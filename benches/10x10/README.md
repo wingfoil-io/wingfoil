@@ -1,5 +1,8 @@
 # 10x10 - Criterion.rs Benchmark
 
+In this benchmark we measure graph overhead by wiring up a trivial graph, 10 nodes deep and 10 nodes wide, with all nodes ticking on each engine cycle.  
+Running on 3.80 GHz CPU, we observe a latency around 2µs per engine cycle, equivalent to 20ns per node cycle.   For a smaller graph of 10 nodes, this would give a graph overhead around 200ns per engine cycle.
+
 <img src="pdf.png" width="600">
 <img src="regression.png" width="600">
 
@@ -25,11 +28,11 @@
 
 ## Understanding this report
 
-The plot on the left displays the average time per iteration for this benchmark. The shaded region
+The first plot displays the average time per iteration for this benchmark. The shaded region
 shows the estimated probability of an iteration taking a certain amount of time, while the line
-shows the mean. Click on the plot for a larger view showing the outliers.
+shows the mean
 
-The plot on the right shows the linear regression calculated from the measurements. Each point
+The second plot show the linear regression calculated from the measurements. Each point
 represents a sample, though here it shows the total time for the sample rather than time per
 iteration. The line is the line of best fit for these measurements.
 
