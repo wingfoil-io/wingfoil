@@ -1,7 +1,7 @@
 # 10x10 - Criterion.rs Benchmark
 
-<img src="benches/10x10/pdf.png" width="600">
-<img src="benches/10x10/regression.png" width="600">
+<img src="pdf.png" width="600">
+<img src="regression.png" width="600">
 
 ## Additional Statistics
 
