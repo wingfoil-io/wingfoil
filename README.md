@@ -1,9 +1,8 @@
 # Wingfoil
 
-Wingfoil is a blazingly fast, highly scalable stream processing framework designed for latency-critical use cases such as electronic trading and real-time AI systems.
-
-Wingfoil is a [lingua franca](https://en.wikipedia.org/wiki/Lingua_franca) of stream
-processing, making it easy to receive, process, and distribute streaming data.   
+Wingfoil is a [blazingly fast](https://crates.io/crates/wingfoil/benches/), highly scalable 
+stream processing framework designed for latency-critical use cases such as electronic trading 
+and real-time AI systems.
 
 ## Features
 
@@ -34,7 +33,14 @@ hello, world 2
 hello, world 3
 ```
 
-
 You can download from [crates.io](https://crates.io/crates/wingfoil/),
 read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/) 
-or jump straight into the [examples.](https://github.com/wingfoil-io/wingfoil/tree/main/examples)
+or jump straight into [one the examples](https://github.com/wingfoil-io/wingfoil/tree/main/examples/order_book).
+
+We want to hear from you!  Especially if you:
+- are interested in contributing
+- know of a project that wingfoil would be well suited for
+- would like to request a feature
+- have any feedback
+
+Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io) or connect on [linkedin](https://www.linkedin.com/in/jake-mitchell-x77/).
