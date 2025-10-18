@@ -2,8 +2,10 @@
 
 Here is some sample output from the [10x10](graph.rs) benchmark.
 
-In this benchmark we measure graph overhead by wiring up a trivial graph, 10 nodes deep and 10 nodes wide, with all nodes ticking on each engine cycle.  
-Running on 3.80 GHz CPU, we observe a latency around 2µs per engine cycle, equivalent to 20ns per node cycle.   For a smaller graph of 10 nodes, this would give a graph overhead around 200ns per engine cycle.
+In this benchmark we measure graph overhead by wiring up a trivial graph, 10 nodes deep and 10 nodes 
+wide, with all nodes ticking on each engine cycle.  Running on 3.80 GHz CPU, we observe a latency 
+around 2µs per engine cycle, equivalent to 20ns per node cycle.   For a smaller graph of 10 nodes, 
+this would give a graph overhead around 200ns per engine cycle.
 
 <img src="images/pdf.png" width="600">
 <img src="images/regression.png" width="600">
