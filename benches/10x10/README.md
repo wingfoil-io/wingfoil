@@ -13,12 +13,12 @@
 
 ## Additional Plots
 
-- [Typical](typical.svg)
-- [Mean](mean.svg)
-- [Std. Dev.](SD.svg)
-- [Median](median.svg)
-- [MAD](MAD.svg)
-- [Slope](slope.svg)
+- [Typical](typical.png)
+- [Mean](mean.png)
+- [Std. Dev.](SD.png)
+- [Median](median.png)
+- [MAD](MAD.png)
+- [Slope](slope.png)
 
 ## Understanding this report
 
