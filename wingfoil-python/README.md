@@ -1,6 +1,16 @@
 
+This crate contains the python bindings for the wingfoil crate.
 
-# To install (and activate) the python virtual env run:
+Wingfoil is a blazingly fast, highly scalable 
+stream processing framework designed for latency-critical use cases such as electronic trading 
+and real-time AI systems.
+
+The wingfoil python module will available for installation using pip.
+
+To build from source:
+
+```bash
+# install deps
 
 sudo apt-get install python3
 sudo apt-get install python3-pip
@@ -15,16 +25,14 @@ python3 -m venv ./.venv
 source ./.venv/bin/activate
 
 # under virtual env install these modules
-# Note we are still working on updating fluvial to compile 
-# with latest maturin version.
 
 pip install patchelf
-pip install maturin==0.13
+pip install maturin
 
 # under virtual env, build the fluvial wheel
 
-maturin develop
+maturin develop --release
 
 # You can run example with
 
-python3 ./examples/example.py 
+python3 ./examples/quickstart.py 
