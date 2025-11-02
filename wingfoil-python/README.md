@@ -5,6 +5,16 @@ Wingfoil is a blazingly fast, highly scalable
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
+```
+#!/usr/bin/env python3
+
+from wingfoil import ticker
+
+period = 1.0 # secondssrc = ticker(period).count().logged("hello, world")
+src.run()
+print(src.peek_value())
+```
+
 The wingfoil python module will available for installation using pip.
 
 To build from source:
