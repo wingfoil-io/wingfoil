@@ -1,0 +1,198 @@
+// fn parse_run_args(
+//     realtime: Option<bool>,
+//     start: Option<PyObject>,
+//     end: Option<PyObject>,
+//     cycles: Option<u32>,
+// ) -> (RunMode, RunFor) {
+//     if end.is_some() && cycles.is_some() {
+//         panic!("Cannot specify both end and cycles");
+//     }
+//     let realtime = realtime.unwrap_or(false);
+//     if realtime && start.is_some() {
+//         panic!("Cannot specify start in realtime mode");
+//     }
+//     let run_mode = if realtime {
+//         RunMode::RealTime
+//     } else {
+//         match start {
+//             Some(_start) => {
+//                 unimplemented!("Explicit historical start is not yet supported.");
+//             }
+//             None => RunMode::HistoricalFrom(NanoTime::ZERO),
+//         }
+//     };
+//     let run_for = if let Some(cycles) = cycles {
+//         RunFor::Cycles(cycles)
+//     } else {
+//         match end {
+//             Some(_end) => {
+//                 unimplemented!("Explicit historical end is not yet supported.");
+//             }
+//             None => RunFor::Forever,
+//         }
+//     };
+//     (run_mode, run_for)
+// }
+
+// #[pymethods]
+// impl PyStream {
+//     #[new]
+//     fn new(inner: PyObject) -> Self {
+//         let stream = ProxyStream(inner);
+//         let stream = stream.into_stream();
+//         Self(stream)
+//     }
+
+//     fn run(
+//         &self,
+//         realtime: Option<bool>,
+//         start: Option<PyObject>,
+//         end: Option<PyObject>,
+//         cycles: Option<u32>,
+//     ) -> PyResult<PyStream> {
+//         let (run_mode, run_for) = parse_run_args(realtime, start, end, cycles);
+//         self.0.run(run_mode, run_for);
+//         Ok(self.clone())
+//     }
+
+//     fn logged(&self, label: &str) -> PyResult<PyStream> {
+//         Ok(PyStream(self.0.logged(label, log::Level::Info)))
+//     }
+
+
+
+//     fn collapse(&self) -> PyResult<PyStream> {
+//         let collapse = self.0.collapse();
+//         Ok(PyStream(collapse))
+//     }
+//     fn distinct(&self) -> PyResult<PyStream> {
+//         Ok(PyStream(self.0.distinct()))
+//     }
+//     fn sum(&self) -> PyResult<PyStream> {
+//         Ok(PyStream(self.0.sum()))
+//     }
+//     fn peek_value(&self) -> PyResult<Py<PyAny>> {
+//         Ok(self.0.peek_value().0)
+//     }
+// }
+
+// #[derive(Clone, Display)]
+// #[display(fmt = "ProxyStream")]
+// #[pyclass(subclass, unsendable, name = "ProxyStream")]
+// struct ProxyStream(PyObject);
+
+// impl MutableNode for ProxyStream {
+//     fn cycle(&mut self, _state: &mut GraphState) -> bool {
+//         Python::with_gil(|py| {
+//             let res = self.0.call_method0(py, "cycle").unwrap();
+//             res.extract::<bool>(py).unwrap()
+//         })
+//     }
+
+//     fn upstreams(&self) -> UpStreams {
+//         let ups = Python::with_gil(|py| {
+//             let res = self.0.call_method0(py, "upstreams").unwrap();
+//             let res = res.extract::<Vec<PyObject>>(py).unwrap();
+//             let res = res.iter().map(|obj| match obj.extract::<PyStream>(py) {
+//                 Ok(stream) => stream.0.as_node(),
+//                 Err(_) => match obj.extract::<ProxyStream>(py) {
+//                     Ok(stream) => stream.into_node(),
+//                     Err(_) => panic!("Unexpected upstream type"),
+//                 },
+//             });
+//             res.collect::<Vec<_>>()
+//         });
+//         UpStreams::new(ups, vec![])
+//     }
+// }
+
+// impl StreamPeekRef<PyObjectEx> for ProxyStream {
+
+//     fn peek_ref(&self) -> &PyObjectEx {
+//         Python::with_gil(|py| {
+//             let res = self.0.call_method0(py, "peek_ref").unwrap();
+//             &PyObjectEx(res)
+//         })
+//     }
+// }
+
+// #[pymodule]
+// fn wingfoil_internal(_py: Python<'_>, module: Bound<'_, PyModule>) -> PyResult<()> {
+//     module.add_class::<PyNode>()?;
+    
+//     Ok(())
+// }
+
+
+
+// impl std::ops::Add for PyObjectEx {
+//     type Output = Self;
+//     fn add(self, other: Self) -> Self {
+//         Python::with_gil(|py| {
+//             let result = if self.0.is_none(py) {
+//                 other.0
+//             } else {
+//                 self.0.call_method1(py, "__add__", (other.0,)).unwrap()
+//             };
+//             PyObjectEx(result)
+//         })
+//     }
+// }
+
+// impl std::cmp::PartialEq for PyObjectEx {
+//     fn eq(&self, other: &Self) -> bool {
+//         Python::with_gil(|py| {
+//             self.0
+//                 .call_method1(py, "__eq__", (&other.0,))
+//                 .unwrap()
+//                 .extract::<bool>(py)
+//                 .unwrap()
+//         })
+//     }
+// }
+
+// impl std::fmt::Debug for PyObjectEx {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         Python::with_gil(|py| {
+//             let result = self.0.call_method0(py, "__str__").unwrap();
+//             write!(f, "{}", result.extract::<String>(py).unwrap())
+//         })
+//     }
+// }
+
+// impl Serialize for PyObjectEx {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: serde::Serializer,
+//     {
+//         Python::with_gil(|py| self.0.extract::<String>(py).unwrap().serialize(serializer))
+//     }
+// }
+
+// impl std::iter::IntoIterator for PyObjectEx {
+//     type Item = PyObjectEx;
+//     type IntoIter = std::vec::IntoIter<PyObjectEx>;
+//     fn into_iter(self) -> Self::IntoIter {
+//         Python::with_gil(|py| {
+//             let v = self
+//                 .0
+//                 .extract::<Vec<PyObject>>(py)
+//                 .unwrap()
+//                 .into_iter()
+//                 .map(PyObjectEx);
+//             v.collect::<Vec<_>>().into_iter()
+//         })
+//     }
+// }
+
+    // fn run(
+    //     &self,
+    //     realtime: Option<bool>,
+    //     start: Option<PyObject>,
+    //     end: Option<PyObject>,
+    //     cycles: Option<u32>,
+    // ) -> PyResult<PyNode> {
+    //     let (run_mode, run_for) = parse_run_args(realtime, start, end, cycles);
+    //     self.0.clone().run(run_mode, run_for);
+    //     Ok(self.clone())
+    // }
