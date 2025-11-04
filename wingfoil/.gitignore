@@ -2,6 +2,3 @@ Cargo.lock
 /target
 .vscode
 flamegraph.svg
-.venv
-__pycache__
-*.so

@@ -1,0 +1,28 @@
+[package]
+name = "wingfoil-python"
+version = "0.1.0"
+edition = "2024"
+
+
+[lib]
+name = "wingfoil_internal"
+crate-type = ["cdylib"]
+
+
+[dependencies]
+
+# parent
+wingfoil = { path = "../wingfoil" }
+
+# workspace deps
+log = {workspace = true}
+env_logger = {workspace = true}
+derive_more = {workspace = true}
+chrono = {workspace = true}
+
+# local deps
+pyo3 = { version = "0.27", features = ["extension-module", "serde"] }
+
+
+[package.metadata.maturin]
+name = "wingfoil.wingfoil_internal"
