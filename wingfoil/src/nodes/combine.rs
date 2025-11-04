@@ -73,7 +73,11 @@ mod tests {
             .logged("output", log::Level::Info)
             .accumulate()
             .finally(|res, _| {
-                let expected = vec![tiny_vec![1, 10, 100], tiny_vec![2, 20, 200], tiny_vec![3, 30, 300]];
+                let expected = vec![
+                    tiny_vec![1, 10, 100],
+                    tiny_vec![2, 20, 200],
+                    tiny_vec![3, 30, 300],
+                ];
                 println!("{:?}", res);
                 assert_eq!(res, expected);
             })

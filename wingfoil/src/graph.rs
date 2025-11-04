@@ -270,7 +270,9 @@ impl GraphState {
     }
 
     pub fn log(&self, level: log::Level, msg: &str) {
-        if log_enabled!(level) && let Some(ix) = self.current_node_index {
+        if log_enabled!(level)
+            && let Some(ix) = self.current_node_index
+        {
             let id = self.id;
             let type_name = &self.nodes[ix].node.type_name();
             log!(target: type_name, level, "[{id:},{ix:}]{msg:}");

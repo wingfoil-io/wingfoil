@@ -22,7 +22,10 @@ impl<IN1, IN2, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(
-            vec![self.upstream1.clone().as_node(), self.upstream2.clone().as_node()],
+            vec![
+                self.upstream1.clone().as_node(),
+                self.upstream2.clone().as_node(),
+            ],
             vec![],
         )
     }

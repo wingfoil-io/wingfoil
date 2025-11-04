@@ -52,7 +52,10 @@ fn set_current_dir() {
     env::set_current_dir(&root).unwrap();
 }
 
-fn process_orders(chunk: Vec<Message>, book: &RefCell<lobster::OrderBook>) -> (Vec<Fill>, Option<TwoWayPrice>) {
+fn process_orders(
+    chunk: Vec<Message>,
+    book: &RefCell<lobster::OrderBook>,
+) -> (Vec<Fill>, Option<TwoWayPrice>) {
     let mut fills = vec![];
     let mut price: Option<TwoWayPrice> = None;
     // chunk contains messages with common timestamp.
@@ -150,7 +153,12 @@ fn parse_order(msg: Message) -> lobster::OrderType {
     };
     if message_type == 1 {
         // order
-        lobster::OrderType::Limit { id, side, qty, price }
+        lobster::OrderType::Limit {
+            id,
+            side,
+            qty,
+            price,
+        }
     } else if message_type == 2 || message_type == 3 {
         // 2 partial cancel.  TODO: implement more accurately
         // 3 complete cancel

@@ -27,7 +27,8 @@ impl HistoricalMarketDataProvider {
         let mut i = 0;
         while t <= n_msgs as u64 {
             let rfq_id = format!("{}", i);
-            let rfq_id: RfqId = ArrayString::try_from(rfq_id.as_str()).expect("string too long for RfqId");
+            let rfq_id: RfqId =
+                ArrayString::try_from(rfq_id.as_str()).expect("string too long for RfqId");
 
             let rfq_data = RfqData { id: rfq_id.clone() };
             let rfq_params = RfqParams {
@@ -81,7 +82,9 @@ impl MarketDataProvider for RealTimeMarketDataProvider {
 }
 
 impl RealTimeMarketDataProvider {
-    async fn notifications(env: Environment) -> impl futures::Stream<Item = (NanoTime, Params)> + Send {
+    async fn notifications(
+        env: Environment,
+    ) -> impl futures::Stream<Item = (NanoTime, Params)> + Send {
         println!("{env:?}");
         let url = &env.url();
         let heartbeat = Duration::from_secs(2);

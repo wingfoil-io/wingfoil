@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use criterion::Criterion;
 
-
 /// Used to add wingfoil bench to criterion.
 pub fn add_bench<F>(crit: &mut Criterion, name: &str, f: F)
 where

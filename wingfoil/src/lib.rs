@@ -15,7 +15,7 @@
 //! ```rust
 //! use wingfoil::*;
 //! use std::time::Duration;
-//! 
+//!
 //! fn main() {
 //!     let period = Duration::from_millis(10);
 //!     let source = ticker(period).count(); // 1, 2, 3 etc

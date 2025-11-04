@@ -12,7 +12,8 @@ pub(crate) struct BufferStream<T: Element> {
 impl<T: Element> MutableNode for BufferStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> bool {
         self.buffer.push(self.upstream.peek_value());
-        if self.buffer.len() >= self.capacity || (!self.buffer.is_empty() && state.is_last_cycle()) {
+        if self.buffer.len() >= self.capacity || (!self.buffer.is_empty() && state.is_last_cycle())
+        {
             self.value = self.buffer.clone();
             self.buffer.clear();
             assert!(!self.value.is_empty());

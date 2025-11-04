@@ -15,7 +15,21 @@ type RawTime = u64;
 static CLOCK: Lazy<Clock> = Lazy::new(Clock::new);
 
 /// A time in nanoseconds since the unix epoch.
-#[derive(new, Display, Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    new,
+    Display,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+)]
 pub struct NanoTime(RawTime);
 
 impl NanoTime {

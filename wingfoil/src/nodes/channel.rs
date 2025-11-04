@@ -1,26 +1,34 @@
 use crate::channel::{ChannelReceiver, ChannelSender, Message, NotifierChannelSender};
 use crate::*;
 
+use anyhow::anyhow;
 use derive_more::Debug;
 use derive_new::new;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::rc::Rc;
 use tinyvec::TinyVec;
-use anyhow::anyhow;
 
 pub(crate) trait ChannelOperators<T>
 where
     T: Element + Send,
 {
-    fn send(self: &Rc<Self>, sender: ChannelSender<T>, trigger: Option<Rc<dyn Node>>) -> Rc<dyn Node>;
+    fn send(
+        self: &Rc<Self>,
+        sender: ChannelSender<T>,
+        trigger: Option<Rc<dyn Node>>,
+    ) -> Rc<dyn Node>;
 }
 
 impl<T> ChannelOperators<T> for dyn Stream<T>
 where
     T: Element + Send,
 {
-    fn send(self: &Rc<Self>, sender: ChannelSender<T>, trigger: Option<Rc<dyn Node>>) -> Rc<dyn Node> {
+    fn send(
+        self: &Rc<Self>,
+        sender: ChannelSender<T>,
+        trigger: Option<Rc<dyn Node>>,
+    ) -> Rc<dyn Node> {
         SenderNode::new(self.clone(), sender, trigger).into_node()
     }
 }
@@ -38,7 +46,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
         if state.ticked(self.source.clone().as_node()) {
             let res = self.sender.send(state, self.source.peek_value());
             if res.is_err() {
-                state.terminate(res.map_err(|e| {anyhow!(e)}));
+                state.terminate(res.map_err(|e| anyhow!(e)));
             }
             true
         } else {
@@ -47,7 +55,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
                     debug_assert!(state.ticked(trig.clone()));
                     let res = self.sender.send_checkpoint(state);
                     if res.is_err() {
-                        state.terminate(res.map_err(|e| {anyhow!(e)}));
+                        state.terminate(res.map_err(|e| anyhow!(e)));
                     }
                 }
                 None => {

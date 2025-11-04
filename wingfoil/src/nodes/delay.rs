@@ -72,7 +72,10 @@ mod tests {
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         let run_for = RunFor::Cycles(6);
         let mut graph = Graph::new(
-            vec![captured_source.clone().as_node(), captured_delayed.clone().as_node()],
+            vec![
+                captured_source.clone().as_node(),
+                captured_delayed.clone().as_node(),
+            ],
             run_mode,
             run_for,
         );

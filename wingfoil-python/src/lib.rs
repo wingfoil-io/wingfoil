@@ -1,19 +1,10 @@
-
 //mod time;
 //use time::*;
 
-use ::wingfoil::{
-    Node, 
-    NodeOperators, 
-    RunFor, 
-    RunMode, 
-    Stream,
-    StreamOperators, 
-};
+use ::wingfoil::{Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators};
 
-
-use pyo3::prelude::*;
 use pyo3::conversion::IntoPyObjectExt;
+use pyo3::prelude::*;
 
 //use serde::Serialize;
 use std::rc::Rc;
@@ -32,15 +23,12 @@ impl PyNode {
 #[pymethods]
 impl PyNode {
     fn count(&self) -> PyResult<PyStream> {
-        let count = self
-            .0
-            .count()
-            .map(move |x| {
-                Python::attach(|py| {
-                    let x: Py<PyAny> = x.into_py_any(py).unwrap();
-                    PyElement(x)
-                })
-            });
+        let count = self.0.count().map(move |x| {
+            Python::attach(|py| {
+                let x: Py<PyAny> = x.into_py_any(py).unwrap();
+                PyElement(x)
+            })
+        });
         Ok(PyStream(count))
     }
 }
@@ -56,9 +44,7 @@ struct PyElement(Py<PyAny>);
 
 impl Default for PyElement {
     fn default() -> Self {
-        Python::attach(|py| {
-            PyElement(py.None())
-        })
+        Python::attach(|py| PyElement(py.None()))
     }
 }
 
@@ -77,21 +63,21 @@ impl Clone for PyElement {
     }
 }
 
-
 #[derive(Clone)]
 #[pyclass(subclass, unsendable)]
 struct PyStream(Rc<dyn Stream<PyElement>>);
 
-
 #[pymethods]
 impl PyStream {
     fn run(&self) {
-        self.0.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3))).unwrap();
+        self.0
+            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)))
+            .unwrap();
     }
     fn peek_value(&self) -> Py<PyAny> {
         self.0.peek_value().0
     }
-    fn logged(&self, label:String) -> PyStream {
+    fn logged(&self, label: String) -> PyStream {
         PyStream(self.0.logged(&label, log::Level::Info))
     }
 }

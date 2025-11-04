@@ -1,4 +1,7 @@
-use crate::{Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators, StreamPeekRef, UpStreams};
+use crate::{
+    Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators, StreamPeekRef,
+    UpStreams,
+};
 use derive_more::Debug;
 use derive_new::new;
 use std::cell::RefCell;
@@ -148,7 +151,8 @@ where
     let overflow = Rc::new(RefCell::new(None));
     let children = Rc::new(RefCell::new(vec![]));
 
-    let parent = DemuxParent::new(source, func, map, children.clone(), overflow.clone()).into_stream();
+    let parent =
+        DemuxParent::new(source, func, map, children.clone(), overflow.clone()).into_stream();
     let build_child = || DemuxChild::new(parent.clone()).into_stream();
     let demuxed = (0..size).map(|_| build_child()).collect::<Vec<_>>();
     assert!(overflow.borrow().is_none());
@@ -284,11 +288,14 @@ where
 
 /////////////////////////////////////
 
-pub (crate) fn demux_it<K, T, F, I>(
+pub(crate) fn demux_it<K, T, F, I>(
     source: Rc<dyn Stream<I>>,
     map: DemuxMap<K>,
     func: F,
-) -> (Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>, Overflow<TinyVec<[T; 1]>>)
+) -> (
+    Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>,
+    Overflow<TinyVec<[T; 1]>>,
+)
 where
     K: Hash + Eq + PartialEq + fmt::Debug + 'static,
     T: Element,
@@ -299,7 +306,8 @@ where
     let overflow = Rc::new(RefCell::new(None));
     let children = Rc::new(RefCell::new(vec![]));
     let value = vec![TinyVec::new(); size + 1];
-    let parent = DemuxVecParent::new(source, func, map, children.clone(), overflow.clone(), value).into_stream();
+    let parent = DemuxVecParent::new(source, func, map, children.clone(), overflow.clone(), value)
+        .into_stream();
     let build_child = |i| DemuxVecChild::new(i, parent.clone()).into_stream();
     let demuxed = (0..size).map(build_child).collect::<Vec<_>>();
     assert!(overflow.borrow().is_none());
@@ -579,7 +587,11 @@ mod tests {
     }
 
     fn capacity(with_overflow: bool) -> usize {
-        if with_overflow { N_STREAMS - 1 } else { N_STREAMS }
+        if with_overflow {
+            N_STREAMS - 1
+        } else {
+            N_STREAMS
+        }
     }
 
     const N_STREAMS: usize = 3;
@@ -599,7 +611,10 @@ mod tests {
     fn run_demux_vec(with_overflow: bool) {
         let capacity = capacity(with_overflow);
         for run_mode in &*RUN_MODES {
-            println!("demux_vec\n{:?}\nwith_overflow={:?}", run_mode, with_overflow);
+            println!(
+                "demux_vec\n{:?}\nwith_overflow={:?}",
+                run_mode, with_overflow
+            );
             let streams = (0..N_STREAMS)
                 .map(|i| message_source(i, None))
                 .collect::<Vec<_>>();

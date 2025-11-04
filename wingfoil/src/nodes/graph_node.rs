@@ -3,6 +3,7 @@ use crate::*;
 use channel::{ChannelSender, channel_pair};
 use nodes::channel::ChannelOperators;
 
+use anyhow::anyhow;
 use std::cell::OnceCell;
 use std::cmp::Eq;
 use std::hash::Hash;
@@ -11,7 +12,6 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{thread, vec};
 use tinyvec::TinyVec;
-use anyhow::anyhow;
 
 #[derive(Debug, Default)]
 enum GraphProducerStreamState<T, FUNC>
@@ -80,7 +80,8 @@ where
                 let run_mode = graph_state.run_mode();
                 let task = move || {
                     let node = func().send(sender, None);
-                    let mut graph = Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
+                    let mut graph =
+                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
                     graph.run().unwrap();
                 };
 
@@ -116,7 +117,6 @@ where
         self.receiver_stream.get().unwrap().peek_ref()
     }
 }
-
 
 /// Creates a [Stream] emitting values on this thread
 /// but produced on a worker thread.
@@ -186,12 +186,13 @@ where
 
     fn cycle(&mut self, graph_state: &mut GraphState) -> bool {
         if graph_state.ticked(self.source.clone()) {
-            let res = self.sender
+            let res = self
+                .sender
                 .get_mut()
                 .unwrap()
                 .send(graph_state, self.source.peek_value());
             if res.is_err() {
-            graph_state.terminate(res.map_err(|e| anyhow!(e)));
+                graph_state.terminate(res.map_err(|e| anyhow!(e)));
             }
         }
 
@@ -223,7 +224,8 @@ where
                 let task = move || {
                     let src = ReceiverStream::new(receiver_in, None, tx_notif).into_stream();
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));
-                    let mut graph = Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
+                    let mut graph =
+                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
                     graph.run().unwrap();
                 };
                 let handle = thread::spawn(task);
@@ -351,7 +353,9 @@ mod tests {
                     .run(run_mode, run_for)
                     .unwrap();
             };
-            println!("{run_mode:?}, delay={delay:?}, sleep_produce={sleep_produce:}, sleep_map={sleep_map:}");
+            println!(
+                "{run_mode:?}, delay={delay:?}, sleep_produce={sleep_produce:}, sleep_map={sleep_map:}"
+            );
             if delay == half_period && matches!(run_mode, RunMode::HistoricalFrom(_)) {
                 assert!(catch_unwind(f).is_err());
             } else {

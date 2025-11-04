@@ -204,7 +204,10 @@ impl<T> NodeOperators for dyn Stream<T> {
     fn ticked_at_elapsed(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>> {
         self.clone().as_node().ticked_at_elapsed()
     }
-    fn produce<OUT: Element>(self: &Rc<Self>, func: impl Fn() -> OUT + 'static) -> Rc<dyn Stream<OUT>> {
+    fn produce<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn() -> OUT + 'static,
+    ) -> Rc<dyn Stream<OUT>> {
         self.clone().as_node().produce(func)
     }
     fn run(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<()> {
@@ -242,11 +245,17 @@ pub trait StreamOperators<T: Element> {
     where
         T: Element + Send,
         FUT: Future<Output = ()> + Send + 'static;
-    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(self: &Rc<Self>, func: F) -> Rc<dyn Node>;
+    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(
+        self: &Rc<Self>,
+        func: F,
+    ) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
     // reduce/fold source by applying function
-    fn fold<OUT: Element>(self: &Rc<Self>, func: impl Fn(&mut OUT, T) + 'static) -> Rc<dyn Stream<OUT>>;
+    fn fold<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(&mut OUT, T) + 'static,
+    ) -> Rc<dyn Stream<OUT>>;
     /// difference in it's source from one cycle to the next
     fn difference(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
@@ -257,7 +266,11 @@ pub trait StreamOperators<T: Element> {
     where
         T: Hash + Eq;
     /// Demuxes its source into a Vec of n streams.
-    fn demux<K, F>(self: &Rc<Self>, capacity: usize, func: F) -> (Vec<Rc<dyn Stream<T>>>, Overflow<T>)
+    fn demux<K, F>(
+        self: &Rc<Self>,
+        capacity: usize,
+        func: F,
+    ) -> (Vec<Rc<dyn Stream<T>>>, Overflow<T>)
     where
         K: Hash + Eq + PartialEq + std::fmt::Debug + 'static,
         F: Fn(&T) -> (K, DemuxEvent) + 'static;
@@ -267,7 +280,10 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         capacity: usize,
         func: F,
-    ) -> (Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>, Overflow<TinyVec<[U; 1]>>)
+    ) -> (
+        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
+        Overflow<TinyVec<[U; 1]>>,
+    )
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -279,7 +295,10 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         map: DemuxMap<K>,
         func: F,
-    ) -> (Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>, Overflow<TinyVec<[U; 1]>>)
+    ) -> (
+        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
+        Overflow<TinyVec<[U; 1]>>,
+    )
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -292,13 +311,15 @@ pub trait StreamOperators<T: Element> {
     /// drops source contingent on supplied stream
     fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Stream<T>>;
     /// drops source contingent on supplied predicate
-    fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static) -> Rc<dyn Stream<T>>;
+    fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static)
+    -> Rc<dyn Stream<T>>;
     /// propagates source up to limit times
     fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Stream<T>>;
     /// logs source and propagates it
     fn logged(self: &Rc<Self>, label: &str, level: Level) -> Rc<dyn Stream<T>>;
     /// Map’s it’s source into a new Stream using the supplied closure.
-    fn map<OUT: Element>(self: &Rc<Self>, func: impl Fn(T) -> OUT + 'static) -> Rc<dyn Stream<OUT>>;
+    fn map<OUT: Element>(self: &Rc<Self>, func: impl Fn(T) -> OUT + 'static)
+    -> Rc<dyn Stream<OUT>>;
     /// Uses func to build graph, which is spawned on worker thread
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<TinyVec<[OUT; 1]>>>
     where
@@ -342,11 +363,14 @@ where
     }
 
     fn collect(self: &Rc<Self>) -> Rc<dyn Stream<Vec<ValueAt<T>>>> {
-        bimap(self.clone(), self.clone().as_node().ticked_at(), ValueAt::new).fold(
-            |acc: &mut Vec<ValueAt<T>>, value| {
-                acc.push(value);
-            },
+        bimap(
+            self.clone(),
+            self.clone().as_node().ticked_at(),
+            ValueAt::new,
         )
+        .fold(|acc: &mut Vec<ValueAt<T>>, value| {
+            acc.push(value);
+        })
     }
 
     fn collapse<OUT>(self: &Rc<Self>) -> Rc<dyn Stream<OUT>>
@@ -372,7 +396,11 @@ where
         AsyncConsumerNode::new(self.clone(), func).into_node()
     }
 
-    fn demux<K, F>(self: &Rc<Self>, capacity: usize, func: F) -> (Vec<Rc<dyn Stream<T>>>, Overflow<T>)
+    fn demux<K, F>(
+        self: &Rc<Self>,
+        capacity: usize,
+        func: F,
+    ) -> (Vec<Rc<dyn Stream<T>>>, Overflow<T>)
     where
         T: Element,
         K: Hash + Eq + PartialEq + std::fmt::Debug + 'static,
@@ -385,7 +413,10 @@ where
         self: &Rc<Self>,
         capacity: usize,
         func: F,
-    ) -> (Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>, Overflow<TinyVec<[U; 1]>>)
+    ) -> (
+        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
+        Overflow<TinyVec<[U; 1]>>,
+    )
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -399,7 +430,10 @@ where
         self: &Rc<Self>,
         map: DemuxMap<K>,
         func: F,
-    ) -> (Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>, Overflow<TinyVec<[U; 1]>>)
+    ) -> (
+        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
+        Overflow<TinyVec<[U; 1]>>,
+    )
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -438,16 +472,25 @@ where
         FilterStream::new(self.clone(), condition).into_stream()
     }
 
-    fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static) -> Rc<dyn Stream<T>> {
+    fn filter_value(
+        self: &Rc<Self>,
+        predicate: impl Fn(&T) -> bool + 'static,
+    ) -> Rc<dyn Stream<T>> {
         let condition = self.clone().map(move |val| predicate(&val));
         FilterStream::new(self.clone(), condition).into_stream()
     }
 
-    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(self: &Rc<Self>, func: F) -> Rc<dyn Node> {
+    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(
+        self: &Rc<Self>,
+        func: F,
+    ) -> Rc<dyn Node> {
         FinallyNode::new(self.clone(), func).into_node()
     }
 
-    fn fold<OUT: Element>(self: &Rc<Self>, func: impl Fn(&mut OUT, T) + 'static) -> Rc<dyn Stream<OUT>> {
+    fn fold<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(&mut OUT, T) + 'static,
+    ) -> Rc<dyn Stream<OUT>> {
         FoldStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
@@ -462,13 +505,20 @@ where
                 log!(target:"wingfoil", level, "{:} {:} {:?}", time.pretty(), lbl, value);
                 value
             };
-            bimap(self.clone(), self.clone().as_node().ticked_at_elapsed(), func)
+            bimap(
+                self.clone(),
+                self.clone().as_node().ticked_at_elapsed(),
+                func,
+            )
         } else {
             self.clone()
         }
     }
 
-    fn map<OUT: Element>(self: &Rc<Self>, func: impl Fn(T) -> OUT + 'static) -> Rc<dyn Stream<OUT>> {
+    fn map<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(T) -> OUT + 'static,
+    ) -> Rc<dyn Stream<OUT>> {
         MapStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
@@ -509,7 +559,6 @@ where
         self.reduce(|acc, val| acc + val)
     }
 }
-
 
 #[doc(hidden)]
 pub trait TupleStreamOperators<A, B>

@@ -9,7 +9,9 @@ use std::{marker::PhantomData, time::Duration};
 use tokio::select;
 use tokio::{net::TcpStream, time::interval};
 use tokio_tungstenite::tungstenite::protocol;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
+};
 
 type SockSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type SockStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
@@ -99,7 +101,10 @@ where
     pub async fn connect(url: &str, responder: F, heartbeat: Option<Duration>) -> Self {
         let (ws_stream, _) = connect_async(url).await.unwrap();
         let (writer, reader) = ws_stream.split();
-        let writer = JRPCWriter { writer, message_id: 0 };
+        let writer = JRPCWriter {
+            writer,
+            message_id: 0,
+        };
         let heartbeat = heartbeat.unwrap_or(Duration::MAX);
         let _phantom = Default::default();
         Self {

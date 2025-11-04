@@ -22,6 +22,8 @@ impl Environment {
             Self::Test => "testnet",
         };
         let access_key = self.access_key();
-        format!("wss://ws.api.{env}.paradigm.trade/v2/drfq/?api-key={access_key}&cancel_on_disconnect=false")
+        format!(
+            "wss://ws.api.{env}.paradigm.trade/v2/drfq/?api-key={access_key}&cancel_on_disconnect=false"
+        )
     }
 }

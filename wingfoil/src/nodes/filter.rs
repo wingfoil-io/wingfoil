@@ -26,7 +26,10 @@ impl<T: Element> MutableNode for FilterStream<T> {
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(
-            vec![self.source.clone().as_node(), self.condition.clone().as_node()],
+            vec![
+                self.source.clone().as_node(),
+                self.condition.clone().as_node(),
+            ],
             vec![],
         )
     }

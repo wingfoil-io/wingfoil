@@ -85,7 +85,9 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
                         panic!("source time was descending!");
                     }
                     Ordering::Equal => {
-                        panic!("source produced multiple ticks for same time, use IteratorStream instead")
+                        panic!(
+                            "source produced multiple ticks for same time, use IteratorStream instead"
+                        )
                     }
                     Ordering::Less => {}
                 }

@@ -26,7 +26,10 @@ where
     Box::new(data.map(move |record: Result<T, csv::Error>| {
         let rec = record.unwrap();
         let t = get_time_func(&rec);
-        ValueAt { value: rec, time: t }
+        ValueAt {
+            value: rec,
+            time: t,
+        }
     }))
 }
 
@@ -34,7 +37,11 @@ where
 /// comma seperated values (csv).  The source iterator must be of strictly
 /// ascending time.  For the more general cases where there can be multiple
 /// rows with the same timestamp, you can use [csv_read_vec] instead.
-pub fn csv_read<T>(path: &str, get_time_func: impl Fn(&T) -> NanoTime + 'static, has_headers: bool) -> Rc<dyn Stream<T>>
+pub fn csv_read<T>(
+    path: &str,
+    get_time_func: impl Fn(&T) -> NanoTime + 'static,
+    has_headers: bool,
+) -> Rc<dyn Stream<T>>
 where
     T: Element + DeserializeOwned + 'static,
 {
@@ -137,7 +144,9 @@ pub trait CsvVecOperators<T: Element> {
     fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
 }
 
-impl<T: Element + Serialize + DeserializeOwned + 'static> CsvVecOperators<T> for dyn Stream<Vec<T>> {
+impl<T: Element + Serialize + DeserializeOwned + 'static> CsvVecOperators<T>
+    for dyn Stream<Vec<T>>
+{
     fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
