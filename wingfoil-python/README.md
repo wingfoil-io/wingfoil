@@ -1,12 +1,12 @@
 
-This crate contains the python bindings for the wingfoil crate.
+This crate contains the python bindings for the wingfoil crate.   These bindings are still 
+work in progress / incomplete.
 
-Wingfoil is a blazingly fast, highly scalable 
-stream processing framework designed for latency-critical use cases such as electronic trading 
-and real-time AI systems.
+Wingfoil is a blazingly fast, highly scalable stream processing framework designed 
+for latency-critical use cases such as electronic trading and real-time AI systems.
 
 
-# quick start
+## quick start
 
 This python code
 ```
@@ -27,11 +27,11 @@ print(src.peek_value())
 [2025-11-02T18:42:21Z INFO  wingfoil] 3.002_859 hello, world 4
 ```
 
-# Installation
+## Installation
 
 The wingfoil python module will available for installation using pip.
 
-# Building from source
+## Building from source
 
 ```bash
 # install deps

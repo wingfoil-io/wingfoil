@@ -10,13 +10,17 @@ crate-type = ["cdylib"]
 
 
 [dependencies]
+
 # parent
 wingfoil = { path = "../wingfoil" }
+
 # workspace deps
 log = {workspace = true}
 env_logger = {workspace = true}
 derive_more = {workspace = true}
-# deps
+chrono = {workspace = true}
+
+# local deps
 pyo3 = { version = "0.27", features = ["extension-module", "serde"] }
 
 
