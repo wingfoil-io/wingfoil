@@ -1,6 +1,6 @@
 # Wingfoil
 
-Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/wingfoil/tree/main/benches/), highly scalable 
+Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/), highly scalable 
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
@@ -35,8 +35,8 @@ hello, world 3
 
 You can download from [crates.io](https://crates.io/crates/wingfoil/),
 read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/), 
-review the [benchmarks](https://github.com/wingfoil-io/wingfoil/wingfoil/tree/main/benches/) 
-or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/wingfoil/tree/main/examples/order_book)
+review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) 
+or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book)
 
 
 We want to hear from you!  Especially if you:
