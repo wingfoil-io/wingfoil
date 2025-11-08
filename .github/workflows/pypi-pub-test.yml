@@ -1,4 +1,4 @@
-name: Build and Publish Python Wheels to Test PyPI
+name: PyPI Pub Test
 
 on:
   workflow_dispatch:   # Manual trigger from GitHub UI
@@ -36,7 +36,7 @@ jobs:
         run: ls -lh wheelhouse
 
       - name: Upload to Test PyPI
-        uses: pypa/gh-action-pypi-publish@v2
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           user: __token__
