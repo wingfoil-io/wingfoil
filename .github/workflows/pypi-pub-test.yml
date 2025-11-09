@@ -1,15 +1,25 @@
-name: PyPI Pub Test
+name: PyPI Publish
 
 on:
   workflow_dispatch:
+    inputs:
+      pypi-target:
+        description: 'Choose PyPI target'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - prod
 
 jobs:
   build-and-upload:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest] #, macos-latest, windows-latest]
-        python-version: [3.11] # 3.12]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: [3.8, 3.9, 3.10, 3.11, 3.12]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -39,12 +49,22 @@ jobs:
           cd wingfoil-python
           ls -lh wheelhouse
 
-      - name: Upload to Test PyPI
+      - name: Set PyPI target
+        id: pypi
+        run: |
+          if [ "${{ github.event.inputs.pypi-target }}" = "prod" ]; then
+            echo "REPO_URL=https://upload.pypi.org/legacy/" >> $GITHUB_ENV
+            echo "TOKEN_NAME=PROD_PYPI_API_TOKEN" >> $GITHUB_ENV
+          else
+            echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
+            echo "TOKEN_NAME=TEST_PYPI_API_TOKEN" >> $GITHUB_ENV
+          fi
+
+      - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages_dir: wingfoil-python/wheelhouse
-          repository-url: https://test.pypi.org/legacy/
+          repository-url: ${{ env.REPO_URL }}
           verbose: true
           user: __token__
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-          
+          password: ${{ secrets[env.TOKEN_NAME] }}
