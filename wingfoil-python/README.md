@@ -7,6 +7,7 @@ and real-time AI systems.
 
 Wingfoil simplifies receiving, processing and distributing streaming data across your entire stack.
 
+Checkout the [wingfoil project page](https://github.com/wingfoil-io/wingfoil/) for more information.
 
 ## Features
 
@@ -48,9 +49,7 @@ stream.run(realtime=True, duration=duration)
 [2025-11-02T18:42:20Z INFO  wingfoil] 2.012_219 hello, world 3
 ```
 
-Checkout the [wingfoil project page] (https://github.com/wingfoil-io/wingfoil/) for more information.
-
-You can follow these instructions to [build the wingfoil python module from soure](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
+You can follow these instructions to [build the module from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
 
 We want to hear from you!  Especially if you:
 - are interested in contributing
