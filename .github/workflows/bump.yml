@@ -1,10 +1,7 @@
-name: Bump Rust Version
+name: Bump Version
 
 on:
-  workflow_dispatch:       # Manual trigger
-  push:
-    branches:
-      - main
+  workflow_dispatch:       
 
 jobs:
   bump-version:
