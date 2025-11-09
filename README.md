@@ -4,13 +4,16 @@ Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
+Wingfoil simplifies receiving, processing and distributing streaming data across your entire stack.
+
 ## Features
 
 - **Fast**: Ultra-low latency and high throughput with a efficent [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.  
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.  
+- **Multi-language**: currently available as rust crate and a python package with plans to add WASM/JavaSript/TypeScript support.
 - **Backtesting**: Replay historical data to backtest and optimise strategies.
-- **Async/Tokio**: seamless integration, allows you to leverage async at your graph edges.
 - **Multi-threading**: distribute graph execution across cores.
+- **Async/Tokio**: seamless integration, allows you to leverage async at your graph edges.
 
 ## Quick Start
 ```rust
@@ -36,8 +39,9 @@ hello, world 3
 You can download from [crates.io](https://crates.io/crates/wingfoil/),
 read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/), 
 review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) 
-or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book)
+or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 
+You can download the wingfoil python module from [pypi](https://pypi.org/project/wingfoil/)
 
 We want to hear from you!  Especially if you:
 - are interested in contributing
@@ -45,4 +49,9 @@ We want to hear from you!  Especially if you:
 - would like to request a feature
 - Have any feedback
 
-Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io) or connect on [linkedin](https://www.linkedin.com/in/jake-mitchell-x77/).
+Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io) or get involved in the [wingfoil discussion](https://github.com/wingfoil-io/wingfoil/discussions/).  And you can take a look at the [issues](https://github.com/wingfoil-io/wingfoil/issues) for 
+ideas on ways to contribute.
+
+
+
+

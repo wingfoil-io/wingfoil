@@ -45,7 +45,7 @@
 //! ````
 //! We can visualise the graph like this:
 //! <div align="center">
-//! <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/assets/refs/heads/main/odds_evens.png" width="400"/>
+//! <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/odds_evens.png" width="400"/>
 //! </div>
 //! The input and output nodes tick 6 times each and the evens and odds nodes tick 3 times.
 //!

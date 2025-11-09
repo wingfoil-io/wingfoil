@@ -1,4 +1,3 @@
 
+from ._wingfoil import Node, ticker, __version__
 
-
-from ._wingfoil import Node, ticker
