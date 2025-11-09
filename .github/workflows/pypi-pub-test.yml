@@ -35,11 +35,15 @@ jobs:
           maturin build --verbose --release --strip --manylinux off -o wheelhouse
 
       - name: List built wheels
-        run: ls -lh wheelhouse
+        run: |
+          cd wingfoil-python
+          ls -lh wheelhouse
 
       - name: Upload to Test PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages_dir: wingfoil-python/wheelhouse
           repository-url: https://test.pypi.org/legacy/
           user: __token__
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          
