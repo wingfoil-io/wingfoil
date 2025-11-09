@@ -4,7 +4,6 @@ build-backend = "maturin"
 
 [project]
 name = "wingfoil"
-version = "0.1.6.post1"
 description = "Python bindings for the wingfoil Rust library"
 authors = [{ name = "Jake Mitchell" }]
 license = "MIT"
@@ -23,3 +22,4 @@ homepage = "https://github.com/wingfoil-io/wingfoil/"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "wingfoil._wingfoil"
+include = ["Cargo.toml"]

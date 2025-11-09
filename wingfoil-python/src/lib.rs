@@ -70,6 +70,7 @@ struct PyStream(Rc<dyn Stream<PyElement>>);
 
 #[pymethods]
 impl PyStream {
+    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
@@ -183,5 +184,6 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_class::<PyNode>()?;
+    module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
