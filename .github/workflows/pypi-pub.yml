@@ -13,12 +13,12 @@ on:
           - prod
 
 jobs:
-  build-and-upload:
+  build-wheels:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.12']
 
     steps:
       - name: Debug matrix
@@ -47,13 +47,20 @@ jobs:
       - name: Build wheel and sdist
         run: |
           cd wingfoil-python
-          maturin --version
           maturin build --verbose --release --strip --sdist -o wheelhouse
 
-      - name: List built distributions
-        run: |
-          cd wingfoil-python
-          ls -lh wheelhouse
+      - name: Upload wheels as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheelhouse-${{ matrix.os }}-${{ matrix.python-version }}
+          path: wingfoil-python/wheelhouse
+
+  upload-pypi:
+    runs-on: ubuntu-latest
+    needs: build-wheels
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Set PyPI target
         id: pypi
@@ -64,7 +71,11 @@ jobs:
           else
             echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
             echo "TOKEN_NAME=TEST_PYPI_API_TOKEN" >> $GITHUB_ENV
-          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: wingfoil-python/wheelhouse
 
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
