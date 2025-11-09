@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-python"
-version = "0.1.8"
+version = "0.1.9"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 publish = ["wingfoil", "crates-io"]
