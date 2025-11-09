@@ -16,7 +16,7 @@ and plotted below.
 The frequencies of the inputs and outputs are all different to each other.
 
 <div align="center">
-  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/assets/refs/heads/main/aapl.svg"/>
+  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
 </div>
 
 In addition to the csv output, we also get a performance summary and
