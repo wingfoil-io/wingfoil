@@ -24,7 +24,7 @@ jobs:
         working-directory: wingfoil
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-        run: cargo publish
+        run: cargo publish --registry crates-io
 
       # Wait a few seconds to let crates.io index update
       - name: Wait for crates.io index
@@ -48,4 +48,4 @@ jobs:
         working-directory: wingfoil-python
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-        run: cargo publish
+        run: cargo publish --registry crates-io
