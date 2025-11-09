@@ -16,9 +16,10 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 
-[tool.maturin]
-# maturin knows to look at Cargo.toml for module info
-features = ["pyo3/extension-module"]
+[project.urls]
+homepage = "https://github.com/wingfoil-io/wingfoil/"
 
-[tool.setuptools]
-packages = ["wingfoil"]
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "wingfoil._wingfoil"

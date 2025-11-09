@@ -2,8 +2,7 @@ use anyhow::anyhow;
 use pyo3::exceptions::PyException;
 use std::time::SystemTime;
 
-use ::wingfoil::{Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators};
-use wingfoil::NanoTime;
+use ::wingfoil::{Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators, NanoTime};
 
 use pyo3::conversion::IntoPyObjectExt;
 use pyo3::prelude::*;
@@ -180,7 +179,7 @@ fn to_nano_time(py: Python<'_>, obj: Py<PyAny>) -> anyhow::Result<NanoTime> {
 }
 
 #[pymodule]
-fn wingfoil_internal(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_class::<PyNode>()?;
