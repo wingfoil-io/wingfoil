@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wingfoil"
-version = "0.1.0"
+version = "0.1.6"
 description = "Python bindings for the wingfoil Rust library"
 authors = [{ name = "Jake Mitchell" }]
 license = "MIT"
@@ -19,3 +19,6 @@ classifiers = [
 [tool.maturin]
 # maturin knows to look at Cargo.toml for module info
 features = ["pyo3/extension-module"]
+
+[tool.setuptools]
+packages = ["wingfoil"]
