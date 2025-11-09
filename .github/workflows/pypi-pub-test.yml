@@ -44,6 +44,7 @@ jobs:
         with:
           packages_dir: wingfoil-python/wheelhouse
           repository-url: https://test.pypi.org/legacy/
+          verbose: true
           user: __token__
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           
