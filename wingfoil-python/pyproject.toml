@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wingfoil"
-version = "0.1.6"
+version = "0.1.6.post1"
 description = "Python bindings for the wingfoil Rust library"
 authors = [{ name = "Jake Mitchell" }]
 license = "MIT"
