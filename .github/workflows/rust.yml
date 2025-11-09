@@ -3,9 +3,12 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - ".github/workflows/**"
   pull_request:
     branches: [ "main" ]
-
+    paths-ignore:
+      - ".github/workflows/**"
 env:
   CARGO_TERM_COLOR: always
 

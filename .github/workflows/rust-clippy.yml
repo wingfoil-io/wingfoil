@@ -12,11 +12,12 @@ name: rust-clippy analyze
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - ".github/workflows/**"
   pull_request:
-    # The branches below must be a subset of the branches above
     branches: [ "main" ]
-  schedule:
-    - cron: '16 2 * * 1'
+    paths-ignore:
+      - ".github/workflows/**"
 
 jobs:
   rust-clippy-analyze:
