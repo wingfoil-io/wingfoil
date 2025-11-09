@@ -64,6 +64,7 @@ jobs:
           else
             echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
             echo "TOKEN_NAME=TEST_PYPI_API_TOKEN" >> $GITHUB_ENV
+          fi
 
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
