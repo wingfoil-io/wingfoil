@@ -34,5 +34,5 @@ jobs:
         if: ${{ github.event.inputs.crate == 'wingfoil-python' || github.event.inputs.crate == 'both' }}
         working-directory: wingfoil-python
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish
