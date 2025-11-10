@@ -4,6 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wingfoil"
+dynamic = ["version"]
 description = "Python bindings for the wingfoil Rust library"
 authors = [{ name = "Jake Mitchell" }]
 license = "MIT"

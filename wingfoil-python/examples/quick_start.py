@@ -5,14 +5,19 @@ import wingfoil
 
 print("wingfoil.__version__=%s" % wingfoil.__version__)
 
-period = 1.0 # seconds
+period = 0.1 # seconds
 
-
-src = ticker(period).count().logged("hello, world")
-src.run(
-    realtime = True,
-    duration = 3,
+stream = (
+    ticker(period)
+        .count()
+        .map(lambda x: f"hello world {x}")
+        .logged(">>")
 )
 
-print(src.peek_value())
+stream.run(
+    realtime = True,
+    cycles = 10,
+)
+
+print(stream.peek_value())
 

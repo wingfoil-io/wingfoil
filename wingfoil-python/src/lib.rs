@@ -84,11 +84,23 @@ impl PyStream {
         self.0.run(run_mode, run_for).to_pyresult()?;
         Ok(())
     }
+
     fn peek_value(&self) -> Py<PyAny> {
         self.0.peek_value().0
     }
+
     fn logged(&self, label: String) -> PyStream {
         PyStream(self.0.logged(&label, log::Level::Info))
+    }
+
+    fn map(&self, func: Py<PyAny>) -> PyResult<PyStream> {
+        let stream = self.0.map(move |x| {
+            Python::attach(|py| {
+                let res = func.call1(py, (x.0,)).unwrap();
+                PyElement(res)
+            })
+        });
+        Ok(PyStream(stream))
     }
 }
 
