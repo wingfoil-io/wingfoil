@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use pyo3::exceptions::PyException;
 use std::time::SystemTime;
 
-use ::wingfoil::{Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators, NanoTime};
+use ::wingfoil::{NanoTime, Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators};
 
 use pyo3::conversion::IntoPyObjectExt;
 use pyo3::prelude::*;

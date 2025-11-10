@@ -17,7 +17,7 @@ Checkout the [wingfoil project page](https://github.com/wingfoil-io/wingfoil/) f
 - **Backtesting**: Replay historical data to backtest and optimise strategies.
 - **Multi-threading**: distribute graph execution across cores.
 
-## Installation
+## Installation (coming soon)
 
 ```bash
 pip install wingfoil
@@ -49,7 +49,7 @@ stream.run(realtime=True, duration=duration)
 [2025-11-02T18:42:20Z INFO  wingfoil] 2.012_219 hello, world 3
 ```
 
-You can follow these instructions to [build the module from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
+You can follow these instructions to [build from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
 
 We want to hear from you!  Especially if you:
 - are interested in contributing
@@ -57,5 +57,4 @@ We want to hear from you!  Especially if you:
 - would like to request a feature
 - Have any feedback
 
-Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io) or get involved in the [wingfoil discussion](https://github.com/wingfoil-io/wingfoil/discussions/).  And you can take a look at the [issues](https://github.com/wingfoil-io/wingfoil/issues) for 
-ideas on ways to contribute.
+Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io) or get involved in the [wingfoil discussion](https://github.com/wingfoil-io/wingfoil/discussions/).  Take a look at the [issues](https://github.com/wingfoil-io/wingfoil/issues) for ideas on ways to contribute.
