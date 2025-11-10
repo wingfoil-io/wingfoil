@@ -70,7 +70,6 @@ struct PyStream(Rc<dyn Stream<PyElement>>);
 
 #[pymethods]
 impl PyStream {
-
     #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
     fn run(
         &self,
@@ -94,10 +93,7 @@ impl PyStream {
         PyStream(self.0.logged(&label, log::Level::Info))
     }
 
-    fn map(
-        &self, 
-        func: Py<PyAny>
-    ) -> PyResult<PyStream> {
+    fn map(&self, func: Py<PyAny>) -> PyResult<PyStream> {
         let stream = self.0.map(move |x| {
             Python::attach(|py| {
                 let res = func.call1(py, (x.0,)).unwrap();
