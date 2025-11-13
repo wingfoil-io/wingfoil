@@ -1,8 +1,12 @@
 use anyhow::anyhow;
 use pyo3::exceptions::PyException;
 use std::time::SystemTime;
+use wingfoil::StreamPeek;
 
-use ::wingfoil::{NanoTime, Node, NodeOperators, RunFor, RunMode, Stream, StreamOperators};
+use ::wingfoil::{
+    GraphState, IntoNode, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode, Stream,
+    StreamOperators, StreamPeekRef, UpStreams,
+};
 
 use pyo3::conversion::IntoPyObjectExt;
 use pyo3::prelude::*;
@@ -191,11 +195,84 @@ fn to_nano_time(py: Python<'_>, obj: Py<PyAny>) -> anyhow::Result<NanoTime> {
     }
 }
 
+use derive_more::Display;
+
+/// This is used as inner class of python coded base class Stream
+#[derive(Display)]
+#[pyclass(subclass, unsendable)]
+struct PyProxyStream(Py<PyAny>);
+
+#[pymethods]
+impl PyProxyStream {
+    /// Constructor taking a Python object to wrap
+    #[new]
+    fn new(obj: Py<PyAny>) -> Self {
+        PyProxyStream(obj)
+    }
+}
+
+impl Clone for PyProxyStream {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self(self.0.clone_ref(py)))
+    }
+}
+
+impl MutableNode for PyProxyStream {
+    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+        Python::attach(|py| {
+            let this = self.0.bind(py);
+            let res = this.call_method0("cycle").unwrap();
+            res.extract::<bool>().unwrap()
+        })
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        let ups = Python::attach(|py| {
+            let this = self.0.bind(py);
+            let res = this.call_method0("upstreams").unwrap();
+            let res = res.extract::<Vec<Py<PyAny>>>().unwrap();
+            res.iter()
+                .map(|obj| {
+                    let bound = obj.bind(py);
+                    if let Ok(stream) = bound.extract::<PyStream>() {
+                        stream.0.as_node()
+                    } else if let Ok(stream) = bound.extract::<PyProxyStream>() {
+                        stream.into_node()
+                    } else {
+                        panic!("Unexpected upstream type");
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        UpStreams::new(ups, vec![])
+    }
+}
+
+impl StreamPeekRef<PyElement> for PyProxyStream {
+    fn peek_ref(&self) -> &PyElement {
+        panic!("peek_ref is not implemented");
+    }
+}
+
+impl StreamPeek<PyElement> for PyProxyStream {
+    fn peek_value(&self) -> PyElement {
+        Python::attach(|py| {
+            let res = self.0.call_method0(py, "peek").unwrap();
+            PyElement(res)
+        })
+    }
+
+    fn peek_ref_cell(&self) -> std::cell::Ref<'_, PyElement> {
+        panic!("peek_ref_cell is not implemented");
+    }
+}
+
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_class::<PyNode>()?;
+    module.add_class::<PyProxyStream>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
