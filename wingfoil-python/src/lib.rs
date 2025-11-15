@@ -5,7 +5,7 @@ use wingfoil::StreamPeek;
 
 use ::wingfoil::{
     GraphState, IntoNode, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode, Stream,
-    StreamOperators, StreamPeekRef, UpStreams,
+    StreamOperators, StreamPeekRef, UpStreams, IntoStream
 };
 
 use pyo3::conversion::IntoPyObjectExt;
@@ -74,6 +74,15 @@ struct PyStream(Rc<dyn Stream<PyElement>>);
 
 #[pymethods]
 impl PyStream {
+
+    #[new]
+    fn new(inner: Py<PyAny>) -> Self {
+        let stream = PyProxyStream(inner);
+        let stream = stream.into_stream();
+        Self(stream)
+    }    
+
+
     #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
     fn run(
         &self,
@@ -273,6 +282,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyProxyStream>()?;
+    module.add_class::<PyStream>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

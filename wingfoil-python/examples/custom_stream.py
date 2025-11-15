@@ -8,12 +8,13 @@ class MyStream(Stream):
 
     def cycle(self):
         self.value = 0
-        for i, src in enumerate(self.sources()):
+        for i, src in enumerate(self.upstreams()):
             self.value += src.peek_value() * math.pow(10, i)
+        return True
             
 period = 0.1 # seconds
-source = ticker(period).count()
-stream = MyStream([source]*3)
+source = ticker(period).count().logged("src")
+stream = MyStream([source]*3).logged("MyStream")
 stream.run(
     realtime = True,
     cycles = 10,

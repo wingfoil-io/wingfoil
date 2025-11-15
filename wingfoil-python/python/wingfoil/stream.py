@@ -1,6 +1,6 @@
 
 
-from ._wingfoil import PyProxyStream
+from ._wingfoil import PyStream
 
 
 class Stream():
@@ -10,7 +10,7 @@ class Stream():
         in proxy Stream - this is where the magic happens"""
         obj = super().__new__(cls)
         obj.__init__(*args, **kwargs)
-        proxy = PyProxyStream(obj)
+        proxy = PyStream(obj)
         print("proxy %s" % proxy)
         return proxy
 
