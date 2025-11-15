@@ -10,10 +10,10 @@ use ::wingfoil::{
 use pyo3::conversion::IntoPyObjectExt;
 use pyo3::prelude::*;
 
+use lazy_static::lazy_static;
 use std::rc::Rc;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
-use lazy_static::lazy_static;
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
@@ -56,7 +56,12 @@ impl Default for PyElement {
 impl std::fmt::Debug for PyElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::attach(|py| {
-            let result = self.0.as_ref().unwrap().call_method0(py, "__str__").unwrap();
+            let result = self
+                .0
+                .as_ref()
+                .unwrap()
+                .call_method0(py, "__str__")
+                .unwrap();
             write!(f, "{}", result.extract::<String>(py).unwrap())
         })
     }
@@ -64,10 +69,8 @@ impl std::fmt::Debug for PyElement {
 
 impl Clone for PyElement {
     fn clone(&self) -> Self {
-        match &self.0  {
-            Some(inner) => {
-                Python::attach(|py| PyElement(Some(inner.clone_ref(py))))
-            },
+        match &self.0 {
+            Some(inner) => Python::attach(|py| PyElement(Some(inner.clone_ref(py)))),
             None => PyElement(None),
         }
     }
@@ -260,13 +263,11 @@ impl MutableNode for PyProxyStream {
     }
 }
 
-
 lazy_static! {
     static ref DUMMY_PY_ELEMENT: PyElement = PyElement(None);
 }
 
 impl StreamPeekRef<PyElement> for PyProxyStream {
-
     // This is a bit hacky - we supply dummy value for peek ref
     // but resolve it to real value in from_cell_ref.
     // Currently peek_ref is only used directly in demux.
@@ -279,7 +280,7 @@ impl StreamPeekRef<PyElement> for PyProxyStream {
         Python::attach(|py| {
             let res = self.0.call_method0(py, "peek").unwrap();
             PyElement(Some(res))
-        })        
+        })
     }
 }
 
