@@ -4,8 +4,8 @@ use std::time::SystemTime;
 use wingfoil::StreamPeek;
 
 use ::wingfoil::{
-    GraphState, IntoNode, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode, Stream,
-    StreamOperators, StreamPeekRef, UpStreams, IntoStream
+    GraphState, IntoNode, IntoStream, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode,
+    Stream, StreamOperators, StreamPeekRef, UpStreams,
 };
 
 use pyo3::conversion::IntoPyObjectExt;
@@ -74,14 +74,12 @@ struct PyStream(Rc<dyn Stream<PyElement>>);
 
 #[pymethods]
 impl PyStream {
-
     #[new]
     fn new(inner: Py<PyAny>) -> Self {
         let stream = PyProxyStream(inner);
         let stream = stream.into_stream();
         Self(stream)
-    }    
-
+    }
 
     #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
     fn run(
