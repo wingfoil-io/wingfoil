@@ -276,7 +276,7 @@ impl StreamPeekRef<PyElement> for PyProxyStream {
         &DUMMY_PY_ELEMENT
     }
 
-    fn from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
+    fn clone_from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
         Python::attach(|py| {
             let res = self.0.call_method0(py, "peek").unwrap();
             PyElement(Some(res))

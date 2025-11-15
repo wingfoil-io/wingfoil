@@ -83,7 +83,7 @@ pub trait Node: MutableNode {
 /// be peeked at.
 pub trait StreamPeekRef<T: Clone>: MutableNode {
     fn peek_ref(&self) -> &T;
-    fn from_cell_ref(&self, cell_ref: std::cell::Ref<'_, T>) -> T {
+    fn clone_from_cell_ref(&self, cell_ref: std::cell::Ref<'_, T>) -> T {
         cell_ref.clone()
     }
 }
@@ -142,7 +142,7 @@ where
         std::cell::Ref::map(self.borrow(), |strm| strm.peek_ref())
     }
     fn peek_value(&self) -> T {
-        self.borrow().from_cell_ref(self.peek_ref_cell())
+        self.borrow().clone_from_cell_ref(self.peek_ref_cell())
     }
 }
 
