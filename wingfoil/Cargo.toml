@@ -23,6 +23,7 @@ chrono = {workspace=true}
 derive_more = {workspace=true}
 env_logger = {workspace=true}
 log = {workspace=true}
+lazy_static = {workspace=true}
 
 
 # local
@@ -42,7 +43,7 @@ tokio = { version = "1", features = ["full"] }
 tungstenite = { version="0.14.0", features = ["rustls-tls"]}
 smallvec = "1.10.0"
 rand = "0.8.5"
-lazy_static = "1.4.0"
+
 tynm = "0.1.7"
 kanal = "0.1.1"
 scopeguard = "1.2.0"

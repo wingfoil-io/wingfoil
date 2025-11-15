@@ -22,8 +22,10 @@ class Stream():
         return self._upstreams
 
     def cycle(self):
-        return True
+        raise Exception("cycle must be implemented in derived class")
 
     def peek(self):
         return self._value
 
+    def set_value(self, value):
+        self._value = value

@@ -7,16 +7,21 @@ from wingfoil import ticker, Stream
 class MyStream(Stream):
 
     def cycle(self):
-        self.value = 0
+        value = 0
         for i, src in enumerate(self.upstreams()):
-            self.value += src.peek_value() * math.pow(10, i)
+            value += src.peek_value() * math.pow(10, i)
+        self.set_value(value)
         return True
             
 period = 0.1 # seconds
 source = ticker(period).count().logged("src")
-stream = MyStream([source]*3).logged("MyStream")
-stream.run(
-    realtime = True,
-    cycles = 10,
+(
+    MyStream([source]*3)
+        .map(lambda x : x * 1e-3)
+        .logged("out")
+        .run(
+            realtime = True,
+            cycles = 10,
+        )
 )
 

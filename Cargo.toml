@@ -9,12 +9,13 @@ resolver = "3"
 
 [workspace.dependencies]
 anyhow = "1.0"
-log = "0.4"
+chrono = "0.4"
+derive_more = { version = "2.0", features = ["full"] }
 env_logger = "0.11"
+lazy_static = "1.5.0"
+log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-derive_more = { version = "2.0", features = ["full"] }
-chrono = "0.4"
 
 [profile.release]
 opt-level = 3       # Options: 0, 1, 2, 3, "s" (size), "z" (min size), 3 is max speed

@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use pyo3::exceptions::PyException;
 use std::time::SystemTime;
-use wingfoil::StreamPeek;
 
 use ::wingfoil::{
     GraphState, IntoNode, IntoStream, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode,
@@ -14,6 +13,7 @@ use pyo3::prelude::*;
 use std::rc::Rc;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
+use lazy_static::lazy_static;
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
@@ -31,7 +31,7 @@ impl PyNode {
         let count = self.0.count().map(move |x| {
             Python::attach(|py| {
                 let x: Py<PyAny> = x.into_py_any(py).unwrap();
-                PyElement(x)
+                PyElement(Some(x))
             })
         });
         Ok(PyStream(count))
@@ -45,18 +45,18 @@ fn ticker(seconds: f64) -> PyResult<PyNode> {
     Ok(node)
 }
 
-struct PyElement(Py<PyAny>);
+struct PyElement(Option<Py<PyAny>>);
 
 impl Default for PyElement {
     fn default() -> Self {
-        Python::attach(|py| PyElement(py.None()))
+        Python::attach(|py| PyElement(Some(py.None())))
     }
 }
 
 impl std::fmt::Debug for PyElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::attach(|py| {
-            let result = self.0.call_method0(py, "__str__").unwrap();
+            let result = self.0.as_ref().unwrap().call_method0(py, "__str__").unwrap();
             write!(f, "{}", result.extract::<String>(py).unwrap())
         })
     }
@@ -64,7 +64,12 @@ impl std::fmt::Debug for PyElement {
 
 impl Clone for PyElement {
     fn clone(&self) -> Self {
-        Python::attach(|py| PyElement(self.0.clone_ref(py)))
+        match &self.0  {
+            Some(inner) => {
+                Python::attach(|py| PyElement(Some(inner.clone_ref(py))))
+            },
+            None => PyElement(None),
+        }
     }
 }
 
@@ -97,7 +102,7 @@ impl PyStream {
     }
 
     fn peek_value(&self) -> Py<PyAny> {
-        self.0.peek_value().0
+        self.0.peek_value().0.unwrap()
     }
 
     fn logged(&self, label: String) -> PyStream {
@@ -108,7 +113,7 @@ impl PyStream {
         let stream = self.0.map(move |x| {
             Python::attach(|py| {
                 let res = func.call1(py, (x.0,)).unwrap();
-                PyElement(res)
+                PyElement(Some(res))
             })
         });
         Ok(PyStream(stream))
@@ -255,22 +260,26 @@ impl MutableNode for PyProxyStream {
     }
 }
 
-impl StreamPeekRef<PyElement> for PyProxyStream {
-    fn peek_ref(&self) -> &PyElement {
-        panic!("peek_ref is not implemented");
-    }
+
+lazy_static! {
+    static ref DUMMY_PY_ELEMENT: PyElement = PyElement(None);
 }
 
-impl StreamPeek<PyElement> for PyProxyStream {
-    fn peek_value(&self) -> PyElement {
-        Python::attach(|py| {
-            let res = self.0.call_method0(py, "peek").unwrap();
-            PyElement(res)
-        })
+impl StreamPeekRef<PyElement> for PyProxyStream {
+
+    // This is a bit hacky - we supply dummy value for peek ref
+    // but resolve it to real value in from_cell_ref.
+    // Currently peek_ref is only used directly in demux.
+
+    fn peek_ref(&self) -> &PyElement {
+        &DUMMY_PY_ELEMENT
     }
 
-    fn peek_ref_cell(&self) -> std::cell::Ref<'_, PyElement> {
-        panic!("peek_ref_cell is not implemented");
+    fn from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
+        Python::attach(|py| {
+            let res = self.0.call_method0(py, "peek").unwrap();
+            PyElement(Some(res))
+        })        
     }
 }
 
@@ -279,7 +288,6 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_class::<PyNode>()?;
-    module.add_class::<PyProxyStream>()?;
     module.add_class::<PyStream>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
