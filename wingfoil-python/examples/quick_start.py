@@ -14,11 +14,9 @@ stream = (
         .logged(">>")
 )
 
-
-
 stream.run(
     realtime = True,
-    cycles = 10,
+    cycles = 3,
 )
 
 print(stream.peek_value())

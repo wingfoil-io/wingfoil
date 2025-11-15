@@ -12,16 +12,17 @@ class MyStream(Stream):
             value += src.peek_value() * math.pow(10, i)
         self.set_value(value)
         return True
-            
+
+
 period = 0.1 # seconds
 source = ticker(period).count().logged("src")
 (
     MyStream([source]*3)
-        .map(lambda x : x * 1e-3)
+        .map(lambda x : x * 0.01)
         .logged("out")
         .run(
             realtime = True,
-            cycles = 10,
+            cycles = 5,
         )
 )
 
