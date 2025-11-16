@@ -21,7 +21,6 @@ lazy_static! {
 
 pub struct PyElement(Option<Py<PyAny>>);
 
-use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 
