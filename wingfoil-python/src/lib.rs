@@ -1,19 +1,16 @@
-use anyhow::anyhow;
-use pyo3::exceptions::PyException;
-use std::time::SystemTime;
 
-use ::wingfoil::{
-    GraphState, IntoNode, IntoStream, MutableNode, NanoTime, Node, NodeOperators, RunFor, RunMode,
-    Stream, StreamOperators, StreamPeekRef, UpStreams,
-};
 
-use pyo3::conversion::IntoPyObjectExt;
+mod py_stream;
+mod types;
+mod proxy_stream;
+
+use ::wingfoil::{Node, NodeOperators};
+use py_stream::*;
+
 use pyo3::prelude::*;
-
-use lazy_static::lazy_static;
 use std::rc::Rc;
 use std::time::Duration;
-use std::time::UNIX_EPOCH;
+
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
@@ -28,13 +25,7 @@ impl PyNode {
 #[pymethods]
 impl PyNode {
     fn count(&self) -> PyResult<PyStream> {
-        let count = self.0.count().map(move |x| {
-            Python::attach(|py| {
-                let x: Py<PyAny> = x.into_py_any(py).unwrap();
-                PyElement(Some(x))
-            })
-        });
-        Ok(PyStream(count))
+        Ok(self.0.count().as_py_stream())
     }
 }
 
@@ -45,244 +36,7 @@ fn ticker(seconds: f64) -> PyResult<PyNode> {
     Ok(node)
 }
 
-struct PyElement(Option<Py<PyAny>>);
 
-impl Default for PyElement {
-    fn default() -> Self {
-        Python::attach(|py| PyElement(Some(py.None())))
-    }
-}
-
-impl std::fmt::Debug for PyElement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Python::attach(|py| {
-            let result = self
-                .0
-                .as_ref()
-                .unwrap()
-                .call_method0(py, "__str__")
-                .unwrap();
-            write!(f, "{}", result.extract::<String>(py).unwrap())
-        })
-    }
-}
-
-impl Clone for PyElement {
-    fn clone(&self) -> Self {
-        match &self.0 {
-            Some(inner) => Python::attach(|py| PyElement(Some(inner.clone_ref(py)))),
-            None => PyElement(None),
-        }
-    }
-}
-
-#[derive(Clone)]
-#[pyclass(subclass, unsendable)]
-struct PyStream(Rc<dyn Stream<PyElement>>);
-
-#[pymethods]
-impl PyStream {
-    #[new]
-    fn new(inner: Py<PyAny>) -> Self {
-        let stream = PyProxyStream(inner);
-        let stream = stream.into_stream();
-        Self(stream)
-    }
-
-    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
-    fn run(
-        &self,
-        py: Python<'_>,
-        realtime: Option<bool>,
-        start: Option<Py<PyAny>>,
-        duration: Option<Py<PyAny>>,
-        cycles: Option<u32>,
-    ) -> PyResult<()> {
-        let (run_mode, run_for) =
-            parse_run_args(py, realtime, start, duration, cycles).to_pyresult()?;
-        self.0.run(run_mode, run_for).to_pyresult()?;
-        Ok(())
-    }
-
-    fn peek_value(&self) -> Py<PyAny> {
-        self.0.peek_value().0.unwrap()
-    }
-
-    fn logged(&self, label: String) -> PyStream {
-        PyStream(self.0.logged(&label, log::Level::Info))
-    }
-
-    fn map(&self, func: Py<PyAny>) -> PyResult<PyStream> {
-        let stream = self.0.map(move |x| {
-            Python::attach(|py| {
-                let res = func.call1(py, (x.0,)).unwrap();
-                PyElement(Some(res))
-            })
-        });
-        Ok(PyStream(stream))
-    }
-}
-
-pub trait ToPyResult<T> {
-    fn to_pyresult(self) -> PyResult<T>;
-}
-
-impl<T> ToPyResult<T> for anyhow::Result<T> {
-    fn to_pyresult(self) -> PyResult<T> {
-        self.map_err(|e| PyException::new_err(e.to_string()))
-    }
-}
-
-fn parse_run_args(
-    py: Python<'_>,
-    realtime: Option<bool>,
-    start: Option<Py<PyAny>>,
-    duration: Option<Py<PyAny>>,
-    cycles: Option<u32>,
-) -> anyhow::Result<(RunMode, RunFor)> {
-    if duration.is_some() && cycles.is_some() {
-        panic!("Cannot specify both duration and cycles");
-    }
-    let realtime = realtime.unwrap_or(false);
-    if realtime && start.is_some() {
-        panic!("Cannot specify start in realtime mode");
-    }
-    let run_mode = if realtime {
-        RunMode::RealTime
-    } else {
-        let t = match start {
-            Some(start) => to_nano_time(py, start)?,
-            None => NanoTime::ZERO,
-        };
-        RunMode::HistoricalFrom(t)
-    };
-    let run_for = if let Some(cycles) = cycles {
-        RunFor::Cycles(cycles)
-    } else {
-        match duration {
-            Some(duration) => {
-                let duration = to_duration(py, duration)?;
-                RunFor::Duration(duration)
-            }
-            None => RunFor::Forever,
-        }
-    };
-    Ok((run_mode, run_for))
-}
-
-fn to_duration(py: Python<'_>, obj: Py<PyAny>) -> anyhow::Result<Duration> {
-    if let Ok(f) = obj.extract::<f64>(py) {
-        if f < 0.0 {
-            anyhow::bail!("duration can not be negative");
-        }
-        let nanos = (f * 1e9) as u64;
-        Ok(Duration::from_nanos(nanos))
-    } else if let Ok(td) = obj.extract::<Duration>(py) {
-        Ok(td)
-    } else {
-        anyhow::bail!("failed to convert duration");
-    }
-}
-
-fn f64_secs_to_nanos(ts: f64) -> anyhow::Result<u64> {
-    if ts.is_sign_negative() {
-        return Err(anyhow!("Negative timestamps not supported"));
-    }
-    let secs = ts.trunc() as u64;
-    let frac_nanos = (ts.fract() * 1e9) as u64;
-    let nanos = secs
-        .checked_mul(1_000_000_000)
-        .ok_or_else(|| anyhow!("Overflow when converting seconds to nanoseconds"))?;
-    let total_nanos = nanos
-        .checked_add(frac_nanos)
-        .ok_or_else(|| anyhow!("Overflow when adding fractional nanoseconds"))?;
-    Ok(total_nanos)
-}
-
-fn to_nano_time(py: Python<'_>, obj: Py<PyAny>) -> anyhow::Result<NanoTime> {
-    if let Ok(dt) = obj.extract::<SystemTime>(py) {
-        let nanos = dt.duration_since(UNIX_EPOCH)?.as_nanos();
-        Ok(nanos.into())
-    } else if let Ok(ts) = obj.extract::<f64>(py) {
-        Ok(f64_secs_to_nanos(ts)?.into())
-    } else {
-        Err(anyhow!("failed to convert to NanoTime"))
-    }
-}
-
-use derive_more::Display;
-
-/// This is used as inner class of python coded base class Stream
-#[derive(Display)]
-#[pyclass(subclass, unsendable)]
-struct PyProxyStream(Py<PyAny>);
-
-#[pymethods]
-impl PyProxyStream {
-    /// Constructor taking a Python object to wrap
-    #[new]
-    fn new(obj: Py<PyAny>) -> Self {
-        PyProxyStream(obj)
-    }
-}
-
-impl Clone for PyProxyStream {
-    fn clone(&self) -> Self {
-        Python::attach(|py| Self(self.0.clone_ref(py)))
-    }
-}
-
-impl MutableNode for PyProxyStream {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
-        Python::attach(|py| {
-            let this = self.0.bind(py);
-            let res = this.call_method0("cycle").unwrap();
-            res.extract::<bool>().unwrap()
-        })
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        let ups = Python::attach(|py| {
-            let this = self.0.bind(py);
-            let res = this.call_method0("upstreams").unwrap();
-            let res = res.extract::<Vec<Py<PyAny>>>().unwrap();
-            res.iter()
-                .map(|obj| {
-                    let bound = obj.bind(py);
-                    if let Ok(stream) = bound.extract::<PyStream>() {
-                        stream.0.as_node()
-                    } else if let Ok(stream) = bound.extract::<PyProxyStream>() {
-                        stream.into_node()
-                    } else {
-                        panic!("Unexpected upstream type");
-                    }
-                })
-                .collect::<Vec<_>>()
-        });
-        UpStreams::new(ups, vec![])
-    }
-}
-
-lazy_static! {
-    static ref DUMMY_PY_ELEMENT: PyElement = PyElement(None);
-}
-
-impl StreamPeekRef<PyElement> for PyProxyStream {
-    // This is a bit hacky - we supply dummy value for peek ref
-    // but resolve it to real value in from_cell_ref.
-    // Currently peek_ref is only used directly in demux.
-
-    fn peek_ref(&self) -> &PyElement {
-        &DUMMY_PY_ELEMENT
-    }
-
-    fn clone_from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
-        Python::attach(|py| {
-            let res = self.0.call_method0(py, "peek").unwrap();
-            PyElement(Some(res))
-        })
-    }
-}
 
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {

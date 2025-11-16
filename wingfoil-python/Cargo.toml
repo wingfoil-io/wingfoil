@@ -21,11 +21,11 @@ wingfoil = { path = "../wingfoil" }
 
 # workspace deps
 anyhow = {workspace = true}
+chrono = {workspace = true}
+derive_more = {workspace = true}
+env_logger = {workspace = true}
 lazy_static = {workspace = true}
 log = {workspace = true}
-env_logger = {workspace = true}
-derive_more = {workspace = true}
-chrono = {workspace = true}
 
 # local deps
 pyo3 = { version = "0.27", features = ["extension-module", "serde"] }

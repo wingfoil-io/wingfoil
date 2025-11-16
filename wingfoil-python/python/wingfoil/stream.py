@@ -2,30 +2,35 @@
 
 from ._wingfoil import PyStream
 
+from __future__ import annotations
+from typing import Any, Generic, Iterable, List, Optional, TypeVar
 
-class Stream():
+T = TypeVar("T")   # The value type carried by the Stream
 
-    def __new__(cls, *args, **kwargs):
-        """Overriden constructor to wrap this instance 
-        in proxy Stream - this is where the magic happens"""
+
+class Stream(Generic[T]):
+    def __new__(cls, *args: Any, **kwargs: Any) -> "PyStream[T]": 
+        """Override constructor to wrap the instance in a PyStream proxy."""
         obj = super().__new__(cls)
         obj.__init__(*args, **kwargs)
-        proxy = PyStream(obj)
-        print("proxy %s" % proxy)
+        proxy: PyStream[T] = PyStream(obj)
+        print(f"proxy {proxy}")
         return proxy
 
-    def __init__(self, upstreams = None):
-        self._value = None
-        self._upstreams = upstreams or []
+    def __init__(self, upstreams: Optional[Iterable["Stream[Any]"]] = None) -> None:
+        self._value: Optional[T] = None
+        self._upstreams: List[Stream[Any]] = list(upstreams) if upstreams else []
 
-    def upstreams(self):
+    def upstreams(self) -> List["Stream[Any]"]:
         return self._upstreams
 
-    def cycle(self):
+    def cycle(self) -> bool:
+        """Must be implemented in subclasses."""
         raise Exception("cycle must be implemented in derived class")
 
-    def peek(self):
+    def peek(self) -> Optional[T]:
         return self._value
 
-    def set_value(self, value):
+    def set_value(self, value: T) -> None:
         self._value = value
+

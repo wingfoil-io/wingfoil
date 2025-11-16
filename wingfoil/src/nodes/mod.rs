@@ -245,7 +245,7 @@ pub trait StreamOperators<T: Element> {
     where
         T: Element + Send,
         FUT: Future<Output = ()> + Send + 'static;
-    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(
+    fn finally<F: FnOnce(T, &GraphState) + 'static>(
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Node>;
@@ -480,11 +480,11 @@ where
         FilterStream::new(self.clone(), condition).into_stream()
     }
 
-    fn finally<F: FnOnce(T, &GraphState) + Clone + 'static>(
+    fn finally<F: FnOnce(T, &GraphState) + 'static>(
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Node> {
-        FinallyNode::new(self.clone(), func).into_node()
+        FinallyNode::new(self.clone(), Some(func)).into_node()
     }
 
     fn fold<OUT: Element>(
