@@ -74,7 +74,7 @@ impl PartialEq for PyElement {
                     let a_bound = a_obj.bind(py);
                     let b_bound = b_obj.bind(py);
 
-                    match a_bound.rich_compare(&b_bound, pyo3::basic::CompareOp::Eq) {
+                    match a_bound.rich_compare(b_bound, pyo3::basic::CompareOp::Eq) {
                         Ok(obj) => obj.is_truthy().unwrap_or(false),
                         Err(_) => false,
                     }

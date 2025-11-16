@@ -229,8 +229,7 @@ impl PyStream {
 
     /// only propagates its source if it changed (uses PartialEq on PyElement)
     fn distinct(&self) -> PyStream {
-        let stream = self.0.distinct();
-        PyStream(stream)
+        PyStream(self.0.distinct())
     }
 
     // /// drops source contingent on supplied stream (expect the user to pass a PyStream)
