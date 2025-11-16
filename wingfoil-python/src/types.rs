@@ -1,51 +1,35 @@
-
 use anyhow::anyhow;
 use pyo3::exceptions::PyException;
 use std::time::SystemTime;
 
-use ::wingfoil::{
-    NanoTime, RunFor, RunMode,
-};
+use ::wingfoil::{NanoTime, RunFor, RunMode};
 
 use pyo3::prelude::*;
 
+use lazy_static::lazy_static;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
-use lazy_static::lazy_static;
-
 
 lazy_static! {
     pub static ref DUMMY_PY_ELEMENT: PyElement = PyElement(None);
 }
 
-
 pub struct PyElement(Option<Py<PyAny>>);
 
 use pyo3::types::PyAny;
-
-
 
 impl PyElement {
     pub fn new(val: Py<PyAny>) -> Self {
         PyElement(Some(val))
     }
 
-
     pub fn as_ref(&self) -> &Py<PyAny> {
-        self
-            .0
-            .as_ref()
-            .unwrap()
-    
+        self.0.as_ref().unwrap()
     }
 
     pub fn value(&self) -> Py<PyAny> {
-        Python::attach(|py| {
-            self.as_ref().clone_ref(py)
-        })
+        Python::attach(|py| self.as_ref().clone_ref(py))
     }
-
-
 }
 
 impl Default for PyElement {
@@ -57,7 +41,8 @@ impl Default for PyElement {
 impl std::fmt::Debug for PyElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::attach(|py| {
-            let res = self.as_ref()
+            let res = self
+                .as_ref()
                 .call_method0(py, "__str__")
                 .unwrap()
                 .extract::<String>(py)
@@ -75,8 +60,6 @@ impl Clone for PyElement {
         }
     }
 }
-
-
 
 pub trait ToPyResult<T> {
     fn to_pyresult(self) -> PyResult<T>;

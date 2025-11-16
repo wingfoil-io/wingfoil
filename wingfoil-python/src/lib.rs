@@ -1,8 +1,6 @@
-
-
+mod proxy_stream;
 mod py_stream;
 mod types;
-mod proxy_stream;
 
 use ::wingfoil::{Node, NodeOperators};
 use py_stream::*;
@@ -10,7 +8,6 @@ use py_stream::*;
 use pyo3::prelude::*;
 use std::rc::Rc;
 use std::time::Duration;
-
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
@@ -35,8 +32,6 @@ fn ticker(seconds: f64) -> PyResult<PyNode> {
     let node = PyNode::new(ticker);
     Ok(node)
 }
-
-
 
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {

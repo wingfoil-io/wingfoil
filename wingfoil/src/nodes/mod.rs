@@ -245,10 +245,7 @@ pub trait StreamOperators<T: Element> {
     where
         T: Element + Send,
         FUT: Future<Output = ()> + Send + 'static;
-    fn finally<F: FnOnce(T, &GraphState) + 'static>(
-        self: &Rc<Self>,
-        func: F,
-    ) -> Rc<dyn Node>;
+    fn finally<F: FnOnce(T, &GraphState) + 'static>(self: &Rc<Self>, func: F) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
     // reduce/fold source by applying function
@@ -480,10 +477,7 @@ where
         FilterStream::new(self.clone(), condition).into_stream()
     }
 
-    fn finally<F: FnOnce(T, &GraphState) + 'static>(
-        self: &Rc<Self>,
-        func: F,
-    ) -> Rc<dyn Node> {
+    fn finally<F: FnOnce(T, &GraphState) + 'static>(self: &Rc<Self>, func: F) -> Rc<dyn Node> {
         FinallyNode::new(self.clone(), Some(func)).into_node()
     }
 

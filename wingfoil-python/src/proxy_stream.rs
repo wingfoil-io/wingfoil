@@ -1,18 +1,12 @@
-
 use derive_more::Display;
 
-use ::wingfoil::{
-    GraphState, IntoNode, MutableNode, 
-    StreamPeekRef, UpStreams,
-};
+use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
 
 use pyo3::prelude::*;
 
-
 // /use crate::proxy_stream::*;
-use crate::types::*;
 use crate::py_stream::*;
-
+use crate::types::*;
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
@@ -64,7 +58,6 @@ impl MutableNode for PyProxyStream {
         UpStreams::new(ups, vec![])
     }
 }
-
 
 impl StreamPeekRef<PyElement> for PyProxyStream {
     // This is a bit hacky - we supply dummy value for peek ref

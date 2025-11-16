@@ -1,40 +1,30 @@
-
 use pyo3::BoundObject;
 use std::any::type_name;
 
-use ::wingfoil::{
-    IntoStream, NodeOperators, 
-    Stream, StreamOperators,Element
-};
+use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators};
 
 use pyo3::prelude::*;
 
 use std::rc::Rc;
 
-use crate::types::*;
 use crate::proxy_stream::*;
+use crate::types::*;
 use crate::*;
-
 
 #[derive(Clone)]
 #[pyclass(subclass, unsendable)]
 pub struct PyStream(Rc<dyn Stream<PyElement>>);
 
 impl PyStream {
-
-    fn extract<T>(&self) -> Rc<dyn Stream<T>> 
-    where 
+    fn extract<T>(&self) -> Rc<dyn Stream<T>>
+    where
         T: Element + for<'a, 'py> FromPyObject<'a, 'py>,
     {
         self.0.map(move |x: PyElement| {
-            Python::attach(|py| {
-                match x.as_ref().extract::<T>(py) {
-                    Ok(val) => {
-                        val
-                    }, 
-                    Err(_err) => {
-                        panic!("Failed to convert from python type to native rust type")
-                    }
+            Python::attach(|py| match x.as_ref().extract::<T>(py) {
+                Ok(val) => val,
+                Err(_err) => {
+                    panic!("Failed to convert from python type to native rust type")
                 }
             })
         })
@@ -49,20 +39,15 @@ pub fn to_pyany<T>(x: T) -> Py<PyAny>
 where
     T: for<'py> IntoPyObject<'py>,
 {
-    Python::attach(|py| {
-        match x.into_pyobject(py) {
-            Ok(bound) => {
-                bound.into_any().unbind()
-            },
-            Err(_) => panic!("Conversion to PyAny from type {} failed", type_name::<T>())
-        }
+    Python::attach(|py| match x.into_pyobject(py) {
+        Ok(bound) => bound.into_any().unbind(),
+        Err(_) => panic!("Conversion to PyAny from type {} failed", type_name::<T>()),
     })
 }
 
-
 use pyo3::conversion::IntoPyObject;
 
-pub trait AsPyStream<T> 
+pub trait AsPyStream<T>
 where
     T: Element + for<'py> IntoPyObject<'py>,
 {
@@ -84,7 +69,6 @@ where
 
 #[pymethods]
 impl PyStream {
-
     #[new]
     fn new(inner: Py<PyAny>) -> Self {
         let stream = PyProxyStream::new(inner);
@@ -111,7 +95,6 @@ impl PyStream {
         self.0.peek_value().value()
     }
 
-
     // // Helper: convert Vec<PyElement> -> Py<PyAny> list
     // fn py_list_from_vec(py: Python<'_>, v: Vec<PyElement>) -> Py<PyAny> {
     //     let list = PyList::empty(py);
@@ -126,7 +109,6 @@ impl PyStream {
     // }
 
     // begin StreamOperators
-
 
     // /// accumulate the source into a Python list (PyElement containing list)
     // fn accumulate(&self) -> PyStream {
@@ -182,29 +164,27 @@ impl PyStream {
     // }
 
     fn finally(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.finally(|py_elmnt,_| {
+        let node = self.0.finally(|py_elmnt, _| {
             Python::attach(move |py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
-                let args = (res, );
+                let args = (res,);
                 func.call1(py, args).unwrap();
             });
         });
         PyNode(node)
     }
 
-
     fn for_each(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.for_each(move |py_elmnt,t| {
+        let node = self.0.for_each(move |py_elmnt, t| {
             Python::attach(|py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
-                let t: f64 = t.into() ;
+                let t: f64 = t.into();
                 let args = (res, t);
                 func.call1(py, args).unwrap();
             });
         });
         PyNode(node)
     }
-
 
     // /// reduce/fold source by applying Python callable to accumulator
     // fn fold(&self, func: Py<PyAny>) -> PyStream {
@@ -391,8 +371,5 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-
     // end StreamOperators
-
-
 }
