@@ -3,6 +3,7 @@ use std::any::type_name;
 
 use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators};
 
+use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
 
 use std::rc::Rc;
@@ -33,6 +34,10 @@ impl PyStream {
     pub fn inner_stream(&self) -> Rc<dyn Stream<PyElement>> {
         self.0.clone()
     }
+
+    pub fn from_inner(inner: Rc<dyn Stream<PyElement>>) -> Self {
+        Self(inner)
+    }
 }
 
 pub fn to_pyany<T>(x: T) -> Py<PyAny>
@@ -44,8 +49,6 @@ where
         Err(_) => panic!("Conversion to PyAny from type {} failed", type_name::<T>()),
     })
 }
-
-use pyo3::conversion::IntoPyObject;
 
 pub trait AsPyStream<T>
 where
@@ -224,12 +227,11 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// only propagates its source if it changed (uses PartialEq on PyElement)
-    // fn distinct(&self) -> PyStream {
-    //     let s = self.0.distinct();
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// only propagates its source if it changed (uses PartialEq on PyElement)
+    fn distinct(&self) -> PyStream {
+        let stream = self.0.distinct();
+        PyStream(stream)
+    }
 
     // /// drops source contingent on supplied stream (expect the user to pass a PyStream)
     // fn filter(&self, condition: &PyAny) -> PyResult<PyStream> {

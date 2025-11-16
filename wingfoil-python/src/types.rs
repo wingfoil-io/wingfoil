@@ -61,6 +61,31 @@ impl Clone for PyElement {
     }
 }
 
+impl PartialEq for PyElement {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => {
+                Python::attach(|py| {
+                    // keep cloned Py<T> alive outside bind()
+                    let a_obj = a.clone_ref(py);
+                    let b_obj = b.clone_ref(py);
+
+                    // bind inside attach so temporary doesn't drop too early
+                    let a_bound = a_obj.bind(py);
+                    let b_bound = b_obj.bind(py);
+
+                    match a_bound.rich_compare(&b_bound, pyo3::basic::CompareOp::Eq) {
+                        Ok(obj) => obj.is_truthy().unwrap_or(false),
+                        Err(_) => false,
+                    }
+                })
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 pub trait ToPyResult<T> {
     fn to_pyresult(self) -> PyResult<T>;
 }
