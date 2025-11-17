@@ -12,6 +12,7 @@ use std::rc::Rc;
 use crate::proxy_stream::*;
 use crate::types::*;
 use crate::*;
+use crate::py_element::PyElement;
 
 #[derive(Clone)]
 #[pyclass(subclass, unsendable)]

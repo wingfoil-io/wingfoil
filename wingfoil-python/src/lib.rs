@@ -1,5 +1,6 @@
 mod proxy_stream;
 mod py_stream;
+mod py_element;
 mod types;
 
 use ::wingfoil::{Node, NodeOperators};
