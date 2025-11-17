@@ -1,3 +1,4 @@
+use log::Level;
 use pyo3::BoundObject;
 use std::any::type_name;
 
@@ -279,18 +280,15 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// propagates source up to limit times
-    // fn limit(&self, limit: u32) -> PyStream {
-    //     let s = self.0.limit(limit);
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// propagates source up to limit times
+    fn limit(&self, limit: u32) -> PyStream {
+        PyStream(self.0.limit(limit))
+    }
 
-    // /// logs source and propagates it. Default level INFO.
-    // fn logged(&self, label: String, level: Option<Level>) -> PyStream {
-    //     let lvl = level.unwrap_or(Level::Info);
-    //     PyStream(self.0.logged(&label, lvl))
-    // }
+    /// logs source and propagates it. Default level INFO.
+    fn logged(&self, label: String) -> PyStream {
+        PyStream(self.0.logged(&label, Level::Info))
+    }
 
     /// Map’s its source into a new Stream using the supplied Python callable.
     fn map(&self, func: Py<PyAny>) -> PyResult<PyStream> {
@@ -312,11 +310,9 @@ impl PyStream {
     // }
 
     // /// negates its input (for boolean-like PyElements)
-    // fn not(&self) -> PyStream {
-    //     let s = self.0.not();
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    fn not(&self) -> PyStream {
+        PyStream(self.0.not())
+    }
 
     // /// reduce by applying python callable pairwise (func(a, b) -> out)
     // fn reduce(&self, func: Py<PyAny>) -> PyStream {

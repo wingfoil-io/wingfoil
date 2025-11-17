@@ -61,6 +61,20 @@ impl Clone for PyElement {
     }
 }
 
+impl std::ops::Not for PyElement {
+    type Output = PyElement;
+
+    fn not(self) -> Self::Output {
+        Python::attach(|py| {
+            let res = self
+                .as_ref()
+                .call_method0(py, "__neg__")
+                .unwrap();
+            PyElement::new(res)
+        })
+    }
+}
+
 impl PartialEq for PyElement {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
