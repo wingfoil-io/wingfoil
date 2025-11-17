@@ -6,10 +6,8 @@ use ::wingfoil::{NanoTime, RunFor, RunMode};
 
 use pyo3::prelude::*;
 
-
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
-
 
 pub trait ToPyResult<T> {
     fn to_pyresult(self) -> PyResult<T>;

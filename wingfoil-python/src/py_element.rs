@@ -1,12 +1,9 @@
-
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-
 
 pub struct PyElement(Option<Py<PyAny>>);
 
 impl PyElement {
-
     pub fn none() -> Self {
         PyElement(None)
     }
@@ -58,10 +55,7 @@ impl std::ops::Not for PyElement {
 
     fn not(self) -> Self::Output {
         Python::attach(|py| {
-            let res = self
-                .as_ref()
-                .call_method0(py, "__neg__")
-                .unwrap();
+            let res = self.as_ref().call_method0(py, "__neg__").unwrap();
             PyElement::new(res)
         })
     }

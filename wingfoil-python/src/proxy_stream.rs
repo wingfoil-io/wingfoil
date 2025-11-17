@@ -1,12 +1,11 @@
 use derive_more::Display;
-use pyo3::prelude::*;
 use lazy_static::lazy_static;
+use pyo3::prelude::*;
 
-use crate::py_stream::PyStream;
 use crate::py_element::PyElement;
+use crate::py_stream::PyStream;
 
 use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
-
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
@@ -58,7 +57,6 @@ impl MutableNode for PyProxyStream {
         UpStreams::new(ups, vec![])
     }
 }
-
 
 lazy_static! {
     pub static ref DUMMY_PY_ELEMENT: PyElement = PyElement::none();
