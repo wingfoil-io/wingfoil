@@ -6,3 +6,4 @@ flamegraph.svg
 __pycache__
 *.so
 wheelhouse
+wingfoil.html
