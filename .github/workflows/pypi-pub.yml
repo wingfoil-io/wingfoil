@@ -47,7 +47,7 @@ jobs:
       - name: Build wheel and sdist
         run: |
           cd wingfoil-python
-          maturin build --verbose --release --strip --sdist -o wheelhouse
+          maturin build --verbose --release --strip -o wheelhouse
           ls -al wheelhouse
 
       - name: Upload wheels as artifact
