@@ -239,13 +239,11 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// Propagates its source delayed by specified duration (milliseconds)
-    // fn delay(&self, delay_ms: u64) -> PyStream {
-    //     let d = Duration::from_millis(delay_ms);
-    //     let s = self.0.delay(d);
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// Propagates its source delayed by specified duration (milliseconds)
+    fn delay(&self, delay_secs: f64) -> PyStream {
+        let delay = Duration::from_secs_f64(delay_secs);
+        PyStream(self.0.delay(delay))
+    }
 
     /// only propagates its source if it changed (uses PartialEq on PyElement)
     fn distinct(&self) -> PyStream {

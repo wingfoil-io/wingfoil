@@ -99,3 +99,29 @@ impl PartialEq for PyElement {
         }
     }
 }
+
+
+impl Eq for PyElement {}
+
+
+use std::hash::{Hash, Hasher};
+
+impl Hash for PyElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.0 {
+            Some(obj) => {
+                Python::attach(|py| {
+                    let obj_ref = obj.clone_ref(py); 
+                    let bound = obj_ref.bind(py);
+                    match bound.hash() {
+                        Ok(hash_val) => state.write_isize(hash_val),
+                        Err(err) => panic!("hash failed, {err:?}")
+                    }
+                });
+            }
+            None => {
+                panic!("can not hash empty PyElement")
+            }
+        }
+    }
+}
