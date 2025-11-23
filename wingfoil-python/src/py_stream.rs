@@ -16,7 +16,7 @@ use crate::*;
 
 #[derive(Clone)]
 #[pyclass(subclass, unsendable)]
-pub struct PyStream(Rc<dyn Stream<PyElement>>);
+pub struct PyStream(pub Rc<dyn Stream<PyElement>>);
 
 impl PyStream {
     fn extract<T>(&self) -> Rc<dyn Stream<T>>
@@ -345,23 +345,18 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// samples its source on each tick of trigger (trigger must be a PyStream)
-    // fn sample(&self, trigger: &PyAny) -> PyResult<PyStream> {
-    //     Python::with_gil(|py| {
-    //         if let Ok(pystream_cell) = trigger.downcast::<pyo3::PyCell<PyStream>>() {
-    //             let other = pystream_cell.borrow();
-    //             // assume other.0 is a Node/Stream we can provide to sample
-    //             // For safety, return NotImplemented unless you have an exposed Node type bridging
-    //             Err(pyo3::exceptions::PyNotImplementedError::new_err(
-    //                 "sample: implement by extracting trigger's node and calling inner.sample(trigger_node).",
-    //             ))
-    //         } else {
-    //             Err(pyo3::exceptions::PyTypeError::new_err(
-    //                 "sample expects a PyStream trigger argument",
-    //             ))
-    //         }
-    //     })
-    // }
+    fn sample(&self, trigger: Py<PyAny>) -> PyStream {
+        Python::attach(|py| {
+            let obj = trigger.as_ref();
+            if let Ok(node) = obj.extract::<PyRef<PyNode>>(py) {
+                return PyStream(self.0.sample(node.0.clone()));
+            }
+            if let Ok(stream) = obj.extract::<PyRef<PyStream>>(py) {
+                return PyStream(self.0.sample(stream.0.clone()));
+            }
+            panic!("Expected a PyNode or PyStream");
+        })
+    }
 
     // /// print stream values to stdout via Python print()
     // fn print(&self) -> PyStream {

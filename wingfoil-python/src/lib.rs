@@ -5,6 +5,7 @@ mod types;
 
 use ::wingfoil::{Node, NodeOperators};
 use py_stream::*;
+use py_element::*;
 
 use pyo3::prelude::*;
 use std::rc::Rc;
@@ -34,10 +35,18 @@ fn ticker(seconds: f64) -> PyResult<PyNode> {
     Ok(node)
 }
 
+#[pyfunction]
+fn constant(val: Py<PyAny>) -> PyResult<PyStream> {
+    let strm = ::wingfoil::constant(PyElement::new(val));
+    Ok(PyStream(strm))
+}
+
+
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
+    module.add_function(wrap_pyfunction!(constant, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;

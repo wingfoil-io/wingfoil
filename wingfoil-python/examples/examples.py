@@ -1,8 +1,7 @@
-from wingfoil import ticker
+from wingfoil import ticker, constant
 import wingfoil
 
-src = ticker(0.1).count()
 
-strm = src.buffer(3).logged(">>")
-strm.run(realtime=True, duration=2.0)
+strm = constant(7.0).sample(ticker(0.1)).logged(">>")
+strm.run(realtime=False, duration=2.0)
 
