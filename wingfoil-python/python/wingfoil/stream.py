@@ -1,8 +1,7 @@
-
+from __future__ import annotations
 
 from ._wingfoil import PyStream
 
-from __future__ import annotations
 from typing import Any, Generic, Iterable, List, Optional, TypeVar
 
 T = TypeVar("T")   # The value type carried by the Stream

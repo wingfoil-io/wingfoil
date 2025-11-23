@@ -52,6 +52,20 @@ where
     })
 }
 
+
+// pub fn vec_to_pyany<T>(x: Vec<T>) -> Py<PyAny> 
+// where
+//     T: for<'py> IntoPyObject<'py>,
+// {
+//     Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
+// }
+
+pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> 
+{
+    Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
+}
+
+
 pub trait AsPyStream<T>
 where
     T: Element + for<'py> IntoPyObject<'py>,
@@ -128,14 +142,20 @@ impl PyStream {
         self.extract::<f64>().average().as_py_stream()
     }
 
-    // /// Buffer the source stream. The buffer is flushed automatically.
-    // fn buffer(&self, capacity: usize) -> PyStream {
-    //     let s = self.0.buffer(capacity); // Stream<Vec<PyElement>>
-    //     let s = s.map(move |vec: Vec<PyElement>| {
-    //         Python::attach(|py| PyElement(Some(Self::py_list_from_vec(py, vec))))
-    //     });
-    //     PyStream(s)
-    // }
+    fn buffer(&self, capacity: usize) -> PyStream {
+        let strm = self
+            .0
+            .buffer(capacity)
+            .map(|items| {
+                Python::attach(move |py| {
+                    let items = items.iter().map(|item| {
+                        item.as_ref().clone_ref(py)
+                    }).collect::<Vec<_>>();
+                    PyElement::new(vec_any_to_pyany(items))
+                })
+            });
+        PyStream(strm)
+    }
 
     // /// Used to accumulate values retrievable after graph completes. Returns list of (value, time) tuples.
     // fn collect(&self) -> PyStream {
