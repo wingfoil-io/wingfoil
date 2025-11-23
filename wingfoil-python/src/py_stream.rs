@@ -232,12 +232,10 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// difference in its source from one cycle to the next (pass-through of PyElement)
-    // fn difference(&self) -> PyStream {
-    //     let s = self.0.difference();
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// difference in its source from one cycle to the next (pass-through of PyElement)
+    fn difference(&self) -> PyStream {
+        PyStream(self.0.difference())
+    }
 
     /// Propagates its source delayed by specified duration (milliseconds)
     fn delay(&self, delay_secs: f64) -> PyStream {
@@ -318,13 +316,6 @@ impl PyStream {
         Ok(PyStream(stream))
     }
 
-    // /// Uses func to build graph, which is spawned on worker thread.
-    // /// This is tricky to bridge to Python; leave as NotImplementedError with guidance.
-    // fn mapper(&self, _func: Py<PyAny>) -> PyResult<PyStream> {
-    //     Err(pyo3::exceptions::PyNotImplementedError::new_err(
-    //         "mapper: please implement a Rust-side wrapper or provide a concrete Python->Rust graph builder bridge",
-    //     ))
-    // }
 
     // /// negates its input (for boolean-like PyElements)
     fn not(&self) -> PyStream {
@@ -379,4 +370,7 @@ impl PyStream {
     }
 
     // end StreamOperators
+
+    // not done: 
+    // mapper
 }

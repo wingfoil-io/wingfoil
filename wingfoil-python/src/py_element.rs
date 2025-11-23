@@ -75,6 +75,20 @@ impl std::ops::Add for PyElement {
     }
 }
 
+impl std::ops::Sub for PyElement {
+    type Output = PyElement;
+
+    fn sub(self, rhs: PyElement) -> Self::Output {
+        Python::attach(|py| {
+            let res = self
+                .as_ref()
+                .call_method1(py,"__sub__", (rhs.as_ref(),))
+                .unwrap();
+            PyElement::new(res)
+        })
+    }
+}
+
 impl PartialEq for PyElement {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
