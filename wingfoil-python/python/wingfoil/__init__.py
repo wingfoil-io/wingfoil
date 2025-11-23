@@ -1,4 +1,6 @@
+from . import _wingfoil as _ext
+from ._wingfoil import *
 
-from ._wingfoil import Node, ticker, constant, __version__
-
-from .stream import Stream
+__doc__ = _ext.__doc__
+__version__ = getattr(_ext, "__version__", None)
+__all__ = _ext.__all__
