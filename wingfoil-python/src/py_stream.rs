@@ -86,6 +86,25 @@ where
     }
 }
 
+// trait AsPyStreamVec {
+//     fn as_py_stream_vec(&self) -> PyStream;
+// }
+
+// impl AsPyStreamVec for Rc<dyn Stream<Vec<PyElement>>>
+// {
+//     fn as_py_stream_vec(&self) -> PyStream {
+//         let strm = self.map(|items| {
+//                 Python::attach(move |py| {
+//                     let items = items.iter().map(|item| {
+//                         item.as_ref().clone_ref(py)
+//                     }).collect::<Vec<_>>();
+//                     PyElement::new(vec_any_to_pyany(items))
+//                 });
+//         PyStream(strm)
+//     }
+// }
+
+
 #[pymethods]
 impl PyStream {
     #[new]
@@ -113,21 +132,6 @@ impl PyStream {
     fn peek_value(&self) -> Py<PyAny> {
         self.0.peek_value().value()
     }
-
-    // // Helper: convert Vec<PyElement> -> Py<PyAny> list
-    // fn py_list_from_vec(py: Python<'_>, v: Vec<PyElement>) -> Py<PyAny> {
-    //     let list = PyList::empty(py);
-    //     for e in v {
-    //         if let Some(obj) = e.0 {
-    //             list.append(obj.as_ref(py)).expect("append failed");
-    //         } else {
-    //             list.append(py.None()).expect("append none failed");
-    //         }
-    //     }
-    //     list.into()
-    // }
-
-    // begin StreamOperators
 
     // /// accumulate the source into a Python list (PyElement containing list)
     // fn accumulate(&self) -> PyStream {
@@ -157,26 +161,20 @@ impl PyStream {
         PyStream(strm)
     }
 
-    // /// Used to accumulate values retrievable after graph completes. Returns list of (value, time) tuples.
     // fn collect(&self) -> PyStream {
-    //     let s = self.0.collect(); // Stream<Vec<ValueAt<PyElement>>>
-    //     let s = s.map(move |vec_va: Vec<ValueAt<PyElement>>| {
-    //         Python::attach(|py| {
-    //             let list = PyList::empty(py);
-    //             for va in vec_va {
-    //                 // convert value to Python object (or None)
-    //                 let val_obj = match va.value.0 {
-    //                     Some(obj) => obj.as_ref(py).into(),
-    //                     None => py.None().into(),
-    //                 };
-    //                 // Represent ValueAt as tuple (value, time)
-    //                 let tup = (val_obj, va.time);
-    //                 list.append(tup).unwrap();
-    //             }
-    //             PyElement(Some(list.into()))
-    //         })
-    //     });
-    //     PyStream(s)
+    //     let strm = self
+    //         .0
+    //         .collect()
+    //         .map(|items| {
+    //             Python::attach(move |py| {
+    //                 let items = items.iter().map(|item| {
+    //                     let value = item.value.as_ref().clone_ref(py);
+    //                     let time = item.time();
+    //                 }).collect::<Vec<_>>();
+    //                 PyElement::new(vec_any_to_pyany(items))
+    //             })
+    //         });
+    //     PyStream(strm)
     // }
 
     // /// collapses a burst (IntoIterator) of ticks into a single tick
@@ -382,12 +380,10 @@ impl PyStream {
     //     PyStream(s)
     // }
 
-    // /// sum the stream (assumes addable PyElements)
-    // fn sum(&self) -> PyStream {
-    //     let s = self.0.sum();
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// sum the stream (assumes addable PyElements)
+    fn sum(&self) -> PyStream {
+        PyStream(self.0.sum())
+    }
 
     // end StreamOperators
 }
