@@ -83,24 +83,6 @@ where
     }
 }
 
-// trait AsPyStreamVec {
-//     fn as_py_stream_vec(&self) -> PyStream;
-// }
-
-// impl AsPyStreamVec for Rc<dyn Stream<Vec<PyElement>>>
-// {
-//     fn as_py_stream_vec(&self) -> PyStream {
-//         let strm = self.map(|items| {
-//                 Python::attach(move |py| {
-//                     let items = items.iter().map(|item| {
-//                         item.as_ref().clone_ref(py)
-//                     }).collect::<Vec<_>>();
-//                     PyElement::new(vec_any_to_pyany(items))
-//                 });
-//         PyStream(strm)
-//     }
-// }
-
 #[pymethods]
 impl PyStream {
     #[new]
@@ -226,14 +208,14 @@ impl PyStream {
     }
 
     /// Map’s its source into a new Stream using the supplied Python callable.
-    fn map(&self, func: Py<PyAny>) -> PyResult<PyStream> {
+    fn map(&self, func: Py<PyAny>) -> PyStream {
         let stream = self.0.map(move |x| {
             Python::attach(|py| {
                 let res = func.call1(py, (x.value(),)).unwrap();
                 PyElement::new(res)
             })
         });
-        Ok(PyStream(stream))
+        PyStream(stream)
     }
 
     // /// negates its input (for boolean-like PyElements)

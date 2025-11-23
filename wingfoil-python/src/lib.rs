@@ -23,22 +23,21 @@ impl PyNode {
 
 #[pymethods]
 impl PyNode {
-    fn count(&self) -> PyResult<PyStream> {
-        Ok(self.0.count().as_py_stream())
+    fn count(&self) -> PyStream {
+        self.0.count().as_py_stream()
     }
 }
 
 #[pyfunction]
-fn ticker(seconds: f64) -> PyResult<PyNode> {
+fn ticker(seconds: f64) -> PyNode {
     let ticker = ::wingfoil::ticker(Duration::from_secs_f64(seconds));
-    let node = PyNode::new(ticker);
-    Ok(node)
+    PyNode::new(ticker)
 }
 
 #[pyfunction]
-fn constant(val: Py<PyAny>) -> PyResult<PyStream> {
+fn constant(val: Py<PyAny>) -> PyStream {
     let strm = ::wingfoil::constant(PyElement::new(val));
-    Ok(PyStream(strm))
+    PyStream(strm)
 }
 
 #[pymodule]
