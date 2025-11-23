@@ -52,13 +52,6 @@ where
     })
 }
 
-// pub fn vec_to_pyany<T>(x: Vec<T>) -> Py<PyAny>
-// where
-//     T: for<'py> IntoPyObject<'py>,
-// {
-//     Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
-// }
-
 pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> {
     Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
 }
