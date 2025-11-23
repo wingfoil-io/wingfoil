@@ -104,7 +104,6 @@ impl PyStream {
         self.0.peek_value().value()
     }
 
-
     // begin StreamOperators
 
     // not done yet:
@@ -118,7 +117,6 @@ impl PyStream {
     //   mapper
     //   accumulate
     //   filter (as opposed to filter_value)
-
 
     fn average(&self) -> PyStream {
         self.extract::<f64>().average().as_py_stream()
@@ -235,6 +233,4 @@ impl PyStream {
     }
 
     // end StreamOperators
-
-    
 }
