@@ -52,19 +52,16 @@ where
     })
 }
 
-
-// pub fn vec_to_pyany<T>(x: Vec<T>) -> Py<PyAny> 
+// pub fn vec_to_pyany<T>(x: Vec<T>) -> Py<PyAny>
 // where
 //     T: for<'py> IntoPyObject<'py>,
 // {
 //     Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
 // }
 
-pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> 
-{
+pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> {
     Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
 }
-
 
 pub trait AsPyStream<T>
 where
@@ -104,7 +101,6 @@ where
 //     }
 // }
 
-
 #[pymethods]
 impl PyStream {
     #[new]
@@ -133,58 +129,38 @@ impl PyStream {
         self.0.peek_value().value()
     }
 
-    // /// accumulate the source into a Python list (PyElement containing list)
-    // fn accumulate(&self) -> PyStream {
-    //     let s = self.0.accumulate(); // Stream<Vec<PyElement>>
-    //     let s = s.map(move |vec: Vec<PyElement>| {
-    //         Python::attach(|py| PyElement(Some(Self::py_list_from_vec(py, vec))))
-    //     });
-    //     PyStream(s)
-    // }
+
+    // begin StreamOperators
+
+    // not done yet:
+    //   mapper
+    //   reduce
+    //   print
+    //   collect
+    //   collapse
+    //   fold
+    // will not be done?
+    //   mapper
+    //   accumulate
+    //   filter (as opposed to filter_value)
+
 
     fn average(&self) -> PyStream {
         self.extract::<f64>().average().as_py_stream()
     }
 
     fn buffer(&self, capacity: usize) -> PyStream {
-        let strm = self
-            .0
-            .buffer(capacity)
-            .map(|items| {
-                Python::attach(move |py| {
-                    let items = items.iter().map(|item| {
-                        item.as_ref().clone_ref(py)
-                    }).collect::<Vec<_>>();
-                    PyElement::new(vec_any_to_pyany(items))
-                })
-            });
+        let strm = self.0.buffer(capacity).map(|items| {
+            Python::attach(move |py| {
+                let items = items
+                    .iter()
+                    .map(|item| item.as_ref().clone_ref(py))
+                    .collect::<Vec<_>>();
+                PyElement::new(vec_any_to_pyany(items))
+            })
+        });
         PyStream(strm)
     }
-
-    // fn collect(&self) -> PyStream {
-    //     let strm = self
-    //         .0
-    //         .collect()
-    //         .map(|items| {
-    //             Python::attach(move |py| {
-    //                 let items = items.iter().map(|item| {
-    //                     let value = item.value.as_ref().clone_ref(py);
-    //                     let time = item.time();
-    //                 }).collect::<Vec<_>>();
-    //                 PyElement::new(vec_any_to_pyany(items))
-    //             })
-    //         });
-    //     PyStream(strm)
-    // }
-
-    // /// collapses a burst (IntoIterator) of ticks into a single tick
-    // fn collapse(&self) -> PyStream {
-    //     // Underlying: collapse::<OUT>() where OUT is PyElement or Py<PyAny>
-    //     // We assume collapse returns Stream<PyElement> or Stream<Py<PyAny>>; adapt if needed.
-    //     let s = self.0.collapse::<Py<PyAny>>();
-    //     let s = s.map(move |out: Py<PyAny>| PyElement(Some(out)));
-    //     PyStream(s)
-    // }
 
     fn finally(&self, func: Py<PyAny>) -> PyNode {
         let node = self.0.finally(|py_elmnt, _| {
@@ -209,29 +185,6 @@ impl PyStream {
         PyNode(node)
     }
 
-    // /// reduce/fold source by applying Python callable to accumulator
-    // fn fold(&self, func: Py<PyAny>) -> PyStream {
-    //     // We'll use a PyElement accumulator; Python callable signature: (acc, value) -> new_acc (optional)
-    //     let s = self.0.fold(move |acc: &mut PyElement, pe: PyElement| {
-    //         Python::attach(|py| {
-    //             let f = func.as_ref(py);
-    //             let acc_obj = match acc.0 {
-    //                 Some(ref o) => o.as_ref(py),
-    //                 None => py.None(),
-    //             };
-    //             let val_obj = match pe.0 {
-    //                 Some(ref o) => o.as_ref(py),
-    //                 None => py.None(),
-    //             };
-    //             if let Ok(ret) = f.call1((acc_obj, val_obj)) {
-    //                 // replace accumulator with returned value if callable returned something
-    //                 *acc = PyElement(Some(ret.into()));
-    //             }
-    //         })
-    //     });
-    //     PyStream(s)
-    // }
-
     /// difference in its source from one cycle to the next (pass-through of PyElement)
     fn difference(&self) -> PyStream {
         PyStream(self.0.difference())
@@ -248,52 +201,19 @@ impl PyStream {
         PyStream(self.0.distinct())
     }
 
-    // /// drops source contingent on supplied stream (expect the user to pass a PyStream)
-    // fn filter(&self, condition: &PyAny) -> PyResult<PyStream> {
-    //     // Best-effort: accept a PyStream instance and extract its inner Rc<dyn Stream<bool>>
-    //     Python::with_gil(|py| {
-    //         // Try to downcast to PyCell<PyStream> and borrow .0; this requires exposing PyStream as a Python class
-    //         if let Ok(pystream_cell) = condition.downcast::<pyo3::PyCell<PyStream>>() {
-    //             let other = pystream_cell.borrow();
-    //             // Here we assume other.0 is Rc<dyn Stream<PyElement>> but it should be Stream<bool> for condition.
-    //             // The user must pass a PyStream that yields bool PyElements.
-    //             let cond_stream_rc = other.0.clone();
-    //             // wrap the cond_stream_rc into an Rc<dyn Stream<bool>> via a mapping that converts PyElement -> bool
-    //             // For simplicity build a condition stream using `.map` on cond_stream_rc
-    //             let cond_mapped = cond_stream_rc.map(|pe: PyElement| {
-    //                 Python::attach(|py| {
-    //                     match pe.0 {
-    //                         Some(obj) => obj.as_ref(py).extract::<bool>().unwrap_or(false),
-    //                         None => false,
-    //                     }
-    //                 })
-    //             });
-    //             let filtered = self.0.filter(Rc::new(cond_mapped));
-    //             let mapped = filtered.map(|pe: PyElement| pe);
-    //             Ok(PyStream(mapped))
-    //         } else {
-    //             Err(pyo3::exceptions::PyTypeError::new_err(
-    //                 "filter expects a PyStream instance yielding bools",
-    //             ))
-    //         }
-    //     })
-    // }
-
-    // /// drops source contingent on supplied predicate (Python callable)
-    // fn filter_value(&self, predicate: Py<PyAny>) -> PyStream {
-    //     let s = self.0.filter_value(move |pe: &PyElement| {
-    //         Python::attach(|py| {
-    //             let f = predicate.as_ref(py);
-    //             let arg = match pe.0 {
-    //                 Some(ref o) => o.as_ref(py),
-    //                 None => py.None(),
-    //             };
-    //             f.call1((arg,)).unwrap().extract::<bool>().unwrap_or(false)
-    //         })
-    //     });
-    //     let s = s.map(|pe: PyElement| pe);
-    //     PyStream(s)
-    // }
+    /// drops source contingent on supplied predicate (Python callable)
+    fn filter(&self, keep_func: Py<PyAny>) -> PyStream {
+        let keep = self.0.map(move |x| {
+            Python::attach(|py| {
+                keep_func
+                    .call1(py, (x.value(),))
+                    .unwrap()
+                    .extract::<bool>(py)
+                    .unwrap()
+            })
+        });
+        PyStream(self.0.filter(keep))
+    }
 
     /// propagates source up to limit times
     fn limit(&self, limit: u32) -> PyStream {
@@ -316,25 +236,10 @@ impl PyStream {
         Ok(PyStream(stream))
     }
 
-
     // /// negates its input (for boolean-like PyElements)
     fn not(&self) -> PyStream {
         PyStream(self.0.not())
     }
-
-    // /// reduce by applying python callable pairwise (func(a, b) -> out)
-    // fn reduce(&self, func: Py<PyAny>) -> PyStream {
-    //     let s = self.0.reduce(move |a: PyElement, b: PyElement| {
-    //         Python::attach(|py| {
-    //             let f = func.as_ref(py);
-    //             let av = match a.0 { Some(ref o) => o.as_ref(py), None => py.None() };
-    //             let bv = match b.0 { Some(ref o) => o.as_ref(py), None => py.None() };
-    //             let out = f.call1((av, bv)).unwrap();
-    //             PyElement(Some(out.into()))
-    //         })
-    //     });
-    //     PyStream(s)
-    // }
 
     fn sample(&self, trigger: Py<PyAny>) -> PyStream {
         Python::attach(|py| {
@@ -349,21 +254,6 @@ impl PyStream {
         })
     }
 
-    // /// print stream values to stdout via Python print()
-    // fn print(&self) -> PyStream {
-    //     let s = self.0.for_each(move |pe: PyElement, _nano: i128| {
-    //         Python::attach(|py| {
-    //             if let Some(obj) = pe.0 {
-    //                 let _ = py.print(obj.as_ref(py));
-    //             } else {
-    //                 let _ = py.print(py.None());
-    //             }
-    //         })
-    //     });
-    //     // for_each returns Node; if your for_each combinator returns Stream, adapt accordingly
-    //     PyStream(s)
-    // }
-
     /// sum the stream (assumes addable PyElements)
     fn sum(&self) -> PyStream {
         PyStream(self.0.sum())
@@ -371,6 +261,5 @@ impl PyStream {
 
     // end StreamOperators
 
-    // not done: 
-    // mapper
+    
 }

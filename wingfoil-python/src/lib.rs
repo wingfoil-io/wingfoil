@@ -4,8 +4,8 @@ mod py_stream;
 mod types;
 
 use ::wingfoil::{Node, NodeOperators};
-use py_stream::*;
 use py_element::*;
+use py_stream::*;
 
 use pyo3::prelude::*;
 use std::rc::Rc;
@@ -40,7 +40,6 @@ fn constant(val: Py<PyAny>) -> PyResult<PyStream> {
     let strm = ::wingfoil::constant(PyElement::new(val));
     Ok(PyStream(strm))
 }
-
 
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {

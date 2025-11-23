@@ -82,7 +82,7 @@ impl std::ops::Sub for PyElement {
         Python::attach(|py| {
             let res = self
                 .as_ref()
-                .call_method1(py,"__sub__", (rhs.as_ref(),))
+                .call_method1(py, "__sub__", (rhs.as_ref(),))
                 .unwrap();
             PyElement::new(res)
         })
@@ -114,9 +114,7 @@ impl PartialEq for PyElement {
     }
 }
 
-
 impl Eq for PyElement {}
-
 
 use std::hash::{Hash, Hasher};
 
@@ -125,11 +123,11 @@ impl Hash for PyElement {
         match &self.0 {
             Some(obj) => {
                 Python::attach(|py| {
-                    let obj_ref = obj.clone_ref(py); 
+                    let obj_ref = obj.clone_ref(py);
                     let bound = obj_ref.bind(py);
                     match bound.hash() {
                         Ok(hash_val) => state.write_isize(hash_val),
-                        Err(err) => panic!("hash failed, {err:?}")
+                        Err(err) => panic!("hash failed, {err:?}"),
                     }
                 });
             }
