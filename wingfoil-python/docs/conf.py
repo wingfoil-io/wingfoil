@@ -2,17 +2,28 @@
 
 import os
 import sys
-sys.path.insert(0, os.path.abspath('..'))  # Adds wingfoil-python to Python path
+sys.path.insert(0, os.path.abspath('../python/wingfoil'))  # Adds wingfoil-python to Python path
+sys.path.insert(0, os.path.abspath('../python'))
 
 project = 'Wingfoil'
 author = 'Jake Mitchell'
 release = '0.1.10'
 
 extensions = [
-    'sphinx.ext.autodoc',  # Pull docstrings from Python modules
-    'sphinx.ext.napoleon', # Support for Google/NumPy style docstrings
-    'myst_parser',  # enable Markdown support
+    'sphinx.ext.autodoc',
+    'sphinx.ext.autosummary',
+    'sphinx.ext.napoleon',
+    'myst_parser',
 ]
+
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": True,
+    "show-inheritance": True,
+}
+
+autosummary_generate = True
+autosummary_generate_overwrite = True
 
 templates_path = ['_templates']
 exclude_patterns = []

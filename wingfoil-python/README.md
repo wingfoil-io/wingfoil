@@ -43,7 +43,7 @@ stream.run(realtime=True, duration=duration)
 
 ```
 ...produces this output...
-```log
+```console
 [2025-11-02T18:42:18Z INFO  wingfoil] 0.000_092 hello, world 1
 [2025-11-02T18:42:19Z INFO  wingfoil] 1.008_038 hello, world 2
 [2025-11-02T18:42:20Z INFO  wingfoil] 2.012_219 hello, world 3

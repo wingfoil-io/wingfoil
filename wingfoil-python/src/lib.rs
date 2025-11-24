@@ -23,11 +23,13 @@ impl PyNode {
 
 #[pymethods]
 impl PyNode {
+    /// Counts how many times upstream node has ticked.
     fn count(&self) -> PyStream {
         self.0.count().as_py_stream()
     }
 }
 
+/// A node that ticks at the specified period
 #[pyfunction]
 fn ticker(seconds: f64) -> PyNode {
     let ticker = ::wingfoil::ticker(Duration::from_secs_f64(seconds));
@@ -40,6 +42,10 @@ fn constant(val: Py<PyAny>) -> PyStream {
     PyStream(strm)
 }
 
+
+/// Wingfoil is a blazingly fast, highly scalable stream processing 
+/// framework designed for latency-critical use cases such as electronic 
+/// trading and real-time AI systems
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     _ = env_logger::try_init();
