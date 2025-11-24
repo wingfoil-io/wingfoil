@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import math
-from wingfoil import ticker, Stream
+from wingfoil import ticker, CustomStream
 
 
-class MyStream(Stream):
+class MyStream(CustomStream):
 
     def cycle(self):
         value = 0

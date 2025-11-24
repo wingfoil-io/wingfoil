@@ -15,7 +15,7 @@ use crate::types::*;
 use crate::*;
 
 #[derive(Clone)]
-#[pyclass(subclass, unsendable)]
+#[pyclass(subclass, unsendable, name = "Stream")]
 pub struct PyStream(pub Rc<dyn Stream<PyElement>>);
 
 impl PyStream {

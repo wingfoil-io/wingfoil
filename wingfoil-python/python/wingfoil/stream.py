@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from ._wingfoil import PyStream
+from ._wingfoil import Stream
 
 from typing import Any, Generic, Iterable, List, Optional, TypeVar
 
 T = TypeVar("T")   # The value type carried by the Stream
 
 
-class Stream(Generic[T]):
-    def __new__(cls, *args: Any, **kwargs: Any) -> "PyStream[T]": 
+class CustomStream(Generic[T]):
+    def __new__(cls, *args: Any, **kwargs: Any) -> "Stream[T]": 
         """Override constructor to wrap the instance in a PyStream proxy."""
         obj = super().__new__(cls)
         obj.__init__(*args, **kwargs)
-        proxy: PyStream[T] = PyStream(obj)
+        proxy: Stream[T] = Stream(obj)
         print(f"proxy {proxy}")
         return proxy
 
