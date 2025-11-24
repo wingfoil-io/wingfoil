@@ -16,10 +16,14 @@ Features
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
 - **Multi-language**: currently available as rust crate and a python package with plans to add WASM/JavaScript/TypeScript support.
 - **Backtesting**: Replay historical data to backtest and optimise strategies.
-- **Multi-threading**: Distribute graph execution across cores.
 
-Installation (coming soon)
---------------------------
+Release Status
+--------------
+
+The wingfoil python module is currently available as **beta release**.
+
+Installation
+------------
 
 .. code-block:: bash
 
