@@ -42,9 +42,8 @@ fn constant(val: Py<PyAny>) -> PyStream {
     PyStream(strm)
 }
 
-
-/// Wingfoil is a blazingly fast, highly scalable stream processing 
-/// framework designed for latency-critical use cases such as electronic 
+/// Wingfoil is a blazingly fast, highly scalable stream processing
+/// framework designed for latency-critical use cases such as electronic
 /// trading and real-time AI systems
 #[pymodule]
 fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
