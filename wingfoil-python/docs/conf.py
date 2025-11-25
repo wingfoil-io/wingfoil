@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath('../python'))
 
 project = 'Wingfoil'
 author = 'Jake Mitchell'
-release = '0.1.10'
+release = '0.1.13'
 
 extensions = [
     'sphinx.ext.autodoc',
