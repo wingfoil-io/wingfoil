@@ -3,20 +3,12 @@
 import sys, os
 sys.path.insert(0, os.path.abspath('..')) 
 
-# CRITICAL FIX: Alias the top-level module to the nested name Autodoc expects
-try:
-    import wingfoil
-    # If wingfoil imports, assign its contents to the nested path Autodoc is failing on.
-    sys.modules['wingfoil.wingfoil'] = wingfoil
-    print("SUCCESS: Aliased 'wingfoil' to 'wingfoil.wingfoil' for Sphinx.")
-except ImportError:
-    # This keeps the build from crashing if the module isn't built yet
-    print("WARNING: Could not import 'wingfoil' for aliasing.")
-    pass
+import wingfoil
+sys.modules['wingfoil.wingfoil'] = wingfoil # some workaround for sphinx nonsense!?
 
 copyright = '2025, Jake Mitchell'
 author = 'Jake Mitchell'
-release = '0.1.15'
+release = '0.1.14'
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -36,6 +28,7 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autosummary_generate = True
+add_module_names = False
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = 'sphinx_rtd_theme' # Use a standard documentation theme
