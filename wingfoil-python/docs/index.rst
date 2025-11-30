@@ -1,5 +1,5 @@
-Wingfoil PyO3 Crate Documentation
-=================================
+Wingfoil
+========
 
 .. toctree::
    :maxdepth: 2
