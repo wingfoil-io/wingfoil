@@ -41,11 +41,10 @@ from wingfoil import ticker
 period = 1.0 # seconds
 duration = 4.0 # seconds
 stream = (
-      ticker(period)
-      .count()
-      .logged("hello, world")
+    ticker(period)
+        .count()
+        .logged("hello, world")
 )
-
 stream.run(realtime=True, duration=duration)
 ```
 

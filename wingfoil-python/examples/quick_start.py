@@ -12,12 +12,9 @@ stream = (
         .count()
         .map(lambda x: f"hello world {x}")
         .logged(">>")
+        ,run(
+            realtime = True,
+        cycles = 3,
+    )
 )
-
-stream.run(
-    realtime = True,
-    cycles = 3,
-)
-
-print(stream.peek_value())
 
