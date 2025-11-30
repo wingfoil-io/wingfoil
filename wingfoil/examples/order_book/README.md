@@ -37,7 +37,7 @@ Completed 91998 cycles in 287.125397ms. 3.12µs average.
 
 <div style="page-break-after: always;"></div>
 
-```rust
+```rust, ignore
 
 pub fn main() {
     env_logger::init();
