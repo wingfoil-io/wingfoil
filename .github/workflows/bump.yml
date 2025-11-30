@@ -1,7 +1,7 @@
 name: Bump Version
 
 on:
-  workflow_dispatch:       
+  workflow_dispatch:
 
 jobs:
   bump-version:
@@ -17,14 +17,22 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Install cargo-edit (for cargo set-version)
+      - name: Install cargo-edit
         run: cargo install cargo-edit
 
-      - name: Bump version
+      - name: Bump version and extract value
+        id: bump_cargo
         run: |
-          # Example: bump patch version
           cargo set-version --bump patch
+          NEW_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
+      - name: Update conf.py with new version
+        run: |
+          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
+          CONF_PATH="wingfoil-python/docs/conf.py" 
+          sed -i -E "s/^(release[[:space:]]*=[[:space:]]*['\"]).*([[:space:]]*['\"])/\1$NEW_VERSION\2/I" $CONF_PATH
+          
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
@@ -36,4 +44,4 @@ jobs:
         uses: ad-m/github-push-action@v0.6.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: main
+          branch: ${{ github.ref_name }}
