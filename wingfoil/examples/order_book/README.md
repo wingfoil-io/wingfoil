@@ -39,18 +39,6 @@ Completed 91998 cycles in 287.125397ms. 3.12µs average.
 
 ```rust
 
-use std::cell::RefCell;
-use wingfoil::adapters::csv_streams::*;
-use wingfoil::{Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators};
-
-
-# use serde::{Serialize, Deserialize};
-# fn process_orders(chunk: Vec<Message>, book: &RefCell<lobster::OrderBook>) -> (Vec<Fill>, Option<TwoWayPrice>) {todo!()}
-# 
-# #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)] struct Message {pub seconds: f64};
-# #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)] struct TwoWayPrice{};
-# #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)] struct Fill{};
-
 pub fn main() {
     env_logger::init();
     let book = RefCell::new(lobster::OrderBook::default());
