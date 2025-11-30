@@ -24,13 +24,13 @@ jobs:
         id: bump_cargo
         run: |
           cargo set-version --bump patch
-          NEW_VERSION=$(grep -m 1 '^version' Cargo.toml | awk -F'"' '{print $2}')
+          NEW_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update conf.py with new version
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          CONF_PATH="wingfoil/wingfoil-python/docs/conf.py" 
+          CONF_PATH="wingfoil-python/docs/conf.py" 
           sed -i -E "s/^(release[[:space:]]*=[[:space:]]*['\"]).*([[:space:]]*['\"])/\1$NEW_VERSION\2/I" $CONF_PATH
           
       - name: Commit version bump
