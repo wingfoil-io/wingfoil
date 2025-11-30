@@ -1,9 +1,11 @@
-.. toctree::
-   :hidden:
-
-   api
-
 Wingfoil PyO3 Crate Documentation
 =================================
 
-Welcome to the documentation for **Wingfoil**.
+.. toctree::
+   :maxdepth: 2
+   :caption: Contents:
+
+   api
+
+.. include:: ../README.md
+   :parser: myst_parser.sphinx_
