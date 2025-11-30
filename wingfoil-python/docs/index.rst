@@ -1,19 +1,9 @@
-
-
-
-.. include:: ../README.rst
-
-.. autosummary::
-   :toctree: api
-   :recursive:
-   :template: module.rst
-
-   wingfoil
-   wingfoil.ticker
-   wingfoil.Node
-   wingfoil.PyStream
-
 .. toctree::
-   :maxdepth: 2
-   :caption: API Modules
+   :hidden:
 
+   api
+
+Wingfoil PyO3 Crate Documentation
+=================================
+
+Welcome to the documentation for **Wingfoil**.
