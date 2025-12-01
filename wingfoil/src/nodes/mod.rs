@@ -81,7 +81,7 @@ where
     BiMapStream::new(upstream1.clone(), upstream2.clone(), Box::new(f)).into_stream()
 }
 
-/// Maps two [Stream]s into one using thr supplied function.  Ticks when either of it's sources ticks.
+/// Maps two [Stream]s into one using the supplied function.  Ticks when either of it's sources ticks.
 pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
     upstream1: Rc<dyn Stream<IN1>>,
     upstream2: Rc<dyn Stream<IN2>>,

@@ -7,7 +7,7 @@ pub use crate::graph::GraphState;
 pub use crate::time::*;
 
 /// The graph can ask a [Node] what it's upstreams sources are.  The node
-/// replies wiht a [UpStreams] for passive and active sources.   All sources
+/// replies with a [UpStreams] for passive and active sources.   All sources
 /// are wired upstream.   Active nodes trigger [Node].cycle() when they tick.
 /// Passive [Node]s do not.   
 #[derive(new, Default)]
@@ -23,7 +23,7 @@ impl UpStreams {
 }
 
 /// [Stream]s produce values constrained by this trait.  For large structs that you
-/// would prefer not to clone, it is recomended to wrap them in a [Rc](std::rc::Rc)
+/// would prefer not to clone, it is recommended to wrap them in a [Rc](std::rc::Rc)
 /// so they can be cloned cheaply.
 #[doc(hidden)]
 pub trait Element: Debug + Clone + Default + 'static {}
@@ -79,7 +79,7 @@ pub trait Node: MutableNode {
     fn teardown(&self, state: &mut GraphState);
 }
 
-/// A trait through which a referene to [Stream]'s value can
+/// A trait through which a reference to [Stream]'s value can
 /// be peeked at.
 pub trait StreamPeekRef<T: Clone>: MutableNode {
     fn peek_ref(&self) -> &T;

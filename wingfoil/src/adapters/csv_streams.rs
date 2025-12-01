@@ -34,7 +34,7 @@ where
 }
 
 /// Returns a [SimpleIteratorStream] that emits records from a file of
-/// comma seperated values (csv).  The source iterator must be of strictly
+/// comma separated values (csv).  The source iterator must be of strictly
 /// ascending time.  For the more general cases where there can be multiple
 /// rows with the same timestamp, you can use [csv_read_vec] instead.
 pub fn csv_read<T>(
@@ -50,7 +50,7 @@ where
 }
 
 /// Returns a [IteratorStream] that emits values from a file of
-/// comma seperated values (csv).  The source iterator can tick
+/// comma separated values (csv).  The source iterator can tick
 /// multiple times per cycle.  
 pub fn csv_read_vec<T>(
     path: &str,
@@ -64,7 +64,7 @@ where
     IteratorStream::new(it).into_stream()
 }
 
-/// Used to write records to a file of comma seperated values (csv).
+/// Used to write records to a file of comma separated values (csv).
 /// Used by [write_csv](crate::adapters::csv_streams::CsvOperators::csv_write).
 #[derive(new)]
 pub struct CsvWriterNode<T> {
@@ -98,7 +98,7 @@ fn write_header<T: Serialize + DeserializeOwned + 'static>(writer: &mut csv::Wri
     }
 }
 
-/// Used to write records to a file of comma seperated values (csv).
+/// Used to write records to a file of comma separated values (csv).
 /// Used by [write_csv](crate::adapters::csv_streams::CsvVecOperators::csv_write_vec).
 #[derive(new)]
 pub struct CsvVecWriterNode<T> {
