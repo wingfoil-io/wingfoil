@@ -40,7 +40,7 @@ mod tests {
     use crate::nodes::*;
 
     #[test]
-    fn tick_node_works_in_realitme() {
+    fn tick_node_works_in_realtime() {
         let period = Duration::from_millis(100);
         let run_to = RunFor::Duration(period * 5);
         let run_mode = RunMode::RealTime;

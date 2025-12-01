@@ -123,7 +123,7 @@
 //! We take performance seriously, and ongoing work is focused on making **Wingfoil** even closer to a **zero-cost abstraction**,
 //! Currently, the overhead of cycling a node in the graph is less than **10 nanoseconds**.
 //!  
-//! For best perfomance we recommend using **cheaply cloneable** types:
+//! For best performance we recommend using **cheaply cloneable** types:
 //!
 //! - For small strings: [`arraystring`](https://!crates.io/crates/arraystring)
 //! - For small vectors: [`tinyvec`](https://!crates.io/crates/tinyvec)
