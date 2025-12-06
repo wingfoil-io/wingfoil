@@ -14,8 +14,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  RUSTFLAGS: "-Zinstrument-mirs"
-  LLVM_PROFILE_FILE: "code-%p-%m.profraw"
 
 jobs:
   ci:
@@ -43,17 +41,6 @@ jobs:
 
       - name: Run tests with coverage
         run: cargo +nightly test --verbose
-
-      - name: Generate coverage report
-        run: |
-          grcov . --binary-path ./target/debug/ -s . -t lcov --llvm --branch -o lcov.info
-          
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
           
       - name: Run rustfmt
         run: |
