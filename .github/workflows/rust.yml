@@ -1,25 +1,75 @@
-name: Rust
+name: Rust CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
     paths-ignore:
       - ".github/workflows/**"
   pull_request:
     branches: [ "main" ]
     paths-ignore:
       - ".github/workflows/**"
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-Zinstrument-mirs"
+  LLVM_PROFILE_FILE: "code-%p-%m.profraw"
 
 jobs:
-  build:
-
+  ci:
+    name: Build, Test, & Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af
+        with:
+          profile: minimal
+          toolchain: stable
+          components: clippy
+          override: true
+          target: nightly
+
+      - name: Install required cargo tools
+        run: cargo install clippy-sarif sarif-fmt grcov
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests with coverage
+        run: cargo +nightly test --verbose
+
+      - name: Generate coverage report
+        run: |
+          grcov . --binary-path ./target/debug/ -s . -t lcov --llvm --branch -o lcov.info
+          
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          
+      - name: Run rustfmt
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Run rust-clippy
+        run: |
+          set -o pipefail
+
+          cargo clippy --all-features --message-format=json \
+            | clippy-sarif \
+            | tee rust-clippy-results.sarif \
+            | sarif-fmt
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: rust-clippy-results.sarif
+          wait-for-processing: true
