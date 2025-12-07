@@ -1,25 +1,61 @@
-name: Rust
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
     paths-ignore:
       - ".github/workflows/**"
   pull_request:
     branches: [ "main" ]
     paths-ignore:
       - ".github/workflows/**"
+  workflow_dispatch:      
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  build:
-
+  ci:
+    name: Build, Test, & Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install required cargo tools
+        run: cargo install clippy-sarif sarif-fmt grcov
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests with coverage
+        run: cargo +nightly test --verbose
+          
+      - name: Run rustfmt
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Run rust-clippy
+        run: |
+          set -o pipefail
+
+          cargo clippy --all-features --message-format=json \
+            | clippy-sarif \
+            | tee rust-clippy-results.sarif \
+            | sarif-fmt
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: rust-clippy-results.sarif
+          wait-for-processing: true
