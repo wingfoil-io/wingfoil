@@ -7,17 +7,14 @@ print("wingfoil.__version__=%s" % wingfoil.__version__)
 
 period = 0.1 # seconds
 
-stream = (
+(
     ticker(period)
         .count()
         .map(lambda x: f"hello world {x}")
         .logged(">>")
+        .run(
+            realtime = True,
+            cycles = 3,
+        )
 )
-
-stream.run(
-    realtime = True,
-    cycles = 3,
-)
-
-print(stream.peek_value())
 

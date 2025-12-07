@@ -7,3 +7,5 @@ __pycache__
 *.so
 wheelhouse
 wingfoil.html
+_build
+*_generated

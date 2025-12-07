@@ -1,7 +1,13 @@
-from wingfoil import ticker, constant
+from wingfoil import ticker, constant, bimap
 import wingfoil
 
+period = 0.1
 
-strm = constant(7.0).sample(ticker(0.1)).logged(">>")
-strm.run(realtime=False, duration=2.0)
+a = ticker(period * 2).count()
+b = constant(0.7).sample(ticker(period))
+(
+    bimap(a, b, lambda a, b: a + b)
+        .logged(">>")
+        .run(realtime=False, duration=1.0)
+)
 
