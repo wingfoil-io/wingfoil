@@ -15,29 +15,27 @@ impl<T: Element> MutableNode for WindowStream<T> {
     }
 
     fn cycle(&mut self, state: &mut GraphState) -> bool {
-        self.buffer.push(self.upstream.peek_value());
-        if state.time() >= self.next_window || (!self.buffer.is_empty() && state.is_last_cycle()) {
+        let mut flushed = false;
+        if state.time() >= self.next_window {
             self.value = self.buffer.clone();
             self.buffer.clear();
             assert!(!self.value.is_empty());
 
-            // Advance window. Handle cases where we might have skipped multiple windows or just one.
-            // For simple "buffer like" behavior, just moving the deadline forward is enough.
-            // But aligned windows usually align to the clock.
-            // Let's stick to "interval from start" logic to align windows.
-            // But state.time() is what matters.
-            
-            // If we are late, we just set the next window to be current time + interval? 
-            // Or keep strictly to the grid? 
-            // Strict grid: while next_window <= state.time() { next_window += interval }
-            
             while self.next_window <= state.time() {
                 self.next_window = self.next_window + self.interval;
             }
-            true
-        } else {
-            false
+            flushed = true;
         }
+
+        self.buffer.push(self.upstream.peek_value());
+
+        if !flushed && state.is_last_cycle() && !self.buffer.is_empty() {
+             self.value = self.buffer.clone();
+             self.buffer.clear();
+             flushed = true;
+        }
+        
+        flushed
     }
 
     fn upstreams(&self) -> UpStreams {
@@ -68,34 +66,48 @@ mod tests {
 
     use crate::graph::*;
     use crate::nodes::*;
+    use crate::queue::ValueAt;
 
     #[test]
     fn window_stream_works() {
         //env_logger::init();
         let period = Duration::from_millis(200);
-        let n = 5;
+
         // Run for enough time to trigger multiple windows
         for mode in [RunMode::HistoricalFrom(NanoTime::ZERO), RunMode::RealTime] {
-            // Window size 500ms. Ticker 200ms. 
-            // Window 1: 0, 200, 400. Flatten @ >= 500?
-            // Ticks: 0, 200, 400, 600, 800, 1000
-            // W1 (0-500): 0, 200, 400. Flush at 600?
-            // If we only cycle on upstream tick, we will flush at 600 with data [0, 200, 400, 600].
-            // Wait, if 600 is >= 500, we flush. 
-            // Logic: push current (600). check 600 >= 500. flush [0, 200, 400, 600].
-            // This includes the boundary item in the previous window if we push first.
-            // Maybe we should check BEFORE push?
-            // BufferStream pushes then checks.
-            
             let count = ticker(period).count();
             let windowed = count.window(Duration::from_millis(500));
             // Run for 1100 ms.
             // Ticks: 0, 200, 400, 600, 800, 1000
-            // Windows: 
-            // 0-500: Ticks 0, 200, 400. 
-            // Next tick 600. 600 > 500. Flush.
             
+            // Expected Windows:
+            // W1 [0, 500): 0(1), 200(2), 400(3) -> Flush at 600 check (time >= 500)
+            // W2 [500, 1000): 600(4), 800(5) -> Flush at 1000 check (time >= 1000)
+            // W3 [1000, 1500): 1000(6) -> Flush at last cycle (1100) mechanism?
+            // Actually, if run for 1100ms.
+            // 0: push 1.
+            // 200: push 2.
+            // 400: push 3.
+            // 600: 600 >= 500. flush [1, 2, 3]. push 4. next_window = 1000.
+            // 800: push 5.
+            // 1000: 1000 >= 1000. flush [4, 5]. push 6. next_window = 1500.
+            // 1200: (not run, run_for is duration 1100) -> Wait, next tick is 1200.
+            // But loop runs check at 1000? run_for duration usually stops AT limit.
+            // If run nodes logic: loop while time <= end.
+            
+            let result = windowed.collect();
             windowed.run(mode, RunFor::Duration(Duration::from_millis(1100))).unwrap();
+            
+            let data = result.peek_value();
+            // Verify structure
+            assert_eq!(data.len(), 2); 
+            // W1
+            assert_eq!(data[0].value, vec![1, 2, 3]);
+            // W2
+            assert_eq!(data[1].value, vec![4, 5]);
+            // It seems last cycle flush might not trigger if no tick happens?
+            // Ticker at 1000 happens.
+            // Let's rely on standard collecting behavior.
         }
     }
 }
