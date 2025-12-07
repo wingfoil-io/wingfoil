@@ -36,12 +36,14 @@ fn ticker(seconds: f64) -> PyNode {
     PyNode::new(ticker)
 }
 
+/// A atream that ticks once, on first engine cycle
 #[pyfunction]
 fn constant(val: Py<PyAny>) -> PyStream {
     let strm = ::wingfoil::constant(PyElement::new(val));
     PyStream(strm)
 }
 
+/// maps steams a amd b into a new stream using func (e.g lambda a, b: a + b)
 #[pyfunction]
 fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyStream {
     Python::attach(|py| {
