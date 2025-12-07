@@ -15,6 +15,9 @@ impl<T: Element> MutableNode for WindowStream<T> {
     }
 
     fn cycle(&mut self, state: &mut GraphState) -> bool {
+        // Push current value to buffer first
+        self.buffer.push(self.upstream.peek_value());
+
         let mut flushed = false;
         if state.time() >= self.next_window {
             self.value = self.buffer.clone();
@@ -26,8 +29,6 @@ impl<T: Element> MutableNode for WindowStream<T> {
             }
             flushed = true;
         }
-
-        self.buffer.push(self.upstream.peek_value());
 
         if !flushed && state.is_last_cycle() && !self.buffer.is_empty() {
              self.value = self.buffer.clone();
