@@ -16,7 +16,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 
 - **Fast**: Ultra-low latency and high throughput with a efficent [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.  
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.  
-- **Multi-language**: currently available as rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaSript/TypeScript support.
+- **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaScript/TypeScript support.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/src/nodes/graph_node.rs) across cores.
@@ -47,12 +47,12 @@ You can download from [crates.io](https://crates.io/crates/wingfoil/),
 read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/), 
 review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) 
 or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
-You can download the wingfoil python module from [pypi](https://pypi.org/project/wingfoil/).
+You can download the wingfoil Python module from [pypi](https://pypi.org/project/wingfoil/).
 
 ## Get Involved!
 
 We want to hear from you!  Especially if you:
-- are interested in contributing.  Check out CONTRIBUTING.md!
+- are interested in [contributing](https://github.com/wingfoil-io/wingfoil/blob/main/CONTRIBUTING.md)
 - know of a project that wingfoil would be well-suited for
 - would like to request a feature or report a bug
 - have any feedback
