@@ -14,6 +14,8 @@ jobs:
       - name: Install Rust Toolchains
         uses: actions-rs/toolchain@v1
         with:
+          toolchain: stable
+          override: true
           components: rustfmt
           
       - name: Cache Rust Build Artifacts
