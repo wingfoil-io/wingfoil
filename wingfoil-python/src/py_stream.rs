@@ -106,14 +106,35 @@ impl PyStream {
 
     // begin StreamOperators
 
-    // not done yet:
-    //   mapper
-    //   reduce
-    //   print
-    //   collect
-    //   collapse
-    //   fold
-    // will not be done?
+    fn print(&self) -> PyStream {
+        // Since Rust's Stream::print might not be implemented or exposed cleanly for PyElement,
+        // we map and print ourselves or use logging if available?
+        // Actually wingfoil::Stream operators usually include print/inspect.
+        // Assuming wingfoil has .inspect() or similar.
+        // Let's implement a simple print mapper for now.
+        let stream = self.0.map(|x| {
+            println!("{:?}", x.value());
+            x
+        });
+        PyStream(stream)
+    }
+
+    fn collect(&self) -> PyStream {
+        // collect() returns Stream<Vec<T>>. We need to convert Stream<Vec<PyElement>> to Stream<PyElement>.
+        let strm = self.0.collect().map(|items| {
+            Python::attach(move |py| {
+                let items = items
+                    .iter()
+                    .map(|item| item.as_ref().clone_ref(py))
+                    .collect::<Vec<_>>();
+                PyElement::new(vec_any_to_pyany(items))
+            })
+        });
+        PyStream(strm)
+    }
+
+    //     collapse
+    //     fold
     //   mapper
     //   accumulate
     //   filter (as opposed to filter_value)
