@@ -20,11 +20,12 @@ impl<T: Element> MutableNode for WindowStream<T> {
             if !self.buffer.is_empty() {
                 self.value = self.buffer.clone();
                 self.buffer.clear();
-
-                while self.next_window <= state.time() {
-                    self.next_window = self.next_window + self.interval;
-                }
                 flushed = true;
+            }
+
+            // Always update window boundaries when time passes, regardless of data
+            while self.next_window <= state.time() {
+                self.next_window = self.next_window + self.interval;
             }
         }
 
