@@ -32,11 +32,11 @@ impl<T: Element> MutableNode for WindowStream<T> {
         self.buffer.push(self.upstream.peek_value());
 
         if !flushed && state.is_last_cycle() && !self.buffer.is_empty() {
-             self.value = self.buffer.clone();
-             self.buffer.clear();
-             flushed = true;
+            self.value = self.buffer.clone();
+            self.buffer.clear();
+            flushed = true;
         }
-        
+
         flushed
     }
 
@@ -66,8 +66,8 @@ impl<T: Element> WindowStream<T> {
 #[cfg(test)]
 mod tests {
 
-    use crate::nodes::*;
     use crate::graph::*; // For RunMode, RunFor
+    use crate::nodes::*;
     use crate::queue::ValueAt; // For ValueAt
 
     #[test]
