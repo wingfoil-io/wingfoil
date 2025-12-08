@@ -24,7 +24,9 @@ between IO and business logic, which can often be problematic in
 async oriented systems.   
 
 
-
+```bash
+RUST_LOG=INFO cargo run --example async
+```
 
 ```rust
 use async_stream::stream;
