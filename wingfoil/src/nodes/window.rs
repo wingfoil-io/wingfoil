@@ -81,23 +81,23 @@ mod tests {
                 println!("{:#?}", res);
                 let expected = vec![
                     ValueAt {
-                        value: vec![1, 2, 3, 4],
+                        value: vec![1, 2, 3],
                         time: NanoTime::new(300000000),
                     },
                     ValueAt {
-                        value: vec![5, 6],
+                        value: vec![4, 5],
                         time: NanoTime::new(500000000),
                     },
                     ValueAt {
-                        value: vec![7, 8, 9],
+                        value: vec![6, 7, 8],
                         time: NanoTime::new(800000000),
                     },
                     ValueAt {
-                        value: vec![10, 11],
+                        value: vec![9, 10],
                         time: NanoTime::new(1000000000),
                     },
                     ValueAt {
-                        value: vec![12, 13, 14],
+                        value: vec![11, 12, 13],
                         time: NanoTime::new(1300000000),
                     },
                 ];
