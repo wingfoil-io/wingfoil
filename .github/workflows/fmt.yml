@@ -6,7 +6,7 @@ on:
       branch:
         description: 'Branch to run on'
         required: true
-        default: ${{ github.ref_name }}
+        default: '${{ github.ref_name }}'
 
 jobs:
   format-and-build:
@@ -19,9 +19,8 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: rustfmt
 
       - name: Run cargo fmt
