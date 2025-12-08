@@ -1,10 +1,12 @@
 mod proxy_stream;
 mod py_element;
+mod py_graph_state;
 mod py_stream;
 mod types;
 
 use ::wingfoil::{Node, NodeOperators};
 use py_element::*;
+use py_graph_state::*;
 use py_stream::*;
 
 use pyo3::prelude::*;
@@ -53,6 +55,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(constant, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
+    module.add_class::<PyGraphState>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
