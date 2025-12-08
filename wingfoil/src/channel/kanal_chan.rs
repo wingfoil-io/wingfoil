@@ -7,8 +7,7 @@ use std::pin::Pin;
 
 use super::message::{Message, ReceiverMessageSource};
 use super::{SendNodeError, SendResult};
-use crate::graph::{GraphState, ReadyNotifier, RunMode}
-    ;
+use crate::graph::{GraphState, ReadyNotifier, RunMode};
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
 use crate::types::Element;
