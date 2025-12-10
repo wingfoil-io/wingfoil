@@ -106,19 +106,6 @@ impl PyStream {
 
     // begin StreamOperators
 
-    // not done yet:
-    //   mapper
-    //   reduce
-    //   print
-    //   collect
-    //   collapse
-    //   fold
-    //   fold
-    // will not be done?
-    //   mapper
-    //   accumulate
-    //   filter (as opposed to filter_value)
-
     fn collect(&self) -> PyStream {
         let strm = self.0.collect().map(|items| {
             Python::attach(move |py| {
