@@ -113,10 +113,24 @@ impl PyStream {
     //   collect
     //   collapse
     //   fold
+    //   fold
     // will not be done?
     //   mapper
     //   accumulate
     //   filter (as opposed to filter_value)
+
+    fn collect(&self) -> PyStream {
+        let strm = self.0.collect().map(|items| {
+            Python::attach(move |py| {
+                let items = items
+                    .iter()
+                    .map(|item| item.as_ref().clone_ref(py))
+                    .collect::<Vec<_>>();
+                PyElement::new(vec_any_to_pyany(items))
+            })
+        });
+        PyStream(strm)
+    }
 
     fn average(&self) -> PyStream {
         self.extract::<f64>().average().as_py_stream()
