@@ -124,7 +124,7 @@ impl PyStream {
             Python::attach(move |py| {
                 let items = items
                     .iter()
-                    .map(|item| item.as_ref().clone_ref(py))
+                    .map(|item| item.value.as_ref().clone_ref(py))
                     .collect::<Vec<_>>();
                 PyElement::new(vec_any_to_pyany(items))
             })
