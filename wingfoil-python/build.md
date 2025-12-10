@@ -9,11 +9,11 @@ sudo apt-get install python3-venv
 
 # set up virtual env
 
-python3 -m venv ./.venv
+python3 -m venv ~/.venv
 
 # activate the virutal env
 
-source ./.venv/bin/activate
+source ~/.venv/bin/activate
 
 # under virtual env install these modules
 
@@ -26,4 +26,4 @@ maturin develop --release
 
 # You can run example with
 
-python3 ./examples/quickstart.py 
+python3 ./examples/quick_start.py 

@@ -28,6 +28,7 @@ mod print;
 mod producer;
 mod sample;
 mod tick;
+mod window;
 
 pub use always::*;
 pub use async_io::*;
@@ -55,6 +56,7 @@ use print::*;
 use producer::*;
 use sample::*;
 use tick::*;
+use window::WindowStream;
 
 use crate::graph::*;
 use crate::queue::ValueAt;
@@ -229,6 +231,8 @@ pub trait StreamOperators<T: Element> {
         T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>>;
+    /// Buffer the source stream based on time interval. The window is automatically flushed when the interval is exceeded or on the last cycle.
+    fn window(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<Vec<T>>>;
     /// Used to accumulate values, which can be retrieved after
     /// the graph has completed running. Useful for unit tests.
     fn collect(self: &Rc<Self>) -> Rc<dyn Stream<Vec<ValueAt<T>>>>;
@@ -357,6 +361,10 @@ where
 
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>> {
         BufferStream::new(self.clone(), capacity).into_stream()
+    }
+
+    fn window(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<Vec<T>>> {
+        WindowStream::new(self.clone(), NanoTime::new(interval.as_nanos() as u64)).into_stream()
     }
 
     fn collect(self: &Rc<Self>) -> Rc<dyn Stream<Vec<ValueAt<T>>>> {

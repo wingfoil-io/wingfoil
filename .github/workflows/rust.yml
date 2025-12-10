@@ -27,20 +27,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust Toolchains
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+          components: rustfmt, clippy
+          
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
 
-      - name: Install required cargo tools
-        run: cargo install clippy-sarif sarif-fmt grcov
+      - name: Install clippy-sarif
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: clippy-sarif
+
+      - name: Install sarif-fmt
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: sarif-fmt
+
+      - name: Install grcov
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: grcov
 
       - name: Build
         run: cargo build --verbose
 
       - name: Run tests with coverage
-        run: cargo +nightly test --verbose
+        run: cargo test --verbose
           
       - name: Run rustfmt
         run: |

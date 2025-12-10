@@ -1,0 +1,45 @@
+name: fmt
+
+on:
+  workflow_dispatch:
+
+jobs:
+  format-and-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust Toolchains
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt
+          
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo fmt
+        run: cargo fmt --all
+
+      - name: Run cargo build
+        run: cargo build --verbose
+
+      - name: Commit changes
+        if: success()
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add .
+            git commit -m fmt
+          fi
+
+      - name: Push Formatted Changes
+        uses: ad-m/github-push-action@v0.6.0
+        if: success()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref_name }}
