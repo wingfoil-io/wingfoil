@@ -629,14 +629,12 @@ impl Graph {
         self.state.current_node_index = Some(index);
         let ticked = node.clone().cycle(&mut self.state)?;
         self.state.current_node_index = None;
-
         if ticked {
             self.state.set_ticked(index);
-            // Collect downstream indices first to avoid borrowing issues
-            let downstreams = self.state.nodes[index].downstreams.clone();
-            for &(downstream_index, active) in &downstreams {
+            for i in 0..self.state.nodes[index].downstreams.len() {
+                let (downstream_index, active) = self.state.nodes[index].downstreams[i];
                 if active {
-                    self.mark_dirty(downstream_index);
+                    self.mark_dirty(downstream_index)
                 }
             }
         }

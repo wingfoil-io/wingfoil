@@ -186,17 +186,12 @@ where
 
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         if graph_state.ticked(self.source.clone()) {
-            let res = self
+            self
                 .sender
                 .get_mut()
                 .unwrap()
-                .send(graph_state, self.source.peek_value());
-            if let Err(e) = res {
-                graph_state.terminate(Err(anyhow!(e)));
-                return Ok(false);
-            }
+                .send(graph_state, self.source.peek_value())?;
         }
-
         self.receiver_stream.cycle(graph_state)
     }
 
