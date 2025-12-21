@@ -37,6 +37,10 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
         Ok(ticked)
     }
 
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if !self.queue.is_empty() {
             let time = self.queue.next_time();

@@ -1,5 +1,5 @@
 use crate::graph::GraphState;
-use crate::types::{IntoNode, MutableNode, Node};
+use crate::types::{IntoNode, MutableNode, Node, UpStreams};
 use std::rc::Rc;
 
 struct AlwaysTickNode {}
@@ -7,6 +7,10 @@ struct AlwaysTickNode {}
 impl MutableNode for AlwaysTickNode {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         Ok(true)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

@@ -37,9 +37,7 @@ pub trait MutableNode {
     /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool>;
     /// Called by the graph at wiring time.
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
-    }
+    fn upstreams(&self) -> UpStreams;
     /// called by the graph after wiring and before start
     #[allow(unused_variables)]
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

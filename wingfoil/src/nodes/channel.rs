@@ -75,8 +75,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
     }
 
     fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
-        self.sender
-            .send_message(Message::EndOfStream)?;
+        self.sender.send_message(Message::EndOfStream)?;
         Ok(())
     }
 }
