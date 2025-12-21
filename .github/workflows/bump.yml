@@ -26,10 +26,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install sarif-fmt
+      - name: Install cargo-edit
         uses: taiki-e/cache-cargo-install-action@v2
         with:
-          tool: cargo-edit        
+          tool: cargo-edit
 
       - name: Bump version and extract value
         id: bump_cargo
