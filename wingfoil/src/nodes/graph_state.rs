@@ -13,9 +13,9 @@ pub(crate) struct GraphStateStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for GraphStateStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(state);
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

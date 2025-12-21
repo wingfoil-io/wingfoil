@@ -57,12 +57,12 @@ where
     T: Element + Send,
     FUT: Future<Output = ()> + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let res = self.sender.send(state, self.source.peek_value());
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
+        if let Err(e) = res {
+            state.terminate(Err(anyhow!(e)));
         }
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {
@@ -141,7 +141,7 @@ where
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
     }
 

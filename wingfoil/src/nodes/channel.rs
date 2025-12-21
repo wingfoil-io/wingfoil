@@ -41,14 +41,14 @@ pub(crate) struct SenderNode<T: Element + Send> {
 }
 
 impl<T: Element + Send> MutableNode for SenderNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
         if state.ticked(self.source.clone().as_node()) {
             let res = self.sender.send(state, self.source.peek_value());
             if res.is_err() {
                 state.terminate(res.map_err(|e| anyhow!(e)));
             }
-            true
+            Ok(true)
         } else {
             match &self.trigger {
                 Some(trig) => {
@@ -62,7 +62,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
                     state.terminate(Err(anyhow!("None trigger!")));
                 }
             }
-            false
+            Ok(false)
         }
     }
 
@@ -99,7 +99,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
 }
 
 impl<T: Element + Send> MutableNode for ReceiverStream<T> {
-    fn cycle(&mut self, state: &mut crate::GraphState) -> bool {
+    fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         //println!("ReceiverStream::cycle start {:?}", state.time());
         let mut values: TinyVec<[T; 1]> = TinyVec::new();
         match state.run_mode() {
@@ -127,7 +127,6 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
             }
             RunMode::HistoricalFrom(_) => {
                 // no notifications from sender, block until message recieved
-
                 loop {
                     if self.finished {
                         break;
@@ -151,15 +150,15 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                     let message = self.receiver.recv();
                     match message {
                         Message::RealtimeValue(_) => {
-                            panic!("received RealtimeValue but RunMode is Historical");
+                            return Err(anyhow!("received RealtimeValue but RunMode is Historical"));
                         }
                         Message::HistoricalValue(value_at) => {
                             if value_at.time < state.time() {
-                                panic!(
-                                    "recieved Historical message but with time less than graph time, {} < {}",
+                                return Err(anyhow!(
+                                    "received Historical message but with time less than graph time, {} < {}",
                                     value_at.time,
                                     state.time()
-                                );
+                                ));
                             }
                             self.message_time = Some(value_at.time);
                             self.queue.push_back(value_at);
@@ -184,9 +183,9 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         }
         if !values.is_empty() {
             self.value = values;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 

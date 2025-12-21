@@ -12,14 +12,14 @@ pub struct MergeStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for MergeStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         for stream in self.upstreams.iter() {
             if state.ticked(stream.clone().as_node()) {
                 self.value = stream.peek_value();
                 break;
             }
         }
-        true
+        Ok(true)
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(

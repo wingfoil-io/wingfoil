@@ -2,6 +2,7 @@
 
 use crate::queue::ValueAt;
 use crate::types::*;
+use anyhow::anyhow;
 
 use std::cmp::Ordering;
 
@@ -13,18 +14,18 @@ pub struct IteratorStream<T: Element> {
     value: Vec<T>,
 }
 
-fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> bool {
+fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::Result<bool> {
     match peekable.peek() {
         Some(value_at) => {
             state.add_callback(value_at.time);
-            true
+            Ok(true)
         }
-        None => false,
+        None => Ok(false),
     }
 }
 
 impl<T: Element> MutableNode for IteratorStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
         {
             while let Some(value_at) = self.peekable.peek() {
@@ -40,7 +41,7 @@ impl<T: Element> MutableNode for IteratorStream<T> {
     }
 
     fn start(&mut self, state: &mut GraphState) {
-        add_callback(&mut self.peekable, state);
+        let _ = add_callback(&mut self.peekable, state);
     }
 }
 
@@ -73,7 +74,7 @@ pub struct SimpleIteratorStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         {
             let val_at1 = self.peekable.next().unwrap();
             self.value = val_at1.value;
@@ -82,12 +83,12 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
             if let Some(val_at2) = optional_val_at2 {
                 match val_at1.time.cmp(&val_at2.time) {
                     Ordering::Greater => {
-                        panic!("source time was descending!");
+                        return Err(anyhow!("source time was descending!"));
                     }
                     Ordering::Equal => {
-                        panic!(
+                        return Err(anyhow!(
                             "source produced multiple ticks for same time, use IteratorStream instead"
-                        )
+                        ));
                     }
                     Ordering::Less => {}
                 }
@@ -97,7 +98,7 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     }
 
     fn start(&mut self, state: &mut GraphState) {
-        add_callback(&mut self.peekable, state);
+        let _ = add_callback(&mut self.peekable, state);
     }
 }
 

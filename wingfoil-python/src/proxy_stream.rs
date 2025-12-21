@@ -28,11 +28,13 @@ impl Clone for PyProxyStream {
 }
 
 impl MutableNode for PyProxyStream {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         Python::attach(|py| {
             let this = self.0.bind(py);
-            let res = this.call_method0("cycle").unwrap();
-            res.extract::<bool>().unwrap()
+            let res = this.call_method0("cycle")
+                .map_err(|e| anyhow::anyhow!("Failed to call cycle method: {e}"))?;
+            res.extract::<bool>()
+                .map_err(|e| anyhow::anyhow!("Failed to extract boolean result: {e}"))
         })
     }
 

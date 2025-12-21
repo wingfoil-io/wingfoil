@@ -75,15 +75,15 @@ pub struct CsvWriterNode<T> {
 }
 
 impl<T: Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
             write_header::<T>(&mut self.writer);
             self.headers_written = true;
         }
         self.writer
             .serialize((state.time(), self.upstream.peek_value()))
-            .unwrap();
-        false
+            .map_err(|e| anyhow::anyhow!("Failed to serialize CSV record: {e}"))?;
+        Ok(false)
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
@@ -109,15 +109,17 @@ pub struct CsvVecWriterNode<T> {
 }
 
 impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVecWriterNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
             write_header::<T>(&mut self.writer);
             self.headers_written = true;
         }
         for rec in self.upstream.peek_value() {
-            self.writer.serialize((state.time(), rec)).unwrap();
+            self.writer
+                .serialize((state.time(), rec))
+                .map_err(|e| anyhow::anyhow!("Failed to serialize CSV record: {e}"))?;
         }
-        false
+        Ok(false)
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])

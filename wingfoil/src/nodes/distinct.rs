@@ -14,15 +14,15 @@ pub(crate) struct DistinctStream<T: Element> {
 impl<T: Element + PartialEq> MutableNode for DistinctStream<T> {
     // called by Graph when it determines this node needs
     // to be cycled
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let curr = self.source.peek_value();
         if self.value == curr {
             // value did not change, do not tick
-            false
+            Ok(false)
         } else {
             // value changed, tick
             self.value = curr;
-            true
+            Ok(true)
         }
     }
 

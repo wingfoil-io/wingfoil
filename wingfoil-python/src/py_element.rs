@@ -36,7 +36,7 @@ impl std::fmt::Debug for PyElement {
                 .unwrap()
                 .extract::<String>(py)
                 .unwrap();
-            write!(f, "{}", res)
+            write!(f, "{res}")
         })
     }
 }

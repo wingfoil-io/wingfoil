@@ -454,7 +454,7 @@ impl Graph {
                     break;
                 }
             }
-            self.cycle();
+            self.cycle()?;
             /*
             if cycles == 0 && !is_realtime {
                 // first cycle
@@ -613,31 +613,34 @@ impl Graph {
         progressed
     }
 
-    fn cycle(&mut self) {
+    fn cycle(&mut self) -> anyhow::Result<()> {
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
                 let ix = self.state.dirty_nodes_by_layer[lyr][i];
-                self.cycle_node(ix);
+                self.cycle_node(ix)?;
             }
         }
         self.reset();
+        Ok(())
     }
 
-    fn cycle_node(&mut self, index: usize) {
+    fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         let node = &self.state.nodes[index].node;
         self.state.current_node_index = Some(index);
-        let ticked = node.clone().cycle(&mut self.state);
+        let ticked = node.clone().cycle(&mut self.state)?;
         self.state.current_node_index = None;
-        //trace!("cycled node [{:02}] Ticked =  {:?} => {:}", index, ticked, node);
+        
         if ticked {
             self.state.set_ticked(index);
-            for i in 0..self.state.nodes[index].downstreams.len() {
-                let (downstream_index, active) = self.state.nodes[index].downstreams[i];
+            // Collect downstream indices first to avoid borrowing issues
+            let downstreams = self.state.nodes[index].downstreams.clone();
+            for &(downstream_index, active) in &downstreams {
                 if active {
-                    self.mark_dirty(downstream_index)
+                    self.mark_dirty(downstream_index);
                 }
             }
         }
+        Ok(())
     }
 
     fn reset(&mut self) {

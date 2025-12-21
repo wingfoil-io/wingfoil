@@ -18,11 +18,11 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
 }
 
 impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {
             // just tick on this cycle
             self.value = self.upstream.peek_value();
-            true
+            Ok(true)
         } else {
             let current_time = state.time();
             let mut ticked = false;
@@ -35,7 +35,7 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
                 self.value = self.queue.pop();
                 ticked = true;
             }
-            ticked
+            Ok(ticked)
         }
     }
 

@@ -58,7 +58,7 @@ where
         UpStreams::new(vec![], vec![])
     }
 
-    fn cycle(&mut self, graph_state: &mut GraphState) -> bool {
+    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.get_mut().unwrap().cycle(graph_state)
     }
 
@@ -184,15 +184,16 @@ where
         UpStreams::new(vec![self.source.clone()], vec![])
     }
 
-    fn cycle(&mut self, graph_state: &mut GraphState) -> bool {
+    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         if graph_state.ticked(self.source.clone()) {
             let res = self
                 .sender
                 .get_mut()
                 .unwrap()
                 .send(graph_state, self.source.peek_value());
-            if res.is_err() {
-                graph_state.terminate(res.map_err(|e| anyhow!(e)));
+            if let Err(e) = res {
+                graph_state.terminate(Err(anyhow!(e)));
+                return Ok(false);
             }
         }
 

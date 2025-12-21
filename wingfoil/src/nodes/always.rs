@@ -5,8 +5,8 @@ use std::rc::Rc;
 struct AlwaysTickNode {}
 
 impl MutableNode for AlwaysTickNode {
-    fn cycle(&mut self, _: &mut GraphState) -> bool {
-        true
+    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
     fn start(&mut self, state: &mut GraphState) {

@@ -34,7 +34,8 @@ impl<T> Element for T where T: Debug + Clone + Default + 'static {}
 pub trait MutableNode {
     /// Called by the graph when it determines that this node
     /// is required to be cycled.
-    fn cycle(&mut self, state: &mut GraphState) -> bool;
+    /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool>;
     /// Called by the graph at wiring time.
     fn upstreams(&self) -> UpStreams {
         UpStreams::default()
@@ -72,7 +73,8 @@ impl<T> Debug for dyn Stream<T> {
 /// A wiring point in the Graph.
 pub trait Node: MutableNode {
     /// This is like Node::cycle but doesn't require mutable self
-    fn cycle(&self, state: &mut GraphState) -> bool;
+    /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
+    fn cycle(&self, state: &mut GraphState) -> anyhow::Result<bool>;
     fn setup(&self, state: &mut GraphState);
     fn start(&self, state: &mut GraphState);
     fn stop(&self, state: &mut GraphState);
@@ -101,7 +103,7 @@ pub trait Stream<T>: Node + StreamPeek<T> + AsNode {}
 // RefCell
 
 impl<NODE: MutableNode> Node for RefCell<NODE> {
-    fn cycle(&self, state: &mut GraphState) -> bool {
+    fn cycle(&self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.borrow_mut().cycle(state)
     }
     fn setup(&self, state: &mut GraphState) {
@@ -119,7 +121,7 @@ impl<NODE: MutableNode> Node for RefCell<NODE> {
 }
 
 impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
-    fn cycle(&mut self, graph_state: &mut GraphState) -> bool {
+    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.borrow_mut().cycle(graph_state)
     }
     fn upstreams(&self) -> UpStreams {

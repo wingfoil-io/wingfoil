@@ -16,14 +16,14 @@ pub(crate) struct AverageStream<T: Element> {
 }
 
 impl<T: Element + ToPrimitive> MutableNode for AverageStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.count += 1;
         let sample = match self.upstream.peek_value().to_f64() {
             Some(smpl) => smpl,
             None => f64::NAN,
         };
         self.value += (sample - self.value) / self.count as f64;
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

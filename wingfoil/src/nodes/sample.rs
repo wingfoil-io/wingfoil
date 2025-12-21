@@ -14,9 +14,9 @@ pub struct SampleStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for SampleStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

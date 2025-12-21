@@ -16,12 +16,12 @@ pub struct MapFilterStream<IN, OUT: Element> {
 }
 
 impl<IN, OUT: Element> MutableNode for MapFilterStream<IN, OUT> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let (val, ticked) = (self.func)(self.upstream.peek_value());
         if ticked {
             self.value = val;
         }
-        ticked
+        Ok(ticked)
     }
 
     fn upstreams(&self) -> UpStreams {
