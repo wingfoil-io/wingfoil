@@ -16,43 +16,40 @@ on:
 jobs:
   bump-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-edit
-        run: cargo install cargo-edit
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-edit
 
       - name: Bump version and extract value
         id: bump_cargo
         run: |
-          cargo set-version --bump ${{ github.event.inputs.bump_type || 'patch' }}
+          cargo set-version --bump ${{ github.event.inputs['bump-type'] }}
           NEW_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
-          echo "bump_type=${{ github.event.inputs.bump_type || 'patch' }}" >> $GITHUB_OUTPUT
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update conf.py with new version
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
           CONF_PATH="wingfoil-python/docs/conf.py" 
-          sed -i -E "s/^(release[[:space:]]*=[[:space:]]*['\"]).*([[:space:]]*['\"])/\1$NEW_VERSION\2/I" $CONF_PATH
+          sed -i "s/^release = .*/release = '$NEW_VERSION'/" $CONF_PATH
           
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add --all
-          git commit -m "bump: ${{ steps.bump_cargo.outputs.bump_type }} version to ${{ steps.bump_cargo.outputs.new_version }}"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "bump: ${{ github.event.inputs['bump-type'] }} version to ${{ steps.bump_cargo.outputs.new_version }}"
 
       - name: Push changes
-        uses: ad-m/github-push-action@v0.6.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref_name }}
+        run: git push
