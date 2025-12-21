@@ -12,8 +12,9 @@ impl<T: Element> MutableNode for ConstantStream<T> {
         Ok(true)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(NanoTime::ZERO);
+        Ok(())
     }
 }
 

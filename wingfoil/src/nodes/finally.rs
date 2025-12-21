@@ -18,8 +18,10 @@ impl<T: Element, F: FnOnce(T, &GraphState)> MutableNode for FinallyNode<T, F> {
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
-    fn stop(&mut self, state: &mut GraphState) {
-        let f = self.finally.take().unwrap();
-        f(self.value.clone(), state)
+    fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        if let Some(f) = self.finally.take() {
+            f(self.value.clone(), state);
+        }
+        Ok(())
     }
 }

@@ -74,11 +74,10 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
         UpStreams::new(upstreams, Vec::new())
     }
 
-    fn stop(&mut self, state: &mut GraphState) {
-        let res = self.sender.send_message(Message::EndOfStream);
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
-        }
+    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        self.sender
+            .send_message(Message::EndOfStream)?;
+        Ok(())
     }
 }
 
@@ -199,11 +198,12 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         UpStreams::new(ups, vec![])
     }
 
-    fn setup(&mut self, state: &mut GraphState) {
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         match state.run_mode() {
             RunMode::RealTime => {
                 if let Some(chan) = self.notifier_channel.take() {
-                    chan.send(state.ready_notifier()).unwrap();
+                    chan.send(state.ready_notifier())
+                        .map_err(|e| anyhow::anyhow!(e))?;
                 }
             }
             RunMode::HistoricalFrom(time) => {
@@ -212,10 +212,12 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                 }
             }
         }
+        Ok(())
     }
 
-    fn teardown(&mut self, _: &mut GraphState) {
+    fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
         self.receiver.teardown();
+        Ok(())
     }
 }
 

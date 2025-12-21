@@ -135,8 +135,9 @@ impl MutableNode for BenchTriggerNode {
         }
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.always_callback();
+        Ok(())
     }
 }
 

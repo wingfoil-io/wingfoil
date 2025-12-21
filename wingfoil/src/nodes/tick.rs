@@ -28,8 +28,9 @@ impl MutableNode for TickNode {
         Ok(true)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(NanoTime::ZERO);
+        Ok(())
     }
 }
 

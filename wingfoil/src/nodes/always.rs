@@ -9,8 +9,9 @@ impl MutableNode for AlwaysTickNode {
         Ok(true)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.always_callback();
+        Ok(())
     }
 }
 

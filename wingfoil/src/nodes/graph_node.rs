@@ -3,7 +3,6 @@ use crate::*;
 use channel::{ChannelSender, channel_pair};
 use nodes::channel::ChannelOperators;
 
-use anyhow::anyhow;
 use std::cell::OnceCell;
 use std::cmp::Eq;
 use std::hash::Hash;
@@ -62,7 +61,7 @@ where
         self.receiver_stream.get_mut().unwrap().cycle(graph_state)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) {
+    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let state = mem::take(&mut self.state);
         match state {
             GraphProducerStreamState::Func(func) => {
@@ -73,7 +72,7 @@ where
                 };
                 let (sender, receiver) = channel_pair(notifier);
                 let mut receiver_stream = ReceiverStream::new(receiver, None, None);
-                receiver_stream.setup(graph_state);
+                receiver_stream.setup(graph_state)?;
                 self.receiver_stream.set(receiver_stream).unwrap();
                 let tokio_runtime = graph_state.tokio_runtime();
                 let start_time = graph_state.start_time();
@@ -90,21 +89,23 @@ where
             }
             _ => panic!(),
         }
+        Ok(())
     }
 
-    fn teardown(&mut self, graph_state: &mut GraphState) {
+    fn teardown(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         self.receiver_stream
             .get_mut()
             .unwrap()
-            .teardown(graph_state);
+            .teardown(graph_state)?;
         let state = mem::take(&mut self.state);
         match state {
             GraphProducerStreamState::Handle(handle) => {
                 handle.join().unwrap();
                 self.state = GraphProducerStreamState::Empty;
             }
-            _ => panic!(),
+            _ => anyhow::bail!("unexpected state"),
         }
+        Ok(())
     }
 }
 
@@ -186,8 +187,7 @@ where
 
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         if graph_state.ticked(self.source.clone()) {
-            self
-                .sender
+            self.sender
                 .get_mut()
                 .unwrap()
                 .send(graph_state, self.source.peek_value())?;
@@ -195,7 +195,7 @@ where
         self.receiver_stream.cycle(graph_state)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) {
+    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let state = mem::take(&mut self.state);
         match state {
             GraphMapStreamState::Func(func, sender_out) => {
@@ -236,28 +236,30 @@ where
                 };
                 self.sender.set(sender_in).unwrap();
             }
-            _ => panic!(),
+            _ => anyhow::bail!("Invalid state"),
         }
-        self.receiver_stream.setup(graph_state);
+        self.receiver_stream.setup(graph_state)
     }
 
-    fn stop(&mut self, state: &mut GraphState) {
-        let res = self.sender.get_mut().unwrap().close();
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
-        }
+    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        self.sender
+            .get_mut()
+            .ok_or(anyhow::anyhow!("Sender not initialized"))?
+            .close()?;
+        Ok(())
     }
 
-    fn teardown(&mut self, graph_state: &mut GraphState) {
-        self.receiver_stream.teardown(graph_state);
+    fn teardown(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+        self.receiver_stream.teardown(graph_state)?;
         let state = mem::take(&mut self.state);
         match state {
             GraphMapStreamState::Handle(handle) => {
                 handle.join().unwrap();
                 self.state = GraphMapStreamState::Empty;
             }
-            _ => panic!(),
+            _ => anyhow::bail!("Invalid state"),
         }
+        Ok(())
     }
 }
 

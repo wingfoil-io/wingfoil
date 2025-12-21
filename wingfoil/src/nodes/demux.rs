@@ -220,7 +220,7 @@ where
         Ok(false)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) {
+    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
         let mut node_indexes: Vec<_> = childes
             .drain(..)
@@ -234,16 +234,20 @@ where
         node_indexes
             .drain(..)
             .for_each(|node_index| self.index_map.push(node_index));
-        let overflow = self.overflow_child.take().unwrap();
+        let overflow = self
+            .overflow_child
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("overflow child is already taken"))?;
         self.overflow_graph_index = graph_state.node_index(overflow.as_node());
-        assert!(
+        anyhow::ensure!(
             self.overflow_graph_index.is_some(),
             "Failed to resolve graph index of demux overflow node.  Was it added to the graph?"
         );
-        assert!(
+        anyhow::ensure!(
             !self.index_map.is_empty(),
             "Failed to resolve any children to demux into"
         );
+        Ok(())
     }
 
     fn upstreams(&self) -> UpStreams {
@@ -389,7 +393,7 @@ where
         Ok(false)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) {
+    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
         let mut node_indexes: Vec<_> = childes
             .drain(..)
@@ -405,14 +409,15 @@ where
             .for_each(|node_index| self.index_map.push(node_index));
         let overflow = self.overflow_child.take().unwrap();
         self.overflow_graph_index = graph_state.node_index(overflow.as_node());
-        assert!(
+        anyhow::ensure!(
             self.overflow_graph_index.is_some(),
             "Failed to resolve graph index of demux overflow node.  Was it added to the graph?"
         );
-        assert!(
+        anyhow::ensure!(
             !self.index_map.is_empty(),
             "Failed to resolve any children to demux into"
         );
+        Ok(())
     }
 
     fn upstreams(&self) -> UpStreams {

@@ -40,8 +40,9 @@ impl<T: Element> MutableNode for IteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
-        let _ = add_callback(&mut self.peekable, state);
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        add_callback(&mut self.peekable, state)?;
+        Ok(())
     }
 }
 
@@ -97,8 +98,9 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
-        let _ = add_callback(&mut self.peekable, state);
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        add_callback(&mut self.peekable, state)?;
+        Ok(())
     }
 }
 

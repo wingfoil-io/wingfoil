@@ -42,16 +42,24 @@ pub trait MutableNode {
     }
     /// called by the graph after wiring and before start
     #[allow(unused_variables)]
-    fn setup(&mut self, state: &mut GraphState) {}
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called by the graph after wiring and before the first cycle.
     /// Can be used to request an initial callback.
     #[allow(unused_variables)]
-    fn start(&mut self, state: &mut GraphState) {}
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called by the graph after the last cycle.  Can be used to clean up resources.
     #[allow(unused_variables)]
-    fn stop(&mut self, state: &mut GraphState) {}
+    fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        Ok(())
+    }
     #[allow(unused_variables)]
-    fn teardown(&mut self, state: &mut GraphState) {}
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     fn type_name(&self) -> String {
         tynm::type_name::<Self>()
@@ -75,10 +83,10 @@ pub trait Node: MutableNode {
     /// This is like Node::cycle but doesn't require mutable self
     /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
     fn cycle(&self, state: &mut GraphState) -> anyhow::Result<bool>;
-    fn setup(&self, state: &mut GraphState);
-    fn start(&self, state: &mut GraphState);
-    fn stop(&self, state: &mut GraphState);
-    fn teardown(&self, state: &mut GraphState);
+    fn setup(&self, state: &mut GraphState) -> anyhow::Result<()>;
+    fn start(&self, state: &mut GraphState) -> anyhow::Result<()>;
+    fn stop(&self, state: &mut GraphState) -> anyhow::Result<()>;
+    fn teardown(&self, state: &mut GraphState) -> anyhow::Result<()>;
 }
 
 /// A trait through which a reference to [Stream]'s value can
@@ -106,16 +114,16 @@ impl<NODE: MutableNode> Node for RefCell<NODE> {
     fn cycle(&self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.borrow_mut().cycle(state)
     }
-    fn setup(&self, state: &mut GraphState) {
+    fn setup(&self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().setup(state)
     }
-    fn start(&self, state: &mut GraphState) {
+    fn start(&self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().start(state)
     }
-    fn stop(&self, state: &mut GraphState) {
+    fn stop(&self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().stop(state)
     }
-    fn teardown(&self, state: &mut GraphState) {
+    fn teardown(&self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().teardown(state)
     }
 }
@@ -127,10 +135,10 @@ impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
     fn upstreams(&self) -> UpStreams {
         self.borrow().upstreams()
     }
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().start(state)
     }
-    fn stop(&mut self, state: &mut GraphState) {
+    fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().stop(state)
     }
 }

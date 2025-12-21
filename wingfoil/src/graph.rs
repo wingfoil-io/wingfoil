@@ -331,37 +331,33 @@ impl Graph {
         graph
     }
 
-    pub(crate) fn setup_nodes(&mut self) {
-        self.apply_nodes("setup", |node, state| {
-            node.setup(state);
-        });
+    pub(crate) fn setup_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("setup", |node, state| node.setup(state))
     }
 
-    pub(crate) fn start_nodes(&mut self) {
-        self.apply_nodes("start", |node, state| {
-            node.start(state);
-        });
+    pub(crate) fn start_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("start", |node, state| node.start(state))
     }
 
-    pub(crate) fn stop_nodes(&mut self) {
-        self.apply_nodes("stop", |node, state| {
-            node.stop(state);
-        });
+    pub(crate) fn stop_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("stop", |node, state| node.stop(state))
     }
 
-    pub(crate) fn teardown_nodes(&mut self) {
-        self.apply_nodes("teardown", |node, state| {
-            node.teardown(state);
-        });
+    pub(crate) fn teardown_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("teardown", |node, state| node.teardown(state))
     }
 
-    fn apply_nodes(&mut self, desc: &str, func: impl Fn(Rc<dyn Node>, &mut GraphState)) {
+    fn apply_nodes(
+        &mut self,
+        desc: &str,
+        func: impl Fn(Rc<dyn Node>, &mut GraphState) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         //println!("*** {:}graph {:} {:}", "   ".repeat(self.state.id), self.state.id, desc);
         let timer = Instant::now();
         for ix in 0..self.state.nodes.len() {
             let node = &self.state.nodes[ix];
             self.state.current_node_index = Some(ix);
-            func(node.node.clone(), &mut self.state);
+            func(node.node.clone(), &mut self.state)?;
             self.state.current_node_index = None;
         }
         debug!(
@@ -372,6 +368,7 @@ impl Graph {
             self.state.nodes.len()
         );
         //println!("*** {:}graph {:} {:} done", "   ".repeat(self.state.id), self.state.id, desc);
+        Ok(())
     }
 
     fn resolve_start_end(
@@ -480,11 +477,11 @@ impl Graph {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        self.setup_nodes();
-        self.start_nodes();
+        self.setup_nodes()?;
+        self.start_nodes()?;
         self.run_nodes()?;
-        self.stop_nodes();
-        self.teardown_nodes();
+        self.stop_nodes()?;
+        self.teardown_nodes()?;
         Ok(())
     }
 
