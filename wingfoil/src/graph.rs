@@ -706,7 +706,7 @@ mod tests {
         let captured = inputs
             .iter()
             .map(|stream| stream.clone().as_stream().distinct())
-            .tree_fold1(
+            .tree_reduce(
                 // https://docs.rs/itertools/0.8.0/itertools/trait.Itertools.html#method.tree_fold1
                 // 1 2 3 4 5 6 7
                 // │ │ │ │ │ │ │
