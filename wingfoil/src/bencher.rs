@@ -1,12 +1,13 @@
-use crate::{Graph, GraphState, IntoNode, MutableNode, Node, NodeOperators, RunFor, RunMode};
+use crate::{
+    Graph, GraphState, IntoNode, MutableNode, Node, NodeOperators, RunFor, RunMode, UpStreams,
+};
 
+use criterion::Criterion;
 use derive_new::new;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-
-use criterion::Criterion;
 
 /// Used to add wingfoil bench to criterion.
 pub fn add_bench<F>(crit: &mut Criterion, name: &str, f: F)
@@ -121,22 +122,26 @@ struct BenchTriggerNode {
 }
 
 impl MutableNode for BenchTriggerNode {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         match self.signal.load(Ordering::SeqCst).into() {
             Signal::Begin => {
                 self.signal.store(Signal::Running.into(), Ordering::SeqCst);
-                true
+                Ok(true)
             }
             Signal::Kill => {
-                state.terminate(Ok(()));
-                false
+                anyhow::bail!("Killed")
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.always_callback();
+        Ok(())
     }
 }
 

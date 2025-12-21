@@ -10,7 +10,7 @@ resolver = "3"
 [workspace.dependencies]
 anyhow = "1.0"
 chrono = "0.4"
-derive_more = { version = "2.0", features = ["full"] }
+derive_more = { version = "2.1", features = ["full"] }
 env_logger = "0.11"
 lazy_static = "1.5.0"
 log = "0.4"

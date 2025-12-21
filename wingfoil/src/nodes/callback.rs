@@ -24,7 +24,7 @@ impl<T: Element + Hash + Eq> StreamPeekRef<T> for CallBackStream<T> {
 }
 
 impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
         while self.queue.pending(state.time()) {
             self.value = self.queue.pop();
@@ -34,14 +34,19 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
             let callback_time = self.queue.next_time();
             state.add_callback(callback_time);
         }
-        ticked
+        Ok(ticked)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if !self.queue.is_empty() {
             let time = self.queue.next_time();
             state.add_callback(time);
         }
+        Ok(())
     }
 }
 

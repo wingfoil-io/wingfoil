@@ -15,9 +15,9 @@ pub(crate) struct BiMapStream<IN1, IN2, OUT: Element> {
 }
 
 impl<IN1, IN2, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream1.peek_value(), self.upstream2.peek_value());
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

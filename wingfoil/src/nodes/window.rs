@@ -10,11 +10,12 @@ pub(crate) struct WindowStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for WindowStream<T> {
-    fn start(&mut self, state: &mut GraphState) {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.next_window = state.time() + self.interval;
+        Ok(())
     }
 
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut flushed = false;
         if state.time() >= self.next_window {
             if !self.buffer.is_empty() {
@@ -37,7 +38,7 @@ impl<T: Element> MutableNode for WindowStream<T> {
             flushed = true;
         }
 
-        flushed
+        Ok(flushed)
     }
 
     fn upstreams(&self) -> UpStreams {

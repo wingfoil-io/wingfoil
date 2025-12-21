@@ -15,13 +15,13 @@ pub(crate) struct FilterStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for FilterStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let val = self.source.peek_value();
         let ticked = self.condition.peek_value();
         if ticked {
             self.value = val;
         }
-        ticked
+        Ok(ticked)
     }
 
     fn upstreams(&self) -> UpStreams {

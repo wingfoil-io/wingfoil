@@ -41,28 +41,22 @@ pub(crate) struct SenderNode<T: Element + Send> {
 }
 
 impl<T: Element + Send> MutableNode for SenderNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
         if state.ticked(self.source.clone().as_node()) {
-            let res = self.sender.send(state, self.source.peek_value());
-            if res.is_err() {
-                state.terminate(res.map_err(|e| anyhow!(e)));
-            }
-            true
+            self.sender.send(state, self.source.peek_value())?;
+            Ok(true)
         } else {
             match &self.trigger {
                 Some(trig) => {
                     debug_assert!(state.ticked(trig.clone()));
-                    let res = self.sender.send_checkpoint(state);
-                    if res.is_err() {
-                        state.terminate(res.map_err(|e| anyhow!(e)));
-                    }
+                    self.sender.send_checkpoint(state)?;
                 }
                 None => {
-                    state.terminate(Err(anyhow!("None trigger!")));
+                    anyhow::bail!("None trigger!");
                 }
             }
-            false
+            Ok(false)
         }
     }
 
@@ -74,11 +68,9 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
         UpStreams::new(upstreams, Vec::new())
     }
 
-    fn stop(&mut self, state: &mut GraphState) {
-        let res = self.sender.send_message(Message::EndOfStream);
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
-        }
+    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        self.sender.send_message(Message::EndOfStream)?;
+        Ok(())
     }
 }
 
@@ -99,7 +91,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
 }
 
 impl<T: Element + Send> MutableNode for ReceiverStream<T> {
-    fn cycle(&mut self, state: &mut crate::GraphState) -> bool {
+    fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         //println!("ReceiverStream::cycle start {:?}", state.time());
         let mut values: TinyVec<[T; 1]> = TinyVec::new();
         match state.run_mode() {
@@ -127,7 +119,6 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
             }
             RunMode::HistoricalFrom(_) => {
                 // no notifications from sender, block until message recieved
-
                 loop {
                     if self.finished {
                         break;
@@ -151,15 +142,17 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                     let message = self.receiver.recv();
                     match message {
                         Message::RealtimeValue(_) => {
-                            panic!("received RealtimeValue but RunMode is Historical");
+                            return Err(anyhow!(
+                                "received RealtimeValue but RunMode is Historical"
+                            ));
                         }
                         Message::HistoricalValue(value_at) => {
                             if value_at.time < state.time() {
-                                panic!(
-                                    "recieved Historical message but with time less than graph time, {} < {}",
+                                return Err(anyhow!(
+                                    "received Historical message but with time less than graph time, {} < {}",
                                     value_at.time,
                                     state.time()
-                                );
+                                ));
                             }
                             self.message_time = Some(value_at.time);
                             self.queue.push_back(value_at);
@@ -184,9 +177,9 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         }
         if !values.is_empty() {
             self.value = values;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -198,11 +191,12 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         UpStreams::new(ups, vec![])
     }
 
-    fn setup(&mut self, state: &mut GraphState) {
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         match state.run_mode() {
             RunMode::RealTime => {
                 if let Some(chan) = self.notifier_channel.take() {
-                    chan.send(state.ready_notifier()).unwrap();
+                    chan.send(state.ready_notifier())
+                        .map_err(|e| anyhow::anyhow!(e))?;
                 }
             }
             RunMode::HistoricalFrom(time) => {
@@ -211,10 +205,12 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                 }
             }
         }
+        Ok(())
     }
 
-    fn teardown(&mut self, _: &mut GraphState) {
+    fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
         self.receiver.teardown();
+        Ok(())
     }
 }
 

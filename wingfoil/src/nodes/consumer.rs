@@ -14,9 +14,9 @@ pub(crate) struct ConsumerNode<IN> {
 }
 
 impl<IN> MutableNode for ConsumerNode<IN> {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(self.upstream.peek_value(), state.time());
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

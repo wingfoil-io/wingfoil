@@ -4,7 +4,6 @@ use crate::channel::{
 use crate::nodes::channel::ReceiverStream;
 use crate::*;
 
-use anyhow::anyhow;
 use futures::stream::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
@@ -57,23 +56,26 @@ where
     T: Element + Send,
     FUT: Future<Output = ()> + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
-        let res = self.sender.send(state, self.source.peek_value());
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
-        }
-        true
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.sender.send(state, self.source.peek_value())?;
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 
-    fn setup(&mut self, state: &mut GraphState) {
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         let run_mode = state.run_mode();
         let run_for = state.run_for();
-        let rx = self.rx.take().unwrap();
-        let func = self.func.take().unwrap();
+        let rx = self
+            .rx
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("rx is already taken"))?;
+        let func = self
+            .func
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("func is already taken"))?;
         let f = async move {
             let src = rx
                 .to_boxed_message_stream()
@@ -84,18 +86,19 @@ where
         };
         let handle = state.tokio_runtime().spawn(f);
         self.handle = Some(handle);
+        Ok(())
     }
 
-    fn stop(&mut self, state: &mut GraphState) {
-        let res = self.sender.close();
-        if res.is_err() {
-            state.terminate(res.map_err(|e| anyhow!(e)));
+    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        self.sender.close()?;
+        Ok(())
+    }
+
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        if let Some(handle) = self.handle.take() {
+            state.tokio_runtime().block_on(handle)?;
         }
-    }
-
-    fn teardown(&mut self, state: &mut GraphState) {
-        let handle = self.handle.take().unwrap();
-        state.tokio_runtime().block_on(handle).unwrap();
+        Ok(())
     }
 }
 
@@ -141,7 +144,7 @@ where
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
     }
 
@@ -149,16 +152,23 @@ where
         UpStreams::none()
     }
 
-    fn setup(&mut self, state: &mut GraphState) {
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         let run_mode = state.run_mode();
         let run_for = state.run_for();
-        let mut sender = self.sender.take().unwrap();
+        let mut sender = self
+            .sender
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("sender is already taken"))?;
+
         match run_mode {
             RunMode::HistoricalFrom(_) => {}
             RunMode::RealTime => sender.set_notifier(state.ready_notifier()),
         };
         let mut sender = sender.into_async();
-        let func = self.func.take().unwrap();
+        let func = self
+            .func
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("func is already taken"))?;
         let fut = async move {
             let source = func()
                 .await
@@ -172,13 +182,16 @@ where
         };
         let handle = state.tokio_runtime().spawn(fut);
         self.handle = Some(handle);
-        self.receiver_stream.setup(state);
+        self.receiver_stream.setup(state)?;
+        Ok(())
     }
 
-    fn teardown(&mut self, state: &mut GraphState) {
-        self.receiver_stream.teardown(state);
-        let handle = self.handle.take().unwrap();
-        state.tokio_runtime().block_on(handle).unwrap();
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.receiver_stream.teardown(state)?;
+        if let Some(handle) = self.handle.take() {
+            state.tokio_runtime().block_on(handle)?;
+        }
+        Ok(())
     }
 }
 

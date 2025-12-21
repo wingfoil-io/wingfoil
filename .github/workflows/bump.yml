@@ -2,6 +2,16 @@ name: Bump Version
 
 on:
   workflow_dispatch:
+    inputs:
+      bump-type:
+        description: 'Version bump type (major, minor, or patch)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
 
 jobs:
   bump-version:
@@ -23,8 +33,9 @@ jobs:
       - name: Bump version and extract value
         id: bump_cargo
         run: |
-          cargo set-version --bump patch
+          cargo set-version --bump ${{ github.event.inputs.bump_type || 'patch' }}
           NEW_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          echo "bump_type=${{ github.event.inputs.bump_type || 'patch' }}" >> $GITHUB_OUTPUT
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update conf.py with new version
@@ -38,7 +49,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add --all
-          git commit -m bump
+          git commit -m "bump: ${{ steps.bump_cargo.outputs.bump_type }} version to ${{ steps.bump_cargo.outputs.new_version }}"
 
       - name: Push changes
         uses: ad-m/github-push-action@v0.6.0

@@ -8,12 +8,17 @@ pub(crate) struct ConstantStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for ConstantStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
-        true
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(NanoTime::ZERO);
+        Ok(())
     }
 }
 

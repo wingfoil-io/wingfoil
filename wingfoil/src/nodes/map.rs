@@ -16,9 +16,9 @@ pub struct MapStream<IN, OUT: Element> {
 }
 
 impl<IN, OUT: Element> MutableNode for MapStream<IN, OUT> {
-    fn cycle(&mut self, _state: &mut GraphState) -> bool {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream.peek_value());
-        true
+        Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {

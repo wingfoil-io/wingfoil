@@ -94,7 +94,6 @@ pub struct GraphState {
     current_node_index: Option<usize>,
     scheduled_callbacks: TimeQueue<usize>,
     always_callbacks: Vec<usize>,
-    result: Option<anyhow::Result<()>>,
     node_to_index: HashMap<HashByRef<dyn Node>, usize>,
     node_ticked: Vec<bool>,
     run_time: Arc<tokio::runtime::Runtime>,
@@ -124,7 +123,6 @@ impl GraphState {
             current_node_index: None,
             scheduled_callbacks: TimeQueue::new(),
             always_callbacks: Vec::new(),
-            result: None,
             node_to_index: HashMap::new(),
             node_ticked: Vec::new(),
             run_time,
@@ -183,10 +181,6 @@ impl GraphState {
     /// Returns true if node has ticked on the current engine cycle
     pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
         self.node_ticked[self.node_index(node).unwrap()]
-    }
-
-    pub fn terminate(&mut self, result: anyhow::Result<()>) {
-        self.result = Some(result)
     }
 
     #[allow(dead_code)]
@@ -331,37 +325,33 @@ impl Graph {
         graph
     }
 
-    pub(crate) fn setup_nodes(&mut self) {
-        self.apply_nodes("setup", |node, state| {
-            node.setup(state);
-        });
+    pub(crate) fn setup_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("setup", |node, state| node.setup(state))
     }
 
-    pub(crate) fn start_nodes(&mut self) {
-        self.apply_nodes("start", |node, state| {
-            node.start(state);
-        });
+    pub(crate) fn start_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("start", |node, state| node.start(state))
     }
 
-    pub(crate) fn stop_nodes(&mut self) {
-        self.apply_nodes("stop", |node, state| {
-            node.stop(state);
-        });
+    pub(crate) fn stop_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("stop", |node, state| node.stop(state))
     }
 
-    pub(crate) fn teardown_nodes(&mut self) {
-        self.apply_nodes("teardown", |node, state| {
-            node.teardown(state);
-        });
+    pub(crate) fn teardown_nodes(&mut self) -> anyhow::Result<()> {
+        self.apply_nodes("teardown", |node, state| node.teardown(state))
     }
 
-    fn apply_nodes(&mut self, desc: &str, func: impl Fn(Rc<dyn Node>, &mut GraphState)) {
+    fn apply_nodes(
+        &mut self,
+        desc: &str,
+        func: impl Fn(Rc<dyn Node>, &mut GraphState) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         //println!("*** {:}graph {:} {:}", "   ".repeat(self.state.id), self.state.id, desc);
         let timer = Instant::now();
         for ix in 0..self.state.nodes.len() {
             let node = &self.state.nodes[ix];
             self.state.current_node_index = Some(ix);
-            func(node.node.clone(), &mut self.state);
+            func(node.node.clone(), &mut self.state)?;
             self.state.current_node_index = None;
         }
         debug!(
@@ -372,6 +362,7 @@ impl Graph {
             self.state.nodes.len()
         );
         //println!("*** {:}graph {:} {:} done", "   ".repeat(self.state.id), self.state.id, desc);
+        Ok(())
     }
 
     fn resolve_start_end(
@@ -423,9 +414,6 @@ impl Graph {
         );
         self.state.start_time = start_time;
         loop {
-            if self.state.result.is_some() {
-                return self.state.result.take().unwrap();
-            }
             if self.state.is_last_cycle && (self.state.time >= end_time || cycles >= end_cycle) {
                 debug!(
                     "Finished. {:}, {:}, {:}, {:}",
@@ -454,7 +442,7 @@ impl Graph {
                     break;
                 }
             }
-            self.cycle();
+            self.cycle()?;
             /*
             if cycles == 0 && !is_realtime {
                 // first cycle
@@ -480,11 +468,11 @@ impl Graph {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        self.setup_nodes();
-        self.start_nodes();
+        self.setup_nodes()?;
+        self.start_nodes()?;
         self.run_nodes()?;
-        self.stop_nodes();
-        self.teardown_nodes();
+        self.stop_nodes()?;
+        self.teardown_nodes()?;
         Ok(())
     }
 
@@ -613,22 +601,22 @@ impl Graph {
         progressed
     }
 
-    fn cycle(&mut self) {
+    fn cycle(&mut self) -> anyhow::Result<()> {
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
                 let ix = self.state.dirty_nodes_by_layer[lyr][i];
-                self.cycle_node(ix);
+                self.cycle_node(ix)?;
             }
         }
         self.reset();
+        Ok(())
     }
 
-    fn cycle_node(&mut self, index: usize) {
+    fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         let node = &self.state.nodes[index].node;
         self.state.current_node_index = Some(index);
-        let ticked = node.clone().cycle(&mut self.state);
+        let ticked = node.clone().cycle(&mut self.state)?;
         self.state.current_node_index = None;
-        //trace!("cycled node [{:02}] Ticked =  {:?} => {:}", index, ticked, node);
         if ticked {
             self.state.set_ticked(index);
             for i in 0..self.state.nodes[index].downstreams.len() {
@@ -638,6 +626,7 @@ impl Graph {
                 }
             }
         }
+        Ok(())
     }
 
     fn reset(&mut self) {

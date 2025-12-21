@@ -12,7 +12,7 @@ pub(crate) struct TickNode {
 }
 
 impl MutableNode for TickNode {
-    fn cycle(&mut self, state: &mut GraphState) -> bool {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let next_time = match self.at_time {
             Some(t) => {
                 // anchor to first call to mitigate drift
@@ -25,11 +25,16 @@ impl MutableNode for TickNode {
         };
         self.at_time = Some(next_time);
         state.add_callback(next_time);
-        true
+        Ok(true)
     }
 
-    fn start(&mut self, state: &mut GraphState) {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(NanoTime::ZERO);
+        Ok(())
     }
 }
 

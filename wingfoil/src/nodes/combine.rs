@@ -12,9 +12,9 @@ struct CombineNode<T: Element> {
 }
 
 impl<T: Element> MutableNode for CombineNode<T> {
-    fn cycle(&mut self, _: &mut GraphState) -> bool {
+    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         self.combined.borrow_mut().push(self.upstream.peek_value());
-        true
+        Ok(true)
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
@@ -30,9 +30,9 @@ struct CombineStream2<T: Element> {
 }
 
 impl<T: Element> MutableNode for CombineStream2<T> {
-    fn cycle(&mut self, _: &mut GraphState) -> bool {
+    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         self.value = std::mem::replace(&mut *self.combined.borrow_mut(), TinyVec::new());
-        true
+        Ok(true)
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(self.upstreams.clone(), vec![])
