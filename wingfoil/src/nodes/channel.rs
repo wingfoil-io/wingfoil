@@ -150,7 +150,9 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                     let message = self.receiver.recv();
                     match message {
                         Message::RealtimeValue(_) => {
-                            return Err(anyhow!("received RealtimeValue but RunMode is Historical"));
+                            return Err(anyhow!(
+                                "received RealtimeValue but RunMode is Historical"
+                            ));
                         }
                         Message::HistoricalValue(value_at) => {
                             if value_at.time < state.time() {

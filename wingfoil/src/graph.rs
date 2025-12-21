@@ -629,7 +629,7 @@ impl Graph {
         self.state.current_node_index = Some(index);
         let ticked = node.clone().cycle(&mut self.state)?;
         self.state.current_node_index = None;
-        
+
         if ticked {
             self.state.set_ticked(index);
             // Collect downstream indices first to avoid borrowing issues
