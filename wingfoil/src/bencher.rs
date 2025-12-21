@@ -122,15 +122,14 @@ struct BenchTriggerNode {
 }
 
 impl MutableNode for BenchTriggerNode {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         match self.signal.load(Ordering::SeqCst).into() {
             Signal::Begin => {
                 self.signal.store(Signal::Running.into(), Ordering::SeqCst);
                 Ok(true)
             }
             Signal::Kill => {
-                state.terminate(Ok(()));
-                Ok(false)
+                anyhow::bail!("Killed")
             }
             _ => Ok(false),
         }

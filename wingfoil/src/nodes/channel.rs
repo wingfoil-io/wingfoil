@@ -44,22 +44,16 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
         if state.ticked(self.source.clone().as_node()) {
-            let res = self.sender.send(state, self.source.peek_value());
-            if res.is_err() {
-                state.terminate(res.map_err(|e| anyhow!(e)));
-            }
+            self.sender.send(state, self.source.peek_value())?;
             Ok(true)
         } else {
             match &self.trigger {
                 Some(trig) => {
                     debug_assert!(state.ticked(trig.clone()));
-                    let res = self.sender.send_checkpoint(state);
-                    if res.is_err() {
-                        state.terminate(res.map_err(|e| anyhow!(e)));
-                    }
+                    self.sender.send_checkpoint(state)?;
                 }
                 None => {
-                    state.terminate(Err(anyhow!("None trigger!")));
+                    anyhow::bail!("None trigger!");
                 }
             }
             Ok(false)

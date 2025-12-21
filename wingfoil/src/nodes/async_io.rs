@@ -4,7 +4,6 @@ use crate::channel::{
 use crate::nodes::channel::ReceiverStream;
 use crate::*;
 
-use anyhow::anyhow;
 use futures::stream::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
@@ -58,10 +57,7 @@ where
     FUT: Future<Output = ()> + Send + 'static,
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        let res = self.sender.send(state, self.source.peek_value());
-        if let Err(e) = res {
-            state.terminate(Err(anyhow!(e)));
-        }
+        self.sender.send(state, self.source.peek_value())?;
         Ok(true)
     }
 

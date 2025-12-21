@@ -94,7 +94,6 @@ pub struct GraphState {
     current_node_index: Option<usize>,
     scheduled_callbacks: TimeQueue<usize>,
     always_callbacks: Vec<usize>,
-    result: Option<anyhow::Result<()>>,
     node_to_index: HashMap<HashByRef<dyn Node>, usize>,
     node_ticked: Vec<bool>,
     run_time: Arc<tokio::runtime::Runtime>,
@@ -124,7 +123,6 @@ impl GraphState {
             current_node_index: None,
             scheduled_callbacks: TimeQueue::new(),
             always_callbacks: Vec::new(),
-            result: None,
             node_to_index: HashMap::new(),
             node_ticked: Vec::new(),
             run_time,
@@ -183,10 +181,6 @@ impl GraphState {
     /// Returns true if node has ticked on the current engine cycle
     pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
         self.node_ticked[self.node_index(node).unwrap()]
-    }
-
-    pub fn terminate(&mut self, result: anyhow::Result<()>) {
-        self.result = Some(result)
     }
 
     #[allow(dead_code)]
@@ -420,9 +414,6 @@ impl Graph {
         );
         self.state.start_time = start_time;
         loop {
-            if self.state.result.is_some() {
-                return self.state.result.take().unwrap();
-            }
             if self.state.is_last_cycle && (self.state.time >= end_time || cycles >= end_cycle) {
                 debug!(
                     "Finished. {:}, {:}, {:}, {:}",
