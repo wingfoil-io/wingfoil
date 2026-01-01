@@ -11,16 +11,6 @@ use serde::de::DeserializeOwned;
 use tinyvec::TinyVec;
 use zmq;
 
-enum ZeroMqStatusEvent {
-    Connect,
-    Disconnect,
-}
-
-enum ZeroMqMessage<T: Element + Send> {
-    Message(Message<T>),
-    Status(ZeroMqStatusEvent),
-}
-
 #[derive(new)]
 struct ZeroMqSubscriber<T: Element + Send> {
     address: String,
