@@ -220,4 +220,3 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ChannelReceiverStream
         &self.value
     }
 }
-

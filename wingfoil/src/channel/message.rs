@@ -3,10 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::boxed::Box;
 use std::pin::Pin;
 
-use crate::{GraphState, RunMode};
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
 use crate::types::Element;
+use crate::{GraphState, RunMode};
 
 /// Message that can be sent between threads.
 #[derive(new, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,12 +26,10 @@ pub(crate) enum Message<T: Element + Send> {
     RealtimeValue(T),
 }
 
-impl <T: Element + Send> Message<T> {
+impl<T: Element + Send> Message<T> {
     pub fn build(value: T, graph_state: &GraphState) -> Message<T> {
         match graph_state.run_mode() {
-            RunMode::RealTime => {
-                Message::RealtimeValue(value)
-            },
+            RunMode::RealTime => Message::RealtimeValue(value),
             RunMode::HistoricalFrom(_) => {
                 Message::HistoricalValue(ValueAt::new(value, graph_state.time()))
             }
