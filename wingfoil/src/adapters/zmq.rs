@@ -32,9 +32,7 @@ struct ZeroMqSubscriber<T: Element + Send>{
 impl <T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 
     fn run(&self, channel_sender: ChannelSender<T>) -> anyhow::Result<()> {
-        info!("ZeroMqSubscriber connecting");
         let socket = self.connect()?;
-        info!("ZeroMqSubscriber connected");
         let mut done = false;
         while !done {
             let msg = self.recv(&socket)?;
@@ -69,7 +67,6 @@ impl <T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
    fn recv(&self, socket: &zmq::Socket) -> anyhow::Result<Message<T>> {
         let res = socket.recv_bytes(0)?;
         let msg = bincode::deserialize(&res)?;
-        info!("socket recv {msg:?}");
         Ok(msg)
         // match res {
         //     Ok(data) => {
@@ -92,8 +89,8 @@ impl <T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 
 
 
-pub fn zmq_rec<T: Element + Send + DeserializeOwned>() -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
-    let subscriber = ZeroMqSubscriber::new("tcp://127.0.0.1:5556".to_string());
+pub fn zmq_rec<T: Element + Send + DeserializeOwned>(address: &str) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
+    let subscriber = ZeroMqSubscriber::new(address.to_string());
     let f = move |channel_sender| {subscriber.run(channel_sender)};
     let receiver_stream = ReceiverStream::new(f);
     receiver_stream.into_stream()    
@@ -102,6 +99,7 @@ pub fn zmq_rec<T: Element + Send + DeserializeOwned>() -> Rc<dyn Stream<TinyVec<
 #[derive(new)]
 struct ZeroMqSenderNode<T: Element + Send + Serialize> {
     src: Rc<dyn Stream<T>>,
+    port: u16,
     #[new(default)]
     socket: Option<zmq::Socket>,
 }
@@ -124,11 +122,9 @@ impl <T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 
     fn start(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
         let context = zmq::Context::new();
-        info!("PUB socket..");
         let socket = context.socket(zmq::SocketType::PUB)?;
-        info!("bind..");
-        socket.bind(&"tcp://127.0.0.1:5556")?;
-        info!("bind complete");
+        let address = format!("tcp://127.0.0.1:{:}", self.port);
+        socket.bind(&address)?;
         self.socket = Some(socket);
         Ok(())
     }
@@ -197,12 +193,12 @@ impl <T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 // }
 
 pub trait ZeroMqSend<T: Element + Send> {
-    fn zmq_send(&self) -> Rc<dyn Node>;
+    fn zmq_send(&self, port: u16) -> Rc<dyn Node>;
 }
 
 impl<T: Element + Send + Serialize> ZeroMqSend<T> for Rc<dyn Stream<T>> {
-    fn zmq_send(&self) -> Rc<dyn Node> {
-        ZeroMqSenderNode::new(self.clone()).into_node()
+    fn zmq_send(&self, port: u16) -> Rc<dyn Node> {
+        ZeroMqSenderNode::new(self.clone(), port).into_node()
     }
 }
 
@@ -214,18 +210,73 @@ mod tests {
     use std::time::Duration;
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
-    use crate::{StreamOperators, NodeOperators, Graph, NanoTime};
+    use crate::{StreamOperators, NodeOperators, Graph};
     use crate::adapters::zmq::{ZeroMqSend, zmq_rec};
 
     #[test]
     fn zmq_works() {
         _ = env_logger::try_init();
-        let period = Duration::from_millis(100);
-        let send = ticker(period).count().logged("pub", Info).zmq_send();
-        let rec = zmq_rec::<u64>().logged("sub", Info).as_node();
-        let nodes = vec![send, rec];
-        Graph::new(nodes, RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).run().unwrap();
+        let period = Duration::from_millis(50);
+        for run_mode in [
+            RunMode::RealTime, 
+            //RunMode::HistoricalFrom(NanoTime::ZERO)
+        ] {
+            info!("{run_mode:?}");
+            let port = 5556;
+            let address = format!("tcp://127.0.0.1:{port}");
+            let send = ticker(period)
+                .count()
+                .logged("pub", Info)
+                .zmq_send(port);
+            let rec = zmq_rec::<u64>(address.as_str())
+                .logged("sub", Info)
+                .as_node();
+            let nodes = vec![send, rec];
+            let run_for = RunFor::Duration(period * 10);
+            Graph::new(nodes, run_mode, run_for)
+                .print()
+                .run()
+                .unwrap();
+        } 
     }
+
+    #[test]
+    fn zmq_really_works() {
+        _ = env_logger::try_init();
+        let period = Duration::from_millis(10);
+        for run_mode in [
+            RunMode::RealTime, 
+            //RunMode::HistoricalFrom(NanoTime::ZERO)
+        ] {
+            info!("{run_mode:?}");
+            let port = 5557;
+            let address = format!("tcp://127.0.0.1:{port}");
+            let run_for = RunFor::Duration(period * 5);
+            let rm_send = run_mode.clone();
+            let rf_send = run_for.clone();
+            let rm_rec = run_mode.clone();
+            let rf_rec = run_for.clone();
+            let rec = std::thread::spawn(move || {
+                zmq_rec::<u64>(address.as_str())
+                    .logged("sub", Info)
+                    .collect()
+                    .finally(|x, _| {
+                        println!("{:?}", x)
+                    })
+                    .run(rm_rec, rf_rec)
+            });
+            let send = std::thread::spawn(move || {
+                ticker(period)
+                    .count()
+                    .logged("pub", Info)
+                    .zmq_send(port)
+                    .run(rm_send, rf_send)
+            });
+            send.join().unwrap().unwrap();
+            rec.join().unwrap().unwrap();
+        }
+    }
+
 }
 
 

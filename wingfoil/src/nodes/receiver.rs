@@ -1,7 +1,7 @@
 
 use std::thread::{self, JoinHandle};
 
-use crate::{Element, MutableNode, ChannelReceiverStream, StreamPeekRef, channel::{ChannelSender, channel_pair}};
+use crate::{ChannelReceiverStream, Element, MutableNode, NanoTime, RunMode, StreamPeekRef, channel::{ChannelSender, channel_pair}};
 use tinyvec::TinyVec;
 
 enum State<T: Element + Send> {
@@ -48,7 +48,9 @@ impl <T: Element + Send> MutableNode for ReceiverStream<T> {
 
     fn setup(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
         let mut sender = self.sender.take().ok_or_else(|| anyhow::anyhow!("missing sender"))?;
-        sender.set_notifier(state.ready_notifier());
+        if state.run_mode() == RunMode::RealTime {
+            sender.set_notifier(state.ready_notifier());
+        }
         self.state.start(sender);
         self.inner.setup(state)
     }
