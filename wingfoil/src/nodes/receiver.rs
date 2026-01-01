@@ -1,7 +1,9 @@
-
 use std::thread::{self, JoinHandle};
 
-use crate::{ChannelReceiverStream, Element, MutableNode, NanoTime, RunMode, StreamPeekRef, channel::{ChannelSender, channel_pair}};
+use crate::{
+    ChannelReceiverStream, Element, MutableNode, NanoTime, RunMode, StreamPeekRef,
+    channel::{ChannelSender, channel_pair},
+};
 use tinyvec::TinyVec;
 
 enum State<T: Element + Send> {
@@ -10,21 +12,19 @@ enum State<T: Element + Send> {
     Empty,
 }
 
-impl <T: Element + Send> State<T> {
+impl<T: Element + Send> State<T> {
     pub fn start(&mut self, channel_sender: ChannelSender<T>) {
         if let State::Func(f) = std::mem::replace(self, State::Empty) {
-            let handle = thread::spawn(move || {
-                f(channel_sender)
-            });
+            let handle = thread::spawn(move || f(channel_sender));
             *self = State::JoinHandle(handle);
         }
     }
 
     pub fn stop(&mut self) -> anyhow::Result<()> {
         match std::mem::replace(self, State::Empty) {
-            State::JoinHandle(handle) => {
-                handle.join().map_err(|e| anyhow::anyhow!("Thread panicked: {e:?}"))?
-            }
+            State::JoinHandle(handle) => handle
+                .join()
+                .map_err(|e| anyhow::anyhow!("Thread panicked: {e:?}"))?,
             _ => Ok(()),
         }
     }
@@ -36,8 +36,7 @@ pub struct ReceiverStream<T: Element + Send> {
     state: State<T>,
 }
 
-impl <T: Element + Send> MutableNode for ReceiverStream<T> {
-
+impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         self.inner.cycle(state)
     }
@@ -47,7 +46,10 @@ impl <T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 
     fn setup(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
-        let mut sender = self.sender.take().ok_or_else(|| anyhow::anyhow!("missing sender"))?;
+        let mut sender = self
+            .sender
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("missing sender"))?;
         if state.run_mode() == RunMode::RealTime {
             sender.set_notifier(state.ready_notifier());
         }
@@ -74,7 +76,6 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
         self.inner.peek_ref()
     }
 }
-
 
 impl<T: Element + Send> ReceiverStream<T> {
     pub fn new(f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static) -> Self {

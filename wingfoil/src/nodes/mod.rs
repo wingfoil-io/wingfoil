@@ -35,9 +35,9 @@ mod window;
 pub use always::*;
 pub use async_io::*;
 pub use callback::CallBackStream;
+pub use channel::ChannelReceiverStream;
 pub use demux::*;
 pub use graph_node::*;
-pub use channel::ChannelReceiverStream; 
 pub use receiver::ReceiverStream;
 
 use average::*;
