@@ -1,7 +1,7 @@
 use std::thread::{self, JoinHandle};
 
 use crate::{
-    ChannelReceiverStream, Element, MutableNode, NanoTime, RunMode, StreamPeekRef,
+    ChannelReceiverStream, Element, MutableNode, RunMode, StreamPeekRef,
     channel::{ChannelSender, channel_pair},
 };
 use tinyvec::TinyVec;
@@ -30,7 +30,7 @@ impl<T: Element + Send> State<T> {
     }
 }
 
-pub struct ReceiverStream<T: Element + Send> {
+pub (crate) struct ReceiverStream<T: Element + Send> {
     inner: ChannelReceiverStream<T>,
     sender: Option<ChannelSender<T>>,
     state: State<T>,
@@ -78,7 +78,7 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
 }
 
 impl<T: Element + Send> ReceiverStream<T> {
-    pub fn new(f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static) -> Self {
+    pub (crate) fn new(f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static) -> Self {
         let (sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let sender = Some(sender);

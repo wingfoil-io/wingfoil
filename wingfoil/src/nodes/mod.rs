@@ -37,7 +37,6 @@ pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
 pub use demux::*;
 pub use graph_node::*;
-pub use receiver::ReceiverStream;
 
 use average::*;
 use bimap::*;
@@ -57,7 +56,6 @@ use map_filter::*;
 use merge::*;
 use print::*;
 use producer::*;
-use receiver::*;
 use sample::*;
 use tick::*;
 use window::WindowStream;
@@ -65,6 +63,8 @@ use window::WindowStream;
 use crate::graph::*;
 use crate::queue::ValueAt;
 use crate::types::*;
+
+pub(crate) use receiver::*;
 
 use log::Level;
 use log::log;
