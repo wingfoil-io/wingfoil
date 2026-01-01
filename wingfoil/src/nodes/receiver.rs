@@ -47,7 +47,8 @@ impl <T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 
     fn setup(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
-        let sender = self.sender.take().ok_or_else(|| anyhow::anyhow!("missing sender"))?;
+        let mut sender = self.sender.take().ok_or_else(|| anyhow::anyhow!("missing sender"))?;
+        sender.set_notifier(state.ready_notifier());
         self.state.start(sender);
         self.inner.setup(state)
     }

@@ -214,7 +214,7 @@ mod tests {
     use std::time::Duration;
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
-    use crate::{StreamOperators, NodeOperators, Graph};
+    use crate::{StreamOperators, NodeOperators, Graph, NanoTime};
     use crate::adapters::zmq::{ZeroMqSend, zmq_rec};
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
         let send = ticker(period).count().logged("pub", Info).zmq_send();
         let rec = zmq_rec::<u64>().logged("sub", Info).as_node();
         let nodes = vec![send, rec];
-        Graph::new(nodes, RunMode::RealTime, RunFor::Cycles(5)).run().unwrap();
+        Graph::new(nodes, RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).run().unwrap();
     }
 }
 
