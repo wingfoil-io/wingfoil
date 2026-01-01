@@ -92,7 +92,6 @@ pub struct ChannelReceiverStream<T: Element + Send> {
 
 impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
-        println!("ReceiverStream::cycle start {:?}", state.time());
         let mut values: TinyVec<[T; 1]> = TinyVec::new();
         match state.run_mode() {
             RunMode::RealTime => {
@@ -222,9 +221,3 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ChannelReceiverStream
     }
 }
 
-
-impl<T: Element + Send> ChannelReceiverStream<T> {
-    fn set_notifier_channel(&mut self, notifier_channel: NotifierChannelSender) {
-        self.notifier_channel = Some(notifier_channel);
-    }
-}
