@@ -10,7 +10,7 @@ Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
-Wingfoil simplifies receiving, processing and distributing streaming data across your entire stack.
+Wingfoil simplifies receiving, processing and distributing streaming data across your stack.
 
 ## Features
 
