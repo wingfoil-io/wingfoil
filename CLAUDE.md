@@ -56,7 +56,10 @@ cargo fmt --check
 ### Branch Management
 
 - **NEVER edit files directly on the main branch**
-- Always suggest creating a feature branch with a descriptive name before making changes
+- Before starting any work, always:
+  1. Switch to main: `git checkout main`
+  2. Pull latest changes: `git pull origin main`
+  3. Create a new branch from the updated main: `git checkout -b <branch-name>`
 - Branch naming convention: use simple descriptive names (e.g., `add-metrics`, `fix-error-handling`)
 
 ### Pre-Commit Checklist
