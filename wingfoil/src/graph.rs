@@ -807,6 +807,59 @@ mod tests {
         assert_eq!(captured_data, expected);
     }
 
+    #[test]
+    fn error_context_shows_graph_structure() {
+        use std::time::Duration;
+
+        // Build graph: ticker -> count -> try_map (fails on count == 3)
+        let stream = ticker(Duration::from_nanos(100))
+            .count()
+            .try_map(|x: u64| {
+                if x == 3 {
+                    anyhow::bail!("intentional failure at count 3")
+                } else {
+                    Ok(x * 100)
+                }
+            });
+
+        let mut graph = Graph::new(
+            vec![stream.as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(10),
+        );
+        graph.print();
+        let result = graph.run();
+
+        // Verify error occurred
+        assert!(result.is_err(), "Expected error but got: {:?}", result);
+        let err = result.unwrap_err();
+        let err_msg = format!("{:?}", err);
+
+        // Verify error message contains context markers
+        assert!(
+            err_msg.contains(">>>"),
+            "Error should contain >>> marker, got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("Error in node"),
+            "Error should mention 'Error in node', got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("TryMapStream"),
+            "Error should mention TryMapStream, got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("intentional failure at count 3"),
+            "Error should contain original message, got: {err_msg}"
+        );
+
+        // Verify type names don't contain RefCell
+        assert!(
+            !err_msg.contains("RefCell"),
+            "Error should not contain RefCell in type names, got: {err_msg}"
+        );
+    }
+
     fn push_all(inputs: &[Rc<RefCell<CallBackStream<i32>>>], value_at: ValueAt<i32>) {
         inputs
             .iter()

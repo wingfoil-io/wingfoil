@@ -23,6 +23,7 @@ mod graph_state;
 mod limit;
 mod map;
 mod map_filter;
+mod try_map;
 mod merge;
 mod print;
 mod producer;
@@ -51,6 +52,7 @@ use graph_state::*;
 use limit::*;
 use map::*;
 use map_filter::*;
+use try_map::*;
 use merge::*;
 use print::*;
 use producer::*;
@@ -318,9 +320,15 @@ pub trait StreamOperators<T: Element> {
     fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Stream<T>>;
     /// logs source and propagates it
     fn logged(self: &Rc<Self>, label: &str, level: Level) -> Rc<dyn Stream<T>>;
-    /// Map’s it’s source into a new Stream using the supplied closure.
+    /// Map's it's source into a new Stream using the supplied closure.
     fn map<OUT: Element>(self: &Rc<Self>, func: impl Fn(T) -> OUT + 'static)
     -> Rc<dyn Stream<OUT>>;
+    /// Map's source into a new Stream using a fallible closure.
+    /// Errors propagate to graph execution.
+    fn try_map<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(T) -> anyhow::Result<OUT> + 'static,
+    ) -> Rc<dyn Stream<OUT>>;
     /// Uses func to build graph, which is spawned on worker thread
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<TinyVec<[OUT; 1]>>>
     where
@@ -522,6 +530,13 @@ where
         func: impl Fn(T) -> OUT + 'static,
     ) -> Rc<dyn Stream<OUT>> {
         MapStream::new(self.clone(), Box::new(func)).into_stream()
+    }
+
+    fn try_map<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(T) -> anyhow::Result<OUT> + 'static,
+    ) -> Rc<dyn Stream<OUT>> {
+        TryMapStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<TinyVec<[OUT; 1]>>>
