@@ -23,12 +23,12 @@ mod graph_state;
 mod limit;
 mod map;
 mod map_filter;
-mod try_map;
 mod merge;
 mod print;
 mod producer;
 mod sample;
 mod tick;
+mod try_map;
 mod window;
 
 pub use always::*;
@@ -52,12 +52,12 @@ use graph_state::*;
 use limit::*;
 use map::*;
 use map_filter::*;
-use try_map::*;
 use merge::*;
 use print::*;
 use producer::*;
 use sample::*;
 use tick::*;
+use try_map::*;
 use window::WindowStream;
 
 use crate::graph::*;

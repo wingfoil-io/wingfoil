@@ -37,3 +37,30 @@ impl<IN: 'static, OUT: Element> StreamPeekRef<OUT> for TryMapStream<IN, OUT> {
         &self.value
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+    use std::time::Duration;
+
+    #[test]
+    fn try_map_success() {
+        let stream = ticker(Duration::from_nanos(100))
+            .count()
+            .try_map(|x| Ok(x * 10));
+        stream
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert_eq!(stream.peek_value(), 50);
+    }
+
+    #[test]
+    fn try_map_error() {
+        let stream = ticker(Duration::from_nanos(100))
+            .count()
+            .try_map(|_: u64| -> anyhow::Result<u64> { anyhow::bail!("oops") });
+        let result = stream.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1));
+        assert!(result.is_err());
+    }
+}
