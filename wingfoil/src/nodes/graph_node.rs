@@ -285,9 +285,9 @@ mod tests {
 
     #[test]
     fn graph_node_works() {
-        _ = env_logger::try_init();
+        //_ = env_logger::try_init();
         let n_runs = 1;
-        let n_ticks = 5;
+        let n_ticks = 6;
         let half_period = Duration::from_millis(5);
         let period = half_period * 2;
         let run_for = RunFor::Duration(period * n_ticks);
@@ -345,7 +345,8 @@ mod tests {
                         println!("expected {:?}", expected);
                         println!("actual   {:?}", actual);
                         println!();
-                        assert!(actual.len() + 3 >= n_ticks as usize);
+                        let tol = if run_mode == RunMode::RealTime { 4 } else { 0 };
+                        assert!(actual.len() + tol >= n_ticks as usize);
                         assert_eq!(expected, actual);
                     })
                     .run(run_mode, run_for)
