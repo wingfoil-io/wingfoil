@@ -139,6 +139,9 @@ impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().stop(state)
     }
+    fn type_name(&self) -> String {
+        self.borrow().type_name()
+    }
 }
 
 impl<STREAM, T> StreamPeek<T> for RefCell<STREAM>

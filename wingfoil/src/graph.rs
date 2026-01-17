@@ -351,7 +351,10 @@ impl Graph {
         for ix in 0..self.state.nodes.len() {
             let node = &self.state.nodes[ix];
             self.state.current_node_index = Some(ix);
-            func(node.node.clone(), &mut self.state)?;
+            func(node.node.clone(), &mut self.state).map_err(|e| {
+                let context = self.format_context(ix, 5);
+                e.context(format!("Error during {desc} in node [{ix}]:\n{context}"))
+            })?;
             self.state.current_node_index = None;
         }
         debug!(
@@ -615,8 +618,14 @@ impl Graph {
     fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         let node = &self.state.nodes[index].node;
         self.state.current_node_index = Some(index);
-        let ticked = node.clone().cycle(&mut self.state)?;
+        let result = node.clone().cycle(&mut self.state);
         self.state.current_node_index = None;
+
+        let ticked = result.map_err(|e| {
+            let context = self.format_context(index, 5);
+            e.context(format!("Error in node [{index}]:\n{context}"))
+        })?;
+
         if ticked {
             self.state.set_ticked(index);
             for i in 0..self.state.nodes[index].downstreams.len() {
@@ -639,6 +648,25 @@ impl Graph {
         for i in self.state.node_dirty.iter_mut() {
             *i = false;
         }
+    }
+
+    /// Format nodes around the given index for error context.
+    /// Shows `range` nodes before and after, marking the target node.
+    fn format_context(&self, target_index: usize, range: usize) -> String {
+        let mut output = String::new();
+        let start = target_index.saturating_sub(range);
+        let end = (target_index + range + 1).min(self.state.nodes.len());
+
+        for i in start..end {
+            let node_data = &self.state.nodes[i];
+            let marker = if i == target_index { ">>> " } else { "    " };
+            output.push_str(&format!("{marker}[{i:02}] "));
+            for _ in 0..node_data.layer {
+                output.push_str("   ");
+            }
+            output.push_str(&format!("{}\n", node_data.node));
+        }
+        output
     }
 
     pub fn print(&mut self) -> &mut Graph {
