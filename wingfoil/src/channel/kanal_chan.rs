@@ -111,13 +111,15 @@ impl<T: Element + Send> ChannelSender<T> {
     }
 
     pub fn close(&mut self) -> SendResult {
-        // check if already close
+        // check if already closed
         if self.kanal_sender.is_none() {
             return Ok(());
         }
-        let result = self.send_message(Message::EndOfStream);
+        // Ignore errors when sending EndOfStream - if the receiver is already
+        // dropped, the channel is effectively closed anyway
+        let _ = self.send_message(Message::EndOfStream);
         self.kanal_sender = None;
-        result
+        Ok(())
     }
 
     pub fn into_async(self) -> AsyncChannelSender<T> {
