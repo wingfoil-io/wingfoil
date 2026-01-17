@@ -66,7 +66,7 @@ pub trait MutableNode {
 
 impl Display for dyn Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.type_name())
+        write!(f, "{}", self.type_name())
     }
 }
 

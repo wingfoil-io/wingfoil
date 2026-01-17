@@ -352,7 +352,7 @@ impl Graph {
             let node = &self.state.nodes[ix];
             self.state.current_node_index = Some(ix);
             func(node.node.clone(), &mut self.state).map_err(|e| {
-                let context = self.format_context(ix, 5);
+                let context = self.format_context(ix, 3);
                 e.context(format!("Error during {desc} in node [{ix}]:\n{context}"))
             })?;
             self.state.current_node_index = None;
@@ -622,7 +622,7 @@ impl Graph {
         self.state.current_node_index = None;
 
         let ticked = result.map_err(|e| {
-            let context = self.format_context(index, 5);
+            let context = self.format_context(index, 3);
             e.context(format!("Error in node [{index}]:\n{context}"))
         })?;
 
@@ -845,17 +845,13 @@ mod tests {
         let err_msg = format!("{:?}", result.unwrap_err());
 
         let expected = r#"Error in node [14]:
-    [09]                         "MapStream<u64, u64>"
-    [10]                            "MapStream<u64, u64>"
-    [11]                               "MapStream<u64, u64>"
-    [12]                                  "MapStream<u64, u64>"
-    [13]                                     "MapStream<u64, u64>"
->>> [14]                                        "TryMapStream<u64, u64>"
-    [15]                                           "MapStream<u64, u64>"
-    [16]                                              "MapStream<u64, u64>"
-    [17]                                                 "MapStream<u64, u64>"
-    [18]                                                    "MapStream<u64, u64>"
-    [19]                                                       "MapStream<u64, u64>"
+    [11]                               MapStream<u64, u64>
+    [12]                                  MapStream<u64, u64>
+    [13]                                     MapStream<u64, u64>
+>>> [14]                                        TryMapStream<u64, u64>
+    [15]                                           MapStream<u64, u64>
+    [16]                                              MapStream<u64, u64>
+    [17]                                                 MapStream<u64, u64>
 
 
 Caused by:
