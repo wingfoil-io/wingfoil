@@ -51,6 +51,24 @@ cargo clippy
 cargo fmt --check
 ```
 
+## Development Workflow Rules
+
+### Branch Management
+
+- **NEVER edit files directly on the main branch**
+- Always suggest creating a feature branch with a descriptive name before making changes
+- Branch naming convention: use simple descriptive names (e.g., `add-metrics`, `fix-error-handling`)
+
+### Pre-Commit Checklist
+
+Before committing any changes, ALWAYS run:
+```bash
+cargo fmt
+cargo clippy
+```
+
+These commands must pass without errors before creating a commit.
+
 ## Key Architecture Concepts
 
 ### Trait Hierarchy
