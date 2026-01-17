@@ -1,0 +1,88 @@
+# CLAUDE.md
+
+This file provides guidance for Claude Code when working with this codebase.
+
+## Project Overview
+
+Wingfoil is a Rust stream processing library for building directed acyclic graphs (DAGs) of data transformations. It supports both real-time and historical (backtesting) execution modes.
+
+## Repository Structure
+
+```
+wingfoil/           # Core Rust library
+  src/
+    lib.rs          # Public API re-exports
+    types.rs        # Core traits: Element, Node, MutableNode, Stream
+    graph.rs        # Graph execution engine
+    time.rs         # NanoTime (nanoseconds from UNIX epoch)
+    nodes/          # 27 node implementations (map, filter, fold, etc.)
+    adapters/       # I/O adapters (ZMQ, CSV, sockets)
+    channel/        # Inter-node communication (kanal)
+    queue/          # Data structures (TimeQueue, HashByRef)
+  examples/         # Usage examples (order_book, rfq, async, breadth_first)
+  benches/          # Criterion benchmarks
+
+wingfoil-python/    # PyO3 Python bindings
+  src/
+  python/           # Python package
+  tests/            # pytest tests
+```
+
+## Build Commands
+
+```bash
+# Build
+cargo build
+cargo build --release
+
+# Test
+cargo test
+cargo test -p wingfoil
+cargo test -p wingfoil-python
+
+# Python tests
+cd wingfoil-python && maturin develop && pytest
+
+# Benchmarks
+cargo bench
+
+# Lint
+cargo clippy
+cargo fmt --check
+```
+
+## Key Architecture Concepts
+
+### Trait Hierarchy
+
+- `MutableNode` - has `cycle(&mut self)` called each tick
+- `Node` - immutable wrapper via `RefCell<T: MutableNode>`
+- `Stream<T>` - extends `Node` with `peek_value()` to get current value
+
+### Execution Model
+
+- Nodes declare dependencies via `upstreams()` returning `UpStreams { active, passive }`
+- **Active** upstreams trigger downstream nodes when they tick
+- **Passive** upstreams are read but don't trigger execution
+- Graph executes breadth-first from source nodes
+
+### Common Patterns
+
+- All stream values must implement `Element` (= `Debug + Clone + Default + 'static`)
+- Nodes are wrapped in `Rc<RefCell<...>>` for interior mutability
+- Factory functions return `Rc<dyn Stream<T>>` or `Rc<dyn Node>`
+- Fluent API: `ticker(duration).map(f).filter(g).fold(init, h)`
+
+### Run Modes
+
+- `RunMode::RealTime` - uses wall clock time
+- `RunMode::HistoricalFrom(NanoTime)` - replay from timestamp (for testing/backtesting)
+- `RunFor::Duration(d)`, `RunFor::Cycles(n)`, `RunFor::Forever`
+
+## Testing Conventions
+
+Tests use historical mode for determinism:
+```rust
+stream.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10)).unwrap();
+assert_eq!(expected, stream.peek_value());
+```
