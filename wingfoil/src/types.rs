@@ -66,7 +66,7 @@ pub trait MutableNode {
 
 impl Display for dyn Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.type_name())
+        write!(f, "{:?}", self.type_name())
     }
 }
 
@@ -138,9 +138,6 @@ impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
     }
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().stop(state)
-    }
-    fn type_name(&self) -> String {
-        self.borrow().type_name()
     }
 }
 
