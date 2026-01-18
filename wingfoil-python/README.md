@@ -58,7 +58,7 @@ Produces this output:
 
 ### Building from source
 
-You can follow these instructions to [build from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md>).
+You can follow these instructions to [build from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
 
 ### Contact us
 

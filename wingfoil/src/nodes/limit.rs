@@ -2,6 +2,8 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
+/// Limits the number of times this stream can tick.
+/// After the limit is reached, the stream stops propagating values.
 #[derive(new)]
 pub struct LimitStream<T: Element> {
     source: Rc<dyn Stream<T>>,

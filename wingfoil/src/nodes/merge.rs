@@ -3,7 +3,8 @@ use derive_new::new;
 
 use std::rc::Rc;
 
-/// Counts how many times upstream has ticked.
+/// Merges multiple streams into a single stream.
+/// Ticks when any upstream ticks, using the value from the first ticked source.
 #[derive(new)]
 pub struct MergeStream<T: Element> {
     upstreams: Vec<Rc<dyn Stream<T>>>,
