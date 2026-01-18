@@ -19,7 +19,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaScript/TypeScript support.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
-- **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/src/nodes/graph_node.rs) across cores.
+- **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) across cores.
 
 
 ## Quick Start
