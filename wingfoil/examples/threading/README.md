@@ -10,8 +10,51 @@ send data between them.
 
 Historical and RealTime modes are supported. In RealTime mode, data can arrive in bursts
 i.e. multiple inputs may have been received since the last engine cycle, so the incoming
-data is always a vector of the source data. In this example we use the collapse method
+data is always a vector of the source data. In this example, we use the collapse method
 to collapse the burst into a single (latest) value.
+
+## Code
+
+```rust
+use log::Level::Info;
+use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
+use tinyvec::TinyVec;
+use wingfoil::*;
+
+fn label(name: &str) -> String {
+    format!("{:?} >> {:9}", thread::current().id(), name)
+}
+
+fn main() {
+    env_logger::init();
+    let period = Duration::from_millis(100);
+    let run_mode = RunMode::RealTime;
+    let run_for = RunFor::Duration(period * 6);
+
+    let produce_graph = move || {
+        let label = label("producer");
+        ticker(period).count().logged(&label, Info)
+    };
+
+    let map_graph = |src: Rc<dyn Stream<TinyVec<[u64; 1]>>>| {
+        let label = label("mapper");
+        src.collapse()
+            .map(|x| x * 10)
+            .logged(&label, Info)
+    };
+
+    producer(produce_graph)
+        .collapse()
+        .logged(&label("main-pre"), Info)
+        .mapper(map_graph)
+        .collapse()
+        .logged(&label("main-post"), Info)
+        .run(run_mode, run_for)
+        .unwrap();
+}
+```
 
 ## Running
 
@@ -83,47 +126,4 @@ Log lines may appear out of order due to channel buffering between threads, but 
 [2026-01-18T11:58:32Z INFO  wingfoil] 0.600_000 ThreadId(1) >> main-pre  7
 [2026-01-18T11:58:32Z INFO  wingfoil] 0.600_000 ThreadId(7) >> mapper    70
 [2026-01-18T11:58:32Z INFO  wingfoil] 0.600_000 ThreadId(1) >> main-post 70
-```
-
-## Code
-
-```rust
-use log::Level::Info;
-use std::rc::Rc;
-use std::thread;
-use std::time::Duration;
-use tinyvec::TinyVec;
-use wingfoil::*;
-
-fn label(name: &str) -> String {
-    format!("{:?} >> {:9}", thread::current().id(), name)
-}
-
-fn main() {
-    env_logger::init();
-    let period = Duration::from_millis(100);
-    let run_mode = RunMode::RealTime;
-    let run_for = RunFor::Duration(period * 6);
-
-    let produce_graph = move || {
-        let label = label("producer");
-        ticker(period).count().logged(&label, Info)
-    };
-
-    let map_graph = |src: Rc<dyn Stream<TinyVec<[u64; 1]>>>| {
-        let label = label("mapper");
-        src.collapse()
-            .map(|x| x * 10)
-            .logged(&label, Info)
-    };
-
-    producer(produce_graph)
-        .collapse()
-        .logged(&label("main-pre"), Info)
-        .mapper(map_graph)
-        .collapse()
-        .logged(&label("main-post"), Info)
-        .run(run_mode, run_for)
-        .unwrap();
-}
 ```
