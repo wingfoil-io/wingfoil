@@ -56,10 +56,11 @@ cargo fmt --check
 ### Branch Management
 
 - **NEVER edit files directly on the main branch**
-- Before starting any work, always:
-  1. Switch to main: `git checkout main`
-  2. Pull latest changes: `git pull origin main`
-  3. Create a new branch from the updated main: `git checkout -b <branch-name>`
+- Before starting any work:
+  - If continuing work on an existing branch, stay on that branch
+  - If starting new work:
+    1. Ensure you're on main with latest: `git checkout main && git pull origin main`
+    2. Create a new branch: `git checkout -b <branch-name>`
 - Branch naming convention: use simple descriptive names (e.g., `add-metrics`, `fix-error-handling`)
 
 ### Pre-Commit Checklist
@@ -67,7 +68,13 @@ cargo fmt --check
 Before committing any changes, ALWAYS run:
 ```bash
 cargo fmt
-cargo clippy
+cargo clippy -- -D warnings
+cargo test
+```
+
+For changes to `wingfoil-python/`, also run:
+```bash
+cd wingfoil-python && maturin develop && pytest
 ```
 
 These commands must pass without errors before creating a commit.
