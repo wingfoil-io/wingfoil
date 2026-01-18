@@ -1,7 +1,7 @@
 ## async / tokio integration
 
 In this example, we demonstrate wingfoil's integration with tokio / async.
-This makes building IO adapters at the the graph edge a breeze, giving 
+This makes building IO adapters at the graph edge a breeze, giving 
 the best of sync and async worlds.   
 
 Async streams are a useful abstraction for IO but are not as powerful or 
@@ -9,7 +9,7 @@ as easy to use for implementing complex business logic as wingfoil.  Async
 uses an implicit, depth first graph execution strategy.  In
 contrast wingfoil's explicit, breadth first graph execution algorithm, 
 is easier to reason about, encourages re-use and provides a more 
-structured and productive development environment.   Wingfoils 
+structured and productive development environment.   Wingfoil's
 explicit modelling of time with support for historical and realtime 
 modes, is also huge win in terms of productivity and ability to 
 backtest strategies over async streams.
@@ -19,7 +19,7 @@ The key methods here are produce_async which maps an async futures stream
 into a wingfoil stream and consume_async which takes a wingfoil stream
 and consumes it with a supplied async closure.
 
-This hybrid sync-async approach enforces clear seperation 
+This hybrid sync-async approach enforces clear separation 
 between IO and business logic, which can often be problematic in 
 async oriented systems.   
 

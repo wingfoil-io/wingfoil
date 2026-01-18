@@ -6,7 +6,7 @@
 //! ## Graph Execution
 
 //! Wingfoil abstracts away the details of how to co-ordinate the calculation of your
-//! application, parts of which may executing at different frequencies.
+//! application, parts of which may be executing at different frequencies.
 
 //! Only the nodes that actually require cycling are executed which allows wingfoil to
 //! efficiently scale to very large graphs.
@@ -51,7 +51,7 @@
 //!
 //! ## Historical vs RealTime
 //! Time is a first-class citizen in wingfoil.  Engine time is measured in nanoseconds from the
-//! [UNIX epoch](https://!en.wikipedia.org/wiki/Unix_time) and represented by a [NanoTime].
+//! [UNIX epoch](https://en.wikipedia.org/wiki/Unix_time) and represented by a [NanoTime].
 //!
 //! In this example we compare and contrast RealTime vs Historical RunMode.   RealTime is used for
 //! production deployment.   Historical is used for development, unit-testing, integration-testing
@@ -92,17 +92,17 @@
 //! immediately.   In both cases engine time advances by 1 second between each tick.
 //!
 #![doc = include_str!("../examples/order_book/README.md")]
-//! See the [order book example](https://github.com/wingfoil-io/wingfoil/blob/main/examples/order_book/) for more details.
+//! See the [order book example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/order_book/) for more details.
 #![doc = include_str!("../examples/async/README.md")]
-//! See the [async example](https://github.com/wingfoil-io/wingfoil/blob/main/examples/async/) for more details.
+//! See the [async example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/async/) for more details.
 #![doc = include_str!("../examples/breadth_first/README.md")]
-//! See the [breadth first example](https://github.com/wingfoil-io/wingfoil/blob/main/examples/breadth_first/) for more details.
+//! See the [breadth first example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/breadth_first/) for more details.
 #![doc = include_str!("../examples/rfq/README.md")]
-//! See the [rfq example](https://github.com/wingfoil-io/wingfoil/blob/main/examples/rfq/) for more details.
+//! See the [rfq example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/rfq/) for more details.
 //!
 //! ## Multithreading
 //!
-//! Wingfoils supports multi-threading to distribute workloads across cores.  The approach
+//! Wingfoil supports multi-threading to distribute workloads across cores.  The approach
 //! is to compose sub-graphs, each running in its own dedicated thread.
 //!
 //! ## Messaging
@@ -125,11 +125,11 @@
 //!  
 //! For best performance we recommend using **cheaply cloneable** types:
 //!
-//! - For small strings: [`arraystring`](https://!crates.io/crates/arraystring)
-//! - For small vectors: [`tinyvec`](https://!crates.io/crates/tinyvec)
+//! - For small strings: [`arraystring`](https://crates.io/crates/arraystring)
+//! - For small vectors: [`tinyvec`](https://crates.io/crates/tinyvec)
 //! - For larger or heap-allocated types:
-//!   - Use [`Rc<T>`](https://!doc.rust-lang.org/std/rc/struct.Rc.html) for single threaded contexts.
-//!   - Use [`Arc<T>`](https://!doc.rust-lang.org/std) for multithreaded contexts.
+//!   - Use [`Rc<T>`](https://doc.rust-lang.org/std/rc/struct.Rc.html) for single threaded contexts.
+//!   - Use [`Arc<T>`](https://doc.rust-lang.org/std/sync/struct.Arc.html) for multithreaded contexts.
 
 #[macro_use]
 extern crate log;
