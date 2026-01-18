@@ -22,9 +22,7 @@ fn main() {
 
     let map_graph = |src: Rc<dyn Stream<TinyVec<[u64; 1]>>>| {
         let label = label("mapper");
-        src.collapse()
-            .map(|x| x * 10)
-            .logged(&label, Info)
+        src.collapse().map(|x| x * 10).logged(&label, Info)
     };
 
     producer(produce_graph)
