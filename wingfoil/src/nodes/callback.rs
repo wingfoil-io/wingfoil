@@ -52,7 +52,6 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
 
 impl<T: Element + Hash + Eq> CallBackStream<T> {
     pub fn push(&mut self, value_at: ValueAt<T>) {
-        println!("push {:?}", value_at.time);
         self.queue.push(value_at.value, value_at.time)
     }
 }
