@@ -14,6 +14,4 @@ fn main() {
         .zmq_pub(port)
         .run(RunMode::RealTime, RunFor::Forever)
         .unwrap();
-
-    println!("Finished.");
 }
