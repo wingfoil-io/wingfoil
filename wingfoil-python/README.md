@@ -1,6 +1,6 @@
 # 🚀 Wingfoil
 
-Wingfoil is a **blazingly fast** [stream processing framework](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/), highly scalable stream processing framework designed for **latency-critical** use cases such as electronic trading and real-time AI systems.
+Wingfoil is a **blazingly fast**, highly scalable [stream processing framework](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) designed for **latency-critical** use cases such as electronic trading and real-time AI systems.
 
 Wingfoil simplifies receiving, processing and distributing streaming data across your entire stack.
 
@@ -58,7 +58,7 @@ Produces this output:
 
 ### Building from source
 
-You can follow these instructions to [build from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md>).
+You can follow these instructions to [build from source](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
 
 ### Contact us
 

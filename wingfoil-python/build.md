@@ -11,7 +11,7 @@ sudo apt-get install python3-venv
 
 python3 -m venv ~/.venv
 
-# activate the virutal env
+# activate the virtual env
 
 source ~/.venv/bin/activate
 
@@ -20,7 +20,7 @@ source ~/.venv/bin/activate
 pip install patchelf
 pip install maturin
 
-# under virtual env, build the fluvial wheel
+# under virtual env, build the wingfoil wheel
 
 maturin develop --release
 

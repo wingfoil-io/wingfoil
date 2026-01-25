@@ -6,7 +6,7 @@ In this example we illustrate the power of wingfoil's breadth-first graph execut
 algorithm and compare with ReactiveX's depth-first approach.   Depth first execution
 is also problematic for async streams.
 
-Also note that wingfoil's depth first approach, by constsuction, eliminates
+Also note that wingfoil's breadth first approach, by construction, eliminates
 "reactive glitches" (potential logic defects due to inconsistent intermediate state).
 See [StackOverflow](https://stackoverflow.com/questions/25139257/terminology-what-is-a-glitch-in-functional-reactive-programming-rx)
 and [Wikipedia](https://en.wikipedia.org/wiki/Reactive_programming#Glitches)

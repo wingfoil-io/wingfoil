@@ -6,7 +6,7 @@ edition = "2024"
 publish = ["wingfoil", "crates-io"]
 license = "Apache-2.0"
 keywords = ["graph", "stream", "dag", "trading", "python"]
-homepage = "https://github.com/wingfoil-io/wingfoil/wingfoil-python"
+homepage = "https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python"
 documentation = "https://docs.rs/wingfoil-python"
 description = "python bindings for wingfoil - graph based stream processing framework"
 
