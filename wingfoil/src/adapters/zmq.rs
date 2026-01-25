@@ -199,7 +199,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn zmq_works() {
+    fn zmq_same_thread() {
         _ = env_logger::try_init();
         let period = Duration::from_millis(50);
         for run_mode in [
@@ -212,7 +212,19 @@ mod tests {
             let send = ticker(period).count().logged("pub", Info).zmq_send(port);
             let rec = zmq_rec::<u64>(address.as_str())
                 .logged("sub", Info)
-                .as_node();
+                .collect()
+                .finally(|res, _| {
+                    let res: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+                    println!("{res:?}");
+                    assert!(
+                        res.len() >= 5,
+                        "expected at least 5 items, got {}",
+                        res.len()
+                    );
+                    for window in res.windows(2) {
+                        assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
+                    }
+                });
             let nodes = vec![send, rec];
             let run_for = RunFor::Duration(period * 10);
             Graph::new(nodes, run_mode, run_for).print().run().unwrap();
@@ -220,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn zmq_really_works() {
+    fn zmq_seperate_threads() {
         _ = env_logger::try_init();
         let period = Duration::from_millis(10);
         for run_mode in [
