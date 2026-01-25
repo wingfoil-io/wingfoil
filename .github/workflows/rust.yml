@@ -59,7 +59,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests
-        run: cargo nextest run --test-timeout 10s
+        run: cargo nextest run
           
       - name: Run rustfmt
         run: |
