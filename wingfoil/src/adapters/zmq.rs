@@ -193,76 +193,63 @@ impl<T: Element + Send + Serialize> ZeroMqSend<T> for Rc<dyn Stream<T>> {
 #[cfg(test)]
 mod tests {
     use crate::adapters::zmq::{ZeroMqSend, zmq_rec};
-    use crate::{Graph, NodeOperators, StreamOperators};
+    use crate::{Graph, Node, NodeOperators, StreamOperators};
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
+    use std::rc::Rc;
     use std::time::Duration;
+
+    fn sender(period: Duration, port: u16) -> Rc<dyn Node> {
+        ticker(period).count().logged("pub", Info).zmq_send(port)
+    }
+
+    fn receiver(address: &str) -> Rc<dyn Node> {
+        zmq_rec::<u64>(address)
+            .logged("sub", Info)
+            .collect()
+            .finally(|res, _| {
+                let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+                println!("{values:?}");
+                assert!(
+                    values.len() >= 5,
+                    "expected at least 5 items, got {}",
+                    values.len()
+                );
+                for window in values.windows(2) {
+                    assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
+                }
+            })
+    }
 
     #[test]
     fn zmq_same_thread() {
         _ = env_logger::try_init();
         let period = Duration::from_millis(50);
-        for run_mode in [
+        let port = 5556;
+        let address = format!("tcp://127.0.0.1:{port}");
+        let run_for = RunFor::Duration(period * 10);
+        Graph::new(
+            vec![sender(period, port), receiver(&address)],
             RunMode::RealTime,
-            //RunMode::HistoricalFrom(NanoTime::ZERO)
-        ] {
-            info!("{run_mode:?}");
-            let port = 5556;
-            let address = format!("tcp://127.0.0.1:{port}");
-            let send = ticker(period).count().logged("pub", Info).zmq_send(port);
-            let rec = zmq_rec::<u64>(address.as_str())
-                .logged("sub", Info)
-                .collect()
-                .finally(|res, _| {
-                    let res: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
-                    println!("{res:?}");
-                    assert!(
-                        res.len() >= 5,
-                        "expected at least 5 items, got {}",
-                        res.len()
-                    );
-                    for window in res.windows(2) {
-                        assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
-                    }
-                });
-            let nodes = vec![send, rec];
-            let run_for = RunFor::Duration(period * 10);
-            Graph::new(nodes, run_mode, run_for).print().run().unwrap();
-        }
+            run_for,
+        )
+        .print()
+        .run()
+        .unwrap();
     }
 
     #[test]
-    fn zmq_seperate_threads() {
+    fn zmq_separate_threads() {
         _ = env_logger::try_init();
         let period = Duration::from_millis(10);
-        for run_mode in [
-            RunMode::RealTime,
-            //RunMode::HistoricalFrom(NanoTime::ZERO)
-        ] {
-            info!("{run_mode:?}");
-            let port = 5557;
-            let address = format!("tcp://127.0.0.1:{port}");
-            let run_for = RunFor::Duration(period * 5);
-            let rm_send = run_mode.clone();
-            let rf_send = run_for.clone();
-            let rm_rec = run_mode.clone();
-            let rf_rec = run_for.clone();
-            let rec = std::thread::spawn(move || {
-                zmq_rec::<u64>(address.as_str())
-                    .logged("sub", Info)
-                    .collect()
-                    .finally(|x, _| println!("{:?}", x))
-                    .run(rm_rec, rf_rec)
-            });
-            let send = std::thread::spawn(move || {
-                ticker(period)
-                    .count()
-                    .logged("pub", Info)
-                    .zmq_send(port)
-                    .run(rm_send, rf_send)
-            });
-            send.join().unwrap().unwrap();
-            rec.join().unwrap().unwrap();
-        }
+        let port = 5557;
+        let address = format!("tcp://127.0.0.1:{port}");
+        let run_for = RunFor::Duration(period * 10);
+        let rf_send = run_for.clone();
+        let rf_rec = run_for.clone();
+        let rec = std::thread::spawn(move || receiver(&address).run(RunMode::RealTime, rf_rec));
+        let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
+        send.join().unwrap().unwrap();
+        rec.join().unwrap().unwrap();
     }
 }
