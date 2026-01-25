@@ -4,3 +4,4 @@ pub mod csv_streams;
 pub mod iterator_stream;
 #[doc(hidden)]
 pub mod socket;
+pub mod zmq;
