@@ -20,6 +20,23 @@ impl<T: Element + Send> State<T> {
         }
     }
 
+    pub fn check_running(&mut self) -> anyhow::Result<()> {
+        match &*self {
+            State::JoinHandle(handle) if handle.is_finished() => {
+                if let State::JoinHandle(handle) = std::mem::replace(self, State::Empty) {
+                    return match handle.join() {
+                        Err(e) => Err(anyhow::anyhow!("Receiver thread panicked: {e:?}")),
+                        Ok(Err(e)) => Err(e),
+                        Ok(Ok(())) => Err(anyhow::anyhow!("Receiver thread exited unexpectedly")),
+                    };
+                }
+                Ok(())
+            }
+            State::JoinHandle(_) => Ok(()),
+            _ => Err(anyhow::anyhow!("Receiver thread not running")),
+        }
+    }
+
     pub fn stop(&mut self) -> anyhow::Result<()> {
         match std::mem::replace(self, State::Empty) {
             State::JoinHandle(handle) => handle
@@ -38,6 +55,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
 
 impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
+        self.state.check_running()?;
         self.inner.cycle(state)
     }
 
