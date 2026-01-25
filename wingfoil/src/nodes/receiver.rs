@@ -51,6 +51,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     inner: ChannelReceiverStream<T>,
     sender: Option<ChannelSender<T>>,
     state: State<T>,
+    assert_realtime: bool,
 }
 
 impl<T: Element + Send> MutableNode for ReceiverStream<T> {
@@ -76,6 +77,9 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 
     fn start(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
+        if self.assert_realtime && state.run_mode() != RunMode::RealTime {
+            anyhow::bail!("ReceiverStream only supports real-time mode");
+        }
         self.inner.start(state)
     }
 
@@ -96,7 +100,10 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
 }
 
 impl<T: Element + Send> ReceiverStream<T> {
-    pub(crate) fn new(f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static) -> Self {
+    pub(crate) fn new(
+        f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static,
+        assert_realtime: bool,
+    ) -> Self {
         let (sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let sender = Some(sender);
@@ -105,6 +112,7 @@ impl<T: Element + Send> ReceiverStream<T> {
             inner,
             sender,
             state,
+            assert_realtime,
         }
     }
 }

@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use crate::channel::{ChannelSender, Message};
 use crate::{
-    Element, GraphState, IntoNode, IntoStream, MutableNode, Node, ReceiverStream, Stream, UpStreams,
+    Element, GraphState, IntoNode, IntoStream, MutableNode, Node, ReceiverStream, RunMode, Stream,
+    UpStreams,
 };
 use derive_new::new;
 use serde::Serialize;
@@ -77,8 +78,7 @@ pub fn zmq_rec<T: Element + Send + DeserializeOwned>(
 ) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
     let subscriber = ZeroMqSubscriber::new(address.to_string());
     let f = move |channel_sender| subscriber.run(channel_sender);
-    let receiver_stream = ReceiverStream::new(f);
-    receiver_stream.into_stream()
+    ReceiverStream::new(f, true).into_stream()
 }
 
 #[derive(new)]
@@ -108,7 +108,10 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
         UpStreams::new(vec![self.src.clone().as_node()], vec![])
     }
 
-    fn start(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        if state.run_mode() != RunMode::RealTime {
+            anyhow::bail!("ZMQ nodes only support real-time mode");
+        }
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SocketType::PUB)?;
         let address = format!("tcp://127.0.0.1:{:}", self.port);
@@ -251,5 +254,32 @@ mod tests {
         let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
         send.join().unwrap().unwrap();
         rec.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn zmq_send_historical_mode_fails() {
+        use crate::NanoTime;
+        let result = sender(Duration::from_millis(10), 5558)
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let err = result.expect_err("expected historical mode to fail for zmq sender");
+        let err_msg = format!("{err:?}");
+        assert!(
+            err_msg.contains("real-time"),
+            "expected error to mention real-time, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn zmq_rec_historical_mode_fails() {
+        use crate::NanoTime;
+        let result = zmq_rec::<u64>("tcp://127.0.0.1:5559")
+            .as_node()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let err = result.expect_err("expected historical mode to fail for zmq receiver");
+        let err_msg = format!("{err:?}");
+        assert!(
+            err_msg.contains("real-time"),
+            "expected error to mention real-time, got: {err_msg}"
+        );
     }
 }
