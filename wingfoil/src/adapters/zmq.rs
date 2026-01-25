@@ -73,7 +73,7 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
     }
 }
 
-pub fn zmq_rec<T: Element + Send + DeserializeOwned>(
+pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
     address: &str,
 ) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
     let subscriber = ZeroMqSubscriber::new(address.to_string());
@@ -183,19 +183,19 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 //     }
 // }
 
-pub trait ZeroMqSend<T: Element + Send> {
-    fn zmq_send(&self, port: u16) -> Rc<dyn Node>;
+pub trait ZeroMqPub<T: Element + Send> {
+    fn zmq_pub(&self, port: u16) -> Rc<dyn Node>;
 }
 
-impl<T: Element + Send + Serialize> ZeroMqSend<T> for Rc<dyn Stream<T>> {
-    fn zmq_send(&self, port: u16) -> Rc<dyn Node> {
+impl<T: Element + Send + Serialize> ZeroMqPub<T> for Rc<dyn Stream<T>> {
+    fn zmq_pub(&self, port: u16) -> Rc<dyn Node> {
         ZeroMqSenderNode::new(self.clone(), port).into_node()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::zmq::{ZeroMqSend, zmq_rec};
+    use crate::adapters::zmq::{ZeroMqPub, zmq_sub};
     use crate::{Graph, Node, NodeOperators, StreamOperators};
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
@@ -203,11 +203,11 @@ mod tests {
     use std::time::Duration;
 
     fn sender(period: Duration, port: u16) -> Rc<dyn Node> {
-        ticker(period).count().logged("pub", Info).zmq_send(port)
+        ticker(period).count().logged("pub", Info).zmq_pub(port)
     }
 
     fn receiver(address: &str) -> Rc<dyn Node> {
-        zmq_rec::<u64>(address)
+        zmq_sub::<u64>(address)
             .logged("sub", Info)
             .collect()
             .finally(|res, _| {
@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn zmq_send_historical_mode_fails() {
+    fn zmq_pub_historical_mode_fails() {
         use crate::NanoTime;
         let result = sender(Duration::from_millis(10), 5558)
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
@@ -270,9 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn zmq_rec_historical_mode_fails() {
+    fn zmq_sub_historical_mode_fails() {
         use crate::NanoTime;
-        let result = zmq_rec::<u64>("tcp://127.0.0.1:5559")
+        let result = zmq_sub::<u64>("tcp://127.0.0.1:5559")
             .as_node()
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
         let err = result.expect_err("expected historical mode to fail for zmq receiver");
