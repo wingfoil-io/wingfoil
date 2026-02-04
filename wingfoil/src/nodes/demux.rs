@@ -1,5 +1,4 @@
-use crate::{
-    Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators, StreamPeekRef,
+use crate::{    GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators, StreamPeekRef,
     UpStreams,
 };
 use derive_more::Debug;
@@ -11,6 +10,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 use tinyvec::TinyVec;
+use std::fmt::Debug as StdDebug;
 
 /// A message used to signal that a demuxed child stream
 /// can be closed.   Used by [StreamOperators::demux] and [StreamOperators::demux_it]
@@ -34,7 +34,8 @@ where
     inner: Rc<RefCell<DemuxMapInner<K>>>,
 }
 
-impl<K> DemuxMap<K>
+impl<K>
+    DemuxMap<K>
 where
     K: Hash + Eq + PartialEq + fmt::Debug,
 {
@@ -52,7 +53,7 @@ where
         self.inner.borrow_mut().release(key)
     }
 
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.inner.borrow().size
     }
 }
@@ -67,7 +68,8 @@ where
     size: usize,
 }
 
-impl<K> DemuxMapInner<K>
+impl<K>
+    DemuxMapInner<K>
 where
     K: Hash + Eq + PartialEq + std::fmt::Debug,
 {
@@ -125,27 +127,28 @@ where
 /// Represents a [Stream] of values that failed to be demuxed because the
 /// the demux capacity was exceeded.   Output of [StreamOperators::demux] and
 /// [StreamOperators::demux_it].
-pub struct Overflow<T: Element>(Rc<RefCell<Option<Rc<dyn Stream<T>>>>>);
-impl<T: Element> Overflow<T> {
-    pub fn stream(&self) -> Rc<dyn Stream<T>> {
+pub struct Overflow<'a, T: StdDebug + Clone + 'a>(Rc<RefCell<Option<Rc<dyn Stream<'a, T> + 'a>>>>);
+impl<'a, T: StdDebug + Clone + 'a> Overflow<'a, T> {
+    pub fn stream(&self) -> Rc<dyn Stream<'a, T> + 'a> {
         self.0.borrow().clone().unwrap()
     }
-    pub fn panic(&self) -> Rc<dyn Node> {
+    pub fn panic(&self) -> Rc<dyn Node<'a> + 'a>
+    where T: Default + 'static {
         self.stream().for_each(move |itm, _| {
-            panic!("overflow!\n{itm:?}");
+            panic!("overflow!\n{:?}", itm);
         })
     }
 }
 
-pub(crate) fn demux<K, T, F>(
-    source: Rc<dyn Stream<T>>,
+pub(crate) fn demux<'a, K, T, F>(
+    source: Rc<dyn Stream<'a, T> + 'a>,
     map: DemuxMap<K>,
     func: F,
-) -> (Vec<Rc<dyn Stream<T>>>, Overflow<T>)
+) -> (Vec<Rc<dyn Stream<'a, T> + 'a>>, Overflow<'a, T>)
 where
-    K: Hash + Eq + PartialEq + fmt::Debug + 'static,
-    T: Element,
-    F: Fn(&T) -> (K, DemuxEvent) + 'static,
+    K: Hash + Eq + PartialEq + fmt::Debug + 'a,
+    T: StdDebug + Clone + Default + 'a,
+    F: Fn(&T) -> (K, DemuxEvent) + 'a,
 {
     let size = map.size();
     let overflow = Rc::new(RefCell::new(None));
@@ -166,18 +169,18 @@ where
 }
 
 #[derive(new, Debug)]
-struct DemuxParent<T, F, K>
+struct DemuxParent<'a, T, F, K>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
 {
-    source: Rc<dyn Stream<T>>,
+    source: Rc<dyn Stream<'a, T> + 'a>,
     func: F,
     #[debug(skip)]
     map: DemuxMap<K>,
-    children: Rc<RefCell<Vec<Rc<dyn Stream<T>>>>>,
-    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<T>>>>>,
+    children: Rc<RefCell<Vec<Rc<dyn Stream<'a, T> + 'a>>>>,
+    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<'a, T> + 'a>>>>,
     #[new(default)]
     value: T,
     #[new(default)]
@@ -187,9 +190,9 @@ where
     overflow_graph_index: Option<usize>,
 }
 
-impl<T, F, K> StreamPeekRef<T> for DemuxParent<T, F, K>
+impl<'a, T, F, K> StreamPeekRef<'a, T> for DemuxParent<'a, T, F, K>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
 {
@@ -198,13 +201,13 @@ where
     }
 }
 
-impl<T, K, F> MutableNode for DemuxParent<T, F, K>
+impl<'a, T, K, F> MutableNode<'a> for DemuxParent<'a, T, F, K>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
 {
-    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         let (key, event) = (self.func)(&self.value);
         let entry = match event {
@@ -220,7 +223,7 @@ where
         Ok(false)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
         let mut node_indexes: Vec<_> = childes
             .drain(..)
@@ -250,41 +253,35 @@ where
         Ok(())
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         let nodes = vec![self.source.clone().as_node()];
         UpStreams::new(nodes, vec![])
     }
 }
 
 #[derive(new)]
-struct DemuxChild<T>
+struct DemuxChild<'a, T>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
 {
-    source: Rc<dyn Stream<T>>,
+    source: Rc<dyn Stream<'a, T> + 'a>,
     #[new(default)]
     value: T,
 }
 
-impl<T> MutableNode for DemuxChild<T>
-where
-    T: Element,
-{
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Default + 'a> MutableNode<'a> for DemuxChild<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
     }
 }
 
-impl<T> StreamPeekRef<T> for DemuxChild<T>
-where
-    T: Element,
-{
+impl<'a, T: StdDebug + Clone + Default + 'a> StreamPeekRef<'a, T> for DemuxChild<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
     }
@@ -292,19 +289,52 @@ where
 
 /////////////////////////////////////
 
-pub(crate) fn demux_it<K, T, F, I>(
-    source: Rc<dyn Stream<I>>,
+pub fn demux_it<'a, T, F, K, I>(
+    source: Rc<dyn Stream<'a, I> + 'a>,
+    capacity: usize,
+    func: F,
+) -> (
+    Vec<Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a>>,
+    Overflow<'a, TinyVec<[T; 1]>>,
+)
+where
+    T: StdDebug + Clone + Default + 'a,
+    K: Hash + Eq + PartialEq + std::fmt::Debug + 'a,
+    F: Fn(&T) -> (K, DemuxEvent) + 'a,
+    I: IntoIterator<Item = T> + StdDebug + Clone + Default + 'a,
+{
+    let map = DemuxMap::new(capacity);
+    let size = map.size();
+    let overflow = Rc::new(RefCell::new(None));
+    let children = Rc::new(RefCell::new(vec![]));
+    let value = vec![TinyVec::new(); size + 1];
+    let parent = DemuxVecParent::new(source, func, map, children.clone(), overflow.clone(), value)
+        .into_stream();
+    let build_child = |i| DemuxVecChild::new(i, parent.clone()).into_stream();
+    let demuxed = (0..size).map(build_child).collect::<Vec<_>>();
+    assert!(overflow.borrow().is_none());
+    overflow.borrow_mut().replace(build_child(size));
+    assert!(overflow.borrow().is_some());
+    demuxed.iter().for_each(|strm| {
+        children.borrow_mut().push(strm.clone());
+    });
+    let overflow = Overflow(overflow);
+    (demuxed, overflow)
+}
+
+pub fn demux_it_with_map<'a, T, F, K, I>(
+    source: Rc<dyn Stream<'a, I> + 'a>,
     map: DemuxMap<K>,
     func: F,
 ) -> (
-    Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>,
-    Overflow<TinyVec<[T; 1]>>,
+    Vec<Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a>>,
+    Overflow<'a, TinyVec<[T; 1]>>,
 )
 where
-    K: Hash + Eq + PartialEq + fmt::Debug + 'static,
-    T: Element,
-    F: Fn(&T) -> (K, DemuxEvent) + 'static,
-    I: IntoIterator<Item = T> + Element,
+    T: StdDebug + Clone + Default + 'a,
+    K: Hash + Eq + PartialEq + std::fmt::Debug + 'a,
+    F: Fn(&T) -> (K, DemuxEvent) + 'a,
+    I: IntoIterator<Item = T> + StdDebug + Clone + Default + 'a,
 {
     let size = map.size();
     let overflow = Rc::new(RefCell::new(None));
@@ -324,20 +354,21 @@ where
     (demuxed, overflow)
 }
 
+
 #[derive(new, Debug)]
-struct DemuxVecParent<T, F, K, I>
+struct DemuxVecParent<'a, T, F, K, I>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
-    I: IntoIterator<Item = T> + Element,
+    I: IntoIterator<Item = T> + StdDebug + Clone,
 {
-    source: Rc<dyn Stream<I>>,
+    source: Rc<dyn Stream<'a, I> + 'a>,
     func: F,
     #[debug(skip)]
     map: DemuxMap<K>,
-    children: Rc<RefCell<Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>>>,
-    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<TinyVec<[T; 1]>>>>>>,
+    children: Rc<RefCell<Vec<Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a>>>>,
+    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a>>>>,
     value: Vec<TinyVec<[T; 1]>>,
     #[new(default)]
     // map from child node index to its index in the graph
@@ -346,26 +377,26 @@ where
     overflow_graph_index: Option<usize>,
 }
 
-impl<T, F, K, I> StreamPeekRef<Vec<TinyVec<[T; 1]>>> for DemuxVecParent<T, F, K, I>
+impl<'a, T, F, K, I> StreamPeekRef<'a, Vec<TinyVec<[T; 1]>>> for DemuxVecParent<'a, T, F, K, I>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
-    I: IntoIterator<Item = T> + Element,
+    I: IntoIterator<Item = T> + StdDebug + Clone,
 {
     fn peek_ref(&self) -> &Vec<TinyVec<[T; 1]>> {
         &self.value
     }
 }
 
-impl<T, K, F, I> MutableNode for DemuxVecParent<T, F, K, I>
+impl<'a, T, K, F, I> MutableNode<'a> for DemuxVecParent<'a, T, F, K, I>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
-    I: IntoIterator<Item = T> + Element,
+    I: IntoIterator<Item = T> + StdDebug + Clone,
 {
-    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         for row in &mut self.value {
             row.clear();
         }
@@ -393,7 +424,7 @@ where
         Ok(false)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
         let mut node_indexes: Vec<_> = childes
             .drain(..)
@@ -420,42 +451,36 @@ where
         Ok(())
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         let nodes = vec![self.source.clone().as_node()];
         UpStreams::new(nodes, vec![])
     }
 }
 
 #[derive(new)]
-struct DemuxVecChild<T>
+struct DemuxVecChild<'a, T>
 where
-    T: Element,
+    T: StdDebug + Clone + Default + 'a,
 {
     index: usize,
-    source: Rc<dyn Stream<Vec<TinyVec<[T; 1]>>>>,
+    source: Rc<dyn Stream<'a, Vec<TinyVec<[T; 1]>>> + 'a>,
     #[new(default)]
     value: TinyVec<[T; 1]>,
 }
 
-impl<T> MutableNode for DemuxVecChild<T>
-where
-    T: Element,
-{
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Default + 'a> MutableNode<'a> for DemuxVecChild<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
     }
 }
 
-impl<T> StreamPeekRef<TinyVec<[T; 1]>> for DemuxVecChild<T>
-where
-    T: Element,
-{
+impl<'a, T: StdDebug + Clone + Default + 'a> StreamPeekRef<'a, TinyVec<[T; 1]>> for DemuxVecChild<'a, T> {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         &self.value
     }
@@ -494,7 +519,7 @@ mod tests {
         message_type: MessageType,
     }
 
-    fn message_source(stream_id: usize, delay: Option<Duration>) -> Rc<dyn Stream<Message>> {
+    fn message_source<'a>(stream_id: usize, delay: Option<Duration>) -> Rc<dyn Stream<'a, Message> + 'a> {
         ticker(*PERIOD)
             .count()
             .delay(delay.unwrap_or(Duration::ZERO))
@@ -511,7 +536,7 @@ mod tests {
                     message_type,
                 }
             })
-            .logged(&format!("source {stream_id} "), log::Level::Info)
+            .logged(&format!("source {} ", stream_id), log::Level::Info)
     }
 
     fn parse_message(message: &Message) -> (Topic, DemuxEvent) {
@@ -523,11 +548,12 @@ mod tests {
         (key, event)
     }
 
-    fn build_results<T: Element>(
-        demuxed: Vec<Rc<dyn Stream<T>>>,
-        overflow: Overflow<T>,
+    fn build_results<'a, T: std::fmt::Debug + Clone + Default + 'a>(
+        demuxed: Vec<Rc<dyn Stream<'a, T> + 'a>>,
+        overflow: Overflow<'a, T>,
         with_overflow: bool,
-    ) -> (Vec<Rc<dyn Stream<Vec<T>>>>, Vec<Rc<dyn Node>>) {
+    ) -> (Vec<Rc<dyn Stream<'a, Vec<T>> + 'a>>, Vec<Rc<dyn Node<'a> + 'a>>)
+    {
         let mut dmxd = demuxed;
         if with_overflow {
             dmxd.push(overflow.stream());
@@ -535,9 +561,9 @@ mod tests {
         let results = dmxd
             .iter()
             .enumerate()
-            .map(|(i, sream)| {
+            .map(|(_i, sream)| {
                 sream
-                    .logged(&format!("output {i} "), log::Level::Info)
+                    .logged(&format!("output {} ", _i), log::Level::Info)
                     .accumulate()
             })
             .collect::<Vec<_>>();
@@ -554,7 +580,7 @@ mod tests {
         (results, nodes)
     }
 
-    fn validate_results<T>(results: Vec<Rc<dyn Stream<Vec<T>>>>, func: impl Fn(&T) -> Topic) {
+    fn validate_results<'a, T: Clone>(results: Vec<Rc<dyn Stream<'a, Vec<T>> + 'a>>, func: impl Fn(&T) -> Topic) {
         let topics = results
             .iter()
             .map(|strm| {
@@ -577,13 +603,13 @@ mod tests {
             .iter()
             .map(|strm| strm.peek_value().len())
             .collect::<Vec<_>>();
-        println!("n_msgs = {n_msgs:?}");
+        println!("n_msgs = {:?}", n_msgs);
         println!("ntopics:");
-        sorted_topics.iter().for_each(|item| {
+        for item in sorted_topics {
             println!("{:?}", item);
-        });
+        }
         println!("");
-        for rw in sorted_topics {
+        for rw in topics {
             assert_eq!(rw.len(), EXPECTED_DISTINCT_TOPICS_PER_STREAM);
         }
         n_msgs

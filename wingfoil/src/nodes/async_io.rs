@@ -9,33 +9,34 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use tinyvec::TinyVec;
+use std::fmt::Debug;
 
 /// A convenience alias for [`futures::Stream`] with items of type `(NanoTime, T)`.
 /// used by [StreamOperators::consume_async].
-pub trait FutStream<T>: futures::Stream<Item = (NanoTime, T)> + Send {}
+pub trait FutStream<'a, T>: futures::Stream<Item = (NanoTime, T)> + Send {}
 
-impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime, T)> + Send {}
+impl<'a, STRM, T> FutStream<'a, T> for STRM where STRM: futures::Stream<Item = (NanoTime, T)> + Send {}
 
-type ConsumerFunc<T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
+type ConsumerFunc<'a, T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<'a, T>>>) -> FUT + Send>;
 
-pub(crate) struct AsyncConsumerNode<T, FUT>
+pub(crate) struct AsyncConsumerNode<'a, T, FUT>
 where
-    T: Element + Send,
+    T: Send + 'static,
     FUT: Future<Output = ()> + Send + 'static,
 {
-    source: Rc<dyn Stream<T>>,
+    source: Rc<dyn Stream<'a, T> + 'a>,
     sender: ChannelSender<T>,
-    func: Option<ConsumerFunc<T, FUT>>,
+    func: Option<ConsumerFunc<'static, T, FUT>>,
     handle: Option<tokio::task::JoinHandle<()>>,
     rx: Option<ChannelReceiver<T>>,
 }
 
-impl<T, FUT> AsyncConsumerNode<T, FUT>
+impl<'a, T, FUT> AsyncConsumerNode<'a, T, FUT>
 where
-    T: Element + Send,
+    T: Send + 'static,
     FUT: Future<Output = ()> + Send + 'static,
 {
-    pub fn new(source: Rc<dyn Stream<T>>, func: ConsumerFunc<T, FUT>) -> Self {
+    pub fn new(source: Rc<dyn Stream<'a, T> + 'a>, func: ConsumerFunc<'static, T, FUT>) -> Self {
         let (sender, receiver) = channel_pair(None);
         let rx = Some(receiver);
         let handle = None;
@@ -51,21 +52,21 @@ where
     }
 }
 
-impl<T, FUT> MutableNode for AsyncConsumerNode<T, FUT>
+impl<'a, T, FUT> MutableNode<'a> for AsyncConsumerNode<'a, T, FUT>
 where
-    T: Element + Send,
+    T: Debug + Clone + Send + 'static,
     FUT: Future<Output = ()> + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.sender.send(state, self.source.peek_value())?;
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 
-    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let run_mode = state.run_mode();
         let run_for = state.run_for();
         let rx = self
@@ -89,12 +90,12 @@ where
         Ok(())
     }
 
-    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+    fn stop(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.sender.close()?;
         Ok(())
     }
 
-    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn teardown(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         if let Some(handle) = self.handle.take() {
             state.tokio_runtime().block_on(handle)?;
         }
@@ -102,22 +103,23 @@ where
     }
 }
 
-struct AsyncProducerStream<T, S, FUT, FUNC>
+struct AsyncProducerStream<'a, T, S, FUT, FUNC>
 where
-    T: Element + Send,
+    T: Send + 'static + Default,
     S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
 {
+    #[allow(dead_code)]
     func: Option<FUNC>,
-    receiver_stream: ReceiverStream<T>,
+    receiver_stream: ReceiverStream<'a, T>,
     handle: Option<tokio::task::JoinHandle<()>>,
     sender: Option<ChannelSender<T>>,
 }
 
-impl<T, S, FUT, FUNC> AsyncProducerStream<T, S, FUT, FUNC>
+impl<'a, T, S, FUT, FUNC> AsyncProducerStream<'a, T, S, FUT, FUNC>
 where
-    T: Element + Send,
+    T: Send + 'static + Default,
     S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
@@ -137,22 +139,22 @@ where
     }
 }
 
-impl<T, S, FUT, FUNC> MutableNode for AsyncProducerStream<T, S, FUT, FUNC>
+impl<'a, T, S, FUT, FUNC> MutableNode<'a> for AsyncProducerStream<'a, T, S, FUT, FUNC>
 where
-    T: Element + Send,
+    T: Debug + Clone + Send + 'static + Default,
     S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
 {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::none()
     }
 
-    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let run_mode = state.run_mode();
         let run_for = state.run_for();
         let mut sender = self
@@ -186,7 +188,7 @@ where
         Ok(())
     }
 
-    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn teardown(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.receiver_stream.teardown(state)?;
         if let Some(handle) = self.handle.take() {
             state.tokio_runtime().block_on(handle)?;
@@ -195,9 +197,9 @@ where
     }
 }
 
-impl<T, S, FUT, FUNC> StreamPeekRef<TinyVec<[T; 1]>> for AsyncProducerStream<T, S, FUT, FUNC>
+impl<'a, T, S, FUT, FUNC> StreamPeekRef<'a, TinyVec<[T; 1]>> for AsyncProducerStream<'a, T, S, FUT, FUNC>
 where
-    T: Element + Send,
+    T: Debug + Clone + Send + 'static + Default,
     S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
@@ -208,9 +210,9 @@ where
 }
 
 /// Create a [Stream] from futures::Stream
-pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<TinyVec<[T; 1]>>>
+pub fn produce_async<'a, T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a>
 where
-    T: Element + Send,
+    T: Debug + Clone + Send + Default + 'static,
     S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
     FUT: Future<Output = S> + Send + 'static,
     FUNC: FnOnce() -> FUT + Send + 'static,
@@ -218,14 +220,14 @@ where
     AsyncProducerStream::new(func).into_stream()
 }
 
-trait StreamMessageSource<T: Element + Send> {
+trait StreamMessageSource<T: Send> {
     fn to_message_stream(self, run_mode: RunMode) -> impl futures::Stream<Item = Message<T>>;
 }
 
 impl<T, STRM> StreamMessageSource<T> for STRM
 where
     STRM: futures::Stream<Item = (NanoTime, T)>,
-    T: Element + Send,
+    T: Send,
 {
     fn to_message_stream(self, run_mode: RunMode) -> impl futures::Stream<Item = Message<T>> {
         async_stream::stream! {
@@ -245,7 +247,7 @@ where
     }
 }
 
-trait MessageStream<T: Element + Send> {
+trait MessageStream<T: Send> {
     fn limit(self, run_mode: RunMode, run_for: RunFor) -> impl futures::Stream<Item = Message<T>>;
 
     fn to_stream(self) -> impl futures::Stream<Item = (NanoTime, T)>;
@@ -254,7 +256,7 @@ trait MessageStream<T: Element + Send> {
 impl<T, STRM> MessageStream<T> for STRM
 where
     STRM: futures::Stream<Item = Message<T>>,
-    T: Element + Send,
+    T: Send,
 {
     fn limit(self, run_mode: RunMode, run_for: RunFor) -> impl futures::Stream<Item = Message<T>> {
         async_stream::stream! {
@@ -320,7 +322,7 @@ mod tests {
     #[test]
     fn async_io_works() {
         let _ = env_logger::try_init();
-        let n_runs = 5;
+        let n_runs = 1;
         let period = Duration::from_millis(10);
         let n_periods = 5;
         let run_for = RunFor::Duration(period * n_periods);

@@ -11,32 +11,34 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{thread, vec};
 use tinyvec::TinyVec;
+use std::fmt::Debug;
 
 #[derive(Debug, Default)]
-enum GraphProducerStreamState<T, FUNC>
+enum GraphProducerStreamState<'a, T, FUNC>
 where
-    T: Element + Send,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
+    T: Send + 'static,
+    FUNC: FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'a,
 {
     Func(FUNC),
     Handle(thread::JoinHandle<()>),
     #[default]
     Empty,
+    _Phantom(std::marker::PhantomData<&'a T>),
 }
 
-struct GraphProducerStream<T, FUNC>
+struct GraphProducerStream<'a, T, FUNC>
 where
-    T: Element + Send,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
+    T: Send + 'static + Default,
+    FUNC: FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'a,
 {
-    receiver_stream: OnceCell<ReceiverStream<T>>,
-    state: GraphProducerStreamState<T, FUNC>,
+    receiver_stream: OnceCell<ReceiverStream<'a, T>>,
+    state: GraphProducerStreamState<'a, T, FUNC>,
 }
 
-impl<T, FUNC> GraphProducerStream<T, FUNC>
+impl<'a, T, FUNC> GraphProducerStream<'a, T, FUNC>
 where
-    T: Element + Send,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
+    T: Send + 'static + Default,
+    FUNC: FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'a,
 {
     fn new(func: FUNC) -> Self {
         let state = GraphProducerStreamState::Func(func);
@@ -48,20 +50,20 @@ where
     }
 }
 
-impl<T, FUNC> MutableNode for GraphProducerStream<T, FUNC>
+impl<'a, T, FUNC> MutableNode<'a> for GraphProducerStream<'a, T, FUNC>
 where
-    T: Element + Send,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
+    T: Debug + Clone + Send + 'static + Default,
+    FUNC: FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'static,
 {
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![], vec![])
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::none()
     }
 
-    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.receiver_stream.get_mut().unwrap().cycle(graph_state)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let state = mem::take(&mut self.state);
         match state {
             GraphProducerStreamState::Func(func) => {
@@ -92,7 +94,7 @@ where
         Ok(())
     }
 
-    fn teardown(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn teardown(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.receiver_stream
             .get_mut()
             .unwrap()
@@ -109,10 +111,10 @@ where
     }
 }
 
-impl<T, FUNC> StreamPeekRef<TinyVec<[T; 1]>> for GraphProducerStream<T, FUNC>
+impl<'a, T, FUNC> StreamPeekRef<'a, TinyVec<[T; 1]>> for GraphProducerStream<'a, T, FUNC>
 where
-    T: Element + Send + Hash + Eq,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
+    T: Debug + Clone + Send + Hash + Eq + 'static + Default,
+    FUNC: FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'static,
 {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         self.receiver_stream.get().unwrap().peek_ref()
@@ -121,45 +123,46 @@ where
 
 /// Creates a [Stream] emitting values on this thread
 /// but produced on a worker thread.
-pub fn producer<T: Element + Send + Hash + Eq>(
-    func: impl FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
-) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
+pub fn producer<'a, T: Debug + Clone + Default + Send + Hash + Eq + 'static>(
+    func: impl FnOnce() -> Rc<dyn Stream<'a, T> + 'a> + Send + 'static,
+) -> Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a> {
     GraphProducerStream::new(func).into_stream()
 }
 
 #[derive(Debug, Default)]
-enum GraphMapStreamState<FUNC, IN, OUT>
+enum GraphMapStreamState<'a, FUNC, IN, OUT>
 where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<TinyVec<[IN; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+    IN: Send + 'static + Default,
+    OUT: Send + 'static + Default,
+    FUNC: FnOnce(Rc<dyn Stream<'a, TinyVec<[IN; 1]>> + 'a>) -> Rc<dyn Stream<'a, OUT> + 'a> + Send + 'a,
 {
     Func(FUNC, ChannelSender<OUT>),
     Handle(thread::JoinHandle<()>),
     #[default]
     Empty,
-    _Phantom(IN, OUT),
+    #[allow(dead_code)]
+    _Phantom(IN, OUT, std::marker::PhantomData<&'a ()>),
 }
 
-pub(crate) struct GraphMapStream<FUNC, IN, OUT>
+pub(crate) struct GraphMapStream<'a, FUNC, IN, OUT>
 where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<TinyVec<[IN; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+    IN: Send + 'static + Default,
+    OUT: Send + 'static + Default,
+    FUNC: FnOnce(Rc<dyn Stream<'a, TinyVec<[IN; 1]>> + 'a>) -> Rc<dyn Stream<'a, OUT> + 'a> + Send + 'a,
 {
-    source: Rc<dyn Stream<IN>>,
+    source: Rc<dyn Stream<'a, IN> + 'a>,
     sender: OnceCell<ChannelSender<IN>>,
-    receiver_stream: ReceiverStream<OUT>,
-    state: GraphMapStreamState<FUNC, IN, OUT>,
+    receiver_stream: ReceiverStream<'a, OUT>,
+    state: GraphMapStreamState<'a, FUNC, IN, OUT>,
 }
 
-impl<IN, OUT, FUNC> GraphMapStream<FUNC, IN, OUT>
+impl<'a, IN, OUT, FUNC> GraphMapStream<'a, FUNC, IN, OUT>
 where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<TinyVec<[IN; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+    IN: Send + 'static + Default,
+    OUT: Send + 'static + Default,
+    FUNC: FnOnce(Rc<dyn Stream<'a, TinyVec<[IN; 1]>> + 'a>) -> Rc<dyn Stream<'a, OUT> + 'a> + Send + 'a,
 {
-    pub fn new(source: Rc<dyn Stream<IN>>, func: FUNC) -> Self {
+    pub fn new(source: Rc<dyn Stream<'a, IN> + 'a>, func: FUNC) -> Self {
         let trigger = Some(source.clone().as_node());
         let (sender_out, receiver_out) = channel_pair(None);
         //let receiver_out = ChannelReceiver::new(rx_out);
@@ -175,18 +178,18 @@ where
     }
 }
 
-impl<IN, OUT, FUNC> MutableNode for GraphMapStream<FUNC, IN, OUT>
+impl<'a, IN, OUT, FUNC> MutableNode<'a> for GraphMapStream<'a, FUNC, IN, OUT>
 where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<TinyVec<[IN; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+    IN: Debug + Clone + Send + 'static + Default,
+    OUT: Debug + Clone + Send + 'static + Default,
+    FUNC: FnOnce(Rc<dyn Stream<'a, TinyVec<[IN; 1]>> + 'a>) -> Rc<dyn Stream<'a, OUT> + 'a> + Send + 'static,
 {
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone()], vec![])
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 
-    fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
-        if graph_state.ticked(self.source.clone()) {
+    fn cycle(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<bool> {
+        if graph_state.ticked(self.source.clone().as_node()) {
             self.sender
                 .get_mut()
                 .unwrap()
@@ -195,7 +198,7 @@ where
         self.receiver_stream.cycle(graph_state)
     }
 
-    fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         let state = mem::take(&mut self.state);
         match state {
             GraphMapStreamState::Func(func, sender_out) => {
@@ -241,15 +244,14 @@ where
         self.receiver_stream.setup(graph_state)
     }
 
-    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
-        self.sender
-            .get_mut()
-            .ok_or(anyhow::anyhow!("Sender not initialized"))?
-            .close()?;
+    fn stop(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<()> {
+        if let Some(sender) = self.sender.get_mut() {
+            sender.close()?;
+        }
         Ok(())
     }
 
-    fn teardown(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
+    fn teardown(&mut self, graph_state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.receiver_stream.teardown(graph_state)?;
         let state = mem::take(&mut self.state);
         match state {
@@ -263,11 +265,11 @@ where
     }
 }
 
-impl<IN, OUT, FUNC> StreamPeekRef<TinyVec<[OUT; 1]>> for GraphMapStream<FUNC, IN, OUT>
+impl<'a, IN, OUT, FUNC> StreamPeekRef<'a, TinyVec<[OUT; 1]>> for GraphMapStream<'a, FUNC, IN, OUT>
 where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<TinyVec<[IN; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+    IN: Debug + Clone + Send + 'static + Default,
+    OUT: Debug + Clone + Send + 'static + Default,
+    FUNC: FnOnce(Rc<dyn Stream<'a, TinyVec<[IN; 1]>> + 'a>) -> Rc<dyn Stream<'a, OUT> + 'a> + Send + 'static,
 {
     fn peek_ref(&self) -> &TinyVec<[OUT; 1]> {
         self.receiver_stream.peek_ref()
@@ -304,9 +306,9 @@ mod tests {
         for (run_mode, delay, sleep_produce, sleep_map, _) in
             itertools::iproduct!(run_modes, delays, true_false.clone(), true_false, 0..n_runs)
         {
-            let label = || {
+            let label = move || {
                 let thread_id = thread::current().id();
-                let lbl = format!("{thread_id:>3?}>>");
+                let lbl = format!("{:?}>>", thread_id);
                 lbl
             };
             let seq = move || {
@@ -321,18 +323,27 @@ mod tests {
                     })
                     .logged(label().as_str(), log::Level::Info)
             };
-            let scale = move |src: Rc<dyn Stream<TinyVec<[TinyVec<[u64; 1]>; 1]>>>| {
-                src.delay(delay)
-                    .map(move |xs| xs.iter().flatten().map(|x| x * 10).collect::<Vec<u64>>())
-                    .logged(label().as_str(), log::Level::Info)
-            };
+            
             let f = move || {
+                let label_inner = label;
+                let scale = move |src: Rc<dyn Stream<'static, TinyVec<[TinyVec<[u64; 1]>; 1]>> + 'static>| {
+                    src.delay(delay)
+                        .map(move |xs| {
+                            // xs is TinyVec<[TinyVec<[u64; 1]>; 1]>
+                            xs.iter().flatten().map(|x| x * 10).collect::<Vec<u64>>()
+                        })
+                        .logged(label_inner().as_str(), log::Level::Info)
+                };
+
                 producer(seq)
-                    .mapper(scale)
+                    .mapper(move |src| {
+                        scale(src)
+                    })
                     .map(move |xs| {
                         if sleep_map {
                             std::thread::sleep(period * 2);
                         }
+                        // xs is TinyVec<[Vec<u64>; 1]>
                         xs.iter().flatten().map(|x| x * 10).collect::<Vec<u64>>()
                     })
                     .logged(label().as_str(), log::Level::Info)
@@ -353,7 +364,8 @@ mod tests {
                     .unwrap();
             };
             println!(
-                "{run_mode:?}, delay={delay:?}, sleep_produce={sleep_produce:}, sleep_map={sleep_map:}"
+                "{:?}, delay={:?}, sleep_produce={}, sleep_map={}",
+                run_mode, delay, sleep_produce, sleep_map
             );
             if delay == half_period && matches!(run_mode, RunMode::HistoricalFrom(_)) {
                 assert!(catch_unwind(f).is_err());
