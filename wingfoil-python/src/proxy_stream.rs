@@ -5,7 +5,8 @@ use pyo3::prelude::*;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
-use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
+use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams, Node};
+use std::rc::Rc;
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
@@ -27,8 +28,8 @@ impl Clone for PyProxyStream {
     }
 }
 
-impl MutableNode for PyProxyStream {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a> MutableNode<'a> for PyProxyStream {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         Python::attach(|py| {
             let this = self.0.bind(py);
             let res = this
@@ -39,7 +40,7 @@ impl MutableNode for PyProxyStream {
         })
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         let ups = Python::attach(|py| {
             let this = self.0.bind(py);
             let res = this.call_method0("upstreams").unwrap();
@@ -47,12 +48,17 @@ impl MutableNode for PyProxyStream {
             res.iter()
                 .map(|obj| {
                     let bound = obj.bind(py);
-                    if let Ok(stream) = bound.extract::<PyStream>() {
+                    let node_static = if let Ok(stream) = bound.extract::<PyStream>() {
                         stream.inner_stream().as_node()
                     } else if let Ok(stream) = bound.extract::<PyProxyStream>() {
                         stream.into_node()
                     } else {
                         panic!("Unexpected upstream type");
+                    };
+                    // SAFETY: All python-wrapped nodes are effectively 'static.
+                    // We transmute from 'static to 'a to satisfy the return type constraint.
+                    unsafe {
+                        std::mem::transmute::<Rc<dyn Node<'static> + 'static>, Rc<dyn Node<'a> + 'a>>(node_static)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -65,7 +71,7 @@ lazy_static! {
     pub static ref DUMMY_PY_ELEMENT: PyElement = PyElement::none();
 }
 
-impl StreamPeekRef<PyElement> for PyProxyStream {
+impl<'a> StreamPeekRef<'a, PyElement> for PyProxyStream {
     // This is a bit hacky - we supply dummy value for peek ref
     // but resolve it to real value in from_cell_ref.
     // Currently peek_ref is only used directly in demux.

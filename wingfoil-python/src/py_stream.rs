@@ -2,7 +2,7 @@ use log::Level;
 use pyo3::BoundObject;
 use std::any::type_name;
 
-use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators};
+use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators, NanoTime, GraphState};
 
 use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
@@ -16,12 +16,12 @@ use crate::*;
 
 #[derive(Clone)]
 #[pyclass(subclass, unsendable, name = "Stream")]
-pub struct PyStream(pub Rc<dyn Stream<PyElement>>);
+pub struct PyStream(pub Rc<dyn Stream<'static, PyElement> + 'static>);
 
 impl PyStream {
-    fn extract<T>(&self) -> Rc<dyn Stream<T>>
+    fn extract<T>(&self) -> Rc<dyn Stream<'static, T> + 'static>
     where
-        T: Element + for<'a, 'py> FromPyObject<'a, 'py>,
+        T: Element + for<'a, 'py> FromPyObject<'a, 'py> + 'static + Default,
     {
         self.0.map(move |x: PyElement| {
             Python::attach(|py| match x.as_ref().extract::<T>(py) {
@@ -33,11 +33,11 @@ impl PyStream {
         })
     }
 
-    pub fn inner_stream(&self) -> Rc<dyn Stream<PyElement>> {
+    pub fn inner_stream(&self) -> Rc<dyn Stream<'static, PyElement> + 'static> {
         self.0.clone()
     }
 
-    pub fn from_inner(inner: Rc<dyn Stream<PyElement>>) -> Self {
+    pub fn from_inner(inner: Rc<dyn Stream<'static, PyElement> + 'static>) -> Self {
         Self(inner)
     }
 }
@@ -58,14 +58,14 @@ pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> {
 
 pub trait AsPyStream<T>
 where
-    T: Element + for<'py> IntoPyObject<'py>,
+    T: Element + for<'py> IntoPyObject<'py> + 'static + Default,
 {
     fn as_py_stream(&self) -> PyStream;
 }
 
-impl<T> AsPyStream<T> for Rc<dyn Stream<T>>
+impl<T> AsPyStream<T> for Rc<dyn Stream<'static, T> + 'static>
 where
-    T: Element + for<'py> IntoPyObject<'py>,
+    T: Element + for<'py> IntoPyObject<'py> + 'static + Default,
 {
     fn as_py_stream(&self) -> PyStream {
         let strm = self.map(|x| {
@@ -107,7 +107,7 @@ impl PyStream {
     // begin StreamOperators
 
     fn collect(&self) -> PyStream {
-        let strm = self.0.collect().map(|items| {
+        let strm = self.0.collect().map(|items: Vec<::wingfoil::ValueAt<PyElement>>| {
             Python::attach(move |py| {
                 let items = items
                     .iter()
@@ -124,7 +124,7 @@ impl PyStream {
     }
 
     fn buffer(&self, capacity: usize) -> PyStream {
-        let strm = self.0.buffer(capacity).map(|items| {
+        let strm = self.0.buffer(capacity).map(|items: Vec<PyElement>| {
             Python::attach(move |py| {
                 let items = items
                     .iter()
@@ -137,7 +137,7 @@ impl PyStream {
     }
 
     fn finally(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.finally(|py_elmnt, _| {
+        let node = self.0.finally(|py_elmnt: PyElement, _: &GraphState<'static>| {
             Python::attach(move |py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let args = (res,);
@@ -148,7 +148,7 @@ impl PyStream {
     }
 
     fn for_each(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.for_each(move |py_elmnt, t| {
+        let node = self.0.for_each(move |py_elmnt: PyElement, t: NanoTime| {
             Python::attach(|py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let t: f64 = t.into();
@@ -177,7 +177,7 @@ impl PyStream {
 
     /// drops source contingent on supplied predicate (Python callable)
     fn filter(&self, keep_func: Py<PyAny>) -> PyStream {
-        let keep = self.0.map(move |x| {
+        let keep = self.0.map(move |x: PyElement| {
             Python::attach(|py| {
                 keep_func
                     .call1(py, (x.value(),))
@@ -201,7 +201,7 @@ impl PyStream {
 
     /// Map’s its source into a new Stream using the supplied Python callable.
     fn map(&self, func: Py<PyAny>) -> PyStream {
-        let stream = self.0.map(move |x| {
+        let stream = self.0.map(move |x: PyElement| {
             Python::attach(|py| {
                 let res = func.call1(py, (x.value(),)).unwrap();
                 PyElement::new(res)

@@ -13,10 +13,10 @@ use std::time::Duration;
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
-struct PyNode(Rc<dyn Node>);
+struct PyNode(Rc<dyn Node<'static> + 'static>);
 
 impl PyNode {
-    fn new(node: Rc<dyn Node>) -> Self {
+    fn new(node: Rc<dyn Node<'static> + 'static>) -> Self {
         Self(node)
     }
 }
