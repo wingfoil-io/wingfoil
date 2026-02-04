@@ -6,6 +6,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_aux::serde_introspection::serde_introspect;
 use std::fs::File;
 use std::rc::Rc;
+use std::fmt::Debug as StdDebug;
 
 use crate::adapters::iterator_stream::{IteratorStream, SimpleIteratorStream};
 use crate::queue::ValueAt;
@@ -17,7 +18,7 @@ fn csv_iterator<T>(
     has_headers: bool,
 ) -> Box<dyn Iterator<Item = ValueAt<T>>>
 where
-    T: Element + DeserializeOwned + 'static,
+    T: StdDebug + Clone + Default + DeserializeOwned + 'static,
 {
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
@@ -37,13 +38,13 @@ where
 /// comma separated values (csv).  The source iterator must be of strictly
 /// ascending time.  For the more general cases where there can be multiple
 /// rows with the same timestamp, you can use [csv_read_vec] instead.
-pub fn csv_read<T>(
+pub fn csv_read<'a, T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<T>>
+) -> Rc<dyn Stream<'a, T> + 'a>
 where
-    T: Element + DeserializeOwned + 'static,
+    T: StdDebug + Clone + Default + DeserializeOwned + 'a + 'static,
 {
     let it = csv_iterator(path, get_time_func, has_headers);
     SimpleIteratorStream::new(it).into_stream()
@@ -52,13 +53,13 @@ where
 /// Returns a [IteratorStream] that emits values from a file of
 /// comma separated values (csv).  The source iterator can tick
 /// multiple times per cycle.  
-pub fn csv_read_vec<T>(
+pub fn csv_read_vec<'a, T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<Vec<T>>>
+) -> Rc<dyn Stream<'a, Vec<T>> + 'a>
 where
-    T: Element + DeserializeOwned + 'static,
+    T: StdDebug + Clone + Default + DeserializeOwned + 'a + 'static,
 {
     let it = csv_iterator(path, get_time_func, has_headers);
     IteratorStream::new(it).into_stream()
@@ -67,15 +68,15 @@ where
 /// Used to write records to a file of comma separated values (csv).
 /// Used by [write_csv](crate::adapters::csv_streams::CsvOperators::csv_write).
 #[derive(new)]
-pub struct CsvWriterNode<T> {
-    upstream: Rc<dyn Stream<T>>,
+pub struct CsvWriterNode<'a, T> {
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
     writer: csv::Writer<File>,
     #[new(default)]
     headers_written: bool,
 }
 
-impl<T: Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Serialize + DeserializeOwned + 'a + 'static> MutableNode<'a> for CsvWriterNode<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         if !self.headers_written {
             write_header::<T>(&mut self.writer);
             self.headers_written = true;
@@ -85,7 +86,7 @@ impl<T: Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T>
             .map_err(|e| anyhow::anyhow!("Failed to serialize CSV record: {e}"))?;
         Ok(false)
     }
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
@@ -101,15 +102,15 @@ fn write_header<T: Serialize + DeserializeOwned + 'static>(writer: &mut csv::Wri
 /// Used to write records to a file of comma separated values (csv).
 /// Used by [write_csv](crate::adapters::csv_streams::CsvVecOperators::csv_write_vec).
 #[derive(new)]
-pub struct CsvVecWriterNode<T> {
-    upstream: Rc<dyn Stream<Vec<T>>>,
+pub struct CsvVecWriterNode<'a, T> {
+    upstream: Rc<dyn Stream<'a, Vec<T>> + 'a>,
     writer: csv::Writer<File>,
     #[new(default)]
     headers_written: bool,
 }
 
-impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVecWriterNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Serialize + DeserializeOwned + 'a + 'static> MutableNode<'a> for CsvVecWriterNode<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         if !self.headers_written {
             write_header::<T>(&mut self.writer);
             self.headers_written = true;
@@ -121,19 +122,19 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVec
         }
         Ok(false)
     }
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
 /// Trait to add csv write operators to streams.
-pub trait CsvOperators<T: Element> {
+pub trait CsvOperators<'a, T: StdDebug + Clone + Default + 'a> {
     /// writes stream to csv file
-    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
+    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node<'a> + 'a>;
 }
 
-impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dyn Stream<T> {
-    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
+impl<'a, T: StdDebug + Clone + Default + Serialize + DeserializeOwned + 'a + 'static> CsvOperators<'a, T> for dyn Stream<'a, T> + 'a {
+    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node<'a> + 'a> {
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
@@ -141,15 +142,15 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
         CsvWriterNode::new(self.clone(), writer).into_node()
     }
 }
-pub trait CsvVecOperators<T: Element> {
+pub trait CsvVecOperators<'a, T: StdDebug + Clone + Default + 'a> {
     /// writes stream of Vec to csv file
-    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
+    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node<'a> + 'a>;
 }
 
-impl<T: Element + Serialize + DeserializeOwned + 'static> CsvVecOperators<T>
-    for dyn Stream<Vec<T>>
+impl<'a, T: StdDebug + Clone + Default + Serialize + DeserializeOwned + 'a + 'static> CsvVecOperators<'a, T>
+    for dyn Stream<'a, Vec<T>> + 'a
 {
-    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
+    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node<'a> + 'a> {
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
