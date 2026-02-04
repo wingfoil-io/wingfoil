@@ -31,8 +31,8 @@ where
 
 /// A function that accepts a trigger node and wires downstream logic to be
 /// benchmarked.
-pub trait BenchBuilder: FnOnce(Rc<dyn Node>) -> Rc<dyn Node> + Send {}
-impl<F> BenchBuilder for F where F: FnOnce(Rc<dyn Node>) -> Rc<dyn Node> + Send {}
+pub trait BenchBuilder: for<'a> FnOnce(Rc<dyn Node<'a> + 'a>) -> Rc<dyn Node<'a> + 'a> + Send {}
+impl<F> BenchBuilder for F where F: for<'a> FnOnce(Rc<dyn Node<'a> + 'a>) -> Rc<dyn Node<'a> + 'a> + Send {}
 
 struct Bencher {
     run_mode: RunMode,
@@ -121,8 +121,8 @@ struct BenchTriggerNode {
     signal: Arc<AtomicU8>,
 }
 
-impl MutableNode for BenchTriggerNode {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a> MutableNode<'a> for BenchTriggerNode {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         match self.signal.load(Ordering::SeqCst).into() {
             Signal::Begin => {
                 self.signal.store(Signal::Running.into(), Ordering::SeqCst);
@@ -135,43 +135,12 @@ impl MutableNode for BenchTriggerNode {
         }
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::none()
     }
 
-    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn start(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         state.always_callback();
         Ok(())
     }
 }
-
-// #[derive(new)]
-// struct BenchTriggerNode {
-//     signal: Arc<AtomicU8>
-// }
-
-// impl MutableNode for BenchTriggerNode {
-//     fn cycle(&mut self, _: &mut GraphState) -> bool {
-//         true
-//     }
-//     fn start(&mut self, state: &mut GraphState) {
-//         let signal = self.signal.clone();
-//         let notifier = state.ready_notifier();
-//         std::thread::spawn(move || {
-//             loop {
-//                 match signal.load(Ordering::SeqCst).into() {
-//                     Signal::Begin => {
-//                         signal.store(Signal::Running.into(), Ordering::SeqCst);
-//                         notifier.notify();
-//                     },
-//                     Signal::Kill => {
-//                         break;
-//                     },
-//                     _ => {
-//                         std::hint::spin_loop();
-//                     },
-//                 }
-//             }
-//         });
-//     }
-// }

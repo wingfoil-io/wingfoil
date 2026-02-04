@@ -22,15 +22,16 @@ impl<T: ?Sized> Hash for HashByRef<T> {
     where
         H: Hasher,
     {
-        let ptr = Rc::into_raw(self.val.clone());
-        ptr.hash(state);
-        let _ = unsafe { Rc::from_raw(ptr) };
+        (Rc::as_ptr(&self.val) as *const ()).hash(state);
     }
 }
 
 impl<T: ?Sized> PartialEq for HashByRef<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.val, &other.val)
+        std::ptr::eq(
+            Rc::as_ptr(&self.val) as *const (),
+            Rc::as_ptr(&other.val) as *const (),
+        )
     }
 }
 impl<T: ?Sized> Eq for HashByRef<T> {}
