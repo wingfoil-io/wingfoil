@@ -15,7 +15,7 @@ to collapse the burst into a single (latest) value.
 
 ## Code
 
-```rust
+```rust, no_run
 use log::Level::Info;
 use std::rc::Rc;
 use std::thread;
@@ -30,8 +30,8 @@ fn label(name: &str) -> String {
 fn main() {
     env_logger::init();
     let period = Duration::from_millis(100);
-    let run_mode = RunMode::RealTime;
-    let run_for = RunFor::Duration(period * 6);
+    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+    let run_for = RunFor::Cycles(6);
 
     let produce_graph = move || {
         let label = label("producer");

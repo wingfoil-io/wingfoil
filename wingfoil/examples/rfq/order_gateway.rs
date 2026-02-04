@@ -10,14 +10,14 @@ use super::message::Order;
 use wingfoil::*;
 
 pub trait OrderGateway {
-    fn send(&self, orders: Rc<dyn Stream<TinyVec<[Order; 1]>>>) -> Rc<dyn Node>;
+    fn send<'a>(&self, orders: Rc<dyn Stream<'a, TinyVec<[Order; 1]>> + 'a>) -> Rc<dyn Node<'a> + 'a>;
 }
 
-#[derive(new)]
+#[derive(new, Clone)]
 pub struct RealTimeOrderGateway {}
 
 impl RealTimeOrderGateway {
-    async fn consume_orders(mut source: Pin<Box<dyn FutStream<TinyVec<[Order; 1]>>>>) {
+    async fn consume_orders(mut source: Pin<Box<dyn FutStream<'_, TinyVec<[Order; 1]>>>>) {
         while let Some((_time, _value)) = source.next().await {
             //println!("{time:?}, {value:?}");
         }
@@ -25,7 +25,7 @@ impl RealTimeOrderGateway {
 }
 
 impl OrderGateway for RealTimeOrderGateway {
-    fn send(&self, orders: Rc<dyn Stream<TinyVec<[Order; 1]>>>) -> Rc<dyn Node> {
+    fn send<'a>(&self, orders: Rc<dyn Stream<'a, TinyVec<[Order; 1]>> + 'a>) -> Rc<dyn Node<'a> + 'a> {
         let consumer = Box::new(Self::consume_orders);
         orders.consume_async(consumer)
     }

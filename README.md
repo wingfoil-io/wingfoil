@@ -32,8 +32,8 @@ fn main() {
         .count()
         .map(|i| format!("hello, world {:}", i))
         .print()
-        .run(RunMode::RealTime, RunFor::Duration(period*3)
-    );
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
 }
 ```
 This output is produced:
@@ -58,8 +58,3 @@ We want to hear from you!  Especially if you:
 - have any feedback
 
 Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io), submit an [issue](https://github.com/wingfoil-io/wingfoil/issues) or get involved in the [discussion](https://github.com/wingfoil-io/wingfoil/discussions/).
-
-
-
-
-

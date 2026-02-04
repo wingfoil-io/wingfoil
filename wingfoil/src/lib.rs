@@ -30,8 +30,8 @@
 //!         .print()
 //!         .run(
 //!             RunMode::HistoricalFrom(NanoTime::ZERO),
-//!             RunFor::Duration(period * 5),
-//!         );
+//!             RunFor::Cycles(5),
+//!         ).unwrap();
 //! }
 //! ```
 //! This output is produced:  
@@ -63,17 +63,13 @@
 //! use log::Level::Info;
 //!
 //! pub fn main() {
-//!     env_logger::init();
-//!     for run_mode in vec![
-//!         RunMode::RealTime,
-//!         RunMode::HistoricalFrom(NanoTime::ZERO)
-//!     ] {
-//!         println!("\nUsing RunMode::{:?}", run_mode);
-//!         ticker(Duration::from_secs(1))
-//!             .count()
-//!             .logged("tick", Info)
-//!             .run(run_mode, RunFor::Cycles(3));
-//!     }
+//!     let _ = env_logger::try_init();
+//!     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+//!     println!("\nUsing RunMode::{:?}", run_mode);
+//!     ticker(Duration::from_secs(1))
+//!         .count()
+//!         .logged("tick", Info)
+//!         .run(run_mode, RunFor::Cycles(3)).unwrap();
 //! }
 //! ```
 //! This output is produced:

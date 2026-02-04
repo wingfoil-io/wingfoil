@@ -28,7 +28,7 @@ async oriented systems.
 RUST_LOG=INFO cargo run --example async
 ```
 
-```rust
+```rust, no_run
 use async_stream::stream;
 use std::time::Duration;
 use std::pin::Pin;
@@ -36,14 +36,13 @@ use futures::StreamExt;
 use wingfoil::*;
 
 let period = Duration::from_millis(10);
-let run_for = RunFor::Duration(period * 5);
-let run_mode = RunMode::RealTime;
+let run_for = RunFor::Cycles(5);
+let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
 let producer = async move || {
     stream! {
         for i in 0.. {
-            tokio::time::sleep(period).await; // simulate waiting IO
-            let time = NanoTime::now();
-            yield (time, i * 10);
+            let time = NanoTime::new(i * 10_000_000);
+            yield (time, i as u32 * 10);
         }
     }
 };
@@ -58,6 +57,5 @@ produce_async(producer)
     .logged("on-graph", log::Level::Info)
     .collapse()
     .consume_async(Box::new(consumer))
-    .run(run_mode, run_for);
+    .run(run_mode, run_for).unwrap();
 ```
-

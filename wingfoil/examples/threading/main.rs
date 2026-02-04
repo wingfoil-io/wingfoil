@@ -20,7 +20,7 @@ fn main() {
         ticker(period).count().logged(&label, Info)
     };
 
-    let map_graph = |src: Rc<dyn Stream<TinyVec<[u64; 1]>>>| {
+    let map_graph = |src: Rc<dyn Stream<'static, TinyVec<[u64; 1]>> + 'static>| {
         let label = label("mapper");
         src.collapse().map(|x| x * 10).logged(&label, Info)
     };

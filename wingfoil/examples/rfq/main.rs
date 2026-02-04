@@ -21,25 +21,25 @@ fn main() {
     let run_for = RunFor::Forever;
     let n_rfqs = 100; // max number of concurrent rfqs
     let n_msgs_historical = 1_000_000;
+    
+    // We declare everything outside the match to extend lifetimes
+    let env = Environment::Test;
+    let rt_market_data = RealTimeMarketDataProvider::new(env);
+    let hist_market_data = HistoricalMarketDataProvider::new(n_msgs_historical);
+    let gateway = RealTimeOrderGateway::new();
+    
+    let rt_responder = RfqResponder::new(n_rfqs, rt_market_data, gateway.clone());
+    let hist_responder = RfqResponder::new(n_rfqs, hist_market_data, gateway);
+
     let nodes = match run_mode {
         RunMode::RealTime => {
-            let env = Environment::Test;
-            let responder = RfqResponder::new(
-                n_rfqs,
-                RealTimeMarketDataProvider::new(env),
-                RealTimeOrderGateway::new(),
-            );
-            responder.build()
+            rt_responder.build()
         }
         RunMode::HistoricalFrom(_) => {
-            let responder = RfqResponder::new(
-                n_rfqs,
-                HistoricalMarketDataProvider::new(n_msgs_historical),
-                RealTimeOrderGateway::new(),
-            );
-            responder.build()
+            hist_responder.build()
         }
     };
+    
     let mut graph = Graph::new(nodes, run_mode, run_for);
     let t0 = std::time::Instant::now();
     graph.run().unwrap();
@@ -71,23 +71,23 @@ where
     O: OrderGateway + 'static,
 {
     /// input streams
-    fn source(&self) -> Rc<dyn Stream<TinyVec<[MarketData; 1]>>> {
+    fn source<'a>(&self) -> Rc<dyn Stream<'a, TinyVec<[MarketData; 1]>> + 'a> {
         // async is abstracted away
         self.market_data_provider.notifications()
     }
 
     /// output node
-    fn send(&self, orders: Rc<dyn Stream<TinyVec<[Order; 1]>>>) -> Rc<dyn Node> {
+    fn send<'a>(&self, orders: Rc<dyn Stream<'a, TinyVec<[Order; 1]>> + 'a>) -> Rc<dyn Node<'a> + 'a> {
         // async is abstracted away
         self.order_gateway.send(orders)
     }
 
     /// demuxed sources
-    fn sources(
+    fn sources<'a>(
         &self,
     ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[MarketData; 1]>>>>,
-        Overflow<TinyVec<[MarketData; 1]>>,
+        Vec<Rc<dyn Stream<'a, TinyVec<[MarketData; 1]>> + 'a>>,
+        Overflow<'a, TinyVec<[MarketData; 1]>>,
     ) {
         self.source().demux_it(
             self.n_rfqs,     // max num of current rfqs
@@ -96,7 +96,7 @@ where
     }
 
     /// main entry point to build the nodes
-    pub fn build(&self) -> Vec<Rc<dyn Node>> {
+    pub fn build<'a>(&'a self) -> Vec<Rc<dyn Node<'a> + 'a>> {
         let (sources, overflow) = self.sources();
         let order_streams = sources
             .iter()
@@ -110,12 +110,12 @@ where
 
     /// The main rfq circuit.  
     /// Each circuit can easily be set up to run on worker a thread.
-    fn rfq_circuit(
+    fn rfq_circuit<'a>(
         subcircuit_id: usize,
-        market_data: Rc<dyn Stream<TinyVec<[MarketData; 1]>>>,
-    ) -> Rc<dyn Stream<Order>> {
-        let label = format!("subcircuit {subcircuit_id} received");
-        market_data.logged(&label, Info).map(|_mkt_data_burst| {
+        market_data: Rc<dyn Stream<'a, TinyVec<[MarketData; 1]>> + 'a>,
+    ) -> Rc<dyn Stream<'a, Order> + 'a> {
+        let label = format!("subcircuit {} received", subcircuit_id);
+        market_data.logged(&label, Info).map(move |_mkt_data_burst| {
             //println!("{:?}", mkt_data_burst.len());
             Order::new()
         })

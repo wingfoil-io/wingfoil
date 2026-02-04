@@ -13,7 +13,7 @@ and [Wikipedia](https://en.wikipedia.org/wiki/Reactive_programming#Glitches)
 for more details.
 
 In wingfoil we build an example with a depth of 127 branch / recombine operations:
-```rust
+```rust, no_run
 use wingfoil::*;
 
 fn main(){

@@ -13,7 +13,7 @@ use super::environment::Environment;
 use super::message::{Channel, Message, Params, RfqData, RfqEvent, RfqId, RfqParams};
 
 pub trait MarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>>;
+    fn notifications<'a>(&self) -> Rc<dyn Stream<'a, TinyVec<[Params; 1]>> + 'a>;
 }
 
 pub struct HistoricalMarketDataProvider {
@@ -57,7 +57,7 @@ impl HistoricalMarketDataProvider {
 }
 
 impl MarketDataProvider for HistoricalMarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
+    fn notifications<'a>(&self) -> Rc<dyn Stream<'a, TinyVec<[Params; 1]>> + 'a> {
         let msgs = self.msgs.clone();
         produce_async(async move || {
             stream! {
@@ -75,7 +75,7 @@ pub struct RealTimeMarketDataProvider {
 }
 
 impl MarketDataProvider for RealTimeMarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
+    fn notifications<'a>(&self) -> Rc<dyn Stream<'a, TinyVec<[Params; 1]>> + 'a> {
         let env = self.env.clone();
         produce_async(async move || Self::notifications(env).await)
     }
