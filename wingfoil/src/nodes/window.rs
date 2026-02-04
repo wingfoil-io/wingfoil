@@ -1,21 +1,22 @@
 use crate::types::*;
 use std::rc::Rc;
+use std::fmt::Debug;
 
-pub(crate) struct WindowStream<T: Element> {
-    upstream: Rc<dyn Stream<T>>,
+pub(crate) struct WindowStream<'a, T: Debug + Clone + 'a> {
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
     interval: NanoTime,
     next_window: NanoTime,
     buffer: Vec<T>,
     value: Vec<T>,
 }
 
-impl<T: Element> MutableNode for WindowStream<T> {
-    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+impl<'a, T: Debug + Clone + 'a> MutableNode<'a> for WindowStream<'a, T> {
+    fn start(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.next_window = state.time() + self.interval;
         Ok(())
     }
 
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         let mut flushed = false;
         if state.time() >= self.next_window {
             if !self.buffer.is_empty() {
@@ -41,19 +42,19 @@ impl<T: Element> MutableNode for WindowStream<T> {
         Ok(flushed)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
-impl<T: Element> StreamPeekRef<Vec<T>> for WindowStream<T> {
+impl<'a, T: Debug + Clone + 'a> StreamPeekRef<'a, Vec<T>> for WindowStream<'a, T> {
     fn peek_ref(&self) -> &Vec<T> {
         &self.value
     }
 }
 
-impl<T: Element> WindowStream<T> {
-    pub fn new(upstream: Rc<dyn Stream<T>>, interval: NanoTime) -> Self {
+impl<'a, T: Debug + Clone + 'a> WindowStream<'a, T> {
+    pub fn new(upstream: Rc<dyn Stream<'a, T> + 'a>, interval: NanoTime) -> Self {
         Self {
             upstream,
             interval,
@@ -70,6 +71,7 @@ mod tests {
     use crate::graph::*; // For RunMode, RunFor
     use crate::nodes::*;
     use crate::queue::ValueAt; // For ValueAt
+    use std::time::Duration;
 
     #[test]
     fn window_stream_works() {

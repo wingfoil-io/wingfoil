@@ -4,23 +4,23 @@ use std::rc::Rc;
 
 struct AlwaysTickNode {}
 
-impl MutableNode for AlwaysTickNode {
-    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a> MutableNode<'a> for AlwaysTickNode {
+    fn cycle(&mut self, _: &mut GraphState<'a>) -> anyhow::Result<bool> {
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::none()
     }
 
-    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn start(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         state.always_callback();
         Ok(())
     }
 }
 
 /// Produces a [Node] that ticks on every engine cycle.
-pub fn always() -> Rc<dyn Node> {
+pub fn always<'a>() -> Rc<dyn Node<'a> + 'a> {
     AlwaysTickNode {}.into_node()
 }
 

@@ -20,9 +20,9 @@ lazy_static! {
     static ref GRAPH_ID: Mutex<usize> = Mutex::new(0);
 }
 
-struct NodeData {
-    node: Rc<dyn Node>,
-    upstreams: Vec<(usize, bool)>,
+struct NodeData<'a> {
+    node: Rc<dyn Node<'a> + 'a>,
+    upstreams: Vec<(usize, bool)> ,
     downstreams: Vec<(usize, bool)>,
     layer: usize,
 }
@@ -88,13 +88,13 @@ impl ReadyNotifier {
 }
 
 /// Maintains the parts of the graph state that is accessible to Nodes.
-pub struct GraphState {
+pub struct GraphState<'a> {
     time: NanoTime,
     is_last_cycle: bool,
     current_node_index: Option<usize>,
     scheduled_callbacks: TimeQueue<usize>,
     always_callbacks: Vec<usize>,
-    node_to_index: HashMap<HashByRef<dyn Node>, usize>,
+    node_to_index: HashMap<HashByRef<dyn Node<'a> + 'a>, usize>,
     node_ticked: Vec<bool>,
     run_time: Arc<tokio::runtime::Runtime>,
     run_mode: RunMode,
@@ -103,12 +103,12 @@ pub struct GraphState {
     ready_callbacks: Receiver<usize>,
     start_time: NanoTime,
     id: usize,
-    nodes: Vec<NodeData>,
+    nodes: Vec<NodeData<'a>>,
     dirty_nodes_by_layer: Vec<Vec<usize>>,
     node_dirty: Vec<bool>,
 }
 
-impl GraphState {
+impl<'a> GraphState<'a> {
     pub fn new(
         run_time: Arc<tokio::runtime::Runtime>,
         run_mode: RunMode,
@@ -179,7 +179,7 @@ impl GraphState {
     }
 
     /// Returns true if node has ticked on the current engine cycle
-    pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
+    pub fn ticked(&self, node: Rc<dyn Node<'a> + 'a>) -> bool {
         self.node_ticked[self.node_index(node).unwrap()]
     }
 
@@ -228,7 +228,7 @@ impl GraphState {
         }
     }
 
-    pub fn node_index(&self, node: Rc<dyn Node>) -> Option<usize> {
+    pub fn node_index(&self, node: Rc<dyn Node<'a> + 'a>) -> Option<usize> {
         let key = HashByRef::new(node.clone());
         self.node_to_index.get(&key).copied()
     }
@@ -239,7 +239,7 @@ impl GraphState {
         }
     }
 
-    fn push_node(&mut self, node: Rc<dyn Node>) {
+    fn push_node(&mut self, node: Rc<dyn Node<'a> + 'a>) {
         let index = self.node_ticked.len();
         self.node_ticked.push(false);
         //self.nodes.push(node.clone());
@@ -247,7 +247,7 @@ impl GraphState {
             .insert(HashByRef::new(node.clone()), index);
     }
 
-    fn seen(&self, node: Rc<dyn Node>) -> bool {
+    fn seen(&self, node: Rc<dyn Node<'a> + 'a>) -> bool {
         self.node_to_index.contains_key(&HashByRef::new(node))
     }
 
@@ -283,12 +283,12 @@ impl GraphState {
 }
 
 /// Engine for co-ordinating execution of [Node]s
-pub struct Graph {
-    pub(crate) state: GraphState,
+pub struct Graph<'a> {
+    pub(crate) state: GraphState<'a>,
 }
 
-impl Graph {
-    pub fn new(root_nodes: Vec<Rc<dyn Node>>, run_mode: RunMode, run_for: RunFor) -> Graph {
+impl<'a> Graph<'a> {
+    pub fn new(root_nodes: Vec<Rc<dyn Node<'a> + 'a>>, run_mode: RunMode, run_for: RunFor) -> Graph<'a> {
         //let cores = core_affinity::get_core_ids().unwrap();
         //core_affinity::set_for_current(cores[0]);
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -312,12 +312,12 @@ impl Graph {
     }
 
     pub fn new_with(
-        root_nodes: Vec<Rc<dyn Node>>,
+        root_nodes: Vec<Rc<dyn Node<'a> + 'a>>,
         tokio_runtime: Arc<tokio::runtime::Runtime>,
         run_mode: RunMode,
         run_for: RunFor,
         start_time: NanoTime,
-    ) -> Graph {
+    ) -> Graph<'a> {
         let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time);
 
         let mut graph = Graph { state };
@@ -344,7 +344,7 @@ impl Graph {
     fn apply_nodes(
         &mut self,
         desc: &str,
-        func: impl Fn(Rc<dyn Node>, &mut GraphState) -> anyhow::Result<()>,
+        func: impl Fn(Rc<dyn Node<'a> + 'a>, &mut GraphState<'a>) -> anyhow::Result<()>, 
     ) -> anyhow::Result<()> {
         //println!("*** {:}graph {:} {:}", "   ".repeat(self.state.id), self.state.id, desc);
         let timer = Instant::now();
@@ -396,7 +396,7 @@ impl Graph {
                 *end_cycle = cycle;
                 debug!("end_cycle = {end_cycle}",);
             }
-            RunFor::Forever => {}
+            RunFor::Forever => {} 
         }
     }
 
@@ -479,7 +479,7 @@ impl Graph {
         Ok(())
     }
 
-    fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> &mut Graph {
+    fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node<'a> + 'a>>) -> &mut Graph<'a> {
         let timer = Instant::now();
         for node in root_nodes {
             if !self.state.seen(node.clone()) {
@@ -508,7 +508,7 @@ impl Graph {
 
     fn initialise_upstreams(
         &mut self,
-        upstreams: &[Rc<dyn Node>],
+        upstreams: &[Rc<dyn Node<'a> + 'a>],
         is_active: bool,
         layer: &mut usize,
         upstream_indexes: &mut Vec<(usize, bool)>,
@@ -520,12 +520,13 @@ impl Graph {
         }
     }
 
-    fn initialise_node(&mut self, node: &Rc<dyn Node>) -> usize {
+    fn initialise_node(&mut self, node: &Rc<dyn Node<'a> + 'a>) -> usize {
         // recursively crawl through graph defined by node
         // constructing NodeData wrapper for each node and pushing
         // onto self.nodes returns index of new NodeData in self.nodes
         if self.state.seen(node.clone()) {
-            self.state.node_index(node.clone()).unwrap()
+            let index = self.state.node_index(node.clone()).unwrap();
+            index
         } else {
             let mut layer = 0;
             let mut upstream_indexes = vec![];
@@ -669,7 +670,7 @@ impl Graph {
         output
     }
 
-    pub fn print(&mut self) -> &mut Graph {
+    pub fn print(&mut self) -> &mut Graph<'a> {
         for (i, node_data) in self.state.nodes.iter().enumerate() {
             print!("[{i:02}] ");
             for _ in 0..node_data.layer {
@@ -844,18 +845,18 @@ mod tests {
         assert!(result.is_err(), "Expected error but got: {:?}", result);
         let err_msg = format!("{:?}", result.unwrap_err());
 
-        let expected = r#"Error in node [14]:
-    [11]                               MapStream<u64, u64>
-    [12]                                  MapStream<u64, u64>
-    [13]                                     MapStream<u64, u64>
->>> [14]                                        TryMapStream<u64, u64>
-    [15]                                           MapStream<u64, u64>
-    [16]                                              MapStream<u64, u64>
-    [17]                                                 MapStream<u64, u64>
+        let expected = r###"Error in node [14]:
+    [11]                               MapStream
+    [12]                                  MapStream
+    [13]                                     MapStream
+>>> [14]                                        TryMapStream
+    [15]                                           MapStream
+    [16]                                              MapStream
+    [17]                                                 MapStream
 
 
 Caused by:
-    intentional failure at count 3"#;
+    intentional failure at count 3"###;
 
         assert!(
             err_msg.contains(expected),

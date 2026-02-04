@@ -1,32 +1,35 @@
-use derive_new::new;
-
-use std::boxed::Box;
 use std::rc::Rc;
-
 use crate::types::*;
+use std::fmt::Debug;
 
-/// When triggered by it's source, it produces values
-/// using the supplied closure.
-#[derive(new)]
-pub(crate) struct ProducerStream<T: Element> {
-    upstream: Rc<dyn Node>,
-    func: Box<dyn Fn() -> T>,
-    #[new(default)]
+pub(crate) struct ProducerStream<'a, T: Debug + Clone + 'a> {
+    upstream: Rc<dyn Node<'a> + 'a>,
     value: T,
+    func: Box<dyn Fn() -> T + 'a>,
 }
 
-impl<T: Element> MutableNode for ProducerStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + Default + 'a> ProducerStream<'a, T> {
+    pub fn new(upstream: Rc<dyn Node<'a> + 'a>, func: Box<dyn Fn() -> T + 'a>) -> Self {
+        Self {
+            upstream,
+            value: T::default(),
+            func,
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a> MutableNode<'a> for ProducerStream<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = (self.func)();
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 
-impl<T: Element> StreamPeekRef<T> for ProducerStream<T> {
+impl<'a, T: Debug + Clone + 'a> StreamPeekRef<'a, T> for ProducerStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
     }

@@ -1,57 +1,67 @@
-use std::cmp::Eq;
-use std::hash::Hash;
-
-use crate::queue::{TimeQueue, ValueAt};
 use crate::types::*;
+use crate::queue::{TimeQueue, ValueAt};
+use std::hash::Hash;
+use std::fmt::Debug;
 
-use derive_new::new;
-
-/// A queue of values that are emitted at specified times.  Useful for
-/// unit tests.  Can also be used to feed stream output back into
-/// the [Graph](crate::graph::Graph) as input on later cycles.
-#[derive(new)]
-pub struct CallBackStream<T: Element + Hash + Eq> {
-    #[new(default)]
+/// A [Stream] which can be updated by calling [push](CallBackStream::push).
+/// Useful for unit testing.
+pub struct CallBackStream<'a, T: Debug + Clone + 'a + Hash + Eq> {
     value: T,
-    #[new(default)]
     queue: TimeQueue<T>,
+    _phantom: std::marker::PhantomData<&'a T>,
 }
 
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for CallBackStream<T> {
+impl<'a, T: Debug + Clone + 'a + Hash + Eq + Default> Default for CallBackStream<'a, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a + Hash + Eq + Default> CallBackStream<'a, T> {
+    pub fn new() -> Self {
+        Self {
+            value: T::default(),
+            queue: TimeQueue::new(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a + Hash + Eq + Default> StreamPeekRef<'a, T> for CallBackStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
     }
 }
 
-impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + 'a + Hash + Eq + Default> MutableNode<'a> for CallBackStream<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
+        let current_time = state.time();
         let mut ticked = false;
-        while self.queue.pending(state.time()) {
+        while self.queue.pending(current_time) {
             self.value = self.queue.pop();
             ticked = true;
         }
+        // Schedule next tick if queue is not empty
         if !self.queue.is_empty() {
-            let callback_time = self.queue.next_time();
-            state.add_callback(callback_time);
+            state.add_callback(self.queue.next_time());
         }
         Ok(ticked)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::none()
     }
 
-    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         if !self.queue.is_empty() {
-            let time = self.queue.next_time();
-            state.add_callback(time);
+            state.add_callback(self.queue.next_time());
         }
         Ok(())
     }
 }
 
-impl<T: Element + Hash + Eq> CallBackStream<T> {
-    pub fn push(&mut self, value_at: ValueAt<T>) {
-        self.queue.push(value_at.value, value_at.time)
+impl<'a, T: Debug + Clone + 'a + Hash + Eq> CallBackStream<'a, T> {
+    pub fn push(&mut self, value: ValueAt<T>) {
+        self.queue.push(value.value, value.time);
     }
 }

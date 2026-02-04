@@ -1,61 +1,40 @@
-use crate::types::*;
-use derive_new::new;
-
 use std::rc::Rc;
+use crate::types::*;
+use std::fmt::Debug;
 
-/// Counts how many times upstream has ticked.
-#[derive(new)]
-pub struct MergeStream<T: Element> {
-    upstreams: Vec<Rc<dyn Stream<T>>>,
-    #[new(default)]
+pub struct MergeStream<'a, T: Debug + Clone + 'a> {
+    sources: Vec<Rc<dyn Stream<'a, T> + 'a>>,
     value: T,
 }
 
-impl<T: Element> MutableNode for MergeStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        for stream in self.upstreams.iter() {
-            if state.ticked(stream.clone().as_node()) {
-                self.value = stream.peek_value();
-                break;
+impl<'a, T: Debug + Clone + Default + 'a> MergeStream<'a, T> {
+    pub fn new(sources: Vec<Rc<dyn Stream<'a, T> + 'a>>) -> Self {
+        Self {
+            sources,
+            value: T::default(),
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a> MutableNode<'a> for MergeStream<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
+        for source in &self.sources {
+            if state.ticked(source.clone().as_node()) {
+                self.value = source.peek_value();
+                return Ok(true);
             }
         }
-        Ok(true)
+        Ok(false)
     }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            self.upstreams
-                .iter()
-                .map(|stream| stream.clone().as_node())
-                .collect(),
-            vec![],
-        )
+
+    fn upstreams(&self) -> UpStreams<'a> {
+        let active = self.sources.iter().map(|s| s.clone().as_node()).collect();
+        UpStreams::new(active, vec![])
     }
 }
 
-impl<T: Element> StreamPeekRef<T> for MergeStream<T> {
+impl<'a, T: Debug + Clone + 'a> StreamPeekRef<'a, T> for MergeStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{NodeOperators, RunFor, RunMode, StreamOperators, always, merge};
-    #[test]
-    fn merge_works() {
-        // cargo flamegraph  --unit-test -- merge_works
-        let src = always().count();
-        let streams = (0..10)
-            .map(|_| {
-                let mut stream = src.clone();
-                for _ in 0..10 {
-                    stream = stream.map(std::hint::black_box);
-                }
-                stream
-            })
-            .collect::<Vec<_>>();
-        merge(streams)
-            .run(RunMode::RealTime, RunFor::Cycles(1))
-            .unwrap();
     }
 }

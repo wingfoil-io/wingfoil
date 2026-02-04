@@ -4,11 +4,10 @@ use std::pin::Pin;
 
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
-use crate::types::Element;
 
 /// Message that can be sent between threads.
 #[derive(new, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Message<T: Element + Send> {
+pub(crate) enum Message<T: Send> {
     /// In [RunMode::HistoricalFrom], this message  
     /// allows receiving graph to progress, even when
     /// the channel is ticking less frequently than
@@ -24,6 +23,6 @@ pub(crate) enum Message<T: Element + Send> {
     RealtimeValue(T),
 }
 
-pub trait ReceiverMessageSource<T: Element + Send> {
+pub trait ReceiverMessageSource<T: Send> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>>;
 }

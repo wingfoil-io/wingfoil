@@ -8,40 +8,41 @@ use std::collections::VecDeque;
 use std::option::Option;
 use std::rc::Rc;
 use tinyvec::TinyVec;
+use std::fmt::Debug as StdDebug;
 
-pub(crate) trait ChannelOperators<T>
+pub(crate) trait ChannelOperators<'a, T>
 where
-    T: Element + Send,
+    T: Send + 'static,
 {
     fn send(
         self: &Rc<Self>,
         sender: ChannelSender<T>,
-        trigger: Option<Rc<dyn Node>>,
-    ) -> Rc<dyn Node>;
+        trigger: Option<Rc<dyn Node<'a> + 'a>>,
+    ) -> Rc<dyn Node<'a> + 'a>;
 }
 
-impl<T> ChannelOperators<T> for dyn Stream<T>
+impl<'a, T> ChannelOperators<'a, T> for dyn Stream<'a, T> + 'a
 where
-    T: Element + Send,
+    T: StdDebug + Clone + Default + Send + 'static,
 {
     fn send(
         self: &Rc<Self>,
         sender: ChannelSender<T>,
-        trigger: Option<Rc<dyn Node>>,
-    ) -> Rc<dyn Node> {
+        trigger: Option<Rc<dyn Node<'a> + 'a>>,
+    ) -> Rc<dyn Node<'a> + 'a> {
         SenderNode::new(self.clone(), sender, trigger).into_node()
     }
 }
 
 #[derive(new)]
-pub(crate) struct SenderNode<T: Element + Send> {
-    source: Rc<dyn Stream<T>>,
+pub(crate) struct SenderNode<'a, T: Send + 'static> {
+    source: Rc<dyn Stream<'a, T> + 'a>,
     sender: ChannelSender<T>,
-    trigger: Option<Rc<dyn Node>>,
+    trigger: Option<Rc<dyn Node<'a> + 'a>>,
 }
 
-impl<T: Element + Send> MutableNode for SenderNode<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Send + 'static> MutableNode<'a> for SenderNode<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
         if state.ticked(self.source.clone().as_node()) {
             self.sender.send(state, self.source.peek_value())?;
@@ -60,7 +61,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
         }
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         let mut upstreams = vec![self.source.clone().as_node()];
         if let Some(trig) = &self.trigger {
             upstreams.push(trig.clone());
@@ -68,17 +69,17 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
         UpStreams::new(upstreams, Vec::new())
     }
 
-    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+    fn stop(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.sender.send_message(Message::EndOfStream)?;
         Ok(())
     }
 }
 
 #[derive(new, Debug)]
-pub(crate) struct ReceiverStream<T: Element + Send> {
+pub(crate) struct ReceiverStream<'a, T: Send + Default + 'static> {
     receiver: ChannelReceiver<T>,
     #[debug(skip)]
-    trigger: Option<Rc<dyn Node>>,
+    trigger: Option<Rc<dyn Node<'a> + 'a>>,
     notifier_channel: Option<NotifierChannelSender>,
     #[new(default)]
     value: TinyVec<[T; 1]>,
@@ -90,8 +91,8 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     queue: VecDeque<ValueAt<T>>,
 }
 
-impl<T: Element + Send> MutableNode for ReceiverStream<T> {
-    fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
+impl<'a, T: StdDebug + Clone + Send + Default + 'static> MutableNode<'a> for ReceiverStream<'a, T> {
+    fn cycle(&mut self, state: &mut crate::GraphState<'a>) -> anyhow::Result<bool> {
         //println!("ReceiverStream::cycle start {:?}", state.time());
         let mut values: TinyVec<[T; 1]> = TinyVec::new();
         match state.run_mode() {
@@ -183,7 +184,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         }
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         let mut ups = Vec::new();
         if let Some(trigger) = &self.trigger {
             ups.push(trigger.clone());
@@ -191,7 +192,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         UpStreams::new(ups, vec![])
     }
 
-    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+    fn setup(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
         match state.run_mode() {
             RunMode::RealTime => {
                 if let Some(chan) = self.notifier_channel.take() {
@@ -208,13 +209,13 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         Ok(())
     }
 
-    fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
+    fn teardown(&mut self, _: &mut GraphState<'a>) -> anyhow::Result<()> {
         self.receiver.teardown();
         Ok(())
     }
 }
 
-impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
+impl<'a, T: StdDebug + Clone + Send + Default + 'static> StreamPeekRef<'a, TinyVec<[T; 1]>> for ReceiverStream<'a, T> {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         &self.value
     }

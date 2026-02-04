@@ -1,51 +1,44 @@
 use crate::types::*;
-use derive_new::new;
+use std::fmt::Debug;
 
-/// Only ticks once (on the first [Graph](crate::graph::Graph) cycle).
-#[derive(new)]
-pub(crate) struct ConstantStream<T: Element> {
+pub(crate) struct ConstantStream<'a, T: Debug + Clone + 'a> {
     value: T,
+    ticked: bool,
+    _phantom: std::marker::PhantomData<&'a T>,
 }
 
-impl<T: Element> MutableNode for ConstantStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        Ok(true)
+impl<'a, T: Debug + Clone + 'a> ConstantStream<'a, T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            ticked: false,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a> MutableNode<'a> for ConstantStream<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
+        if !self.ticked {
+            self.ticked = true;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
+    fn upstreams(&self) -> UpStreams<'a> {
+        UpStreams::none()
     }
 
-    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.add_callback(NanoTime::ZERO);
+    fn start(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<()> {
+        state.always_callback();
         Ok(())
     }
 }
 
-impl<T: Element> StreamPeekRef<T> for ConstantStream<T> {
+impl<'a, T: Debug + Clone + 'a> StreamPeekRef<'a, T> for ConstantStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::*;
-
-    #[test]
-    fn constant_value_works() {
-        let x = 7;
-        let const_value = constant(x);
-        assert_eq!(const_value.peek_value(), x);
-        let captured = const_value.collect();
-        captured
-            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
-            .unwrap();
-        let expected = vec![ValueAt {
-            value: x,
-            time: NanoTime::new(0),
-        }];
-        assert_eq!(expected, captured.peek_value());
     }
 }

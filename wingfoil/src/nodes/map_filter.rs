@@ -1,22 +1,29 @@
-use derive_new::new;
-
 use std::boxed::Box;
 use std::rc::Rc;
 
 use crate::types::*;
+use std::fmt::Debug;
 
 /// Map's it's source into a new [Stream] using the supplied closure.
 /// Used by [map](crate::nodes::StreamOperators::map).
-#[derive(new)]
-pub struct MapFilterStream<IN, OUT: Element> {
-    upstream: Rc<dyn Stream<IN>>,
-    #[new(default)]
+pub struct MapFilterStream<'a, IN, OUT> {
+    upstream: Rc<dyn Stream<'a, IN> + 'a>,
     value: OUT,
-    func: Box<dyn Fn(IN) -> (OUT, bool)>,
+    func: Box<dyn Fn(IN) -> (OUT, bool) + 'a>,
 }
 
-impl<IN, OUT: Element> MutableNode for MapFilterStream<IN, OUT> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, IN, OUT: Debug + Clone + Default + 'a> MapFilterStream<'a, IN, OUT> {
+    pub fn new(upstream: Rc<dyn Stream<'a, IN> + 'a>, func: Box<dyn Fn(IN) -> (OUT, bool) + 'a>) -> Self {
+        Self {
+            upstream,
+            value: OUT::default(),
+            func,
+        }
+    }
+}
+
+impl<'a, IN: Clone, OUT: Debug + Clone + 'a> MutableNode<'a> for MapFilterStream<'a, IN, OUT> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         let (val, ticked) = (self.func)(self.upstream.peek_value());
         if ticked {
             self.value = val;
@@ -24,12 +31,12 @@ impl<IN, OUT: Element> MutableNode for MapFilterStream<IN, OUT> {
         Ok(ticked)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
-impl<IN: 'static, OUT: Element> StreamPeekRef<OUT> for MapFilterStream<IN, OUT> {
+impl<'a, IN: Clone, OUT: Debug + Clone + 'a> StreamPeekRef<'a, OUT> for MapFilterStream<'a, IN, OUT> {
     fn peek_ref(&self) -> &OUT {
         &self.value
     }

@@ -4,21 +4,29 @@ use std::rc::Rc;
 
 use crate::queue::TimeQueue;
 use crate::types::*;
-use derive_new::new;
+use std::fmt::Debug;
 
 /// Emits it's source delayed by the specified time
-#[derive(new)]
-pub(crate) struct DelayStream<T: Element + Hash + Eq> {
-    #[new(default)]
+pub(crate) struct DelayStream<'a, T: Debug + Clone + 'a + Hash + Eq> {
     value: T,
-    #[new(default)]
     queue: TimeQueue<T>,
-    upstream: Rc<dyn Stream<T>>,
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
     delay: NanoTime,
 }
 
-impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + 'a + Hash + Eq + Default> DelayStream<'a, T> {
+    pub fn new(upstream: Rc<dyn Stream<'a, T> + 'a>, delay: NanoTime) -> Self {
+        Self {
+            value: T::default(),
+            queue: TimeQueue::new(),
+            upstream,
+            delay,
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a + Hash + Eq> MutableNode<'a> for DelayStream<'a, T> {
+    fn cycle(&mut self, state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {
             // just tick on this cycle
             self.value = self.upstream.peek_value();
@@ -39,12 +47,12 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
         }
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayStream<T> {
+impl<'a, T: Debug + Clone + 'a + Hash + Eq> StreamPeekRef<'a, T> for DelayStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
     }

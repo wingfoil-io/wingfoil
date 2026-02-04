@@ -1,23 +1,29 @@
-use derive_new::new;
-
 use std::ops::Sub;
 use std::rc::Rc;
 
 use crate::types::*;
+use std::fmt::Debug;
 
 /// Emits the difference of it's source from one cycle to the
 /// next.  Used by [difference](crate::nodes::StreamOperators::difference).
-#[derive(new)]
-pub(crate) struct DifferenceStream<T: Element> {
-    upstream: Rc<dyn Stream<T>>,
-    #[new(default)]
+pub(crate) struct DifferenceStream<'a, T: Debug + Clone + 'a> {
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
     diff: T,
-    #[new(default)]
     prev_val: Option<T>,
 }
 
-impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + Default + 'a> DifferenceStream<'a, T> {
+    pub fn new(upstream: Rc<dyn Stream<'a, T> + 'a>) -> Self {
+        Self {
+            upstream,
+            diff: T::default(),
+            prev_val: None,
+        }
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a + Sub<Output = T>> MutableNode<'a> for DifferenceStream<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         let ticked = match self.prev_val.clone() {
             Some(prv) => {
                 self.diff = self.upstream.peek_value() - prv;
@@ -29,12 +35,12 @@ impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
         Ok(ticked)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
-impl<T: Element + Sub<Output = T>> StreamPeekRef<T> for DifferenceStream<T> {
+impl<'a, T: Debug + Clone + 'a + Sub<Output = T>> StreamPeekRef<'a, T> for DifferenceStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.diff
     }

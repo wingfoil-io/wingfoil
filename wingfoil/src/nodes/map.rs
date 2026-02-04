@@ -4,29 +4,29 @@ use std::boxed::Box;
 use std::rc::Rc;
 
 use crate::types::*;
+use std::fmt::Debug;
 
 /// Map's it's source into a new [Stream] using the supplied closure.
 /// Used by [map](crate::nodes::StreamOperators::map).
 #[derive(new)]
-pub struct MapStream<IN, OUT: Element> {
-    upstream: Rc<dyn Stream<IN>>,
-    #[new(default)]
+pub struct MapStream<'a, IN, OUT> {
+    upstream: Rc<dyn Stream<'a, IN> + 'a>,
     value: OUT,
-    func: Box<dyn Fn(IN) -> OUT>,
+    func: Box<dyn Fn(IN) -> OUT + 'a>,
 }
 
-impl<IN, OUT: Element> MutableNode for MapStream<IN, OUT> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, IN: Clone, OUT: Debug + Clone + 'a> MutableNode<'a> for MapStream<'a, IN, OUT> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream.peek_value());
         Ok(true)
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
-impl<IN: 'static, OUT: Element> StreamPeekRef<OUT> for MapStream<IN, OUT> {
+impl<'a, IN: Clone, OUT: Debug + Clone + 'a> StreamPeekRef<'a, OUT> for MapStream<'a, IN, OUT> {
     fn peek_ref(&self) -> &OUT {
         &self.value
     }

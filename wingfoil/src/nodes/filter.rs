@@ -1,41 +1,42 @@
-use derive_new::new;
-
 use std::rc::Rc;
-
 use crate::types::*;
+use std::fmt::Debug;
 
-/// Filter's it source based on the supplied predicate.  Used by
-/// [filter](crate::nodes::StreamOperators::filter).
-#[derive(new)]
-pub(crate) struct FilterStream<T: Element> {
-    source: Rc<dyn Stream<T>>,
-    condition: Rc<dyn Stream<bool>>,
-    #[new(default)]
+pub(crate) struct FilterStream<'a, T: Debug + Clone + 'a> {
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
+    condition: Rc<dyn Stream<'a, bool> + 'a>,
     value: T,
 }
 
-impl<T: Element> MutableNode for FilterStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        let val = self.source.peek_value();
-        let ticked = self.condition.peek_value();
-        if ticked {
-            self.value = val;
+impl<'a, T: Debug + Clone + Default + 'a> FilterStream<'a, T> {
+    pub fn new(upstream: Rc<dyn Stream<'a, T> + 'a>, condition: Rc<dyn Stream<'a, bool> + 'a>) -> Self {
+        Self {
+            upstream,
+            condition,
+            value: T::default(),
         }
-        Ok(ticked)
+    }
+}
+
+impl<'a, T: Debug + Clone + 'a> MutableNode<'a> for FilterStream<'a, T> {
+    fn cycle(&mut self, _state: &mut GraphState<'a>) -> anyhow::Result<bool> {
+        if self.condition.peek_value() {
+            self.value = self.upstream.peek_value();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(
-            vec![
-                self.source.clone().as_node(),
-                self.condition.clone().as_node(),
-            ],
+            vec![self.upstream.clone().as_node(), self.condition.clone().as_node()],
             vec![],
         )
     }
 }
 
-impl<T: Element> StreamPeekRef<T> for FilterStream<T> {
+impl<'a, T: Debug + Clone + 'a> StreamPeekRef<'a, T> for FilterStream<'a, T> {
     fn peek_ref(&self) -> &T {
         &self.value
     }

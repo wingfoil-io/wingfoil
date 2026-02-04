@@ -10,11 +10,10 @@ use super::{SendNodeError, SendResult};
 use crate::graph::{GraphState, ReadyNotifier, RunMode};
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
-use crate::types::Element;
 
 use kanal::{Receiver, Sender};
 
-pub fn channel_pair<T: Element + Send>(
+pub fn channel_pair<T: Send + 'static>(
     ready_notifier: Option<ReadyNotifier>,
 ) -> (ChannelSender<T>, ChannelReceiver<T>) {
     let (tx, rx) = kanal::unbounded();
@@ -24,11 +23,11 @@ pub fn channel_pair<T: Element + Send>(
 }
 
 #[derive(new, Debug)]
-pub(crate) struct ChannelReceiver<T: Element + Send> {
+pub(crate) struct ChannelReceiver<T: Send + 'static> {
     kanal_receiver: Receiver<Message<T>>,
 }
 
-impl<T: Element + Send> ChannelReceiver<T> {
+impl<T: Send + 'static> ChannelReceiver<T> {
     pub fn try_recv(&self) -> Option<Message<T>> {
         self.kanal_receiver.try_recv().unwrap()
     }
@@ -46,7 +45,7 @@ impl<T: Element + Send> ChannelReceiver<T> {
     }
 }
 
-impl<T: Element + Send> ReceiverMessageSource<T> for ChannelReceiver<T> {
+impl<T: Send + 'static> ReceiverMessageSource<T> for ChannelReceiver<T> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>> {
         let strm = async_stream::stream! {
             let receiver = self.kanal_receiver.to_async();
@@ -60,12 +59,12 @@ impl<T: Element + Send> ReceiverMessageSource<T> for ChannelReceiver<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ChannelSender<T: Element + Send> {
+pub(crate) struct ChannelSender<T: Send + 'static> {
     kanal_sender: Option<Sender<Message<T>>>,
     ready_notifier: Option<ReadyNotifier>,
 }
 
-impl<T: Element + Send> ChannelSender<T> {
+impl<T: Send + 'static> ChannelSender<T> {
     pub fn new(kanal_sender: Sender<Message<T>>, ready_notifier: Option<ReadyNotifier>) -> Self {
         let kanal_sender = Some(kanal_sender);
         Self {
@@ -94,7 +93,7 @@ impl<T: Element + Send> ChannelSender<T> {
         Ok(())
     }
 
-    pub fn send(&self, state: &GraphState, value: T) -> SendResult {
+    pub fn send<'a>(&self, state: &GraphState<'a>, value: T) -> SendResult {
         let message = match state.run_mode() {
             RunMode::HistoricalFrom(_) => {
                 let value_at = ValueAt::new(value, state.time());
@@ -105,7 +104,7 @@ impl<T: Element + Send> ChannelSender<T> {
         self.send_message(message)
     }
 
-    pub fn send_checkpoint(&self, state: &GraphState) -> SendResult {
+    pub fn send_checkpoint<'a>(&self, state: &GraphState<'a>) -> SendResult {
         let message = Message::CheckPoint(state.time());
         self.send_message(message)
     }
@@ -133,12 +132,12 @@ impl<T: Element + Send> ChannelSender<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct AsyncChannelSender<T: Element + Send> {
+pub(crate) struct AsyncChannelSender<T: Send + 'static> {
     kanal_sender: Option<kanal::AsyncSender<Message<T>>>,
     ready_notifier: Option<ReadyNotifier>,
 }
 
-impl<T: Element + Send> AsyncChannelSender<T> {
+impl<T: Send + 'static> AsyncChannelSender<T> {
     pub fn new(sender: kanal::Sender<Message<T>>, ready_notifier: Option<ReadyNotifier>) -> Self {
         let kanal_sender = Some(sender.to_async());
         Self {

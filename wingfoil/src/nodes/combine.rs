@@ -4,48 +4,49 @@ use derive_new::new;
 use std::cell::RefCell;
 use std::rc::Rc;
 use tinyvec::TinyVec;
+use std::fmt::Debug;
 
 #[derive(new)]
-struct CombineNode<T: Element> {
-    upstream: Rc<dyn Stream<T>>,
+struct CombineNode<'a, T: Debug + Clone + Default + 'a> {
+    upstream: Rc<dyn Stream<'a, T> + 'a>,
     combined: Rc<RefCell<TinyVec<[T; 1]>>>,
 }
 
-impl<T: Element> MutableNode for CombineNode<T> {
-    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + Default + 'a> MutableNode<'a> for CombineNode<'a, T> {
+    fn cycle(&mut self, _: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.combined.borrow_mut().push(self.upstream.peek_value());
         Ok(true)
     }
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
 #[derive(new)]
-struct CombineStream2<T: Element> {
-    upstreams: Vec<Rc<dyn Node>>,
+struct CombineStream2<'a, T: Debug + Clone + Default + 'a> {
+    upstreams: Vec<Rc<dyn Node<'a> + 'a>>,
     combined: Rc<RefCell<TinyVec<[T; 1]>>>,
     #[new(default)]
     value: TinyVec<[T; 1]>,
 }
 
-impl<T: Element> MutableNode for CombineStream2<T> {
-    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+impl<'a, T: Debug + Clone + Default + 'a> MutableNode<'a> for CombineStream2<'a, T> {
+    fn cycle(&mut self, _: &mut GraphState<'a>) -> anyhow::Result<bool> {
         self.value = std::mem::replace(&mut *self.combined.borrow_mut(), TinyVec::new());
         Ok(true)
     }
-    fn upstreams(&self) -> UpStreams {
+    fn upstreams(&self) -> UpStreams<'a> {
         UpStreams::new(self.upstreams.clone(), vec![])
     }
 }
 
-impl<T: Element> StreamPeekRef<TinyVec<[T; 1]>> for CombineStream2<T> {
+impl<'a, T: Debug + Clone + Default + 'a> StreamPeekRef<'a, TinyVec<[T; 1]>> for CombineStream2<'a, T> {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         &self.value
     }
 }
 
-pub fn combine<T: Element>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
+pub fn combine<'a, T: Debug + Clone + Default + 'a>(streams: Vec<Rc<dyn Stream<'a, T> + 'a>>) -> Rc<dyn Stream<'a, TinyVec<[T; 1]>> + 'a> {
     let combined = Rc::new(RefCell::new(TinyVec::new()));
     let nodes = streams
         .iter()
