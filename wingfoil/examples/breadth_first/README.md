@@ -16,17 +16,15 @@ In wingfoil we build an example with a depth of 127 branch / recombine operation
 ```rust
 use wingfoil::*;
 
-fn main(){
-    let mut source = constant(1_u128);
-    for _ in 0..127 {
-        source = add(&source, &source);
-    }
-    let cycles = source.count();
-    cycles.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
-        .unwrap();
-    println!("cycles {:?}", cycles.peek_value());
-    println!("value {:?}", source.peek_value());
+let mut source = constant(1_u128);
+for _ in 0..127 {
+    source = add(&source, &source);
 }
+let cycles = source.count();
+cycles.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+    .unwrap();
+println!("cycles {:?}", cycles.peek_value());
+println!("value {:?}", source.peek_value());
 ```
 It produces the correct ouput of 2^127 in 1 engine cycle that takes
 less than half a millisecond to complete.

@@ -43,13 +43,10 @@ fn main() {
     let mut graph = Graph::new(nodes, run_mode, run_for);
     let t0 = std::time::Instant::now();
     graph.run().unwrap();
-    match run_mode {
-        RunMode::HistoricalFrom(_) => {
-            let elapsed = std::time::Instant::now() - t0;
-            let avg = elapsed / n_msgs_historical as u32;
-            println!("{avg:?}");
-        }
-        _ => {}
+    if let RunMode::HistoricalFrom(_) = run_mode {
+        let elapsed = std::time::Instant::now() - t0;
+        let avg = elapsed / n_msgs_historical as u32;
+        println!("{avg:?}");
     }
 }
 
@@ -83,6 +80,7 @@ where
     }
 
     /// demuxed sources
+    #[allow(clippy::type_complexity)]
     fn sources(
         &self,
     ) -> (
@@ -130,7 +128,7 @@ where
     ) {
         match market_data {
             MarketData::Rfq(rfq) => {
-                let id = rfq.data.id.clone();
+                let id = rfq.data.id;
                 let event = match rfq.event {
                     RfqEvent::Removed => DemuxEvent::Close,
                     _ => DemuxEvent::None,
@@ -138,7 +136,7 @@ where
                 (id, event)
             }
             MarketData::Bbo(bbo) => {
-                let id = bbo.data.rfq_id.clone();
+                let id = bbo.data.rfq_id;
                 let event = DemuxEvent::None;
                 (id, event)
             }

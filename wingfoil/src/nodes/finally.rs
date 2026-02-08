@@ -3,16 +3,14 @@ use derive_new::new;
 use std::rc::Rc;
 
 #[derive(new)]
-pub struct FinallyNode<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> {
+pub struct FinallyNode<T: Element, F: FnOnce(T, &GraphState)> {
     source: Rc<dyn Stream<T>>,
     finally: Option<F>,
     #[new(default)]
     value: T,
 }
 
-impl<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> MutableNode
-    for FinallyNode<T, F>
-{
+impl<T: Element, F: FnOnce(T, &GraphState)> MutableNode for FinallyNode<T, F> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         Ok(true)
@@ -22,7 +20,7 @@ impl<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> MutableNode
     }
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(f) = self.finally.take() {
-            f(self.value.clone(), state)?;
+            f(self.value.clone(), state);
         }
         Ok(())
     }

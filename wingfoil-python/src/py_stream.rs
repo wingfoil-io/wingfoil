@@ -143,7 +143,6 @@ impl PyStream {
                 let args = (res,);
                 func.call1(py, args).unwrap();
             });
-            Ok(())
         });
         PyNode(node)
     }

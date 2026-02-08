@@ -38,11 +38,30 @@ impl NanoTime {
     pub const NANOS_PER_SECOND: RawTime = 1_000_000_000;
     pub const SECONDS_PER_NANO: f64 = 1e-9;
 
+    /// KDB epoch is 2000-01-01, Unix epoch is 1970-01-01
+    /// Difference: 946684800 seconds = 946684800000000000 nanoseconds
+    const KDB_EPOCH_OFFSET_NANOS: i64 = 946_684_800_000_000_000;
+
     pub fn now() -> Self {
         Self(CLOCK.now().as_u64())
     }
+
     pub fn pretty(&self) -> String {
         (self.0 as f64 * Self::SECONDS_PER_NANO).formato("#,###.000_000")
+    }
+
+    /// Create a NanoTime from a KDB timestamp (nanoseconds from 2000-01-01).
+    pub fn from_kdb_timestamp(kdb_nanos: i64) -> Self {
+        Self::new((kdb_nanos + Self::KDB_EPOCH_OFFSET_NANOS) as u64)
+    }
+
+    /// Convert to KDB timestamp (nanoseconds from 2000-01-01).
+    pub fn to_kdb_timestamp(self) -> i64 {
+        if self.0 == RawTime::MAX {
+            i64::MAX
+        } else {
+            self.0 as i64 - Self::KDB_EPOCH_OFFSET_NANOS
+        }
     }
 }
 

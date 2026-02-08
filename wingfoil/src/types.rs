@@ -6,33 +6,6 @@ use std::rc::Rc;
 pub use crate::graph::GraphState;
 pub use crate::time::*;
 
-/// Wraps a [Stream] to indicate whether it is an active or passive dependency.
-/// Active dependencies trigger downstream nodes when they tick.
-/// Passive dependencies are read but don't trigger execution.
-pub enum Dep<T> {
-    Active(Rc<dyn Stream<T>>),
-    Passive(Rc<dyn Stream<T>>),
-}
-
-impl<T> Dep<T> {
-    pub fn stream(&self) -> &Rc<dyn Stream<T>> {
-        match self {
-            Dep::Active(s) | Dep::Passive(s) => s,
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        matches!(self, Dep::Active(_))
-    }
-
-    pub fn as_node(&self) -> Rc<dyn Node>
-    where
-        T: 'static,
-    {
-        self.stream().clone().as_node()
-    }
-}
-
 /// The graph can ask a [Node] what it's upstreams sources are.  The node
 /// replies with a [UpStreams] for passive and active sources.   All sources
 /// are wired upstream.   Active nodes trigger [Node].cycle() when they tick.

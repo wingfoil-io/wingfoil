@@ -38,29 +38,26 @@ Completed 91998 cycles in 287.125397ms. 3.12µs average.
 <div style="page-break-after: always;"></div>
 
 ```rust, ignore
-
-pub fn main() {
-    env_logger::init();
-    let book = RefCell::new(lobster::OrderBook::default());
-    let source_path = "examples/lobster/data/aapl.csv";
-    let fills_path = "examples/lobster/data/fills.csv";
-    let prices_path = "examples/lobster/data/prices.csv";
-    // map from seconds from midnight to NanoTime time
-    let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
-    let (fills, prices) = csv_read_vec(source_path, get_time, true)
-        .map(move |chunk| process_orders(chunk, &book))
-        .split();
-    let prices_export = prices
-        .filter_value(|price: &Option<TwoWayPrice>| !price.is_none())
-        .map(|price| price.unwrap())
-        .distinct()
-        .csv_write(prices_path);
-    let fills_export = fills.csv_write_vec(fills_path);
-    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
-    let run_for = RunFor::Forever;
-    Graph::new(vec![prices_export, fills_export], run_mode, run_for)
-        .print()
-        .run()
-        .unwrap();
-}
+env_logger::init();
+let book = RefCell::new(lobster::OrderBook::default());
+let source_path = "examples/lobster/data/aapl.csv";
+let fills_path = "examples/lobster/data/fills.csv";
+let prices_path = "examples/lobster/data/prices.csv";
+// map from seconds from midnight to NanoTime time
+let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
+let (fills, prices) = csv_read_vec(source_path, get_time, true)
+    .map(move |chunk| process_orders(chunk, &book))
+    .split();
+let prices_export = prices
+    .filter_value(|price: &Option<TwoWayPrice>| !price.is_none())
+    .map(|price| price.unwrap())
+    .distinct()
+    .csv_write(prices_path);
+let fills_export = fills.csv_write_vec(fills_path);
+let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+let run_for = RunFor::Forever;
+Graph::new(vec![prices_export, fills_export], run_mode, run_for)
+    .print()
+    .run()
+    .unwrap();
 ```

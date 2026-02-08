@@ -557,12 +557,7 @@ mod tests {
     fn validate_results<T>(results: Vec<Rc<dyn Stream<Vec<T>>>>, func: impl Fn(&T) -> Topic) {
         let topics = results
             .iter()
-            .map(|strm| {
-                strm.peek_value()
-                    .iter()
-                    .map(|item| func(item))
-                    .collect::<HashSet<_>>()
-            })
+            .map(|strm| strm.peek_value().iter().map(&func).collect::<HashSet<_>>())
             .collect::<Vec<_>>();
         let sorted_topics = topics
             .clone()
@@ -582,7 +577,7 @@ mod tests {
         sorted_topics.iter().for_each(|item| {
             println!("{:?}", item);
         });
-        println!("");
+        println!();
         for rw in sorted_topics {
             assert_eq!(rw.len(), EXPECTED_DISTINCT_TOPICS_PER_STREAM);
         }
@@ -602,11 +597,11 @@ mod tests {
     const N_STREAMS: usize = 3;
     const MESSAGES_PER_TOPIC: u32 = 5;
     const DELAY: Duration = Duration::from_micros(1);
-    const PERIOD: Lazy<Duration> = Lazy::new(|| DELAY * MESSAGES_PER_TOPIC * 2);
-    const RUN_FOR: Lazy<RunFor> = Lazy::new(|| RunFor::Duration(*PERIOD * MESSAGES_PER_TOPIC * 3));
+    static PERIOD: Lazy<Duration> = Lazy::new(|| DELAY * MESSAGES_PER_TOPIC * 2);
+    static RUN_FOR: Lazy<RunFor> = Lazy::new(|| RunFor::Duration(*PERIOD * MESSAGES_PER_TOPIC * 3));
     const EXPECTED_DISTINCT_TOPICS_PER_STREAM: usize = 4;
     const EXPECTED_MIN_MSGS_PER_STREAM: usize = 15;
-    const RUN_MODES: Lazy<Vec<RunMode>> = Lazy::new(|| {
+    static RUN_MODES: Lazy<Vec<RunMode>> = Lazy::new(|| {
         vec![
             RunMode::HistoricalFrom(NanoTime::ZERO),
             //RunMode::RealTime,

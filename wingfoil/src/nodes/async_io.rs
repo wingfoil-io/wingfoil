@@ -10,6 +10,31 @@ use std::pin::Pin;
 use std::rc::Rc;
 use tinyvec::TinyVec;
 
+/// Context passed to async producer closures during graph setup.
+///
+/// This provides the run configuration so producers can adapt their behavior
+/// (e.g., derive time ranges for database queries).
+#[derive(Clone, Copy, Debug)]
+pub struct RunParams {
+    pub run_mode: RunMode,
+    pub run_for: RunFor,
+    pub start_time: NanoTime,
+}
+
+impl RunParams {
+    /// Compute end time based on run_for.
+    ///
+    /// Returns `start_time + duration` for `RunFor::Duration`,
+    /// `NanoTime::MAX` for `Forever`, or an error for `Cycles`.
+    pub fn end_time(&self) -> anyhow::Result<NanoTime> {
+        match self.run_for {
+            RunFor::Duration(d) => Ok(self.start_time + d),
+            RunFor::Forever => Ok(NanoTime::MAX),
+            RunFor::Cycles(_) => anyhow::bail!("end_time not available for RunFor::Cycles"),
+        }
+    }
+}
+
 /// A convenience alias for [`futures::Stream`] with items of type `(NanoTime, T)`.
 /// used by [StreamOperators::consume_async].
 pub trait FutStream<T>: futures::Stream<Item = (NanoTime, T)> + Send {}
@@ -21,19 +46,19 @@ type ConsumerFunc<T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + 
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
-    FUT: Future<Output = ()> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     source: Rc<dyn Stream<T>>,
     sender: ChannelSender<T>,
     func: Option<ConsumerFunc<T, FUT>>,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     rx: Option<ChannelReceiver<T>>,
 }
 
 impl<T, FUT> AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
-    FUT: Future<Output = ()> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     pub fn new(source: Rc<dyn Stream<T>>, func: ConsumerFunc<T, FUT>) -> Self {
         let (sender, receiver) = channel_pair(None);
@@ -54,7 +79,7 @@ where
 impl<T, FUT> MutableNode for AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
-    FUT: Future<Output = ()> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.sender.send(state, self.source.peek_value())?;
@@ -82,7 +107,7 @@ where
                 .limit(run_mode, run_for)
                 .to_stream();
             let fut = func(Box::pin(src));
-            fut.await;
+            fut.await
         };
         let handle = state.tokio_runtime().spawn(f);
         self.handle = Some(handle);
@@ -96,7 +121,7 @@ where
 
     fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(handle) = self.handle.take() {
-            state.tokio_runtime().block_on(handle)?;
+            state.tokio_runtime().block_on(handle)??;
         }
         Ok(())
     }
@@ -105,22 +130,22 @@ where
 struct AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
-    S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
-    FUT: Future<Output = S> + Send + 'static,
-    FUNC: FnOnce() -> FUT + Send + 'static,
+    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
+    FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     func: Option<FUNC>,
     receiver_stream: ReceiverStream<T>,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     sender: Option<ChannelSender<T>>,
 }
 
 impl<T, S, FUT, FUNC> AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
-    S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
-    FUT: Future<Output = S> + Send + 'static,
-    FUNC: FnOnce() -> FUT + Send + 'static,
+    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
+    FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     pub fn new(func: FUNC) -> Self {
         let (sender, receiver) = channel_pair(None);
@@ -140,9 +165,9 @@ where
 impl<T, S, FUT, FUNC> MutableNode for AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
-    S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
-    FUT: Future<Output = S> + Send + 'static,
-    FUNC: FnOnce() -> FUT + Send + 'static,
+    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
+    FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
@@ -169,16 +194,20 @@ where
             .func
             .take()
             .ok_or_else(|| anyhow::anyhow!("func is already taken"))?;
+        let ctx = RunParams {
+            run_mode,
+            run_for,
+            start_time: state.start_time(),
+        };
         let fut = async move {
-            let source = func()
-                .await
-                .to_message_stream(run_mode)
-                .limit(run_mode, run_for);
+            let stream = func(ctx).await?;
+            let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
             let mut source = Box::pin(source);
             while let Some(message) = source.next().await {
                 sender.send_message(message).await;
             }
             sender.close().await;
+            Ok(())
         };
         let handle = state.tokio_runtime().spawn(fut);
         self.handle = Some(handle);
@@ -189,7 +218,7 @@ where
     fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.receiver_stream.teardown(state)?;
         if let Some(handle) = self.handle.take() {
-            state.tokio_runtime().block_on(handle)?;
+            state.tokio_runtime().block_on(handle)??;
         }
         Ok(())
     }
@@ -198,22 +227,36 @@ where
 impl<T, S, FUT, FUNC> StreamPeekRef<TinyVec<[T; 1]>> for AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
-    S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
-    FUT: Future<Output = S> + Send + 'static,
-    FUNC: FnOnce() -> FUT + Send + 'static,
+    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
+    FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         self.receiver_stream.peek_ref()
     }
 }
 
-/// Create a [Stream] from futures::Stream
+/// Create a [Stream] from a fallible async function that produces a futures::Stream.
+///
+/// The closure receives an [`RunParams`] with `run_mode`, `run_for`, and `start_time`,
+/// allowing producers to adapt their behavior (e.g., derive time ranges for queries).
+///
+/// # Example
+/// ```ignore
+/// produce_async(|ctx| async move {
+///     let start = ctx.start_time;
+///     let end = ctx.end_time();
+///     Ok(async_stream::stream! {
+///         // Use start, end in async code...
+///     })
+/// })
+/// ```
 pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<TinyVec<[T; 1]>>>
 where
     T: Element + Send,
-    S: futures::Stream<Item = (NanoTime, T)> + Send + 'static,
-    FUT: Future<Output = S> + Send + 'static,
-    FUNC: FnOnce() -> FUT + Send + 'static,
+    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
+    FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
+    FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     AsyncProducerStream::new(func).into_stream()
 }
@@ -224,20 +267,21 @@ trait StreamMessageSource<T: Element + Send> {
 
 impl<T, STRM> StreamMessageSource<T> for STRM
 where
-    STRM: futures::Stream<Item = (NanoTime, T)>,
+    STRM: futures::Stream<Item = anyhow::Result<(NanoTime, T)>>,
     T: Element + Send,
 {
     fn to_message_stream(self, run_mode: RunMode) -> impl futures::Stream<Item = Message<T>> {
         async_stream::stream! {
             let mut source = Box::pin(self);
-            while let Some((time, value)) = source.next().await {
-                match run_mode {
-                    RunMode::RealTime => {
-                        yield Message::RealtimeValue(value);
-                    }
-                    RunMode::HistoricalFrom(_) => {
-                        yield Message::HistoricalValue(ValueAt::new(value, time));
+            while let Some(result) = source.next().await {
+                match result {
+                    Ok((time, value)) => match run_mode {
+                        RunMode::RealTime => yield Message::RealtimeValue(value),
+                        RunMode::HistoricalFrom(_) => yield Message::HistoricalValue(ValueAt::new(value, time)),
                     },
+                    Err(e) => {
+                        yield Message::Error(std::sync::Arc::new(e));
+                    }
                 }
             }
             yield Message::EndOfStream;
@@ -259,8 +303,8 @@ where
     fn limit(self, run_mode: RunMode, run_for: RunFor) -> impl futures::Stream<Item = Message<T>> {
         async_stream::stream! {
             let time0 = run_mode.start_time();
-            let mut time = NanoTime::ZERO;
-            let mut elapsed:  NanoTime;
+            let mut time = time0;
+            let mut elapsed: NanoTime;
             let mut cycle = 0;
             let mut source = Box::pin(self);
             let mut finished = false;
@@ -276,8 +320,17 @@ where
                     Message::CheckPoint(t) => {
                         time = *t;
                     },
+                    Message::HistoricalBatch(batch) => {
+                        // Update time to earliest timestamp in batch
+                        if let Some(value_at) = batch.first() {
+                            time = value_at.time;
+                        }
+                    }
                     Message::EndOfStream => {
                         finished = true;
+                    },
+                    Message::Error(_) => {
+                        // Error messages are passed through
                     },
                 }
                 elapsed = time - time0;
@@ -301,8 +354,16 @@ where
                     Message::HistoricalValue(value_at) => {
                         yield (value_at.time, value_at.value)
                     },
+                    Message::HistoricalBatch(batch) => {
+                        // Convert to Vec to own the data and avoid holding reference across await
+                        let batch_vec = batch.into_vec();
+                        for value_at in batch_vec {
+                            yield (value_at.time, value_at.value)
+                        }
+                    }
                     Message::CheckPoint(_) => {},
                     Message::EndOfStream => {},
+                    Message::Error(_) => {},
                 }
             }
         }
@@ -318,6 +379,33 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn produce_async_mid_stream_error() {
+        let _ = env_logger::try_init();
+        let period = Duration::from_millis(10);
+
+        let producer = move |ctx: RunParams| async move {
+            Ok(async_stream::stream! {
+                for i in 0..3u32 {
+                    let time = ctx.start_time + period * i;
+                    yield Ok((time, i));
+                }
+                yield Err(anyhow::anyhow!("something went wrong"));
+            })
+        };
+
+        let result = produce_async(producer)
+            .collapse()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+
+        let err = result.unwrap_err();
+        let root = err.root_cause().to_string();
+        assert!(
+            root.contains("something went wrong"),
+            "expected error message, got: {root}"
+        );
+    }
+
+    #[test]
     fn async_io_works() {
         let _ = env_logger::try_init();
         let n_runs = 5;
@@ -327,13 +415,13 @@ mod tests {
 
         for _ in 0..n_runs {
             for run_mode in [RunMode::RealTime, RunMode::HistoricalFrom(NanoTime::ZERO)] {
-                let example_producer = async move || {
-                    async_stream::stream! {
+                let example_producer = move |ctx: RunParams| async move {
+                    Ok(async_stream::stream! {
                         for i in 0.. {
-                            let time = match run_mode {
-                                RunMode::HistoricalFrom(time0) => {
+                            let time = match ctx.run_mode {
+                                RunMode::HistoricalFrom(_) => {
                                     // wire up historical source here
-                                    time0 + period * i
+                                    ctx.start_time + period * i
                                 },
                                 RunMode::RealTime => {
                                     // wire up real time source here
@@ -341,15 +429,16 @@ mod tests {
                                     NanoTime::now()
                                 }
                             };
-                            yield (time, i * 10);
+                            yield Ok((time, i * 10));
                         }
-                    }
+                    })
                 };
 
                 let example_consumer = async move |mut source: Pin<Box<dyn FutStream<u32>>>| {
                     while let Some((time, value)) = source.next().await {
                         println!("{time:?}, {value:?}");
                     }
+                    Ok(())
                 };
 
                 produce_async(example_producer)

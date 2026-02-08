@@ -3,7 +3,7 @@ mod py_element;
 mod py_stream;
 mod types;
 
-use ::wingfoil::{Dep, Node, NodeOperators};
+use ::wingfoil::{Node, NodeOperators};
 use py_element::*;
 use py_stream::*;
 
@@ -57,16 +57,12 @@ fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyStream {
             .extract::<PyRef<PyStream>>(py)
             .unwrap()
             .inner_stream();
-        let stream = ::wingfoil::bimap(
-            Dep::Active(a),
-            Dep::Active(b),
-            move |a: PyElement, b: PyElement| {
-                Python::attach(|py: Python<'_>| {
-                    let res = func.call1(py, (a.value(), b.value())).unwrap();
-                    PyElement::new(res)
-                })
-            },
-        );
+        let stream = ::wingfoil::bimap(a, b, move |a: PyElement, b: PyElement| {
+            Python::attach(|py: Python<'_>| {
+                let res = func.call1(py, (a.value(), b.value())).unwrap();
+                PyElement::new(res)
+            })
+        });
         PyStream(stream)
     })
 }
