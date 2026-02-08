@@ -76,4 +76,23 @@ mod tests {
         let result = stream.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn try_bimap_passive_does_not_trigger() {
+        // Passive upstream does not trigger try_bimap.
+        // a ticks every 100ns (active), b ticks every 50ns (passive).
+        // Output should only tick on a's schedule, not b's.
+        let a = ticker(Duration::from_nanos(100)).count();
+        let b = ticker(Duration::from_nanos(50)).count();
+        let stream =
+            try_bimap(Dep::Active(a), Dep::Passive(b), |a: u64, b: u64| Ok(a + b)).collect();
+        stream
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let times: Vec<NanoTime> = stream.peek_value().iter().map(|v| v.time).collect();
+        assert_eq!(
+            times,
+            vec![NanoTime::new(0), NanoTime::new(100), NanoTime::new(200)]
+        );
+    }
 }

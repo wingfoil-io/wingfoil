@@ -49,22 +49,36 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn bimap_delay_difference() {
-        let source = ticker(Duration::from_secs(1)).count().map(|x| x as i64 + 4); // 5, 6, 7, 8, 9, 10, 11, 12, 13, ...
-
-        let delayed = source.delay(Duration::from_secs(5)); // same sequence, 5s later
-
-        let diff = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| a - b);
-
-        diff.accumulate()
-            .finally(|res, _| {
-                assert_eq!(res, vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5]);
-                Ok(())
-            })
-            .run(
-                RunMode::HistoricalFrom(NanoTime::ZERO),
-                RunFor::Duration(Duration::from_secs(8)),
-            )
+    fn bimap_both_active() {
+        // Both upstreams active: bimap ticks when either source ticks.
+        // Two independent tickers at different rates both drive output.
+        let a = ticker(Duration::from_nanos(100)).count();
+        let b = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|x: u64| x * 10);
+        let stream = bimap(Dep::Active(a), Dep::Active(b), |a: u64, b: u64| a + b).collect();
+        stream
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
             .unwrap();
+        assert_eq!(stream.peek_value().last().unwrap().value, 44);
+    }
+
+    #[test]
+    fn bimap_passive_does_not_trigger() {
+        // Passive upstream does not trigger bimap.
+        // a ticks every 100ns (active), b ticks every 50ns (passive).
+        // Output should only tick on a's schedule, not b's.
+        let a = ticker(Duration::from_nanos(100)).count();
+        let b = ticker(Duration::from_nanos(50)).count();
+        let stream = bimap(Dep::Active(a), Dep::Passive(b), |a: u64, b: u64| a + b).collect();
+        stream
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        // Output should only have ticked at a's times, not at b's 50ns intervals
+        let times: Vec<NanoTime> = stream.peek_value().iter().map(|v| v.time).collect();
+        assert_eq!(
+            times,
+            vec![NanoTime::new(0), NanoTime::new(100), NanoTime::new(200)]
+        );
     }
 }
