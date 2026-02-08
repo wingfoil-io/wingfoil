@@ -273,6 +273,12 @@ pub trait StreamOperators<T: Element> {
     fn finally<F: FnOnce(T, &GraphState) + 'static>(self: &Rc<Self>, func: F) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
+    /// executes supplied fallible closure on each tick.
+    /// Errors propagate to graph execution.
+    fn try_for_each(
+        self: &Rc<Self>,
+        func: impl Fn(T, NanoTime) -> anyhow::Result<()> + 'static,
+    ) -> Rc<dyn Node>;
     // reduce/fold source by applying function
     fn fold<OUT: Element>(
         self: &Rc<Self>,
@@ -477,6 +483,13 @@ where
 
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node> {
         ConsumerNode::new(self.clone(), Box::new(func)).into_node()
+    }
+
+    fn try_for_each(
+        self: &Rc<Self>,
+        func: impl Fn(T, NanoTime) -> anyhow::Result<()> + 'static,
+    ) -> Rc<dyn Node> {
+        TryConsumerNode::new(self.clone(), Box::new(func)).into_node()
     }
 
     fn delay(self: &Rc<Self>, duration: Duration) -> Rc<dyn Stream<T>>

@@ -41,3 +41,29 @@ impl<IN1: 'static, IN2: 'static, OUT: Element> StreamPeekRef<OUT> for BiMapStrea
         &self.value
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+    use std::time::Duration;
+
+    #[test]
+    fn bimap_delay_difference() {
+        let source = ticker(Duration::from_secs(1)).count().map(|x| x as i64 + 4); // 5, 6, 7, 8, 9, 10, 11, 12, 13, ...
+
+        let delayed = source.delay(Duration::from_secs(5)); // same sequence, 5s later
+
+        let diff = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| a - b);
+
+        diff.accumulate()
+            .finally(|res, _| {
+                assert_eq!(res, vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5]);
+            })
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_secs(8)),
+            )
+            .unwrap();
+    }
+}

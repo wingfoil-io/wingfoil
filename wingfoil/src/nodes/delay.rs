@@ -13,6 +13,8 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
+    #[new(default)]
+    initialized: bool,
     upstream: Rc<dyn Stream<T>>,
     delay: NanoTime,
 }
@@ -27,6 +29,10 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
             let current_time = state.time();
             let mut ticked = false;
             if state.ticked(self.upstream.clone().as_node()) {
+                if !self.initialized {
+                    self.value = self.upstream.peek_value();
+                    self.initialized = true;
+                }
                 let next_time = current_time + self.delay;
                 state.add_callback(next_time);
                 self.queue.push(self.upstream.peek_value(), next_time)

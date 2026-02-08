@@ -23,3 +23,22 @@ impl<IN> MutableNode for ConsumerNode<IN> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
+
+/// Like [ConsumerNode] but accepts a fallible closure.
+/// Errors propagate to graph execution.
+#[derive(new)]
+pub(crate) struct TryConsumerNode<IN> {
+    upstream: Rc<dyn Stream<IN>>,
+    func: Box<dyn Fn(IN, NanoTime) -> anyhow::Result<()>>,
+}
+
+impl<IN> MutableNode for TryConsumerNode<IN> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        (self.func)(self.upstream.peek_value(), state.time())?;
+        Ok(true)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
+    }
+}
