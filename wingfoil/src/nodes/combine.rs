@@ -80,6 +80,7 @@ mod tests {
                 ];
                 println!("{:?}", res);
                 assert_eq!(res, expected);
+                Ok(())
             })
             .run(run_mode, run_for)
             .unwrap();

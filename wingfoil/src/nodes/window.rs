@@ -103,6 +103,7 @@ mod tests {
                     },
                 ];
                 assert_eq!(expected, res);
+                Ok(())
             })
             .run(
                 RunMode::HistoricalFrom(NanoTime::ZERO),

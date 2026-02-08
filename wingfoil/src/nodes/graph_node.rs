@@ -348,6 +348,7 @@ mod tests {
                         let tol = if run_mode == RunMode::RealTime { 4 } else { 0 };
                         assert!(actual.len() + tol >= n_ticks as usize);
                         assert_eq!(expected, actual);
+                        Ok(())
                     })
                     .run(run_mode, run_for)
                     .unwrap();
