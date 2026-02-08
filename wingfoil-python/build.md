@@ -24,6 +24,11 @@ pip install maturin
 
 maturin develop --release
 
+# run tests
+
+pip install pytest
+pytest
+
 # You can run example with
 
-python3 ./examples/quick_start.py 
+python3 ./examples/quick_start.py
