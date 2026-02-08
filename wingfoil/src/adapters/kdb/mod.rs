@@ -11,16 +11,18 @@
 //!
 //! #[derive(Debug, Clone, Default)]
 //! struct Trade {
-//!     sym: String,
-//!     time: i64,
+//!     sym: Sym,
 //!     price: f64,
 //!     size: i64,
 //! }
 //!
 //! impl KdbDeserialize for Trade {
-//!     fn from_kdb_row(row: &K, columns: &[String]) -> Result<Self, KdbError> {
-//!         // Extract fields from row - use row.as_vec() to get column values
-//!         Ok(Trade { ... })
+//!     fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<Self, KdbError> {
+//!         Ok(Trade {
+//!             sym: row.get_sym(1, interner)?,
+//!             price: row.get(2)?.get_float()?,
+//!             size: row.get(3)?.get_long()?,
+//!         })
 //!     }
 //! }
 //!
@@ -32,10 +34,7 @@
 //!     conn,
 //!     "select from trades where date=.z.d",
 //!     "time",                  // time column for chunking
-//!     0,                       // start_time (KDB epoch: 2000-01-01)
-//!     86400000000000,          // end_time (24 hours later)
 //!     10000,                   // rows_per_chunk (controls memory usage)
-//!     |t: &Trade| NanoTime::from_kdb_timestamp(t.time)
 //! )
 //!     .map(|trades| trades.first().map(|t| t.price).unwrap_or(0.0))
 //!     .print()
@@ -54,6 +53,55 @@ pub use write::*;
 
 /// Re-export kdbplus error type for convenience.
 pub use kdbplus::ipc::error::Error as KdbError;
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+/// An interned symbol string, backed by `Arc<str>` for cheap cloning and deduplication.
+///
+/// Use with [`SymbolInterner`] to ensure repeated symbol values (e.g. `"AAPL"`, `"GOOG"`)
+/// share a single heap allocation.
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub struct Sym(Arc<str>);
+
+impl std::fmt::Debug for Sym {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Display for Sym {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Default for Sym {
+    fn default() -> Self {
+        Sym(Arc::from(""))
+    }
+}
+
+/// Deduplicates symbol strings so repeated values share a single `Arc<str>` allocation.
+///
+/// Created once per `kdb_read` call and passed to `from_kdb_row` / `Row::get_sym`.
+#[derive(Default)]
+pub struct SymbolInterner {
+    set: HashSet<Arc<str>>,
+}
+
+impl SymbolInterner {
+    /// Intern a string, returning a [`Sym`] that shares storage with prior equal values.
+    pub fn intern(&mut self, s: &str) -> Sym {
+        if let Some(existing) = self.set.get(s) {
+            Sym(Arc::clone(existing))
+        } else {
+            let arc: Arc<str> = Arc::from(s);
+            self.set.insert(Arc::clone(&arc));
+            Sym(arc)
+        }
+    }
+}
 
 /// KDB connection configuration.
 #[derive(Debug, Clone)]
