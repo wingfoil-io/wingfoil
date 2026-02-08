@@ -13,6 +13,8 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
+    #[new(default)]
+    initialized: bool,
     upstream: Rc<dyn Stream<T>>,
     delay: NanoTime,
 }
@@ -27,6 +29,10 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
             let current_time = state.time();
             let mut ticked = false;
             if state.ticked(self.upstream.clone().as_node()) {
+                if !self.initialized {
+                    self.value = self.upstream.peek_value();
+                    self.initialized = true;
+                }
                 let next_time = current_time + self.delay;
                 state.add_callback(next_time);
                 self.queue.push(self.upstream.peek_value(), next_time)
@@ -144,6 +150,25 @@ mod tests {
             },
         ];
         assert_eq!(expected, delayed.peek_value());
+    }
+
+    #[test]
+    fn delay_initializes_to_first_value() {
+        // Passive reads of a delayed stream return the first upstream value
+        // (not T::default()) before the delay elapses.
+        let source = ticker(Duration::from_secs(1)).count().map(|x| x as i64 + 4); // 5, 6, 7, 8, 9, ...
+        let delayed = source.delay(Duration::from_secs(5));
+        let diff = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| a - b);
+        diff.accumulate()
+            .finally(|res, _| {
+                assert_eq!(res, vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5]);
+                Ok(())
+            })
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_secs(8)),
+            )
+            .unwrap();
     }
 
     #[test]
