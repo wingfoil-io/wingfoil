@@ -1,6 +1,6 @@
 use crate::{
-    Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators, StreamPeekRef,
-    UpStreams,
+    Burst, Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators,
+    StreamPeekRef, UpStreams,
 };
 use derive_more::Debug;
 use derive_new::new;
@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 /// A message used to signal that a demuxed child stream
 /// can be closed.   Used by [StreamOperators::demux] and [StreamOperators::demux_it]
@@ -296,10 +295,7 @@ pub(crate) fn demux_it<K, T, F, I>(
     source: Rc<dyn Stream<I>>,
     map: DemuxMap<K>,
     func: F,
-) -> (
-    Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>,
-    Overflow<TinyVec<[T; 1]>>,
-)
+) -> (Vec<Rc<dyn Stream<Burst<T>>>>, Overflow<Burst<T>>)
 where
     K: Hash + Eq + PartialEq + fmt::Debug + 'static,
     T: Element,
@@ -309,7 +305,7 @@ where
     let size = map.size();
     let overflow = Rc::new(RefCell::new(None));
     let children = Rc::new(RefCell::new(vec![]));
-    let value = vec![TinyVec::new(); size + 1];
+    let value = vec![Burst::new(); size + 1];
     let parent = DemuxVecParent::new(source, func, map, children.clone(), overflow.clone(), value)
         .into_stream();
     let build_child = |i| DemuxVecChild::new(i, parent.clone()).into_stream();
@@ -336,9 +332,9 @@ where
     func: F,
     #[debug(skip)]
     map: DemuxMap<K>,
-    children: Rc<RefCell<Vec<Rc<dyn Stream<TinyVec<[T; 1]>>>>>>,
-    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<TinyVec<[T; 1]>>>>>>,
-    value: Vec<TinyVec<[T; 1]>>,
+    children: Rc<RefCell<Vec<Rc<dyn Stream<Burst<T>>>>>>,
+    overflow_child: Rc<RefCell<Option<Rc<dyn Stream<Burst<T>>>>>>,
+    value: Vec<Burst<T>>,
     #[new(default)]
     // map from child node index to its index in the graph
     index_map: Vec<usize>,
@@ -346,14 +342,14 @@ where
     overflow_graph_index: Option<usize>,
 }
 
-impl<T, F, K, I> StreamPeekRef<Vec<TinyVec<[T; 1]>>> for DemuxVecParent<T, F, K, I>
+impl<T, F, K, I> StreamPeekRef<Vec<Burst<T>>> for DemuxVecParent<T, F, K, I>
 where
     T: Element,
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
     I: IntoIterator<Item = T> + Element,
 {
-    fn peek_ref(&self) -> &Vec<TinyVec<[T; 1]>> {
+    fn peek_ref(&self) -> &Vec<Burst<T>> {
         &self.value
     }
 }
@@ -432,9 +428,9 @@ where
     T: Element,
 {
     index: usize,
-    source: Rc<dyn Stream<Vec<TinyVec<[T; 1]>>>>,
+    source: Rc<dyn Stream<Vec<Burst<T>>>>,
     #[new(default)]
-    value: TinyVec<[T; 1]>,
+    value: Burst<T>,
 }
 
 impl<T> MutableNode for DemuxVecChild<T>
@@ -452,11 +448,11 @@ where
     }
 }
 
-impl<T> StreamPeekRef<TinyVec<[T; 1]>> for DemuxVecChild<T>
+impl<T> StreamPeekRef<Burst<T>> for DemuxVecChild<T>
 where
     T: Element,
 {
-    fn peek_ref(&self) -> &TinyVec<[T; 1]> {
+    fn peek_ref(&self) -> &Burst<T> {
         &self.value
     }
 }
@@ -623,7 +619,7 @@ mod tests {
             let (demuxed, overflow) = muxed.demux_it_with_map(map, parse_message);
             let (results, nodes) = build_results(demuxed, overflow, with_overflow);
             Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
-            let parse_topic = |msgs: &TinyVec<[Message; 1]>| {
+            let parse_topic = |msgs: &Burst<Message>| {
                 assert!(msgs.len() == 1);
                 msgs[0].topic
             };
