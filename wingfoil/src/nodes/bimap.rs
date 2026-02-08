@@ -7,27 +7,37 @@ use std::rc::Rc;
 /// Maps two streams into a single stream.  Used by [add](crate::nodes::add).
 #[derive(new)]
 pub(crate) struct BiMapStream<IN1, IN2, OUT: Element> {
-    upstream1: Rc<dyn Stream<IN1>>,
-    upstream2: Rc<dyn Stream<IN2>>,
+    upstream1: Dep<IN1>,
+    upstream2: Dep<IN2>,
     #[new(default)]
     value: OUT,
     func: Box<dyn Fn(IN1, IN2) -> OUT>,
 }
 
-impl<IN1, IN2, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
+impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = (self.func)(self.upstream1.peek_value(), self.upstream2.peek_value());
+        self.value = (self.func)(
+            self.upstream1.stream().peek_value(),
+            self.upstream2.stream().peek_value(),
+        );
         Ok(true)
     }
 
     fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![
-                self.upstream1.clone().as_node(),
-                self.upstream2.clone().as_node(),
-            ],
-            vec![],
-        )
+        let mut active = vec![];
+        let mut passive = vec![];
+        let deps: Vec<(Rc<dyn Node>, bool)> = vec![
+            (self.upstream1.as_node(), self.upstream1.is_active()),
+            (self.upstream2.as_node(), self.upstream2.is_active()),
+        ];
+        for (node, is_active) in deps {
+            if is_active {
+                active.push(node);
+            } else {
+                passive.push(node);
+            }
+        }
+        UpStreams::new(active, passive)
     }
 }
 

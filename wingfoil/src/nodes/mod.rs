@@ -82,13 +82,19 @@ where
     T: Element + Add<Output = T>,
 {
     let f = |a: T, b: T| (a + b) as T;
-    BiMapStream::new(upstream1.clone(), upstream2.clone(), Box::new(f)).into_stream()
+    BiMapStream::new(
+        Dep::Active(upstream1.clone()),
+        Dep::Active(upstream2.clone()),
+        Box::new(f),
+    )
+    .into_stream()
 }
 
-/// Maps two [Stream]s into one using the supplied function.  Ticks when either of it's sources ticks.
+/// Maps two [Stream]s into one using the supplied function.
+/// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
 pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
-    upstream1: Rc<dyn Stream<IN1>>,
-    upstream2: Rc<dyn Stream<IN2>>,
+    upstream1: Dep<IN1>,
+    upstream2: Dep<IN2>,
     func: impl Fn(IN1, IN2) -> OUT + 'static,
 ) -> Rc<dyn Stream<OUT>> {
     BiMapStream::new(upstream1, upstream2, Box::new(func)).into_stream()
@@ -377,8 +383,8 @@ where
 
     fn collect(self: &Rc<Self>) -> Rc<dyn Stream<Vec<ValueAt<T>>>> {
         bimap(
-            self.clone(),
-            self.clone().as_node().ticked_at(),
+            Dep::Active(self.clone()),
+            Dep::Active(self.clone().as_node().ticked_at()),
             ValueAt::new,
         )
         .fold(|acc: &mut Vec<ValueAt<T>>, value| {
@@ -516,8 +522,8 @@ where
                 value
             };
             bimap(
-                self.clone(),
-                self.clone().as_node().ticked_at_elapsed(),
+                Dep::Active(self.clone()),
+                Dep::Active(self.clone().as_node().ticked_at_elapsed()),
                 func,
             )
         } else {
