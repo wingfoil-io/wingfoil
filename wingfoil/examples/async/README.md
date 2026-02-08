@@ -38,20 +38,21 @@ use wingfoil::*;
 let period = Duration::from_millis(10);
 let run_for = RunFor::Duration(period * 5);
 let run_mode = RunMode::RealTime;
-let producer = async move || {
-    stream! {
+let producer = move |_ctx: RunParams| async move {
+    Ok(stream! {
         for i in 0.. {
             tokio::time::sleep(period).await; // simulate waiting IO
             let time = NanoTime::now();
-            yield (time, i * 10);
+            yield Ok((time, i * 10));
         }
-    }
+    })
 };
 
 let consumer = async move |mut source: Pin<Box<dyn FutStream<u32>>>| {
     while let Some((time, value)) = source.next().await {
         println!("{time:?}, {value:?}");
     }
+    Ok(())
 };
 
 produce_async(producer)

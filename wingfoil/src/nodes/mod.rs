@@ -269,7 +269,7 @@ pub trait StreamOperators<T: Element> {
     ) -> Rc<dyn Node>
     where
         T: Element + Send,
-        FUT: Future<Output = ()> + Send + 'static;
+        FUT: Future<Output = anyhow::Result<()>> + Send + 'static;
     fn finally<F: FnOnce(T, &GraphState) -> anyhow::Result<()> + 'static>(
         self: &Rc<Self>,
         func: F,
@@ -432,7 +432,7 @@ where
     ) -> Rc<dyn Node>
     where
         T: Element + Send,
-        FUT: Future<Output = ()> + Send + 'static,
+        FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         AsyncConsumerNode::new(self.clone(), func).into_node()
     }

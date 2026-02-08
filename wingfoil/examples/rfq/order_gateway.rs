@@ -17,10 +17,13 @@ pub trait OrderGateway {
 pub struct RealTimeOrderGateway {}
 
 impl RealTimeOrderGateway {
-    async fn consume_orders(mut source: Pin<Box<dyn FutStream<TinyVec<[Order; 1]>>>>) {
+    async fn consume_orders(
+        mut source: Pin<Box<dyn FutStream<TinyVec<[Order; 1]>>>>,
+    ) -> anyhow::Result<()> {
         while let Some((_time, _value)) = source.next().await {
             //println!("{time:?}, {value:?}");
         }
+        Ok(())
     }
 }
 

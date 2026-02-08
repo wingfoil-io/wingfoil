@@ -109,8 +109,16 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 Message::HistoricalValue(value_at) => {
                                     values.push(value_at.value);
                                 }
+                                Message::HistoricalBatch(_) => {
+                                    return Err(anyhow!(
+                                        "received HistoricalBatch but RunMode is RealTime"
+                                    ));
+                                }
                                 Message::EndOfStream => self.finished = true,
                                 Message::CheckPoint(_) => {}
+                                Message::Error(err) => {
+                                    return Err(anyhow!("Error received from channel: {}", err));
+                                }
                             },
                             None => break,
                         }
@@ -157,9 +165,35 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                             self.message_time = Some(value_at.time);
                             self.queue.push_back(value_at);
                         }
+                        Message::HistoricalBatch(batch) => {
+                            if batch.is_empty() {
+                                continue;
+                            }
+
+                            // Validate: all timestamps must be >= current graph time
+                            let min_time = batch.iter().map(|va| va.time).min().unwrap();
+                            if min_time < state.time() {
+                                return Err(anyhow!(
+                                    "received HistoricalBatch with timestamp less than graph time, {} < {}",
+                                    min_time,
+                                    state.time()
+                                ));
+                            }
+
+                            // Set message_time to earliest timestamp
+                            self.message_time = Some(min_time);
+
+                            // Unpack all values into queue
+                            for value_at in batch.iter() {
+                                self.queue.push_back(value_at.clone());
+                            }
+                        }
                         Message::EndOfStream => self.finished = true,
                         Message::CheckPoint(check_point) => {
                             self.message_time = Some(check_point);
+                        }
+                        Message::Error(err) => {
+                            return Err(anyhow!("Error received from channel: {}", err));
                         }
                     }
                 }

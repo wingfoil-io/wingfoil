@@ -64,19 +64,14 @@ pub struct Subscription {
 
 // TODO: factor out clone
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Default, Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Params {
     Rfq(RfqParams),
     #[allow(unused)]
     Bbo(BboParams),
+    #[default]
     Empty,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

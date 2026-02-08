@@ -110,6 +110,12 @@ impl<T: Element + Send> ChannelSender<T> {
         self.send_message(message)
     }
 
+    #[allow(dead_code)]
+    pub fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) -> SendResult {
+        let message = Message::HistoricalBatch(batch.into_boxed_slice());
+        self.send_message(message)
+    }
+
     pub fn close(&mut self) -> SendResult {
         // check if already closed
         if self.kanal_sender.is_none() {
@@ -174,6 +180,12 @@ impl<T: Element + Send> AsyncChannelSender<T> {
     #[allow(dead_code)]
     pub async fn send_checkpoint(&self, time: NanoTime) {
         let message = Message::CheckPoint(time);
+        self.send_message(message).await;
+    }
+
+    #[allow(dead_code)]
+    pub async fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) {
+        let message = Message::HistoricalBatch(batch.into_boxed_slice());
         self.send_message(message).await;
     }
 

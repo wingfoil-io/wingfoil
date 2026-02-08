@@ -23,14 +23,14 @@ pub struct HistoricalMarketDataProvider {
 impl HistoricalMarketDataProvider {
     pub fn new(n_msgs: usize) -> Self {
         let mut msgs = Vec::new();
-        let mut t = 0 as u64;
+        let mut t = 0_u64;
         let mut i = 0;
         while t <= n_msgs as u64 {
             let rfq_id = format!("{}", i);
             let rfq_id: RfqId =
                 ArrayString::try_from(rfq_id.as_str()).expect("string too long for RfqId");
 
-            let rfq_data = RfqData { id: rfq_id.clone() };
+            let rfq_data = RfqData { id: rfq_id };
             let rfq_params = RfqParams {
                 channel: Channel::Rfqs,
                 event: RfqEvent::Added,
@@ -40,7 +40,7 @@ impl HistoricalMarketDataProvider {
             t += 1;
             let item = (NanoTime::from(t), params);
             msgs.push(item);
-            let rfq_data = RfqData { id: rfq_id.clone() };
+            let rfq_data = RfqData { id: rfq_id };
             let rfq_params = RfqParams {
                 channel: Channel::Rfqs,
                 event: RfqEvent::Removed,
@@ -49,7 +49,7 @@ impl HistoricalMarketDataProvider {
             let params = Params::Rfq(rfq_params);
             t += 1;
             i += 1;
-            let item = (NanoTime::from(t as u64), params);
+            let item = (NanoTime::from(t), params);
             msgs.push(item);
         }
         Self { msgs }
@@ -59,12 +59,12 @@ impl HistoricalMarketDataProvider {
 impl MarketDataProvider for HistoricalMarketDataProvider {
     fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
         let msgs = self.msgs.clone();
-        produce_async(async move || {
-            stream! {
+        produce_async(move |_ctx| async move {
+            Ok(stream! {
                 for msg in msgs {
-                    yield msg;
+                    yield Ok(msg);
                 }
-            }
+            })
         })
     }
 }
@@ -77,14 +77,14 @@ pub struct RealTimeMarketDataProvider {
 impl MarketDataProvider for RealTimeMarketDataProvider {
     fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
         let env = self.env.clone();
-        produce_async(async move || Self::notifications(env).await)
+        produce_async(move |_ctx| async move { Ok(Self::notifications(env).await) })
     }
 }
 
 impl RealTimeMarketDataProvider {
     async fn notifications(
         env: Environment,
-    ) -> impl futures::Stream<Item = (NanoTime, Params)> + Send {
+    ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, Params)>> + Send {
         println!("{env:?}");
         let url = &env.url();
         let heartbeat = Duration::from_secs(2);
@@ -112,7 +112,7 @@ impl RealTimeMarketDataProvider {
                 };
                 let time = NanoTime::now();
                 println!("{time:?} parsed sock message");
-                (time, params)
+                Ok((time, params))
             })
     }
 }

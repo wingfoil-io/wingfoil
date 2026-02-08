@@ -305,7 +305,8 @@ impl Graph {
             .enable_all()
             .build()
             .unwrap();
-        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, NanoTime::ZERO);
+        let start_time = run_mode.start_time();
+        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time);
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
