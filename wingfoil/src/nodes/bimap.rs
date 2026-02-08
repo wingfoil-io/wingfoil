@@ -2,7 +2,6 @@ use crate::types::*;
 use derive_new::new;
 
 use std::boxed::Box;
-use std::rc::Rc;
 
 /// Maps two streams into a single stream.  Used by [add](crate::nodes::add).
 #[derive(new)]
@@ -24,20 +23,15 @@ impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, 
     }
 
     fn upstreams(&self) -> UpStreams {
-        let mut active = vec![];
-        let mut passive = vec![];
-        let deps: Vec<(Rc<dyn Node>, bool)> = vec![
+        let deps = [
             (self.upstream1.as_node(), self.upstream1.is_active()),
             (self.upstream2.as_node(), self.upstream2.is_active()),
         ];
-        for (node, is_active) in deps {
-            if is_active {
-                active.push(node);
-            } else {
-                passive.push(node);
-            }
-        }
-        UpStreams::new(active, passive)
+        let (active, passive): (Vec<_>, Vec<_>) = deps.into_iter().partition(|(_, active)| *active);
+        UpStreams::new(
+            active.into_iter().map(|(n, _)| n).collect(),
+            passive.into_iter().map(|(n, _)| n).collect(),
+        )
     }
 }
 

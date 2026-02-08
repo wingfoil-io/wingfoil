@@ -28,6 +28,7 @@ mod print;
 mod producer;
 mod sample;
 mod tick;
+mod try_bimap;
 mod try_map;
 mod window;
 
@@ -57,6 +58,7 @@ use print::*;
 use producer::*;
 use sample::*;
 use tick::*;
+use try_bimap::*;
 use try_map::*;
 use window::WindowStream;
 
@@ -98,6 +100,17 @@ pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
     func: impl Fn(IN1, IN2) -> OUT + 'static,
 ) -> Rc<dyn Stream<OUT>> {
     BiMapStream::new(upstream1, upstream2, Box::new(func)).into_stream()
+}
+
+/// Maps two [Stream]s into one using a fallible closure.
+/// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
+/// Errors propagate to graph execution.
+pub fn try_bimap<IN1: Element, IN2: Element, OUT: Element>(
+    upstream1: Dep<IN1>,
+    upstream2: Dep<IN2>,
+    func: impl Fn(IN1, IN2) -> anyhow::Result<OUT> + 'static,
+) -> Rc<dyn Stream<OUT>> {
+    TryBiMapStream::new(upstream1, upstream2, Box::new(func)).into_stream()
 }
 
 /// Returns a stream that merges it's sources into one.  Ticks when either of it's sources ticks.
