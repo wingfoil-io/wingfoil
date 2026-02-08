@@ -76,7 +76,6 @@ use std::ops::Add;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
-use tinyvec::TinyVec;
 
 /// Returns a [Stream] that adds both it's source [Stream]s.  Ticks when either of it's sources ticks.
 pub fn add<T>(upstream1: &Rc<dyn Stream<T>>, upstream2: &Rc<dyn Stream<T>>) -> Rc<dyn Stream<T>>
@@ -128,7 +127,7 @@ pub fn constant<T: Element>(value: T) -> Rc<dyn Stream<T>> {
 }
 
 /// Collects a Vec of [Stream]s into a [Stream] of Vec.
-pub fn combine<T>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<TinyVec<[T; 1]>>>
+pub fn combine<T>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + 'static,
 {
@@ -311,10 +310,7 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         capacity: usize,
         func: F,
-    ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
-        Overflow<TinyVec<[U; 1]>>,
-    )
+    ) -> (Vec<Rc<dyn Stream<Burst<U>>>>, Overflow<Burst<U>>)
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -326,10 +322,7 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         map: DemuxMap<K>,
         func: F,
-    ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
-        Overflow<TinyVec<[U; 1]>>,
-    )
+    ) -> (Vec<Rc<dyn Stream<Burst<U>>>>, Overflow<Burst<U>>)
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -358,11 +351,11 @@ pub trait StreamOperators<T: Element> {
         func: impl Fn(T) -> anyhow::Result<OUT> + 'static,
     ) -> Rc<dyn Stream<OUT>>;
     /// Uses func to build graph, which is spawned on worker thread
-    fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<TinyVec<[OUT; 1]>>>
+    fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<Burst<OUT>>>
     where
         T: Element + Send,
         OUT: Element + Send + Hash + Eq,
-        FUNC: FnOnce(Rc<dyn Stream<TinyVec<[T; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static;
+        FUNC: FnOnce(Rc<dyn Stream<Burst<T>>>) -> Rc<dyn Stream<OUT>> + Send + 'static;
     /// negates it's input
     fn not(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
@@ -454,10 +447,7 @@ where
         self: &Rc<Self>,
         capacity: usize,
         func: F,
-    ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
-        Overflow<TinyVec<[U; 1]>>,
-    )
+    ) -> (Vec<Rc<dyn Stream<Burst<U>>>>, Overflow<Burst<U>>)
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -471,10 +461,7 @@ where
         self: &Rc<Self>,
         map: DemuxMap<K>,
         func: F,
-    ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[U; 1]>>>>,
-        Overflow<TinyVec<[U; 1]>>,
-    )
+    ) -> (Vec<Rc<dyn Stream<Burst<U>>>>, Overflow<Burst<U>>)
     where
         T: IntoIterator<Item = U>,
         U: Element,
@@ -577,11 +564,11 @@ where
         TryMapStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
-    fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<TinyVec<[OUT; 1]>>>
+    fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<Burst<OUT>>>
     where
         T: Element + Send,
         OUT: Element + Send + Hash + Eq,
-        FUNC: FnOnce(Rc<dyn Stream<TinyVec<[T; 1]>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
+        FUNC: FnOnce(Rc<dyn Stream<Burst<T>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
     {
         GraphMapStream::new(self.clone(), func).into_stream()
     }

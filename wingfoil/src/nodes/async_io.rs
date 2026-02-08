@@ -8,7 +8,6 @@ use futures::stream::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 /// Context passed to async producer closures during graph setup.
 ///
@@ -224,14 +223,14 @@ where
     }
 }
 
-impl<T, S, FUT, FUNC> StreamPeekRef<TinyVec<[T; 1]>> for AsyncProducerStream<T, S, FUT, FUNC>
+impl<T, S, FUT, FUNC> StreamPeekRef<Burst<T>> for AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
     FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
     FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
-    fn peek_ref(&self) -> &TinyVec<[T; 1]> {
+    fn peek_ref(&self) -> &Burst<T> {
         self.receiver_stream.peek_ref()
     }
 }
@@ -251,7 +250,7 @@ where
 ///     })
 /// })
 /// ```
-pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<TinyVec<[T; 1]>>>
+pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,

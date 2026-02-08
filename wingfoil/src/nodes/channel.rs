@@ -7,7 +7,6 @@ use derive_new::new;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 pub(crate) trait ChannelOperators<T>
 where
@@ -81,7 +80,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     trigger: Option<Rc<dyn Node>>,
     notifier_channel: Option<NotifierChannelSender>,
     #[new(default)]
-    value: TinyVec<[T; 1]>,
+    value: Burst<T>,
     #[new(default)]
     finished: bool,
     #[new(default)]
@@ -93,7 +92,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
 impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         //println!("ReceiverStream::cycle start {:?}", state.time());
-        let mut values: TinyVec<[T; 1]> = TinyVec::new();
+        let mut values: Burst<T> = Burst::new();
         match state.run_mode() {
             RunMode::RealTime => {
                 // cycle triggered by notiifcation from sender
@@ -248,8 +247,8 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 }
 
-impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
-    fn peek_ref(&self) -> &TinyVec<[T; 1]> {
+impl<T: Element + Send> StreamPeekRef<Burst<T>> for ReceiverStream<T> {
+    fn peek_ref(&self) -> &Burst<T> {
         &self.value
     }
 }

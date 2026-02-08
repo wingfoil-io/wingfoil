@@ -2,9 +2,18 @@ use derive_new::new;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::rc::Rc;
+use tinyvec::TinyVec;
 
 pub use crate::graph::GraphState;
 pub use crate::time::*;
+
+/// A small vector optimised for single-element bursts.
+///
+/// In multi-threaded or async contexts, multiple values may arrive between
+/// engine cycles, so incoming data is always a `Burst<T>` rather than a
+/// plain `T`.  Use [`.collapse()`](crate::StreamOperators::collapse) to
+/// reduce a burst to its latest value.
+pub type Burst<T> = TinyVec<[T; 1]>;
 
 /// Wraps a [Stream] to indicate whether it is an active or passive dependency.
 /// Active dependencies trigger downstream nodes when they tick.

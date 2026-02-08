@@ -8,7 +8,6 @@ use kdbplus::ipc::error::Error as KdbError;
 use kdbplus::ipc::{ConnectionMethod, K, QStream};
 use kdbplus::qtype;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 /// Extension trait for extracting data from K objects.
 pub trait KdbExt {
@@ -305,7 +304,7 @@ pub fn kdb_read<T>(
     query: impl Into<String>,
     time_col: impl Into<String>,
     rows_per_chunk: usize,
-) -> Rc<dyn Stream<TinyVec<[T; 1]>>>
+) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
 {

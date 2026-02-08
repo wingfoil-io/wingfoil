@@ -3,12 +3,11 @@ use derive_new::new;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 #[derive(new)]
 struct CombineNode<T: Element> {
     upstream: Rc<dyn Stream<T>>,
-    combined: Rc<RefCell<TinyVec<[T; 1]>>>,
+    combined: Rc<RefCell<Burst<T>>>,
 }
 
 impl<T: Element> MutableNode for CombineNode<T> {
@@ -24,14 +23,14 @@ impl<T: Element> MutableNode for CombineNode<T> {
 #[derive(new)]
 struct CombineStream2<T: Element> {
     upstreams: Vec<Rc<dyn Node>>,
-    combined: Rc<RefCell<TinyVec<[T; 1]>>>,
+    combined: Rc<RefCell<Burst<T>>>,
     #[new(default)]
-    value: TinyVec<[T; 1]>,
+    value: Burst<T>,
 }
 
 impl<T: Element> MutableNode for CombineStream2<T> {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = std::mem::replace(&mut *self.combined.borrow_mut(), TinyVec::new());
+        self.value = std::mem::replace(&mut *self.combined.borrow_mut(), Burst::new());
         Ok(true)
     }
     fn upstreams(&self) -> UpStreams {
@@ -39,14 +38,14 @@ impl<T: Element> MutableNode for CombineStream2<T> {
     }
 }
 
-impl<T: Element> StreamPeekRef<TinyVec<[T; 1]>> for CombineStream2<T> {
-    fn peek_ref(&self) -> &TinyVec<[T; 1]> {
+impl<T: Element> StreamPeekRef<Burst<T>> for CombineStream2<T> {
+    fn peek_ref(&self) -> &Burst<T> {
         &self.value
     }
 }
 
-pub fn combine<T: Element>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
-    let combined = Rc::new(RefCell::new(TinyVec::new()));
+pub fn combine<T: Element>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<Burst<T>>> {
+    let combined = Rc::new(RefCell::new(Burst::new()));
     let nodes = streams
         .iter()
         .map(|strm| CombineNode::new(strm.clone(), combined.clone()).into_node())

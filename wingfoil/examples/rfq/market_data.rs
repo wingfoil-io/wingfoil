@@ -4,7 +4,6 @@ use derive_new::new;
 use futures::StreamExt;
 use std::rc::Rc;
 use std::time::Duration;
-use tinyvec::TinyVec;
 
 use wingfoil::adapters::socket::{JRPCSocket, Responder, Response, subscribe_message};
 use wingfoil::*;
@@ -13,7 +12,7 @@ use super::environment::Environment;
 use super::message::{Channel, Message, Params, RfqData, RfqEvent, RfqId, RfqParams};
 
 pub trait MarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>>;
+    fn notifications(&self) -> Rc<dyn Stream<Burst<Params>>>;
 }
 
 pub struct HistoricalMarketDataProvider {
@@ -57,7 +56,7 @@ impl HistoricalMarketDataProvider {
 }
 
 impl MarketDataProvider for HistoricalMarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
+    fn notifications(&self) -> Rc<dyn Stream<Burst<Params>>> {
         let msgs = self.msgs.clone();
         produce_async(move |_ctx| async move {
             Ok(stream! {
@@ -75,7 +74,7 @@ pub struct RealTimeMarketDataProvider {
 }
 
 impl MarketDataProvider for RealTimeMarketDataProvider {
-    fn notifications(&self) -> Rc<dyn Stream<TinyVec<[Params; 1]>>> {
+    fn notifications(&self) -> Rc<dyn Stream<Burst<Params>>> {
         let env = self.env.clone();
         produce_async(move |_ctx| async move { Ok(Self::notifications(env).await) })
     }

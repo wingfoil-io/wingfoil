@@ -7,7 +7,6 @@ use futures::StreamExt;
 use kdbplus::ipc::{ConnectionMethod, K, QStream};
 use std::pin::Pin;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 /// Trait for serializing Rust types to KDB row data.
 ///
@@ -74,7 +73,7 @@ pub trait KdbSerialize: Sized {
 ///
 /// fn example() {
 ///     let conn = KdbConnection::new("localhost", 5000);
-///     let trades: Rc<dyn Stream<TinyVec<[Trade; 1]>>> = /* ... */
+///     let trades: Rc<dyn Stream<Burst<Trade>>> = /* ... */
 /// #       panic!("example code");
 ///     // Time from graph tuples will be prepended when writing to KDB
 ///     kdb_write(conn, "trades", &trades)
@@ -85,14 +84,14 @@ pub trait KdbSerialize: Sized {
 pub fn kdb_write<T>(
     connection: KdbConnection,
     table_name: impl Into<String>,
-    upstream: &Rc<dyn Stream<TinyVec<[T; 1]>>>,
+    upstream: &Rc<dyn Stream<Burst<T>>>,
 ) -> Rc<dyn Node>
 where
     T: Element + Send + KdbSerialize + 'static,
 {
     let table_name = table_name.into();
 
-    let consumer = Box::new(move |source: Pin<Box<dyn FutStream<TinyVec<[T; 1]>>>>| {
+    let consumer = Box::new(move |source: Pin<Box<dyn FutStream<Burst<T>>>>| {
         kdb_write_consumer(connection, table_name, source)
     });
 
@@ -102,7 +101,7 @@ where
 async fn kdb_write_consumer<T>(
     connection: KdbConnection,
     table_name: String,
-    mut source: Pin<Box<dyn FutStream<TinyVec<[T; 1]>>>>,
+    mut source: Pin<Box<dyn FutStream<Burst<T>>>>,
 ) -> anyhow::Result<()>
 where
     T: Element + Send + KdbSerialize + 'static,
@@ -148,7 +147,7 @@ where
 
 /// Extension trait for writing streams to KDB+ tables.
 ///
-/// This trait provides a fluent API for writing `TinyVec<[T; 1]>` streams
+/// This trait provides a fluent API for writing `Burst<T>` streams
 /// (output of `combine`, `kdb_read`, etc.) to KDB+ tables.
 pub trait KdbWriteOperators<T: Element> {
     /// Write this stream to a KDB+ table.
@@ -162,9 +161,7 @@ pub trait KdbWriteOperators<T: Element> {
     fn kdb_write(self: &Rc<Self>, conn: KdbConnection, table: &str) -> Rc<dyn Node>;
 }
 
-impl<T: Element + Send + KdbSerialize + 'static> KdbWriteOperators<T>
-    for dyn Stream<TinyVec<[T; 1]>>
-{
+impl<T: Element + Send + KdbSerialize + 'static> KdbWriteOperators<T> for dyn Stream<Burst<T>> {
     fn kdb_write(self: &Rc<Self>, conn: KdbConnection, table: &str) -> Rc<dyn Node> {
         kdb_write(conn, table, self)
     }
@@ -234,7 +231,7 @@ mod tests {
             sym: "TEST".to_string(),
             price: 100.0,
         };
-        let mut batch: TinyVec<[TestTrade; 1]> = TinyVec::new();
+        let mut batch: Burst<TestTrade> = Burst::new();
         batch.push(trade);
 
         let stream = constant(batch);

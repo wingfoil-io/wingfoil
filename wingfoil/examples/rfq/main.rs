@@ -11,7 +11,6 @@ use order_gateway::{OrderGateway, RealTimeOrderGateway};
 use derive_new::new;
 use log::Level::Info;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 use wingfoil::*;
 
@@ -68,13 +67,13 @@ where
     O: OrderGateway + 'static,
 {
     /// input streams
-    fn source(&self) -> Rc<dyn Stream<TinyVec<[MarketData; 1]>>> {
+    fn source(&self) -> Rc<dyn Stream<Burst<MarketData>>> {
         // async is abstracted away
         self.market_data_provider.notifications()
     }
 
     /// output node
-    fn send(&self, orders: Rc<dyn Stream<TinyVec<[Order; 1]>>>) -> Rc<dyn Node> {
+    fn send(&self, orders: Rc<dyn Stream<Burst<Order>>>) -> Rc<dyn Node> {
         // async is abstracted away
         self.order_gateway.send(orders)
     }
@@ -84,8 +83,8 @@ where
     fn sources(
         &self,
     ) -> (
-        Vec<Rc<dyn Stream<TinyVec<[MarketData; 1]>>>>,
-        Overflow<TinyVec<[MarketData; 1]>>,
+        Vec<Rc<dyn Stream<Burst<MarketData>>>>,
+        Overflow<Burst<MarketData>>,
     ) {
         self.source().demux_it(
             self.n_rfqs,     // max num of current rfqs
@@ -110,7 +109,7 @@ where
     /// Each circuit can easily be set up to run on worker a thread.
     fn rfq_circuit(
         subcircuit_id: usize,
-        market_data: Rc<dyn Stream<TinyVec<[MarketData; 1]>>>,
+        market_data: Rc<dyn Stream<Burst<MarketData>>>,
     ) -> Rc<dyn Stream<Order>> {
         let label = format!("subcircuit {subcircuit_id} received");
         market_data.logged(&label, Info).map(|_mkt_data_burst| {

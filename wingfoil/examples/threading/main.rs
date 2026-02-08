@@ -2,7 +2,6 @@ use log::Level::Info;
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
-use tinyvec::TinyVec;
 use wingfoil::*;
 
 fn label(name: &str) -> String {
@@ -20,7 +19,7 @@ fn main() {
         ticker(period).count().logged(&label, Info)
     };
 
-    let map_graph = |src: Rc<dyn Stream<TinyVec<[u64; 1]>>>| {
+    let map_graph = |src: Rc<dyn Stream<Burst<u64>>>| {
         let label = label("mapper");
         src.collapse().map(|x| x * 10).logged(&label, Info)
     };
