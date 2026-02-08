@@ -59,6 +59,7 @@ mod tests {
         diff.accumulate()
             .finally(|res, _| {
                 assert_eq!(res, vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5]);
+                Ok(())
             })
             .run(
                 RunMode::HistoricalFrom(NanoTime::ZERO),
