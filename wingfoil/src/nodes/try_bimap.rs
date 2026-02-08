@@ -24,11 +24,12 @@ impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for TryBiMapStream<IN
     }
 
     fn upstreams(&self) -> UpStreams {
-        let deps = [
+        let (active, passive): (Vec<_>, Vec<_>) = [
             (self.upstream1.as_node(), self.upstream1.is_active()),
             (self.upstream2.as_node(), self.upstream2.is_active()),
-        ];
-        let (active, passive): (Vec<_>, Vec<_>) = deps.into_iter().partition(|(_, active)| *active);
+        ]
+        .into_iter()
+        .partition(|(_, active)| *active);
         UpStreams::new(
             active.into_iter().map(|(n, _)| n).collect(),
             passive.into_iter().map(|(n, _)| n).collect(),
