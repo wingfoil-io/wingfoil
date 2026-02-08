@@ -309,11 +309,7 @@ fn test_read_read_perf() -> Result<()> {
     with_test_data(n, true, |n, conn| {
         let chunk_sizes = [
             //100,
-            1_000,
-            10_000,
-            100_000,
-            1_000_000,
-            10_000_000,
+            1_000, 10_000, 100_000, 1_000_000, 10_000_000,
         ];
 
         println!("\n{:<15} {:>12}", "Chunk Size", "Time");
