@@ -101,19 +101,20 @@ The integration tests in `integration_tests.rs` are gated behind the `kdb-integr
 ### Example: Record Structure
 
 ```rust
-// CORRECT - No time field
+// CORRECT - No time field, use Sym for interned symbols
 #[derive(Debug, Clone, Default)]
 struct Trade {
-    sym: String,
+    sym: Sym,
     price: f64,
     qty: i64,
 }
 
 impl KdbDeserialize for Trade {
-    fn from_kdb_row(row: Row<'_>, _columns: &[String]) -> Result<Self, KdbError> {
+    fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<Self, KdbError> {
         Ok(Trade {
             // Skip column 0 (time) - handled by adapter
-            sym: row.get(1)?.get_symbol()?.to_string(),
+            // Use get_sym() for zero-allocation interned symbol access
+            sym: row.get_sym(1, interner)?,
             price: row.get(2)?.get_float()?,
             qty: row.get(3)?.get_long()?,
         })
@@ -124,7 +125,7 @@ impl KdbSerialize for Trade {
     fn to_kdb_row(&self) -> K {
         // Return business data only - time prepended automatically
         K::new_compound_list(vec![
-            K::new_symbol(self.sym.clone()),
+            K::new_symbol(self.sym.to_string()),
             K::new_float(self.price),
             K::new_long(self.qty),
         ])

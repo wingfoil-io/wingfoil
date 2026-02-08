@@ -21,7 +21,7 @@ use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone, Default)]
 pub struct TestTrade {
-    sym: String,
+    sym: Sym,
     price: f64,
     qty: i64,
 }
@@ -29,7 +29,7 @@ pub struct TestTrade {
 impl KdbSerialize for TestTrade {
     fn to_kdb_row(&self) -> K {
         K::new_compound_list(vec![
-            K::new_symbol(self.sym.clone()),
+            K::new_symbol(self.sym.to_string()),
             K::new_float(self.price),
             K::new_long(self.qty),
         ])
@@ -37,10 +37,14 @@ impl KdbSerialize for TestTrade {
 }
 
 impl KdbDeserialize for TestTrade {
-    fn from_kdb_row(row: Row<'_>, _columns: &[String]) -> Result<Self, KdbError> {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<Self, KdbError> {
         Ok(TestTrade {
             // Skip column 0 (time) - it's handled by the adapter
-            sym: row.get(1)?.get_symbol()?.to_string(),
+            sym: row.get_sym(1, interner)?,
             price: row.get(2)?.get_float()?,
             qty: row.get(3)?.get_long()?,
         })
@@ -210,7 +214,11 @@ struct BadTrade {
 }
 
 impl KdbDeserialize for BadTrade {
-    fn from_kdb_row(row: Row<'_>, _columns: &[String]) -> Result<Self, KdbError> {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        _interner: &mut SymbolInterner,
+    ) -> Result<Self, KdbError> {
         Ok(BadTrade {
             sym: row.get(1)?.get_long()?, // sym column is symbol, get_long will fail
         })
@@ -293,6 +301,7 @@ fn read_rows(connection: KdbConnection, chunk_size: usize) -> Result<(u64, std::
 fn test_read_read_perf() -> Result<()> {
     /*
     cargo flamegraph --open --unit-test -p wingfoil --features kdb-integration-test -- kdb::integration_tests::test_read_read_perf --nocapture
+    cargo test --release  -p wingfoil --features kdb-integration-test -- kdb::integration_tests::test_read_read_perf --nocapture
      */
     let _ = env_logger::try_init();
     let n = 1_000_000;
@@ -300,11 +309,7 @@ fn test_read_read_perf() -> Result<()> {
     with_test_data(n, true, |n, conn| {
         let chunk_sizes = [
             //100,
-            //1_000,
-            10_000,
-            //100_000,
-            //1_000_000,
-            //10_000_000,
+            1_000, 10_000, 100_000, 1_000_000, 10_000_000,
         ];
 
         println!("\n{:<15} {:>12}", "Chunk Size", "Time");

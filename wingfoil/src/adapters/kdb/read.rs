@@ -1,6 +1,6 @@
 //! KDB+ read functionality for streaming data from q/kdb+ instances.
 
-use super::KdbConnection;
+use super::{KdbConnection, Sym, SymbolInterner};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};
@@ -137,6 +137,29 @@ impl Row<'_> {
             .element_at(self.index)
     }
 
+    /// Get an interned symbol from a symbol column, avoiding per-row String allocation.
+    ///
+    /// Accesses the underlying `Vec<String>` directly and interns the `&str`,
+    /// bypassing `element_at` (which clones the String into a new K object).
+    pub fn get_sym(&self, col: usize, interner: &mut SymbolInterner) -> Result<Sym, KdbError> {
+        let column = self.columns.get(col).ok_or(KdbError::IndexOutOfBounds {
+            index: col,
+            length: self.columns.len(),
+        })?;
+        let strings = column
+            .as_vec::<String>()
+            .map_err(|_| KdbError::InvalidOperation {
+                operator: "get_sym",
+                operand_type: "K",
+                expected: Some("symbol list"),
+            })?;
+        let s = strings.get(self.index).ok_or(KdbError::IndexOutOfBounds {
+            index: self.index,
+            length: strings.len(),
+        })?;
+        Ok(interner.intern(s))
+    }
+
     /// Number of columns.
     pub fn len(&self) -> usize {
         self.columns.len()
@@ -247,10 +270,15 @@ pub trait KdbDeserialize: Sized {
     /// # Arguments
     /// * `row` - Row accessor providing indexed access to column values
     /// * `columns` - Column names from the table schema
+    /// * `interner` - Symbol interner for deduplicating symbol strings via [`Row::get_sym`]
     ///
     /// # Note
     /// Skip the time column - it's handled automatically by the adapter.
-    fn from_kdb_row(row: Row<'_>, columns: &[String]) -> Result<Self, KdbError>;
+    fn from_kdb_row(
+        row: Row<'_>,
+        columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<Self, KdbError>;
 }
 
 /// Read data from a KDB+ database with time-based chunking to handle large result sets.
@@ -332,6 +360,7 @@ where
             // Stream rows in chunks
             Ok(async_stream::stream! {
                 let mut current_time = start_time;
+                let mut interner = SymbolInterner::default();
 
                 loop {
                     // Build chunk query with time constraint and row limit
@@ -408,7 +437,7 @@ where
                         let time = NanoTime::from_kdb_timestamp(time_kdb);
 
                         // Deserialize record (without time)
-                        let record = match T::from_kdb_row(row, &columns) {
+                        let record = match T::from_kdb_row(row, &columns, &mut interner) {
                             Ok(r) => r,
                             Err(e) => {
                                 yield Err(anyhow::Error::new(e).context("KDB deserialization failed"));
