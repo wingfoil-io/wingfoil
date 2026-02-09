@@ -27,6 +27,7 @@ mod merge;
 mod print;
 mod producer;
 mod sample;
+mod throttle;
 mod tick;
 mod try_bimap;
 mod try_map;
@@ -57,6 +58,7 @@ use merge::*;
 use print::*;
 use producer::*;
 use sample::*;
+use throttle::*;
 use tick::*;
 use try_bimap::*;
 use try_map::*;
@@ -369,6 +371,10 @@ pub trait StreamOperators<T: Element> {
     fn sum(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: Add<T, Output = T>;
+    /// Suppresses upstream values that arrive faster than the specified interval.
+    /// Emits the first value immediately, then ignores subsequent values until
+    /// the interval elapses.
+    fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>>;
 }
 
 impl<T> StreamOperators<T> for dyn Stream<T>
@@ -599,6 +605,10 @@ where
         T: Add<T, Output = T>,
     {
         self.reduce(|acc, val| acc + val)
+    }
+
+    fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>> {
+        ThrottleStream::new(self.clone(), NanoTime::new(interval.as_nanos() as u64)).into_stream()
     }
 }
 
