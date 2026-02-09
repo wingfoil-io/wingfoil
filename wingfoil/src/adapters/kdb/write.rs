@@ -4,7 +4,7 @@ use super::KdbConnection;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use futures::StreamExt;
-use kdbplus::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -133,7 +133,7 @@ where
 
             // Build insert query as K object: (insert; `tablename; values)
             let query = K::new_compound_list(vec![
-                K::new_string("insert".to_string(), kdbplus::qattribute::NONE),
+                K::new_string("insert".to_string(), kdb_plus_fixed::qattribute::NONE),
                 K::new_symbol(table_name.clone()),
                 full_row,
             ]);
@@ -170,7 +170,7 @@ impl<T: Element + Send + KdbSerialize + 'static> KdbWriteOperators<T> for dyn St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kdbplus::qtype;
+    use kdb_plus_fixed::qtype;
 
     #[test]
     fn test_kdb_serialize_trait() {

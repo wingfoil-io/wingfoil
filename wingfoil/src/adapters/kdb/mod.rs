@@ -52,7 +52,7 @@ pub use read::*;
 pub use write::*;
 
 /// Re-export kdbplus error type for convenience.
-pub use kdbplus::ipc::error::Error as KdbError;
+pub use kdb_plus_fixed::ipc::error::Error as KdbError;
 
 use std::collections::HashSet;
 use std::sync::Arc;

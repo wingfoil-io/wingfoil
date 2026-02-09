@@ -15,7 +15,7 @@ use super::*;
 use crate::{RunFor, RunMode, nodes::*, types::*};
 use anyhow::{Context, Result};
 use derive_new::new;
-use kdbplus::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use log::Level;
 use tokio::runtime::Runtime;
 
