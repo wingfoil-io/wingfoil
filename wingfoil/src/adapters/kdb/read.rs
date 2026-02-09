@@ -4,9 +4,9 @@ use super::{KdbConnection, Sym, SymbolInterner};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};
-use kdbplus::ipc::error::Error as KdbError;
-use kdbplus::ipc::{ConnectionMethod, K, QStream};
-use kdbplus::qtype;
+use kdb_plus_fixed::ipc::error::Error as KdbError;
+use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::qtype;
 use std::rc::Rc;
 
 /// Extension trait for extracting data from K objects.

@@ -62,8 +62,7 @@ tinyvec = { version = "1.10.0", features = ["alloc"] }
 arrayvec = { version = "0.7", features = ["serde"] }
 criterion = {version = "0.8.1", features = ["async_tokio"]}
 quanta = "0.9.3"
-# https://github.com/rollo-b2c2/kdbplus/commit/1b9bf2dca1f8b71ca898ba2108d1f233e379e1aa
-kdbplus = { git = "https://github.com/rollo-b2c2/kdbplus.git/", rev = "1b9bf2dca1f8b71ca898ba2108d1f233e379e1aa",  features = ["ipc"] }
+kdb-plus-fixed = { version = "0.4.0", features = ["ipc"] }
 
 
 
