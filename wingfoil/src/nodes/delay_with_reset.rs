@@ -82,11 +82,14 @@ mod tests {
     fn delay_never_reset() {
         let period = Duration::from_nanos(100);
         let src = ticker(period).count();
-        let delayed_never_reset = src.delay_with_reset(Duration::from_nanos(10), never());
-        bimap(Active(src), Active(delayed_never_reset), |a, b| {
-            assert_eq!(a, b);
-            ()
-        })
+        bimap(
+            Active(src.delay_with_reset(period * 3, never())), 
+            Active(src.delay(period * 3)), 
+            |a, b| {
+                assert_eq!(a, b);
+                ()
+            }
+        )
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
         .unwrap();
     }
