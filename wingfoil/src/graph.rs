@@ -169,6 +169,10 @@ impl GraphState {
         self.add_callback_for_node(self.current_node_index.unwrap(), time);
     }
 
+    pub(crate) fn current_node_id(&self) -> usize {
+        self.current_node_index.unwrap()
+    }
+
     pub fn always_callback(&mut self) {
         let ix = self.current_node_index.unwrap();
         self.always_callbacks.push(ix);
@@ -201,7 +205,7 @@ impl GraphState {
         }
     }
 
-    fn add_callback_for_node(&mut self, node_index: usize, time: NanoTime) {
+    pub(crate) fn add_callback_for_node(&mut self, node_index: usize, time: NanoTime) {
         self.scheduled_callbacks.push(node_index, time);
     }
 

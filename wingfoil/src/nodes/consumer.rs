@@ -42,3 +42,21 @@ impl<IN> MutableNode for TryConsumerNode<IN> {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
+
+/// Like [ConsumerNode] but the closure receives [GraphState].
+#[derive(new)]
+pub(crate) struct StateConsumerNode<IN> {
+    upstream: Rc<dyn Stream<IN>>,
+    func: Box<dyn Fn(IN, &mut GraphState)>,
+}
+
+impl<IN> MutableNode for StateConsumerNode<IN> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        (self.func)(self.upstream.peek_value(), state);
+        Ok(true)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
+    }
+}

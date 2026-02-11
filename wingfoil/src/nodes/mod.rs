@@ -16,6 +16,7 @@ mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
+mod feedback;
 mod filter;
 mod finally;
 mod fold;
@@ -41,6 +42,7 @@ pub use always::*;
 pub use async_io::*;
 pub use callback::CallBackStream;
 pub use demux::*;
+pub use feedback::{FeedbackSink, feedback};
 pub use graph_node::*;
 pub use never::*;
 
@@ -308,6 +310,11 @@ pub trait StreamOperators<T: Element> {
     ) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
+    /// executes supplied closure with [GraphState] access on each tick
+    fn for_each_with_state(
+        self: &Rc<Self>,
+        func: impl Fn(T, &mut GraphState) + 'static,
+    ) -> Rc<dyn Node>;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
     fn try_for_each(
@@ -520,6 +527,13 @@ where
 
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node> {
         ConsumerNode::new(self.clone(), Box::new(func)).into_node()
+    }
+
+    fn for_each_with_state(
+        self: &Rc<Self>,
+        func: impl Fn(T, &mut GraphState) + 'static,
+    ) -> Rc<dyn Node> {
+        StateConsumerNode::new(self.clone(), Box::new(func)).into_node()
     }
 
     fn try_for_each(
