@@ -30,6 +30,9 @@ impl<T: Hash + Eq + std::fmt::Debug + std::clone::Clone> TimeQueue<T> {
     pub fn pop(&mut self) -> T {
         self.queue.pop().unwrap().0.value
     }
+    pub fn clear(&mut self) {
+        self.queue.clear();
+    }
     pub fn pending(&self, current_time: NanoTime) -> bool {
         let item = self.queue.peek();
         match item {
