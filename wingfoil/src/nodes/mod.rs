@@ -12,6 +12,7 @@ mod combine;
 mod constant;
 mod consumer;
 mod delay;
+mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
@@ -24,13 +25,16 @@ mod limit;
 mod map;
 mod map_filter;
 mod merge;
+mod never;
 mod print;
 mod producer;
 mod sample;
 mod throttle;
 mod tick;
+mod trimap;
 mod try_bimap;
 mod try_map;
+mod try_trimap;
 mod window;
 
 pub use always::*;
@@ -38,6 +42,7 @@ pub use async_io::*;
 pub use callback::CallBackStream;
 pub use demux::*;
 pub use graph_node::*;
+pub use never::*;
 
 use average::*;
 use bimap::*;
@@ -45,6 +50,7 @@ use buffer::BufferStream;
 use constant::*;
 use consumer::*;
 use delay::*;
+use delay_with_reset::*;
 use difference::*;
 use distinct::*;
 use filter::*;
@@ -60,8 +66,10 @@ use producer::*;
 use sample::*;
 use throttle::*;
 use tick::*;
+use trimap::*;
 use try_bimap::*;
 use try_map::*;
+use try_trimap::*;
 use window::WindowStream;
 
 use crate::graph::*;
@@ -103,6 +111,17 @@ pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
     BiMapStream::new(upstream1, upstream2, Box::new(func)).into_stream()
 }
 
+/// Maps three [Stream]s into one using the supplied function.
+/// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
+pub fn trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
+    upstream1: Dep<IN1>,
+    upstream2: Dep<IN2>,
+    upstream3: Dep<IN3>,
+    func: impl Fn(IN1, IN2, IN3) -> OUT + 'static,
+) -> Rc<dyn Stream<OUT>> {
+    TriMapStream::new(upstream1, upstream2, upstream3, Box::new(func)).into_stream()
+}
+
 /// Maps two [Stream]s into one using a fallible closure.
 /// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
 /// Errors propagate to graph execution.
@@ -112,6 +131,18 @@ pub fn try_bimap<IN1: Element, IN2: Element, OUT: Element>(
     func: impl Fn(IN1, IN2) -> anyhow::Result<OUT> + 'static,
 ) -> Rc<dyn Stream<OUT>> {
     TryBiMapStream::new(upstream1, upstream2, Box::new(func)).into_stream()
+}
+
+/// Maps three [Stream]s into one using a fallible closure.
+/// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
+/// Errors propagate to graph execution.
+pub fn try_trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
+    upstream1: Dep<IN1>,
+    upstream2: Dep<IN2>,
+    upstream3: Dep<IN3>,
+    func: impl Fn(IN1, IN2, IN3) -> anyhow::Result<OUT> + 'static,
+) -> Rc<dyn Stream<OUT>> {
+    TryTriMapStream::new(upstream1, upstream2, upstream3, Box::new(func)).into_stream()
 }
 
 /// Returns a stream that merges it's sources into one.  Ticks when either of it's sources ticks.
@@ -295,6 +326,16 @@ pub trait StreamOperators<T: Element> {
 
     /// Propagates it's source, delayed by the specified duration
     fn delay(self: &Rc<Self>, delay: Duration) -> Rc<dyn Stream<T>>
+    where
+        T: Hash + Eq;
+    /// Like [`delay`](StreamOperators::delay) but with a reset trigger.
+    /// When the trigger fires, the output snaps to the current upstream value
+    /// and the pending queue is cleared.
+    fn delay_with_reset(
+        self: &Rc<Self>,
+        delay: Duration,
+        trigger: Rc<dyn Node>,
+    ) -> Rc<dyn Stream<T>>
     where
         T: Hash + Eq;
     /// Demuxes its source into a Vec of n streams.
@@ -493,6 +534,22 @@ where
         T: Hash + Eq,
     {
         DelayStream::new(self.clone(), NanoTime::new(duration.as_nanos() as u64)).into_stream()
+    }
+
+    fn delay_with_reset(
+        self: &Rc<Self>,
+        delay: Duration,
+        trigger: Rc<dyn Node>,
+    ) -> Rc<dyn Stream<T>>
+    where
+        T: Hash + Eq,
+    {
+        DelayWithResetStream::new(
+            self.clone(),
+            trigger,
+            NanoTime::new(delay.as_nanos() as u64),
+        )
+        .into_stream()
     }
 
     fn difference(self: &Rc<Self>) -> Rc<dyn Stream<T>>
