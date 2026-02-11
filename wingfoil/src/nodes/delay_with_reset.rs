@@ -83,12 +83,12 @@ mod tests {
         let period = Duration::from_nanos(100);
         let src = ticker(period).count();
         bimap(
-            Active(src.delay_with_reset(period * 3, never())), 
-            Active(src.delay(period * 3)), 
+            Active(src.delay_with_reset(period * 3, never())),
+            Active(src.delay(period * 3)),
             |a, b| {
                 assert_eq!(a, b);
                 ()
-            }
+            },
         )
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
         .unwrap();
