@@ -315,6 +315,12 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         func: impl Fn(T, &mut GraphState) + 'static,
     ) -> Rc<dyn Node>;
+    /// Sends to a [FeedbackSink] when the predicate returns true.
+    fn feedback(
+        self: &Rc<Self>,
+        sink: FeedbackSink<bool>,
+        predicate: impl Fn(&T) -> bool + 'static,
+    ) -> Rc<dyn Node>;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
     fn try_for_each(
@@ -534,6 +540,18 @@ where
         func: impl Fn(T, &mut GraphState) + 'static,
     ) -> Rc<dyn Node> {
         StateConsumerNode::new(self.clone(), Box::new(func)).into_node()
+    }
+
+    fn feedback(
+        self: &Rc<Self>,
+        sink: FeedbackSink<bool>,
+        predicate: impl Fn(&T) -> bool + 'static,
+    ) -> Rc<dyn Node> {
+        self.for_each_with_state(move |val, state| {
+            if predicate(&val) {
+                sink.send(true, state);
+            }
+        })
     }
 
     fn try_for_each(

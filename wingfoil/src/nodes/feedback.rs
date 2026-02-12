@@ -186,11 +186,7 @@ mod tests {
 
         let collected = perf.collect();
 
-        let writer = perf.for_each_with_state(move |p: i64, state| {
-            if p.abs() > level {
-                tx.send(true, state);
-            }
-        });
+        let writer = perf.feedback(tx, move |p| p.abs() > level);
 
         let mut graph = Graph::new(
             vec![collected.clone().as_node(), writer],
