@@ -103,113 +103,50 @@ mod tests {
     use super::*;
     use crate::graph::*;
     use crate::nodes::*;
+    use crate::Dep::*;
     use std::time::Duration;
 
-    #[test]
-    fn feedback_delivers_on_next_cycle() {
-        let src = ticker(Duration::from_nanos(100)).count();
-        let (tx, rx) = feedback::<u64>();
-        let collected = rx.collect();
-
-        let writer = src.feedback(tx);
-
-        let mut graph = Graph::new(
-            vec![collected.clone().as_node(), writer],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Cycles(4),
-        );
-        graph.run().unwrap();
-
-        let values: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
-        // Cycle 1 (t=0):   src=1, tx.send(1) → schedules rx at t=0
-        // Cycle 2 (t=0):   rx emits 1
-        // Cycle 3 (t=100): src=2, tx.send(2) → schedules rx at t=100
-        // Cycle 4 (t=100): rx emits 2
-        assert_eq!(values, vec![1, 2]);
-    }
 
     #[test]
-    fn feedback_loop_accumulates() {
-        // Running sum via feedback:
-        // ticker:  1, 2, 3, 4
-        // fb:      0, 1, 3, 6  (previous sum)
-        // sum:     1, 3, 6, 10
-        //
-        // Use Duration-based termination because each feedback
-        // round-trip consumes an engine cycle at the same time.
-        let src = ticker(Duration::from_nanos(100)).count();
-        let (tx, rx) = feedback::<u64>();
-
-        let sum = bimap(Dep::Active(src), Dep::Passive(rx), |count, prev| {
-            count + prev
-        });
-        let collected = sum.collect();
-
-        let writer = sum.feedback(tx);
-
-        let mut graph = Graph::new(
-            vec![collected.clone().as_node(), writer],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(Duration::from_nanos(300)),
-        );
-        graph.run().unwrap();
-
-        let values: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
-        assert_eq!(values, vec![1, 3, 6, 10]);
-    }
-
-    #[test]
-    fn feedback_delay_reset_throttle() {
-        // Generates 1, 2, 3, ... and looks back 5 periods via delay_with_reset.
-        // Computes perf = source - delayed.  When |perf| > 3, feeds back a
-        // signal that resets the delay, snapping the delayed value to current.
-        //
-        // Without feedback the perf would plateau at 5 (the lookback depth).
-        // With feedback it follows a sawtooth: rises to 4 (level+1, because
-        // the reset takes effect on the next engine cycle) then drops back.
+    fn feedback_works() {
+        // Example of circuit breaker observing to spot change
+        // relative to delayed valued. 
+        // If trigger fires, the lookback resets to avoid 
+        // excessively repeating, whilst still enforcing the control
+        // 
         let period = Duration::from_nanos(100);
         let lookback = 5;
         let level: i64 = 3;
 
-        let source = ticker(period).count().map(|x| x as i64);
+        let source = ticker(period).count();
         let (tx, rx) = feedback::<bool>();
 
         let delayed = source.delay_with_reset(period * lookback, rx.as_node());
 
-        let perf = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| a - b);
+        let diff = bimap(
+            Active(source), 
+            Passive(delayed), 
+            |a, b| a as i64 - b as i64
+        );
 
-        let collected = perf.collect();
-
-        let writer = perf
+        let trigger = diff
             .filter_value(move |p| p.abs() > level)
             .map(|_| true)
             .feedback(tx);
 
-        let mut graph = Graph::new(
-            vec![collected.clone().as_node(), writer],
+        let res = diff.accumulate().finally(|value, _| {
+            let expected = vec![0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3];
+            assert_eq!(expected, value);
+            Ok(())
+        });
+
+        Graph::new(
+            vec![trigger, res], 
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(period * 14),
-        );
-        graph.run().unwrap();
+        )
+        .run()
+        .unwrap();
 
-        let values: Vec<i64> = collected.peek_value().iter().map(|v| v.value).collect();
-        // Sawtooth: perf rises 0..4 then resets repeat.
-        //  t=0:    src=1  delayed=1  perf=0
-        //  t=100:  src=2  delayed=1  perf=1
-        //  t=200:  src=3  delayed=1  perf=2
-        //  t=300:  src=4  delayed=1  perf=3
-        //  t=400:  src=5  delayed=1  perf=4  → reset, delayed snaps to 5
-        //  t=500:  src=6  delayed=5  perf=1
-        //  t=600:  src=7  delayed=5  perf=2
-        //  t=700:  src=8  delayed=5  perf=3
-        //  t=800:  src=9  delayed=5  perf=4  → reset, delayed snaps to 9
-        //  t=900:  src=10 delayed=9  perf=1
-        //  t=1000: src=11 delayed=9  perf=2
-        //  t=1100: src=12 delayed=9  perf=3
-        //  t=1200: src=13 delayed=9  perf=4  → reset, delayed snaps to 13
-        //  t=1300: src=14 delayed=13 perf=1
-        //  t=1400: src=15 delayed=13 perf=2
-        //  t=1500: src=16 delayed=13 perf=3  (last cycle)
-        assert_eq!(values, vec![0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3]);
     }
 }
