@@ -159,8 +159,12 @@ mod tests {
 
         let res = value.collect().finally(|values, _| {
             let expected = vec![
-                ValueAt::new(1, NanoTime::ZERO)
-            ]; 
+                ValueAt::new(1, NanoTime::ZERO),
+                ValueAt::new(11, NanoTime::ZERO),
+                ValueAt::new(111, NanoTime::ZERO),
+                ValueAt::new(1111, NanoTime::ZERO),
+                ValueAt::new(11111, NanoTime::ZERO),
+            ];
             assert_eq!(expected, values);
             Ok(())
         });
