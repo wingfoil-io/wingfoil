@@ -62,7 +62,7 @@ impl<T: Element + Hash + Eq> Clone for FeedbackSink<T> {
 impl<T: Element + Hash + Eq> FeedbackSink<T> {
     /// Push a value and schedule the paired source stream to cycle.
     pub fn send(&self, value: T, state: &mut GraphState) {
-        let time = state.time();
+        let time = state.time() + 1;
         self.queue.borrow_mut().push(value, time);
         state.add_callback_for_node(self.node_id.get().unwrap(), time);
     }
@@ -159,11 +159,11 @@ mod tests {
 
         let res = value.collect().finally(|values, _| {
             let expected = vec![
-                ValueAt::new(1, NanoTime::ZERO),
-                ValueAt::new(11, NanoTime::ZERO),
-                ValueAt::new(111, NanoTime::ZERO),
-                ValueAt::new(1111, NanoTime::ZERO),
-                ValueAt::new(11111, NanoTime::ZERO),
+                ValueAt::new(1, NanoTime::new(0)),
+                ValueAt::new(11, NanoTime::new(1)),
+                ValueAt::new(111, NanoTime::new(2)),
+                ValueAt::new(1111, NanoTime::new(3)),
+                ValueAt::new(11111, NanoTime::new(4)),
             ];
             assert_eq!(expected, values);
             Ok(())
