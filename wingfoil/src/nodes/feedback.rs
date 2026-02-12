@@ -98,6 +98,14 @@ pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>
     (sink, stream.into_stream())
 }
 
+/// Creates a feedback channel carrying `()`. Returns a
+/// ([FeedbackSink], [Node]) pair suitable for signalling ticks
+/// without carrying a value.
+pub fn feedback_node() -> (FeedbackSink<()>, Rc<dyn Node>) {
+    let (sink, stream) = feedback::<()>();
+    (sink, stream.as_node())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,20 +116,78 @@ mod tests {
 
 
     #[test]
+    fn feedback_passive_works() {
+        let period = Duration::from_nanos(100);
+        let (tx, rx) = feedback::<u64>();
+        let source = ticker(period).count();
+
+        let value = bimap(
+            Active(source),
+            Passive(rx),
+            |src, fb| src + fb * 10,
+        );
+
+        let fb = value.feedback(tx);
+
+        let res = value.accumulate().finally(|values, _| {
+            assert_eq!(vec![1, 12, 23, 34, 45, 56], values);
+            Ok(())
+        });
+
+        Graph::new(
+            vec![fb, res],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Duration(period * 5),
+        )
+        .run()
+        .unwrap();
+    }
+
+
+    #[test]
+    fn feedback_active_works() {
+        let (tx, rx) = feedback::<u64>();
+        let source = constant(1);
+
+        let value = bimap(
+            Active(source),
+            Active(rx),
+            |src, fb| src + fb * 10,
+        );
+
+        let fb = value.feedback(tx);
+
+        let res = value.collect().finally(|values, _| {
+            let expected = vec![
+                ValueAt::new(1, NanoTime::ZERO)
+            ]; 
+            assert_eq!(expected, values);
+            Ok(())
+        });
+
+        Graph::new(
+            vec![fb, res],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(5),
+        )
+        .run()
+        .unwrap();
+    }    
+    #[test]
     fn feedback_works() {
         // Example of circuit breaker observing to spot change
         // relative to delayed valued. 
         // If trigger fires, the lookback resets to avoid 
         // excessively repeating, whilst still enforcing the control
-        // 
+        
         let period = Duration::from_nanos(100);
         let lookback = 5;
         let level: i64 = 3;
 
         let source = ticker(period).count();
-        let (tx, rx) = feedback::<bool>();
+        let (tx, rx) = feedback_node();
 
-        let delayed = source.delay_with_reset(period * lookback, rx.as_node());
+        let delayed = source.delay_with_reset(period * lookback, rx);
 
         let diff = bimap(
             Active(source), 
@@ -131,8 +197,7 @@ mod tests {
 
         let trigger = diff
             .filter_value(move |p| p.abs() > level)
-            .map(|_| true)
-            .feedback(tx);
+            .feedback_node(tx);
 
         let res = diff.accumulate().finally(|value, _| {
             let expected = vec![0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3];

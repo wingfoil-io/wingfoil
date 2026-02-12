@@ -42,7 +42,7 @@ pub use always::*;
 pub use async_io::*;
 pub use callback::CallBackStream;
 pub use demux::*;
-pub use feedback::{FeedbackSink, feedback};
+pub use feedback::{FeedbackSink, feedback, feedback_node};
 pub use graph_node::*;
 pub use never::*;
 
@@ -225,6 +225,8 @@ pub trait NodeOperators {
     /// ```
     fn run(self: &Rc<Self>, run_mode: RunMode, run_to: RunFor) -> anyhow::Result<()>;
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph;
+    /// Sends `()` to a [FeedbackSink] on each tick.
+    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node>;
 }
 
 impl NodeOperators for dyn Node {
@@ -249,6 +251,16 @@ impl NodeOperators for dyn Node {
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
         Graph::new(vec![self.clone()], run_mode, run_for)
     }
+    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
+        GraphStateStream::new(
+            self.clone(),
+            Box::new(move |state: &mut GraphState| {
+                sink.send((), state);
+            }),
+        )
+        .into_stream()
+        .as_node()
+    }
 }
 
 impl<T> NodeOperators for dyn Stream<T> {
@@ -272,6 +284,9 @@ impl<T> NodeOperators for dyn Stream<T> {
     }
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
         self.clone().as_node().into_graph(run_mode, run_for)
+    }
+    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
+        self.clone().as_node().feedback_node(sink)
     }
 }
 
