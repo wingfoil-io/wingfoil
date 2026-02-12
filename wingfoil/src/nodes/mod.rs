@@ -310,16 +310,11 @@ pub trait StreamOperators<T: Element> {
     ) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
-    /// executes supplied closure with [GraphState] access on each tick
-    fn for_each_with_state(
+    /// Sends to a [FeedbackSink] when the function returns `Some`.
+    fn feedback<U: Element + Hash + Eq>(
         self: &Rc<Self>,
-        func: impl Fn(T, &mut GraphState) + 'static,
-    ) -> Rc<dyn Node>;
-    /// Sends to a [FeedbackSink] when the predicate returns true.
-    fn feedback(
-        self: &Rc<Self>,
-        sink: FeedbackSink<bool>,
-        predicate: impl Fn(&T) -> bool + 'static,
+        sink: FeedbackSink<U>,
+        func: impl Fn(&T) -> Option<U> + 'static,
     ) -> Rc<dyn Node>;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
@@ -535,23 +530,22 @@ where
         ConsumerNode::new(self.clone(), Box::new(func)).into_node()
     }
 
-    fn for_each_with_state(
+    fn feedback<U: Element + Hash + Eq>(
         self: &Rc<Self>,
-        func: impl Fn(T, &mut GraphState) + 'static,
+        sink: FeedbackSink<U>,
+        func: impl Fn(&T) -> Option<U> + 'static,
     ) -> Rc<dyn Node> {
-        StateConsumerNode::new(self.clone(), Box::new(func)).into_node()
-    }
-
-    fn feedback(
-        self: &Rc<Self>,
-        sink: FeedbackSink<bool>,
-        predicate: impl Fn(&T) -> bool + 'static,
-    ) -> Rc<dyn Node> {
-        self.for_each_with_state(move |val, state| {
-            if predicate(&val) {
-                sink.send(true, state);
-            }
-        })
+        let upstream = self.clone();
+        GraphStateStream::new(
+            self.clone().as_node(),
+            Box::new(move |state: &mut GraphState| {
+                if let Some(val) = func(&upstream.peek_value()) {
+                    sink.send(val, state);
+                }
+            }),
+        )
+        .into_stream()
+        .as_node()
     }
 
     fn try_for_each(
