@@ -109,11 +109,10 @@ pub fn feedback_node() -> (FeedbackSink<()>, Rc<dyn Node>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Dep::*;
     use crate::graph::*;
     use crate::nodes::*;
-    use crate::Dep::*;
     use std::time::Duration;
-
 
     #[test]
     fn feedback_passive_works() {
@@ -121,11 +120,7 @@ mod tests {
         let (tx, rx) = feedback::<u64>();
         let source = ticker(period).count();
 
-        let value = bimap(
-            Active(source),
-            Passive(rx),
-            |src, fb| src + fb * 10,
-        );
+        let value = bimap(Active(source), Passive(rx), |src, fb| src + fb * 10);
 
         let fb = value.feedback(tx);
 
@@ -143,17 +138,12 @@ mod tests {
         .unwrap();
     }
 
-
     #[test]
     fn feedback_active_works() {
         let (tx, rx) = feedback::<u64>();
         let source = constant(1);
 
-        let value = bimap(
-            Active(source),
-            Active(rx),
-            |src, fb| src + fb * 10,
-        );
+        let value = bimap(Active(source), Active(rx), |src, fb| src + fb * 10);
 
         let fb = value.feedback(tx);
 
@@ -176,14 +166,14 @@ mod tests {
         )
         .run()
         .unwrap();
-    }    
+    }
     #[test]
     fn feedback_works() {
         // Example of circuit breaker observing to spot change
-        // relative to delayed valued. 
-        // If trigger fires, the lookback resets to avoid 
+        // relative to delayed valued.
+        // If trigger fires, the lookback resets to avoid
         // excessively repeating, whilst still enforcing the control
-        
+
         let period = Duration::from_nanos(100);
         let lookback = 5;
         let level: i64 = 3;
@@ -193,11 +183,7 @@ mod tests {
 
         let delayed = source.delay_with_reset(period * lookback, rx);
 
-        let diff = bimap(
-            Active(source), 
-            Passive(delayed), 
-            |a, b| a as i64 - b as i64
-        );
+        let diff = bimap(Active(source), Passive(delayed), |a, b| a as i64 - b as i64);
 
         let trigger = diff
             .filter_value(move |p| p.abs() > level)
@@ -210,12 +196,11 @@ mod tests {
         });
 
         Graph::new(
-            vec![trigger, res], 
+            vec![trigger, res],
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(period * 14),
         )
         .run()
         .unwrap();
-
     }
 }
