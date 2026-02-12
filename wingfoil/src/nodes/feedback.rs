@@ -125,7 +125,7 @@ mod tests {
         let fb = value.feedback(tx);
 
         let res = value.accumulate().finally(|values, _| {
-            assert_eq!(vec![1, 12, 23, 34, 45, 56], values);
+            assert_eq!(vec![1, 12, 123, 1234, 12345, 123456], values);
             Ok(())
         });
 
