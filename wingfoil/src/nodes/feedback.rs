@@ -84,7 +84,7 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
 ///     |count, prev| count + prev,
 /// );
 ///
-/// let writer = sum.feedback(tx, |val| Some(*val));
+/// let writer = sum.feedback(tx);
 /// ```
 pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>) {
     let queue = Rc::new(RefCell::new(TimeQueue::new()));
@@ -111,7 +111,7 @@ mod tests {
         let (tx, rx) = feedback::<u64>();
         let collected = rx.collect();
 
-        let writer = src.feedback(tx, |val| Some(*val));
+        let writer = src.feedback(tx);
 
         let mut graph = Graph::new(
             vec![collected.clone().as_node(), writer],
@@ -145,7 +145,7 @@ mod tests {
         });
         let collected = sum.collect();
 
-        let writer = sum.feedback(tx, |val| Some(*val));
+        let writer = sum.feedback(tx);
 
         let mut graph = Graph::new(
             vec![collected.clone().as_node(), writer],
@@ -180,7 +180,10 @@ mod tests {
 
         let collected = perf.collect();
 
-        let writer = perf.feedback(tx, move |p| (p.abs() > level).then_some(true));
+        let writer = perf
+            .filter_value(move |p| p.abs() > level)
+            .map(|_| true)
+            .feedback(tx);
 
         let mut graph = Graph::new(
             vec![collected.clone().as_node(), writer],

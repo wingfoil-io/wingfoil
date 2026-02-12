@@ -310,12 +310,10 @@ pub trait StreamOperators<T: Element> {
     ) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
-    /// Sends to a [FeedbackSink] when the function returns `Some`.
-    fn feedback<U: Element + Hash + Eq>(
-        self: &Rc<Self>,
-        sink: FeedbackSink<U>,
-        func: impl Fn(&T) -> Option<U> + 'static,
-    ) -> Rc<dyn Node>;
+    /// Sends each value to a [FeedbackSink].
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Node>
+    where
+        T: Hash + Eq;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
     fn try_for_each(
@@ -530,18 +528,15 @@ where
         ConsumerNode::new(self.clone(), Box::new(func)).into_node()
     }
 
-    fn feedback<U: Element + Hash + Eq>(
-        self: &Rc<Self>,
-        sink: FeedbackSink<U>,
-        func: impl Fn(&T) -> Option<U> + 'static,
-    ) -> Rc<dyn Node> {
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Node>
+    where
+        T: Hash + Eq,
+    {
         let upstream = self.clone();
         GraphStateStream::new(
             self.clone().as_node(),
             Box::new(move |state: &mut GraphState| {
-                if let Some(val) = func(&upstream.peek_value()) {
-                    sink.send(val, state);
-                }
+                sink.send(upstream.peek_value(), state);
             }),
         )
         .into_stream()
