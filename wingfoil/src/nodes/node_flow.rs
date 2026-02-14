@@ -164,3 +164,174 @@ impl MutableNode for FeedbackSendNode {
         UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+    use crate::queue::ValueAt;
+    use std::time::Duration;
+
+    #[test]
+    fn node_throttle_suppresses_fast_ticks() {
+        // Source ticks every 10ns, throttle interval is 25ns
+        // Throttled node fires at t=0, t=30, t=60
+        ticker(Duration::from_nanos(10))
+            .throttle(Duration::from_nanos(25))
+            .count()
+            .collect()
+            .finally(|values, _| {
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(0)),
+                    ValueAt::new(2, NanoTime::new(30)),
+                    ValueAt::new(3, NanoTime::new(60)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_nanos(60)),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn node_throttle_zero_interval_passes_all() {
+        ticker(Duration::from_nanos(10))
+            .throttle(Duration::from_nanos(0))
+            .count()
+            .collect()
+            .finally(|values, _| {
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(0)),
+                    ValueAt::new(2, NanoTime::new(10)),
+                    ValueAt::new(3, NanoTime::new(20)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+    }
+
+    #[test]
+    fn node_delay_shifts_ticks() {
+        // Source ticks every 100ns, delay by 10ns
+        // Upstream ticks at t=0,100,200; delayed ticks arrive at t=10,110,210
+        ticker(Duration::from_nanos(100))
+            .delay(Duration::from_nanos(10))
+            .count()
+            .collect()
+            .finally(|values, _| {
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(10)),
+                    ValueAt::new(2, NanoTime::new(110)),
+                    ValueAt::new(3, NanoTime::new(210)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+    }
+
+    #[test]
+    fn node_delay_zero_passes_immediately() {
+        ticker(Duration::from_nanos(10))
+            .delay(Duration::from_nanos(0))
+            .count()
+            .collect()
+            .finally(|values, _| {
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(0)),
+                    ValueAt::new(2, NanoTime::new(10)),
+                    ValueAt::new(3, NanoTime::new(20)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+    }
+
+    #[test]
+    fn node_limit_caps_ticks() {
+        // Source ticks 10 times, limit to 3
+        ticker(Duration::from_nanos(10))
+            .limit(3)
+            .count()
+            .collect()
+            .finally(|values, _| {
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(0)),
+                    ValueAt::new(2, NanoTime::new(10)),
+                    ValueAt::new(3, NanoTime::new(20)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_nanos(90)),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn node_filter_gates_ticks() {
+        // Source ticks every 10ns producing 1,2,3,...
+        // Filter passes only when count is even
+        let src = ticker(Duration::from_nanos(10));
+        let is_even = src.count().map(|i| i % 2 == 0);
+        src.filter(is_even)
+            .count()
+            .collect()
+            .finally(|values, _| {
+                // Ticks at t=0(count=1,odd), t=10(2,even), t=20(3,odd),
+                //         t=30(4,even), t=40(5,odd), t=50(6,even)
+                let expected = vec![
+                    ValueAt::new(1, NanoTime::new(10)),
+                    ValueAt::new(2, NanoTime::new(30)),
+                    ValueAt::new(3, NanoTime::new(50)),
+                ];
+                assert_eq!(expected, values);
+                Ok(())
+            })
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_nanos(50)),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn node_feedback_sends_signal() {
+        // Verify that feedback on a node triggers the feedback source
+        let period = Duration::from_nanos(100);
+        let (tx, rx) = feedback_node();
+
+        // fire feedback on every source tick
+        let fb = ticker(period).feedback(tx);
+
+        // rx ticks whenever the feedback fires; count those ticks
+        let res = rx.count().collect().finally(|values, _| {
+            // feedback delivers on next cycle, so rx_count lags by one tick
+            let expected = vec![
+                ValueAt::new(1, NanoTime::new(1)),
+                ValueAt::new(2, NanoTime::new(101)),
+                ValueAt::new(3, NanoTime::new(201)),
+            ];
+            assert_eq!(expected, values);
+            Ok(())
+        });
+
+        Graph::new(
+            vec![fb, res],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Duration(period * 2),
+        )
+        .run()
+        .unwrap();
+    }
+}
