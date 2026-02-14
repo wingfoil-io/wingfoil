@@ -1,7 +1,7 @@
 use crate::channel::{
     ChannelReceiver, ChannelSender, Message, ReceiverMessageSource, channel_pair,
 };
-use crate::nodes::channel::ReceiverStream;
+use crate::nodes::channel::ChannelReceiverStream;
 use crate::*;
 
 use futures::stream::StreamExt;
@@ -134,7 +134,7 @@ where
     FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
     func: Option<FUNC>,
-    receiver_stream: ReceiverStream<T>,
+    receiver_stream: ChannelReceiverStream<T>,
     handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     sender: Option<ChannelSender<T>>,
 }
@@ -148,7 +148,7 @@ where
 {
     pub fn new(func: FUNC) -> Self {
         let (sender, receiver) = channel_pair(None);
-        let receiver_stream = ReceiverStream::new(receiver, None, None);
+        let receiver_stream = ChannelReceiverStream::new(receiver, None, None);
         let handle = None;
         let func = Some(func);
         let sender = Some(sender);
