@@ -95,8 +95,9 @@ fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
-    let query = format!("select from {table}");
     let time_col = "time";
+    // query needs to sort by time if not already sorted
+    let query = format!("select from {table}");
     let chunk = 10000;
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
