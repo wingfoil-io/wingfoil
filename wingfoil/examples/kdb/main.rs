@@ -34,7 +34,6 @@
 
 use anyhow::Result;
 use log::Level;
-use std::rc::Rc;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
@@ -71,13 +70,16 @@ impl KdbSerialize for Trade {
     }
 }
 
-/// Generate a stream of mock trade data with timestamps
-fn generate() -> Rc<dyn Stream<Burst<Trade>>> {
+fn main() -> Result<()> {
+    env_logger::init();
+
+    let conn = KdbConnection::new("localhost", 5000);
+
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
     let syms_interned: Vec<Sym> = syms.iter().map(|s| interner.intern(s)).collect();
 
-    ticker(std::time::Duration::from_nanos(1_000_000_000))
+    let trades = ticker(std::time::Duration::from_nanos(1_000_000_000))
         .count()
         .map(move |i| {
             burst![Trade {
@@ -85,71 +87,20 @@ fn generate() -> Rc<dyn Stream<Burst<Trade>>> {
                 price: 100.0 + i as f64,
                 qty: (i * 10 + 1) as i64,
             }]
-        })
-}
+        });
 
-/// Write a stream of trades to a KDB+ table
-fn write(conn: KdbConnection, table: &str, stream: &Rc<dyn Stream<Burst<Trade>>>) -> Rc<dyn Node> {
-    kdb_write(conn, table, stream)
-}
+    let writer = kdb_write(conn.clone(), "trade", &trades);
+    writer.run(RunMode::RealTime, RunFor::Cycles(10))?;
 
-/// Read a stream of trades from KDB+ using a query
-fn read(
-    conn: KdbConnection,
-    query: &str,
-    time_col: &str,
-    batch_size: usize,
-) -> Rc<dyn Stream<Burst<Trade>>> {
-    kdb_read::<Trade>(conn, query, time_col, batch_size)
-}
-
-fn main() -> Result<()> {
-    env_logger::init();
-
-    let conn = KdbConnection::new("localhost", 5000);
-
-    // Step 1: Generate mock trade stream
-    let trade_stream = generate();
-    let trade_count: u32 = 10; // Known from generate() implementation
-    println!("Generated stream with {} mock trades", trade_count);
-
-    // Step 2: Write trades to KDB
-    let writer = write(conn.clone(), "trade", &trade_stream);
-    println!("Writing trades to KDB...");
-    writer.run(RunMode::RealTime, RunFor::Cycles(trade_count))?;
-    println!("Write complete");
-
-    // Step 3: Read trades back from KDB
-    println!("Reading trades from KDB...");
-    let read_stream = read(conn, "select from trade", "time", 10000);
+    let read_stream = kdb_read::<Trade>(conn, "select from trade", "time", 10000);
     let collected = read_stream
         .collapse()
         .logged("trades", Level::Info)
         .collect();
-
     collected.clone().run(RunMode::RealTime, RunFor::Forever)?;
 
     let read_trades = collected.peek_value();
-    println!("Read {} trades from KDB", read_trades.len());
-
-    // Step 4: Validate round-trip by comparing counts and sample data
-    println!("\nValidating round-trip...");
-    assert_eq!(
-        read_trades.len(),
-        trade_count as usize,
-        "Row count mismatch: expected {}, got {}",
-        trade_count,
-        read_trades.len()
-    );
-
-    println!("✓ All {} trades validated successfully!", trade_count);
-    println!("\nSample trades (first 3):");
-    for (i, record) in read_trades.iter().take(3).enumerate() {
-        println!(
-            "  [{}] sym={}, price={:.2}, qty={}",
-            i, record.value.sym, record.value.price, record.value.qty
-        );
-    }
+    assert_eq!(read_trades.len(), 10);
 
     Ok(())
 }
