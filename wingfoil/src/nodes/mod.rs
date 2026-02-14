@@ -22,6 +22,7 @@ mod finally;
 mod fold;
 mod graph_node;
 mod graph_state;
+mod inspect;
 mod limit;
 mod map;
 mod map_filter;
@@ -59,6 +60,7 @@ use filter::*;
 use finally::*;
 use fold::*;
 use graph_state::*;
+use inspect::*;
 use limit::*;
 use map::*;
 use map_filter::*;
@@ -433,6 +435,10 @@ pub trait StreamOperators<T: Element> {
     #[must_use]
     fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static)
     -> Rc<dyn Stream<T>>;
+    /// Passes through values unchanged while calling the supplied closure
+    /// on a reference to each value, for side effects (debugging, logging, etc.).
+    #[must_use]
+    fn inspect(self: &Rc<Self>, func: impl Fn(&T) + 'static) -> Rc<dyn Stream<T>>;
     /// propagates source up to limit times
     #[must_use]
     fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Stream<T>>;
@@ -669,6 +675,10 @@ where
         func: impl Fn(&mut OUT, T) + 'static,
     ) -> Rc<dyn Stream<OUT>> {
         FoldStream::new(self.clone(), Box::new(func)).into_stream()
+    }
+
+    fn inspect(self: &Rc<Self>, func: impl Fn(&T) + 'static) -> Rc<dyn Stream<T>> {
+        InspectStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
     fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Stream<T>> {
