@@ -33,14 +33,17 @@
 //! ```
 
 use anyhow::Result;
+use ordered_float::OrderedFloat;
 use std::rc::Rc;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
+type Price = OrderedFloat<f64>;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Trade {
     sym: Sym,
-    price: f64,
+    price: Price,
     qty: i64,
 }
 
@@ -52,7 +55,7 @@ impl KdbDeserialize for Trade {
     ) -> Result<Self, KdbError> {
         Ok(Trade {
             sym: row.get_sym(1, interner)?,
-            price: row.get(2)?.get_float()?,
+            price: OrderedFloat(row.get(2)?.get_float()?),
             qty: row.get(3)?.get_long()?,
         })
     }
@@ -62,7 +65,7 @@ impl KdbSerialize for Trade {
     fn to_kdb_row(&self) -> K {
         K::new_compound_list(vec![
             K::new_symbol(self.sym.to_string()),
-            K::new_float(self.price),
+            K::new_float(self.price.into_inner()),
             K::new_long(self.qty),
         ])
     }
@@ -77,22 +80,15 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
         .map(move |i| {
             burst![Trade {
                 sym: syms_interned[i as usize % syms_interned.len()].clone(),
-                price: 100.0 + i as f64,
+                price: OrderedFloat(100.0 + i as f64),
                 qty: (i * 10 + 1) as i64,
             }]
         })
         .limit(num_rows)
 }
 
-fn assert_equal<T: Element + Eq>(
-    a: Rc<dyn Stream<T>>, 
-    b: Rc<dyn Stream<T>>
-) -> Rc<dyn Node>{
-    bimap(
-    Dep::Active(a),
-        Dep::Active(b),
-        |a, b| assert!(a == b)
-    )
+fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Rc<dyn Node> {
+    bimap(Dep::Active(a), Dep::Active(b), |a, b| assert!(a == b))
 }
 
 fn main() -> Result<()> {
@@ -111,8 +107,8 @@ fn main() -> Result<()> {
     let baseline = generate(num_rows);
     let read = kdb_read::<Trade>(conn, query, time_col, chunk);
     let assertions = vec![
-        assert_equal(read, baseline), 
-        assert_equal(read.count(), baseline.count())
+        assert_equal(read.clone(), baseline.clone()),
+        assert_equal(read.count(), baseline.count()),
     ];
     Graph::new(assertions, run_mode, run_for).run()?;
     Ok(())
