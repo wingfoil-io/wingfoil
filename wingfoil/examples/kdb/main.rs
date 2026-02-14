@@ -29,6 +29,7 @@
 use anyhow::Result;
 use log::Level;
 use std::rc::Rc;
+use tinyvec::TinyVec;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
@@ -66,7 +67,7 @@ impl KdbSerialize for Trade {
 }
 
 /// Generate a stream of mock trade data with timestamps
-fn generate() -> Rc<dyn Stream<Trade>> {
+fn generate() -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
     let mock_trades: Vec<Trade> = (0..10)
@@ -95,7 +96,7 @@ fn generate() -> Rc<dyn Stream<Trade>> {
 fn write(
     conn: KdbConnection,
     table: &str,
-    stream: &Rc<dyn Stream<Trade>>,
+    stream: &Rc<dyn Stream<TinyVec<[Trade; 1]>>>,
 ) -> Rc<dyn Node> {
     kdb_write(conn, table, stream)
 }
@@ -106,7 +107,7 @@ fn read(
     query: &str,
     time_col: &str,
     batch_size: usize,
-) -> Rc<dyn Stream<Trade>> {
+) -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
     kdb_read::<Trade>(conn, query, time_col, batch_size)
 }
 
