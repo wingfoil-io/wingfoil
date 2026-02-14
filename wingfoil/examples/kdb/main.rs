@@ -35,7 +35,6 @@
 use anyhow::Result;
 use log::Level;
 use std::rc::Rc;
-use tinyvec::TinyVec;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
@@ -73,7 +72,7 @@ impl KdbSerialize for Trade {
 }
 
 /// Generate a stream of mock trade data with timestamps
-fn generate() -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
+fn generate() -> Rc<dyn Stream<Burst<Trade>>> {
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
     let syms_interned: Vec<Sym> = syms.iter().map(|s| interner.intern(s)).collect();
@@ -81,22 +80,16 @@ fn generate() -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
     ticker(std::time::Duration::from_nanos(1_000_000_000))
         .count()
         .map(move |i| {
-            let mut result = TinyVec::new();
-            result.push(Trade {
+            burst![Trade {
                 sym: syms_interned[i as usize % syms_interned.len()].clone(),
                 price: 100.0 + i as f64,
                 qty: (i * 10 + 1) as i64,
-            });
-            result
+            }]
         })
 }
 
 /// Write a stream of trades to a KDB+ table
-fn write(
-    conn: KdbConnection,
-    table: &str,
-    stream: &Rc<dyn Stream<TinyVec<[Trade; 1]>>>,
-) -> Rc<dyn Node> {
+fn write(conn: KdbConnection, table: &str, stream: &Rc<dyn Stream<Burst<Trade>>>) -> Rc<dyn Node> {
     kdb_write(conn, table, stream)
 }
 
@@ -106,7 +99,7 @@ fn read(
     query: &str,
     time_col: &str,
     batch_size: usize,
-) -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
+) -> Rc<dyn Stream<Burst<Trade>>> {
     kdb_read::<Trade>(conn, query, time_col, batch_size)
 }
 
