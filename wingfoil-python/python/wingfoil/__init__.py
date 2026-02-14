@@ -4,3 +4,7 @@ from .stream import *
 __doc__ = _ext.__doc__
 __version__ = getattr(_ext, "__version__", None)
 __all__ = _ext.__all__
+
+# User-friendly aliases for KDB+ functions
+kdb_read = _ext.py_kdb_read
+kdb_write = _ext.py_kdb_write

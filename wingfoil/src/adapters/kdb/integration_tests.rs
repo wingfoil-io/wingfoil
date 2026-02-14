@@ -336,3 +336,150 @@ fn test_kdb_connection_refused() {
     let collected = stream.collapse().collect();
     let _ = collected.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
 }
+
+// --- Write integration tests ---
+
+/// Helper: creates an empty table, writes trades via the graph, queries KDB to verify.
+fn write_and_verify(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<usize> {
+    let n = trades.len();
+
+    // Build a produce_async stream that yields each trade at a distinct timestamp
+    let write_conn = conn.clone();
+    let stream = produce_async(move |_ctx| {
+        let trades = trades;
+        async move {
+            Ok(async_stream::stream! {
+                for (i, trade) in trades.into_iter().enumerate() {
+                    // Use KDB epoch + i seconds as timestamp
+                    let time = NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000);
+                    yield Ok((time, trade));
+                }
+            })
+        }
+    });
+
+    // Write to KDB
+    let writer = kdb_write(write_conn, "trade", &stream);
+    writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+
+    // Read back via raw KDB query to verify
+    let rt = tokio::runtime::Runtime::new()?;
+    let verify_conn = conn;
+    let count = rt.block_on(async {
+        let creds = verify_conn.credentials_string();
+        let mut socket = QStream::connect(
+            ConnectionMethod::TCP,
+            &verify_conn.host,
+            verify_conn.port,
+            &creds,
+        )
+        .await?;
+        let result = socket.send_sync_message(&"count trade").await?;
+        let count = result.get_long()?;
+        Ok::<i64, anyhow::Error>(count)
+    })?;
+
+    println!("Wrote {} trades, verified {} in KDB", n, count);
+    Ok(count as usize)
+}
+
+fn make_test_trades(n: usize) -> Vec<TestTrade> {
+    let syms = ["AAPL", "GOOG", "MSFT"];
+    let mut interner = SymbolInterner::default();
+    (0..n)
+        .map(|i| TestTrade {
+            sym: interner.intern(syms[i % syms.len()]),
+            price: 100.0 + i as f64,
+            qty: (i * 10 + 1) as i64,
+        })
+        .collect()
+}
+
+/// Helper: creates empty table, runs test, drops table.
+fn with_empty_table<F>(test: F) -> Result<()>
+where
+    F: FnOnce(KdbConnection) -> Result<()>,
+{
+    let conn = TestDataBuilder::connection();
+    let rt = tokio::runtime::Runtime::new()?;
+    let builder = TestDataBuilder::new(conn.clone(), rt);
+    builder.tokio.block_on(builder.create_table())?;
+    let test_result = test(conn);
+    let teardown_result = builder.teardown();
+    test_result?;
+    teardown_result?;
+    Ok(())
+}
+
+#[test]
+fn test_kdb_write_round_trip() -> Result<()> {
+    let _ = env_logger::try_init();
+    let trades = make_test_trades(5);
+
+    with_empty_table(|conn| {
+        let count = write_and_verify(conn.clone(), trades)?;
+        assert_eq!(count, 5, "Should have written 5 trades");
+
+        // Verify data correctness by reading back via kdb_read
+        let read_stream = kdb_read::<TestTrade>(conn, "select from trade", "time", 10000);
+        let collected = read_stream
+            .collapse()
+            .logged("readback", Level::Info)
+            .collect();
+        collected
+            .clone()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+        let rows = collected.peek_value();
+        assert_eq!(rows.len(), 5, "Should read back 5 rows");
+
+        // Check first row values (collect returns ValueAt<T>, access .value for the trade)
+        let first = &rows[0].value;
+        assert_eq!(first.sym.to_string(), "AAPL");
+        assert!((first.price - 100.0).abs() < 0.001);
+        assert_eq!(first.qty, 1);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_kdb_write_append() -> Result<()> {
+    let _ = env_logger::try_init();
+
+    with_test_data(3, true, |_n, conn| {
+        // Table already has 3 rows from with_test_data
+        let new_trades = make_test_trades(2);
+
+        // Write 2 more trades via the graph - use timestamps after existing data
+        let write_conn = conn.clone();
+        let stream = produce_async(move |_ctx| {
+            let trades = new_trades;
+            async move {
+                Ok(async_stream::stream! {
+                    for (i, trade) in trades.into_iter().enumerate() {
+                        // Use timestamps after the existing 3 rows (which use 0..3 seconds)
+                        let time = NanoTime::from_kdb_timestamp((10 + i as i64) * 1_000_000_000);
+                        yield Ok((time, trade));
+                    }
+                })
+            }
+        });
+
+        let writer = kdb_write(write_conn, "trade", &stream);
+        writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+
+        // Verify total count = 3 original + 2 new = 5
+        let rt = tokio::runtime::Runtime::new()?;
+        let count = rt.block_on(async {
+            let creds = conn.credentials_string();
+            let mut socket =
+                QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds).await?;
+            let result = socket.send_sync_message(&"count trade").await?;
+            result.get_long().map_err(|e| anyhow::Error::new(e))
+        })?;
+
+        assert_eq!(count, 5, "Should have 3 original + 2 appended = 5 rows");
+        println!("Append test: 3 + 2 = {} rows", count);
+        Ok(())
+    })
+}

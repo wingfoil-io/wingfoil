@@ -234,5 +234,29 @@ impl PyStream {
         PyStream(self.0.sum())
     }
 
+    /// Write this stream to a KDB+ table.
+    ///
+    /// Args:
+    ///     host: KDB+ server hostname
+    ///     port: KDB+ server port
+    ///     table: Name of the target KDB+ table
+    ///     columns: List of (name, type) tuples for non-time columns.
+    ///              Supported types: "symbol", "float", "long", "int", "bool"
+    ///
+    /// Returns:
+    ///     A Node that drives the write operation.
+    #[pyo3(signature = (host, port, table, columns))]
+    fn kdb_write(
+        &self,
+        host: String,
+        port: u16,
+        table: String,
+        columns: Vec<(String, String)>,
+    ) -> PyResult<PyNode> {
+        let conn = ::wingfoil::adapters::kdb::KdbConnection::new(host, port);
+        let node = crate::py_kdb::py_kdb_write_inner(conn, table, columns, &self.0)?;
+        Ok(PyNode::new(node))
+    }
+
     // end StreamOperators
 }
