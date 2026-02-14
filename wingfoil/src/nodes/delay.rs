@@ -28,18 +28,20 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
         } else {
             let current_time = state.time();
             let mut ticked = false;
-            if state.ticked(self.upstream.clone().as_node()) {
+            if state.ticked(self.upstream.clone().as_node())? {
                 if !self.initialized {
                     self.value = self.upstream.peek_value();
                     self.initialized = true;
                 }
                 let next_time = current_time + self.delay;
-                state.add_callback(next_time);
+                state.add_callback(next_time)?;
                 self.queue.push(self.upstream.peek_value(), next_time)
             }
             while self.queue.pending(current_time) {
-                self.value = self.queue.pop();
-                ticked = true;
+                if let Some(value) = self.queue.pop() {
+                    self.value = value;
+                    ticked = true;
+                }
             }
             Ok(ticked)
         }
@@ -84,7 +86,8 @@ mod tests {
             ],
             run_mode,
             run_for,
-        );
+        )
+        .unwrap();
         let expected_source = vec![
             ValueAt {
                 value: 1,

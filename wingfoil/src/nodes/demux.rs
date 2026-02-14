@@ -105,9 +105,7 @@ where
             None => match self.peek_available() {
                 Some(index) => {
                     // safe: we just got this index from peek_available
-                    self.available
-                        .take(&index)
-                        .expect("index from peek_available");
+                    self.available.take(&index);
                     self.in_use.insert(key, Some(index));
                     DemuxEntry::Some(index)
                 }
@@ -129,18 +127,20 @@ where
 /// [StreamOperators::demux_it].
 pub struct Overflow<T: Element>(Rc<RefCell<Option<Rc<dyn Stream<T>>>>>);
 impl<T: Element> Overflow<T> {
-    #[must_use]
-    pub fn stream(&self) -> Rc<dyn Stream<T>> {
+    pub fn stream(&self) -> anyhow::Result<Rc<dyn Stream<T>>> {
         self.0
             .borrow()
             .clone()
-            .expect("overflow stream not initialized")
+            .ok_or_else(|| anyhow::anyhow!("overflow stream not initialized"))
     }
+    /// Intentional panic on overflow — used when overflow is a programming error.
     #[must_use]
     pub fn panic(&self) -> Rc<dyn Node> {
-        self.stream().for_each(move |itm, _| {
-            panic!("overflow!\n{itm:?}");
-        })
+        self.stream()
+            .expect("overflow stream not initialized")
+            .for_each(move |itm, _| {
+                panic!("overflow!\n{itm:?}");
+            })
     }
 }
 
@@ -548,7 +548,7 @@ mod tests {
     ) -> (Vec<Rc<dyn Stream<Vec<T>>>>, Vec<Rc<dyn Node>>) {
         let mut dmxd = demuxed;
         if with_overflow {
-            dmxd.push(overflow.stream());
+            dmxd.push(overflow.stream().unwrap());
         }
         let results = dmxd
             .iter()
@@ -564,7 +564,7 @@ mod tests {
             .map(|strm| strm.clone().as_node())
             .collect::<Vec<_>>();
         if !with_overflow {
-            let overflow = overflow.stream().for_each(|_, _| {
+            let overflow = overflow.stream().unwrap().for_each(|_, _| {
                 panic!("overflow!");
             });
             nodes.push(overflow);
@@ -640,7 +640,10 @@ mod tests {
             let muxed = combine(streams);
             let (demuxed, overflow) = muxed.demux_it_with_map(map, parse_message);
             let (results, nodes) = build_results(demuxed, overflow, with_overflow);
-            Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
+            Graph::new(nodes, *run_mode, *RUN_FOR)
+                .unwrap()
+                .run()
+                .unwrap();
             let parse_topic = |msgs: &Burst<Message>| {
                 assert!(msgs.len() == 1);
                 msgs[0].topic
@@ -659,7 +662,10 @@ mod tests {
             let muxed = merge(streams);
             let (demuxed, overflow) = muxed.demux(capacity, parse_message);
             let (results, nodes) = build_results(demuxed, overflow, with_overflow);
-            Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
+            Graph::new(nodes, *run_mode, *RUN_FOR)
+                .unwrap()
+                .run()
+                .unwrap();
             validate_results(results, |msg| msg.topic);
         }
     }

@@ -9,12 +9,12 @@ pub(crate) struct GraphStateStream<T: Element> {
     upstream: Rc<dyn Node>,
     #[new(default)]
     value: T,
-    func: Box<dyn Fn(&mut GraphState) -> T>,
+    func: Box<dyn Fn(&mut GraphState) -> anyhow::Result<T>>,
 }
 
 impl<T: Element> MutableNode for GraphStateStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = (self.func)(state);
+        self.value = (self.func)(state)?;
         Ok(true)
     }
 

@@ -56,7 +56,7 @@ pub fn subscribe_message(channel: String) -> (String, Option<Value>) {
 }
 
 impl JRPCWriter {
-    pub async fn send(&mut self, method: String, params: Option<Value>) {
+    pub async fn send(&mut self, method: String, params: Option<Value>) -> anyhow::Result<()> {
         let request = json!({
             "id": self.message_id,
             "jsonrpc": "2.0",
@@ -68,19 +68,17 @@ impl JRPCWriter {
             println!("send >> {request}");
         }
         let message = Message::Text(request.into());
-        self.writer
-            .send(message)
-            .await
-            .expect("websocket send failed");
+        self.writer.send(message).await?;
         self.message_id += 1;
+        Ok(())
     }
-    pub async fn subscribe(&mut self, channel: String) {
+    pub async fn subscribe(&mut self, channel: String) -> anyhow::Result<()> {
         let (method, params) = subscribe_message(channel);
-        self.send(method, params).await;
+        self.send(method, params).await
     }
 
-    async fn heartbeat(&mut self) {
-        self.send("heartbeat".to_string(), None).await;
+    async fn heartbeat(&mut self) -> anyhow::Result<()> {
+        self.send("heartbeat".to_string(), None).await
     }
 }
 
@@ -101,8 +99,12 @@ where
     F: Responder<T>,
     T: DeserializeOwned,
 {
-    pub async fn connect(url: &str, responder: F, heartbeat: Option<Duration>) -> Self {
-        let (ws_stream, _) = connect_async(url).await.expect("websocket connect failed");
+    pub async fn connect(
+        url: &str,
+        responder: F,
+        heartbeat: Option<Duration>,
+    ) -> anyhow::Result<Self> {
+        let (ws_stream, _) = connect_async(url).await?;
         let (writer, reader) = ws_stream.split();
         let writer = JRPCWriter {
             writer,
@@ -110,17 +112,17 @@ where
         };
         let heartbeat = heartbeat.unwrap_or(Duration::MAX);
         let _phantom = Default::default();
-        Self {
+        Ok(Self {
             reader,
             writer,
             responder,
             heartbeat,
             _phantom,
-        }
+        })
     }
 
-    pub async fn subscribe(&mut self, channel: impl ToString) {
-        self.writer.subscribe(channel.to_string()).await;
+    pub async fn subscribe(&mut self, channel: impl ToString) -> anyhow::Result<()> {
+        self.writer.subscribe(channel.to_string()).await
     }
 
     pub fn stream(mut self) -> impl Stream<Item = Result<T, anyhow::Error>> {
@@ -133,9 +135,11 @@ where
                             Some(Ok(raw_msg)) => {
                                 match self.responder.parse(raw_msg) {
                                     Ok(parsed_msg) => {
-                                        if let Some((meth, params)) = self.responder.respond(&parsed_msg) {
-                                            self.writer.send(meth, params).await;
-                                        }
+                                        if let Some((meth, params)) = self.responder.respond(&parsed_msg)
+                                            && let Err(e) = self.writer.send(meth, params).await {
+                                                yield Err(e);
+                                                break;
+                                            }
                                         yield Ok(parsed_msg)
                                     },
                                     Err(err) => {
@@ -148,7 +152,10 @@ where
                         }
                     }
                     _ = heartbeat.tick() => {
-                        self.writer.heartbeat().await;
+                        if let Err(e) = self.writer.heartbeat().await {
+                            yield Err(e);
+                            break;
+                        }
                     }
                 }
             }

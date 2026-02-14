@@ -239,7 +239,7 @@ pub trait NodeOperators {
     /// count.peek_value(); // 3
     /// ```
     fn run(self: &Rc<Self>, run_mode: RunMode, run_to: RunFor) -> anyhow::Result<()>;
-    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph;
+    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<Graph>;
     /// Sends `()` to a [FeedbackSink] on each tick.
     #[must_use]
     fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node>;
@@ -251,27 +251,28 @@ impl NodeOperators for dyn Node {
     }
 
     fn ticked_at(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>> {
-        let f = Box::new(|state: &mut GraphState| state.time());
+        let f = Box::new(|state: &mut GraphState| Ok(state.time()));
         GraphStateStream::new(self.clone(), f).into_stream()
     }
     fn ticked_at_elapsed(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>> {
-        let f = Box::new(|state: &mut GraphState| state.elapsed());
+        let f = Box::new(|state: &mut GraphState| Ok(state.elapsed()));
         GraphStateStream::new(self.clone(), f).into_stream()
     }
     fn produce<T: Element>(self: &Rc<Self>, func: impl Fn() -> T + 'static) -> Rc<dyn Stream<T>> {
         ProducerStream::new(self.clone(), Box::new(func)).into_stream()
     }
     fn run(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<()> {
-        Graph::new(vec![self.clone()], run_mode, run_for).run()
+        Graph::new(vec![self.clone()], run_mode, run_for)?.run()
     }
-    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
+    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<Graph> {
         Graph::new(vec![self.clone()], run_mode, run_for)
     }
     fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
         GraphStateStream::new(
             self.clone(),
             Box::new(move |state: &mut GraphState| {
-                sink.send((), state);
+                sink.send((), state)?;
+                Ok(())
             }),
         )
         .into_stream()
@@ -298,7 +299,7 @@ impl<T> NodeOperators for dyn Stream<T> {
     fn run(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<()> {
         self.clone().as_node().run(run_mode, run_for)
     }
-    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
+    fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<Graph> {
         self.clone().as_node().into_graph(run_mode, run_for)
     }
     fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
@@ -600,7 +601,8 @@ where
         GraphStateStream::new(
             self.clone().as_node(),
             Box::new(move |state: &mut GraphState| {
-                sink.send(upstream.peek_value(), state);
+                sink.send(upstream.peek_value(), state)?;
+                Ok(())
             }),
         )
         .into_stream()

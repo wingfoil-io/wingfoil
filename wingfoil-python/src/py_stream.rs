@@ -56,7 +56,12 @@ where
 }
 
 pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> {
-    Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
+    Python::attach(|py| {
+        x.into_pyobject(py)
+            .expect("failed to convert Vec to PyList")
+            .into_any()
+            .unbind()
+    })
 }
 
 pub trait AsPyStream<T>
@@ -144,7 +149,7 @@ impl PyStream {
             Python::attach(move |py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let args = (res,);
-                func.call1(py, args).unwrap();
+                func.call1(py, args).expect("finally callback failed");
             });
             Ok(())
         });
@@ -157,7 +162,7 @@ impl PyStream {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let t: f64 = t.into();
                 let args = (res, t);
-                func.call1(py, args).unwrap();
+                func.call1(py, args).expect("for_each callback failed");
             });
         });
         PyNode(node)
@@ -185,9 +190,9 @@ impl PyStream {
             Python::attach(|py| {
                 keep_func
                     .call1(py, (x.value(),))
-                    .unwrap()
+                    .expect("filter predicate call failed")
                     .extract::<bool>(py)
-                    .unwrap()
+                    .expect("filter predicate must return bool")
             })
         });
         PyStream(self.0.filter(keep))
@@ -203,11 +208,11 @@ impl PyStream {
         PyStream(self.0.logged(&label, Level::Info))
     }
 
-    /// Map’s its source into a new Stream using the supplied Python callable.
+    /// Map's its source into a new Stream using the supplied Python callable.
     fn map(&self, func: Py<PyAny>) -> PyStream {
         let stream = self.0.map(move |x| {
             Python::attach(|py| {
-                let res = func.call1(py, (x.value(),)).unwrap();
+                let res = func.call1(py, (x.value(),)).expect("map callback failed");
                 PyElement::new(res)
             })
         });

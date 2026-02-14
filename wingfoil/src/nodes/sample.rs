@@ -56,6 +56,7 @@ mod tests {
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(Duration::from_millis(1000)),
         )
+        .unwrap()
         .print()
         .run()
         .unwrap();

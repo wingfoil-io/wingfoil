@@ -39,7 +39,7 @@ fn main() {
             responder.build()
         }
     };
-    let mut graph = Graph::new(nodes, run_mode, run_for);
+    let mut graph = Graph::new(nodes, run_mode, run_for).unwrap();
     let t0 = std::time::Instant::now();
     graph.run().unwrap();
     if let RunMode::HistoricalFrom(_) = run_mode {

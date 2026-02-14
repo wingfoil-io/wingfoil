@@ -15,56 +15,61 @@ fn csv_iterator<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Box<dyn Iterator<Item = ValueAt<T>>>
+) -> anyhow::Result<Box<dyn Iterator<Item = ValueAt<T>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    let file = File::open(path).unwrap_or_else(|e| panic!("failed to open CSV file '{path}': {e}"));
+    let file = File::open(path)?;
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
         .from_reader(file)
         .into_deserialize();
-    Box::new(data.map(move |record: Result<T, csv::Error>| {
-        let rec = record.expect("failed to parse CSV record");
-        let t = get_time_func(&rec);
-        ValueAt {
-            value: rec,
-            time: t,
-        }
-    }))
+    Ok(Box::new(data.filter_map(
+        move |record: Result<T, csv::Error>| match record {
+            Ok(rec) => {
+                let t = get_time_func(&rec);
+                Some(ValueAt {
+                    value: rec,
+                    time: t,
+                })
+            }
+            Err(e) => {
+                log::error!("failed to parse CSV record: {e}");
+                None
+            }
+        },
+    )))
 }
 
 /// Returns a [SimpleIteratorStream] that emits records from a file of
 /// comma separated values (csv).  The source iterator must be of strictly
 /// ascending time.  For the more general cases where there can be multiple
 /// rows with the same timestamp, you can use [csv_read_vec] instead.
-#[must_use]
 pub fn csv_read<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<T>>
+) -> anyhow::Result<Rc<dyn Stream<T>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    let it = csv_iterator(path, get_time_func, has_headers);
-    SimpleIteratorStream::new(it).into_stream()
+    let it = csv_iterator(path, get_time_func, has_headers)?;
+    Ok(SimpleIteratorStream::new(it).into_stream())
 }
 
 /// Returns a [IteratorStream] that emits values from a file of
 /// comma separated values (csv).  The source iterator can tick
-/// multiple times per cycle.  
-#[must_use]
+/// multiple times per cycle.
 pub fn csv_read_vec<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<Vec<T>>>
+) -> anyhow::Result<Rc<dyn Stream<Vec<T>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    let it = csv_iterator(path, get_time_func, has_headers);
-    IteratorStream::new(it).into_stream()
+    let it = csv_iterator(path, get_time_func, has_headers)?;
+    Ok(IteratorStream::new(it).into_stream())
 }
 
 /// Used to write records to a file of comma separated values (csv).
@@ -139,34 +144,30 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVec
 /// Trait to add csv write operators to streams.
 pub trait CsvOperators<T: Element> {
     /// writes stream to csv file
-    #[must_use]
-    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
+    fn csv_write(self: &Rc<Self>, path: &str) -> anyhow::Result<Rc<dyn Node>>;
 }
 
 impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dyn Stream<T> {
-    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
+    fn csv_write(self: &Rc<Self>, path: &str) -> anyhow::Result<Rc<dyn Node>> {
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
-            .from_path(path)
-            .unwrap_or_else(|e| panic!("failed to create CSV writer for '{path}': {e}"));
-        CsvWriterNode::new(self.clone(), writer).into_node()
+            .from_path(path)?;
+        Ok(CsvWriterNode::new(self.clone(), writer).into_node())
     }
 }
 pub trait CsvVecOperators<T: Element> {
     /// writes stream of Vec to csv file
-    #[must_use]
-    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
+    fn csv_write_vec(self: &Rc<Self>, path: &str) -> anyhow::Result<Rc<dyn Node>>;
 }
 
 impl<T: Element + Serialize + DeserializeOwned + 'static> CsvVecOperators<T>
     for dyn Stream<Vec<T>>
 {
-    fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
+    fn csv_write_vec(self: &Rc<Self>, path: &str) -> anyhow::Result<Rc<dyn Node>> {
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
-            .from_path(path)
-            .unwrap_or_else(|e| panic!("failed to create CSV writer for '{path}': {e}"));
-        CsvVecWriterNode::new(self.clone(), writer).into_node()
+            .from_path(path)?;
+        Ok(CsvVecWriterNode::new(self.clone(), writer).into_node())
     }
 }
 
@@ -187,7 +188,9 @@ mod tests {
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         let get_time = |rec: &Record| rec.0 as NanoTime;
         csv_read("test_data/simple.csv", get_time, false)
+            .unwrap()
             .csv_write("test_data/simple_out.csv")
+            .unwrap()
             .run(run_mode, run_to)
             .unwrap();
     }
@@ -199,7 +202,9 @@ mod tests {
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         let get_time = |rec: &Record| rec.0 as NanoTime;
         csv_read_vec("test_data/example.csv", get_time, false)
+            .unwrap()
             .csv_write_vec("test_data/example_out.csv")
+            .unwrap()
             .run(run_mode, run_to)
             .unwrap();
     }

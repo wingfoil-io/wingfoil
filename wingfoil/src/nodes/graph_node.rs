@@ -83,9 +83,10 @@ where
                 let run_mode = graph_state.run_mode();
                 let task = move || {
                     let node = func().send(sender, None);
-                    let mut graph =
-                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    if let Err(e) = graph.run() {
+                    let result =
+                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time)
+                            .and_then(|mut g| g.run());
+                    if let Err(e) = result {
                         log::error!("graph producer run failed: {e:?}");
                     }
                 };
@@ -198,7 +199,7 @@ where
     }
 
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
-        if graph_state.ticked(self.source.clone()) {
+        if graph_state.ticked(self.source.clone())? {
             self.sender
                 .get_mut()
                 .ok_or_else(|| anyhow::anyhow!("sender not initialized"))?
@@ -232,9 +233,10 @@ where
                 let task = move || {
                     let src = ReceiverStream::new(receiver_in, None, tx_notif).into_stream();
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));
-                    let mut graph =
-                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    if let Err(e) = graph.run() {
+                    let result =
+                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time)
+                            .and_then(|mut g| g.run());
+                    if let Err(e) = result {
                         log::error!("graph map run failed: {e:?}");
                     }
                 };

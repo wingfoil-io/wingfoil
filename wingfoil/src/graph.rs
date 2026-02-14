@@ -169,23 +169,25 @@ impl GraphState {
         self.run_time.clone()
     }
 
-    pub fn add_callback(&mut self, time: NanoTime) {
-        // current_node_index is always set during cycle/setup/start/stop/teardown
-        self.add_callback_for_node(
-            self.current_node_index.expect("no current node index"),
-            time,
-        );
+    pub fn add_callback(&mut self, time: NanoTime) -> anyhow::Result<()> {
+        let ix = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("no current node index"))?;
+        self.add_callback_for_node(ix, time);
+        Ok(())
     }
 
-    pub(crate) fn current_node_id(&self) -> usize {
-        // current_node_index is always set during cycle/setup/start/stop/teardown
-        self.current_node_index.expect("no current node index")
+    pub(crate) fn current_node_id(&self) -> anyhow::Result<usize> {
+        self.current_node_index
+            .ok_or_else(|| anyhow::anyhow!("no current node index"))
     }
 
-    pub fn always_callback(&mut self) {
-        // current_node_index is always set during cycle/setup/start/stop/teardown
-        let ix = self.current_node_index.expect("no current node index");
+    pub fn always_callback(&mut self) -> anyhow::Result<()> {
+        let ix = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("no current node index"))?;
         self.always_callbacks.push(ix);
+        Ok(())
     }
 
     pub fn is_last_cycle(&self) -> bool {
@@ -193,8 +195,11 @@ impl GraphState {
     }
 
     /// Returns true if node has ticked on the current engine cycle
-    pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
-        self.node_ticked[self.node_index(node).expect("node not found in graph")]
+    pub fn ticked(&self, node: Rc<dyn Node>) -> anyhow::Result<bool> {
+        let ix = self
+            .node_index(node)
+            .ok_or_else(|| anyhow::anyhow!("node not found in graph"))?;
+        Ok(self.node_ticked[ix])
     }
 
     #[allow(dead_code)]
@@ -208,11 +213,9 @@ impl GraphState {
     }
 
     fn next_scheduled_time(&self) -> NanoTime {
-        if self.scheduled_callbacks.is_empty() {
-            NanoTime::MAX
-        } else {
-            self.scheduled_callbacks.next_time()
-        }
+        self.scheduled_callbacks
+            .next_time()
+            .unwrap_or(NanoTime::MAX)
     }
 
     pub(crate) fn add_callback_for_node(&mut self, node_index: usize, time: NanoTime) {
@@ -302,29 +305,19 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn new(root_nodes: Vec<Rc<dyn Node>>, run_mode: RunMode, run_for: RunFor) -> Graph {
-        //let cores = core_affinity::get_core_ids().unwrap();
-        //core_affinity::set_for_current(cores[0]);
+    pub fn new(
+        root_nodes: Vec<Rc<dyn Node>>,
+        run_mode: RunMode,
+        run_for: RunFor,
+    ) -> anyhow::Result<Graph> {
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-            // .worker_threads(4)
-            // .thread_name("worker")
-            // .on_thread_start(move || {
-            //     let thread_index = std::thread::current().name()
-            //         .unwrap()
-            //         .trim_start_matches("worker")
-            //         .parse::<usize>()
-            //         .unwrap_or(0);
-            //     core_affinity::set_for_current(cores[(thread_index + 1) % cores.len()]);
-            // })
             .enable_all()
-            .build()
-            .expect("failed to build tokio runtime");
+            .build()?;
         let start_time = run_mode.start_time();
-        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time)
-            .expect("failed to create graph state");
+        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time)?;
         let mut graph = Graph { state };
-        graph.initialise(root_nodes);
-        graph
+        graph.initialise(root_nodes)?;
+        Ok(graph)
     }
 
     pub fn new_with(
@@ -333,13 +326,11 @@ impl Graph {
         run_mode: RunMode,
         run_for: RunFor,
         start_time: NanoTime,
-    ) -> Graph {
-        let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time)
-            .expect("failed to create graph state");
-
+    ) -> anyhow::Result<Graph> {
+        let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time)?;
         let mut graph = Graph { state };
-        graph.initialise(root_nodes);
-        graph
+        graph.initialise(root_nodes)?;
+        Ok(graph)
     }
 
     pub(crate) fn setup_nodes(&mut self) -> anyhow::Result<()> {
@@ -496,11 +487,11 @@ impl Graph {
         Ok(())
     }
 
-    fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> &mut Graph {
+    fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> anyhow::Result<&mut Graph> {
         let timer = Instant::now();
         for node in root_nodes {
             if !self.state.seen(node.clone()) {
-                self.initialise_node(&node);
+                self.initialise_node(&node)?;
             }
         }
         let mut max_layer: i32 = -1;
@@ -520,7 +511,7 @@ impl Graph {
             self.state.nodes.len(),
             timer.elapsed()
         );
-        self
+        Ok(self)
     }
 
     fn initialise_upstreams(
@@ -529,28 +520,34 @@ impl Graph {
         is_active: bool,
         layer: &mut usize,
         upstream_indexes: &mut Vec<(usize, bool)>,
-    ) {
+    ) -> anyhow::Result<()> {
         for upstream_node in upstreams {
-            let upstream_index = self.initialise_node(upstream_node);
+            let upstream_index = self.initialise_node(upstream_node)?;
             upstream_indexes.push((upstream_index, is_active));
             *layer = max(*layer, self.state.nodes[upstream_index].layer + 1);
         }
+        Ok(())
     }
 
-    fn initialise_node(&mut self, node: &Rc<dyn Node>) -> usize {
+    fn initialise_node(&mut self, node: &Rc<dyn Node>) -> anyhow::Result<usize> {
         // recursively crawl through graph defined by node
         // constructing NodeData wrapper for each node and pushing
         // onto self.nodes returns index of new NodeData in self.nodes
         if self.state.seen(node.clone()) {
             self.state
                 .node_index(node.clone())
-                .expect("node was seen but not indexed")
+                .ok_or_else(|| anyhow::anyhow!("node was seen but not indexed"))
         } else {
             let mut layer = 0;
             let mut upstream_indexes = vec![];
             let upstreams = node.upstreams();
-            self.initialise_upstreams(&upstreams.active, true, &mut layer, &mut upstream_indexes);
-            self.initialise_upstreams(&upstreams.passive, false, &mut layer, &mut upstream_indexes);
+            self.initialise_upstreams(&upstreams.active, true, &mut layer, &mut upstream_indexes)?;
+            self.initialise_upstreams(
+                &upstreams.passive,
+                false,
+                &mut layer,
+                &mut upstream_indexes,
+            )?;
             let node_data = NodeData {
                 node: node.clone(),
                 upstreams: upstream_indexes,
@@ -560,7 +557,7 @@ impl Graph {
             let index = self.state.nodes.len();
             self.state.push_node(node.clone());
             self.state.nodes.push(node_data);
-            index
+            Ok(index)
         }
     }
 
@@ -580,9 +577,10 @@ impl Graph {
             progressed = true;
         }
         while self.state.has_pending_scheduled_callbacks() {
-            let ix = self.state.scheduled_callbacks.pop();
-            self.mark_dirty(ix);
-            progressed = true;
+            if let Some(ix) = self.state.scheduled_callbacks.pop() {
+                self.mark_dirty(ix);
+                progressed = true;
+            }
         }
         progressed
     }
@@ -698,7 +696,7 @@ impl Graph {
             for _ in 0..node_data.layer {
                 print!("   ");
             }
-            println!("{:}", node_data.node);
+            println!("{}", node_data.node);
         }
         self
     }
@@ -817,6 +815,7 @@ mod tests {
         // wire up graph and set historical mode
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         Graph::new(vec![captured.clone().as_node()], run_mode, RunFor::Forever)
+            .unwrap()
             .print()
             .run()
             .unwrap();
@@ -860,7 +859,8 @@ mod tests {
             vec![stream.as_node()],
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Cycles(10),
-        );
+        )
+        .unwrap();
         graph.print();
         let result = graph.run();
 

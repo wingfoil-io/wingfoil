@@ -29,8 +29,10 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
             if !q.pending(state.time()) {
                 break;
             }
-            self.value = q.pop();
-            ticked = true;
+            if let Some(value) = q.pop() {
+                self.value = value;
+                ticked = true;
+            }
         }
         Ok(ticked)
     }
@@ -40,7 +42,7 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        self.node_id.set(Some(state.current_node_id()));
+        self.node_id.set(Some(state.current_node_id()?));
         Ok(())
     }
 }
@@ -65,10 +67,15 @@ impl<T: Element + Hash + Eq> Clone for FeedbackSink<T> {
 
 impl<T: Element + Hash + Eq> FeedbackSink<T> {
     /// Push a value and schedule the paired source stream to cycle.
-    pub fn send(&self, value: T, state: &mut GraphState) {
+    pub fn send(&self, value: T, state: &mut GraphState) -> anyhow::Result<()> {
         let time = state.time() + 1;
         self.queue.borrow_mut().push(value, time);
-        state.add_callback_for_node(self.node_id.get().unwrap(), time);
+        let node_id = self
+            .node_id
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("feedback node_id not set"))?;
+        state.add_callback_for_node(node_id, time);
+        Ok(())
     }
 }
 
@@ -140,6 +147,7 @@ mod tests {
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(period * 5),
         )
+        .unwrap()
         .run()
         .unwrap();
     }
@@ -170,6 +178,7 @@ mod tests {
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Cycles(5),
         )
+        .unwrap()
         .run()
         .unwrap();
     }
@@ -206,6 +215,7 @@ mod tests {
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(period * 14),
         )
+        .unwrap()
         .run()
         .unwrap();
     }

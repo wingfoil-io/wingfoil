@@ -95,13 +95,13 @@ impl From<Duration> for NanoTime {
     }
 }
 
-impl From<NaiveDateTime> for NanoTime {
-    fn from(date_time: NaiveDateTime) -> Self {
-        let t = date_time
-            .and_utc()
-            .timestamp_nanos_opt()
-            .expect("timestamp out of range for nanosecond representation");
-        NanoTime(t as RawTime)
+impl TryFrom<NaiveDateTime> for NanoTime {
+    type Error = anyhow::Error;
+    fn try_from(date_time: NaiveDateTime) -> anyhow::Result<Self> {
+        let t = date_time.and_utc().timestamp_nanos_opt().ok_or_else(|| {
+            anyhow::anyhow!("timestamp out of range for nanosecond representation")
+        })?;
+        Ok(NanoTime(t as RawTime))
     }
 }
 
@@ -117,11 +117,12 @@ impl From<NanoTime> for u64 {
     }
 }
 
-impl From<NanoTime> for NaiveDateTime {
-    fn from(t: NanoTime) -> Self {
+impl TryFrom<NanoTime> for NaiveDateTime {
+    type Error = anyhow::Error;
+    fn try_from(t: NanoTime) -> anyhow::Result<Self> {
         DateTime::from_timestamp((t.0 / 1_000_000_000) as i64, (t.0 % 1_000_000_000) as u32)
-            .expect("NanoTime out of range for DateTime")
-            .naive_utc()
+            .map(|dt| dt.naive_utc())
+            .ok_or_else(|| anyhow::anyhow!("NanoTime out of range for DateTime"))
     }
 }
 

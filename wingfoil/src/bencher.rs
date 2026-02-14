@@ -15,7 +15,10 @@ where
     F: BenchBuilder + 'static,
 {
     let custom_bencher = RefCell::new(Bencher::new(f, RunMode::RealTime));
-    custom_bencher.borrow_mut().start();
+    custom_bencher
+        .borrow_mut()
+        .start()
+        .expect("failed to start bencher");
 
     crit.bench_function(name, {
         let custom_bencher = &custom_bencher;
@@ -61,8 +64,11 @@ impl Bencher {
         }
     }
 
-    pub fn start(&mut self) {
-        let builder = self.builder.take().unwrap();
+    pub fn start(&mut self) -> anyhow::Result<()> {
+        let builder = self
+            .builder
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("bencher already started"))?;
         let signal = self.signal.clone();
         let run_mode = self.run_mode;
         std::thread::spawn(move || {
@@ -70,10 +76,13 @@ impl Bencher {
             let node = builder(trigger).produce(move || {
                 signal.store(Signal::End.into(), Ordering::SeqCst);
             });
-            Graph::new(vec![node], run_mode, RunFor::Forever)
-                .run()
-                .unwrap();
+            let result =
+                Graph::new(vec![node], run_mode, RunFor::Forever).and_then(|mut g| g.run());
+            if let Err(e) = result {
+                log::error!("bench graph run failed: {e:?}");
+            }
         });
+        Ok(())
     }
 
     pub fn stop(&self) {
@@ -137,7 +146,7 @@ impl MutableNode for BenchTriggerNode {
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.always_callback();
+        state.always_callback()?;
         Ok(())
     }
 }

@@ -43,13 +43,13 @@ pub(crate) struct SenderNode<T: Element + Send> {
 impl<T: Element + Send> MutableNode for SenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
-        if state.ticked(self.source.clone().as_node()) {
+        if state.ticked(self.source.clone().as_node())? {
             self.sender.send(state, self.source.peek_value())?;
             Ok(true)
         } else {
             match &self.trigger {
                 Some(trig) => {
-                    debug_assert!(state.ticked(trig.clone()));
+                    debug_assert!(state.ticked(trig.clone()).unwrap_or(false));
                     self.sender.send_checkpoint(state)?;
                 }
                 None => {
@@ -139,7 +139,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 break;
                             } else {
                                 //println!("callback {}", t + 1);
-                                state.add_callback(t + 1);
+                                state.add_callback(t + 1)?;
                                 break;
                             }
                         }
@@ -203,14 +203,17 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                 }
                 while let Some(value_at) = self.queue.front() {
                     if value_at.time <= state.time() {
-                        // safe: we just checked front() is Some
-                        values.push(self.queue.pop_front().expect("queue non-empty").value);
+                        let item = self
+                            .queue
+                            .pop_front()
+                            .ok_or_else(|| anyhow!("queue unexpectedly empty"))?;
+                        values.push(item.value);
                     } else {
                         break;
                     }
                 }
                 if let Some(front) = self.queue.front() {
-                    state.add_callback(front.time);
+                    state.add_callback(front.time)?;
                 }
             }
         }
@@ -240,7 +243,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
             }
             RunMode::HistoricalFrom(time) => {
                 if self.trigger.is_none() {
-                    state.add_callback(time);
+                    state.add_callback(time)?;
                 }
             }
         }

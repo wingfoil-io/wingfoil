@@ -45,29 +45,39 @@ fn constant(val: Py<PyAny>) -> PyStream {
 
 /// maps steams a amd b into a new stream using func (e.g lambda a, b: a + b)
 #[pyfunction]
-fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyStream {
+fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyResult<PyStream> {
     Python::attach(|py| {
         let a = a
             .as_ref()
             .extract::<PyRef<PyStream>>(py)
-            .unwrap()
+            .map_err(|e| {
+                pyo3::exceptions::PyTypeError::new_err(format!(
+                    "first argument must be a Stream: {e}"
+                ))
+            })?
             .inner_stream();
         let b = b
             .as_ref()
             .extract::<PyRef<PyStream>>(py)
-            .unwrap()
+            .map_err(|e| {
+                pyo3::exceptions::PyTypeError::new_err(format!(
+                    "second argument must be a Stream: {e}"
+                ))
+            })?
             .inner_stream();
         let stream = ::wingfoil::bimap(
             Dep::Active(a),
             Dep::Active(b),
             move |a: PyElement, b: PyElement| {
                 Python::attach(|py: Python<'_>| {
-                    let res = func.call1(py, (a.value(), b.value())).unwrap();
+                    let res = func
+                        .call1(py, (a.value(), b.value()))
+                        .expect("bimap callback failed");
                     PyElement::new(res)
                 })
             },
         );
-        PyStream(stream)
+        Ok(PyStream(stream))
     })
 }
 

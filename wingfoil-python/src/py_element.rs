@@ -13,7 +13,7 @@ impl PyElement {
     }
 
     pub fn as_ref(&self) -> &Py<PyAny> {
-        self.0.as_ref().unwrap()
+        self.0.as_ref().expect("PyElement is None")
     }
 
     pub fn value(&self) -> Py<PyAny> {
@@ -29,14 +29,15 @@ impl Default for PyElement {
 
 impl std::fmt::Debug for PyElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Python::attach(|py| {
-            let res = self
-                .as_ref()
-                .call_method0(py, "__str__")
-                .unwrap()
-                .extract::<String>(py)
-                .unwrap();
-            write!(f, "{res}")
+        Python::attach(|py| match self.0.as_ref() {
+            Some(obj) => match obj.call_method0(py, "__str__") {
+                Ok(res) => match res.extract::<String>(py) {
+                    Ok(s) => write!(f, "{s}"),
+                    Err(_) => write!(f, "<PyElement: extract failed>"),
+                },
+                Err(_) => write!(f, "<PyElement: __str__ failed>"),
+            },
+            None => write!(f, "<PyElement: None>"),
         })
     }
 }
@@ -55,7 +56,10 @@ impl std::ops::Not for PyElement {
 
     fn not(self) -> Self::Output {
         Python::attach(|py| {
-            let res = self.as_ref().call_method0(py, "__neg__").unwrap();
+            let res = self
+                .as_ref()
+                .call_method0(py, "__neg__")
+                .expect("PyElement __neg__ failed");
             PyElement::new(res)
         })
     }
@@ -69,7 +73,7 @@ impl std::ops::Add for PyElement {
             let res = self
                 .as_ref()
                 .call_method1(py, "__add__", (rhs.as_ref(),))
-                .unwrap();
+                .expect("PyElement __add__ failed");
             PyElement::new(res)
         })
     }
@@ -83,7 +87,7 @@ impl std::ops::Sub for PyElement {
             let res = self
                 .as_ref()
                 .call_method1(py, "__sub__", (rhs.as_ref(),))
-                .unwrap();
+                .expect("PyElement __sub__ failed");
             PyElement::new(res)
         })
     }

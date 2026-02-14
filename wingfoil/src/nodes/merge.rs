@@ -14,7 +14,7 @@ pub struct MergeStream<T: Element> {
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         for stream in self.upstreams.iter() {
-            if state.ticked(stream.clone().as_node()) {
+            if state.ticked(stream.clone().as_node())? {
                 self.value = stream.peek_value();
                 break;
             }

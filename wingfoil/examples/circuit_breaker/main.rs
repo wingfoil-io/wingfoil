@@ -42,6 +42,7 @@ fn main() {
         RunMode::HistoricalFrom(NanoTime::ZERO),
         RunFor::Duration(period * 14),
     )
+    .unwrap()
     .run()
     .unwrap();
 }

@@ -17,8 +17,8 @@ pub(crate) struct TimeQueue<T: Hash + Eq> {
 }
 
 impl<T: Hash + Eq + std::fmt::Debug + std::clone::Clone> TimeQueue<T> {
-    pub fn next_time(&self) -> NanoTime {
-        self.queue.peek().unwrap().1.0
+    pub fn next_time(&self) -> Option<NanoTime> {
+        self.queue.peek().map(|item| item.1.0)
     }
     pub fn is_empty(&self) -> bool {
         let item = self.queue.peek();
@@ -27,8 +27,8 @@ impl<T: Hash + Eq + std::fmt::Debug + std::clone::Clone> TimeQueue<T> {
     pub fn push(&mut self, value: T, time: NanoTime) {
         self.queue.push(ValueAt::new(value, time), Reverse(time));
     }
-    pub fn pop(&mut self) -> T {
-        self.queue.pop().unwrap().0.value
+    pub fn pop(&mut self) -> Option<T> {
+        self.queue.pop().map(|item| item.0.value)
     }
     pub fn clear(&mut self) {
         self.queue.clear();
@@ -54,7 +54,7 @@ mod tests {
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(100));
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
 
@@ -64,9 +64,9 @@ mod tests {
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(200));
         queue.push(1, NanoTime::new(300));
-        assert_eq!(queue.pop(), 1);
-        assert_eq!(queue.pop(), 1);
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
 
@@ -88,9 +88,9 @@ mod tests {
         queue.push(1, NanoTime::new(300));
         queue.push(3, NanoTime::new(100));
         queue.push(2, NanoTime::new(200));
-        assert_eq!(queue.pop(), 3);
-        assert_eq!(queue.pop(), 2);
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(3));
+        assert_eq!(queue.pop(), Some(2));
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
     #[test]

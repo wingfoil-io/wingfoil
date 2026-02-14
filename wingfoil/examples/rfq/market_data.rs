@@ -88,8 +88,12 @@ impl RealTimeMarketDataProvider {
         let url = &env.url();
         let heartbeat = Duration::from_secs(2);
         let subscriber = RfqSubscriber::new();
-        let mut sock = JRPCSocket::connect(url, subscriber, Some(heartbeat)).await;
-        sock.subscribe(Channel::Rfqs).await;
+        let mut sock = JRPCSocket::connect(url, subscriber, Some(heartbeat))
+            .await
+            .expect("failed to connect to websocket");
+        sock.subscribe(Channel::Rfqs)
+            .await
+            .expect("failed to subscribe");
         sock.stream()
             .filter(|res| {
                 // only allow subsciption messages (notifications)
@@ -102,7 +106,7 @@ impl RealTimeMarketDataProvider {
                 };
                 futures::future::ready(pass)
             })
-            .map(|res| {
+            .map(|res: Result<Message, anyhow::Error>| {
                 // stamp with time
                 // TODO: handle errors
                 let params = match res.unwrap() {

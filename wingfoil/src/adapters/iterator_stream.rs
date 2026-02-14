@@ -17,7 +17,7 @@ pub struct IteratorStream<T: Element> {
 fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::Result<bool> {
     match peekable.peek() {
         Some(value_at) => {
-            state.add_callback(value_at.time);
+            state.add_callback(value_at.time)?;
             Ok(true)
         }
         None => Ok(false),
@@ -30,8 +30,12 @@ impl<T: Element> MutableNode for IteratorStream<T> {
         {
             while let Some(value_at) = self.peekable.peek() {
                 if value_at.time == state.time() {
-                    // safe: we just peeked and confirmed Some
-                    let val = self.peekable.next().expect("peeked value").value.clone();
+                    let val = self
+                        .peekable
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("peeked value was consumed"))?
+                        .value
+                        .clone();
                     self.value.push(val);
                 } else {
                     break;

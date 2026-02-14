@@ -24,7 +24,7 @@ pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
 
 impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        if state.ticked(self.trigger.clone()) {
+        if state.ticked(self.trigger.clone())? {
             // Reset: snap to current upstream value, clear pending queue
             self.value = self.upstream.peek_value();
             self.queue.clear();
@@ -38,18 +38,20 @@ impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
         } else {
             let current_time = state.time();
             let mut ticked = false;
-            if state.ticked(self.upstream.clone().as_node()) {
+            if state.ticked(self.upstream.clone().as_node())? {
                 if !self.initialized {
                     self.value = self.upstream.peek_value();
                     self.initialized = true;
                 }
                 let next_time = current_time + self.delay;
-                state.add_callback(next_time);
+                state.add_callback(next_time)?;
                 self.queue.push(self.upstream.peek_value(), next_time)
             }
             while self.queue.pending(current_time) {
-                self.value = self.queue.pop();
-                ticked = true;
+                if let Some(value) = self.queue.pop() {
+                    self.value = value;
+                    ticked = true;
+                }
             }
             Ok(ticked)
         }
@@ -87,7 +89,7 @@ mod tests {
             Active(src.delay(period * 3)),
             |a, b| {
                 assert_eq!(a, b);
-                ()
+                
             },
         )
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))

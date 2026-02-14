@@ -14,7 +14,7 @@ impl MutableNode for AlwaysTickNode {
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.always_callback();
+        state.always_callback()?;
         Ok(())
     }
 }

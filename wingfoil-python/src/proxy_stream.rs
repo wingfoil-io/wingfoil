@@ -42,8 +42,12 @@ impl MutableNode for PyProxyStream {
     fn upstreams(&self) -> UpStreams {
         let ups = Python::attach(|py| {
             let this = self.0.bind(py);
-            let res = this.call_method0("upstreams").unwrap();
-            let res = res.extract::<Vec<Py<PyAny>>>().unwrap();
+            let res = this
+                .call_method0("upstreams")
+                .expect("failed to call upstreams()");
+            let res = res
+                .extract::<Vec<Py<PyAny>>>()
+                .expect("upstreams() must return list");
             res.iter()
                 .filter_map(|obj| {
                     let bound = obj.bind(py);
@@ -77,7 +81,10 @@ impl StreamPeekRef<PyElement> for PyProxyStream {
 
     fn clone_from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
         Python::attach(|py| {
-            let res = self.0.call_method0(py, "peek").unwrap();
+            let res = self
+                .0
+                .call_method0(py, "peek")
+                .expect("failed to call peek()");
             PyElement::new(res)
         })
     }
