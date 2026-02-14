@@ -221,6 +221,7 @@ mod tests {
                 for window in values.windows(2) {
                     assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
                 }
+                Ok(())
             })
     }
 
