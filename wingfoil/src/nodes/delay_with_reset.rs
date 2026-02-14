@@ -89,7 +89,6 @@ mod tests {
             Active(src.delay(period * 3)),
             |a, b| {
                 assert_eq!(a, b);
-                
             },
         )
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
