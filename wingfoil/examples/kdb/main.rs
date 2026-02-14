@@ -4,7 +4,7 @@
 //! 1. Generates mock trade data
 //! 2. Writes it to KDB+
 //! 3. Reads it back from KDB+
-//! 4. Validates that the read data matches the written data
+//! 4. Validates that the read data matches the generated data
 //!
 //! # Setup
 //!
@@ -33,12 +33,11 @@
 //! ```
 
 use anyhow::Result;
-use log::Level;
 use std::rc::Rc;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Trade {
     sym: Sym,
     price: f64,
@@ -52,7 +51,6 @@ impl KdbDeserialize for Trade {
         interner: &mut SymbolInterner,
     ) -> Result<Self, KdbError> {
         Ok(Trade {
-            // Skip column 0 (time) - it's handled automatically by the adapter
             sym: row.get_sym(1, interner)?,
             price: row.get(2)?.get_float()?,
             qty: row.get(3)?.get_long()?,
@@ -62,7 +60,6 @@ impl KdbDeserialize for Trade {
 
 impl KdbSerialize for Trade {
     fn to_kdb_row(&self) -> K {
-        // Return business data only - time will be prepended automatically
         K::new_compound_list(vec![
             K::new_symbol(self.sym.to_string()),
             K::new_float(self.price),
@@ -75,7 +72,6 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
     let syms_interned: Vec<Sym> = syms.iter().map(|s| interner.intern(s)).collect();
-
     ticker(std::time::Duration::from_nanos(1_000_000_000))
         .count()
         .map(move |i| {
@@ -88,28 +84,36 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
         .limit(num_rows)
 }
 
+fn assert_equal<T: Element + Eq>(
+    a: Rc<dyn Stream<T>>, 
+    b: Rc<dyn Stream<T>>
+) -> Rc<dyn Node>{
+    bimap(
+    Dep::Active(a),
+        Dep::Active(b),
+        |a, b| assert!(a == b)
+    )
+}
+
 fn main() -> Result<()> {
     env_logger::init();
-
     let conn = KdbConnection::new("localhost", 5000);
-
+    let table = "trades";
+    let query = "select from trade";
+    let time_col = "time";
+    let chunk = 10000;
     let num_rows = 10;
-    let trades = generate(num_rows);
-
-    // Write trades to KDB using fluent API
-    trades
-        .kdb_write(conn.clone(), "trade")
-        .run(RunMode::RealTime, RunFor::Forever)?;
-
-    let read_stream = kdb_read::<Trade>(conn, "select from trade", "time", 10000);
-    let collected = read_stream
-        .collapse()
-        .logged("trades", Level::Info)
-        .collect();
-    collected.clone().run(RunMode::RealTime, RunFor::Forever)?;
-
-    let read_trades = collected.peek_value();
-    assert_eq!(read_trades.len(), num_rows as usize);
-
+    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+    let run_for = RunFor::Forever;
+    generate(num_rows)
+        .kdb_write(conn.clone(), table)
+        .run(run_mode, run_for)?;
+    let baseline = generate(num_rows);
+    let read = kdb_read::<Trade>(conn, query, time_col, chunk);
+    let assertions = vec![
+        assert_equal(read, baseline), 
+        assert_equal(read.count(), baseline.count())
+    ];
+    Graph::new(assertions, run_mode, run_for).run()?;
     Ok(())
 }
