@@ -35,7 +35,8 @@ fn main() {
     let trigger = diff
         .filter_value(move |p| p.abs() > level)
         .logged("trigger", Info)
-        .feedback_node(tx);
+        .as_node()
+        .feedback(tx);
 
     Graph::new(
         vec![trigger],

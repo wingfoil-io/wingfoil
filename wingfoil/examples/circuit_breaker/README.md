@@ -27,7 +27,7 @@ There are two flavours:
 
 
 ```
-ticker -> count -> bimap(diff) -> filter(|diff| > level) -> feedback_node(tx)
+ticker -> count -> bimap(diff) -> filter(|diff| > level) -> .as_node().feedback(tx)
                      ^                                            |
                      |                                            v
                   delay_with_reset  <-----------------------------+
@@ -106,7 +106,8 @@ let diff = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| {
 let trigger = diff
     .filter_value(move |p| p.abs() > level)
     .logged("trigger", Info)
-    .feedback_node(tx);
+    .as_node()
+    .feedback(tx);
 
 Graph::new(
     vec![trigger],

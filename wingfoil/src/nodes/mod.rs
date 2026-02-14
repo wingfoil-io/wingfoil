@@ -28,6 +28,7 @@ mod map;
 mod map_filter;
 mod merge;
 mod never;
+mod node_flow;
 mod print;
 mod producer;
 mod sample;
@@ -65,6 +66,7 @@ use limit::*;
 use map::*;
 use map_filter::*;
 use merge::*;
+use node_flow::*;
 use print::*;
 use producer::*;
 use sample::*;
@@ -240,9 +242,6 @@ pub trait NodeOperators {
     /// ```
     fn run(self: &Rc<Self>, run_mode: RunMode, run_to: RunFor) -> anyhow::Result<()>;
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph;
-    /// Sends `()` to a [FeedbackSink] on each tick.
-    #[must_use]
-    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node>;
 }
 
 impl NodeOperators for dyn Node {
@@ -266,16 +265,6 @@ impl NodeOperators for dyn Node {
     }
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
         Graph::new(vec![self.clone()], run_mode, run_for)
-    }
-    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
-        GraphStateStream::new(
-            self.clone(),
-            Box::new(move |state: &mut GraphState| {
-                sink.send((), state);
-            }),
-        )
-        .into_stream()
-        .as_node()
     }
 }
 
@@ -301,8 +290,43 @@ impl<T> NodeOperators for dyn Stream<T> {
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
         self.clone().as_node().into_graph(run_mode, run_for)
     }
-    fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
-        self.clone().as_node().feedback_node(sink)
+}
+
+/// Flow-control operators for [Node]s. These mirror the same-named methods
+/// on [StreamOperators] but operate on tick signals rather than values.
+pub trait NodeFlowOperators {
+    /// Suppresses upstream ticks that arrive faster than the specified interval.
+    #[must_use]
+    fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Node>;
+    /// Delays upstream ticks by the specified duration.
+    #[must_use]
+    fn delay(self: &Rc<Self>, delay: Duration) -> Rc<dyn Node>;
+    /// Propagates at most `limit` ticks from upstream.
+    #[must_use]
+    fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Node>;
+    /// Drops upstream ticks when `condition` is false.
+    #[must_use]
+    fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Node>;
+    /// Sends `()` to a [FeedbackSink] on each tick.
+    #[must_use]
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node>;
+}
+
+impl NodeFlowOperators for dyn Node {
+    fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Node> {
+        ThrottleNode::new(self.clone(), NanoTime::new(interval.as_nanos() as u64)).into_node()
+    }
+    fn delay(self: &Rc<Self>, delay: Duration) -> Rc<dyn Node> {
+        DelayNode::new(self.clone(), NanoTime::new(delay.as_nanos() as u64)).into_node()
+    }
+    fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Node> {
+        LimitNode::new(self.clone(), limit).into_node()
+    }
+    fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Node> {
+        FilterNode::new(self.clone(), condition).into_node()
+    }
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node> {
+        FeedbackSendNode::new(self.clone(), sink).into_node()
     }
 }
 
