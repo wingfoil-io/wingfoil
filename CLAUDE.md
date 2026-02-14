@@ -15,11 +15,11 @@ wingfoil/           # Core Rust library
     types.rs        # Core traits: Element, Node, MutableNode, Stream
     graph.rs        # Graph execution engine
     time.rs         # NanoTime (nanoseconds from UNIX epoch)
-    nodes/          # 27 node implementations (map, filter, fold, etc.)
-    adapters/       # I/O adapters (ZMQ, CSV, sockets)
+    nodes/          # 37 node implementations (map, filter, fold, etc.)
+    adapters/       # I/O adapters (CSV, sockets, KDB+, iterators)
     channel/        # Inter-node communication (kanal)
     queue/          # Data structures (TimeQueue, HashByRef)
-  examples/         # Usage examples (order_book, rfq, async, breadth_first)
+  examples/         # Usage examples (order_book, rfq, async, breadth_first, circuit_breaker, threading)
   benches/          # Criterion benchmarks
 
 wingfoil-python/    # PyO3 Python bindings
