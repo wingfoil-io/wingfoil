@@ -24,8 +24,12 @@ impl<T: Element + Hash + Eq> StreamPeekRef<T> for FeedbackStream<T> {
 impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
-        while self.queue.borrow().pending(state.time()) {
-            self.value = self.queue.borrow_mut().pop();
+        loop {
+            let mut q = self.queue.borrow_mut();
+            if !q.pending(state.time()) {
+                break;
+            }
+            self.value = q.pop();
             ticked = true;
         }
         Ok(ticked)
