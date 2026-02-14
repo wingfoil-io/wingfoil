@@ -37,6 +37,7 @@ where
 /// comma separated values (csv).  The source iterator must be of strictly
 /// ascending time.  For the more general cases where there can be multiple
 /// rows with the same timestamp, you can use [csv_read_vec] instead.
+#[must_use]
 pub fn csv_read<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
@@ -52,6 +53,7 @@ where
 /// Returns a [IteratorStream] that emits values from a file of
 /// comma separated values (csv).  The source iterator can tick
 /// multiple times per cycle.  
+#[must_use]
 pub fn csv_read_vec<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
@@ -129,6 +131,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVec
 /// Trait to add csv write operators to streams.
 pub trait CsvOperators<T: Element> {
     /// writes stream to csv file
+    #[must_use]
     fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
 }
 
@@ -143,6 +146,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
 }
 pub trait CsvVecOperators<T: Element> {
     /// writes stream of Vec to csv file
+    #[must_use]
     fn csv_write_vec(self: &Rc<Self>, path: &str) -> Rc<dyn Node>;
 }
 

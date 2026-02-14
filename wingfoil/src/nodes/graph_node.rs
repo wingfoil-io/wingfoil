@@ -120,6 +120,7 @@ where
 
 /// Creates a [Stream] emitting values on this thread
 /// but produced on a worker thread.
+#[must_use]
 pub fn producer<T: Element + Send + Hash + Eq>(
     func: impl FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>> {

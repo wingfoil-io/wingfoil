@@ -90,6 +90,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 /// Returns a [Stream] that adds both it's source [Stream]s.  Ticks when either of it's sources ticks.
+#[must_use]
 pub fn add<T>(upstream1: &Rc<dyn Stream<T>>, upstream2: &Rc<dyn Stream<T>>) -> Rc<dyn Stream<T>>
 where
     T: Element + Add<Output = T>,
@@ -105,6 +106,7 @@ where
 
 /// Maps two [Stream]s into one using the supplied function.
 /// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
+#[must_use]
 pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
@@ -115,6 +117,7 @@ pub fn bimap<IN1: Element, IN2: Element, OUT: Element>(
 
 /// Maps three [Stream]s into one using the supplied function.
 /// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
+#[must_use]
 pub fn trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
@@ -127,6 +130,7 @@ pub fn trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
 /// Maps two [Stream]s into one using a fallible closure.
 /// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
 /// Errors propagate to graph execution.
+#[must_use]
 pub fn try_bimap<IN1: Element, IN2: Element, OUT: Element>(
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
@@ -138,6 +142,7 @@ pub fn try_bimap<IN1: Element, IN2: Element, OUT: Element>(
 /// Maps three [Stream]s into one using a fallible closure.
 /// Use [Dep::Active] and [Dep::Passive] to control which upstreams trigger execution.
 /// Errors propagate to graph execution.
+#[must_use]
 pub fn try_trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
@@ -149,6 +154,7 @@ pub fn try_trimap<IN1: Element, IN2: Element, IN3: Element, OUT: Element>(
 
 /// Returns a stream that merges it's sources into one.  Ticks when either of it's sources ticks.
 /// If more than one source ticks at the same time, the first one that was supplied is used.
+#[must_use]
 pub fn merge<T>(sources: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<T>>
 where
     T: Element,
@@ -157,11 +163,13 @@ where
 }
 
 /// Returns a stream that ticks once with the specified value, on the first cycle.
+#[must_use]
 pub fn constant<T: Element>(value: T) -> Rc<dyn Stream<T>> {
     ConstantStream::new(value).into_stream()
 }
 
 /// Collects a Vec of [Stream]s into a [Stream] of Vec.
+#[must_use]
 pub fn combine<T>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + 'static,
@@ -170,6 +178,7 @@ where
 }
 
 /// Returns a [Node] that ticks with the specified period.
+#[must_use]
 pub fn ticker(period: Duration) -> Rc<dyn Node> {
     TickNode::new(NanoTime::new(period.as_nanos() as u64)).into_node()
 }
@@ -184,6 +193,7 @@ pub trait NodeOperators {
     /// // 1, 2, 3, etc.
     /// ticker(Duration::from_millis(10)).count();
     /// ```
+    #[must_use]
     fn count(self: &Rc<Self>) -> Rc<dyn Stream<u64>>;
 
     /// Emits the time of source ticks in nanos from unix epoch.
@@ -193,6 +203,7 @@ pub trait NodeOperators {
     /// // 0, 1000000000, 2000000000, etc.
     /// ticker(Duration::from_millis(10)).ticked_at();
     /// ```
+    #[must_use]
     fn ticked_at(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>>;
 
     /// Emits the time of source ticks relative to the start.
@@ -202,6 +213,7 @@ pub trait NodeOperators {
     /// // 0, 1000000000, 2000000000, etc.
     /// ticker(Duration::from_millis(10)).ticked_at_elapsed();
     /// ```
+    #[must_use]
     fn ticked_at_elapsed(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>>;
 
     /// Emits the result of supplied closure on each upstream tick.
@@ -211,6 +223,7 @@ pub trait NodeOperators {
     /// /// "hello world", "hello world", etc.
     /// ticker(Duration::from_millis(10)).produce(|| "hello, world");
     /// ```
+    #[must_use]
     fn produce<T: Element>(self: &Rc<Self>, func: impl Fn() -> T + 'static) -> Rc<dyn Stream<T>>;
 
     /// Shortcut for [Graph::run] i.e. initialise and execute the graph.
@@ -226,6 +239,7 @@ pub trait NodeOperators {
     fn run(self: &Rc<Self>, run_mode: RunMode, run_to: RunFor) -> anyhow::Result<()>;
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph;
     /// Sends `()` to a [FeedbackSink] on each tick.
+    #[must_use]
     fn feedback_node(self: &Rc<Self>, sink: FeedbackSink<()>) -> Rc<dyn Node>;
 }
 
@@ -294,24 +308,31 @@ impl<T> NodeOperators for dyn Stream<T> {
 /// Used to support method chaining syntax.
 pub trait StreamOperators<T: Element> {
     /// accumulate the source into a vector
+    #[must_use]
     fn accumulate(self: &Rc<Self>) -> Rc<dyn Stream<Vec<T>>>;
     /// running average of source
+    #[must_use]
     fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
+    #[must_use]
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>>;
     /// Buffer the source stream based on time interval. The window is automatically flushed when the interval is exceeded or on the last cycle.
+    #[must_use]
     fn window(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<Vec<T>>>;
     /// Used to accumulate values, which can be retrieved after
     /// the graph has completed running. Useful for unit tests.
+    #[must_use]
     fn collect(self: &Rc<Self>) -> Rc<dyn Stream<Vec<ValueAt<T>>>>;
-    /// collapses a burst (i.e. IntoIter\[T\]) of ticks into a single tick \[T\].   
+    /// collapses a burst (i.e. IntoIter\[T\]) of ticks into a single tick \[T\].
     /// Does not tick if burst is empty.
+    #[must_use]
     fn collapse<OUT>(self: &Rc<Self>) -> Rc<dyn Stream<OUT>>
     where
         T: std::iter::IntoIterator<Item = OUT>,
         OUT: Element;
+    #[must_use]
     fn consume_async<FUT>(
         self: &Rc<Self>,
         func: Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
@@ -319,39 +340,47 @@ pub trait StreamOperators<T: Element> {
     where
         T: Element + Send,
         FUT: Future<Output = anyhow::Result<()>> + Send + 'static;
+    #[must_use]
     fn finally<F: FnOnce(T, &GraphState) -> anyhow::Result<()> + 'static>(
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Node>;
     /// executes supplied closure on each tick
+    #[must_use]
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
     /// Sends each value to a [FeedbackSink].
+    #[must_use]
     fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Node>
     where
         T: Hash + Eq;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
+    #[must_use]
     fn try_for_each(
         self: &Rc<Self>,
         func: impl Fn(T, NanoTime) -> anyhow::Result<()> + 'static,
     ) -> Rc<dyn Node>;
     // reduce/fold source by applying function
+    #[must_use]
     fn fold<OUT: Element>(
         self: &Rc<Self>,
         func: impl Fn(&mut OUT, T) + 'static,
     ) -> Rc<dyn Stream<OUT>>;
     /// difference in it's source from one cycle to the next
+    #[must_use]
     fn difference(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: std::ops::Sub<Output = T>;
 
     /// Propagates it's source, delayed by the specified duration
+    #[must_use]
     fn delay(self: &Rc<Self>, delay: Duration) -> Rc<dyn Stream<T>>
     where
         T: Hash + Eq;
     /// Like [`delay`](StreamOperators::delay) but with a reset trigger.
     /// When the trigger fires, the output snaps to the current upstream value
     /// and the pending queue is cleared.
+    #[must_use]
     fn delay_with_reset(
         self: &Rc<Self>,
         delay: Duration,
@@ -393,49 +422,63 @@ pub trait StreamOperators<T: Element> {
         K: Hash + Eq + PartialEq + std::fmt::Debug + 'static,
         F: Fn(&U) -> (K, DemuxEvent) + 'static;
     /// only propagates it's source if it is changed
+    #[must_use]
     fn distinct(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: PartialEq;
     /// drops source contingent on supplied stream
+    #[must_use]
     fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Stream<T>>;
     /// drops source contingent on supplied predicate
+    #[must_use]
     fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static)
     -> Rc<dyn Stream<T>>;
     /// propagates source up to limit times
+    #[must_use]
     fn limit(self: &Rc<Self>, limit: u32) -> Rc<dyn Stream<T>>;
     /// logs source and propagates it
+    #[must_use]
     fn logged(self: &Rc<Self>, label: &str, level: Level) -> Rc<dyn Stream<T>>;
     /// Map's it's source into a new Stream using the supplied closure.
+    #[must_use]
     fn map<OUT: Element>(self: &Rc<Self>, func: impl Fn(T) -> OUT + 'static)
     -> Rc<dyn Stream<OUT>>;
     /// Map's source into a new Stream using a fallible closure.
     /// Errors propagate to graph execution.
+    #[must_use]
     fn try_map<OUT: Element>(
         self: &Rc<Self>,
         func: impl Fn(T) -> anyhow::Result<OUT> + 'static,
     ) -> Rc<dyn Stream<OUT>>;
     /// Uses func to build graph, which is spawned on worker thread
+    #[must_use]
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<Burst<OUT>>>
     where
         T: Element + Send,
         OUT: Element + Send + Hash + Eq,
         FUNC: FnOnce(Rc<dyn Stream<Burst<T>>>) -> Rc<dyn Stream<OUT>> + Send + 'static;
     /// negates it's input
+    #[must_use]
     fn not(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: std::ops::Not<Output = T>;
 
+    #[must_use]
     fn reduce(self: &Rc<Self>, func: impl Fn(T, T) -> T + 'static) -> Rc<dyn Stream<T>>;
     /// samples it's source on each tick of trigger
+    #[must_use]
     fn sample(self: &Rc<Self>, trigger: Rc<dyn Node>) -> Rc<dyn Stream<T>>;
     // print stream values to stdout
+    #[must_use]
     fn print(self: &Rc<Self>) -> Rc<dyn Stream<T>>;
+    #[must_use]
     fn sum(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: Add<T, Output = T>;
     /// Suppresses upstream values that arrive faster than the specified interval.
     /// Emits the first value immediately, then ignores subsequent values until
     /// the interval elapses.
+    #[must_use]
     fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>>;
 }
 

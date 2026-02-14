@@ -126,9 +126,11 @@ where
 /// [StreamOperators::demux_it].
 pub struct Overflow<T: Element>(Rc<RefCell<Option<Rc<dyn Stream<T>>>>>);
 impl<T: Element> Overflow<T> {
+    #[must_use]
     pub fn stream(&self) -> Rc<dyn Stream<T>> {
         self.0.borrow().clone().unwrap()
     }
+    #[must_use]
     pub fn panic(&self) -> Rc<dyn Node> {
         self.stream().for_each(move |itm, _| {
             panic!("overflow!\n{itm:?}");

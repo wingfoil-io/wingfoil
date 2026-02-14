@@ -327,6 +327,7 @@ pub trait KdbDeserialize: Sized {
 ///     RunFor::Duration(Duration::from_secs(86400))  // 24 hours
 /// );
 /// ```
+#[must_use]
 pub fn kdb_read<T>(
     connection: KdbConnection,
     query: impl Into<String>,

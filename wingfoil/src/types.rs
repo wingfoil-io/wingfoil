@@ -34,6 +34,7 @@ impl<T> Dep<T> {
         matches!(self, Dep::Active(_))
     }
 
+    #[must_use]
     pub fn as_node(&self) -> Rc<dyn Node>
     where
         T: 'static,
@@ -202,6 +203,7 @@ where
 
 /// Used to cast Rc<dyn [Stream]> to Rc<dyn [Node]>
 pub trait AsNode {
+    #[must_use]
     fn as_node(self: Rc<Self>) -> Rc<dyn Node>;
 }
 
@@ -213,6 +215,7 @@ impl<NODE: Node + 'static> AsNode for NODE {
 
 /// Used co cast Rc of concrete stream into Rc of dyn [Stream].
 pub trait AsStream<T> {
+    #[must_use]
     fn as_stream(self: Rc<Self>) -> Rc<dyn Stream<T>>;
 }
 
@@ -225,6 +228,7 @@ impl<T, STREAM: Stream<T> + 'static> AsStream<T> for STREAM {
 /// Used to consume a concrete [MutableNode] and return
 /// an Rc<dyn [Node]>>.
 pub trait IntoNode {
+    #[must_use]
     fn into_node(self) -> Rc<dyn Node>;
 }
 
@@ -237,6 +241,7 @@ impl<NODE: MutableNode + 'static> IntoNode for NODE {
 /// Used to consume a concrete [Stream] and return
 /// an Rc<dyn [Stream]>>.
 pub trait IntoStream<T> {
+    #[must_use]
     fn into_stream(self) -> Rc<dyn Stream<T>>;
 }
 

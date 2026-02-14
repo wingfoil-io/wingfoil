@@ -15,6 +15,7 @@ impl MutableNode for NeverTickNode {
 }
 
 /// Produces a [Node] that never ticks.
+#[must_use]
 pub fn never() -> Rc<dyn Node> {
     NeverTickNode {}.into_node()
 }

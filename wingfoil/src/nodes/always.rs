@@ -20,6 +20,7 @@ impl MutableNode for AlwaysTickNode {
 }
 
 /// Produces a [Node] that ticks on every engine cycle.
+#[must_use]
 pub fn always() -> Rc<dyn Node> {
     AlwaysTickNode {}.into_node()
 }
