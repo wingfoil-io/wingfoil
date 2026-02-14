@@ -27,6 +27,23 @@ pub trait KdbSerialize: Sized {
     /// # Note
     /// Do not include time in the returned K object - it will be prepended automatically.
     fn to_kdb_row(&self) -> K;
+
+    /// Define the table schema for auto-creation.
+    ///
+    /// Returns a q expression that creates an empty table with the correct schema.
+    /// The time column will be automatically prepended.
+    ///
+    /// # Example
+    /// ```ignore
+    /// fn table_schema() -> &'static str {
+    ///     "sym:`symbol$();price:`float$();qty:`long$()"
+    /// }
+    /// ```
+    ///
+    /// This will create: `([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())`
+    fn table_schema() -> &'static str {
+        ""  // Default: no auto-creation
+    }
 }
 
 /// Write stream data to a KDB+ table.
