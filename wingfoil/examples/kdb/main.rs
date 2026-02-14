@@ -20,6 +20,12 @@
 //! trade:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
 //! ```
 //!
+//! **Note:** Before each run, clear the table in the q console:
+//!
+//! ```q
+//! delete from `trade
+//! ```
+//!
 //! # Run
 //!
 //! ```sh
@@ -70,26 +76,19 @@ impl KdbSerialize for Trade {
 fn generate() -> Rc<dyn Stream<TinyVec<[Trade; 1]>>> {
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
-    let mock_trades: Vec<Trade> = (0..10)
-        .map(|i| Trade {
-            sym: interner.intern(syms[i % syms.len()]),
-            price: 100.0 + i as f64,
-            qty: (i * 10 + 1) as i64,
-        })
-        .collect();
+    let syms_interned: Vec<Sym> = syms.iter().map(|s| interner.intern(s)).collect();
 
-    produce_async(move |_ctx| {
-        let trades = mock_trades;
-        async move {
-            Ok(async_stream::stream! {
-                for (i, trade) in trades.into_iter().enumerate() {
-                    // Use distinct timestamps starting from KDB epoch
-                    let time = NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000);
-                    yield Ok((time, trade));
-                }
-            })
-        }
-    })
+    ticker(std::time::Duration::from_nanos(1_000_000_000))
+        .count()
+        .map(move |i| {
+            let mut result = TinyVec::new();
+            result.push(Trade {
+                sym: syms_interned[i as usize % syms_interned.len()].clone(),
+                price: 100.0 + i as f64,
+                qty: (i * 10 + 1) as i64,
+            });
+            result
+        })
 }
 
 /// Write a stream of trades to a KDB+ table
@@ -118,13 +117,13 @@ fn main() -> Result<()> {
 
     // Step 1: Generate mock trade stream
     let trade_stream = generate();
-    let trade_count = 10; // Known from generate() implementation
+    let trade_count: u32 = 10; // Known from generate() implementation
     println!("Generated stream with {} mock trades", trade_count);
 
     // Step 2: Write trades to KDB
     let writer = write(conn.clone(), "trade", &trade_stream);
     println!("Writing trades to KDB...");
-    writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+    writer.run(RunMode::RealTime, RunFor::Cycles(trade_count))?;
     println!("Write complete");
 
     // Step 3: Read trades back from KDB
@@ -135,9 +134,7 @@ fn main() -> Result<()> {
         .logged("trades", Level::Info)
         .collect();
 
-    collected
-        .clone()
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+    collected.clone().run(RunMode::RealTime, RunFor::Forever)?;
 
     let read_trades = collected.peek_value();
     println!("Read {} trades from KDB", read_trades.len());
@@ -146,7 +143,7 @@ fn main() -> Result<()> {
     println!("\nValidating round-trip...");
     assert_eq!(
         read_trades.len(),
-        trade_count,
+        trade_count as usize,
         "Row count mismatch: expected {}, got {}",
         trade_count,
         read_trades.len()
