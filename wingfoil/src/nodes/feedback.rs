@@ -189,7 +189,8 @@ mod tests {
 
         let trigger = diff
             .filter_value(move |p| p.abs() > level)
-            .feedback_node(tx);
+            .as_node()
+            .feedback(tx);
 
         let res = diff.accumulate().finally(|value, _| {
             let expected = vec![0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3];
