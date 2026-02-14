@@ -8,3 +8,4 @@ pub mod kdb;
 #[cfg(feature = "websockets")]
 #[doc(hidden)]
 pub mod socket;
+pub mod zmq;

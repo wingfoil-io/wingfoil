@@ -1,4 +1,4 @@
-use crate::nodes::channel::ReceiverStream;
+use crate::nodes::channel::ChannelReceiverStream;
 use crate::*;
 use channel::{ChannelSender, channel_pair};
 use nodes::channel::ChannelOperators;
@@ -28,7 +28,7 @@ where
     T: Element + Send,
     FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
 {
-    receiver_stream: OnceCell<ReceiverStream<T>>,
+    receiver_stream: OnceCell<ChannelReceiverStream<T>>,
     state: GraphProducerStreamState<T, FUNC>,
 }
 
@@ -70,7 +70,7 @@ where
                     RunMode::RealTime => Some(graph_state.ready_notifier()),
                 };
                 let (sender, receiver) = channel_pair(notifier);
-                let mut receiver_stream = ReceiverStream::new(receiver, None, None);
+                let mut receiver_stream = ChannelReceiverStream::new(receiver, None, None);
                 receiver_stream.setup(graph_state)?;
                 self.receiver_stream.set(receiver_stream).unwrap();
                 let tokio_runtime = graph_state.tokio_runtime();
@@ -149,7 +149,7 @@ where
 {
     source: Rc<dyn Stream<IN>>,
     sender: OnceCell<ChannelSender<IN>>,
-    receiver_stream: ReceiverStream<OUT>,
+    receiver_stream: ChannelReceiverStream<OUT>,
     state: GraphMapStreamState<FUNC, IN, OUT>,
 }
 
@@ -163,7 +163,7 @@ where
         let trigger = Some(source.clone().as_node());
         let (sender_out, receiver_out) = channel_pair(None);
         //let receiver_out = ChannelReceiver::new(rx_out);
-        let receiver_stream = ReceiverStream::new(receiver_out, trigger, None);
+        let receiver_stream = ChannelReceiverStream::new(receiver_out, trigger, None);
         let state = GraphMapStreamState::Func(func, sender_out);
         let sender = OnceCell::new();
         GraphMapStream {
@@ -218,7 +218,7 @@ where
                 let start_time = graph_state.start_time();
                 let (mut sender_in, receiver_in) = channel_pair(None);
                 let task = move || {
-                    let src = ReceiverStream::new(receiver_in, None, tx_notif).into_stream();
+                    let src = ChannelReceiverStream::new(receiver_in, None, tx_notif).into_stream();
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));
                     let mut graph =
                         Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
