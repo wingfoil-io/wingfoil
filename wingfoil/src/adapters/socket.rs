@@ -68,7 +68,10 @@ impl JRPCWriter {
             println!("send >> {request}");
         }
         let message = Message::Text(request.into());
-        self.writer.send(message).await.unwrap();
+        self.writer
+            .send(message)
+            .await
+            .expect("websocket send failed");
         self.message_id += 1;
     }
     pub async fn subscribe(&mut self, channel: String) {
@@ -99,7 +102,7 @@ where
     T: DeserializeOwned,
 {
     pub async fn connect(url: &str, responder: F, heartbeat: Option<Duration>) -> Self {
-        let (ws_stream, _) = connect_async(url).await.unwrap();
+        let (ws_stream, _) = connect_async(url).await.expect("websocket connect failed");
         let (writer, reader) = ws_stream.split();
         let writer = JRPCWriter {
             writer,

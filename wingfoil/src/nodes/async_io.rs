@@ -186,9 +186,9 @@ where
 
         match run_mode {
             RunMode::HistoricalFrom(_) => {}
-            RunMode::RealTime => sender.set_notifier(state.ready_notifier()),
+            RunMode::RealTime => sender.set_notifier(state.ready_notifier()?),
         };
-        let mut sender = sender.into_async();
+        let mut sender = sender.into_async()?;
         let func = self
             .func
             .take()
@@ -203,9 +203,9 @@ where
             let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
             let mut source = Box::pin(source);
             while let Some(message) = source.next().await {
-                sender.send_message(message).await;
+                sender.send_message(message).await?;
             }
-            sender.close().await;
+            sender.close().await?;
             Ok(())
         };
         let handle = state.tokio_runtime().spawn(fut);

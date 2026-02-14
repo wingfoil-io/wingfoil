@@ -104,7 +104,10 @@ where
             },
             None => match self.peek_available() {
                 Some(index) => {
-                    self.available.take(&index).unwrap();
+                    // safe: we just got this index from peek_available
+                    self.available
+                        .take(&index)
+                        .expect("index from peek_available");
                     self.in_use.insert(key, Some(index));
                     DemuxEntry::Some(index)
                 }
@@ -128,7 +131,10 @@ pub struct Overflow<T: Element>(Rc<RefCell<Option<Rc<dyn Stream<T>>>>>);
 impl<T: Element> Overflow<T> {
     #[must_use]
     pub fn stream(&self) -> Rc<dyn Stream<T>> {
-        self.0.borrow().clone().unwrap()
+        self.0
+            .borrow()
+            .clone()
+            .expect("overflow stream not initialized")
     }
     #[must_use]
     pub fn panic(&self) -> Rc<dyn Node> {
@@ -213,7 +219,9 @@ where
             DemuxEvent::None => self.map.get_or_insert(key),
         };
         let graph_index = match entry {
-            DemuxEntry::Overflow => self.overflow_graph_index.unwrap(),
+            DemuxEntry::Overflow => self
+                .overflow_graph_index
+                .ok_or_else(|| anyhow::anyhow!("overflow graph index not resolved"))?,
             DemuxEntry::Some(index) => self.index_map[index],
         };
         // mark dirty directly instead of ticking
@@ -223,14 +231,15 @@ where
 
     fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
-        let mut node_indexes: Vec<_> = childes
-            .drain(..)
-            .map(|strm| {
-                graph_state.node_index(strm.as_node()).unwrap_or_else(|| {
-                    panic!("Failed to resolve graph index of demux child node.  Was it added to the graph?")
-                })
-            })
-            .collect();
+        let mut node_indexes = Vec::new();
+        for strm in childes.drain(..) {
+            let ix = graph_state.node_index(strm.as_node()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to resolve graph index of demux child node. Was it added to the graph?"
+                )
+            })?;
+            node_indexes.push(ix);
+        }
         drop(childes);
         node_indexes
             .drain(..)
@@ -376,7 +385,9 @@ where
             let (index, graph_index) = match entry {
                 DemuxEntry::Overflow => {
                     let index = self.map.size();
-                    let graph_index = self.overflow_graph_index.unwrap();
+                    let graph_index = self
+                        .overflow_graph_index
+                        .ok_or_else(|| anyhow::anyhow!("overflow graph index not resolved"))?;
                     (index, graph_index)
                 }
                 DemuxEntry::Some(index) => {
@@ -393,19 +404,23 @@ where
 
     fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         let mut childes = self.children.borrow_mut();
-        let mut node_indexes: Vec<_> = childes
-            .drain(..)
-            .map(|strm| {
-                graph_state.node_index(strm.as_node()).unwrap_or_else(|| {
-                    panic!("Failed to resolve graph index of demux child node.  Was it added to the graph?")
-                })
-            })
-            .collect();
+        let mut node_indexes = Vec::new();
+        for strm in childes.drain(..) {
+            let ix = graph_state.node_index(strm.as_node()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to resolve graph index of demux child node. Was it added to the graph?"
+                )
+            })?;
+            node_indexes.push(ix);
+        }
         drop(childes);
         node_indexes
             .drain(..)
             .for_each(|node_index| self.index_map.push(node_index));
-        let overflow = self.overflow_child.take().unwrap();
+        let overflow = self
+            .overflow_child
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("overflow child is already taken"))?;
         self.overflow_graph_index = graph_state.node_index(overflow.as_node());
         anyhow::ensure!(
             self.overflow_graph_index.is_some(),
@@ -440,7 +455,12 @@ where
     T: Element,
 {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
+        self.value = self
+            .source
+            .peek_ref_cell()
+            .get(self.index)
+            .ok_or_else(|| anyhow::anyhow!("demux child index {} out of bounds", self.index))?
+            .clone();
         Ok(true)
     }
 

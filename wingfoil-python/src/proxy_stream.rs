@@ -45,14 +45,15 @@ impl MutableNode for PyProxyStream {
             let res = this.call_method0("upstreams").unwrap();
             let res = res.extract::<Vec<Py<PyAny>>>().unwrap();
             res.iter()
-                .map(|obj| {
+                .filter_map(|obj| {
                     let bound = obj.bind(py);
                     if let Ok(stream) = bound.extract::<PyStream>() {
-                        stream.inner_stream().as_node()
+                        Some(stream.inner_stream().as_node())
                     } else if let Ok(stream) = bound.extract::<PyProxyStream>() {
-                        stream.into_node()
+                        Some(stream.into_node())
                     } else {
-                        panic!("Unexpected upstream type");
+                        log::warn!("Unexpected upstream type: {:?}, skipping", bound.get_type());
+                        None
                     }
                 })
                 .collect::<Vec<_>>()

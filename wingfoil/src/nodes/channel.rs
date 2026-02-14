@@ -101,7 +101,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                     if self.finished {
                         break;
                     } else {
-                        match self.receiver.try_recv() {
+                        match self.receiver.try_recv()? {
                             Some(message) => match message {
                                 Message::RealtimeValue(value) => {
                                     values.push(value);
@@ -147,7 +147,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
 
                     // block for message
                     //println!("blocking for receive");
-                    let message = self.receiver.recv();
+                    let message = self.receiver.recv()?;
                     match message {
                         Message::RealtimeValue(_) => {
                             return Err(anyhow!(
@@ -171,7 +171,11 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                             }
 
                             // Validate: all timestamps must be >= current graph time
-                            let min_time = batch.iter().map(|va| va.time).min().unwrap();
+                            let min_time = batch
+                                .iter()
+                                .map(|va| va.time)
+                                .min()
+                                .ok_or_else(|| anyhow!("empty batch has no min time"))?;
                             if min_time < state.time() {
                                 return Err(anyhow!(
                                     "received HistoricalBatch with timestamp less than graph time, {} < {}",
@@ -199,13 +203,14 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                 }
                 while let Some(value_at) = self.queue.front() {
                     if value_at.time <= state.time() {
-                        values.push(self.queue.pop_front().unwrap().value);
+                        // safe: we just checked front() is Some
+                        values.push(self.queue.pop_front().expect("queue non-empty").value);
                     } else {
                         break;
                     }
                 }
-                if !self.queue.is_empty() {
-                    state.add_callback(self.queue.front().unwrap().time);
+                if let Some(front) = self.queue.front() {
+                    state.add_callback(front.time);
                 }
             }
         }
@@ -229,7 +234,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         match state.run_mode() {
             RunMode::RealTime => {
                 if let Some(chan) = self.notifier_channel.take() {
-                    chan.send(state.ready_notifier())
+                    chan.send(state.ready_notifier()?)
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
             }
@@ -243,8 +248,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 
     fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
-        self.receiver.teardown();
-        Ok(())
+        self.receiver.teardown()
     }
 }
 

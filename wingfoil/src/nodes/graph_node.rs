@@ -57,7 +57,10 @@ where
     }
 
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
-        self.receiver_stream.get_mut().unwrap().cycle(graph_state)
+        self.receiver_stream
+            .get_mut()
+            .ok_or_else(|| anyhow::anyhow!("receiver stream not initialized"))?
+            .cycle(graph_state)
     }
 
     fn setup(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
@@ -67,12 +70,14 @@ where
                 let run_for = graph_state.run_for();
                 let notifier = match graph_state.run_mode() {
                     RunMode::HistoricalFrom(_) => None,
-                    RunMode::RealTime => Some(graph_state.ready_notifier()),
+                    RunMode::RealTime => Some(graph_state.ready_notifier()?),
                 };
                 let (sender, receiver) = channel_pair(notifier);
                 let mut receiver_stream = ReceiverStream::new(receiver, None, None);
                 receiver_stream.setup(graph_state)?;
-                self.receiver_stream.set(receiver_stream).unwrap();
+                self.receiver_stream
+                    .set(receiver_stream)
+                    .map_err(|_| anyhow::anyhow!("receiver stream already set"))?;
                 let tokio_runtime = graph_state.tokio_runtime();
                 let start_time = graph_state.start_time();
                 let run_mode = graph_state.run_mode();
@@ -80,13 +85,15 @@ where
                     let node = func().send(sender, None);
                     let mut graph =
                         Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    graph.run().unwrap();
+                    if let Err(e) = graph.run() {
+                        log::error!("graph producer run failed: {e:?}");
+                    }
                 };
 
                 let handle = thread::spawn(task);
                 self.state = GraphProducerStreamState::Handle(handle);
             }
-            _ => panic!(),
+            _ => anyhow::bail!("unexpected GraphProducerStreamState"),
         }
         Ok(())
     }
@@ -94,12 +101,14 @@ where
     fn teardown(&mut self, graph_state: &mut GraphState) -> anyhow::Result<()> {
         self.receiver_stream
             .get_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("receiver stream not initialized"))?
             .teardown(graph_state)?;
         let state = mem::take(&mut self.state);
         match state {
             GraphProducerStreamState::Handle(handle) => {
-                handle.join().unwrap();
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("producer thread panicked"))?;
                 self.state = GraphProducerStreamState::Empty;
             }
             _ => anyhow::bail!("unexpected state"),
@@ -114,7 +123,10 @@ where
     FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
 {
     fn peek_ref(&self) -> &Burst<T> {
-        self.receiver_stream.get().unwrap().peek_ref()
+        self.receiver_stream
+            .get()
+            .expect("receiver stream not initialized")
+            .peek_ref()
     }
 }
 
@@ -189,7 +201,7 @@ where
         if graph_state.ticked(self.source.clone()) {
             self.sender
                 .get_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("sender not initialized"))?
                 .send(graph_state, self.source.peek_value())?;
         }
         self.receiver_stream.cycle(graph_state)
@@ -203,7 +215,7 @@ where
                 let run_mode = graph_state.run_mode();
                 match run_mode {
                     RunMode::RealTime => {
-                        sender_out.set_notifier(graph_state.ready_notifier());
+                        sender_out.set_notifier(graph_state.ready_notifier()?);
                     }
                     RunMode::HistoricalFrom(_) => {}
                 };
@@ -222,7 +234,9 @@ where
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));
                     let mut graph =
                         Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    graph.run().unwrap();
+                    if let Err(e) = graph.run() {
+                        log::error!("graph map run failed: {e:?}");
+                    }
                 };
                 let handle = thread::spawn(task);
                 self.state = GraphMapStreamState::Handle(handle);
@@ -230,11 +244,15 @@ where
                     RunMode::HistoricalFrom(_) => {}
                     RunMode::RealTime => {
                         let timeout = Duration::from_millis(100);
-                        let notifier = rx_notif.recv_timeout(timeout).unwrap();
+                        let notifier = rx_notif
+                            .recv_timeout(timeout)
+                            .map_err(|e| anyhow::anyhow!("timeout waiting for notifier: {e}"))?;
                         sender_in.set_notifier(notifier);
                     }
                 };
-                self.sender.set(sender_in).unwrap();
+                self.sender
+                    .set(sender_in)
+                    .map_err(|_| anyhow::anyhow!("sender already set"))?;
             }
             _ => anyhow::bail!("Invalid state"),
         }
@@ -254,7 +272,9 @@ where
         let state = mem::take(&mut self.state);
         match state {
             GraphMapStreamState::Handle(handle) => {
-                handle.join().unwrap();
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("map thread panicked"))?;
                 self.state = GraphMapStreamState::Empty;
             }
             _ => anyhow::bail!("Invalid state"),

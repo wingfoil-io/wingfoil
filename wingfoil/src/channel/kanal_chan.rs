@@ -29,20 +29,24 @@ pub(crate) struct ChannelReceiver<T: Element + Send> {
 }
 
 impl<T: Element + Send> ChannelReceiver<T> {
-    pub fn try_recv(&self) -> Option<Message<T>> {
-        self.kanal_receiver.try_recv().unwrap()
+    pub fn try_recv(&self) -> anyhow::Result<Option<Message<T>>> {
+        self.kanal_receiver
+            .try_recv()
+            .map_err(|e| anyhow::anyhow!("channel try_recv failed: {e}"))
     }
-    pub fn recv(&self) -> Message<T> {
-        self.kanal_receiver.recv().unwrap()
+    pub fn recv(&self) -> anyhow::Result<Message<T>> {
+        self.kanal_receiver
+            .recv()
+            .map_err(|e| anyhow::anyhow!("channel recv failed: {e}"))
     }
-    pub fn teardown(&self) {
+    pub fn teardown(&self) -> anyhow::Result<()> {
         for _ in 0..100 {
             if self.kanal_receiver.sender_count() == 0 {
-                return;
+                return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("timed out waiting for sending end of channel to close");
+        anyhow::bail!("timed out waiting for sending end of channel to close")
     }
 }
 
@@ -128,13 +132,15 @@ impl<T: Element + Send> ChannelSender<T> {
         Ok(())
     }
 
-    pub fn into_async(self) -> AsyncChannelSender<T> {
+    pub fn into_async(self) -> anyhow::Result<AsyncChannelSender<T>> {
         let ChannelSender {
             mut kanal_sender,
             ready_notifier,
         } = self;
-        let kanal_sender = kanal_sender.take().unwrap();
-        AsyncChannelSender::new(kanal_sender, ready_notifier)
+        let kanal_sender = kanal_sender
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("channel sender already closed"))?;
+        Ok(AsyncChannelSender::new(kanal_sender, ready_notifier))
     }
 }
 
@@ -153,20 +159,23 @@ impl<T: Element + Send> AsyncChannelSender<T> {
         }
     }
 
-    pub async fn send_message(&self, message: Message<T>) {
+    pub async fn send_message(&self, message: Message<T>) -> anyhow::Result<()> {
         self.kanal_sender
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("async channel sender closed"))?
             .send(message)
             .await
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("async channel send failed: {e}"))?;
         if let Some(notifier) = &self.ready_notifier {
-            notifier.notify().unwrap();
+            notifier
+                .notify()
+                .map_err(|e| anyhow::anyhow!("notifier send failed: {e}"))?;
         }
+        Ok(())
     }
 
     #[allow(dead_code)]
-    pub async fn send(&self, run_mode: RunMode, time: NanoTime, value: T) {
+    pub async fn send(&self, run_mode: RunMode, time: NanoTime, value: T) -> anyhow::Result<()> {
         let message = match run_mode {
             RunMode::HistoricalFrom(_) => {
                 let value_at = ValueAt::new(value, time);
@@ -174,24 +183,25 @@ impl<T: Element + Send> AsyncChannelSender<T> {
             }
             RunMode::RealTime => Message::RealtimeValue(value),
         };
-        self.send_message(message).await;
+        self.send_message(message).await
     }
 
     #[allow(dead_code)]
-    pub async fn send_checkpoint(&self, time: NanoTime) {
+    pub async fn send_checkpoint(&self, time: NanoTime) -> anyhow::Result<()> {
         let message = Message::CheckPoint(time);
-        self.send_message(message).await;
+        self.send_message(message).await
     }
 
     #[allow(dead_code)]
-    pub async fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) {
+    pub async fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) -> anyhow::Result<()> {
         let message = Message::HistoricalBatch(batch.into_boxed_slice());
-        self.send_message(message).await;
+        self.send_message(message).await
     }
 
-    pub async fn close(&mut self) {
+    pub async fn close(&mut self) -> anyhow::Result<()> {
         let message = Message::EndOfStream;
-        self.send_message(message).await;
+        self.send_message(message).await?;
         self.kanal_sender = None;
+        Ok(())
     }
 }

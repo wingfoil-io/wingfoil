@@ -23,11 +23,11 @@ impl PyStream {
     where
         T: Element + for<'a, 'py> FromPyObject<'a, 'py>,
     {
-        self.0.map(move |x: PyElement| {
+        self.0.try_map(move |x: PyElement| {
             Python::attach(|py| match x.as_ref().extract::<T>(py) {
-                Ok(val) => val,
+                Ok(val) => Ok(val),
                 Err(_err) => {
-                    panic!("Failed to convert from python type to native rust type")
+                    anyhow::bail!("Failed to convert from python type to native rust type")
                 }
             })
         })
@@ -48,7 +48,10 @@ where
 {
     Python::attach(|py| match x.into_pyobject(py) {
         Ok(bound) => bound.into_any().unbind(),
-        Err(_) => panic!("Conversion to PyAny from type {} failed", type_name::<T>()),
+        Err(_) => {
+            log::error!("Conversion to PyAny from type {} failed", type_name::<T>());
+            py.None()
+        }
     })
 }
 
@@ -216,16 +219,19 @@ impl PyStream {
         PyStream(self.0.not())
     }
 
-    fn sample(&self, trigger: Py<PyAny>) -> PyStream {
+    fn sample(&self, trigger: Py<PyAny>) -> PyResult<PyStream> {
         Python::attach(|py| {
             let obj = trigger.as_ref();
             if let Ok(node) = obj.extract::<PyRef<PyNode>>(py) {
-                return PyStream(self.0.sample(node.0.clone()));
+                return Ok(PyStream(self.0.sample(node.0.clone())));
             }
             if let Ok(stream) = obj.extract::<PyRef<PyStream>>(py) {
-                return PyStream(self.0.sample(stream.0.clone()));
+                return Ok(PyStream(self.0.sample(stream.0.clone())));
             }
-            panic!("Expected a PyNode or PyStream");
+            Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Expected a PyNode or PyStream, got: {:?}",
+                obj.bind(py).get_type()
+            )))
         })
     }
 

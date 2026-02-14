@@ -27,11 +27,11 @@ pub fn parse_run_args(
     cycles: Option<u32>,
 ) -> anyhow::Result<(RunMode, RunFor)> {
     if duration.is_some() && cycles.is_some() {
-        panic!("Cannot specify both duration and cycles");
+        anyhow::bail!("Cannot specify both duration and cycles");
     }
     let realtime = realtime.unwrap_or(false);
     if realtime && start.is_some() {
-        panic!("Cannot specify start in realtime mode");
+        anyhow::bail!("Cannot specify start in realtime mode");
     }
     let run_mode = if realtime {
         RunMode::RealTime

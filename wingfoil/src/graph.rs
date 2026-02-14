@@ -6,7 +6,7 @@ use crossbeam::channel::{Receiver, SendError, Sender, select};
 use lazy_static::lazy_static;
 use std::cmp::{max, min};
 use std::collections::HashMap;
-use std::convert::TryInto;
+
 use std::fs::File;
 use std::io::{Error, Write};
 use std::path::Path;
@@ -114,9 +114,11 @@ impl GraphState {
         run_mode: RunMode,
         run_for: RunFor,
         start_time: NanoTime,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let (ready_notifier, ready_callbacks) = crossbeam::channel::unbounded();
-        let mut id = GRAPH_ID.lock().unwrap();
+        let mut id = GRAPH_ID
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock GRAPH_ID: {e}"))?;
         let slf = Self {
             time: NanoTime::ZERO,
             is_last_cycle: false,
@@ -137,7 +139,7 @@ impl GraphState {
             node_dirty: Vec::new(),
         };
         *id += 1;
-        slf
+        Ok(slf)
     }
 
     /// The current engine time
@@ -154,11 +156,13 @@ impl GraphState {
         self.start_time
     }
 
-    pub(crate) fn ready_notifier(&self) -> ReadyNotifier {
-        ReadyNotifier {
-            node_index: self.current_node_index.unwrap(),
+    pub(crate) fn ready_notifier(&self) -> anyhow::Result<ReadyNotifier> {
+        Ok(ReadyNotifier {
+            node_index: self
+                .current_node_index
+                .ok_or_else(|| anyhow::anyhow!("no current node index"))?,
             sender: self.ready_notifier.clone(),
-        }
+        })
     }
 
     pub fn tokio_runtime(&self) -> Arc<tokio::runtime::Runtime> {
@@ -166,15 +170,21 @@ impl GraphState {
     }
 
     pub fn add_callback(&mut self, time: NanoTime) {
-        self.add_callback_for_node(self.current_node_index.unwrap(), time);
+        // current_node_index is always set during cycle/setup/start/stop/teardown
+        self.add_callback_for_node(
+            self.current_node_index.expect("no current node index"),
+            time,
+        );
     }
 
     pub(crate) fn current_node_id(&self) -> usize {
-        self.current_node_index.unwrap()
+        // current_node_index is always set during cycle/setup/start/stop/teardown
+        self.current_node_index.expect("no current node index")
     }
 
     pub fn always_callback(&mut self) {
-        let ix = self.current_node_index.unwrap();
+        // current_node_index is always set during cycle/setup/start/stop/teardown
+        let ix = self.current_node_index.expect("no current node index");
         self.always_callbacks.push(ix);
     }
 
@@ -184,7 +194,7 @@ impl GraphState {
 
     /// Returns true if node has ticked on the current engine cycle
     pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
-        self.node_ticked[self.node_index(node).unwrap()]
+        self.node_ticked[self.node_index(node).expect("node not found in graph")]
     }
 
     #[allow(dead_code)]
@@ -223,7 +233,7 @@ impl GraphState {
             let timeout = u64::from(end_time - now);
             select! {
                 recv(self.ready_callbacks) -> msg => {
-                    Some(msg.unwrap())
+                    msg.ok()
                 },
                 default(Duration::from_nanos(timeout)) => {
                     None
@@ -308,9 +318,10 @@ impl Graph {
             // })
             .enable_all()
             .build()
-            .unwrap();
+            .expect("failed to build tokio runtime");
         let start_time = run_mode.start_time();
-        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time);
+        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time)
+            .expect("failed to create graph state");
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
@@ -323,7 +334,8 @@ impl Graph {
         run_for: RunFor,
         start_time: NanoTime,
     ) -> Graph {
-        let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time);
+        let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time)
+            .expect("failed to create graph state");
 
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
@@ -493,7 +505,7 @@ impl Graph {
         }
         let mut max_layer: i32 = -1;
         for i in 0..self.state.nodes.len() {
-            max_layer = max(max_layer, self.state.nodes[i].layer.try_into().unwrap());
+            max_layer = max(max_layer, self.state.nodes[i].layer as i32);
             self.state.node_dirty.push(false);
             for j in 0..self.state.nodes[i].upstreams.len() {
                 let (up_index, active) = self.state.nodes[i].upstreams[j];
@@ -530,7 +542,9 @@ impl Graph {
         // constructing NodeData wrapper for each node and pushing
         // onto self.nodes returns index of new NodeData in self.nodes
         if self.state.seen(node.clone()) {
-            self.state.node_index(node.clone()).unwrap()
+            self.state
+                .node_index(node.clone())
+                .expect("node was seen but not indexed")
         } else {
             let mut layer = 0;
             let mut upstream_indexes = vec![];
@@ -574,9 +588,10 @@ impl Graph {
     }
 
     fn process_callbacks_historical(&mut self) -> bool {
-        if !self.state.ready_callbacks.is_empty() {
-            panic!("ready_callbacks are not supported in realtime mode.");
-        }
+        debug_assert!(
+            self.state.ready_callbacks.is_empty(),
+            "ready_callbacks are not supported in historical mode"
+        );
         if self.state.has_scheduled_callbacks() {
             self.state.time = self.state.next_scheduled_time();
         }
@@ -586,9 +601,12 @@ impl Graph {
     fn process_ready_callbacks(&mut self) -> bool {
         let mut progressed = false;
         while !self.state.ready_callbacks.is_empty() {
-            let ix = self.state.ready_callbacks.recv().unwrap();
-            self.mark_dirty(ix);
-            progressed = true;
+            if let Ok(ix) = self.state.ready_callbacks.try_recv() {
+                self.mark_dirty(ix);
+                progressed = true;
+            } else {
+                break;
+            }
         }
         progressed
     }

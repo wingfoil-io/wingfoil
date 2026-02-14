@@ -19,12 +19,13 @@ fn csv_iterator<T>(
 where
     T: Element + DeserializeOwned + 'static,
 {
+    let file = File::open(path).unwrap_or_else(|e| panic!("failed to open CSV file '{path}': {e}"));
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
-        .from_reader(File::open(path).unwrap())
+        .from_reader(file)
         .into_deserialize();
     Box::new(data.map(move |record: Result<T, csv::Error>| {
-        let rec = record.unwrap();
+        let rec = record.expect("failed to parse CSV record");
         let t = get_time_func(&rec);
         ValueAt {
             value: rec,
@@ -79,7 +80,7 @@ pub struct CsvWriterNode<T> {
 impl<T: Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
-            write_header::<T>(&mut self.writer);
+            write_header::<T>(&mut self.writer)?;
             self.headers_written = true;
         }
         self.writer
@@ -92,12 +93,19 @@ impl<T: Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T>
     }
 }
 
-fn write_header<T: Serialize + DeserializeOwned + 'static>(writer: &mut csv::Writer<File>) {
+fn write_header<T: Serialize + DeserializeOwned + 'static>(
+    writer: &mut csv::Writer<File>,
+) -> anyhow::Result<()> {
     let fields = serde_introspect::<T>();
     if !fields.is_empty() {
-        writer.write_field("time").unwrap();
-        writer.write_record(fields).unwrap();
+        writer
+            .write_field("time")
+            .map_err(|e| anyhow::anyhow!("failed to write CSV header field: {e}"))?;
+        writer
+            .write_record(fields)
+            .map_err(|e| anyhow::anyhow!("failed to write CSV header record: {e}"))?;
     }
+    Ok(())
 }
 
 /// Used to write records to a file of comma separated values (csv).
@@ -113,7 +121,7 @@ pub struct CsvVecWriterNode<T> {
 impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvVecWriterNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
-            write_header::<T>(&mut self.writer);
+            write_header::<T>(&mut self.writer)?;
             self.headers_written = true;
         }
         for rec in self.upstream.peek_value() {
@@ -140,7 +148,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create CSV writer for '{path}': {e}"));
         CsvWriterNode::new(self.clone(), writer).into_node()
     }
 }
@@ -157,7 +165,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvVecOperators<T>
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create CSV writer for '{path}': {e}"));
         CsvVecWriterNode::new(self.clone(), writer).into_node()
     }
 }

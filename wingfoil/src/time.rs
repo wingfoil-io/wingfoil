@@ -97,7 +97,10 @@ impl From<Duration> for NanoTime {
 
 impl From<NaiveDateTime> for NanoTime {
     fn from(date_time: NaiveDateTime) -> Self {
-        let t = date_time.and_utc().timestamp_nanos_opt().unwrap();
+        let t = date_time
+            .and_utc()
+            .timestamp_nanos_opt()
+            .expect("timestamp out of range for nanosecond representation");
         NanoTime(t as RawTime)
     }
 }
@@ -117,7 +120,7 @@ impl From<NanoTime> for u64 {
 impl From<NanoTime> for NaiveDateTime {
     fn from(t: NanoTime) -> Self {
         DateTime::from_timestamp((t.0 / 1_000_000_000) as i64, (t.0 % 1_000_000_000) as u32)
-            .unwrap()
+            .expect("NanoTime out of range for DateTime")
             .naive_utc()
     }
 }

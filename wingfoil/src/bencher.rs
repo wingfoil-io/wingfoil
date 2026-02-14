@@ -54,14 +54,10 @@ impl Bencher {
     pub fn step(&mut self) {
         self.signal.store(Signal::Begin.into(), Ordering::SeqCst);
         loop {
-            match self.signal.load(Ordering::SeqCst).into() {
-                Signal::End => {
-                    break;
-                }
-                _ => {
-                    std::hint::spin_loop();
-                }
+            if let Ok(Signal::End) = self.signal.load(Ordering::SeqCst).try_into() {
+                break;
             }
+            std::hint::spin_loop();
         }
     }
 
@@ -97,15 +93,16 @@ enum Signal {
     Kill = 5,
 }
 
-impl From<u8> for Signal {
-    fn from(val: u8) -> Self {
+impl TryFrom<u8> for Signal {
+    type Error = anyhow::Error;
+    fn try_from(val: u8) -> anyhow::Result<Self> {
         match val {
-            1 => Signal::Ready,
-            2 => Signal::Begin,
-            3 => Signal::Running,
-            4 => Signal::End,
-            5 => Signal::Kill,
-            _ => panic!("Invalid Instruction value: {val}"),
+            1 => Ok(Signal::Ready),
+            2 => Ok(Signal::Begin),
+            3 => Ok(Signal::Running),
+            4 => Ok(Signal::End),
+            5 => Ok(Signal::Kill),
+            _ => anyhow::bail!("invalid Signal value: {val}"),
         }
     }
 }
@@ -123,7 +120,7 @@ struct BenchTriggerNode {
 
 impl MutableNode for BenchTriggerNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        match self.signal.load(Ordering::SeqCst).into() {
+        match self.signal.load(Ordering::SeqCst).try_into()? {
             Signal::Begin => {
                 self.signal.store(Signal::Running.into(), Ordering::SeqCst);
                 Ok(true)
