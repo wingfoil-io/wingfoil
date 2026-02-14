@@ -36,3 +36,26 @@ impl<T: Element> StreamPeekRef<T> for InspectStream<T> {
         &self.value
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[test]
+    fn inspect_observes_and_passes_through() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_clone = seen.clone();
+        let result = ticker(Duration::from_millis(1))
+            .count()
+            .inspect(move |v| seen_clone.borrow_mut().push(*v));
+        result
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+        assert_eq!(result.peek_value(), 3);
+        assert_eq!(*seen.borrow(), vec![1, 2, 3]);
+    }
+}
