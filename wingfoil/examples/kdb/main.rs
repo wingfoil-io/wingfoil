@@ -34,6 +34,7 @@
 
 use anyhow::Result;
 use log::Level;
+use std::rc::Rc;
 use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
@@ -70,16 +71,12 @@ impl KdbSerialize for Trade {
     }
 }
 
-fn main() -> Result<()> {
-    env_logger::init();
-
-    let conn = KdbConnection::new("localhost", 5000);
-
+fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
     let syms = ["AAPL", "GOOG", "MSFT"];
     let mut interner = SymbolInterner::default();
     let syms_interned: Vec<Sym> = syms.iter().map(|s| interner.intern(s)).collect();
 
-    let trades = ticker(std::time::Duration::from_nanos(1_000_000_000))
+    ticker(std::time::Duration::from_nanos(1_000_000_000))
         .count()
         .map(move |i| {
             burst![Trade {
@@ -87,10 +84,22 @@ fn main() -> Result<()> {
                 price: 100.0 + i as f64,
                 qty: (i * 10 + 1) as i64,
             }]
-        });
+        })
+        .limit(num_rows)
+}
 
-    let writer = kdb_write(conn.clone(), "trade", &trades);
-    writer.run(RunMode::RealTime, RunFor::Cycles(10))?;
+fn main() -> Result<()> {
+    env_logger::init();
+
+    let conn = KdbConnection::new("localhost", 5000);
+
+    let num_rows = 10;
+    let trades = generate(num_rows);
+
+    // Write trades to KDB using fluent API
+    trades
+        .kdb_write(conn.clone(), "trade")
+        .run(RunMode::RealTime, RunFor::Forever)?;
 
     let read_stream = kdb_read::<Trade>(conn, "select from trade", "time", 10000);
     let collected = read_stream
@@ -100,7 +109,7 @@ fn main() -> Result<()> {
     collected.clone().run(RunMode::RealTime, RunFor::Forever)?;
 
     let read_trades = collected.peek_value();
-    assert_eq!(read_trades.len(), 10);
+    assert_eq!(read_trades.len(), num_rows as usize);
 
     Ok(())
 }
