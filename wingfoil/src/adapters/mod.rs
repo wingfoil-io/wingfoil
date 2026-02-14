@@ -5,3 +5,4 @@ pub mod iterator_stream;
 pub mod kdb;
 #[doc(hidden)]
 pub mod socket;
+pub mod zmq;

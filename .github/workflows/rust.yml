@@ -55,8 +55,13 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
-      - name: Run tests with coverage
-        run: cargo test --verbose
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: cargo nextest run --no-capture
+        env:
+          RUST_LOG: INFO
           
       - name: Run rustfmt
         run: |

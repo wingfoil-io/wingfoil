@@ -75,7 +75,7 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
 }
 
 #[derive(new, Debug)]
-pub(crate) struct ReceiverStream<T: Element + Send> {
+pub struct ChannelReceiverStream<T: Element + Send> {
     receiver: ChannelReceiver<T>,
     #[debug(skip)]
     trigger: Option<Rc<dyn Node>>,
@@ -90,9 +90,8 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     queue: VecDeque<ValueAt<T>>,
 }
 
-impl<T: Element + Send> MutableNode for ReceiverStream<T> {
+impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
-        //println!("ReceiverStream::cycle start {:?}", state.time());
         let mut values: Burst<T> = Burst::new();
         match state.run_mode() {
             RunMode::RealTime => {
@@ -231,6 +230,8 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                 if let Some(chan) = self.notifier_channel.take() {
                     chan.send(state.ready_notifier())
                         .map_err(|e| anyhow::anyhow!(e))?;
+                } else {
+                    info!("state.ready_notifier() is None")
                 }
             }
             RunMode::HistoricalFrom(time) => {
@@ -248,7 +249,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 }
 
-impl<T: Element + Send> StreamPeekRef<Burst<T>> for ReceiverStream<T> {
+impl<T: Element + Send> StreamPeekRef<Burst<T>> for ChannelReceiverStream<T> {
     fn peek_ref(&self) -> &Burst<T> {
         &self.value
     }
