@@ -1,5 +1,6 @@
 mod proxy_stream;
 mod py_element;
+mod py_kdb;
 mod py_stream;
 mod types;
 
@@ -13,10 +14,10 @@ use std::time::Duration;
 
 #[pyclass(unsendable, name = "Node")]
 #[derive(Clone)]
-struct PyNode(Rc<dyn Node>);
+pub(crate) struct PyNode(Rc<dyn Node>);
 
 impl PyNode {
-    fn new(node: Rc<dyn Node>) -> Self {
+    pub(crate) fn new(node: Rc<dyn Node>) -> Self {
         Self(node)
     }
 }
@@ -81,6 +82,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_function(wrap_pyfunction!(constant, module)?)?;
     module.add_function(wrap_pyfunction!(bimap, module)?)?;
+    module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
+    module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;

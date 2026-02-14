@@ -54,6 +54,9 @@ pub use write::*;
 /// Re-export kdbplus error type for convenience.
 pub use kdb_plus_fixed::ipc::error::Error as KdbError;
 
+/// Re-export K type for building custom serialization.
+pub use kdb_plus_fixed::ipc::K;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
