@@ -81,6 +81,7 @@ pub trait KdbSerialize: Sized {
 ///         .unwrap();
 /// }
 /// ```
+#[must_use]
 pub fn kdb_write<T>(
     connection: KdbConnection,
     table_name: impl Into<String>,
@@ -158,6 +159,7 @@ pub trait KdbWriteOperators<T: Element> {
     ///
     /// # Returns
     /// A Node that drives the write operation.
+    #[must_use]
     fn kdb_write(self: &Rc<Self>, conn: KdbConnection, table: &str) -> Rc<dyn Node>;
 }
 

@@ -12,6 +12,7 @@ pub(crate) trait ChannelOperators<T>
 where
     T: Element + Send,
 {
+    #[must_use]
     fn send(
         self: &Rc<Self>,
         sender: ChannelSender<T>,

@@ -86,6 +86,7 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
 ///
 /// let writer = sum.feedback(tx);
 /// ```
+#[must_use]
 pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>) {
     let queue = Rc::new(RefCell::new(TimeQueue::new()));
     let node_id = Rc::new(Cell::new(None));
@@ -101,6 +102,7 @@ pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>
 /// Creates a feedback channel carrying `()`. Returns a
 /// ([FeedbackSink], [Node]) pair suitable for signalling ticks
 /// without carrying a value.
+#[must_use]
 pub fn feedback_node() -> (FeedbackSink<()>, Rc<dyn Node>) {
     let (sink, stream) = feedback::<()>();
     (sink, stream.as_node())

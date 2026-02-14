@@ -44,6 +44,7 @@ impl<T: Element> StreamPeekRef<Burst<T>> for CombineStream2<T> {
     }
 }
 
+#[must_use]
 pub fn combine<T: Element>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<Burst<T>>> {
     let combined = Rc::new(RefCell::new(Burst::new()));
     let nodes = streams

@@ -250,6 +250,7 @@ where
 ///     })
 /// })
 /// ```
+#[must_use]
 pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send,
