@@ -102,9 +102,14 @@ fn main() -> Result<()> {
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
+
+    println!("Starting write phase: generating {} rows and writing to KDB+...", num_rows);
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
+    println!("Write phase completed!");
+
+    println!("Starting read/validation phase...");
     let baseline = generate(num_rows);
     let read = kdb_read(conn, query, time_col, chunk);
     let assertions = vec![
@@ -112,5 +117,8 @@ fn main() -> Result<()> {
         assert_equal(read.count(), baseline.count()),
     ];
     Graph::new(assertions, run_mode, run_for).run()?;
+    println!("Read/validation phase completed!");
+
+    println!("All checks passed! ✓");
     Ok(())
 }
