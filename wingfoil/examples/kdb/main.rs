@@ -94,8 +94,8 @@ fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> 
 fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
-    let table = "trades";
-    let query = "select from trade";
+    let table = "test_trades";
+    let query = format!("select from {table}");
     let time_col = "time";
     let chunk = 10000;
     let num_rows = 10;
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
-    let read = kdb_read::<Trade>(conn, query, time_col, chunk);
+    let read = kdb_read(conn, query, time_col, chunk);
     let assertions = vec![
         assert_equal(read.clone(), baseline.clone()),
         assert_equal(read.count(), baseline.count()),
