@@ -31,6 +31,7 @@ mod never;
 mod node_flow;
 mod print;
 mod producer;
+mod receiver;
 mod sample;
 mod throttle;
 mod tick;
@@ -43,6 +44,7 @@ mod window;
 pub use always::*;
 pub use async_io::*;
 pub use callback::CallBackStream;
+pub use channel::ChannelReceiverStream;
 pub use demux::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 pub use graph_node::*;
@@ -81,6 +83,8 @@ use window::WindowStream;
 use crate::graph::*;
 use crate::queue::ValueAt;
 use crate::types::*;
+
+pub(crate) use receiver::*;
 
 use log::Level;
 use log::log;
