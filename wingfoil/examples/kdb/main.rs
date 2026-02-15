@@ -14,22 +14,32 @@
 //! q -p 5000
 //! ```
 //!
-//! Then in the q console, create an empty trade table:
+//! Then in the q console, create the test_trades table:
 //!
 //! ```q
-//! trade:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
-//! ```
-//!
-//! **Note:** Before each run, clear the table in the q console:
-//!
-//! ```q
-//! delete from `trade
+//! test_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
 //! ```
 //!
 //! # Run
 //!
 //! ```sh
 //! cargo run --example kdb
+//! ```
+//! 
+//! clear the table to reset the example:
+//! ```q
+//! delete from `test_trades
+//! ``` 
+//!
+//! If you run this example multiple times without clearing the table,
+//! the data will accumulate and become unsorted (new data appends to the end).
+//! The example will then fail and instruct you to 
+//! ```Add `time xasc` to your query to sort the data.```
+//! 
+//!
+//! Or change the query to explicitly sort the data.
+//! ```rust
+//! time xasc select from test_trades
 //! ```
 
 use anyhow::Result;
@@ -97,7 +107,8 @@ fn main() -> Result<()> {
     let table = "test_trades";
     let time_col = "time";
     // query needs to sort by time if not already sorted
-    let query = format!("select from {table}");
+    // let query = format!("time xasc select from {table}");
+    let query = format!("`time xasc select from {table}");
     let chunk = 10000;
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
