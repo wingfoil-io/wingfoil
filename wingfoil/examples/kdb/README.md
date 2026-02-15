@@ -1,5 +1,53 @@
-#![doc = include_str!("./README.md")]
+# KDB+ Adapter Example
 
+This example demonstrates the KDB+ adapter by:
+1. Generating mock trade data
+2. Writing it to KDB+
+3. Reading it back from KDB+
+4. Validating that the read data matches the generated data
+
+## Setup
+
+Start a KDB+ instance on port 5000:
+
+```sh
+q -p 5000
+```
+
+Then in the q console, create the test_trades table:
+
+```q
+test_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
+```
+
+## Run
+
+```sh
+cargo run --example kdb
+```
+
+To delete the records and reset the example:
+
+```q
+delete from `test_trades
+```
+
+## Query Details
+
+The query used is:
+```q
+`time xasc select from test_trades
+```
+
+The explicit sorting is only needed if the data is written unordered.
+For this example, we could have used:
+```q
+select from test_trades
+```
+
+## Code
+
+```rust
 use anyhow::Result;
 use ordered_float::OrderedFloat;
 use std::rc::Rc;
@@ -55,50 +103,38 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
         .limit(num_rows)
 }
 
-
-fn validate<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Vec<Rc<dyn Node>> {
-    fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Rc<dyn Node> {
-        bimap(
-            Dep::Active(a),
-            Dep::Active(b),
-            |a, b| {
-                assert!(
-                    a == b,
-                    "Generated and read data did not tie out. \
-                    This will happen if you re-run without manually \
-                    deleting the data from the first run."
-                )
-            }
-        )
-    }
-    vec![
-        assert_equal(a.clone(), b.clone()),
-        assert_equal(a.count(), b.count()),
-    ]    
-}
-
 fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
     let time_col = "time";
-    // if data is already sorted, then you don't need the xasc..
-    // let query = format!("select from {table}");
     let query = format!("`time xasc select from {table}");
     let chunk = 10000;
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
-    // write
+
+    // Write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
+
     let baseline = generate(num_rows);
-    // read
+
+    // Read
     let read = kdb_read(conn, query, time_col, chunk);
-    // tie-out
+
+    // Validate
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;
+
     println!("✓ {num_rows} written, read and validated");
     Ok(())
 }
+```
+
+## Output
+
+```
+✓ 10 written, read and validated
+```
