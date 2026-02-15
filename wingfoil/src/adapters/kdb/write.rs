@@ -42,7 +42,7 @@ pub trait KdbSerialize: Sized {
     ///
     /// This will create: `([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())`
     fn table_schema() -> &'static str {
-        ""  // Default: no auto-creation
+        "" // Default: no auto-creation
     }
 }
 

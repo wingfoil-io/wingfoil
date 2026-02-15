@@ -55,26 +55,21 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
         .limit(num_rows)
 }
 
-
 fn validate<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Vec<Rc<dyn Node>> {
     fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Rc<dyn Node> {
-        bimap(
-            Dep::Active(a),
-            Dep::Active(b),
-            |a, b| {
-                assert!(
-                    a == b,
-                    "Generated and read data did not tie out. \
+        bimap(Dep::Active(a), Dep::Active(b), |a, b| {
+            assert!(
+                a == b,
+                "Generated and read data did not tie out. \
                     This will happen if you re-run without manually \
                     deleting the data from the first run."
-                )
-            }
-        )
+            )
+        })
     }
     vec![
         assert_equal(a.clone(), b.clone()),
         assert_equal(a.count(), b.count()),
-    ]    
+    ]
 }
 
 fn main() -> Result<()> {

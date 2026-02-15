@@ -19,6 +19,8 @@ use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use log::Level;
 use tokio::runtime::Runtime;
 
+const TABLE_NAME: &str = "test_trades";
+
 #[derive(Debug, Clone, Default)]
 pub struct TestTrade {
     sym: Sym,
@@ -95,8 +97,11 @@ impl TestDataBuilder {
     }
 
     async fn create_table(&self) -> Result<()> {
-        self.execute("trade:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())")
-            .await?;
+        self.execute(&format!(
+            "{}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())",
+            TABLE_NAME
+        ))
+        .await?;
         Ok(())
     }
 
@@ -108,15 +113,16 @@ impl TestDataBuilder {
             format!("neg {}?{}", n, n)
         };
         let query = format!(
-            "insert[`trade;(2000.01.01D00:00:00.000000000+1000000000*{};{}?`AAPL`GOOG`MSFT;{}?100.0;{}?1000j)]",
-            time_expr, n, n, n
+            "insert[`{};(2000.01.01D00:00:00.000000000+1000000000*{};{}?`AAPL`GOOG`MSFT;{}?100.0;{}?1000j)]",
+            TABLE_NAME, time_expr, n, n, n
         );
         self.execute(&query).await?;
         Ok(())
     }
 
     async fn drop_table(&self) -> Result<()> {
-        self.execute("delete trade from `.").await?;
+        self.execute(&format!("delete {} from `.", TABLE_NAME))
+            .await?;
         Ok(())
     }
 
@@ -176,7 +182,7 @@ bacon test -- --features kdb-integration-test -p wingfoil kdb::integration_tests
 #[test]
 fn test_kdb_sorted_data() -> Result<()> {
     let _ = env_logger::try_init();
-    let count = read("select from trade", "time", 6, 2, true)?;
+    let count = read(&format!("select from {}", TABLE_NAME), "time", 6, 2, true)?;
     assert_eq!(count, 6, "Should read all 6 rows from sorted data");
     Ok(())
 }
@@ -185,7 +191,7 @@ fn test_kdb_sorted_data() -> Result<()> {
 fn test_kdb_unsorted_data_fails() -> Result<()> {
     let _ = env_logger::try_init();
     // With unsorted data, the adapter detects time going backwards
-    let result = read("select from trade", "time", 10, 3, false);
+    let result = read(&format!("select from {}", TABLE_NAME), "time", 10, 3, false);
     assert!(
         result.is_err(),
         "Unsorted data should cause time ordering error"
@@ -247,7 +253,7 @@ fn test_kdb_bad_query() -> Result<()> {
     let err_msg = format!("{:?}", result.unwrap_err());
     println!("Bad query error: {}", err_msg);
     assert!(
-        err_msg.contains("chunk query failed") || err_msg.contains("table extraction failed"),
+        err_msg.contains("kdb query failed"),
         "Expected query error, got: {}",
         err_msg
     );
@@ -259,12 +265,18 @@ fn test_kdb_bad_time_column() -> Result<()> {
     let _ = env_logger::try_init();
     // The bad column name gets injected into the chunk query's WHERE clause,
     // causing KDB to reject the entire query (not a "column not found" from our code).
-    let result = read("select from trade", "nonexistent_col", 6, 2, true);
+    let result = read(
+        &format!("select from {}", TABLE_NAME),
+        "nonexistent_col",
+        6,
+        2,
+        true,
+    );
     assert!(result.is_err(), "Bad time column should return an error");
     let err_msg = format!("{:?}", result.unwrap_err());
     println!("Bad time column error: {}", err_msg);
     assert!(
-        err_msg.contains("table extraction failed") || err_msg.contains("chunk query failed"),
+        err_msg.contains("kdb query failed"),
         "Expected query failure from bad column, got: {}",
         err_msg
     );
@@ -274,7 +286,7 @@ fn test_kdb_bad_time_column() -> Result<()> {
 #[test]
 fn test_kdb_deserialization_error() -> Result<()> {
     let _ = env_logger::try_init();
-    let result = read_with_type::<BadTrade>("select from trade", "time", 6, 2);
+    let result = read_with_type::<BadTrade>(&format!("select from {}", TABLE_NAME), "time", 6, 2);
     assert!(
         result.is_err(),
         "Type mismatch should return a deserialization error"
@@ -291,7 +303,13 @@ fn test_kdb_deserialization_error() -> Result<()> {
 
 fn read_rows(connection: KdbConnection, chunk_size: usize) -> Result<(u64, std::time::Duration)> {
     let start = std::time::Instant::now();
-    let trades = kdb_read::<TestTrade>(connection, "select from trade", "time", chunk_size).count();
+    let trades = kdb_read::<TestTrade>(
+        connection,
+        &format!("select from {}", TABLE_NAME),
+        "time",
+        chunk_size,
+    )
+    .count();
     trades.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
     let count = trades.peek_value();
     Ok((count, start.elapsed()))
@@ -332,7 +350,7 @@ fn test_kdb_connection_refused() {
     // Connection failure currently panics in the channel layer (kanal_chan recv().unwrap())
     // rather than propagating as a clean Err. This test documents that behavior.
     let conn = KdbConnection::new("localhost", 59999);
-    let stream = kdb_read::<TestTrade>(conn, "select from trade", "time", 100);
+    let stream = kdb_read::<TestTrade>(conn, &format!("select from {}", TABLE_NAME), "time", 100);
     let collected = stream.collapse().collect();
     let _ = collected.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
 }
@@ -359,7 +377,7 @@ fn write_and_verify(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<usize
     });
 
     // Write to KDB
-    let writer = kdb_write(write_conn, "trade", &stream);
+    let writer = kdb_write(write_conn, TABLE_NAME, &stream);
     writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 
     // Read back via raw KDB query to verify
@@ -374,7 +392,8 @@ fn write_and_verify(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<usize
             &creds,
         )
         .await?;
-        let result = socket.send_sync_message(&"count trade").await?;
+        let query = format!("count {}", TABLE_NAME);
+        let result = socket.send_sync_message(&query.as_str()).await?;
         let count = result.get_long()?;
         Ok::<i64, anyhow::Error>(count)
     })?;
@@ -421,7 +440,8 @@ fn test_kdb_write_round_trip() -> Result<()> {
         assert_eq!(count, 5, "Should have written 5 trades");
 
         // Verify data correctness by reading back via kdb_read
-        let read_stream = kdb_read::<TestTrade>(conn, "select from trade", "time", 10000);
+        let read_stream =
+            kdb_read::<TestTrade>(conn, &format!("select from {}", TABLE_NAME), "time", 10000);
         let collected = read_stream
             .collapse()
             .logged("readback", Level::Info)
@@ -465,7 +485,7 @@ fn test_kdb_write_append() -> Result<()> {
             }
         });
 
-        let writer = kdb_write(write_conn, "trade", &stream);
+        let writer = kdb_write(write_conn, TABLE_NAME, &stream);
         writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 
         // Verify total count = 3 original + 2 new = 5
@@ -474,7 +494,8 @@ fn test_kdb_write_append() -> Result<()> {
             let creds = conn.credentials_string();
             let mut socket =
                 QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds).await?;
-            let result = socket.send_sync_message(&"count trade").await?;
+            let query = format!("count {}", TABLE_NAME);
+            let result = socket.send_sync_message(&query.as_str()).await?;
             result.get_long().map_err(|e| anyhow::Error::new(e))
         })?;
 
