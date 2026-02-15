@@ -113,21 +113,16 @@ fn main() -> Result<()> {
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
-
     // Write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
-
     let baseline = generate(num_rows);
-
     // Read
     let read = kdb_read(conn, query, time_col, chunk);
-
     // Validate
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;
-
     println!("✓ {num_rows} written, read and validated");
     Ok(())
 }
