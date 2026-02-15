@@ -378,16 +378,27 @@ where
                     let result: K = match socket.send_sync_message(&chunk_query.as_str()).await {
                         Ok(r) => r,
                         Err(e) => {
-                            yield Err(e.into());
+                            yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", chunk_query)));
                             break;
                         }
                     };
+
+                    // Check if result is a KDB error (qtype -128)
+                    if result.get_type() == -128 {
+                        let error_msg = result.get_error_string().unwrap_or_else(|_| "unknown error".to_string());
+                        yield Err(anyhow::anyhow!(
+                            "KDB+ error: {}\nQuery: {}",
+                            error_msg,
+                            chunk_query
+                        ));
+                        break;
+                    }
 
                     // Extract metadata once per chunk
                     let (columns, rows) = match (result.column_names(), result.rows()) {
                         (Ok(cols), Ok(rows)) => (cols, rows),
                         (Err(e), _) | (_, Err(e)) => {
-                            yield Err(e);
+                            yield Err(anyhow::Error::new(e).context(format!("Query: {}", chunk_query)));
                             break;
                         }
                     };
