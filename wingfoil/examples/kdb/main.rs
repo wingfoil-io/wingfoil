@@ -1,4 +1,4 @@
-//! KDB+ adapter example: demonstrates round-trip write/read validation.
+//! KDB+ adapter example
 //!
 //! This example:
 //! 1. Generates mock trade data
@@ -26,20 +26,19 @@
 //! cargo run --example kdb
 //! ```
 //! 
-//! clear the table to reset the example:
+//! deleted the records to reset the example:
 //! ```q
 //! delete from `test_trades
 //! ``` 
 //!
-//! If you run this example multiple times without clearing the table,
-//! the data will accumulate and become unsorted (new data appends to the end).
-//! The example will then fail and instruct you to 
-//! ```Add `time xasc` to your query to sort the data.```
-//! 
-//!
-//! Or change the query to explicitly sort the data.
-//! ```rust
-//! time xasc select from test_trades
+//! The query used is 
+//! ```
+//! `time xasc select from {table}
+//! ```
+//! The explicit sorting is only needed if the data is written onordered.
+//! For this example, we coud have used..
+//! ```
+//! select from test_trades
 //! ```
 
 use anyhow::Result;
@@ -97,8 +96,26 @@ fn generate(num_rows: u32) -> Rc<dyn Stream<Burst<Trade>>> {
         .limit(num_rows)
 }
 
-fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Rc<dyn Node> {
-    bimap(Dep::Active(a), Dep::Active(b), |a, b| assert!(a == b))
+
+fn validate<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Vec<Rc<dyn Node>> {
+    fn assert_equal<T: Element + Eq>(a: Rc<dyn Stream<T>>, b: Rc<dyn Stream<T>>) -> Rc<dyn Node> {
+        bimap(
+            Dep::Active(a),
+            Dep::Active(b),
+            |a, b| {
+                assert!(
+                    a == b,
+                    "Generated and read data did not tie out. \
+                    This will happen if you re-run without manually \
+                    deleting the data from the first run."
+                )
+            }
+        )
+    }
+    vec![
+        assert_equal(a.clone(), b.clone()),
+        assert_equal(a.count(), b.count()),
+    ]    
 }
 
 fn main() -> Result<()> {
@@ -106,30 +123,23 @@ fn main() -> Result<()> {
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
     let time_col = "time";
-    // query needs to sort by time if not already sorted
-    // let query = format!("time xasc select from {table}");
+    // if data is already sorted, then you don't need the xasc..
+    // let query = format!("select from {table}");
     let query = format!("`time xasc select from {table}");
     let chunk = 10000;
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
-
-    println!("Starting write phase: generating {} rows and writing to KDB+...", num_rows);
+    // write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
-    println!("Write phase completed!");
-
-    println!("Starting read/validation phase...");
     let baseline = generate(num_rows);
+    // read
     let read = kdb_read(conn, query, time_col, chunk);
-    let assertions = vec![
-        assert_equal(read.clone(), baseline.clone()),
-        assert_equal(read.count(), baseline.count()),
-    ];
-    Graph::new(assertions, run_mode, run_for).run()?;
-    println!("Read/validation phase completed!");
-
-    println!("All checks passed! ✓");
+    // tie-out
+    let check = validate(baseline, read);
+    Graph::new(check, run_mode, run_for).run()?;
+    println!("✓ {num_rows} written, read and validated");
     Ok(())
 }

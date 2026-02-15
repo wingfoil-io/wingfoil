@@ -204,7 +204,10 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                         break;
                     }
                 }
-                if !self.queue.is_empty() {
+                if self.queue.is_empty() {
+                    // Clear message_time when queue is empty to avoid infinite callback loops
+                    self.message_time = None;
+                } else {
                     state.add_callback(self.queue.front().unwrap().time);
                 }
             }
