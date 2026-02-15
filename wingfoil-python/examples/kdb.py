@@ -7,18 +7,19 @@ This example demonstrates the full write/read cycle similar to the Rust version:
 3. Read back from KDB+
 4. Validate that written data matches read data
 
-Setup:
-    Start a KDB+ instance on port 5000:
+Start a KDB+ instance on port 5000 and create the table:
+        q -p 5000
+        test_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
 
-    $ q -p 5000
-
-Run:
+Run the example:
     cd wingfoil-python && maturin develop && python examples/kdb.py
+
+Delete from the table:
+    delete from `test_trades
 
 Note:
     If you re-run without manually deleting the data from the first run,
     the validation may fail due to duplicate data.
-    To clear: in q console run: delete from `test_trades
 """
 
 from wingfoil import ticker, kdb_read, bimap
@@ -47,28 +48,24 @@ def generate(num_rows):
         .limit(num_rows)
     )
 
-
-# Generate test data
 baseline = generate(NUM_ROWS)
 
-# Write to KDB
 print(f"Writing {NUM_ROWS} rows to {TABLE}...")
 (
-    baseline
-    .kdb_write(
-        host=HOST,
-        port=PORT,
-        table=TABLE,
-        columns=[
-            ("sym", "symbol"),
-            ("price", "float"),
-            ("qty", "long"),
-        ],
-    )
-    .run(realtime=False)
+    generate(NUM_ROWS)
+        .kdb_write(
+            host=HOST,
+            port=PORT,
+            table=TABLE,
+            columns=[
+                ("sym", "symbol"),
+                ("price", "float"),
+                ("qty", "long"),
+            ],
+        )
+        .run(realtime=False)
 )
 
-# Read back from KDB
 print(f"Reading from {TABLE}...")
 read_data = kdb_read(
     host=HOST,
@@ -78,24 +75,12 @@ read_data = kdb_read(
     chunk_size=CHUNK_SIZE,
 )
 
-# Validate: generate fresh baseline and compare with read data
-print("Validating...")
-baseline_fresh = generate(NUM_ROWS)
-
-# Check that data matches
-def assert_equal(a, b):
-    """Assert two values are equal, with helpful error message."""
-    if a != b:
-        raise AssertionError(
-            f"Generated and read data did not match: {a} != {b}. "
-            "This will happen if you re-run without manually deleting "
-            "the data from the first run."
-        )
-
-# Compare the actual data
-# Note: We can only run the validation once because async producers
-# can only be set up once. To validate both data and counts together,
-# we would need to use Graph.new() which isn't exposed to Python yet.
-bimap(baseline_fresh, read_data, assert_equal).run(realtime=False)
+baseline = generate(NUM_ROWS)
+bimap(
+    baseline, 
+    read_data, 
+    lambda a, b: raise AssertionError("Failed to tie out")
+)
+.run(realtime=False)
 
 print(f"✓ {NUM_ROWS} written and read back successfully")
