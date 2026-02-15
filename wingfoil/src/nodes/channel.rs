@@ -139,7 +139,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 break;
                             } else {
                                 //println!("callback {}", t + 1);
-                                state.add_callback(t + 1);
+                                state.add_callback(t);
                                 break;
                             }
                         }
