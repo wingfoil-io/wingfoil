@@ -383,22 +383,11 @@ where
                         }
                     };
 
-                    // Check if result is a KDB error (qtype -128)
-                    if result.get_type() == -128 {
-                        let error_msg = result.get_error_string().unwrap_or("unknown error");
-                        yield Err(anyhow::anyhow!(
-                            "KDB+ error: {}\nQuery: {}",
-                            error_msg,
-                            chunk_query
-                        ));
-                        break;
-                    }
-
                     // Extract metadata once per chunk
                     let (columns, rows) = match (result.column_names(), result.rows()) {
                         (Ok(cols), Ok(rows)) => (cols, rows),
                         (Err(e), _) | (_, Err(e)) => {
-                            yield Err(e.context(format!("Query: {}", chunk_query)));
+                            yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", chunk_query, e));
                             break;
                         }
                     };
