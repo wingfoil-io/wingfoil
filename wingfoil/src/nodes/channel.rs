@@ -117,7 +117,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 Message::EndOfStream => self.finished = true,
                                 Message::CheckPoint(_) => {}
                                 Message::Error(err) => {
-                                    return Err(anyhow!("Error received from channel: {}", err));
+                                    return Err(anyhow!(err));
                                 }
                             },
                             None => break,
@@ -193,7 +193,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                             self.message_time = Some(check_point);
                         }
                         Message::Error(err) => {
-                            return Err(anyhow!("Error received from channel: {}", err));
+                            return Err(anyhow!(err));
                         }
                     }
                 }
