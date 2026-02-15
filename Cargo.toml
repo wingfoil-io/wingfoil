@@ -18,9 +18,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [profile.release]
-#opt-level = 3       # Options: 0, 1, 2, 3, "s" (size), "z" (min size), 3 is max speed
 debug = true            # Include debug info for profiling (perf, hotspot)
-#l/to = "fat"            # Link Time Optimization (fat = max optimization)
+#opt-level = 3       # Options: 0, 1, 2, 3, "s" (size), "z" (min size), 3 is max speed
+#lto = "fat"            # Link Time Optimization (fat = max optimization)
 #codegen-units = 1      # Single codegen unit = better optimizations
 #panic = "abort"        # Smaller binary + faster panics
 #overflow-checks = false # Disable integer overflow checks for speed
