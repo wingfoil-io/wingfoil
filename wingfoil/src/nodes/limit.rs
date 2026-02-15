@@ -13,8 +13,11 @@ pub struct LimitStream<T: Element> {
 }
 
 impl<T: Element> MutableNode for LimitStream<T> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.tick_count >= self.limit {
+            // Request graph termination when limit is reached
+            // This allows RunFor::Forever to stop gracefully
+            state.request_stop();
             Ok(false)
         } else {
             self.tick_count += 1;

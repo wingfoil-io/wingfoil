@@ -3,6 +3,7 @@
 use super::KdbConnection;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
+use chrono::NaiveDateTime;
 use futures::StreamExt;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use std::pin::Pin;
@@ -26,6 +27,23 @@ pub trait KdbSerialize: Sized {
     /// # Note
     /// Do not include time in the returned K object - it will be prepended automatically.
     fn to_kdb_row(&self) -> K;
+
+    /// Define the table schema for auto-creation.
+    ///
+    /// Returns a q expression that creates an empty table with the correct schema.
+    /// The time column will be automatically prepended.
+    ///
+    /// # Example
+    /// ```ignore
+    /// fn table_schema() -> &'static str {
+    ///     "sym:`symbol$();price:`float$();qty:`long$()"
+    /// }
+    /// ```
+    ///
+    /// This will create: `([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())`
+    fn table_schema() -> &'static str {
+        "" // Default: no auto-creation
+    }
 }
 
 /// Write stream data to a KDB+ table.
@@ -124,9 +142,9 @@ where
             // Serialize record (business data only, no time)
             let row = record.to_kdb_row();
 
-            // Prepend time to row values
-            let time_kdb = time.to_kdb_timestamp();
-            let mut row_values = vec![K::new_long(time_kdb)];
+            // Prepend time to row values as proper KDB timestamp type
+            let naive: NaiveDateTime = time.into();
+            let mut row_values = vec![K::new_timestamp(naive.and_utc())];
             if let Ok(list) = row.as_vec::<K>() {
                 row_values.extend(list.iter().cloned());
             }

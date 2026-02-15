@@ -117,7 +117,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 Message::EndOfStream => self.finished = true,
                                 Message::CheckPoint(_) => {}
                                 Message::Error(err) => {
-                                    return Err(anyhow!("Error received from channel: {}", err));
+                                    return Err(anyhow!(err));
                                 }
                             },
                             None => break,
@@ -139,7 +139,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                                 break;
                             } else {
                                 //println!("callback {}", t + 1);
-                                state.add_callback(t + 1);
+                                state.add_callback(t);
                                 break;
                             }
                         }
@@ -193,7 +193,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                             self.message_time = Some(check_point);
                         }
                         Message::Error(err) => {
-                            return Err(anyhow!("Error received from channel: {}", err));
+                            return Err(anyhow!(err));
                         }
                     }
                 }
@@ -204,7 +204,10 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
                         break;
                     }
                 }
-                if !self.queue.is_empty() {
+                if self.queue.is_empty() {
+                    // Clear message_time when queue is empty to avoid infinite callback loops
+                    self.message_time = None;
+                } else {
                     state.add_callback(self.queue.front().unwrap().time);
                 }
             }

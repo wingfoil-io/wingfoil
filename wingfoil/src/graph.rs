@@ -91,6 +91,7 @@ impl ReadyNotifier {
 pub struct GraphState {
     time: NanoTime,
     is_last_cycle: bool,
+    stop_requested: bool,
     current_node_index: Option<usize>,
     scheduled_callbacks: TimeQueue<usize>,
     always_callbacks: Vec<usize>,
@@ -120,6 +121,7 @@ impl GraphState {
         let slf = Self {
             time: NanoTime::ZERO,
             is_last_cycle: false,
+            stop_requested: false,
             current_node_index: None,
             scheduled_callbacks: TimeQueue::new(),
             always_callbacks: Vec::new(),
@@ -180,6 +182,13 @@ impl GraphState {
 
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
+    }
+
+    /// Request early termination of the graph execution.
+    /// This is useful for nodes like `limit` that need to stop the graph
+    /// when they've finished producing values, even with RunFor::Forever.
+    pub fn request_stop(&mut self) {
+        self.stop_requested = true;
     }
 
     /// Returns true if node has ticked on the current engine cycle
@@ -462,6 +471,10 @@ impl Graph {
              */
             cycles += 1;
             debug!("cycles={cycles}");
+            if self.state.stop_requested {
+                debug!("Stop requested by node, terminating early.");
+                break;
+            }
         }
         let elapsed = run_timer.elapsed();
         debug!("{empty_cycles} empty cycles");

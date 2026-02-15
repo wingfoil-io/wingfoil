@@ -62,7 +62,8 @@ tinyvec = { version = "1.10.0", features = ["alloc"] }
 arrayvec = { version = "0.7", features = ["serde"] }
 criterion = {version = "0.8.1", features = ["async_tokio"]}
 quanta = "0.9.3"
-kdb-plus-fixed = { version = "0.4.0", features = ["ipc"] }
+kdb-plus-fixed = { version = "0.4.1", features = ["ipc"] }
+ordered-float = "4.5.0"
 
 
 

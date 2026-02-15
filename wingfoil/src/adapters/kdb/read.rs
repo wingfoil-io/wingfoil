@@ -378,7 +378,7 @@ where
                     let result: K = match socket.send_sync_message(&chunk_query.as_str()).await {
                         Ok(r) => r,
                         Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("KDB chunk query failed"));
+                            yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", chunk_query)));
                             break;
                         }
                     };
@@ -387,7 +387,7 @@ where
                     let (columns, rows) = match (result.column_names(), result.rows()) {
                         (Ok(cols), Ok(rows)) => (cols, rows),
                         (Err(e), _) | (_, Err(e)) => {
-                            yield Err(e.context("KDB table extraction failed"));
+                            yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", chunk_query, e));
                             break;
                         }
                     };
