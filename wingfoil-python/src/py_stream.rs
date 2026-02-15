@@ -105,7 +105,8 @@ impl PyStream {
         // SAFETY: The Rc is kept alive by self for the duration of this call
         let result = py.allow_threads(move || {
             // Reconstruct the fat pointer from (addr, vtable)
-            let stream_ptr: *const dyn Stream<PyElement> = unsafe { std::mem::transmute((addr, vtable)) };
+            let stream_ptr: *const dyn Stream<PyElement> =
+                unsafe { std::mem::transmute((addr, vtable)) };
             // Temporarily reconstruct the Rc without taking ownership
             let stream = unsafe { Rc::from_raw(stream_ptr) };
             let result = stream.run(run_mode, run_for);
