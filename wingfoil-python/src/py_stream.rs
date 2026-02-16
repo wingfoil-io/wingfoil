@@ -96,7 +96,24 @@ impl PyStream {
     ) -> PyResult<()> {
         let (run_mode, run_for) =
             parse_run_args(py, realtime, start, duration, cycles).to_pyresult()?;
-        self.0.run(run_mode, run_for).to_pyresult()?;
+
+        // Convert fat pointer to (addr, vtable) pair which is Send+Sync
+        let stream_ptr = Rc::as_ptr(&self.0);
+        let (addr, vtable): (usize, usize) = unsafe { std::mem::transmute(stream_ptr) };
+
+        // Release GIL during the run to allow async tasks to acquire it
+        // SAFETY: The Rc is kept alive by self for the duration of this call
+        let result = py.detach(move || {
+            // Reconstruct the fat pointer from (addr, vtable)
+            let stream_ptr: *const dyn Stream<PyElement> =
+                unsafe { std::mem::transmute((addr, vtable)) };
+            // Temporarily reconstruct the Rc without taking ownership
+            let stream = unsafe { Rc::from_raw(stream_ptr) };
+            let result = stream.run(run_mode, run_for);
+            std::mem::forget(stream); // Don't drop the Rc (self.0 still owns it)
+            result
+        });
+        result.to_pyresult()?;
         Ok(())
     }
 
@@ -232,6 +249,10 @@ impl PyStream {
     /// sum the stream (assumes addable PyElements)
     fn sum(&self) -> PyStream {
         PyStream(self.0.sum())
+    }
+
+    fn count(&self) -> PyStream {
+        self.0.count().as_py_stream()
     }
 
     /// Write this stream to a KDB+ table.

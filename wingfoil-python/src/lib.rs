@@ -7,6 +7,7 @@ mod types;
 use ::wingfoil::{Dep, Node, NodeOperators};
 use py_element::*;
 use py_stream::*;
+use types::ToPyResult;
 
 use pyo3::prelude::*;
 use std::rc::Rc;
@@ -27,6 +28,37 @@ impl PyNode {
     /// Counts how many times upstream node has ticked.
     fn count(&self) -> PyStream {
         self.0.count().as_py_stream()
+    }
+
+    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        realtime: Option<bool>,
+        start: Option<Py<PyAny>>,
+        duration: Option<Py<PyAny>>,
+        cycles: Option<u32>,
+    ) -> PyResult<()> {
+        let (run_mode, run_for) =
+            types::parse_run_args(py, realtime, start, duration, cycles).to_pyresult()?;
+
+        // Convert fat pointer to (addr, vtable) pair which is Send+Sync
+        let node_ptr = Rc::as_ptr(&self.0);
+        let (addr, vtable): (usize, usize) = unsafe { std::mem::transmute(node_ptr) };
+
+        // Release GIL during the run to allow async tasks to acquire it
+        // SAFETY: The Rc is kept alive by self for the duration of this call
+        let result = py.detach(move || {
+            // Reconstruct the fat pointer from (addr, vtable)
+            let node_ptr: *const dyn Node = unsafe { std::mem::transmute((addr, vtable)) };
+            // Temporarily reconstruct the Rc without taking ownership
+            let node = unsafe { Rc::from_raw(node_ptr) };
+            let result = ::wingfoil::NodeOperators::run(&node, run_mode, run_for);
+            std::mem::forget(node); // Don't drop the Rc (self.0 still owns it)
+            result
+        });
+        result.to_pyresult()?;
+        Ok(())
     }
 }
 
