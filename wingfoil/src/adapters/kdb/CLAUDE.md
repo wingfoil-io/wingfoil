@@ -60,8 +60,8 @@ Before committing changes to the KDB adapter, you MUST:
 2. **Run standard formatting and linting:**
 
    ```bash
-   cargo fmt
-   cargo clippy
+   cargo fmt --all
+   cargo clippy --workspace --all-targets --all-features
    ```
 
 3. **Run unit tests:**
