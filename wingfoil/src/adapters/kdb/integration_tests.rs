@@ -496,7 +496,7 @@ fn test_kdb_write_append() -> Result<()> {
                 QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds).await?;
             let query = format!("count {}", TABLE_NAME);
             let result = socket.send_sync_message(&query.as_str()).await?;
-            result.get_long().map_err(|e| anyhow::Error::new(e))
+            result.get_long().map_err(anyhow::Error::new)
         })?;
 
         assert_eq!(count, 5, "Should have 3 original + 2 appended = 5 rows");

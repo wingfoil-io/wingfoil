@@ -47,8 +47,8 @@ cd wingfoil-python && maturin develop && pytest
 cargo bench
 
 # Lint
-cargo clippy
-cargo fmt --check
+cargo clippy --workspace --all-targets --all-features
+cargo fmt --all -- --check
 ```
 
 ## Development Workflow Rules
@@ -66,8 +66,8 @@ cargo fmt --check
 
 Before committing any changes, ALWAYS run:
 ```bash
-cargo fmt
-cargo clippy
+cargo fmt --all
+cargo clippy --workspace --all-targets --all-features
 ```
 
 These commands must pass without errors before creating a commit.

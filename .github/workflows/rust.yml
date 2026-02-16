@@ -68,10 +68,10 @@ jobs:
           set -e
 
           # First run Clippy with -D warnings to fail on any warnings
-          cargo clippy --all-features -- -D warnings
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
 
           # Then run it again with JSON output for SARIF reporting
-          cargo clippy --all-features --message-format=json \
+          cargo clippy --workspace --all-targets --all-features --message-format=json \
             | clippy-sarif \
             | tee rust-clippy-results.sarif \
             | sarif-fmt

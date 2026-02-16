@@ -11,5 +11,5 @@ Run these steps in this order.  Wait for each step to complete successfully befo
 
 These checks must succeed:
 
-* cargo clippy
-* cargo fmt check
+* cargo clippy --workspace --all-targets --all-features
+* cargo fmt --all -- --check
