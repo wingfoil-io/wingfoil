@@ -86,9 +86,10 @@ bimap(
 print(f"✓ {NUM_ROWS} written and read back successfully")
 
 # DataFrame integration
-from wingfoil import to_dataframe
+from wingfoil import stream_to_dataframe,
+
 print("\nConverting read data to DataFrame...")
-df = to_dataframe(read_data)
+df = stream_to_dataframe(read_data)
 print(df.head())
 print(f"DataFrame Shape: {df.shape}")
 

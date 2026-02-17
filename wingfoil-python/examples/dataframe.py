@@ -25,6 +25,24 @@ def run_example():
         realtime=True
     )
     print(df_auto)
+    
+    print("~~~ Dict of Streams (Zipping) ~~~")
+    
+    source = ticker(0.01).count().limit(5)
+    
+    stream_price = source.map(lambda i: 100+i)
+    stream_qty = source.map(lambda i : 10)
+    
+    df_zipped = stream_to_dataframe(
+        {
+            "price": stream_price,
+            "qty": stream_qty,
+        },
+        realtime = True
+    )
+    
+    print(df_zipped)
+    
 
 if __name__ == "__main__":
     run_example()
