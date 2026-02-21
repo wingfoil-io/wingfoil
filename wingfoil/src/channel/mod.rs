@@ -29,5 +29,7 @@ impl std::error::Error for SendNodeError {}
 
 pub type SendResult = Result<(), SendNodeError>;
 
+#[cfg(feature = "async")]
 use crate::graph::ReadyNotifier;
+#[cfg(feature = "async")]
 pub type NotifierChannelSender = kanal::Sender<ReadyNotifier>;

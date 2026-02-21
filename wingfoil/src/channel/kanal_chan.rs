@@ -1,14 +1,20 @@
 use derive_more::Debug;
 use derive_new::new;
+#[cfg(feature = "async")]
 use futures_util::StreamExt;
+#[cfg(feature = "async")]
 use std::boxed::Box;
 use std::option::Option;
+#[cfg(feature = "async")]
 use std::pin::Pin;
 
-use super::message::{Message, ReceiverMessageSource};
+use super::message::Message;
+#[cfg(feature = "async")]
+use super::message::ReceiverMessageSource;
 use super::{SendNodeError, SendResult};
 use crate::graph::{GraphState, ReadyNotifier, RunMode};
 use crate::queue::ValueAt;
+#[cfg(feature = "async")]
 use crate::time::NanoTime;
 use crate::types::Element;
 
@@ -46,6 +52,7 @@ impl<T: Element + Send> ChannelReceiver<T> {
     }
 }
 
+#[cfg(feature = "async")]
 impl<T: Element + Send> ReceiverMessageSource<T> for ChannelReceiver<T> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>> {
         let strm = async_stream::stream! {
@@ -128,6 +135,7 @@ impl<T: Element + Send> ChannelSender<T> {
         Ok(())
     }
 
+    #[cfg(feature = "async")]
     pub fn into_async(self) -> AsyncChannelSender<T> {
         let ChannelSender {
             mut kanal_sender,
@@ -138,12 +146,14 @@ impl<T: Element + Send> ChannelSender<T> {
     }
 }
 
+#[cfg(feature = "async")]
 #[derive(Debug)]
 pub(crate) struct AsyncChannelSender<T: Element + Send> {
     kanal_sender: Option<kanal::AsyncSender<Message<T>>>,
     ready_notifier: Option<ReadyNotifier>,
 }
 
+#[cfg(feature = "async")]
 impl<T: Element + Send> AsyncChannelSender<T> {
     pub fn new(sender: kanal::Sender<Message<T>>, ready_notifier: Option<ReadyNotifier>) -> Self {
         let kanal_sender = Some(sender.to_async());

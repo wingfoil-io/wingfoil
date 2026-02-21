@@ -2,11 +2,13 @@
 //!
 
 mod always;
+#[cfg(feature = "async")]
 mod async_io;
 mod average;
 mod bimap;
 mod buffer;
 mod callback;
+#[cfg(feature = "async")]
 mod channel;
 mod combine;
 mod constant;
@@ -20,6 +22,7 @@ mod feedback;
 mod filter;
 mod finally;
 mod fold;
+#[cfg(feature = "async")]
 mod graph_node;
 mod graph_state;
 mod inspect;
@@ -41,10 +44,12 @@ mod try_trimap;
 mod window;
 
 pub use always::*;
+#[cfg(feature = "async")]
 pub use async_io::*;
 pub use callback::CallBackStream;
 pub use demux::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
+#[cfg(feature = "async")]
 pub use graph_node::*;
 pub use never::*;
 
@@ -86,9 +91,11 @@ use log::Level;
 use log::log;
 use num_traits::ToPrimitive;
 use std::cmp::Eq;
+#[cfg(feature = "async")]
 use std::future::Future;
 use std::hash::Hash;
 use std::ops::Add;
+#[cfg(feature = "async")]
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
@@ -358,6 +365,7 @@ pub trait StreamOperators<T: Element> {
     where
         T: std::iter::IntoIterator<Item = OUT>,
         OUT: Element;
+    #[cfg(feature = "async")]
     #[must_use]
     fn consume_async<FUT>(
         self: &Rc<Self>,
@@ -481,6 +489,7 @@ pub trait StreamOperators<T: Element> {
         func: impl Fn(T) -> anyhow::Result<OUT> + 'static,
     ) -> Rc<dyn Stream<OUT>>;
     /// Uses func to build graph, which is spawned on worker thread
+    #[cfg(feature = "async")]
     #[must_use]
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<Burst<OUT>>>
     where
@@ -560,6 +569,7 @@ where
         MapFilterStream::new(self.clone(), Box::new(f)).into_stream()
     }
 
+    #[cfg(feature = "async")]
     fn consume_async<FUT>(
         self: &Rc<Self>,
         func: Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
@@ -740,6 +750,7 @@ where
         TryMapStream::new(self.clone(), Box::new(func)).into_stream()
     }
 
+    #[cfg(feature = "async")]
     fn mapper<FUNC, OUT>(self: &Rc<Self>, func: FUNC) -> Rc<dyn Stream<Burst<OUT>>>
     where
         T: Element + Send,

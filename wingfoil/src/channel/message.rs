@@ -1,5 +1,7 @@
 use derive_new::new;
+#[cfg(feature = "async")]
 use std::boxed::Box;
+#[cfg(feature = "async")]
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -47,6 +49,7 @@ impl<T: Element + Send + PartialEq> PartialEq for Message<T> {
 
 impl<T: Element + Send + PartialEq> Eq for Message<T> {}
 
+#[cfg(feature = "async")]
 pub trait ReceiverMessageSource<T: Element + Send> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>>;
 }
