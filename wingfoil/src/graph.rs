@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::{Error, Write};
 use std::path::Path;
 use std::rc::Rc;
+#[cfg(feature = "async")]
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -97,6 +98,7 @@ pub struct GraphState {
     always_callbacks: Vec<usize>,
     node_to_index: HashMap<HashByRef<dyn Node>, usize>,
     node_ticked: Vec<bool>,
+    #[cfg(feature = "async")]
     run_time: Arc<tokio::runtime::Runtime>,
     run_mode: RunMode,
     run_for: RunFor,
@@ -111,7 +113,7 @@ pub struct GraphState {
 
 impl GraphState {
     pub fn new(
-        run_time: Arc<tokio::runtime::Runtime>,
+        #[cfg(feature = "async")] run_time: Arc<tokio::runtime::Runtime>,
         run_mode: RunMode,
         run_for: RunFor,
         start_time: NanoTime,
@@ -127,6 +129,7 @@ impl GraphState {
             always_callbacks: Vec::new(),
             node_to_index: HashMap::new(),
             node_ticked: Vec::new(),
+            #[cfg(feature = "async")]
             run_time,
             ready_notifier,
             run_mode,
@@ -163,6 +166,7 @@ impl GraphState {
         }
     }
 
+    #[cfg(feature = "async")]
     pub fn tokio_runtime(&self) -> Arc<tokio::runtime::Runtime> {
         self.run_time.clone()
     }
@@ -302,29 +306,25 @@ pub struct Graph {
 
 impl Graph {
     pub fn new(root_nodes: Vec<Rc<dyn Node>>, run_mode: RunMode, run_for: RunFor) -> Graph {
-        //let cores = core_affinity::get_core_ids().unwrap();
-        //core_affinity::set_for_current(cores[0]);
+        #[cfg(feature = "async")]
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-            // .worker_threads(4)
-            // .thread_name("worker")
-            // .on_thread_start(move || {
-            //     let thread_index = std::thread::current().name()
-            //         .unwrap()
-            //         .trim_start_matches("worker")
-            //         .parse::<usize>()
-            //         .unwrap_or(0);
-            //     core_affinity::set_for_current(cores[(thread_index + 1) % cores.len()]);
-            // })
             .enable_all()
             .build()
             .unwrap();
         let start_time = run_mode.start_time();
-        let state = GraphState::new(Arc::new(tokio_runtime), run_mode, run_for, start_time);
+        let state = GraphState::new(
+            #[cfg(feature = "async")]
+            Arc::new(tokio_runtime),
+            run_mode,
+            run_for,
+            start_time,
+        );
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
     }
 
+    #[cfg(feature = "async")]
     pub fn new_with(
         root_nodes: Vec<Rc<dyn Node>>,
         tokio_runtime: Arc<tokio::runtime::Runtime>,
