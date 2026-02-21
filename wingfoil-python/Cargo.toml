@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 
 # parent
-wingfoil = { path = "../wingfoil" }
+wingfoil = { path = "../wingfoil", features = ["kdb"] }
 
 # workspace deps
 anyhow = {workspace = true}
