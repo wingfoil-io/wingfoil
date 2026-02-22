@@ -138,7 +138,7 @@ impl PyStream {
 
     fn dataframe(&self) -> PyStream {
         let time_stream = self.0.clone().as_node().ticked_at_elapsed();
-        
+
         let zipped = ::wingfoil::bimap(
             Dep::Active(self.0.clone()),
             Dep::Active(time_stream),
@@ -147,13 +147,17 @@ impl PyStream {
                     let time_secs: f64 = time.into();
 
                     let py_tuple = pyo3::types::PyTuple::new(
-                        py, 
-                        &[time_secs.into_pyobject(py).unwrap().into_any(), val.value().into_bound(py)]
-                    ).unwrap();
-                    
+                        py,
+                        &[
+                            time_secs.into_pyobject(py).unwrap().into_any(),
+                            val.value().into_bound(py),
+                        ],
+                    )
+                    .unwrap();
+
                     PyElement::new(py_tuple.into_any().unbind())
                 })
-            }
+            },
         );
 
         let strm = zipped.collect().map(|items| {

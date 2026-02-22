@@ -49,7 +49,7 @@ impl PyNode {
             let node_ptr: *const dyn Node = unsafe { std::mem::transmute((addr, vtable)) };
             let node = unsafe { Rc::from_raw(node_ptr) };
             let result = ::wingfoil::NodeOperators::run(&node, run_mode, run_for);
-            std::mem::forget(node); 
+            std::mem::forget(node);
             result
         });
         result.to_pyresult()?;
@@ -72,8 +72,16 @@ fn constant(val: Py<PyAny>) -> PyStream {
 #[pyfunction]
 fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyStream {
     Python::attach(|py| {
-        let a = a.as_ref().extract::<PyRef<PyStream>>(py).unwrap().inner_stream();
-        let b = b.as_ref().extract::<PyRef<PyStream>>(py).unwrap().inner_stream();
+        let a = a
+            .as_ref()
+            .extract::<PyRef<PyStream>>(py)
+            .unwrap()
+            .inner_stream();
+        let b = b
+            .as_ref()
+            .extract::<PyRef<PyStream>>(py)
+            .unwrap()
+            .inner_stream();
         let stream = ::wingfoil::bimap(
             Dep::Active(a),
             Dep::Active(b),
@@ -104,7 +112,9 @@ impl PyGraph {
                 } else if let Ok(node) = obj.extract::<PyRef<PyNode>>(py) {
                     roots.push(node.0.clone());
                 } else {
-                    return Err(pyo3::exceptions::PyTypeError::new_err("Graph components must be Stream or Node"));
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "Graph components must be Stream or Node",
+                    ));
                 }
             }
             Ok(PyGraph(roots))
@@ -136,9 +146,9 @@ impl PyGraph {
                 let node_ptr: *const dyn Node = unsafe { std::mem::transmute((addr, vtable)) };
                 let node = unsafe { Rc::from_raw(node_ptr) };
                 roots.push(node.clone());
-                std::mem::forget(node); 
+                std::mem::forget(node);
             }
-            
+
             let mut graph = ::wingfoil::Graph::new(roots, run_mode, run_for);
             graph.run()
         });
@@ -158,7 +168,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
-    module.add_class::<PyGraph>()?; 
+    module.add_class::<PyGraph>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
