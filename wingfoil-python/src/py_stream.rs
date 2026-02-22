@@ -136,6 +136,39 @@ impl PyStream {
         PyStream(strm)
     }
 
+    fn dataframe(&self) -> PyStream {
+        let time_stream = self.0.clone().as_node().ticked_at_elapsed();
+        
+        let zipped = ::wingfoil::bimap(
+            Dep::Active(self.0.clone()),
+            Dep::Active(time_stream),
+            |val: PyElement, time: ::wingfoil::NanoTime| {
+                Python::attach(|py| {
+                    let time_secs: f64 = time.into();
+
+                    let py_tuple = pyo3::types::PyTuple::new(
+                        py, 
+                        &[time_secs.into_pyobject(py).unwrap().into_any(), val.value().into_bound(py)]
+                    ).unwrap();
+                    
+                    PyElement::new(py_tuple.into_any().unbind())
+                })
+            }
+        );
+
+        let strm = zipped.collect().map(|items| {
+            Python::attach(move |py| {
+                let items = items
+                    .iter()
+                    .map(|item| item.value.as_ref().clone_ref(py))
+                    .collect::<Vec<_>>();
+                PyElement::new(vec_any_to_pyany(items))
+            })
+        });
+
+        PyStream(strm)
+    }
+
     fn average(&self) -> PyStream {
         self.extract::<f64>().average().as_py_stream()
     }

@@ -1,48 +1,46 @@
-from wingfoil import ticker, stream_to_dataframe, to_dataframe
+from wingfoil import ticker, Graph, build_dataframe
 
 def run_example():
-
-    print("~~~ Primitives to DataFrame ~~~")
-    stream = ticker(0.01).count().limit(5).collect()
+    print("~~~ Single Stream (Primitives) ~~~")
+   
+    data_a = ticker(0.01).count().limit(5).dataframe()
+    data_a.run(realtime=False) 
     
-    df_prim = stream_to_dataframe(stream, realtime=True)
+    df_prim = data_a.peek_value()
     print(df_prim)
-
     
-    print("\n~~~ Dicts to DataFrame (Explicit) ~~~")
-    stream = ticker(0.01).count().map(
-        lambda i: {"price": 100 + i, "qty": 10}
-    ).limit(5).collect()
+    print("\n~~~ Single Stream (Dictionaries) ~~~")
+    data_b = (
+        ticker(0.01)
+        .count()
+        .limit(5)
+        .map(lambda i: {"price": 100 + i, "qty": 10})
+        .dataframe()
+    )
     
-    stream.run(realtime=True)
-    df_dict = to_dataframe(stream.peek_value())
+    data_b.run(realtime=False)
+    df_dict = data_b.peek_value()
     print(df_dict)
     
-
-    print("\n~~~ Dicts to DataFrame (Convenience) ~~~")
-    df_auto = stream_to_dataframe(
-        ticker(0.01).count().map(lambda i: {"id": i, "val": i*2}).limit(5).collect(),
-        realtime=True
-    )
-    print(df_auto)
-    
-    print("~~~ Dict of Streams (Zipping) ~~~")
+    print("\n~~~ Multiple Streams (Graph + build_dataframe) ~~~")
     
     source = ticker(0.01).count().limit(5)
     
-    stream_price = source.map(lambda i: 100+i)
-    stream_qty = source.map(lambda i : 10)
+  
+    stream_price = source.map(lambda i: 100 + i).dataframe()
+    stream_qty = source.map(lambda _: 10).dataframe()
     
-    df_zipped = stream_to_dataframe(
-        {
-            "price": stream_price,
-            "qty": stream_qty,
-        },
-        realtime = True
-    )
+
+    print("Executing Rust Graph engine...")
+    Graph([stream_price, stream_qty]).run(realtime=False)
     
+    df_zipped = build_dataframe({
+        "price": stream_price,
+        "qty": stream_qty,
+    })
+    
+    print("Final Aligned DataFrame:")
     print(df_zipped)
-    
 
 if __name__ == "__main__":
     run_example()
