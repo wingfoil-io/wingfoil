@@ -69,7 +69,7 @@ fn ticker(seconds: f64) -> PyNode {
     PyNode::new(ticker)
 }
 
-/// A atream that ticks once, on first engine cycle
+/// A stream that ticks once, on first engine cycle
 #[pyfunction]
 fn constant(val: Py<PyAny>) -> PyStream {
     let strm = ::wingfoil::constant(PyElement::new(val));
@@ -104,6 +104,67 @@ fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyStream {
     })
 }
 
+#[pyclass(unsendable, name = "Graph")]
+#[derive(Clone)]
+pub(crate) struct PyGraph(Vec<Rc<dyn Node>>);
+
+#[pymethods]
+impl PyGraph {
+    #[new]
+    fn new(nodes: Vec<Py<PyAny>>) -> PyResult<Self> {
+        Python::attach(|py| {
+            let mut roots: Vec<Rc<dyn Node>> = Vec::new();
+            for obj in nodes {
+                if let Ok(stream) = obj.extract::<PyRef<PyStream>>(py) {
+                    roots.push(stream.0.clone().as_node());
+                } else if let Ok(node) = obj.extract::<PyRef<PyNode>>(py) {
+                    roots.push(node.0.clone());
+                } else {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "Graph components must be Stream or Node",
+                    ));
+                }
+            }
+            Ok(PyGraph(roots))
+        })
+    }
+
+    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        realtime: Option<bool>,
+        start: Option<Py<PyAny>>,
+        duration: Option<Py<PyAny>>,
+        cycles: Option<u32>,
+    ) -> PyResult<()> {
+        let (run_mode, run_for) =
+            types::parse_run_args(py, realtime, start, duration, cycles).to_pyresult()?;
+
+        let mut ptrs: Vec<(usize, usize)> = Vec::with_capacity(self.0.len());
+        for node in &self.0 {
+            let node_ptr = Rc::as_ptr(node);
+            let (addr, vtable): (usize, usize) = unsafe { std::mem::transmute(node_ptr) };
+            ptrs.push((addr, vtable));
+        }
+
+        let result = py.detach(move || {
+            let mut roots: Vec<Rc<dyn Node>> = Vec::with_capacity(ptrs.len());
+            for (addr, vtable) in ptrs {
+                let node_ptr: *const dyn Node = unsafe { std::mem::transmute((addr, vtable)) };
+                let node = unsafe { Rc::from_raw(node_ptr) };
+                roots.push(node.clone());
+                std::mem::forget(node);
+            }
+
+            let mut graph = ::wingfoil::Graph::new(roots, run_mode, run_for);
+            graph.run()
+        });
+        result.to_pyresult()?;
+        Ok(())
+    }
+}
+
 /// Wingfoil is a blazingly fast, highly scalable stream processing
 /// framework designed for latency-critical use cases such as electronic
 /// trading and real-time AI systems
@@ -118,6 +179,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
+    module.add_class::<PyGraph>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
