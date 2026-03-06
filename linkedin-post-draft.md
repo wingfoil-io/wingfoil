@@ -2,7 +2,7 @@
 
 ---
 
-**Wingfoil is going big on big data.**
+**Wingfoil is going big on data.**
 
 We've been heads-down building, and I'm excited to share what's landed recently in [wingfoil](https://github.com/wingfoil-io/wingfoil) — our Rust stream processing library for high-performance DAG-based data pipelines.
 
@@ -36,7 +36,7 @@ We're looking for contributors to tackle:
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. Drop a comment, open an issue, or just star the repo.
 
-Rust + streams + big data. Let's build.
+Rust + streams + data. Let's build.
 
 🔗 https://github.com/wingfoil-io/wingfoil
 
