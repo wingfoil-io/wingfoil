@@ -8,7 +8,7 @@ We've been heads-down building, and I'm excited to share what's landed recently 
 
 **What's shipped:**
 
-- **KDB+ adapter** — production-ready. Connect your streams directly to KDB+ time-series databases with full symbol interning and async support.
+- **KDB+ adapter** — production-ready. Connect your streams directly to KDB+ time-series databases with full symbol interning.
 - **ZMQ adapter** — in beta. Low-latency socket-based messaging between nodes and external systems.
 
 These aren't toys — they're built for the kind of throughput and latency requirements that matter in finance and real-time data infrastructure.
@@ -29,6 +29,8 @@ Open source only works because of people like you. Thank you.
 
 We're looking for contributors to tackle:
 
+- **ZMQ** — graduate from beta to production-ready
+- **Service discovery** — dynamic node registration and topology management
 - **KDB+ caching** — smarter replay and snapshot support
 - **Binary file I/O** — high-speed serialisation adapters (Arrow, Parquet, etc.)
 - **SQL I/O** — stream to/from relational databases
