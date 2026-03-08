@@ -45,10 +45,34 @@ hello, world 3
 ```
 
 You can download from [crates.io](https://crates.io/crates/wingfoil/),
-read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/), 
-review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) 
+read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/),
+review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
 or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 You can download the wingfoil Python module from [pypi](https://pypi.org/project/wingfoil/).
+
+## Order Book Example
+
+Load a CSV of AAPL limit orders from [LOBSTER](https://lobsterdata.com/info/DataSamples.php), maintain an order book using the [lobster](https://github.com/rubik/lobster) crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+
+```rust
+let book = RefCell::new(lobster::OrderBook::default());
+let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
+let (fills, prices) = csv_read_vec("aapl.csv", get_time, true)
+    .map(move |chunk| process_orders(chunk, &book))
+    .split();
+let prices_export = prices
+    .filter_value(|price: &Option<TwoWayPrice>| !price.is_none())
+    .map(|price| price.unwrap())
+    .distinct()
+    .csv_write("prices.csv");
+let fills_export = fills.csv_write_vec("fills.csv");
+Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+    .print()
+    .run()
+    .unwrap();
+```
+
+One hour of market data processed in 287ms. See the [full example](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 
 ## Get Involved!
 
