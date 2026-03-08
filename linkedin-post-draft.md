@@ -33,6 +33,8 @@ We're looking for contributors to tackle:
 - [**Binary file I/O**](https://github.com/wingfoil-io/wingfoil/issues/104) — high-speed serialisation adapters (Arrow, Parquet, etc.)
 - [**SQL I/O**](https://github.com/wingfoil-io/wingfoil/issues/105) — stream to/from relational databases
 - [**Kafka I/O**](https://github.com/wingfoil-io/wingfoil/issues/23) — first-class event streaming integration
+- [**wingfoil-python full parity**](https://github.com/wingfoil-io/wingfoil/issues/106) — every node and I/O adapter in the Rust core exposed to Python
+- [**Python showcase example**](https://github.com/wingfoil-io/wingfoil/issues/107) — define a type and pipeline in Rust, run it from Python, and crunch the results with pandas, scikit-learn, and plotly/matplotlib
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. We're especially keen to hear from **PyO3** and **FPGA** specialists. Drop a comment, open an issue, join us on [Discord](https://discord.gg/WfZwpQnZUA) or just star the repo.
 
