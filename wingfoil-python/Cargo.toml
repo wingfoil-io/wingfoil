@@ -29,7 +29,7 @@ log = {workspace = true}
 
 # local deps
 pyo3 = { version = "0.27", features = ["extension-module", "serde"] }
-kdb-plus-fixed = { version = "0.4.0", features = ["ipc"] }
+kdb-plus-fixed = { version = "0.5.0", features = ["ipc"] }
 futures = "0.3"
 
 
