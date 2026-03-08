@@ -8,9 +8,9 @@ We've been heads-down building, and I'm excited to share what's landed recently 
 
 **What's shipped:**
 
-- **KDB+ adapter** — production-ready. Connect your streams directly to KDB+ time-series databases with full symbol interning.
+We've landed a production-ready **KDB+ adapter** — connect your streams directly to KDB+ time-series databases with full symbol interning.
 
-These aren't toys — they're built for the kind of throughput and latency requirements that matter in finance and real-time data infrastructure.
+This is production-grade — designed for the latency and throughput demands of real-time financial data.
 
 ---
 
@@ -28,14 +28,13 @@ Open source only works because of people like you. Thank you.
 
 We're looking for contributors to tackle:
 
-- **ZMQ** — graduate from beta to production-ready
-- **Service discovery** — dynamic node registration and topology management
+- **ZMQ** — our messaging layer is in beta and we're pushing it to production-ready. That includes adding **service discovery** for dynamic node registration and topology management.
 - **KDB+ caching** — smarter replay and snapshot support
 - **Binary file I/O** — high-speed serialisation adapters (Arrow, Parquet, etc.)
 - **SQL I/O** — stream to/from relational databases
 - **Kafka I/O** — first-class event streaming integration
 
-If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. Drop a comment, open an issue, or just star the repo.
+If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. We're especially keen to hear from **PyO3** and **FPGA** specialists. Drop a comment, open an issue, just star the repo, or join us on [Discord](https://discord.gg/WfZwpQnZUA).
 
 Rust + streams + data. Let's build.
 
