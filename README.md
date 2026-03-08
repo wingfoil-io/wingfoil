@@ -80,7 +80,11 @@ We want to hear from you!  Especially if you:
 - would like to request a feature or report a bug
 - have any feedback
 
-Please email us at [hello@wingfoil.io](mailto:hello@wingfoil.io), submit an [issue](https://github.com/wingfoil-io/wingfoil/issues) or get involved in the [discussion](https://github.com/wingfoil-io/wingfoil/discussions/).
+Please do get in touch:
+- ping us on [discord](https://discord.gg/rfGqf3Ff)
+- email us at [hello@wingfoil.io](mailto:hello@wingfoil.io)
+- submit an [issue](https://github.com/wingfoil-io/wingfoil/issues)
+- get involved in the [discussion](https://github.com/wingfoil-io/wingfoil/discussions/)
 
 
 
