@@ -4,7 +4,7 @@
 
 **Wingfoil is going big on data.**
 
-We've been heads-down building, and I'm excited to share what's landed recently in [wingfoil](https://github.com/wingfoil-io/wingfoil) — our Rust stream processing library for high-performance DAG-based data pipelines.
+We've been heads-down building, and I'm excited to share what's landed recently in [wingfoil](https://github.com/wingfoil-io/wingfoil) — our Rust stream processing library for high-performance DAG-based pipelines.
 
 **What's shipped:**
 
@@ -14,7 +14,7 @@ This is production-grade — designed for the latency and throughput demands of 
 
 ---
 
-**Huge shoutout to our contributors who made this happen:**
+**Huge shoutout to our contributors who are making it happen:**
 
 - **Zohaib Hassan** — Pandas integration for seamless Python interop
 - **Aditya Shirsat** — time-based windowing and Python examples
@@ -34,7 +34,7 @@ We're looking for contributors to tackle:
 - **SQL I/O** — stream to/from relational databases
 - **Kafka I/O** — first-class event streaming integration
 
-If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. We're especially keen to hear from **PyO3** and **FPGA** specialists. Drop a comment, open an issue, just star the repo, or join us on [Discord](https://discord.gg/WfZwpQnZUA).
+If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. We're especially keen to hear from **PyO3** and **FPGA** specialists. Drop a comment, open an issue, join us on [Discord](https://discord.gg/WfZwpQnZUA) or just star the repo.
 
 Rust + streams + data. Let's build.
 
