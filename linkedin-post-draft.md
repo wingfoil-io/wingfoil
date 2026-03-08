@@ -39,7 +39,7 @@ We're looking for contributors to tackle:
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. 
 
 We're especially keen to hear from specialists in:
-  * *FPGA**
+  * **FPGA**
   * **JS/TS**
   * **PyO3**
 
