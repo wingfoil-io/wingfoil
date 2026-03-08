@@ -33,6 +33,7 @@ We're looking for contributors to tackle:
 - [**Kafka I/O**](https://github.com/wingfoil-io/wingfoil/issues/23) — streaming integration
 - [**wingfoil-python full parity**](https://github.com/wingfoil-io/wingfoil/issues/106) — every node and I/O adapter in the Rust core exposed to Python
 - [**Python showcase**](https://github.com/wingfoil-io/wingfoil/issues/107) — define a type and pipeline in Rust, run it from Python, and crunch the results with pandas, scikit-learn, and plotly/matplotlib
+- [**JS/TS browser integration**](https://github.com/wingfoil-io/wingfoil/issues/110) — two proposals under evaluation: run wingfoil natively in-browser via WASM, or stream typed Rust data to a reactive JS frontend
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. 
 
