@@ -1,3 +1,4 @@
+// NOTE: ZMQ support is beta. Enable with the `zmq-beta` feature flag.
 use log::Level::Info;
 use std::time::Duration;
 use wingfoil::adapters::zmq::ZeroMqPub;
