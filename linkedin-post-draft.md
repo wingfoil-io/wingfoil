@@ -28,11 +28,11 @@ Open source only works because of people like you. Thank you.
 
 We're looking for contributors to tackle:
 
-- **ZMQ** — our messaging layer is in beta and we're pushing it to production-ready. That includes adding **service discovery** for dynamic node registration and topology management.
-- **KDB+ caching** — smarter replay and snapshot support
-- **Binary file I/O** — high-speed serialisation adapters (Arrow, Parquet, etc.)
-- **SQL I/O** — stream to/from relational databases
-- **Kafka I/O** — first-class event streaming integration
+- **ZMQ** — our messaging layer is in beta and we're pushing it to [production-ready](https://github.com/wingfoil-io/wingfoil/issues/52). That includes adding [**service discovery**](https://github.com/wingfoil-io/wingfoil/issues/103) for dynamic node registration and topology management.
+- [**KDB+ caching**](https://github.com/wingfoil-io/wingfoil/issues/90) — smarter replay and snapshot support
+- [**Binary file I/O**](https://github.com/wingfoil-io/wingfoil/issues/104) — high-speed serialisation adapters (Arrow, Parquet, etc.)
+- [**SQL I/O**](https://github.com/wingfoil-io/wingfoil/issues/105) — stream to/from relational databases
+- [**Kafka I/O**](https://github.com/wingfoil-io/wingfoil/issues/23) — first-class event streaming integration
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help. We're especially keen to hear from **PyO3** and **FPGA** specialists. Drop a comment, open an issue, join us on [Discord](https://discord.gg/WfZwpQnZUA) or just star the repo.
 
