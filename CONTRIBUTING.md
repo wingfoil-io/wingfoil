@@ -44,7 +44,8 @@ For prerequisites specific to the **wingfoil-python** crate and the full build p
 ### Building
 
 ```bash
-cargo build```
+cargo build
+```
 
 
 
