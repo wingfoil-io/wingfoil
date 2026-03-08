@@ -26,7 +26,7 @@ Open source only works because of people like you. Thank you.
 
 We're looking for contributors to tackle:
 
-- **ZMQ** — our messaging layer is in beta and we're pushing it to [production-ready](https://github.com/wingfoil-io/wingfoil/issues/52). That includes adding [**service discovery**](https://github.com/wingfoil-io/wingfoil/issues/103) for dynamic service registration.
+- [**ZMQ**](https://github.com/wingfoil-io/wingfoil/issues/52) — our messaging layer is in beta and we're pushing it to production-ready. That includes adding [**service discovery**](https://github.com/wingfoil-io/wingfoil/issues/103) for dynamic service registration.
 - [**KDB+ caching**](https://github.com/wingfoil-io/wingfoil/issues/90) — smarter replay and snapshot support
 - [**Binary file I/O**](https://github.com/wingfoil-io/wingfoil/issues/104) — high-speed serialisation adapters (Arrow, Parquet, etc.)
 - [**SQL I/O**](https://github.com/wingfoil-io/wingfoil/issues/105) — stream to/from relational databases
