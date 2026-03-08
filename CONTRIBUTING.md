@@ -1,37 +1,9 @@
+
+## We're looking for contributors!
+
 Hi! Thanks for your interest in contributing to **wingfoil** — we'd love to have your participation! 
 
-If you want help or mentorship, please do reach out: you can raise a **GitHub issue** or email `hello@wingfoil.io`
-
----
-
-## Building and Testing
-
-### Prerequisites
-
-These tools are required for building, testing, and packaging the core **wingfoil** project:
-
-* **The Rust toolchain:** `rustup`, `cargo`, `rustc`, etc. We aim for compatibility with the latest stable version.
-* **`rustfmt` and `clippy`:** We use `rustfmt` for consistent code style and `clippy` for linting across the whole code base.
-
-For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
-
-### Building
-
-```bash
-cargo build```
-
----
-
-## Good First Issues
-
-New to open source or Rust? These are a great starting point:
-
-- 🧮 [Add EWMA stream](https://github.com/wingfoil-io/wingfoil/issues/111)
-- 🔍 [Python binding for inspect & throttle](https://github.com/wingfoil-io/wingfoil/issues/112)
-
----
-
-## We're Looking For Contributors
+Drop a comment on any issue, open a new one, or say hi on [Discord](https://discord.gg/WfZwpQnZUA), email `hello@wingfoil.io`
 
 We're actively looking for help on the following:
 
@@ -50,4 +22,32 @@ We're especially keen to hear from specialists in:
 - 🌐 WASM / JS / TS
 - 🐍 PyO3
 
-Drop a comment on any issue, open a new one, or say hi on [Discord](https://discord.gg/WfZwpQnZUA).
+## Good First Issues
+
+New to open source or Rust? These are a great starting point:
+
+- 🧮 [Add EWMA stream](https://github.com/wingfoil-io/wingfoil/issues/111)
+- 🔍 [Python binding for inspect & throttle](https://github.com/wingfoil-io/wingfoil/issues/112)
+
+
+## Building and Testing
+
+### Prerequisites
+
+These tools are required for building, testing, and packaging the core **wingfoil** project:
+
+* **The Rust toolchain:** `rustup`, `cargo`, `rustc`, etc. We aim for compatibility with the latest stable version.
+* **`rustfmt` and `clippy`:** We use `rustfmt` for consistent code style and `clippy` for linting across the whole code base.
+
+For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
+
+### Building
+
+```bash
+cargo build```
+
+
+
+
+
+
