@@ -72,6 +72,10 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .unwrap();
 ```
 
+<div align="center">
+  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
+</div>
+
 ## Get Involved!
 
 We want to hear from you!  Especially if you:
