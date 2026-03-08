@@ -9,7 +9,7 @@ kdb = ["dep:kdb-plus-fixed", "async"]
 
 [package]
 name = "wingfoil"
-version = "3.0.0"
+version = "3.0.1"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 publish = ["wingfoil", "crates-io"]
