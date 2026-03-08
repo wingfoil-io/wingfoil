@@ -249,8 +249,8 @@ mod tests {
         let port = 5557;
         let address = format!("tcp://127.0.0.1:{port}");
         let run_for = RunFor::Duration(period * 10);
-        let rf_send = run_for.clone();
-        let rf_rec = run_for.clone();
+        let rf_send = run_for;
+        let rf_rec = run_for;
         let rec = std::thread::spawn(move || receiver(&address).run(RunMode::RealTime, rf_rec));
         let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
         send.join().unwrap().unwrap();
