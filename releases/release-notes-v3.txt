@@ -14,6 +14,7 @@ High-performance, DAG-based pipelines
 
 ——— CONTRIBUTORS ———
 
+  John Bennet
   Zohaib Hassan
   Aditya Shirsat
   Matvey Ezhov
