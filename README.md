@@ -14,12 +14,27 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 
 ## Features
 
-- **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.  
-- **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.  
+- **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
+- **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
 - **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaScript/TypeScript support.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
+
+## I/O Adapters
+
+Wingfoil connects your stream graphs directly to the systems you already use:
+
+| Adapter | Status | Notes |
+|---|---|---|
+| [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb) | **Production-ready** | Stream tick data to/from KDB+ with full symbol interning. Built for the latency demands of real-time financial data. |
+| CSV | Stable | Read and write CSV files as stream sources and sinks. |
+| Sockets | Stable | Low-level TCP socket I/O. |
+| Iterators | Stable | Drive a graph from any Rust iterator — great for testing and backtesting. |
+| ZMQ | Beta | Messaging layer in progress; service discovery coming. [#52](https://github.com/wingfoil-io/wingfoil/issues/52) |
+| Kafka | Planned | [#23](https://github.com/wingfoil-io/wingfoil/issues/23) |
+| Arrow / Parquet | Planned | [#104](https://github.com/wingfoil-io/wingfoil/issues/104) |
+| SQL | Planned | [#105](https://github.com/wingfoil-io/wingfoil/issues/105) |
 
 
 ## Quick Start
