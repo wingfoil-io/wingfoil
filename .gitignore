@@ -1,6 +1,7 @@
 Cargo.lock
 /target
 .vscode
+.idea
 flamegraph.svg
 .venv
 __pycache__

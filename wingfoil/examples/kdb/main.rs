@@ -90,7 +90,7 @@ fn main() -> Result<()> {
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
     // read
-    let read = kdb_read(conn, query, time_col, chunk);
+    let read = kdb_read(conn, query, time_col, None::<&str>, chunk);
     // tie-out
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;

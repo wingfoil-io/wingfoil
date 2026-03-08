@@ -16,14 +16,23 @@ kdb/
 
 ### Reading from KDB+
 
-- `kdb_read()` - Execute a q query and stream results with time-based chunking
-  - Uses adaptive chunking to handle arbitrarily large result sets with bounded memory
+- `kdb_read_chunks()` - Primitive chunking function driven by a caller-supplied closure
+  - `FnMut(Option<usize>) -> Option<String>`: called before each chunk with last row count
+  - `None` on first call, `Some(n)` after each chunk; return `None` to stop
+  - Caller owns all query logic: offset arithmetic, date advancement, termination
+  - Use for splayed tables where you advance through date partitions manually
+- `kdb_read()` - Convenience wrapper over `kdb_read_chunks` with offset-based chunking
+  - Uses `(offset;N) sublist query` pagination to handle arbitrarily large result sets with bounded memory
   - Parameters:
     - `connection` - KDB connection configuration
     - `query` - Base q query (can include WHERE clauses)
-    - `time_col` - Name of the time column for chunking (time is extracted automatically)
+    - `time_col` - Name of the timestamp column; extracted per-row for stream ordering
+    - `date_col` - `Option<&str>`: name of the date partition column, or `None` for in-memory tables.
+      When `Some("date")`, injects `date within (start;end)` (bounded) or `date >= start` (unbounded)
+      into the query so KDB+ can prune irrelevant date partitions on disk.
     - `rows_per_chunk` - Maximum rows per query (controls memory usage)
   - Time is automatically extracted from the time column and propagated on-graph
+  - Date range is derived from `RunMode`/`RunFor` — no need to pass dates explicitly
 - `KdbDeserialize` trait - Convert KDB+ rows to Rust types
   - **IMPORTANT**: Do NOT extract the time column - it's handled automatically
   - Your struct should only contain business data (sym, price, qty, etc.)
@@ -157,18 +166,19 @@ The `kdb_read()` function uses time-based chunking to handle large result sets:
 - Smaller chunks = more queries but less memory
 
 **Query construction:**
-- User query is wrapped as subquery: `select[N] from (user_query) where time >= start and time <= end`
+- Pagination uses `select[offset,N] ...` — the offset/count hint is injected directly into the
+  `select` statement so KDB+ applies it at scan time (no materialisation of the full result)
+- Falls back to `(offset;N) sublist query` for non-`select` queries (exec, functional forms, etc.)
+- Optionally injects a date partition filter into the base query before pagination:
+  - `RunFor::Duration` → `date within (start_date;end_date)` (bounded)
+  - `RunFor::Forever` or `RunFor::Cycles` → `date >= start_date` (no upper bound)
 - Preserves existing WHERE clauses, joins, and other query logic
-- Time-based filtering leverages KDB+'s time column indexing for efficiency
 
 **Example:**
 ```rust
-// Read 1M rows with 10K row chunks (bounded ~10 MB memory)
-// Note: Trade struct does not contain time field
-let stream = kdb_read(
-    conn,
-    "select from trades where sym=`AAPL",
-    "time",    // Time column name - extracted automatically
-    10000      // 10K rows per chunk
-);
+// In-memory table: no date filter
+let stream = kdb_read(conn.clone(), "select from trades where sym=`AAPL", "time", None::<&str>, 10000);
+
+// Splayed/partitioned table: inject date filter for partition pruning
+let stream = kdb_read(conn, "select from trades", "time", Some("date"), 10000);
 ```
