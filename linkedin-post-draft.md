@@ -8,9 +8,7 @@ We've been heads-down building, and I'm excited to share what's landed recently 
 
 **What's shipped:**
 
-We've landed a production-ready **KDB+ adapter** — connect your streams directly to KDB+ time-series databases with full symbol interning.
-
-This is production-grade — designed for the latency and throughput demands of real-time financial data.
+We've landed a production-ready **KDB+ adapter** — connect your streams directly to KDB+ time-series databases with full symbol interning.  This is production-grade — designed for the latency and throughput demands of real-time financial data.
 
 ---
 
