@@ -1,5 +1,6 @@
 WINGFOIL v2.1.1 — March 2026
-Rust stream processing for high-performance DAG-based pipelines.
+Rust stream processing
+High-performance, DAG-based pipelines
 
 ——— WHAT'S NEW ———
 
@@ -17,17 +18,19 @@ Rust stream processing for high-performance DAG-based pipelines.
   Aditya Shirsat
   Matvey Ezhov
 
-Open source only works because of people like you. Thank you.
+Open source only works because of people like you. 
+
+Thank you.
 
 ——— WHERE WE'RE GOING NEXT ———
 
 We're looking for contributors to tackle:
 
   🔧 ZMQ — Service discovery for dynamic service registration
-  🗄 KDB+ caching — smarter replay and snapshot support
+  🗄 KDB+ caching — faster reads
   📦 Binary file I/O — Arrow, Parquet, and more
   ⚡ Kafka I/O — streaming integration
-  🐍 wingfoil-python full parity — every node and I/O adapter in Python
+  🐍 wingfoil-python - full parity with core rust crate
   🌐 JS/TS browser integration — wingfoil in-browser via WASM
 
 We're especially keen to hear from specialists in:
