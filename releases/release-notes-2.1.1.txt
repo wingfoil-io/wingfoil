@@ -4,8 +4,9 @@ Rust stream processing for high-performance DAG-based pipelines.
 ——— WHAT'S NEW ———
 
   * KDB+ adapter (production-ready)
-      Streaming into and out of KDB+ with full symbol interning. 
-      Built for tick data.
+      - Streaming into and out of KDB+
+      - Symbol interning 
+      - Built for high-frequency tick data
   * Pandas integration
   * Time-based windowing
   * Code quality sweep
@@ -25,10 +26,8 @@ We're looking for contributors to tackle:
   🔧 ZMQ — Service discovery for dynamic service registration
   🗄 KDB+ caching — smarter replay and snapshot support
   📦 Binary file I/O — Arrow, Parquet, and more
-  🛢 SQL I/O — stream to/from relational databases
   ⚡ Kafka I/O — streaming integration
   🐍 wingfoil-python full parity — every node and I/O adapter in Python
-  🐍 Python showcase — Rust pipeline, results in pandas + scikit-learn + plotly
   🌐 JS/TS browser integration — wingfoil in-browser via WASM
 
 We're especially keen to hear from specialists in:
