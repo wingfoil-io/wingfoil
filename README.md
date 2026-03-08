@@ -52,7 +52,7 @@ You can download the wingfoil Python module from [pypi](https://pypi.org/project
 
 ## Order Book Example
 
-Load a CSV of AAPL limit orders from [LOBSTER](https://lobsterdata.com/info/DataSamples.php), maintain an order book using the [lobster](https://github.com/rubik/lobster) crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+Load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
 let book = RefCell::new(lobster::OrderBook::default());
@@ -71,8 +71,6 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .run()
     .unwrap();
 ```
-
-One hour of market data processed in 287ms. See the [full example](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 
 ## Get Involved!
 
