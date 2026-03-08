@@ -42,6 +42,8 @@ We're especially keen to hear from specialists in:
   * **JS/TS**
   * **PyO3**
 
+New to open source or Rust? We have good first issues tagged — including adding [EWMA](https://github.com/wingfoil-io/wingfoil/issues/111), [inspect](https://github.com/wingfoil-io/wingfoil/issues/112), and [throttle](https://github.com/wingfoil-io/wingfoil/issues/113) to the Python bindings.
+
 Drop a comment, open an issue, join us on [Discord](https://discord.gg/WfZwpQnZUA) or just star the repo.
 
 Rust + streams + data. Let's build.
