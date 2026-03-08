@@ -35,7 +35,11 @@ We're looking for contributors to tackle:
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help.
 
-We're especially keen to hear from specialists in FPGA, JS/TS, and PyO3.
+We're especially keen to hear from specialists in:
+
+🔌 FPGA
+🌐 JS/TS
+🐍 PyO3
 
 New to open source or Rust? We have good first issues — adding EWMA, inspect, and throttle to the Python bindings. All links in the first comment.
 
@@ -52,21 +56,23 @@ Rust + streams + data. Let's build.
 🔗 Repo: https://github.com/wingfoil-io/wingfoil
 💬 Discord: https://discord.gg/WfZwpQnZUA
 
-**What's in progress:**
-- ZMQ production-ready: https://github.com/wingfoil-io/wingfoil/issues/52
-- ZMQ service discovery: https://github.com/wingfoil-io/wingfoil/issues/103
-- KDB+ caching: https://github.com/wingfoil-io/wingfoil/issues/90
-- Binary file I/O (Arrow, Parquet): https://github.com/wingfoil-io/wingfoil/issues/104
-- SQL I/O: https://github.com/wingfoil-io/wingfoil/issues/105
-- Kafka I/O: https://github.com/wingfoil-io/wingfoil/issues/23
-- wingfoil-python full parity: https://github.com/wingfoil-io/wingfoil/issues/106
-- Python showcase (pandas + scikit-learn + plotly): https://github.com/wingfoil-io/wingfoil/issues/107
-- JS/TS browser integration: https://github.com/wingfoil-io/wingfoil/issues/110
+WHAT'S IN PROGRESS:
 
-**Good first issues:**
-- Add EWMA node: https://github.com/wingfoil-io/wingfoil/issues/111
-- Python binding for inspect(): https://github.com/wingfoil-io/wingfoil/issues/112
-- Python binding for throttle(): https://github.com/wingfoil-io/wingfoil/issues/113
+🔧 ZMQ production-ready: https://github.com/wingfoil-io/wingfoil/issues/52
+🔧 ZMQ service discovery: https://github.com/wingfoil-io/wingfoil/issues/103
+🗄 KDB+ caching: https://github.com/wingfoil-io/wingfoil/issues/90
+📦 Binary file I/O (Arrow, Parquet): https://github.com/wingfoil-io/wingfoil/issues/104
+🛢 SQL I/O: https://github.com/wingfoil-io/wingfoil/issues/105
+⚡ Kafka I/O: https://github.com/wingfoil-io/wingfoil/issues/23
+🐍 wingfoil-python full parity: https://github.com/wingfoil-io/wingfoil/issues/106
+🐍 Python showcase (pandas + scikit-learn + plotly): https://github.com/wingfoil-io/wingfoil/issues/107
+🌐 JS/TS browser integration: https://github.com/wingfoil-io/wingfoil/issues/110
+
+GOOD FIRST ISSUES:
+
+🧮 Add EWMA node: https://github.com/wingfoil-io/wingfoil/issues/111
+🔍 Python binding for inspect(): https://github.com/wingfoil-io/wingfoil/issues/112
+🚦 Python binding for throttle(): https://github.com/wingfoil-io/wingfoil/issues/113
 
 ---
 *Draft — tags to add before posting: @Zohaib Hassan, @Aditya Shirsat, @Matvey Ezhov (find their LinkedIn profiles to tag directly)*
