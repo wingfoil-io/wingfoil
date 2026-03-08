@@ -7,6 +7,7 @@ use anyhow::{Result, bail};
 use kdb_plus_fixed::ipc::error::Error as KdbError;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use kdb_plus_fixed::qtype;
+use log::info;
 use std::rc::Rc;
 
 /// Extension trait for extracting data from K objects.
@@ -281,57 +282,341 @@ pub trait KdbDeserialize: Sized {
     ) -> Result<Self, KdbError>;
 }
 
-/// Read data from a KDB+ database with time-based chunking to handle large result sets.
+/// Convert a [`NanoTime`] to a KDB date integer (days since 2000-01-01).
 ///
-/// This function connects to a KDB+ instance and streams data in chunks, ensuring
-/// bounded memory usage regardless of the total result size. It uses time-based
-/// pagination to read rows sequentially within the specified time range.
+/// KDB dates are i32 values counting days from the KDB epoch (2000-01-01).
+/// The Unix epoch (1970-01-01) is 10,957 days before the KDB epoch.
+fn nano_to_kdb_date(t: NanoTime) -> i32 {
+    let unix_days = (u64::from(t) / 1_000_000_000 / 86400) as i64;
+    (unix_days - 10957) as i32
+}
+
+/// Format a KDB date integer as a q date literal (`YYYY.MM.DD`).
 ///
-/// Start and end times are derived from the graph's [`RunMode`] and [`RunFor`]:
-/// - Start time comes from `RunMode::HistoricalFrom(t)` or current time for `RealTime`
-/// - End time is `start + duration` for `RunFor::Duration`, or unbounded otherwise
+/// Uses Howard Hinnant's civil_from_days algorithm.
+fn format_kdb_date(kdb_date: i32) -> String {
+    // Shift to days since 0000-03-01 (the reference point for this algorithm)
+    let z = kdb_date as i64 + 10957 + 719_468;
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{}.{:02}.{:02}", y, m, d)
+}
+
+/// Format a KDB timestamp (nanoseconds since 2000-01-01) as a q timestamp literal.
 ///
-/// # Type Parameters
-/// * `T` - The record type, must implement `Element`, `Send`, and `KdbDeserialize`
+/// Produces the form `YYYY.MM.DDDhh:mm:ss.nnnnnnnnn`, which q parses as a timestamp atom.
+/// Handles timestamps before the KDB epoch (negative values) correctly via floor division.
+fn format_kdb_timestamp(kdb_nanos: i64) -> String {
+    const DAY_NANOS: i64 = 86_400_000_000_000;
+    let kdb_day = kdb_nanos.div_euclid(DAY_NANOS) as i32;
+    let time_nanos = kdb_nanos.rem_euclid(DAY_NANOS);
+    let h = time_nanos / 3_600_000_000_000;
+    let m = (time_nanos % 3_600_000_000_000) / 60_000_000_000;
+    let s = (time_nanos % 60_000_000_000) / 1_000_000_000;
+    let ns = time_nanos % 1_000_000_000;
+    format!(
+        "{}D{:02}:{:02}:{:02}.{:09}",
+        format_kdb_date(kdb_day),
+        h,
+        m,
+        s,
+        ns
+    )
+}
+
+/// Inject a timestamp range filter into a q query's WHERE clause.
+///
+/// Injects `time_col within (start;end)` (bounded) or `time_col >= start` (unbounded).
+/// Uses `0Wp` (KDB+ positive timestamp infinity) when `end` is `i64::MAX`, since that
+/// value is KDB+'s `0Wp` and must be written as such — not as a date literal.
+fn inject_time_filter(query: &str, time_col: &str, start: i64, end: Option<i64>) -> String {
+    let start_ts = format_kdb_timestamp(start);
+    let filter = match end {
+        Some(i64::MAX) => format!("{} within ({};0Wp)", time_col, start_ts),
+        Some(end_ts) => format!(
+            "{} within ({};{})",
+            time_col,
+            start_ts,
+            format_kdb_timestamp(end_ts)
+        ),
+        None => format!("{} >= {}", time_col, start_ts),
+    };
+    let lower = query.to_lowercase();
+    if lower.contains(" where ") {
+        format!("{}, {}", query, filter)
+    } else {
+        format!("{} where {}", query, filter)
+    }
+}
+
+/// Build a paginated q query using `select[offset,count]` syntax.
+///
+/// This injects the offset and row limit directly into the `select` statement so KDB+
+/// can apply them at scan time — avoiding the materialisation penalty of
+/// `(offset;count) sublist (full_query)`, where the inner query runs in full before
+/// the subset is taken.
+///
+/// Falls back to `sublist` for non-`select` queries (functional forms, `exec`, etc.).
+fn build_chunk_query(query: &str, offset: usize, rows_per_chunk: usize) -> String {
+    let trimmed = query.trim_start();
+    if trimmed
+        .get(..6)
+        .is_some_and(|s| s.eq_ignore_ascii_case("select"))
+    {
+        let after_select = trimmed[6..].trim_start();
+        if after_select.starts_with('[') {
+            // User already has select[...] — replace it with our offset/count
+            let close = after_select
+                .find(']')
+                .map(|i| i + 1)
+                .unwrap_or(after_select.len());
+            format!(
+                "select[{},{}] {}",
+                offset,
+                rows_per_chunk,
+                after_select[close..].trim_start()
+            )
+        } else {
+            format!("select[{},{}] {}", offset, rows_per_chunk, after_select)
+        }
+    } else {
+        // Fallback: sublist on non-select queries
+        format!("({};{}) sublist {}", offset, rows_per_chunk, query)
+    }
+}
+
+/// Inject a date partition filter into a q query's WHERE clause.
+///
+/// For splayed/partitioned KDB+ tables, this injects `date within (start;end)` (bounded)
+/// or `date >= start` (unbounded) so KDB+ can skip irrelevant date partitions on disk.
+///
+/// # Arguments
+/// * `query` - The base q query (may already contain a WHERE clause)
+/// * `date_col` - Name of the date column (typically `"date"`)
+/// * `start` - Start KDB date (inclusive), as days since 2000-01-01
+/// * `end` - End KDB date (inclusive), or `None` for no upper bound
+fn inject_date_filter(query: &str, date_col: &str, start: i32, end: Option<i32>) -> String {
+    let filter = match end {
+        Some(end_date) => format!(
+            "{} within ({};{})",
+            date_col,
+            format_kdb_date(start),
+            format_kdb_date(end_date)
+        ),
+        None => format!("{} >= {}", date_col, format_kdb_date(start)),
+    };
+    let lower = query.to_lowercase();
+    if lower.contains(" where ") {
+        format!("{}, {}", query, filter)
+    } else {
+        format!("{} where {}", query, filter)
+    }
+}
+
+/// Core streaming loop driven by a caller-supplied query closure.
+///
+/// Calls `query_fn(last_count)` before each chunk:
+/// - `None` on the first call
+/// - `Some(n)` on subsequent calls, where `n` is the row count returned by the previous query
+///
+/// Returns `None` to stop, or `Some(query_string)` to execute next.
+/// Also stops automatically when a query returns 0 rows.
+///
+/// `prev_time` is reset each chunk so time-of-day columns work correctly when
+/// advancing across date partitions (timestamps restart at midnight on each new date).
+fn chunk_stream<T>(
+    mut socket: QStream,
+    time_col: String,
+    mut query_fn: impl FnMut(Option<usize>) -> Option<String> + Send + 'static,
+) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
+where
+    T: KdbDeserialize + Send + 'static,
+{
+    async_stream::stream! {
+        let mut last_count: Option<usize> = None;
+        let mut interner = SymbolInterner::default();
+
+        while let Some(query) = query_fn(last_count) {
+            let result: K = match socket.send_sync_message(&query.as_str()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", query)));
+                    break;
+                }
+            };
+
+            let (columns, rows) = match (result.column_names(), result.rows()) {
+                (Ok(cols), Ok(rows)) => (cols, rows),
+                (Err(e), _) | (_, Err(e)) => {
+                    yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", query, e));
+                    break;
+                }
+            };
+
+            let row_count = rows.len();
+            info!("KDB query: {} ({} records)", query, row_count);
+            if row_count == 0 {
+                break;
+            }
+
+            let time_col_idx = match columns.iter().position(|c| c == &time_col) {
+                Some(idx) => idx,
+                None => {
+                    yield Err(anyhow::anyhow!(
+                        "time column '{}' not found in result columns: {:?}",
+                        time_col, columns
+                    ));
+                    break;
+                }
+            };
+
+            let mut prev_time: Option<i64> = None;
+            let mut row_error = false;
+            for row in &rows {
+                let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        yield Err(anyhow::Error::new(e).context(format!("failed to extract time from KDB row: {}", query)));
+                        row_error = true;
+                        break;
+                    }
+                };
+
+                if let Some(prev) = prev_time
+                    && time_kdb < prev
+                {
+                    yield Err(anyhow::anyhow!(
+                        "KDB data is not sorted by time column '{}': got {} after {}. \
+                        Add `{} xasc` to your query to sort the data.\nQuery: {}",
+                        time_col, time_kdb, prev, time_col, query
+                    ));
+                    row_error = true;
+                    break;
+                }
+                prev_time = Some(time_kdb);
+
+                let time = NanoTime::from_kdb_timestamp(time_kdb);
+
+                let record = match T::from_kdb_row(row, &columns, &mut interner) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        yield Err(anyhow::Error::new(e).context(format!("KDB deserialization failed: {}", query)));
+                        row_error = true;
+                        break;
+                    }
+                };
+
+                yield Ok((time, record));
+            }
+            if row_error {
+                break;
+            }
+
+            last_count = Some(row_count);
+        }
+    }
+}
+
+/// Stream data from KDB+ using a caller-supplied query closure for full control over
+/// chunking strategy.
+///
+/// The closure receives `Option<usize>`:
+/// - `None` on the first call — return the initial query
+/// - `Some(n)` after each chunk — `n` is the row count from the last query
+///
+/// Return `Some(query_string)` to execute the next chunk, or `None` to stop.
+/// The stream also stops automatically when a query returns 0 rows.
+///
+/// This is the primitive that [`kdb_read`] is built on. Use it directly when you need
+/// query-level control, such as advancing through date partitions:
+///
+/// ```ignore
+/// let dates = vec!["2024.01.01", "2024.01.02"];
+/// let chunk = 10_000usize;
+/// let mut di = 0usize;
+/// let mut offset = 0usize;
+///
+/// kdb_read_chunks::<Trade, _>(conn, move |last_count| {
+///     match last_count {
+///         None => {}
+///         Some(n) if n < chunk => { di += 1; offset = 0; } // date exhausted, advance
+///         Some(n) => { offset += n; }                       // more on this date
+///     }
+///     if di >= dates.len() { return None; }
+///     Some(format!("select[{},{}] from trades where date={}", offset, chunk, dates[di]))
+/// }, "time")
+/// ```
+#[must_use]
+pub fn kdb_read_chunks<T, F>(
+    connection: KdbConnection,
+    query_fn: F,
+    time_col: impl Into<String>,
+) -> Rc<dyn Stream<Burst<T>>>
+where
+    T: Element + Send + KdbDeserialize + 'static,
+    F: FnMut(Option<usize>) -> Option<String> + Send + 'static,
+{
+    let time_col = time_col.into();
+    produce_async(move |_ctx| async move {
+        let creds = connection.credentials_string();
+        let socket = QStream::connect(
+            ConnectionMethod::TCP,
+            &connection.host,
+            connection.port,
+            &creds,
+        )
+        .await?;
+        Ok(chunk_stream::<T>(socket, time_col, query_fn))
+    })
+}
+
+/// Stream data from KDB+ using offset-based chunking with optional date partition filtering.
+///
+/// Builds a `select[offset,N]` query per chunk so KDB+ applies the row limit at scan time,
+/// avoiding materialisation of the full result. Implemented via [`kdb_read_chunks`].
+///
+/// Date filter is derived automatically from [`RunMode`] and [`RunFor`]:
+/// - `date_col = Some("date")` injects `date within (start;end)` for `RunFor::Duration`,
+///   or `date >= start` for `RunFor::Forever`, enabling KDB+ to prune date partitions.
+/// - `date_col = None` — no date filter (use for in-memory tables).
 ///
 /// # Arguments
 /// * `connection` - KDB connection configuration
-/// * `query` - The base q query to execute (e.g., "select from trades" or "select from trades where sym=`AAPL")
-/// * `time_col` - Name of the time column used for chunking (also used to extract time from rows)
-/// * `rows_per_chunk` - Maximum number of rows to fetch per query (controls memory usage)
-///
-/// # Memory Usage
-/// Memory usage is bounded by `rows_per_chunk`. For example, with 10,000 rows per chunk:
-/// - Small records (~100 bytes): ~1 MB per chunk
-/// - Large records (~1 KB): ~10 MB per chunk
-///
-/// # Returns
-/// A stream of records bundled by timestamp using TinyVec.
+/// * `query` - Base q query (e.g., `"select from trades"` or `"select from trades where sym=\`AAPL"`)
+/// * `time_col` - Timestamp column name; extracted per-row for stream ordering
+/// * `date_col` - Date partition column name, or `None` for in-memory tables
+/// * `rows_per_chunk` - Maximum rows per query (controls memory usage)
 ///
 /// # Example
 ///
 /// ```ignore
 /// let conn = KdbConnection::new("localhost", 5000);
 ///
-/// // Read trades - time range from RunMode/RunFor
-/// let stream = kdb_read(
-///     conn,
-///     "select from trades",           // Base query
-///     "time",                          // Time column name
-///     10000                            // 10K rows per chunk
-/// );
+/// // In-memory table
+/// let stream = kdb_read::<Trade>(conn.clone(), "select from trades", "time", None::<&str>, 10000);
 ///
-/// // Run with historical mode and duration
-/// stream.run(
-///     RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-///     RunFor::Duration(Duration::from_secs(86400))  // 24 hours
-/// );
+/// // Splayed/partitioned table
+/// let stream = kdb_read::<Trade>(conn, "select from trades", "time", Some("date"), 10000);
+///
+/// stream.run(RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)), RunFor::Forever);
 /// ```
 #[must_use]
 pub fn kdb_read<T>(
     connection: KdbConnection,
     query: impl Into<String>,
     time_col: impl Into<String>,
+    date_col: Option<impl Into<String>>,
     rows_per_chunk: usize,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
@@ -339,18 +624,30 @@ where
 {
     let query = query.into();
     let time_col = time_col.into();
+    let date_col = date_col.map(|d| d.into());
 
     produce_async(move |ctx| {
-        // Derive start/end times from RunParams
-        let start_time = ctx.start_time.to_kdb_timestamp();
-        let end_time = ctx.end_time().map(|t| t.to_kdb_timestamp());
+        let start_time = ctx.start_time;
+        // Cycles returns Err → no upper bound. Forever/Duration always inject an end filter.
+        let end_time = ctx.end_time().ok();
 
         async move {
-            let end_time = end_time?;
-            let creds = connection.credentials_string();
+            let base_query = {
+                let q = match &date_col {
+                    Some(dc) => {
+                        let start_kdb_date = nano_to_kdb_date(start_time);
+                        let end_kdb_date = end_time.map(nano_to_kdb_date);
+                        inject_date_filter(&query, dc, start_kdb_date, end_kdb_date)
+                    }
+                    None => query.clone(),
+                };
+                let start_kdb_ts = start_time.to_kdb_timestamp();
+                let end_kdb_ts = end_time.map(|t| t.to_kdb_timestamp());
+                inject_time_filter(&q, &time_col, start_kdb_ts, end_kdb_ts)
+            };
 
-            // Connect to KDB
-            let mut socket = QStream::connect(
+            let creds = connection.credentials_string();
+            let socket = QStream::connect(
                 ConnectionMethod::TCP,
                 &connection.host,
                 connection.port,
@@ -358,116 +655,17 @@ where
             )
             .await?;
 
-            // Stream rows in chunks
-            Ok(async_stream::stream! {
-                let mut current_time = start_time;
-                let mut interner = SymbolInterner::default();
-
-                loop {
-                    // Build chunk query with time constraint and row limit
-                    let chunk_query = format!(
-                        "select[{}] from ({}) where {} >= {}, {} <= {}",
-                        rows_per_chunk,
-                        query,
-                        time_col,
-                        current_time,
-                        time_col,
-                        end_time
-                    );
-
-                    let result: K = match socket.send_sync_message(&chunk_query.as_str()).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", chunk_query)));
-                            break;
-                        }
-                    };
-
-                    // Extract metadata once per chunk
-                    let (columns, rows) = match (result.column_names(), result.rows()) {
-                        (Ok(cols), Ok(rows)) => (cols, rows),
-                        (Err(e), _) | (_, Err(e)) => {
-                            yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", chunk_query, e));
-                            break;
-                        }
-                    };
-
-                    let row_count = rows.len();
-                    if row_count == 0 {
-                        break;  // No more data
-                    }
-
-                    // Find time column index once per chunk
-                    let time_col_idx = match columns.iter().position(|c| c == &time_col) {
-                        Some(idx) => idx,
-                        None => {
-                            yield Err(anyhow::anyhow!("time column '{}' not found", time_col));
-                            break;
-                        }
-                    };
-
-                    // Process rows and track last timestamp
-                    let mut prev_time: Option<i64> = None;
-                    let mut last_time = current_time;
-                    let mut row_error = false;
-                    for row in &rows {
-                        // Extract time from KDB row directly
-                        let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                yield Err(anyhow::Error::new(e).context("failed to extract time from KDB row"));
-                                row_error = true;
-                                break;
-                            }
-                        };
-
-                        // Check for unsorted data
-                        if let Some(prev) = prev_time
-                            && time_kdb < prev
-                        {
-                            yield Err(anyhow::anyhow!(
-                                "KDB data is not sorted by time column '{}': got {} after {}. \
-                                Add `{} xasc` to your query to sort the data.",
-                                time_col, time_kdb, prev, time_col
-                            ));
-                            row_error = true;
-                            break;
-                        }
-                        prev_time = Some(time_kdb);
-
-                        let time = NanoTime::from_kdb_timestamp(time_kdb);
-
-                        // Deserialize record (without time)
-                        let record = match T::from_kdb_row(row, &columns, &mut interner) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                yield Err(anyhow::Error::new(e).context("KDB deserialization failed"));
-                                row_error = true;
-                                break;
-                            }
-                        };
-
-                        last_time = time_kdb;
-                        yield Ok((time, record));
-                    }
-                    if row_error {
-                        break;
-                    }
-
-                    // If we got fewer rows than requested, we're done
-                    if row_count < rows_per_chunk {
-                        break;
-                    }
-
-                    // Start next chunk right after the last row
-                    current_time = last_time + 1;
-
-                    // Safety check: don't go past end_time
-                    if current_time > end_time {
-                        break;
-                    }
+            let mut offset = 0usize;
+            let query_fn = move |last_count: Option<usize>| -> Option<String> {
+                match last_count {
+                    None => {}
+                    Some(n) if n < rows_per_chunk => return None,
+                    Some(n) => offset += n,
                 }
-            })
+                Some(build_chunk_query(&base_query, offset, rows_per_chunk))
+            };
+
+            Ok(chunk_stream::<T>(socket, time_col, query_fn))
         }
     })
 }
@@ -505,5 +703,176 @@ mod tests {
         // Test with values after KDB epoch
         let after_epoch = NanoTime::new(946_684_801_000_000_000); // 1 second after
         assert_eq!(after_epoch.to_kdb_timestamp(), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_format_kdb_date() {
+        assert_eq!(format_kdb_date(0), "2000.01.01");
+        assert_eq!(format_kdb_date(1), "2000.01.02");
+        assert_eq!(format_kdb_date(31), "2000.02.01");
+        // 2000 is a leap year (366 days), so day 366 = 2001-01-01
+        assert_eq!(format_kdb_date(366), "2001.01.01");
+        assert_eq!(format_kdb_date(-1), "1999.12.31");
+        assert_eq!(format_kdb_date(-365), "1999.01.01");
+    }
+
+    #[test]
+    fn test_nano_to_kdb_date() {
+        // NanoTime::from_kdb_timestamp(0) = 2000-01-01 → kdb_date 0
+        let t = NanoTime::from_kdb_timestamp(0);
+        assert_eq!(nano_to_kdb_date(t), 0);
+
+        // One day later: 86400 seconds = 86_400_000_000_000 ns after KDB epoch
+        let t2 = NanoTime::from_kdb_timestamp(86_400_000_000_000);
+        assert_eq!(nano_to_kdb_date(t2), 1);
+
+        // NanoTime::ZERO = unix epoch (1970-01-01) = kdb_date -10957
+        assert_eq!(nano_to_kdb_date(NanoTime::ZERO), -10957);
+    }
+
+    #[test]
+    fn test_build_chunk_query_basic_select() {
+        let q = build_chunk_query("select from trades", 0, 10000);
+        assert_eq!(q, "select[0,10000] from trades");
+    }
+
+    #[test]
+    fn test_build_chunk_query_with_offset() {
+        let q = build_chunk_query("select from trades", 30000, 10000);
+        assert_eq!(q, "select[30000,10000] from trades");
+    }
+
+    #[test]
+    fn test_build_chunk_query_preserves_where_clause() {
+        let q = build_chunk_query("select from trades where sym=`AAPL", 0, 1000);
+        assert_eq!(q, "select[0,1000] from trades where sym=`AAPL");
+    }
+
+    #[test]
+    fn test_build_chunk_query_preserves_columns() {
+        let q = build_chunk_query("select price,qty from trades", 5000, 1000);
+        assert_eq!(q, "select[5000,1000] price,qty from trades");
+    }
+
+    #[test]
+    fn test_build_chunk_query_replaces_existing_bracket() {
+        // User accidentally passed select[5] — we replace it with our offset/count
+        let q = build_chunk_query("select[5] from trades", 0, 10000);
+        assert_eq!(q, "select[0,10000] from trades");
+    }
+
+    #[test]
+    fn test_build_chunk_query_case_insensitive() {
+        let q = build_chunk_query("SELECT FROM trades", 0, 100);
+        assert_eq!(q, "select[0,100] FROM trades");
+    }
+
+    #[test]
+    fn test_build_chunk_query_non_select_fallback() {
+        // exec and functional queries fall back to sublist
+        let q = build_chunk_query("exec price from trades", 0, 100);
+        assert_eq!(q, "(0;100) sublist exec price from trades");
+    }
+
+    #[test]
+    fn test_inject_date_filter_bounded_no_existing_where() {
+        let q = inject_date_filter("select from trades", "date", 0, Some(1));
+        assert_eq!(
+            q,
+            "select from trades where date within (2000.01.01;2000.01.02)"
+        );
+    }
+
+    #[test]
+    fn test_inject_date_filter_bounded_with_existing_where() {
+        let q = inject_date_filter("select from trades where sym=`AAPL", "date", 0, Some(1));
+        assert_eq!(
+            q,
+            "select from trades where sym=`AAPL, date within (2000.01.01;2000.01.02)"
+        );
+    }
+
+    #[test]
+    fn test_inject_date_filter_unbounded_no_existing_where() {
+        let q = inject_date_filter("select from trades", "date", 0, None);
+        assert_eq!(q, "select from trades where date >= 2000.01.01");
+    }
+
+    #[test]
+    fn test_inject_date_filter_unbounded_with_existing_where() {
+        let q = inject_date_filter("select from trades where sym=`AAPL", "date", 0, None);
+        assert_eq!(q, "select from trades where sym=`AAPL, date >= 2000.01.01");
+    }
+
+    #[test]
+    fn test_inject_date_filter_same_start_end() {
+        // Single-day filter
+        let q = inject_date_filter("select from trades", "date", 5, Some(5));
+        assert_eq!(
+            q,
+            "select from trades where date within (2000.01.06;2000.01.06)"
+        );
+    }
+
+    #[test]
+    fn test_format_kdb_timestamp_epoch() {
+        assert_eq!(format_kdb_timestamp(0), "2000.01.01D00:00:00.000000000");
+    }
+
+    #[test]
+    fn test_format_kdb_timestamp_one_second() {
+        assert_eq!(
+            format_kdb_timestamp(1_000_000_000),
+            "2000.01.01D00:00:01.000000000"
+        );
+    }
+
+    #[test]
+    fn test_format_kdb_timestamp_one_day() {
+        assert_eq!(
+            format_kdb_timestamp(86_400_000_000_000),
+            "2000.01.02D00:00:00.000000000"
+        );
+    }
+
+    #[test]
+    fn test_format_kdb_timestamp_before_epoch() {
+        assert_eq!(format_kdb_timestamp(-1), "1999.12.31D23:59:59.999999999");
+    }
+
+    #[test]
+    fn test_inject_time_filter_unbounded() {
+        let q = inject_time_filter("select from trades", "time", 0, None);
+        assert_eq!(
+            q,
+            "select from trades where time >= 2000.01.01D00:00:00.000000000"
+        );
+    }
+
+    #[test]
+    fn test_inject_time_filter_bounded() {
+        let q = inject_time_filter("select from trades", "time", 0, Some(86_400_000_000_000));
+        assert_eq!(
+            q,
+            "select from trades where time within (2000.01.01D00:00:00.000000000;2000.01.02D00:00:00.000000000)"
+        );
+    }
+
+    #[test]
+    fn test_inject_time_filter_max_uses_0wp() {
+        let q = inject_time_filter("select from trades", "time", 0, Some(i64::MAX));
+        assert_eq!(
+            q,
+            "select from trades where time within (2000.01.01D00:00:00.000000000;0Wp)"
+        );
+    }
+
+    #[test]
+    fn test_inject_time_filter_with_existing_where() {
+        let q = inject_time_filter("select from trades where sym=`AAPL", "time", 0, None);
+        assert_eq!(
+            q,
+            "select from trades where sym=`AAPL, time >= 2000.01.01D00:00:00.000000000"
+        );
     }
 }

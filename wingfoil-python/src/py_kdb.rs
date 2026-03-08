@@ -109,7 +109,7 @@ pub fn py_kdb_read(
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
     let stream: Rc<dyn Stream<Burst<PyKdbRow>>> =
-        kdb_read::<PyKdbRow>(conn, query, time_col, chunk_size);
+        kdb_read::<PyKdbRow>(conn, query, time_col, None::<&str>, chunk_size);
 
     // Collapse burst to single row, convert to PyElement (dict)
     let collapsed = stream.collapse();

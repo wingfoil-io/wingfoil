@@ -29,11 +29,12 @@
 //! let conn = KdbConnection::new("localhost", 5000)
 //!     .with_credentials("user", "pass");
 //!
-//! // Read with time-based chunking for memory-bounded streaming
+//! // Read with offset-based chunking for memory-bounded streaming
 //! kdb_read(
 //!     conn,
-//!     "select from trades where date=.z.d",
-//!     "time",                  // time column for chunking
+//!     "select from trades",
+//!     "time",                  // time column (extracted per-row for stream ordering)
+//!     Some("date"),            // date column for partition pruning (None for in-memory tables)
 //!     10000,                   // rows_per_chunk (controls memory usage)
 //! )
 //!     .map(|trades| trades.first().map(|t| t.price).unwrap_or(0.0))
