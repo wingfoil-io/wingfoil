@@ -14,12 +14,13 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 
 ## Features
 
-- **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.  
-- **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.  
+- **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
+- **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
 - **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaScript/TypeScript support.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb) integration for tick data, CSV, Kafka ([coming soon](https://github.com/wingfoil-io/wingfoil/issues/23)), and more.
 
 
 ## Quick Start
@@ -44,10 +45,34 @@ hello, world 3
 ```
 
 You can download from [crates.io](https://crates.io/crates/wingfoil/),
-read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/), 
-review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) 
+read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/),
+review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
 or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 You can download the wingfoil Python module from [pypi](https://pypi.org/project/wingfoil/).
+
+## Order Book Example
+
+Load a CSV of AAPL limit orders from [LOBSTER](https://lobsterdata.com/info/DataSamples.php), maintain an order book using the [lobster](https://github.com/rubik/lobster) crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+
+```rust,ignore
+let book = RefCell::new(lobster::OrderBook::default());
+let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
+let (fills, prices) = csv_read_vec("aapl.csv", get_time, true)
+    .map(move |chunk| process_orders(chunk, &book))
+    .split();
+let prices_export = prices
+    .filter_value(|price: &Option<TwoWayPrice>| !price.is_none())
+    .map(|price| price.unwrap())
+    .distinct()
+    .csv_write("prices.csv");
+let fills_export = fills.csv_write_vec("fills.csv");
+Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+    .print()
+    .run()
+    .unwrap();
+```
+
+One hour of market data processed in 287ms. See the [full example](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
 
 ## Get Involved!
 
