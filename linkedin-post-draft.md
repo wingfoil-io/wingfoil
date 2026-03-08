@@ -4,47 +4,40 @@
 
 ## POST (no links — paste this as the post itself)
 
-**Wingfoil is going big on data.**
+WINGFOIL IS GOING BIG ON DATA.
 
 We've been heads-down building, and I'm excited to share what's landed recently in wingfoil — our Rust stream processing library for high-performance DAG-based pipelines.
 
-**What's shipped:**
+——— WHAT'S SHIPPED ———
 
-We've landed a production-ready **KDB+ adapter** — connect your streams directly to KDB+ time-series databases with full symbol interning. This is production-grade — designed for the latency and throughput demands of real-time financial data.
+We've landed a production-ready KDB+ adapter — connect your streams directly to KDB+ time-series databases with full symbol interning. Designed for the latency and throughput demands of real-time financial data.
 
----
+——— SHOUTOUT TO OUR CONTRIBUTORS ———
 
-**Huge shoutout to our contributors who are making wingfoil happen:**
-
-- **Zohaib Hassan** — Pandas integration for seamless Python interop
-- **Aditya Shirsat** — time-based windowing and Python examples
-- **Matvey Ezhov** — code quality improvements across the board
+Zohaib Hassan — Pandas integration for seamless Python interop
+Aditya Shirsat — time-based windowing and Python examples
+Matvey Ezhov — code quality improvements across the board
 
 Open source only works because of people like you. Thank you.
 
----
-
-**Where we're going next — and where we need help:**
+——— WHERE WE'RE GOING NEXT ———
 
 We're looking for contributors to tackle:
 
-- **ZMQ** — our messaging layer is in beta and we're pushing it to production-ready. That includes adding **service discovery** for dynamic service registration.
-- **KDB+ caching** — smarter replay and snapshot support
-- **Binary file I/O** — high-speed serialisation adapters (Arrow, Parquet, etc.)
-- **SQL I/O** — stream to/from relational databases
-- **Kafka I/O** — streaming integration
-- **wingfoil-python full parity** — every node and I/O adapter in the Rust core exposed to Python
-- **Python showcase** — define a type and pipeline in Rust, run it from Python, and crunch the results with pandas, scikit-learn, and plotly/matplotlib
-- **JS/TS browser integration** — two proposals under evaluation: run wingfoil natively in-browser via WASM, or stream typed Rust data to a reactive JS frontend
+🔧 ZMQ — messaging layer in beta, pushing to production-ready. Includes service discovery for dynamic node registration.
+🗄 KDB+ caching — smarter replay and snapshot support
+📦 Binary file I/O — Arrow, Parquet, and more
+🛢 SQL I/O — stream to/from relational databases
+⚡ Kafka I/O — streaming integration
+🐍 wingfoil-python full parity — every node and I/O adapter exposed to Python
+🐍 Python showcase — Rust pipeline, run from Python, results in pandas + scikit-learn + plotly
+🌐 JS/TS browser integration — run wingfoil in-browser via WASM, or stream typed Rust data to a reactive frontend
 
 If you work in quant finance, real-time data, or just love high-performance Rust — we'd love your help.
 
-We're especially keen to hear from specialists in:
-  * **FPGA**
-  * **JS/TS**
-  * **PyO3**
+We're especially keen to hear from specialists in FPGA, JS/TS, and PyO3.
 
-New to open source or Rust? We have good first issues tagged — including adding EWMA, inspect, and throttle to the Python bindings. All issues are linked in the first comment.
+New to open source or Rust? We have good first issues — adding EWMA, inspect, and throttle to the Python bindings. All links in the first comment.
 
 Drop a comment, open an issue, join us on Discord or just star the repo.
 
