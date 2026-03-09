@@ -272,13 +272,14 @@ where
 }
 
 /// Build a time-slice query for TABLE_NAME filtering by date and time range.
-fn slice_query(date: i32, slice_start: NanoTime, slice_end: NanoTime) -> String {
+/// Half-open interval [t0, t1): `time >= t0, time < t1`.
+fn slice_query(date: i32, t0: NanoTime, t1: NanoTime) -> String {
     format!(
-        "select from {} where date=2000.01.01+{}, time within ((`timestamp$){}j;(`timestamp$){}j)",
+        "select from {} where date=2000.01.01+{}, time >= (`timestamp$){}j, time < (`timestamp$){}j",
         TABLE_NAME,
         date,
-        slice_start.to_kdb_timestamp(),
-        slice_end.to_kdb_timestamp(),
+        t0.to_kdb_timestamp(),
+        t1.to_kdb_timestamp(),
     )
 }
 
@@ -554,7 +555,7 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
 ///   Day 1, slice 1 [12:00, 23:59…] → row  at 16 h        → 1 row
 /// Expected total: 6 rows.
 #[test]
-fn test_kdb_read_basic() -> Result<()> {
+fn test_kdb_read_works() -> Result<()> {
     let _ = env_logger::try_init();
 
     with_test_data(3, 2, true, |_n, conn| {
@@ -658,12 +659,12 @@ fn test_kdb_write_round_trip() -> Result<()> {
         let read_stream = kdb_read::<TestTradeWrite, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
-            move |(slice_start, slice_end), _, _| {
+            move |(t0, t1), _, _| {
                 format!(
-                    "select from {} where time within ((`timestamp$){}j;(`timestamp$){}j)",
+                    "select from {} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
                     WRITE_TABLE_NAME,
-                    slice_start.to_kdb_timestamp(),
-                    slice_end.to_kdb_timestamp(),
+                    t0.to_kdb_timestamp(),
+                    t1.to_kdb_timestamp(),
                 )
             },
             "time",

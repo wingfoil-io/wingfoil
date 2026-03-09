@@ -462,29 +462,30 @@ fn compute_time_slices(
         let day_end_kdb = next_midnight_kdb - 1; // 23:59:59.999999999
 
         let mut iteration = 0usize;
-        let mut slice_start = midnight_kdb;
 
         loop {
-            let natural_end = slice_start + period_nanos;
-            // Half-open intervals: slice ends at natural_end-1 so adjacent slices don't
-            // overlap. For the last slice of a day, natural_end-1 >= day_end_kdb so the
-            // min() clamps it to 23:59:59.999999999.
-            let slice_end = (natural_end - 1).min(day_end_kdb);
+            // Half-open intervals [t0, t1): caller uses `time >= t0, time < t1`.
+            // t0 and t1 are always round multiples of period (or midnight),
+            // so queries contain only clean numbers with no ±1 adjustments.
+            let t0 = midnight_kdb + iteration as i64 * period_nanos;
+            let natural_t1 = t0 + period_nanos;
+            // For the final slice of the day, t1 clamps to next midnight (also a round
+            // number: 86400000000000j per day). For non-final slices t1 = t0 + period.
+            let t1 = natural_t1.min(next_midnight_kdb);
 
             result.push((
                 (
-                    NanoTime::from_kdb_timestamp(slice_start),
-                    NanoTime::from_kdb_timestamp(slice_end),
+                    NanoTime::from_kdb_timestamp(t0),
+                    NanoTime::from_kdb_timestamp(t1),
                 ),
                 kdb_date,
                 iteration,
             ));
 
-            if natural_end >= next_midnight_kdb {
+            if natural_t1 >= next_midnight_kdb {
                 break;
             }
 
-            slice_start = natural_end;
             iteration += 1;
         }
     }
@@ -599,7 +600,8 @@ mod tests {
 
     #[test]
     fn test_compute_time_slices_no_stub() {
-        // 8-hour period divides 24h evenly → 3 slices, no stub
+        // 8-hour period divides 24h evenly → 3 slices, no stub.
+        // Slices are (t0_exclusive, t1_inclusive): caller uses `time > t0, time <= t1`.
         let epoch = kdb_epoch();
         let period = std::time::Duration::from_secs(8 * 3600);
         let start = epoch;
@@ -614,18 +616,20 @@ mod tests {
 
         let period_nanos = period.as_nanos() as u64;
 
-        let (s0, e0) = slices[0].0;
-        assert_eq!(u64::from(s0), u64::from(epoch));
-        assert_eq!(u64::from(e0), u64::from(epoch) + period_nanos - 1);
+        // Slice 0: [midnight, midnight + period)
+        let (t0_0, t1_0) = slices[0].0;
+        assert_eq!(u64::from(t0_0), u64::from(epoch));
+        assert_eq!(u64::from(t1_0), u64::from(epoch) + period_nanos);
 
-        let (s1, e1) = slices[1].0;
-        assert_eq!(u64::from(s1), u64::from(epoch) + period_nanos);
-        assert_eq!(u64::from(e1), u64::from(epoch) + 2 * period_nanos - 1);
+        // Slice 1: [midnight + period, midnight + 2*period)
+        let (t0_1, t1_1) = slices[1].0;
+        assert_eq!(u64::from(t0_1), u64::from(epoch) + period_nanos);
+        assert_eq!(u64::from(t1_1), u64::from(epoch) + 2 * period_nanos);
 
-        // Last slice ends at 23:59:59.999999999
-        let (s2, e2) = slices[2].0;
-        assert_eq!(u64::from(s2), u64::from(epoch) + 2 * period_nanos);
-        assert_eq!(u64::from(e2), u64::from(epoch) + DAY_NANOS - 1);
+        // Last slice: [midnight + 2*period, next_midnight) — t1 is next_midnight (round)
+        let (t0_2, t1_2) = slices[2].0;
+        assert_eq!(u64::from(t0_2), u64::from(epoch) + 2 * period_nanos);
+        assert_eq!(u64::from(t1_2), u64::from(epoch) + DAY_NANOS);
 
         assert_eq!(slices[0].2, 0);
         assert_eq!(slices[1].2, 1);
@@ -645,22 +649,16 @@ mod tests {
 
         let period_nanos = period.as_nanos() as u64;
 
-        // Stub: starts at 20h, ends at 23:59:59.999999999
-        let (stub_start, stub_end) = slices[4].0;
-        assert_eq!(u64::from(stub_start), u64::from(epoch) + 4 * period_nanos);
-        assert_eq!(u64::from(stub_end), u64::from(epoch) + DAY_NANOS - 1);
+        // Stub: t0 = 20h (round), t1 = next midnight (round: 86400000000000j)
+        let (stub_t0, stub_t1) = slices[4].0;
+        assert_eq!(u64::from(stub_t0), u64::from(epoch) + 4 * period_nanos);
+        assert_eq!(u64::from(stub_t1), u64::from(epoch) + DAY_NANOS);
 
-        let stub_duration = u64::from(stub_end) - u64::from(stub_start) + 1;
-        assert!(
-            stub_duration < period_nanos,
-            "stub should be shorter than a full period"
-        );
-
-        // Contiguous and non-overlapping: end of slice n + 1 == start of slice n+1
+        // Contiguous: t1 of slice i == t0 of slice i+1 (half-open [t0, t1) intervals)
         for i in 0..4 {
-            let end_i = u64::from(slices[i].0.1);
-            let start_next = u64::from(slices[i + 1].0.0);
-            assert_eq!(end_i + 1, start_next, "gap/overlap at slice {i}/{}", i + 1);
+            let t1_i = u64::from(slices[i].0.1);
+            let t0_next = u64::from(slices[i + 1].0.0);
+            assert_eq!(t1_i, t0_next, "boundary mismatch at slice {i}/{}", i + 1);
         }
     }
 

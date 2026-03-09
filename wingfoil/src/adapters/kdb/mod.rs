@@ -33,11 +33,11 @@
 //! kdb_read::<Trade, _>(
 //!     conn,
 //!     std::time::Duration::from_secs(3600),
-//!     |within, date, _| {
+//!     |(t0, t1), date, _| {
 //!         format!(
 //!             "select from trades where date=2000.01.01+{}, \
-//!              time within ((`timestamp$){}j;(`timestamp$){}j)",
-//!             date, within.0.to_kdb_timestamp(), within.1.to_kdb_timestamp()
+//!              time >= (`timestamp$){}j, time < (`timestamp$){}j",
+//!             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
 //!         )
 //!     },
 //!     "time",

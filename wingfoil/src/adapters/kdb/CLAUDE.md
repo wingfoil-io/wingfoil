@@ -23,7 +23,8 @@ kdb/
   - Use when you need direct control over query construction (e.g. offset pagination)
 - `kdb_read()` - Time-partitioned reads driven by a caller-supplied query closure
   - Computes time slices from `RunMode`/`RunFor` and calls `query_fn` for each slice
-  - `query_fn((slice_start, slice_end), kdb_date, iteration) -> String`
+  - `query_fn((t0, t1), kdb_date, iteration) -> String` — half-open [t0, t1)
+  - Use `time >= t0j, time < t1j` in the q filter for clean round-number boundaries
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
   - Caller constructs the full query — date/time filters, partition hints, etc.
   - Terminates automatically when all slices are exhausted
@@ -139,11 +140,11 @@ impl KdbSerialize for Trade {
 let stream = kdb_read::<Trade, _>(
     conn,
     std::time::Duration::from_secs(3600), // 1-hour slices
-    |(slice_start, slice_end), date, _| {
+    |(t0, t1), date, _| {
         format!(
             "select from trades where date=2000.01.01+{}, \
-             time within ((`timestamp$){}j;(`timestamp$){}j)",
-            date, slice_start.to_kdb_timestamp(), slice_end.to_kdb_timestamp()
+             time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
         )
     },
     "time",
