@@ -464,8 +464,10 @@ fn compute_time_slices(
 
         loop {
             let natural_end = slice_start + period_nanos;
-            // Cap at last nanosecond of day; stub if natural_end > day_end_kdb
-            let slice_end = natural_end.min(day_end_kdb);
+            // Half-open intervals: slice ends at natural_end-1 so adjacent slices don't
+            // overlap. For the last slice of a day, natural_end-1 >= day_end_kdb so the
+            // min() clamps it to 23:59:59.999999999.
+            let slice_end = (natural_end - 1).min(day_end_kdb);
 
             result.push((
                 (
@@ -614,11 +616,11 @@ mod tests {
 
         let (s0, e0) = slices[0].0;
         assert_eq!(u64::from(s0), u64::from(epoch));
-        assert_eq!(u64::from(e0), u64::from(epoch) + period_nanos);
+        assert_eq!(u64::from(e0), u64::from(epoch) + period_nanos - 1);
 
         let (s1, e1) = slices[1].0;
         assert_eq!(u64::from(s1), u64::from(epoch) + period_nanos);
-        assert_eq!(u64::from(e1), u64::from(epoch) + 2 * period_nanos);
+        assert_eq!(u64::from(e1), u64::from(epoch) + 2 * period_nanos - 1);
 
         // Last slice ends at 23:59:59.999999999
         let (s2, e2) = slices[2].0;
@@ -654,11 +656,11 @@ mod tests {
             "stub should be shorter than a full period"
         );
 
-        // Boundary overlap: end of slice n == start of slice n+1
+        // Contiguous and non-overlapping: end of slice n + 1 == start of slice n+1
         for i in 0..4 {
             let end_i = u64::from(slices[i].0.1);
             let start_next = u64::from(slices[i + 1].0.0);
-            assert_eq!(end_i, start_next, "boundary overlap at slice {i}/{}", i + 1);
+            assert_eq!(end_i + 1, start_next, "gap/overlap at slice {i}/{}", i + 1);
         }
     }
 

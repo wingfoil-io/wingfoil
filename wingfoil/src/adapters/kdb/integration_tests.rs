@@ -314,19 +314,27 @@ fn test_kdb_sorted_data() -> Result<()> {
 #[test]
 fn test_kdb_unsorted_data_fails() -> Result<()> {
     let _ = env_logger::try_init();
-    // With unsorted data, the adapter detects time going backwards
+    // Unsorted rows have timestamps before the KDB epoch (negative KDB timestamps),
+    // so date/time slice filters would exclude them. Use kdb_read_chunks with a bare
+    // query so the adapter sees the shuffled order and raises a time-ordering error.
     let result = with_test_data(5, 1, false, |_n, conn| {
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
+        let mut done = false;
+        let stream = kdb_read_chunks::<TestTrade, _>(
             conn,
-            std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| Some(slice_query(date, within.0, within.1)),
+            move |_| {
+                if done {
+                    None
+                } else {
+                    done = true;
+                    Some(format!("select from {}", TABLE_NAME))
+                }
+            },
             "time",
         );
-        let collected = stream.collapse().collect();
-        collected.run(
-            RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-            RunFor::Duration(std::time::Duration::from_secs(86400)),
-        )?;
+        stream
+            .collapse()
+            .collect()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
         Ok(())
     });
     assert!(
