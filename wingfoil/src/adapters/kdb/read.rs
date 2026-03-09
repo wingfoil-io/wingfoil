@@ -466,9 +466,6 @@ where
 
             let row_count = rows.len();
             info!("KDB query: {} ({} records)", query, row_count);
-            if row_count == 0 {
-                break;
-            }
 
             let time_col_idx = match columns.iter().position(|c| c == &time_col) {
                 Some(idx) => idx,
@@ -536,7 +533,8 @@ where
 /// - `Some(n)` after each chunk — `n` is the row count from the last query
 ///
 /// Return `Some(query_string)` to execute the next chunk, or `None` to stop.
-/// The stream also stops automatically when a query returns 0 rows.
+/// A query that returns 0 rows calls the closure with `Some(0)` — the closure
+/// decides whether to stop (return `None`) or skip ahead (return another query).
 ///
 /// This is the primitive that [`kdb_read`] is built on. Use it directly when you need
 /// query-level control, such as advancing through date partitions:
@@ -632,108 +630,6 @@ fn compute_time_slices(
     result
 }
 
-fn time_slice_stream<T>(
-    mut socket: kdb_plus_fixed::ipc::QStream,
-    time_col: String,
-    slices: Vec<((NanoTime, NanoTime), i32, usize)>,
-    mut query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> Option<String> + Send + 'static,
-) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
-where
-    T: KdbDeserialize + Send + 'static,
-{
-    async_stream::stream! {
-        let mut interner = SymbolInterner::default();
-
-        for (within, date, iteration) in slices {
-            let query = match query_fn(within, date, iteration) {
-                Some(q) => q,
-                None => continue,
-            };
-
-            let result: K = match socket.send_sync_message(&query.as_str()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", query)));
-                    break;
-                }
-            };
-
-            let (columns, rows) = match (result.column_names(), result.rows()) {
-                (Ok(cols), Ok(rows)) => (cols, rows),
-                (Err(e), _) | (_, Err(e)) => {
-                    yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", query, e));
-                    break;
-                }
-            };
-
-            let row_count = rows.len();
-            info!("KDB time slice query: {} ({} records)", query, row_count);
-
-            if row_count == 0 {
-                continue; // empty slice — not a stop condition
-            }
-
-            let time_col_idx = match columns.iter().position(|c| c == &time_col) {
-                Some(idx) => idx,
-                None => {
-                    yield Err(anyhow::anyhow!(
-                        "time column '{}' not found in result columns: {:?}",
-                        time_col, columns
-                    ));
-                    break;
-                }
-            };
-
-            let mut prev_time: Option<i64> = None;
-            let mut row_error = false;
-            for row in &rows {
-                let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!(
-                            "failed to extract time from KDB row: {}",
-                            query
-                        )));
-                        row_error = true;
-                        break;
-                    }
-                };
-
-                if let Some(prev) = prev_time
-                    && time_kdb < prev
-                {
-                    yield Err(anyhow::anyhow!(
-                        "KDB data is not sorted by time column '{}': got {} after {}. \
-                        Add `{} xasc` to your query to sort the data.\nQuery: {}",
-                        time_col, time_kdb, prev, time_col, query
-                    ));
-                    row_error = true;
-                    break;
-                }
-                prev_time = Some(time_kdb);
-
-                let time = NanoTime::from_kdb_timestamp(time_kdb);
-                let record = match T::from_kdb_row(row, &columns, &mut interner) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        yield Err(
-                            anyhow::Error::new(e)
-                                .context(format!("KDB deserialization failed: {}", query)),
-                        );
-                        row_error = true;
-                        break;
-                    }
-                };
-
-                yield Ok((time, record));
-            }
-            if row_error {
-                break;
-            }
-        }
-    }
-}
-
 #[must_use]
 pub fn kdb_read_time_sliced<T, F>(
     connection: KdbConnection,
@@ -781,7 +677,20 @@ where
             )
             .await?;
 
-            Ok(time_slice_stream::<T>(socket, time_col, slices, query_fn))
+            // Convert the slice-based iteration into the Option<usize> protocol that
+            // chunk_stream expects. The row count from the previous query is ignored —
+            // we always advance to the next slice unconditionally. Slices where query_fn
+            // returns None are skipped. The stream stops when slices are exhausted.
+            let mut slices_iter = slices.into_iter();
+            let mut query_fn = query_fn;
+            let slice_fn = move |_last_count: Option<usize>| loop {
+                let (within, date, iteration) = slices_iter.next()?;
+                if let Some(q) = query_fn(within, date, iteration) {
+                    return Some(q);
+                }
+            };
+
+            Ok(chunk_stream::<T>(socket, time_col, slice_fn))
         }
     })
 }
@@ -1253,7 +1162,7 @@ mod tests {
         let float_val: f64 = 1.234_567_891;
         let sym_str = "AAPL";
         let string_val = "hello";
-        let vec_icommit nt = vec![10i32, 20, 30];
+        let vec_int = vec![10i32, 20, 30];
         let vec_float = vec![1.1f64, 2.2, 3.3];
 
         // ── Build a single-row KDB table ─────────────────────────────────────
