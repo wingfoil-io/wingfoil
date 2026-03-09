@@ -133,7 +133,7 @@ pub fn py_kdb_read(
             };
             Some(paginated)
         },
-        time_col,
+        &time_col,
     );
 
     // Collapse burst to single row, convert to PyElement (dict)
