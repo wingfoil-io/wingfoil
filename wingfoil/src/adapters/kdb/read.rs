@@ -306,6 +306,8 @@ where
         let mut interner = SymbolInterner::default();
 
         while let Some(query) = query_fn(last_count) {
+            info!("KDB query: {}", query);
+            let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -323,7 +325,7 @@ where
             };
 
             let row_count = rows.len();
-            info!("KDB query: {} ({} records)", query, row_count);
+            info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
             let time_col_idx = match columns.iter().position(|c| c == &time_col) {
                 Some(idx) => idx,
