@@ -1175,4 +1175,188 @@ mod tests {
         assert_eq!(slices[3].1, 1);
         assert_eq!(slices[3].2, 1);
     }
+
+    /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
+    /// supported KDB column type:
+    ///
+    /// | Rust field   | KDB column type      | element_at extraction |
+    /// |--------------|----------------------|-----------------------|
+    /// | `date`       | INT_LIST (DATE_LIST) | `get_int()` → i32     |
+    /// | `timestamp`  | LONG_LIST (TIMESTAMP_LIST) | `get_long()` → i64 |
+    /// | `int_val`    | INT_LIST             | `get_int()` → i32     |
+    /// | `float_val`  | FLOAT_LIST           | `get_float()` → f64   |
+    /// | `sym`        | SYMBOL_LIST          | `get_sym()` → Sym     |
+    /// | `string_val` | COMPOUND_LIST[STRING]| `as_string()` → &str  |
+    /// | `vec_int`    | COMPOUND_LIST[INT_LIST]  | `as_vec::<i32>()` |
+    /// | `vec_float`  | COMPOUND_LIST[FLOAT_LIST]| `as_vec::<f64>()` |
+    #[test]
+    fn test_all_types_serde_round_trip() {
+        use super::super::KdbSerialize;
+        use kdb_plus_fixed::qattribute;
+
+        #[derive(Debug, Clone, Default)]
+        struct AllTypesRecord {
+            /// KDB date integer: days since 2000-01-01.
+            date: i32,
+            /// KDB timestamp integer: nanoseconds since 2000-01-01.
+            timestamp: i64,
+            int_val: i32,
+            float_val: f64,
+            sym: String,
+            string_val: String,
+            vec_int: Vec<i32>,
+            vec_float: Vec<f64>,
+        }
+
+        impl KdbDeserialize for AllTypesRecord {
+            fn from_kdb_row(
+                row: Row<'_>,
+                _columns: &[String],
+                interner: &mut SymbolInterner,
+            ) -> Result<Self, KdbError> {
+                Ok(AllTypesRecord {
+                    date: row.get(0)?.get_int()?,
+                    timestamp: row.get(1)?.get_long()?,
+                    int_val: row.get(2)?.get_int()?,
+                    float_val: row.get(3)?.get_float()?,
+                    sym: row.get_sym(4, interner)?.to_string(),
+                    // col 5: COMPOUND_LIST[STRING] — element_at returns the STRING K;
+                    // as_string() extracts the &str directly from its internal symbol storage.
+                    string_val: row.get(5)?.as_string()?.to_string(),
+                    // col 6: COMPOUND_LIST[INT_LIST] — element_at returns the INT_LIST K
+                    vec_int: row.get(6)?.as_vec::<i32>()?.to_vec(),
+                    // col 7: COMPOUND_LIST[FLOAT_LIST] — element_at returns the FLOAT_LIST K
+                    vec_float: row.get(7)?.as_vec::<f64>()?.to_vec(),
+                })
+            }
+        }
+
+        impl KdbSerialize for AllTypesRecord {
+            fn to_kdb_row(&self) -> K {
+                K::new_compound_list(vec![
+                    K::new_int(self.date),
+                    K::new_long(self.timestamp),
+                    K::new_int(self.int_val),
+                    K::new_float(self.float_val),
+                    K::new_symbol(self.sym.clone()),
+                    K::new_string(self.string_val.clone(), qattribute::NONE),
+                    K::new_int_list(self.vec_int.clone(), qattribute::NONE),
+                    K::new_float_list(self.vec_float.clone(), qattribute::NONE),
+                ])
+            }
+        }
+
+        // ── Known test values ────────────────────────────────────────────────
+        let kdb_date: i32 = 7305; // 2000.01.01 + 7305 days = 2020.01.01
+        let kdb_ts: i64 = 3_600_000_000_000; // 2000.01.01D01:00:00
+        let int_val: i32 = 42;
+        let float_val: f64 = 1.234_567_891;
+        let sym_str = "AAPL";
+        let string_val = "hello";
+        let vec_icommit nt = vec![10i32, 20, 30];
+        let vec_float = vec![1.1f64, 2.2, 3.3];
+
+        // ── Build a single-row KDB table ─────────────────────────────────────
+        // INT_LIST and LONG_LIST are used for date/timestamp columns because
+        // element_at handles DATE_LIST/INT_LIST and TIMESTAMP_LIST/LONG_LIST
+        // identically (same underlying i32 / i64 storage).
+        let header = K::new_symbol_list(
+            [
+                "date",
+                "timestamp",
+                "int_val",
+                "float_val",
+                "sym",
+                "string_val",
+                "vec_int",
+                "vec_float",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            qattribute::NONE,
+        );
+        let columns = K::new_compound_list(vec![
+            K::new_int_list(vec![kdb_date], qattribute::NONE),
+            K::new_long_list(vec![kdb_ts], qattribute::NONE),
+            K::new_int_list(vec![int_val], qattribute::NONE),
+            K::new_float_list(vec![float_val], qattribute::NONE),
+            K::new_symbol_list(vec![sym_str.to_string()], qattribute::NONE),
+            K::new_compound_list(vec![K::new_string(
+                string_val.to_string(),
+                qattribute::NONE,
+            )]),
+            K::new_compound_list(vec![K::new_int_list(vec_int.clone(), qattribute::NONE)]),
+            K::new_compound_list(vec![K::new_float_list(vec_float.clone(), qattribute::NONE)]),
+        ]);
+        let table = K::new_dictionary(header, columns).unwrap().flip().unwrap();
+
+        // ── Deserialize ───────────────────────────────────────────────────────
+        let rows = table.rows().unwrap();
+        assert_eq!(rows.len(), 1);
+
+        let mut interner = SymbolInterner::default();
+        let record =
+            AllTypesRecord::from_kdb_row(rows.get(0).unwrap(), &[], &mut interner).unwrap();
+
+        assert_eq!(record.date, kdb_date);
+        assert_eq!(record.timestamp, kdb_ts);
+        assert_eq!(record.int_val, int_val);
+        assert!(
+            (record.float_val - float_val).abs() < 1e-10,
+            "float mismatch: {} vs {}",
+            record.float_val,
+            float_val
+        );
+        assert_eq!(record.sym, sym_str);
+        assert_eq!(record.string_val, string_val);
+        assert_eq!(record.vec_int, vec_int);
+        assert_eq!(record.vec_float.len(), vec_float.len());
+        for (a, b) in record.vec_float.iter().zip(&vec_float) {
+            assert!((a - b).abs() < 1e-10, "vec_float element mismatch");
+        }
+
+        // ── Serialize and verify K types + values ────────────────────────────
+        let krow = record.to_kdb_row();
+        assert_eq!(krow.get_type(), qtype::COMPOUND_LIST);
+        let fields = krow.as_vec::<K>().unwrap();
+        assert_eq!(fields.len(), 8);
+
+        assert_eq!(fields[0].get_type(), qtype::INT_ATOM, "date → INT_ATOM");
+        assert_eq!(
+            fields[1].get_type(),
+            qtype::LONG_ATOM,
+            "timestamp → LONG_ATOM"
+        );
+        assert_eq!(fields[2].get_type(), qtype::INT_ATOM, "int_val → INT_ATOM");
+        assert_eq!(
+            fields[3].get_type(),
+            qtype::FLOAT_ATOM,
+            "float_val → FLOAT_ATOM"
+        );
+        assert_eq!(
+            fields[4].get_type(),
+            qtype::SYMBOL_ATOM,
+            "sym → SYMBOL_ATOM"
+        );
+        assert_eq!(fields[5].get_type(), qtype::STRING, "string_val → STRING");
+        assert_eq!(fields[6].get_type(), qtype::INT_LIST, "vec_int → INT_LIST");
+        assert_eq!(
+            fields[7].get_type(),
+            qtype::FLOAT_LIST,
+            "vec_float → FLOAT_LIST"
+        );
+
+        assert_eq!(fields[0].get_int().unwrap(), kdb_date);
+        assert_eq!(fields[1].get_long().unwrap(), kdb_ts);
+        assert_eq!(fields[2].get_int().unwrap(), int_val);
+        assert!((fields[3].get_float().unwrap() - float_val).abs() < 1e-10);
+        assert_eq!(fields[4].get_symbol().unwrap(), sym_str);
+        assert_eq!(fields[5].as_string().unwrap(), string_val);
+        assert_eq!(*fields[6].as_vec::<i32>().unwrap(), vec_int);
+        let svf = fields[7].as_vec::<f64>().unwrap();
+        for (a, b) in svf.iter().zip(&vec_float) {
+            assert!((a - b).abs() < 1e-10, "serialized vec_float mismatch");
+        }
+    }
 }
