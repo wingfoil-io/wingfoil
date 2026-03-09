@@ -581,6 +581,211 @@ where
     })
 }
 
+fn compute_time_slices(
+    start_time: NanoTime,
+    end_time: NanoTime,
+    period: std::time::Duration,
+) -> Vec<((NanoTime, NanoTime), i32, usize)> {
+    const DAY_NANOS: i64 = 86_400_000_000_000;
+    let period_nanos = period.as_nanos() as i64;
+
+    let start_kdb = start_time.to_kdb_timestamp();
+    let end_kdb = end_time.to_kdb_timestamp();
+
+    let start_day = start_kdb.div_euclid(DAY_NANOS);
+    let end_day = end_kdb.div_euclid(DAY_NANOS);
+
+    let mut result = Vec::new();
+
+    for day in start_day..=end_day {
+        let kdb_date = day as i32;
+        let midnight_kdb = day * DAY_NANOS;
+        let next_midnight_kdb = midnight_kdb + DAY_NANOS;
+        let day_end_kdb = next_midnight_kdb - 1; // 23:59:59.999999999
+
+        let mut iteration = 0usize;
+        let mut slice_start = midnight_kdb;
+
+        loop {
+            let natural_end = slice_start + period_nanos;
+            // Cap at last nanosecond of day; stub if natural_end > day_end_kdb
+            let slice_end = natural_end.min(day_end_kdb);
+
+            result.push((
+                (
+                    NanoTime::from_kdb_timestamp(slice_start),
+                    NanoTime::from_kdb_timestamp(slice_end),
+                ),
+                kdb_date,
+                iteration,
+            ));
+
+            if natural_end >= next_midnight_kdb {
+                break;
+            }
+
+            slice_start = natural_end;
+            iteration += 1;
+        }
+    }
+
+    result
+}
+
+fn time_slice_stream<T>(
+    mut socket: kdb_plus_fixed::ipc::QStream,
+    time_col: String,
+    slices: Vec<((NanoTime, NanoTime), i32, usize)>,
+    mut query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> Option<String> + Send + 'static,
+) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
+where
+    T: KdbDeserialize + Send + 'static,
+{
+    async_stream::stream! {
+        let mut interner = SymbolInterner::default();
+
+        for (within, date, iteration) in slices {
+            let query = match query_fn(within, date, iteration) {
+                Some(q) => q,
+                None => continue,
+            };
+
+            let result: K = match socket.send_sync_message(&query.as_str()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", query)));
+                    break;
+                }
+            };
+
+            let (columns, rows) = match (result.column_names(), result.rows()) {
+                (Ok(cols), Ok(rows)) => (cols, rows),
+                (Err(e), _) | (_, Err(e)) => {
+                    yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", query, e));
+                    break;
+                }
+            };
+
+            let row_count = rows.len();
+            info!("KDB time slice query: {} ({} records)", query, row_count);
+
+            if row_count == 0 {
+                continue; // empty slice — not a stop condition
+            }
+
+            let time_col_idx = match columns.iter().position(|c| c == &time_col) {
+                Some(idx) => idx,
+                None => {
+                    yield Err(anyhow::anyhow!(
+                        "time column '{}' not found in result columns: {:?}",
+                        time_col, columns
+                    ));
+                    break;
+                }
+            };
+
+            let mut prev_time: Option<i64> = None;
+            let mut row_error = false;
+            for row in &rows {
+                let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        yield Err(anyhow::Error::new(e).context(format!(
+                            "failed to extract time from KDB row: {}",
+                            query
+                        )));
+                        row_error = true;
+                        break;
+                    }
+                };
+
+                if let Some(prev) = prev_time
+                    && time_kdb < prev
+                {
+                    yield Err(anyhow::anyhow!(
+                        "KDB data is not sorted by time column '{}': got {} after {}. \
+                        Add `{} xasc` to your query to sort the data.\nQuery: {}",
+                        time_col, time_kdb, prev, time_col, query
+                    ));
+                    row_error = true;
+                    break;
+                }
+                prev_time = Some(time_kdb);
+
+                let time = NanoTime::from_kdb_timestamp(time_kdb);
+                let record = match T::from_kdb_row(row, &columns, &mut interner) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        yield Err(
+                            anyhow::Error::new(e)
+                                .context(format!("KDB deserialization failed: {}", query)),
+                        );
+                        row_error = true;
+                        break;
+                    }
+                };
+
+                yield Ok((time, record));
+            }
+            if row_error {
+                break;
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn kdb_read_time_sliced<T, F>(
+    connection: KdbConnection,
+    period: std::time::Duration,
+    query_fn: F,
+    time_col: impl Into<String>,
+) -> Rc<dyn Stream<Burst<T>>>
+where
+    T: Element + Send + KdbDeserialize + 'static,
+    F: FnMut((NanoTime, NanoTime), i32, usize) -> Option<String> + Send + 'static,
+{
+    let time_col = time_col.into();
+    produce_async(move |ctx| {
+        let start_time = ctx.start_time;
+        let end_time_result = ctx.end_time();
+
+        async move {
+            if start_time == NanoTime::ZERO {
+                anyhow::bail!(
+                    "kdb_read_time_sliced: start_time is NanoTime::ZERO; \
+                    use RunMode::HistoricalFrom with an explicit start time"
+                );
+            }
+
+            let end_time = match end_time_result {
+                Ok(t) if t == NanoTime::MAX => anyhow::bail!(
+                    "kdb_read_time_sliced requires RunFor::Duration; \
+                    RunFor::Forever would generate an unbounded number of slices"
+                ),
+                Ok(t) => t,
+                Err(_) => anyhow::bail!(
+                    "kdb_read_time_sliced requires RunFor::Duration; \
+                    RunFor::Cycles does not provide an end time"
+                ),
+            };
+
+            let slices = compute_time_slices(start_time, end_time, period);
+
+            let creds = connection.credentials_string();
+            let socket = QStream::connect(
+                ConnectionMethod::TCP,
+                &connection.host,
+                connection.port,
+                &creds,
+            )
+            .await?;
+
+            Ok(time_slice_stream::<T>(socket, time_col, slices, query_fn))
+        }
+    })
+}
+
 /// Stream data from KDB+ using offset-based chunking with optional date partition filtering.
 ///
 /// Builds a `select[offset,N]` query per chunk so KDB+ applies the row limit at scan time,
@@ -874,5 +1079,100 @@ mod tests {
             q,
             "select from trades where sym=`AAPL, time >= 2000.01.01D00:00:00.000000000"
         );
+    }
+
+    fn kdb_epoch() -> NanoTime {
+        // 2000-01-01 midnight = kdb_date 0
+        NanoTime::from_kdb_timestamp(0)
+    }
+
+    const DAY_NANOS: u64 = 86_400_000_000_000;
+
+    #[test]
+    fn test_compute_time_slices_no_stub() {
+        // 8-hour period divides 24h evenly → 3 slices, no stub
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(8 * 3600);
+        let start = epoch;
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS - 1);
+
+        let slices = compute_time_slices(start, end, period);
+        assert_eq!(slices.len(), 3, "expected 3 slices for 8h period");
+
+        for &(_, date, _) in &slices {
+            assert_eq!(date, 0);
+        }
+
+        let period_nanos = period.as_nanos() as u64;
+
+        let (s0, e0) = slices[0].0;
+        assert_eq!(u64::from(s0), u64::from(epoch));
+        assert_eq!(u64::from(e0), u64::from(epoch) + period_nanos);
+
+        let (s1, e1) = slices[1].0;
+        assert_eq!(u64::from(s1), u64::from(epoch) + period_nanos);
+        assert_eq!(u64::from(e1), u64::from(epoch) + 2 * period_nanos);
+
+        // Last slice ends at 23:59:59.999999999
+        let (s2, e2) = slices[2].0;
+        assert_eq!(u64::from(s2), u64::from(epoch) + 2 * period_nanos);
+        assert_eq!(u64::from(e2), u64::from(epoch) + DAY_NANOS - 1);
+
+        assert_eq!(slices[0].2, 0);
+        assert_eq!(slices[1].2, 1);
+        assert_eq!(slices[2].2, 2);
+    }
+
+    #[test]
+    fn test_compute_time_slices_with_stub() {
+        // 5-hour period: 24h / 5h = 4 full slices + 4h stub → 5 slices total
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(5 * 3600);
+        let start = epoch;
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS - 1);
+
+        let slices = compute_time_slices(start, end, period);
+        assert_eq!(slices.len(), 5, "expected 4 full + 1 stub = 5 slices");
+
+        let period_nanos = period.as_nanos() as u64;
+
+        // Stub: starts at 20h, ends at 23:59:59.999999999
+        let (stub_start, stub_end) = slices[4].0;
+        assert_eq!(u64::from(stub_start), u64::from(epoch) + 4 * period_nanos);
+        assert_eq!(u64::from(stub_end), u64::from(epoch) + DAY_NANOS - 1);
+
+        let stub_duration = u64::from(stub_end) - u64::from(stub_start) + 1;
+        assert!(
+            stub_duration < period_nanos,
+            "stub should be shorter than a full period"
+        );
+
+        // Boundary overlap: end of slice n == start of slice n+1
+        for i in 0..4 {
+            let end_i = u64::from(slices[i].0.1);
+            let start_next = u64::from(slices[i + 1].0.0);
+            assert_eq!(end_i, start_next, "boundary overlap at slice {i}/{}", i + 1);
+        }
+    }
+
+    #[test]
+    fn test_compute_time_slices_two_days() {
+        // Two days → iterations reset on day 1
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(12 * 3600); // 2 slices/day
+        let start = epoch;
+        let end = NanoTime::new(u64::from(epoch) + 2 * DAY_NANOS - 1);
+
+        let slices = compute_time_slices(start, end, period);
+        assert_eq!(slices.len(), 4); // 2 slices × 2 days
+
+        assert_eq!(slices[0].1, 0);
+        assert_eq!(slices[0].2, 0);
+        assert_eq!(slices[1].1, 0);
+        assert_eq!(slices[1].2, 1);
+        assert_eq!(slices[2].1, 1);
+        assert_eq!(slices[2].2, 0); // resets to 0 on new day
+        assert_eq!(slices[3].1, 1);
+        assert_eq!(slices[3].2, 1);
     }
 }
