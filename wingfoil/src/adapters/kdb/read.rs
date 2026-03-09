@@ -459,7 +459,6 @@ fn compute_time_slices(
         let kdb_date = day as i32;
         let midnight_kdb = day * DAY_NANOS;
         let next_midnight_kdb = midnight_kdb + DAY_NANOS;
-        let day_end_kdb = next_midnight_kdb - 1; // 23:59:59.999999999
 
         let mut iteration = 0usize;
 
