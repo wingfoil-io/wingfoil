@@ -29,17 +29,26 @@
 //! let conn = KdbConnection::new("localhost", 5000)
 //!     .with_credentials("user", "pass");
 //!
-//! // Read with offset-based chunking for memory-bounded streaming
-//! kdb_read(
+//! // Read with time-sliced chunking, one slice per hour
+//! kdb_read::<Trade, _>(
 //!     conn,
-//!     "select from trades",
-//!     "time",                  // time column (extracted per-row for stream ordering)
-//!     Some("date"),            // date column for partition pruning (None for in-memory tables)
-//!     10000,                   // rows_per_chunk (controls memory usage)
+//!     std::time::Duration::from_secs(3600),
+//!     |(t0, t1), date, _| {
+//!         format!(
+//!             "select from trades where date=2000.01.01+{}, \
+//!              time >= (`timestamp$){}j, time < (`timestamp$){}j",
+//!             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
+//!         )
+//!     },
+//!     "time",
 //! )
-//!     .map(|trades| trades.first().map(|t| t.price).unwrap_or(0.0))
+//!     .collapse()
+//!     .map(|trade| trade.price)
 //!     .print()
-//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+//!     .run(
+//!         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+//!         RunFor::Duration(std::time::Duration::from_secs(86400)),
+//!     )
 //!     .unwrap();
 //! ```
 
@@ -88,7 +97,7 @@ impl Default for Sym {
 
 /// Deduplicates symbol strings so repeated values share a single `Arc<str>` allocation.
 ///
-/// Created once per `kdb_read` call and passed to `from_kdb_row` / `Row::get_sym`.
+/// Created once per read call and passed to `from_kdb_row` / `Row::get_sym`.
 #[derive(Default)]
 pub struct SymbolInterner {
     set: HashSet<Arc<str>>,
