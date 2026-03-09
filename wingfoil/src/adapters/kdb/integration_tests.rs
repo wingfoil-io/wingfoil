@@ -294,7 +294,7 @@ fn test_kdb_sorted_data() -> Result<()> {
         let stream = kdb_read_time_sliced::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| Some(slice_query(date, within.0, within.1)),
+            |within, date, _| slice_query(date, within.0, within.1),
             "time",
         );
         let collected = stream.collapse().collect();
@@ -377,7 +377,7 @@ fn test_kdb_bad_query() -> Result<()> {
     let stream = kdb_read_time_sliced::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
-        |_, _, _| Some("select from nonexistent_table_xyz".to_string()),
+        |_, _, _| "select from nonexistent_table_xyz".to_string(),
         "time",
     );
     let collected = stream.collapse().collect();
@@ -405,7 +405,7 @@ fn test_kdb_bad_time_column() -> Result<()> {
         let stream = kdb_read_time_sliced::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| Some(slice_query(date, within.0, within.1)),
+            |within, date, _| slice_query(date, within.0, within.1),
             "nonexistent_col",
         );
         let collected = stream.collapse().collect();
@@ -433,7 +433,7 @@ fn test_kdb_deserialization_error() -> Result<()> {
         let stream = kdb_read_time_sliced::<BadTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| Some(slice_query(date, within.0, within.1)),
+            |within, date, _| slice_query(date, within.0, within.1),
             "time",
         );
         let collected = stream.collapse().collect();
@@ -482,7 +482,7 @@ fn test_read_read_perf() -> Result<()> {
             let stream = kdb_read_time_sliced::<TestTrade, _>(
                 conn.clone(),
                 period,
-                |within, date, _| Some(slice_query(date, within.0, within.1)),
+                |within, date, _| slice_query(date, within.0, within.1),
                 "time",
             );
             let counter = stream.collapse().count();
@@ -508,7 +508,7 @@ fn test_kdb_connection_refused() {
     let stream = kdb_read_time_sliced::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
-        |_, _, _| Some(format!("select from {}", TABLE_NAME)),
+        |_, _, _| format!("select from {}", TABLE_NAME),
         "time",
     );
     let collected = stream.collapse().collect();
@@ -525,7 +525,7 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
         let stream = kdb_read_time_sliced::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| Some(slice_query(date, within.0, within.1)),
+            |within, date, _| slice_query(date, within.0, within.1),
             "time",
         );
         let collected = stream.collapse().collect();
@@ -564,7 +564,7 @@ fn test_kdb_read_time_sliced_basic() -> Result<()> {
             conn,
             std::time::Duration::from_secs(12 * 3600), // 12-hour slices
             move |(slice_start, slice_end), date, _iteration| {
-                Some(slice_query(date, slice_start, slice_end))
+                slice_query(date, slice_start, slice_end)
             },
             "time",
         );
@@ -579,48 +579,6 @@ fn test_kdb_read_time_sliced_basic() -> Result<()> {
             rows.len(),
             6,
             "Should read all 6 rows (3 per day × 2 days) across 4 time slices, got {}",
-            rows.len()
-        );
-        Ok(())
-    })
-}
-
-/// Test that `kdb_read_time_sliced` stops cleanly on empty slices.
-///
-/// Uses a period larger than a full day so each day produces exactly one slice.
-/// The query_fn returns `None` after the first day to verify early termination.
-#[test]
-fn test_kdb_read_time_sliced_none_stops_stream() -> Result<()> {
-    let _ = env_logger::try_init();
-
-    with_test_data(3, 2, true, |_n, conn| {
-        let start = NanoTime::from_kdb_timestamp(0);
-        let mut slice_count = 0usize;
-
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
-            conn,
-            std::time::Duration::from_secs(24 * 3600), // one slice per day
-            move |(slice_start, slice_end), date, _iteration| {
-                if slice_count >= 1 {
-                    // Stop after the first slice (day 0)
-                    return None;
-                }
-                slice_count += 1;
-                Some(slice_query(date, slice_start, slice_end))
-            },
-            "time",
-        );
-
-        let collected = stream.collapse().collect();
-        collected.clone().run(
-            RunMode::HistoricalFrom(start),
-            RunFor::Duration(std::time::Duration::from_secs(2 * 86400)),
-        )?;
-        let rows = collected.peek_value();
-        assert_eq!(
-            rows.len(),
-            3,
-            "Should read only 3 rows (day 0) when query_fn returns None after first slice, got {}",
             rows.len()
         );
         Ok(())
@@ -701,12 +659,12 @@ fn test_kdb_write_round_trip() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             move |(slice_start, slice_end), _, _| {
-                Some(format!(
+                format!(
                     "select from {} where time within ((`timestamp$){}j;(`timestamp$){}j)",
                     WRITE_TABLE_NAME,
                     slice_start.to_kdb_timestamp(),
                     slice_end.to_kdb_timestamp(),
-                ))
+                )
             },
             "time",
         );

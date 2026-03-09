@@ -23,10 +23,10 @@ kdb/
   - Use when you need direct control over query construction (e.g. offset pagination)
 - `kdb_read_time_sliced()` - Time-partitioned reads driven by a caller-supplied query closure
   - Computes time slices from `RunMode`/`RunFor` and calls `query_fn` for each slice
-  - `query_fn((slice_start, slice_end), kdb_date, iteration) -> Option<String>`
+  - `query_fn((slice_start, slice_end), kdb_date, iteration) -> String`
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
-  - Return `None` from `query_fn` to skip a slice or stop early
   - Caller constructs the full query — date/time filters, partition hints, etc.
+  - Terminates automatically when all slices are exhausted
 - `KdbDeserialize` trait - Convert KDB+ rows to Rust types
   - **IMPORTANT**: Do NOT extract the time column - it's handled automatically
   - Your struct should only contain business data (sym, price, qty, etc.)
@@ -140,11 +140,11 @@ let stream = kdb_read_time_sliced::<Trade, _>(
     conn,
     std::time::Duration::from_secs(3600), // 1-hour slices
     |(slice_start, slice_end), date, _| {
-        Some(format!(
+        format!(
             "select from trades where date=2000.01.01+{}, \
              time within ((`timestamp$){}j;(`timestamp$){}j)",
             date, slice_start.to_kdb_timestamp(), slice_end.to_kdb_timestamp()
-        ))
+        )
     },
     "time",
 );

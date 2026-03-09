@@ -501,7 +501,7 @@ pub fn kdb_read_time_sliced<T, F>(
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> Option<String> + Send + 'static,
+    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     let time_col = time_col.into();
     produce_async(move |ctx| {
@@ -541,15 +541,13 @@ where
 
             // Convert the slice-based iteration into the Option<usize> protocol that
             // chunk_stream expects. The row count from the previous query is ignored —
-            // we always advance to the next slice unconditionally. Slices where query_fn
-            // returns None are skipped. The stream stops when slices are exhausted.
+            // we always advance to the next slice unconditionally.
+            // The stream stops when slices are exhausted.
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move |_last_count: Option<usize>| loop {
+            let slice_fn = move |_last_count: Option<usize>| -> Option<String> {
                 let (within, date, iteration) = slices_iter.next()?;
-                if let Some(q) = query_fn(within, date, iteration) {
-                    return Some(q);
-                }
+                Some(query_fn(within, date, iteration))
             };
 
             Ok(chunk_stream::<T>(socket, time_col, slice_fn))
