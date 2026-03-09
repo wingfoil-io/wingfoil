@@ -14,6 +14,8 @@ use std::rc::Rc;
 #[cfg(feature = "async")]
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(feature = "async")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::vec;
 
@@ -99,7 +101,7 @@ pub struct GraphState {
     node_to_index: HashMap<HashByRef<dyn Node>, usize>,
     node_ticked: Vec<bool>,
     #[cfg(feature = "async")]
-    run_time: Arc<tokio::runtime::Runtime>,
+    run_time: OnceLock<Arc<tokio::runtime::Runtime>>,
     run_mode: RunMode,
     run_for: RunFor,
     ready_notifier: Sender<usize>,
@@ -112,12 +114,7 @@ pub struct GraphState {
 }
 
 impl GraphState {
-    pub fn new(
-        #[cfg(feature = "async")] run_time: Arc<tokio::runtime::Runtime>,
-        run_mode: RunMode,
-        run_for: RunFor,
-        start_time: NanoTime,
-    ) -> Self {
+    pub fn new(run_mode: RunMode, run_for: RunFor, start_time: NanoTime) -> Self {
         let (ready_notifier, ready_callbacks) = crossbeam::channel::unbounded();
         let mut id = GRAPH_ID.lock().unwrap();
         let slf = Self {
@@ -130,7 +127,7 @@ impl GraphState {
             node_to_index: HashMap::new(),
             node_ticked: Vec::new(),
             #[cfg(feature = "async")]
-            run_time,
+            run_time: OnceLock::new(),
             ready_notifier,
             run_mode,
             run_for,
@@ -168,7 +165,23 @@ impl GraphState {
 
     #[cfg(feature = "async")]
     pub fn tokio_runtime(&self) -> Arc<tokio::runtime::Runtime> {
-        self.run_time.clone()
+        self.run_time
+            .get_or_init(|| {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    panic!(
+                        "wingfoil cannot be run from an async context (e.g. `#[tokio::main]`). \
+                     Call graph.run() from a synchronous thread instead. \
+                     Tip: std::thread::spawn(|| graph.run(...)).join().unwrap()"
+                    );
+                }
+                Arc::new(
+                    tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap(),
+                )
+            })
+            .clone()
     }
 
     pub fn add_callback(&mut self, time: NanoTime) {
@@ -306,19 +319,8 @@ pub struct Graph {
 
 impl Graph {
     pub fn new(root_nodes: Vec<Rc<dyn Node>>, run_mode: RunMode, run_for: RunFor) -> Graph {
-        #[cfg(feature = "async")]
-        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let start_time = run_mode.start_time();
-        let state = GraphState::new(
-            #[cfg(feature = "async")]
-            Arc::new(tokio_runtime),
-            run_mode,
-            run_for,
-            start_time,
-        );
+        let state = GraphState::new(run_mode, run_for, start_time);
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
@@ -332,8 +334,8 @@ impl Graph {
         run_for: RunFor,
         start_time: NanoTime,
     ) -> Graph {
-        let state = GraphState::new(tokio_runtime, run_mode, run_for, start_time);
-
+        let state = GraphState::new(run_mode, run_for, start_time);
+        state.run_time.set(tokio_runtime).ok();
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
