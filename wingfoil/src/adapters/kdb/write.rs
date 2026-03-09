@@ -167,7 +167,7 @@ where
 /// Extension trait for writing streams to KDB+ tables.
 ///
 /// This trait provides a fluent API for writing `Burst<T>` streams
-/// (output of `combine`, `kdb_read_time_sliced`, etc.) to KDB+ tables.
+/// (output of `combine`, `kdb_read`, etc.) to KDB+ tables.
 pub trait KdbWriteOperators<T: Element> {
     /// Write this stream to a KDB+ table.
     ///

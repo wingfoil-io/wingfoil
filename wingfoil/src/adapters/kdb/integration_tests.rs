@@ -291,7 +291,7 @@ fn test_kdb_sorted_data() -> Result<()> {
     let _ = env_logger::try_init();
     // 3 rows/day × 2 days = 6 rows total; one 24-hour slice per day.
     with_test_data(3, 2, true, |_n, conn| {
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -374,7 +374,7 @@ impl KdbDeserialize for BadTrade {
 fn test_kdb_bad_query() -> Result<()> {
     let _ = env_logger::try_init();
     let conn = TestDataBuilder::connection();
-    let stream = kdb_read_time_sliced::<TestTrade, _>(
+    let stream = kdb_read::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| "select from nonexistent_table_xyz".to_string(),
@@ -402,7 +402,7 @@ fn test_kdb_bad_time_column() -> Result<()> {
     // The time column name is used to extract timestamps from each result row; when the
     // column doesn't exist in the result, the adapter yields an error.
     let result = with_test_data(3, 1, true, |_n, conn| {
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -430,7 +430,7 @@ fn test_kdb_bad_time_column() -> Result<()> {
 fn test_kdb_deserialization_error() -> Result<()> {
     let _ = env_logger::try_init();
     let result = with_test_data(3, 1, true, |_n, conn| {
-        let stream = kdb_read_time_sliced::<BadTrade, _>(
+        let stream = kdb_read::<BadTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -479,7 +479,7 @@ fn test_read_read_perf() -> Result<()> {
 
         for &period in &periods {
             let start = std::time::Instant::now();
-            let stream = kdb_read_time_sliced::<TestTrade, _>(
+            let stream = kdb_read::<TestTrade, _>(
                 conn.clone(),
                 period,
                 |within, date, _| slice_query(date, within.0, within.1),
@@ -505,7 +505,7 @@ fn test_kdb_connection_refused() {
     // Connection failure currently panics in the channel layer (kanal_chan recv().unwrap())
     // rather than propagating as a clean Err. This test documents that behavior.
     let conn = KdbConnection::new("localhost", 59999);
-    let stream = kdb_read_time_sliced::<TestTrade, _>(
+    let stream = kdb_read::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| format!("select from {}", TABLE_NAME),
@@ -522,7 +522,7 @@ fn test_kdb_connection_refused() {
 fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
     let _ = env_logger::try_init();
     with_empty_table(|conn| {
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -542,7 +542,7 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
     })
 }
 
-/// Test that `kdb_read_time_sliced` reads all rows across multiple time slices and days.
+/// Test that `kdb_read` reads all rows across multiple time slices and days.
 ///
 /// Setup: 3 rows × 2 days (6 rows total).  Rows are evenly distributed across 24 h:
 /// offsets at 0 h, 8 h, 16 h.
@@ -554,13 +554,13 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
 ///   Day 1, slice 1 [12:00, 23:59…] → row  at 16 h        → 1 row
 /// Expected total: 6 rows.
 #[test]
-fn test_kdb_read_time_sliced_basic() -> Result<()> {
+fn test_kdb_read_basic() -> Result<()> {
     let _ = env_logger::try_init();
 
     with_test_data(3, 2, true, |_n, conn| {
         let start = NanoTime::from_kdb_timestamp(0); // 2000.01.01D00:00:00
 
-        let stream = kdb_read_time_sliced::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade, _>(
             conn,
             std::time::Duration::from_secs(12 * 3600), // 12-hour slices
             move |(slice_start, slice_end), date, _iteration| {
@@ -653,9 +653,9 @@ fn test_kdb_write_round_trip() -> Result<()> {
         let count = write_and_verify(conn.clone(), trades)?;
         assert_eq!(count, 5, "Should have written 5 trades");
 
-        // Verify data correctness by reading back via kdb_read_time_sliced.
+        // Verify data correctness by reading back via kdb_read.
         // The write table has no date column so we filter by time only.
-        let read_stream = kdb_read_time_sliced::<TestTradeWrite, _>(
+        let read_stream = kdb_read::<TestTradeWrite, _>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             move |(slice_start, slice_end), _, _| {

@@ -419,13 +419,13 @@ where
 pub fn kdb_read_chunks<T, F>(
     connection: KdbConnection,
     query_fn: F,
-    time_col: impl Into<String>,
+    time_col: &str,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
     F: FnMut(Option<usize>) -> Option<String> + Send + 'static,
 {
-    let time_col = time_col.into();
+    let time_col = time_col.to_string();
     produce_async(move |_ctx| async move {
         let creds = connection.credentials_string();
         let socket = QStream::connect(
@@ -493,17 +493,17 @@ fn compute_time_slices(
 }
 
 #[must_use]
-pub fn kdb_read_time_sliced<T, F>(
+pub fn kdb_read<T, F>(
     connection: KdbConnection,
     period: std::time::Duration,
     query_fn: F,
-    time_col: impl Into<String>,
+    time_col: &str,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
     F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
-    let time_col = time_col.into();
+    let time_col = time_col.to_string();
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
         let end_time_result = ctx.end_time();

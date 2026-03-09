@@ -7,7 +7,7 @@ This directory contains the KDB+ adapter for wingfoil, enabling reading from and
 ```
 kdb/
   mod.rs               # Public API, connection types, error handling
-  read.rs              # Read functions: kdb_read_chunks, kdb_read_time_sliced
+  read.rs              # Read functions: kdb_read_chunks, kdb_read
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)
 ```
@@ -21,7 +21,7 @@ kdb/
   - `None` on first call, `Some(n)` after each chunk; return `None` to stop
   - Caller owns all query logic: offset arithmetic, date advancement, termination
   - Use when you need direct control over query construction (e.g. offset pagination)
-- `kdb_read_time_sliced()` - Time-partitioned reads driven by a caller-supplied query closure
+- `kdb_read()` - Time-partitioned reads driven by a caller-supplied query closure
   - Computes time slices from `RunMode`/`RunFor` and calls `query_fn` for each slice
   - `query_fn((slice_start, slice_end), kdb_date, iteration) -> String`
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
@@ -132,11 +132,11 @@ impl KdbSerialize for Trade {
 }
 ```
 
-### Reading with kdb_read_time_sliced
+### Reading with kdb_read
 
 ```rust
 // Date-partitioned table: filter by date and time range in each slice
-let stream = kdb_read_time_sliced::<Trade, _>(
+let stream = kdb_read::<Trade, _>(
     conn,
     std::time::Duration::from_secs(3600), // 1-hour slices
     |(slice_start, slice_end), date, _| {
