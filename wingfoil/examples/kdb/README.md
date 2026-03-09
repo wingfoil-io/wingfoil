@@ -119,7 +119,15 @@ fn main() -> Result<()> {
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
     // Read
-    let read = kdb_read(conn, query, time_col, chunk);
+    let mut offset = 0usize;
+    let read = kdb_read_chunks::<Trade, _>(conn, move |last_count| {
+        match last_count {
+            None => {}
+            Some(n) if n < chunk => return None,
+            Some(n) => offset += n,
+        }
+        Some(format!("select[{},{}] from {}", offset, chunk, table))
+    }, time_col);
     // Validate
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;

@@ -77,10 +77,7 @@ fn main() -> Result<()> {
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
     let time_col = "time";
-    // if data is already sorted, then you don't need the xasc..
-    // let query = format!("select from {table}");
-    let query = format!("`time xasc select from {table}");
-    let chunk = 10000;
+    let chunk = 10000usize;
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
@@ -89,8 +86,20 @@ fn main() -> Result<()> {
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
-    // read
-    let read = kdb_read(conn, query, time_col, None::<&str>, chunk);
+    // read — use kdb_read_chunks with offset-based pagination
+    let mut offset = 0usize;
+    let read = kdb_read_chunks::<Trade, _>(
+        conn,
+        move |last_count| {
+            match last_count {
+                None => {}
+                Some(n) if n < chunk => return None,
+                Some(n) => offset += n,
+            }
+            Some(format!("select[{},{}] from {}", offset, chunk, table))
+        },
+        time_col,
+    );
     // tie-out
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;

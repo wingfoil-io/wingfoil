@@ -108,8 +108,33 @@ pub fn py_kdb_read(
     chunk_size: usize,
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
-    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> =
-        kdb_read::<PyKdbRow>(conn, query, time_col, None::<&str>, chunk_size);
+    let mut offset = 0usize;
+    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read_chunks::<PyKdbRow, _>(
+        conn,
+        move |last_count| {
+            match last_count {
+                None => {}
+                Some(n) if n < chunk_size => return None,
+                Some(n) => offset += n,
+            }
+            let trimmed = query.trim_start();
+            let paginated = if trimmed
+                .get(..6)
+                .is_some_and(|s| s.eq_ignore_ascii_case("select"))
+            {
+                format!(
+                    "select[{},{}] {}",
+                    offset,
+                    chunk_size,
+                    trimmed[6..].trim_start()
+                )
+            } else {
+                format!("({};{}) sublist {}", offset, chunk_size, query)
+            };
+            Some(paginated)
+        },
+        time_col,
+    );
 
     // Collapse burst to single row, convert to PyElement (dict)
     let collapsed = stream.collapse();
