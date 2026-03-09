@@ -816,6 +816,106 @@ fn test_kdb_read_chunks_date_advance() -> Result<()> {
     })
 }
 
+/// Test that `kdb_read_time_sliced` reads all rows across multiple time slices and days.
+///
+/// Setup: 3 rows × 2 days (6 rows total).  Rows are evenly distributed across 24 h:
+/// offsets at 0 h, 8 h, 16 h.
+///
+/// Period = 12 h → 2 slices per day (4 slices total):
+///   Day 0, slice 0 [00:00, 12:00) → rows at 0 h and 8 h → 2 rows
+///   Day 0, slice 1 [12:00, 23:59…] → row  at 16 h        → 1 row
+///   Day 1, slice 0 [00:00, 12:00) → rows at 0 h and 8 h → 2 rows
+///   Day 1, slice 1 [12:00, 23:59…] → row  at 16 h        → 1 row
+/// Expected total: 6 rows.
+#[test]
+fn test_kdb_read_time_sliced_basic() -> Result<()> {
+    let _ = env_logger::try_init();
+
+    with_test_data(3, 2, true, |_n, conn| {
+        let start = NanoTime::from_kdb_timestamp(0); // 2000.01.01D00:00:00
+
+        let stream = kdb_read_time_sliced::<TestTrade, _>(
+            conn,
+            std::time::Duration::from_secs(12 * 3600), // 12-hour slices
+            move |(slice_start, slice_end), date, _iteration| {
+                // Build a q query filtered to this date and time range.
+                // KDB `timestamp` type stores nanoseconds from 2000-01-01, so we use
+                // `(`timestamp$)Nj` to cast the raw integer directly.
+                Some(format!(
+                    "select from {} where date=2000.01.01+{}, time within ((`timestamp$){}j;(`timestamp$){}j)",
+                    TABLE_NAME,
+                    date,
+                    slice_start.to_kdb_timestamp(),
+                    slice_end.to_kdb_timestamp(),
+                ))
+            },
+            "time",
+        );
+
+        let collected = stream.collapse().collect();
+        collected.clone().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(2 * 86400)),
+        )?;
+        let rows = collected.peek_value();
+        assert_eq!(
+            rows.len(),
+            6,
+            "Should read all 6 rows (3 per day × 2 days) across 4 time slices, got {}",
+            rows.len()
+        );
+        Ok(())
+    })
+}
+
+/// Test that `kdb_read_time_sliced` stops cleanly on empty slices.
+///
+/// Uses a period larger than a full day so each day produces exactly one slice.
+/// The query_fn returns `None` after the first day to verify early termination.
+#[test]
+fn test_kdb_read_time_sliced_none_stops_stream() -> Result<()> {
+    let _ = env_logger::try_init();
+
+    with_test_data(3, 2, true, |_n, conn| {
+        let start = NanoTime::from_kdb_timestamp(0);
+        let mut slice_count = 0usize;
+
+        let stream = kdb_read_time_sliced::<TestTrade, _>(
+            conn,
+            std::time::Duration::from_secs(24 * 3600), // one slice per day
+            move |(slice_start, slice_end), date, _iteration| {
+                if slice_count >= 1 {
+                    // Stop after the first slice (day 0)
+                    return None;
+                }
+                slice_count += 1;
+                Some(format!(
+                    "select from {} where date=2000.01.01+{}, time within ((`timestamp$){}j;(`timestamp$){}j)",
+                    TABLE_NAME,
+                    date,
+                    slice_start.to_kdb_timestamp(),
+                    slice_end.to_kdb_timestamp(),
+                ))
+            },
+            "time",
+        );
+
+        let collected = stream.collapse().collect();
+        collected.clone().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(2 * 86400)),
+        )?;
+        let rows = collected.peek_value();
+        assert_eq!(
+            rows.len(),
+            3,
+            "Should read only 3 rows (day 0) when query_fn returns None after first slice, got {}",
+            rows.len()
+        );
+        Ok(())
+    })
+}
+
 // --- Write integration tests ---
 
 /// Helper: creates an empty WRITE_TABLE_NAME, writes trades via the graph, queries KDB to verify.
