@@ -52,23 +52,14 @@ know which ones fired.
 
 ## Public API
 
-### New enum (mirrors `Dep<T>` pattern but at the untyped node level)
-
-```rust
-pub enum UpstreamKind {
-    Active,
-    Passive,
-}
-```
-
 ### New methods on `GraphState`
 
 ```rust
 /// Wire `upstream` (and its upstream subgraph) into the graph and register it
-/// as an upstream of the calling node. `kind` controls whether it triggers
-/// the calling node on each tick (Active) or is read-only (Passive).
+/// as an upstream of the calling node. `is_active` controls whether it triggers
+/// the calling node on each tick (true) or is read-only (false).
 /// Processed at the end of the current cycle.
-pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, kind: UpstreamKind)
+pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool)
 
 /// Wire `node` (and its upstream subgraph) into the graph without creating
 /// any upstream relationship with the calling node. Useful for new consumers
