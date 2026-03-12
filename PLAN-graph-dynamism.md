@@ -26,10 +26,9 @@ source (layer 0)                         ← emits (instrument, price)
 ```
 
 When a new instrument C arrives, `aggregation.cycle()` fires (source is an active upstream).
-It builds `filter_C → process_C` and calls `state.add_upstream(process_C.as_node(),
-UpstreamKind::Active)`. The graph wires `process_C` in and registers it as an active
-upstream of `aggregation`. From then on, when `process_C` ticks, `aggregation` is marked
-dirty automatically.
+It builds `filter_C → process_C` and calls `state.add_upstream(process_C.as_node(), true)`.
+The graph wires `process_C` in and registers it as an active upstream of `aggregation`.
+From then on, when `process_C` ticks, `aggregation` is marked dirty automatically.
 
 The aggregation node maintains an internal `Vec<Rc<dyn Stream<ProcessedPrice>>>` to track
 and peek at dynamic upstreams. It uses `state.ticked(stream.as_node())` in `cycle()` to
@@ -38,8 +37,8 @@ know which ones fired.
 ## Scope
 
 ### In scope (this PR)
-- `state.add_upstream(node, kind)` — wire a subgraph into the graph and register it as
-  an upstream of the calling node (active or passive).
+- `state.add_upstream(node, is_active)` — wire a subgraph into the graph and register it
+  as an upstream of the calling node (active or passive).
 - `state.add_node(node)` — wire a subgraph into the graph with no upstream relationship
   to the calling node (e.g. new sinks/consumers).
 - `state.remove_node(node)` — deregister a node at the end of the current cycle.
@@ -116,7 +115,7 @@ process_pending_additions()
 1. Record `start_index = nodes.len()`.
 2. For each queued `(node, caller)`:
    a. `initialise_node(node)` — recurses through subgraph; `seen()` check prevents
-      re-wiring already-present nodes.
+      re-wiring already-present nodes. Returns the index for this node.
 3. Collect `new_indices`: all indices `>= start_index` (truly new nodes only).
 4. For each new index: push `false` to `node_dirty`.
 5. For each new index: update its upstreams' `NodeData.downstreams`.
@@ -124,9 +123,10 @@ process_pending_additions()
 7. **Batch setup**: call `setup()` on all new nodes in order.
 8. **Batch start**: call `start()` on all new nodes in order (after all setup is done).
 9. For each queued `(node, Some((caller_index, is_active)))`:
-   a. Add `(new_node_index, is_active)` to `nodes[caller_index].upstreams`.
-   b. Add `(caller_index, is_active)` to `nodes[new_node_index].downstreams`.
-   c. Run `fix_layers(caller_index)` to recalculate layers if needed.
+   a. Look up `node_index = node_to_index[node]` (may already have existed — use seen index).
+   b. Add `(node_index, is_active)` to `nodes[caller_index].upstreams`.
+   c. Add `(caller_index, is_active)` to `nodes[node_index].downstreams`.
+   d. Run `fix_layers(caller_index)` to recalculate layers if needed.
 
 ### Layer fix algorithm
 
@@ -154,6 +154,27 @@ fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
     // ... existing logic ...
 }
 ```
+
+## Timing: Deferred Wiring and the First-Tick Question
+
+New nodes are always wired at the **end of the current engine cycle** — after all dirty
+nodes for that cycle have run. This is required for safety: rewiring mid-cycle could
+corrupt the dirty/downstream lists that the cycle loop is still iterating.
+
+**Consequence**: the data value that caused a node to call `add_upstream` (e.g. the first
+price for a new instrument) is processed by the calling node in the current cycle, but the
+newly added subgraph misses it — it does not exist until the cycle ends.
+
+**Opt-in first tick via `start()`**: nodes that want to fire immediately on the next cycle
+after being dynamically added can call `state.add_callback(state.time())` in their
+`start()` implementation. This schedules them for the next engine iteration, at which
+point they read their upstream's current `peek_value()` (which still holds the triggering
+value if the source has not yet ticked again). This is consistent with how `TickNode`
+already uses `start()` to schedule its first callback.
+
+Default behaviour (no `add_callback` in `start()`) means the new subgraph begins
+processing from the next upstream tick onward. This is acceptable for most use cases —
+the calling node handles the triggering value itself.
 
 ## Testing
 
