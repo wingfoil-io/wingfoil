@@ -1,6 +1,6 @@
 import unittest
 
-#from httpcore import stream
+from httpcore import stream
 from wingfoil import constant, ticker
 
 class TestStreams(unittest.TestCase):
