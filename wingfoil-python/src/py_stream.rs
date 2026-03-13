@@ -215,13 +215,13 @@ impl PyStream {
     }
 
     fn inspect(&self, func: Py<PyAny>) -> PyStream {
-    let stream = self.0.inspect(move |x| {
-        Python::attach(|py| {
-            func.call1(py, (x.value(),)).unwrap();
+        let stream = self.0.inspect(move |x| {
+            Python::attach(|py| {
+                func.call1(py, (x.value(),)).unwrap();
+            });
         });
-    });
-    PyStream(stream)
-}
+        PyStream(stream)
+    }
 
     /// difference in its source from one cycle to the next (pass-through of PyElement)
     fn difference(&self) -> PyStream {
