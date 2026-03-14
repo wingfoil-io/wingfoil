@@ -62,7 +62,7 @@ New logic:
 
 ---
 
-### Task 3 — Update zmq_sub to return a tuple using MapFilterStream
+### Task 3 — Update zmq_sub to return tuple using MapFilterStream
 
 No custom node types, no wrapper struct. Use `MapFilterStream` (from `nodes/map_filter.rs`) which takes `Box<dyn Fn(IN) -> (OUT, bool)>` — the bool controls whether the node ticks.
 
@@ -176,7 +176,7 @@ fn zmq_reports_connected_status() {
 
 ### Task 7 — Update existing tests
 
-1. Update `receiver()` helper — `zmq_sub` now returns a tuple, destructure it:
+1. Update `receiver()` helper — `zmq_sub` now returns a tuple:
    ```rust
    fn receiver(address: &str) -> Rc<dyn Node> {
        let (data, _status) = zmq_sub::<u64>(address);
@@ -186,7 +186,7 @@ fn zmq_reports_connected_status() {
    }
    ```
 2. `zmq_pub_historical_mode_fails` — no changes (uses `sender()` / `ZeroMqPub`)
-3. `zmq_sub_historical_mode_fails` — needs update: `zmq_sub` no longer returns `Rc<dyn Stream<...>>` directly, so `.as_node()` won't work. Use `zmq_sub(...).0.as_node()` instead.
+3. `zmq_sub_historical_mode_fails` — use `zmq_sub(...).0.as_node()` instead of `.as_node()` directly
 4. Remove stale commented-out code blocks (original lines 34–73 and 135–184)
 
 ---
