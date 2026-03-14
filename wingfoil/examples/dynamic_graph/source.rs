@@ -20,7 +20,7 @@ pub struct Source {
 
 /// State threaded through the lifecycle [`fold`].
 ///
-/// Instruments are added sequentially. Every 5th event deletes the oldest
+/// Instruments are added sequentially. Every 3rd event deletes the oldest
 /// live instrument (if any), producing an unbounded stream of additions and
 /// periodic deletions.
 #[derive(Clone, Debug, Default)]
@@ -38,7 +38,7 @@ struct LifecycleState {
 /// - `price_ticker` (every `period`) — continuous price feed
 /// - `event_ticker` (every `period * 3`) — instrument lifecycle
 ///
-/// Lifecycle rule: every 5th event tick deletes the oldest live instrument;
+/// Lifecycle rule: every 3rd event tick deletes the oldest live instrument;
 /// all other ticks add a fresh one. The price stream cycles through instrument
 /// IDs; prices for unknown or deleted instruments are silently dropped by the
 /// aggregator's per-instrument filters.
@@ -49,7 +49,7 @@ pub fn source(period: Duration) -> Source {
     let lifecycle: Rc<dyn Stream<(bool, Instrument)>> = event_ticker
         .count()
         .fold(|state: &mut LifecycleState, n: u64| {
-            if n % 5 == 0 && !state.live.is_empty() {
+            if n % 3 == 0 && !state.live.is_empty() {
                 // Delete the oldest live instrument.
                 let inst = state.live.remove(0);
                 state.event = (false, inst);
@@ -94,10 +94,10 @@ mod tests {
     ///
     ///   event n=1 (t= 0s): add  inst0
     ///   event n=2 (t= 3s): add  inst1
-    ///   event n=3 (t= 6s): add  inst2
-    ///   event n=4 (t= 9s): add  inst3
-    ///   event n=5 (t=12s): del  inst0   ← first delete
-    ///   event n=6 (t=15s): add  inst4
+    ///   event n=3 (t= 6s): del  inst0   ← first delete (3 % 3 == 0)
+    ///   event n=4 (t= 9s): add  inst2
+    ///   event n=5 (t=12s): add  inst3
+    ///   event n=6 (t=15s): del  inst1   ← second delete (6 % 3 == 0)
     ///
     ///   price ticks: 16 total (inst0..inst9 then inst0..inst5, id = (n-1) % 10)
     #[test]
@@ -108,7 +108,7 @@ mod tests {
         let new_insts = src.new_instrument.accumulate().finally(|v, _| {
             assert_eq!(
                 v,
-                ["inst0", "inst1", "inst2", "inst3", "inst4"]
+                ["inst0", "inst1", "inst2", "inst3"]
                     .map(String::from)
                     .to_vec()
             );
@@ -116,7 +116,7 @@ mod tests {
         });
 
         let del_insts = src.del_instrument.accumulate().finally(|v, _| {
-            assert_eq!(v, ["inst0"].map(String::from).to_vec());
+            assert_eq!(v, ["inst0", "inst1"].map(String::from).to_vec());
             Ok(())
         });
 
