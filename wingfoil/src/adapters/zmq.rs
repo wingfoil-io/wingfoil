@@ -184,7 +184,7 @@ impl<T: Element + Send + Serialize> ZeroMqPub<T> for Rc<dyn Stream<T>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::zmq::{ZeroMqPub, zmq_sub};
+    use crate::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub};
     use crate::{Graph, Node, NodeOperators, StreamOperators};
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
@@ -268,6 +268,36 @@ mod tests {
         });
         Graph::new(
             vec![sender_with_delay(period, port), recv_node],
+            RunMode::RealTime,
+            run_for,
+        )
+        .run()
+        .unwrap();
+    }
+
+    #[test]
+    fn zmq_reports_connected_status() {
+        _ = env_logger::try_init();
+        let period = Duration::from_millis(50);
+        let port = 5561;
+        let address = format!("tcp://127.0.0.1:{port}");
+        let run_for = RunFor::Duration(period * 10);
+        let (data, status) = zmq_sub::<u64>(&address);
+        let data_node = data.collect().finally(|res, _| {
+            let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+            assert!(!values.is_empty(), "no data received");
+            Ok(())
+        });
+        let status_node = status.collect().finally(|statuses, _| {
+            let vs: Vec<ZmqStatus> = statuses.into_iter().map(|item| item.value).collect();
+            assert!(
+                vs.contains(&ZmqStatus::Connected),
+                "expected Connected, got: {vs:?}"
+            );
+            Ok(())
+        });
+        Graph::new(
+            vec![sender(period, port), data_node, status_node],
             RunMode::RealTime,
             run_for,
         )
