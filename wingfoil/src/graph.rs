@@ -229,6 +229,15 @@ impl GraphState {
         todo!("add_upstream: see PLAN-graph-dynamism.md")
     }
 
+    /// Deregister `node` at the end of the current cycle: unlinks it from all
+    /// upstream downstream-lists and all downstream upstream-lists, then calls
+    /// `stop()` + `teardown()`.
+    ///
+    /// **Not yet implemented** — see `PLAN-graph-dynamism.md` (issue #54).
+    pub fn remove_node(&mut self, _node: Rc<dyn Node>) {
+        todo!("remove_node: see PLAN-graph-dynamism.md")
+    }
+
     #[allow(dead_code)]
     /// Returns true if node has ticked on the current engine cycle
     pub(crate) fn node_index_ticked(&self, node_index: usize) -> bool {
