@@ -34,6 +34,7 @@ mod never;
 mod node_flow;
 mod print;
 mod producer;
+mod receiver;
 mod sample;
 mod throttle;
 mod tick;
@@ -48,10 +49,12 @@ pub use always::*;
 #[cfg(feature = "async")]
 pub use async_io::*;
 pub use callback::CallBackStream;
+pub use channel::ChannelReceiverStream;
 pub use demux::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
+pub use map_filter::MapFilterStream;
 pub use never::*;
 
 use average::*;
@@ -70,7 +73,6 @@ use graph_state::*;
 use inspect::*;
 use limit::*;
 use map::*;
-use map_filter::*;
 use merge::*;
 use node_flow::*;
 use print::*;
@@ -88,6 +90,8 @@ use with_time::WithTimeStream;
 use crate::graph::*;
 use crate::queue::ValueAt;
 use crate::types::*;
+
+pub(crate) use receiver::*;
 
 use log::Level;
 use log::log;
