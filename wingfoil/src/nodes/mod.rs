@@ -54,6 +54,7 @@ pub use demux::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
+pub use map_filter::MapFilterStream;
 pub use never::*;
 
 use average::*;
@@ -72,7 +73,6 @@ use graph_state::*;
 use inspect::*;
 use limit::*;
 use map::*;
-use map_filter::*;
 use merge::*;
 use node_flow::*;
 use print::*;

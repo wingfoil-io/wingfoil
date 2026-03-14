@@ -3,14 +3,32 @@ use std::rc::Rc;
 
 use crate::channel::{ChannelSender, Message};
 use crate::{
-    Element, GraphState, IntoNode, IntoStream, MutableNode, Node, ReceiverStream, RunMode, Stream,
-    UpStreams,
+    Burst, Element, GraphState, IntoNode, IntoStream, MapFilterStream, MutableNode, Node,
+    ReceiverStream, RunMode, Stream, UpStreams,
 };
 use derive_new::new;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tinyvec::TinyVec;
 use zmq;
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ZmqStatus {
+    Connected,
+    #[default]
+    Disconnected,
+}
+
+#[derive(Debug, Clone)]
+pub enum ZmqEvent<T> {
+    Data(T),
+    Status(ZmqStatus),
+}
+
+impl<T: Default> Default for ZmqEvent<T> {
+    fn default() -> Self {
+        ZmqEvent::Data(T::default())
+    }
+}
 
 #[derive(new)]
 struct ZeroMqSubscriber<T: Element + Send> {
@@ -19,35 +37,36 @@ struct ZeroMqSubscriber<T: Element + Send> {
 }
 
 impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
-    fn run(&self, channel_sender: ChannelSender<T>) -> anyhow::Result<()> {
+    fn run(&self, channel_sender: ChannelSender<ZmqEvent<T>>) -> anyhow::Result<()> {
         let socket = self.connect()?;
+        channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Status(
+            ZmqStatus::Connected,
+        )))?;
         let mut done = false;
         while !done {
-            let msg = self.recv(&socket)?;
-            done = matches!(msg, Message::EndOfStream);
-            channel_sender.send_message(msg)?;
+            let msg: Message<T> = self.recv(&socket)?;
+            match msg {
+                Message::RealtimeValue(v) => {
+                    channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Data(v)))?;
+                }
+                Message::EndOfStream => {
+                    channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Status(
+                        ZmqStatus::Disconnected,
+                    )))?;
+                    channel_sender.send_message(Message::EndOfStream)?;
+                    done = true;
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
 
     fn connect(&self) -> anyhow::Result<zmq::Socket> {
-        //     let mut address = self.address.clone();
-        //     if self.managed {
-        //         status_sender.send(ZmqStatus::ResolvingService);
-        //         address = zooman::resolve(&self.address);
-        //         status_sender.send(ZmqStatus::ResolvedService);
-        //     }
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SUB)?;
         socket.connect(&self.address)?;
-        // if self.managed {
-        //     socket
-        //         .set_rcvtimeo(self.timeout.as_millis() as i32)
-        //         .unwrap();
-        // }
         socket.set_subscribe("".as_bytes())?;
-        //info!("ZeroMqSubscriber: Connected to {}", address);
-        //status_sender.send(ZmqStatus::Connected);
         Ok(socket)
     }
 
@@ -55,30 +74,51 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
         let res = socket.recv_bytes(0)?;
         let msg = bincode::deserialize(&res)?;
         Ok(msg)
-        // match res {
-        //     Ok(data) => {
-        //         let msg = bincode::deserialize(&data)?;
-        //         match msg {
-        //             // SocketMessage::HeartBeat => {
-        //             //     debug!("Received Heartbeat");
-        //             // }
-        //             // SocketMessage::Payload(val) => {
-        //             //     sender.send(val);
-        //             // }
-        //         }
-        //     }
-        //     Err(err) => {
-        //     }
-        // }
     }
 }
 
 pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
     address: &str,
-) -> Rc<dyn Stream<TinyVec<[T; 1]>>> {
-    let subscriber = ZeroMqSubscriber::new(address.to_string());
-    let f = move |channel_sender| subscriber.run(channel_sender);
-    ReceiverStream::new(f, true).into_stream()
+) -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<ZmqStatus>>) {
+    let events: Rc<dyn Stream<Burst<ZmqEvent<T>>>> = {
+        let subscriber = ZeroMqSubscriber::new(address.to_string());
+        ReceiverStream::new(move |s| subscriber.run(s), true).into_stream()
+    };
+    let data = MapFilterStream::new(
+        events.clone(),
+        Box::new(|burst: Burst<ZmqEvent<T>>| {
+            let data: Burst<T> = burst
+                .into_iter()
+                .filter_map(|e| {
+                    if let ZmqEvent::Data(v) = e {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let ticked = !data.is_empty();
+            (data, ticked)
+        }),
+    )
+    .into_stream();
+    let status = MapFilterStream::new(
+        events,
+        Box::new(|burst: Burst<ZmqEvent<T>>| {
+            match burst.into_iter().find_map(|e| {
+                if let ZmqEvent::Status(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            }) {
+                Some(s) => (s, true),
+                None => (ZmqStatus::default(), false),
+            }
+        }),
+    )
+    .into_stream();
+    (data, status)
 }
 
 #[derive(new)]
@@ -132,57 +172,6 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
     }
 }
 
-// fn connect(address: String) -> zmq::Socket {
-// //     let mut address = self.address.clone();
-// //     if self.managed {
-// //         status_sender.send(ZmqStatus::ResolvingService);
-// //         address = zooman::resolve(&self.address);
-// //         status_sender.send(ZmqStatus::ResolvedService);
-// //     }
-//     let context = zmq::Context::new();
-//     let socket = context.socket(zmq::SUB).unwrap();
-//     socket.connect(&address).unwrap();
-//     // if self.managed {
-//     //     socket
-//     //         .set_rcvtimeo(self.timeout.as_millis() as i32)
-//     //         .unwrap();
-//     // }
-//     socket.set_subscribe("".as_bytes()).unwrap();
-//     //info!("ZeroMqSubscriber: Connected to {}", address);
-//     //status_sender.send(ZmqStatus::Connected);
-//     socket
-// }
-
-// fn listen(&self, sender: ChannelSender<T>, status_sender: ChannelSender<ZmqStatus>) {
-//     let mut socket = self.connect("tcp://localhost");
-//     loop {
-//         let res = socket.recv_bytes(0);
-//         match res {
-//             Ok(data) => {
-//                 let msg: SocketMessage<T> = bincode::deserialize(&data).unwrap();
-//                 match msg {
-//                     SocketMessage::HeartBeat => {
-//                         debug!("Received Heartbeat");
-//                         continue;
-//                     }
-//                     SocketMessage::Payload(val) => {
-//                         sender.send(val);
-//                     }
-//                 }
-//             }
-//             Err(err) => {
-//                 debug!("ZeroMqSubscriber: {:?}", err);
-//                 status_sender.send(ZmqStatus::ReceiveError);
-//                 if self.managed {
-//                     socket = self.connect(&status_sender);
-//                 } else {
-//                     break;
-//                 }
-//             }
-//         }
-//     }
-// }
-
 pub trait ZeroMqPub<T: Element + Send> {
     fn zmq_pub(&self, port: u16) -> Rc<dyn Node>;
 }
@@ -207,22 +196,20 @@ mod tests {
     }
 
     fn receiver(address: &str) -> Rc<dyn Node> {
-        zmq_sub::<u64>(address)
-            .logged("sub", Info)
-            .collect()
-            .finally(|res, _| {
-                let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
-                println!("{values:?}");
-                assert!(
-                    values.len() >= 5,
-                    "expected at least 5 items, got {}",
-                    values.len()
-                );
-                for window in values.windows(2) {
-                    assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
-                }
-                Ok(())
-            })
+        let (data, _status) = zmq_sub::<u64>(address);
+        data.logged("sub", Info).collect().finally(|res, _| {
+            let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+            println!("{values:?}");
+            assert!(
+                values.len() >= 5,
+                "expected at least 5 items, got {}",
+                values.len()
+            );
+            for window in values.windows(2) {
+                assert_eq!(window[1], window[0] + 1, "expected consecutive integers");
+            }
+            Ok(())
+        })
     }
 
     #[test]
@@ -274,6 +261,7 @@ mod tests {
     fn zmq_sub_historical_mode_fails() {
         use crate::NanoTime;
         let result = zmq_sub::<u64>("tcp://127.0.0.1:5559")
+            .0
             .as_node()
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
         let err = result.expect_err("expected historical mode to fail for zmq receiver");

@@ -1114,9 +1114,9 @@ dependencies = [
 
 [[package]]
 name = "kdb-plus-fixed"
-version = "0.4.1"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9096c03345daf130734576e8f0eef4811d6aa67132cf908ef7394be024187c53"
+checksum = "10bd5258df745522e4f823bc139b532ae3e4258448031efb5b2e15b4d55da72a"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2959,7 +2959,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "wingfoil"
-version = "2.1.1"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -3005,7 +3005,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-python"
-version = "2.1.1"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "chrono",
