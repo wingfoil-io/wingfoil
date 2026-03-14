@@ -121,13 +121,27 @@ mod tests {
         });
 
         let prices = src.inst_price.accumulate().finally(|v, _| {
-            let expected: Vec<(String, f64)> = (1u64..=16)
-                .map(|n| {
-                    let id = (n - 1) % 10;
-                    (format!("inst{id}"), id as f64 + n as f64 / 100.0)
-                })
-                .collect();
-            assert_eq!(v, expected);
+            assert_eq!(
+                v,
+                vec![
+                    ("inst0".into(), 0.01),
+                    ("inst1".into(), 1.02),
+                    ("inst2".into(), 2.03),
+                    ("inst3".into(), 3.04),
+                    ("inst4".into(), 4.05),
+                    ("inst5".into(), 5.06),
+                    ("inst6".into(), 6.07),
+                    ("inst7".into(), 7.08),
+                    ("inst8".into(), 8.09),
+                    ("inst9".into(), 9.10),
+                    ("inst0".into(), 0.11),
+                    ("inst1".into(), 1.12),
+                    ("inst2".into(), 2.13),
+                    ("inst3".into(), 3.14),
+                    ("inst4".into(), 4.15),
+                    ("inst5".into(), 5.16),
+                ]
+            );
             Ok(())
         });
 
