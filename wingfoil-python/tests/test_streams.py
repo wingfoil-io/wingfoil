@@ -47,5 +47,21 @@ class TestStreams(unittest.TestCase):
         self.assertEqual(inspected_values, [1, 2, 3])        # lambda was called
         self.assertEqual(stream.peek_value(), [1, 2, 3])     # values passed through unchanged
 
+    def test_with_time(self):
+        stream = (
+            ticker(0.1)
+                .count()
+                .with_time()
+                .collect()
+        )
+        stream.run(realtime=False, cycles=3)
+        result = stream.peek_value()
+        self.assertEqual(len(result), 3)
+        times = [t for t, _ in result]
+        values = [v for _, v in result]
+        self.assertEqual(values, [1, 2, 3])
+        # times should be monotonically increasing
+        self.assertTrue(all(times[i] < times[i + 1] for i in range(len(times) - 1)))
+
 if __name__ == '__main__':
     unittest.main()

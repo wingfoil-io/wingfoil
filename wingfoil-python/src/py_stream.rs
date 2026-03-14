@@ -301,6 +301,26 @@ impl PyStream {
         self.0.count().as_py_stream()
     }
 
+    /// Pairs each value with the graph time as a `(float, value)` tuple,
+    /// where the float is seconds since Unix epoch.
+    fn with_time(&self) -> PyStream {
+        let strm = self.0.with_time().map(|(t, v)| {
+            Python::attach(|py| {
+                let time_secs: f64 = t.into();
+                let py_tuple = pyo3::types::PyTuple::new(
+                    py,
+                    &[
+                        time_secs.into_pyobject(py).unwrap().into_any(),
+                        v.value().into_bound(py),
+                    ],
+                )
+                .unwrap();
+                PyElement::new(py_tuple.into_any().unbind())
+            })
+        });
+        PyStream(strm)
+    }
+
     /// Write this stream to a KDB+ table.
     ///
     /// Args:

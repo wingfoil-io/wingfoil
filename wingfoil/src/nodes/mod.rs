@@ -42,6 +42,7 @@ mod try_bimap;
 mod try_map;
 mod try_trimap;
 mod window;
+mod with_time;
 
 pub use always::*;
 #[cfg(feature = "async")]
@@ -82,6 +83,7 @@ use try_bimap::*;
 use try_map::*;
 use try_trimap::*;
 use window::WindowStream;
+use with_time::WithTimeStream;
 
 use crate::graph::*;
 use crate::queue::ValueAt;
@@ -519,6 +521,18 @@ pub trait StreamOperators<T: Element> {
     /// the interval elapses.
     #[must_use]
     fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>>;
+    /// Pairs each value with the graph time at which it ticked.
+    /// Equivalent to `.map(|v| (time, v))` but with access to the graph clock.
+    /// ```
+    /// # use wingfoil::*;
+    /// # use std::time::Duration;
+    /// ticker(Duration::from_millis(10))
+    ///     .count()
+    ///     .with_time()
+    ///     .map(|(t, v)| format!("{t:?}: {v}"));
+    /// ```
+    #[must_use]
+    fn with_time(self: &Rc<Self>) -> Rc<dyn Stream<(NanoTime, T)>>;
 }
 
 impl<T> StreamOperators<T> for dyn Stream<T>
@@ -790,6 +804,10 @@ where
 
     fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>> {
         ThrottleStream::new(self.clone(), NanoTime::new(interval.as_nanos() as u64)).into_stream()
+    }
+
+    fn with_time(self: &Rc<Self>) -> Rc<dyn Stream<(NanoTime, T)>> {
+        WithTimeStream::new(self.clone()).into_stream()
     }
 }
 
