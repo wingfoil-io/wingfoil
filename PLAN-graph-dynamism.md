@@ -26,7 +26,7 @@ source (layer 0)                         ← emits (instrument, price)
 ```
 
 When a new instrument C arrives, `aggregation.cycle()` fires (source is an active upstream).
-It builds `filter_C → process_C` and calls `state.add_upstream(process_C.as_node(), true)`.
+It builds `filter_C → process_C` and calls `state.add_upstream(process_C.as_node(), true, true)`.
 The graph wires `process_C` in and registers it as an active upstream of `aggregation`.
 From then on, when `process_C` ticks, `aggregation` is marked dirty automatically.
 
@@ -59,7 +59,12 @@ node that is not yet registered — see `ticked()` guard below.
 /// as an upstream of the calling node. `is_active` controls whether it triggers
 /// the calling node on each tick (true) or is read-only (false).
 /// Processed at the end of the current cycle.
-pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool)
+///
+/// If `recycle` is true, `add_callback(state.time())` is called on the new
+/// upstream after it is wired, scheduling it to fire on the very next engine
+/// iteration. This lets the calling node catch the value that triggered the
+/// `add_upstream` call without waiting for the next source tick.
+pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool)
 
 /// Wire `node` (and its upstream subgraph) into the graph without creating
 /// any upstream relationship with the calling node. Useful for new consumers
@@ -233,20 +238,20 @@ corrupt the dirty/downstream lists that the cycle loop is still iterating.
 price for a new instrument) is processed by the calling node in the current cycle, but the
 newly added subgraph misses it — it does not exist until the cycle ends.
 
-**Opt-in first tick via `start()`**: nodes that want to fire immediately on the next cycle
-after being dynamically added can call `state.add_callback(state.time())` in their
-`start()` implementation. This schedules them for the next engine iteration, at which
-point they read their upstream's current `peek_value()` (which still holds the triggering
-value if the source has not yet ticked again). This is consistent with how `TickNode`
-already uses `start()` to schedule its first callback.
+**Opt-in first tick via `recycle: true`**: passing `recycle: true` to `add_upstream`
+schedules `add_callback(state.time())` on the new upstream after it is wired. This fires
+the upstream on the very next engine iteration, at which point it reads its upstream's
+current `peek_value()` (which still holds the triggering value if the source has not yet
+ticked again). Use this when the calling node needs to process the value that caused the
+`add_upstream` call through the new subgraph immediately.
 
-Default behaviour (no `add_callback` in `start()`) means the new subgraph begins
-processing from the next upstream tick onward. This is acceptable for most use cases —
-the calling node handles the triggering value itself.
+Default behaviour (`recycle: false`) means the new subgraph begins processing from the
+next upstream tick onward. This is acceptable when the calling node handles the triggering
+value itself and only needs the subgraph for subsequent ticks.
 
 Note: `add_callback(state.time())` behaves differently between run modes. In historical
 mode the scheduled time is exact and fires on the very next engine iteration. In real-time
-mode the time has already passed by the time `start()` runs, so the callback fires
+mode the time has already passed by the time wiring completes, so the callback fires
 immediately on the next pass through the ready queue. Both are correct.
 
 ## Testing

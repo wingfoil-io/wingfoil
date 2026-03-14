@@ -218,8 +218,14 @@ impl GraphState {
     /// triggers the calling node on each tick (true) or is read-only (false).
     /// Processed at the end of the current cycle.
     ///
+    /// If `recycle` is true, `add_callback(state.time())` is called on the
+    /// new upstream after it is wired, scheduling it to fire on the very next
+    /// engine iteration. This lets the calling node catch the value that
+    /// triggered the `add_upstream` call without waiting for the next source
+    /// tick.
+    ///
     /// **Not yet implemented** — see `PLAN-graph-dynamism.md` (issue #54).
-    pub fn add_upstream(&mut self, _upstream: Rc<dyn Node>, _is_active: bool) {
+    pub fn add_upstream(&mut self, _upstream: Rc<dyn Node>, _is_active: bool, _recycle: bool) {
         todo!("add_upstream: see PLAN-graph-dynamism.md")
     }
 

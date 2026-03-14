@@ -100,9 +100,10 @@ impl MutableNode for PriceAggregator {
             let processed = process(filtered);
 
             // Queue the subgraph as an active upstream — wired at cycle boundary.
-            // After this cycle ends, `processed` will trigger `PriceAggregator`
-            // on every future tick relevant to this instrument.
-            state.add_upstream(processed.clone().as_node(), true);
+            // `recycle: true` schedules an immediate callback on the new upstream
+            // so it fires on the very next engine iteration, letting the aggregator
+            // catch the price that triggered the add_upstream call.
+            state.add_upstream(processed.clone().as_node(), true, true);
             self.per_instrument.insert(instrument, processed);
         }
 
