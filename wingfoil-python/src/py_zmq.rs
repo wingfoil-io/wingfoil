@@ -59,9 +59,10 @@ pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
 pub fn py_zmq_pub_inner(stream: &Rc<dyn Stream<PyElement>>, port: u16) -> Rc<dyn Node> {
     let bytes_stream: Rc<dyn Stream<Vec<u8>>> = stream.map(|elem| {
         Python::attach(|py| {
-            elem.as_ref()
-                .extract::<Vec<u8>>(py)
-                .expect("zmq_pub requires stream values to be bytes")
+            elem.as_ref().extract::<Vec<u8>>(py).unwrap_or_else(|e| {
+                log::error!("zmq_pub: stream value is not bytes: {e}");
+                Vec::new()
+            })
         })
     });
     bytes_stream.zmq_pub(port)

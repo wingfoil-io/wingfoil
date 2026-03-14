@@ -105,13 +105,17 @@ pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
     let status = MapFilterStream::new(
         events,
         Box::new(|burst: Burst<ZmqEvent<T>>| {
-            match burst.into_iter().find_map(|e| {
-                if let ZmqEvent::Status(s) = e {
-                    Some(s)
-                } else {
-                    None
-                }
-            }) {
+            match burst
+                .into_iter()
+                .filter_map(|e| {
+                    if let ZmqEvent::Status(s) = e {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .last()
+            {
                 Some(s) => (s, true),
                 None => (ZmqStatus::default(), false),
             }
@@ -125,6 +129,7 @@ pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
 struct ZeroMqSenderNode<T: Element + Send + Serialize> {
     src: Rc<dyn Stream<T>>,
     port: u16,
+    bind_address: String,
     #[new(default)]
     socket: Option<zmq::Socket>,
 }
@@ -154,17 +159,16 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
         }
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SocketType::PUB)?;
-        let address = format!("tcp://127.0.0.1:{:}", self.port);
+        let address = format!("tcp://{}:{}", self.bind_address, self.port);
         socket.bind(&address)?;
         self.socket = Some(socket);
         Ok(())
     }
 
     fn stop(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
-        let sock = self
-            .socket
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing socket"))?;
+        let Some(sock) = self.socket.as_ref() else {
+            return Ok(());
+        };
         let msg: Message<T> = Message::EndOfStream;
         let data = bincode::serialize(&msg)?;
         sock.send(data, FLAGS)?;
@@ -174,11 +178,16 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 
 pub trait ZeroMqPub<T: Element + Send> {
     fn zmq_pub(&self, port: u16) -> Rc<dyn Node>;
+    fn zmq_pub_on(&self, address: &str, port: u16) -> Rc<dyn Node>;
 }
 
 impl<T: Element + Send + Serialize> ZeroMqPub<T> for Rc<dyn Stream<T>> {
     fn zmq_pub(&self, port: u16) -> Rc<dyn Node> {
-        ZeroMqSenderNode::new(self.clone(), port).into_node()
+        ZeroMqSenderNode::new(self.clone(), port, "127.0.0.1".to_string()).into_node()
+    }
+
+    fn zmq_pub_on(&self, address: &str, port: u16) -> Rc<dyn Node> {
+        ZeroMqSenderNode::new(self.clone(), port, address.to_string()).into_node()
     }
 }
 
