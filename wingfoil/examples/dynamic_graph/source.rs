@@ -23,9 +23,9 @@ pub struct Source {
 /// Instruments are added sequentially. Every 3rd event deletes the oldest
 /// live instrument (if any), producing an unbounded stream of additions and
 /// periodic deletions.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct LifecycleState {
-    /// Counter for naming the next instrument (`inst0`, `inst1`, …).
+    /// Counter for naming the next instrument (`inst1`, `inst2`, …).
     next_id: u64,
     /// Currently live instruments, in insertion order.
     live: Vec<Instrument>,
@@ -33,18 +33,28 @@ struct LifecycleState {
     event: (bool, Instrument),
 }
 
-/// Creates a [`Source`] driven by two tickers:
+impl Default for LifecycleState {
+    fn default() -> Self {
+        Self {
+            next_id: 1,
+            live: Vec::new(),
+            event: (true, String::new()),
+        }
+    }
+}
+
+/// Creates a [`Source`] driven by two tickers, both firing every `period`:
 ///
-/// - `price_ticker` (every `period`) — continuous price feed
-/// - `event_ticker` (every `period * 3`) — instrument lifecycle
+/// - `price_ticker` — continuous price feed, cycling through instrument IDs
+///   in a sliding window: `id = (n-1)/3 + (n-1)%3 + 1`
+/// - `event_ticker` — instrument lifecycle; every 3rd tick deletes the oldest
+///   live instrument, all other ticks add a fresh one
 ///
-/// Lifecycle rule: every 3rd event tick deletes the oldest live instrument;
-/// all other ticks add a fresh one. The price stream cycles through instrument
-/// IDs; prices for unknown or deleted instruments are silently dropped by the
+/// Prices for unknown or deleted instruments are silently dropped by the
 /// aggregator's per-instrument filters.
 pub fn source(period: Duration) -> Source {
     let price_ticker = ticker(period);
-    let event_ticker = ticker(period * 3);
+    let event_ticker = ticker(period);
 
     let lifecycle: Rc<dyn Stream<(bool, Instrument)>> = event_ticker
         .count()
@@ -73,7 +83,7 @@ pub fn source(period: Duration) -> Source {
         .map(|(_, inst)| inst);
 
     let inst_price = price_ticker.count().map(|n: u64| {
-        let id = (n - 1) % 10;
+        let id = (n - 1) / 3 + (n - 1) % 3 + 1;
         (format!("inst{id}"), id as f64 + n as f64 / 100.0)
     });
 
@@ -89,17 +99,13 @@ mod tests {
     use super::*;
     use wingfoil::Graph;
 
-    /// Lifecycle over 16 engine cycles (price every 1 s, event every 3 s, both
-    /// starting at t = 0):
+    /// 9 engine cycles, both tickers at the same period:
     ///
-    ///   event n=1 (t= 0s): add  inst0
-    ///   event n=2 (t= 3s): add  inst1
-    ///   event n=3 (t= 6s): del  inst0   ← first delete (3 % 3 == 0)
-    ///   event n=4 (t= 9s): add  inst2
-    ///   event n=5 (t=12s): add  inst3
-    ///   event n=6 (t=15s): del  inst1   ← second delete (6 % 3 == 0)
+    ///   n=1: add  inst1          n=2: add  inst2          n=3: del  inst1
+    ///   n=4: add  inst3          n=5: add  inst4          n=6: del  inst2
+    ///   n=7: add  inst5          n=8: add  inst6          n=9: del  inst3
     ///
-    ///   price ticks: 16 total (inst0..inst9 then inst0..inst5, id = (n-1) % 10)
+    ///   price id = (n-1)/3 + (n-1)%3 + 1  →  sliding window inst1..inst5
     #[test]
     fn source_lifecycle_sequence() {
         let period = std::time::Duration::from_secs(1);
@@ -108,7 +114,7 @@ mod tests {
         let new_insts = src.new_instrument.accumulate().finally(|v, _| {
             assert_eq!(
                 v,
-                ["inst0", "inst1", "inst2", "inst3"]
+                ["inst1", "inst2", "inst3", "inst4", "inst5", "inst6"]
                     .map(String::from)
                     .to_vec()
             );
@@ -116,7 +122,7 @@ mod tests {
         });
 
         let del_insts = src.del_instrument.accumulate().finally(|v, _| {
-            assert_eq!(v, ["inst0", "inst1"].map(String::from).to_vec());
+            assert_eq!(v, ["inst1", "inst2", "inst3"].map(String::from).to_vec());
             Ok(())
         });
 
@@ -124,22 +130,15 @@ mod tests {
             assert_eq!(
                 v,
                 vec![
-                    ("inst0".into(), 0.01),
-                    ("inst1".into(), 1.02),
-                    ("inst2".into(), 2.03),
-                    ("inst3".into(), 3.04),
-                    ("inst4".into(), 4.05),
-                    ("inst5".into(), 5.06),
-                    ("inst6".into(), 6.07),
-                    ("inst7".into(), 7.08),
-                    ("inst8".into(), 8.09),
-                    ("inst9".into(), 9.10),
-                    ("inst0".into(), 0.11),
-                    ("inst1".into(), 1.12),
-                    ("inst2".into(), 2.13),
-                    ("inst3".into(), 3.14),
-                    ("inst4".into(), 4.15),
-                    ("inst5".into(), 5.16),
+                    ("inst1".into(), 1.01),
+                    ("inst2".into(), 2.02),
+                    ("inst3".into(), 3.03),
+                    ("inst2".into(), 2.04),
+                    ("inst3".into(), 3.05),
+                    ("inst4".into(), 4.06),
+                    ("inst3".into(), 3.07),
+                    ("inst4".into(), 4.08),
+                    ("inst5".into(), 5.09),
                 ]
             );
             Ok(())
@@ -148,7 +147,7 @@ mod tests {
         Graph::new(
             vec![new_insts, del_insts, prices],
             wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-            wingfoil::RunFor::Cycles(16),
+            wingfoil::RunFor::Cycles(9),
         )
         .run()
         .unwrap();
