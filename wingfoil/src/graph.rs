@@ -229,6 +229,14 @@ impl GraphState {
         todo!("add_upstream: see PLAN-graph-dynamism.md")
     }
 
+    /// Removes a node from the graph, disconnecting it from the execution
+    /// schedule and releasing its downstream edges.
+    ///
+    /// **Not yet implemented** — see `PLAN-graph-dynamism.md` (issue #54).
+    pub fn remove_node(&mut self, _node: Rc<dyn Node>) {
+        todo!("remove_node: see PLAN-graph-dynamism.md")
+    }
+
     #[allow(dead_code)]
     /// Returns true if node has ticked on the current engine cycle
     pub(crate) fn node_index_ticked(&self, node_index: usize) -> bool {

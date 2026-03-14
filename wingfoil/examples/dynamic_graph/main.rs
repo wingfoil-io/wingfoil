@@ -1,12 +1,21 @@
-//! Demonstrates dynamic graph construction using `state.add_upstream()`.
+//! Demonstrates dynamic graph construction using `state.add_upstream()` and
+//! `state.remove_node()`.
 //!
-//! A price source emits `(Instrument, Price)` pairs, cycling through an
-//! increasing number of instruments over time. A [`PriceAggregator`] node
-//! detects new instruments and wires in a per-instrument processing subgraph
-//! on demand by calling `state.add_upstream()` from within `cycle()`.
+//! Three streams drive the system:
+//! - `new_instrument` — fires when an instrument is added
+//! - `del_instrument` — fires when an instrument is deleted
+//! - `inst_price`     — continuous price feed, cycling through instrument IDs
+//!
+//! A [`PriceAggregator`] node wires in per-instrument subgraphs on demand via
+//! `state.add_upstream()`, and tears them down via `state.remove_node()`.
+//!
+//! Target scenario: add inst0 → inst1 → inst2 → inst3 → delete inst1 → add inst4.
+//! Final price book: {inst0, inst2, inst3, inst4}.
 //!
 //! This example targets the graph-dynamism API described in
 //! `PLAN-graph-dynamism.md` (issue #54).
+
+mod source;
 
 use log::Level::Info;
 use std::collections::BTreeMap;
@@ -15,31 +24,7 @@ use std::time::Duration;
 
 use wingfoil::*;
 
-type Instrument = String;
-type Price = f64;
-
-// ---------------------------------------------------------------------------
-// Source
-// ---------------------------------------------------------------------------
-
-/// Emits `(Instrument, Price)` pairs. A new distinct instrument is introduced
-/// roughly every `period * 3`, so the set of live instruments grows over time.
-fn source(period: Duration) -> Rc<dyn Stream<(Instrument, Price)>> {
-    let n_prices = ticker(period).count();
-    let n_instruments = ticker(period * 3).count();
-    bimap(
-        Dep::Active(n_prices),
-        Dep::Passive(n_instruments),
-        |i_price: u64, i_inst: u64| {
-            // Avoid divide-by-zero: n_instruments defaults to 0 before first tick.
-            let n = i_inst.max(1);
-            let inst_id = i_price % n;
-            let price = inst_id as f64 + i_price as f64 / 100.0;
-            let inst = format!("inst_{inst_id}");
-            (inst, price)
-        },
-    )
-}
+use source::{Instrument, Price};
 
 // ---------------------------------------------------------------------------
 // Per-instrument processing
@@ -51,28 +36,42 @@ fn process(stream: Rc<dyn Stream<(Instrument, Price)>>) -> Rc<dyn Stream<(Instru
 }
 
 // ---------------------------------------------------------------------------
+// InstrumentStreams
+// ---------------------------------------------------------------------------
+
+/// Bundles the two nodes kept per instrument (needed for `remove_node`).
+struct InstrumentStreams {
+    filtered: Rc<dyn Stream<(Instrument, Price)>>,
+    processed: Rc<dyn Stream<(Instrument, Price)>>,
+}
+
+// ---------------------------------------------------------------------------
 // PriceAggregator
 // ---------------------------------------------------------------------------
 
 struct PriceAggregator {
-    /// Source stream — stored to build per-instrument filters in `cycle()`.
-    source: Rc<dyn Stream<(Instrument, Price)>>,
-    /// Active upstream: ticks only when a new (distinct) instrument is seen.
-    new_instruments: Rc<dyn Stream<Instrument>>,
-    /// Dynamic per-instrument processed streams, keyed by instrument name.
-    per_instrument: BTreeMap<Instrument, Rc<dyn Stream<(Instrument, Price)>>>,
+    /// Source price stream — stored to build per-instrument filters in `cycle()`.
+    inst_price: Rc<dyn Stream<(Instrument, Price)>>,
+    /// Active upstream: ticks when a new instrument is added.
+    new_instrument: Rc<dyn Stream<Instrument>>,
+    /// Active upstream: ticks when an instrument is deleted.
+    del_instrument: Rc<dyn Stream<Instrument>>,
+    /// Dynamic per-instrument streams, keyed by instrument name.
+    per_instrument: BTreeMap<Instrument, InstrumentStreams>,
     /// Current price book — the stream's output value.
     value: BTreeMap<Instrument, Price>,
 }
 
 impl PriceAggregator {
     fn new(
-        source: Rc<dyn Stream<(Instrument, Price)>>,
-        new_instruments: Rc<dyn Stream<Instrument>>,
+        inst_price: Rc<dyn Stream<(Instrument, Price)>>,
+        new_instrument: Rc<dyn Stream<Instrument>>,
+        del_instrument: Rc<dyn Stream<Instrument>>,
     ) -> Self {
         Self {
-            source,
-            new_instruments,
+            inst_price,
+            new_instrument,
+            del_instrument,
             per_instrument: BTreeMap::new(),
             value: BTreeMap::new(),
         }
@@ -81,30 +80,52 @@ impl PriceAggregator {
 
 impl MutableNode for PriceAggregator {
     fn upstreams(&self) -> UpStreams {
-        // `new_instruments` is the only *static* active upstream.
+        // Both `new_instrument` and `del_instrument` are static active upstreams.
         // Per-instrument processed streams are registered dynamically via
         // `state.add_upstream()` during `cycle()`.
-        UpStreams::new(vec![self.new_instruments.clone().as_node()], vec![])
+        UpStreams::new(
+            vec![
+                self.new_instrument.clone().as_node(),
+                self.del_instrument.clone().as_node(),
+            ],
+            vec![],
+        )
     }
 
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         // Wire a new per-instrument subgraph whenever a new instrument arrives.
-        if state.ticked(self.new_instruments.clone().as_node()) {
-            let instrument = self.new_instruments.peek_value();
+        if state.ticked(self.new_instrument.clone().as_node()) {
+            let instrument = self.new_instrument.peek_value();
             let inst_key = instrument.clone();
 
             // Build a filtered + processed sub-stream for this instrument.
             let filtered = self
-                .source
-                .filter_value(move |(inst, _px)| inst == &inst_key);
-            let processed = process(filtered);
+                .inst_price
+                .filter_value(move |(inst, _)| inst == &inst_key);
+            let processed = process(filtered.clone());
 
             // Queue the subgraph as an active upstream — wired at cycle boundary.
             // `recycle: true` schedules an immediate callback on the new upstream
             // so it fires on the very next engine iteration, letting the aggregator
             // catch the price that triggered the add_upstream call.
             state.add_upstream(processed.clone().as_node(), true, true);
-            self.per_instrument.insert(instrument, processed);
+            self.per_instrument.insert(
+                instrument,
+                InstrumentStreams {
+                    filtered,
+                    processed,
+                },
+            );
+        }
+
+        // Remove the per-instrument subgraph when an instrument is deleted.
+        if state.ticked(self.del_instrument.clone().as_node()) {
+            let instrument = self.del_instrument.peek_value();
+            if let Some(streams) = self.per_instrument.remove(&instrument) {
+                state.remove_node(streams.processed.clone().as_node());
+                state.remove_node(streams.filtered.clone().as_node());
+                self.value.remove(&instrument);
+            }
         }
 
         // Collect latest prices from dynamic upstreams that fired this cycle.
@@ -113,9 +134,9 @@ impl MutableNode for PriceAggregator {
         // (e.g. streams added via `add_upstream` in this same cycle), so newly
         // wired subgraphs are silently skipped until the next engine cycle.
         let mut ticked = false;
-        for (inst, stream) in &self.per_instrument {
-            if state.ticked(stream.clone().as_node()) {
-                let (_inst, price) = stream.peek_value();
+        for (inst, streams) in &self.per_instrument {
+            if state.ticked(streams.processed.clone().as_node()) {
+                let (_inst, price) = streams.processed.peek_value();
                 self.value.insert(inst.clone(), price);
                 ticked = true;
             }
@@ -139,16 +160,15 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let period = Duration::from_secs(1);
-    let src = source(period);
+    let src = source::source(period);
 
-    // Detect new instruments: map to name, deduplicate, log arrivals.
-    let new_instruments = src
-        .map(|(inst, _px)| inst)
-        .distinct()
-        .logged("new instrument", Info);
+    // Log lifecycle events; the lifecycle stream already emits exactly once per
+    // add/delete event (driven by a dedicated ticker), so no distinct() is needed.
+    let new_instrument = src.new_instrument.logged("new instrument", Info);
+    let del_instrument = src.del_instrument.logged("del instrument", Info);
 
     // The aggregator is a stream of price books: BTreeMap<Instrument, Price>.
-    let aggregator = PriceAggregator::new(src, new_instruments)
+    let aggregator = PriceAggregator::new(src.inst_price, new_instrument, del_instrument)
         .into_stream()
         .logged("price book", Info);
 
