@@ -156,6 +156,7 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
         let socket = context.socket(zmq::SocketType::PUB)?;
         let address = format!("tcp://127.0.0.1:{:}", self.port);
         socket.bind(&address)?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
         self.socket = Some(socket);
         Ok(())
     }
