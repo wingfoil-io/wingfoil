@@ -1,20 +1,15 @@
-//! Demonstrates dynamic graph construction using `state.add_upstream()` and
-//! `state.remove_node()`.
+//! Demonstrates dynamic graph construction using `state.add_upstream()`.
 //!
 //! A price source emits `(Instrument, Price)` pairs, cycling through an
 //! increasing number of instruments over time. A [`PriceAggregator`] node
-//! maintains a sliding window of at most [`MAX_INSTRUMENTS`] live instruments:
-//!
-//! - When a new instrument is discovered it wires in a per-instrument
-//!   processing subgraph via `state.add_upstream()`.
-//! - When the window is full, the oldest instrument is evicted via
-//!   `state.remove_node()` before the new one is added.
+//! detects new instruments and wires in a per-instrument processing subgraph
+//! on demand by calling `state.add_upstream()` from within `cycle()`.
 //!
 //! This example targets the graph-dynamism API described in
 //! `PLAN-graph-dynamism.md` (issue #54).
 
 use log::Level::Info;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -22,9 +17,6 @@ use wingfoil::*;
 
 type Instrument = String;
 type Price = f64;
-
-/// Maximum number of concurrently live per-instrument subgraphs.
-const MAX_INSTRUMENTS: usize = 4;
 
 // ---------------------------------------------------------------------------
 // Source
@@ -62,22 +54,13 @@ fn process(stream: Rc<dyn Stream<(Instrument, Price)>>) -> Rc<dyn Stream<(Instru
 // PriceAggregator
 // ---------------------------------------------------------------------------
 
-struct InstrumentStreams {
-    /// Filtered view of source — stored so we can remove_node it on eviction.
-    filtered: Rc<dyn Stream<(Instrument, Price)>>,
-    /// Processed (transformed) stream — the one we add_upstream and peek.
-    processed: Rc<dyn Stream<(Instrument, Price)>>,
-}
-
 struct PriceAggregator {
     /// Source stream — stored to build per-instrument filters in `cycle()`.
     source: Rc<dyn Stream<(Instrument, Price)>>,
     /// Active upstream: ticks only when a new (distinct) instrument is seen.
     new_instruments: Rc<dyn Stream<Instrument>>,
-    /// Per-instrument streams, keyed by instrument name.
-    per_instrument: BTreeMap<Instrument, InstrumentStreams>,
-    /// Insertion-order queue — drives eviction when the window is full.
-    instrument_order: VecDeque<Instrument>,
+    /// Dynamic per-instrument processed streams, keyed by instrument name.
+    per_instrument: BTreeMap<Instrument, Rc<dyn Stream<(Instrument, Price)>>>,
     /// Current price book — the stream's output value.
     value: BTreeMap<Instrument, Price>,
 }
@@ -91,7 +74,6 @@ impl PriceAggregator {
             source,
             new_instruments,
             per_instrument: BTreeMap::new(),
-            instrument_order: VecDeque::new(),
             value: BTreeMap::new(),
         }
     }
@@ -106,46 +88,34 @@ impl MutableNode for PriceAggregator {
     }
 
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        // When a new instrument is discovered, optionally evict the oldest to
-        // keep the window at MAX_INSTRUMENTS, then wire in the new subgraph.
+        // Wire a new per-instrument subgraph whenever a new instrument arrives.
         if state.ticked(self.new_instruments.clone().as_node()) {
             let instrument = self.new_instruments.peek_value();
-
-            // Evict the oldest instrument when the window is full.
-            if self.instrument_order.len() >= MAX_INSTRUMENTS {
-                let evicted = self.instrument_order.pop_front().unwrap();
-                if let Some(streams) = self.per_instrument.remove(&evicted) {
-                    state.remove_node(streams.processed.clone().as_node());
-                    state.remove_node(streams.filtered.clone().as_node());
-                    self.value.remove(&evicted);
-                }
-            }
-
-            // Build and wire the new per-instrument subgraph.
             let inst_key = instrument.clone();
+
+            // Build a filtered + processed sub-stream for this instrument.
             let filtered = self
                 .source
                 .filter_value(move |(inst, _px)| inst == &inst_key);
-            let processed = process(filtered.clone());
+            let processed = process(filtered);
 
-            // `recycle: true` schedules an immediate callback so the new
-            // subgraph catches the price that triggered this add_upstream call.
+            // Queue the subgraph as an active upstream — wired at cycle boundary.
+            // `recycle: true` schedules an immediate callback on the new upstream
+            // so it fires on the very next engine iteration, letting the aggregator
+            // catch the price that triggered the add_upstream call.
             state.add_upstream(processed.clone().as_node(), true, true);
-            self.per_instrument.insert(
-                instrument.clone(),
-                InstrumentStreams {
-                    filtered,
-                    processed,
-                },
-            );
-            self.instrument_order.push_back(instrument);
+            self.per_instrument.insert(instrument, processed);
         }
 
         // Collect latest prices from dynamic upstreams that fired this cycle.
+        //
+        // Note: `state.ticked()` returns `false` for nodes not yet registered
+        // (e.g. streams added via `add_upstream` in this same cycle), so newly
+        // wired subgraphs are silently skipped until the next engine cycle.
         let mut ticked = false;
-        for (inst, streams) in &self.per_instrument {
-            if state.ticked(streams.processed.clone().as_node()) {
-                let (_inst, price) = streams.processed.peek_value();
+        for (inst, stream) in &self.per_instrument {
+            if state.ticked(stream.clone().as_node()) {
+                let (_inst, price) = stream.peek_value();
                 self.value.insert(inst.clone(), price);
                 ticked = true;
             }
@@ -182,5 +152,5 @@ fn main() -> anyhow::Result<()> {
         .into_stream()
         .logged("price book", Info);
 
-    aggregator.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(40))
+    aggregator.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
 }
