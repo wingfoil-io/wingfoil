@@ -134,7 +134,7 @@ where
                 record
                     .to_kdb_row()
                     .as_vec::<K>()
-                    .map(|v| v.into_iter().cloned().collect::<Vec<_>>())
+                    .map(|v| v.to_vec())
                     .unwrap_or_default()
             })
             .collect();
@@ -159,8 +159,7 @@ where
             format!("enlist {ts_str}")
         } else {
             // All rows in a burst share the same timestamp.
-            std::iter::repeat(ts_str.as_str())
-                .take(n)
+            std::iter::repeat_n(ts_str.as_str(), n)
                 .collect::<Vec<_>>()
                 .join(" ")
         };
