@@ -59,7 +59,7 @@ pub fn source(period: Duration) -> Source {
     let lifecycle: Rc<dyn Stream<(bool, Instrument)>> = event_ticker
         .count()
         .fold(|state: &mut LifecycleState, n: u64| {
-            if n % 3 == 0 && !state.live.is_empty() {
+            if n.is_multiple_of(3) && !state.live.is_empty() {
                 // Delete the oldest live instrument.
                 let inst = state.live.remove(0);
                 state.event = (false, inst);
