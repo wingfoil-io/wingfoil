@@ -138,6 +138,14 @@ impl Row<'_> {
             .element_at(self.index)
     }
 
+    /// Get a KDB timestamp column as [`NanoTime`].
+    ///
+    /// Reads the column value as an i64 (KDB nanoseconds since 2000-01-01) and
+    /// converts it to a [`NanoTime`] (nanoseconds since Unix epoch).
+    pub fn get_timestamp(&self, col: usize) -> Result<NanoTime, KdbError> {
+        Ok(NanoTime::from_kdb_timestamp(self.get(col)?.get_long()?))
+    }
+
     /// Get an interned symbol from a symbol column, avoiding per-row String allocation.
     ///
     /// Accesses the underlying `Vec<String>` directly and interns the `&str`,
@@ -259,184 +267,81 @@ impl KdbExt for K {
 
 /// Trait for deserializing KDB row data into Rust types.
 ///
-/// Implementors should extract fields from the row using indexed column access.
-/// The `columns` parameter provides column names for reference.
+/// Implementors extract fields from the row using indexed column access and return
+/// a `(NanoTime, Self)` tuple — the time is owned by the implementation rather than
+/// the adapter, giving full control over which column carries the timestamp.
 ///
-/// **IMPORTANT**: Do NOT extract the time column in your implementation. Time is
-/// automatically extracted by the adapter and propagated through the graph as part
-/// of the `(NanoTime, T)` tuple. Your struct should only contain business data.
+/// Use [`Row::get_timestamp`] to extract a KDB timestamp column as [`NanoTime`].
 pub trait KdbDeserialize: Sized {
-    /// Deserialize a KDB row into Self.
+    /// Deserialize a KDB row into `(NanoTime, Self)`.
     ///
     /// # Arguments
     /// * `row` - Row accessor providing indexed access to column values
     /// * `columns` - Column names from the table schema
     /// * `interner` - Symbol interner for deduplicating symbol strings via [`Row::get_sym`]
-    ///
-    /// # Note
-    /// Skip the time column - it's handled automatically by the adapter.
     fn from_kdb_row(
         row: Row<'_>,
         columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError>;
+    ) -> Result<(NanoTime, Self), KdbError>;
 }
 
 /// Core streaming loop driven by a caller-supplied query closure.
 ///
-/// Calls `query_fn(last_count)` before each chunk:
-/// - `None` on the first call
-/// - `Some(n)` on subsequent calls, where `n` is the row count returned by the previous query
-///
-/// Returns `None` to stop, or `Some(query_string)` to execute next.
-/// Also stops automatically when a query returns 0 rows.
+/// Calls `query_fn()` before each chunk. Returns `None` to stop, or
+/// `Some(query_string)` to execute next.
 ///
 /// `prev_time` is reset each chunk so time-of-day columns work correctly when
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    time_col: String,
-    mut query_fn: impl FnMut(Option<usize>) -> Option<String> + Send + 'static,
+    mut query_fn: impl FnMut() -> Option<String> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
     T: KdbDeserialize + Send + 'static,
 {
     async_stream::stream! {
-        let mut last_count: Option<usize> = None;
         let mut interner = SymbolInterner::default();
 
-        while let Some(query) = query_fn(last_count) {
+        'outer: while let Some(query) = query_fn() {
             info!("KDB query: {}", query);
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
                 Ok(r) => r,
-                Err(e) => {
-                    yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", query)));
-                    break;
-                }
+                Err(e) => { yield Err(e.into()); break; }
             };
 
             let (columns, rows) = match (result.column_names(), result.rows()) {
                 (Ok(cols), Ok(rows)) => (cols, rows),
-                (Err(e), _) | (_, Err(e)) => {
-                    yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", query, e));
-                    break;
-                }
+                (Err(e), _) | (_, Err(e)) => { yield Err(e); break; }
             };
 
             let row_count = rows.len();
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
-            let time_col_idx = match columns.iter().position(|c| c == &time_col) {
-                Some(idx) => idx,
-                None => {
-                    yield Err(anyhow::anyhow!(
-                        "time column '{}' not found in result columns: {:?}",
-                        time_col, columns
-                    ));
-                    break;
-                }
-            };
-
-            let mut prev_time: Option<i64> = None;
-            let mut row_error = false;
+            let mut prev_time: Option<NanoTime> = None;
             for row in &rows {
-                let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!("failed to extract time from KDB row: {}", query)));
-                        row_error = true;
-                        break;
-                    }
+                let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
+                    Ok(r) => r,
+                    Err(e) => { yield Err(e.into()); break 'outer; }
                 };
 
                 if let Some(prev) = prev_time
-                    && time_kdb < prev
+                    && time < prev
                 {
                     yield Err(anyhow::anyhow!(
-                        "KDB data is not sorted by time column '{}': got {} after {}. \
-                        Add `{} xasc` to your query to sort the data.\nQuery: {}",
-                        time_col, time_kdb, prev, time_col, query
+                        "KDB data is not sorted by time: got {:?} after {:?}. \
+                        Add `xasc` to your query to sort the data.",
+                        time, prev
                     ));
-                    row_error = true;
-                    break;
+                    break 'outer;
                 }
-                prev_time = Some(time_kdb);
-
-                let time = NanoTime::from_kdb_timestamp(time_kdb);
-
-                let record = match T::from_kdb_row(row, &columns, &mut interner) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!("KDB deserialization failed: {}", query)));
-                        row_error = true;
-                        break;
-                    }
-                };
+                prev_time = Some(time);
 
                 yield Ok((time, record));
             }
-            if row_error {
-                break;
-            }
-
-            last_count = Some(row_count);
         }
     }
-}
-
-/// Stream data from KDB+ using a caller-supplied query closure for full control over
-/// chunking strategy.
-///
-/// The closure receives `Option<usize>`:
-/// - `None` on the first call — return the initial query
-/// - `Some(n)` after each chunk — `n` is the row count from the last query
-///
-/// Return `Some(query_string)` to execute the next chunk, or `None` to stop.
-/// A query that returns 0 rows calls the closure with `Some(0)` — the closure
-/// decides whether to stop (return `None`) or skip ahead (return another query).
-///
-/// Use this directly when you need query-level control, such as advancing through date
-/// partitions:
-///
-/// ```ignore
-/// let dates = vec!["2024.01.01", "2024.01.02"];
-/// let chunk = 10_000usize;
-/// let mut di = 0usize;
-/// let mut offset = 0usize;
-///
-/// kdb_read_chunks::<Trade, _>(conn, move |last_count| {
-///     match last_count {
-///         None => {}
-///         Some(n) if n < chunk => { di += 1; offset = 0; } // date exhausted, advance
-///         Some(n) => { offset += n; }                       // more on this date
-///     }
-///     if di >= dates.len() { return None; }
-///     Some(format!("select[{},{}] from trades where date={}", offset, chunk, dates[di]))
-/// }, "time")
-/// ```
-#[must_use]
-pub fn kdb_read_chunks<T, F>(
-    connection: KdbConnection,
-    query_fn: F,
-    time_col: &str,
-) -> Rc<dyn Stream<Burst<T>>>
-where
-    T: Element + Send + KdbDeserialize + 'static,
-    F: FnMut(Option<usize>) -> Option<String> + Send + 'static,
-{
-    let time_col = time_col.to_string();
-    produce_async(move |_ctx| async move {
-        let creds = connection.credentials_string();
-        let socket = QStream::connect(
-            ConnectionMethod::TCP,
-            &connection.host,
-            connection.port,
-            &creds,
-        )
-        .await?;
-        Ok(chunk_stream::<T>(socket, time_col, query_fn))
-    })
 }
 
 fn compute_time_slices(
@@ -451,7 +356,9 @@ fn compute_time_slices(
     let end_kdb = end_time.to_kdb_timestamp();
 
     let start_day = start_kdb.div_euclid(DAY_NANOS);
-    let end_day = end_kdb.div_euclid(DAY_NANOS);
+    // Subtract 1 before dividing so that an end_time that falls exactly on midnight
+    // does not pull in an extra (empty) day. start_time is always > 0 so end_kdb >= 1.
+    let end_day = (end_kdb - 1).div_euclid(DAY_NANOS);
 
     let mut result = Vec::new();
 
@@ -460,7 +367,13 @@ fn compute_time_slices(
         let midnight_kdb = day * DAY_NANOS;
         let next_midnight_kdb = midnight_kdb + DAY_NANOS;
 
-        let mut iteration = 0usize;
+        // For the first day, begin at the period boundary that contains start_time
+        // rather than always starting at midnight.
+        let mut iteration = if day == start_day {
+            ((start_kdb - midnight_kdb) / period_nanos) as usize
+        } else {
+            0
+        };
 
         loop {
             // Half-open intervals [t0, t1): caller uses `time >= t0, time < t1`.
@@ -497,13 +410,11 @@ pub fn kdb_read<T, F>(
     connection: KdbConnection,
     period: std::time::Duration,
     query_fn: F,
-    time_col: &str,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
     F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
-    let time_col = time_col.to_string();
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
         let end_time_result = ctx.end_time();
@@ -539,18 +450,14 @@ where
             )
             .await?;
 
-            // Convert the slice-based iteration into the Option<usize> protocol that
-            // chunk_stream expects. The row count from the previous query is ignored —
-            // we always advance to the next slice unconditionally.
-            // The stream stops when slices are exhausted.
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move |_last_count: Option<usize>| -> Option<String> {
+            let slice_fn = move || -> Option<String> {
                 let (within, date, iteration) = slices_iter.next()?;
                 Some(query_fn(within, date, iteration))
             };
 
-            Ok(chunk_stream::<T>(socket, time_col, slice_fn))
+            Ok(chunk_stream::<T>(socket, slice_fn))
         }
     })
 }
@@ -682,6 +589,104 @@ mod tests {
         assert_eq!(slices[3].2, 1);
     }
 
+    /// Start at 23:59:30 on day 0, end at 23:59:59 — only the tail of the day.
+    ///
+    /// The function must not generate slices from midnight; it should begin at
+    /// the period boundary that contains `start_time`.
+    ///
+    /// Expected slice counts:
+    /// - 60s period → 1 slice  [23:59:00, 00:00:00)  iteration 1439
+    /// - 30s period → 1 slice  [23:59:30, 00:00:00)  iteration 2879
+    /// - 10s period → 3 slices [23:59:30, 23:59:40), [23:59:40, 23:59:50), [23:59:50, 00:00:00)
+    #[test]
+    fn test_compute_time_slices_mid_day_start() {
+        // 23:59:30 = 86370 seconds from midnight in KDB nanos
+        const SECS_23_59_30: i64 = 86_370 * 1_000_000_000;
+        const SECS_23_59_59: i64 = 86_399 * 1_000_000_000;
+        const DAY_NANOS: i64 = 86_400_000_000_000;
+
+        let start = NanoTime::from_kdb_timestamp(SECS_23_59_30);
+        let end = NanoTime::from_kdb_timestamp(SECS_23_59_59);
+        let next_midnight = NanoTime::from_kdb_timestamp(DAY_NANOS);
+
+        // --- 60s period: one slice [23:59:00, 00:00:00), iteration 1439 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(60));
+        assert_eq!(
+            slices.len(),
+            1,
+            "60s: expected 1 slice, got {}",
+            slices.len()
+        );
+        let (t0, t1) = slices[0].0;
+        assert_eq!(
+            t0,
+            NanoTime::from_kdb_timestamp(86_340 * 1_000_000_000),
+            "60s: t0 should be 23:59:00"
+        );
+        assert_eq!(t1, next_midnight, "60s: t1 should be midnight");
+        assert_eq!(slices[0].2, 1439, "60s: iteration should be 1439");
+
+        // --- 30s period: one slice [23:59:30, 00:00:00), iteration 2879 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(30));
+        assert_eq!(
+            slices.len(),
+            1,
+            "30s: expected 1 slice, got {}",
+            slices.len()
+        );
+        let (t0, t1) = slices[0].0;
+        assert_eq!(t0, start, "30s: t0 should be 23:59:30");
+        assert_eq!(t1, next_midnight, "30s: t1 should be midnight");
+        assert_eq!(slices[0].2, 2879, "30s: iteration should be 2879");
+
+        // --- 10s period: three slices starting at 23:59:30 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(10));
+        assert_eq!(
+            slices.len(),
+            3,
+            "10s: expected 3 slices, got {}",
+            slices.len()
+        );
+        assert_eq!(slices[0].0.0, start, "10s: first t0 should be 23:59:30");
+        assert_eq!(
+            slices[0].0.1,
+            NanoTime::from_kdb_timestamp(86_380 * 1_000_000_000),
+            "10s: first t1 should be 23:59:40"
+        );
+        assert_eq!(
+            slices[1].0.0,
+            NanoTime::from_kdb_timestamp(86_380 * 1_000_000_000),
+            "10s: second t0 should be 23:59:40"
+        );
+        assert_eq!(
+            slices[2].0.1, next_midnight,
+            "10s: last t1 should be midnight"
+        );
+        assert_eq!(slices[0].2, 8637, "10s: first iteration should be 8637");
+    }
+
+    /// When `end_time` lands exactly on a midnight boundary (the common case when
+    /// `RunFor::Duration` is a whole number of days from the KDB epoch), no extra
+    /// empty slice for the following day should be generated.
+    #[test]
+    fn test_compute_time_slices_exact_midnight_boundary() {
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(8 * 3600); // 3 slices per day
+
+        // Exactly next midnight — what RunFor::Duration(86400s) produces when start = epoch.
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS);
+        let slices = compute_time_slices(epoch, end, period);
+        assert_eq!(
+            slices.len(),
+            3,
+            "exact midnight end should yield 3 slices (day 0 only), got {}",
+            slices.len()
+        );
+        for &(_, date, _) in &slices {
+            assert_eq!(date, 0, "all slices should be on day 0");
+        }
+    }
+
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
     /// supported KDB column type:
     ///
@@ -719,21 +724,25 @@ mod tests {
                 row: Row<'_>,
                 _columns: &[String],
                 interner: &mut SymbolInterner,
-            ) -> Result<Self, KdbError> {
-                Ok(AllTypesRecord {
-                    date: row.get(0)?.get_int()?,
-                    timestamp: row.get(1)?.get_long()?,
-                    int_val: row.get(2)?.get_int()?,
-                    float_val: row.get(3)?.get_float()?,
-                    sym: row.get_sym(4, interner)?.to_string(),
-                    // col 5: COMPOUND_LIST[STRING] — element_at returns the STRING K;
-                    // as_string() extracts the &str directly from its internal symbol storage.
-                    string_val: row.get(5)?.as_string()?.to_string(),
-                    // col 6: COMPOUND_LIST[INT_LIST] — element_at returns the INT_LIST K
-                    vec_int: row.get(6)?.as_vec::<i32>()?.to_vec(),
-                    // col 7: COMPOUND_LIST[FLOAT_LIST] — element_at returns the FLOAT_LIST K
-                    vec_float: row.get(7)?.as_vec::<f64>()?.to_vec(),
-                })
+            ) -> Result<(NanoTime, Self), KdbError> {
+                let time = row.get_timestamp(1)?;
+                Ok((
+                    time,
+                    AllTypesRecord {
+                        date: row.get(0)?.get_int()?,
+                        timestamp: row.get(1)?.get_long()?,
+                        int_val: row.get(2)?.get_int()?,
+                        float_val: row.get(3)?.get_float()?,
+                        sym: row.get_sym(4, interner)?.to_string(),
+                        // col 5: COMPOUND_LIST[STRING] — element_at returns the STRING K;
+                        // as_string() extracts the &str directly from its internal symbol storage.
+                        string_val: row.get(5)?.as_string()?.to_string(),
+                        // col 6: COMPOUND_LIST[INT_LIST] — element_at returns the INT_LIST K
+                        vec_int: row.get(6)?.as_vec::<i32>()?.to_vec(),
+                        // col 7: COMPOUND_LIST[FLOAT_LIST] — element_at returns the FLOAT_LIST K
+                        vec_float: row.get(7)?.as_vec::<f64>()?.to_vec(),
+                    },
+                ))
             }
         }
 
@@ -802,7 +811,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
 
         let mut interner = SymbolInterner::default();
-        let record =
+        let (_, record) =
             AllTypesRecord::from_kdb_row(rows.get(0).unwrap(), &[], &mut interner).unwrap();
 
         assert_eq!(record.date, kdb_date);

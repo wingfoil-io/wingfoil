@@ -102,7 +102,8 @@ class TestKdbRead(unittest.TestCase):
             time_col="time",
             chunk_size=10000,
         ).collect()
-        stream.run(realtime=False)
+        # start=2000-01-01 00:00:00 UTC (Unix seconds), duration=1 day
+        stream.run(realtime=False, start=946684800.0, duration=86400.0)
         rows = stream.peek_value()
 
         self.assertIsInstance(rows, list)
@@ -140,7 +141,7 @@ class TestKdbWrite(unittest.TestCase):
             port=PORT,
             table=write_table,
             columns=[("sym", "symbol"), ("price", "float"), ("qty", "long")],
-        ).run(realtime=False, cycles=1)
+        ).run(realtime=False, start=946684800.0, cycles=1)
 
         stream = kdb_read(
             host=HOST,
@@ -149,7 +150,8 @@ class TestKdbWrite(unittest.TestCase):
             time_col="time",
             chunk_size=10000,
         ).collect()
-        stream.run(realtime=False)
+        # start=2000-01-01 00:00:00 UTC (Unix seconds), duration=1 day
+        stream.run(realtime=False, start=946684800.0, duration=86400.0)
         rows = stream.peek_value()
 
         self.assertGreaterEqual(len(rows), 1)

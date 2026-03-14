@@ -32,19 +32,6 @@ To delete the records and reset the example:
 delete from `test_trades
 ```
 
-## Query Details
-
-The query used is:
-```q
-`time xasc select from test_trades
-```
-
-The explicit sorting is only needed if the data is written unordered.
-For this example, we could have used:
-```q
-select from test_trades
-```
-
 ## Code
 
 ```rust
@@ -68,12 +55,13 @@ impl KdbDeserialize for Trade {
         row: Row<'_>,
         _columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(Trade {
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((time, Trade {
             sym: row.get_sym(1, interner)?,
             price: OrderedFloat(row.get(2)?.get_float()?),
             qty: row.get(3)?.get_long()?,
-        })
+        }))
     }
 }
 
@@ -107,27 +95,27 @@ fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
-    let time_col = "time";
-    let query = format!("`time xasc select from {table}");
-    let chunk = 10000;
     let num_rows = 10;
-    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
-    let run_for = RunFor::Forever;
+    let run_mode = RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0));
+    let run_for = RunFor::Duration(std::time::Duration::from_secs(11));
     // Write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
     // Read
-    let mut offset = 0usize;
-    let read = kdb_read_chunks::<Trade, _>(conn, move |last_count| {
-        match last_count {
-            None => {}
-            Some(n) if n < chunk => return None,
-            Some(n) => offset += n,
-        }
-        Some(format!("select[{},{}] from {}", offset, chunk, table))
-    }, time_col);
+    let read = kdb_read::<Trade, _>(
+        conn,
+        std::time::Duration::from_secs(86400),
+        move |(t0, t1), _date, _iter| {
+            format!(
+                "select from {} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+                table,
+                t0.to_kdb_timestamp(),
+                t1.to_kdb_timestamp()
+            )
+        },
+    );
     // Validate
     let check = validate(baseline, read);
     Graph::new(check, run_mode, run_for).run()?;

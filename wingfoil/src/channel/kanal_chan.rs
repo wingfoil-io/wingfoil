@@ -36,10 +36,13 @@ pub(crate) struct ChannelReceiver<T: Element + Send> {
 
 impl<T: Element + Send> ChannelReceiver<T> {
     pub fn try_recv(&self) -> Option<Message<T>> {
-        self.kanal_receiver.try_recv().unwrap()
+        match self.kanal_receiver.try_recv() {
+            Ok(msg) => msg,
+            Err(_) => Some(Message::EndOfStream), // channel closed by sender
+        }
     }
     pub fn recv(&self) -> Message<T> {
-        self.kanal_receiver.recv().unwrap()
+        self.kanal_receiver.recv().unwrap_or(Message::EndOfStream)
     }
     pub fn teardown(&self) {
         for _ in 0..100 {

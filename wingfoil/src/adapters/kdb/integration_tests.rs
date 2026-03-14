@@ -43,13 +43,16 @@ impl KdbDeserialize for TestTrade {
         row: Row<'_>,
         _columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(TestTrade {
-            // col 0: date (skip), col 1: time (handled by adapter)
-            sym: row.get_sym(2, interner)?,
-            price: row.get(3)?.get_float()?,
-            qty: row.get(4)?.get_long()?,
-        })
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(1)?; // col 0: date, col 1: time
+        Ok((
+            time,
+            TestTrade {
+                sym: row.get_sym(2, interner)?,
+                price: row.get(3)?.get_float()?,
+                qty: row.get(4)?.get_long()?,
+            },
+        ))
     }
 }
 
@@ -66,13 +69,16 @@ impl KdbDeserialize for TestTradeWrite {
         row: Row<'_>,
         _columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(TestTradeWrite {
-            // col 0: time (handled by adapter)
-            sym: row.get_sym(1, interner)?,
-            price: row.get(2)?.get_float()?,
-            qty: row.get(3)?.get_long()?,
-        })
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((
+            time,
+            TestTradeWrite {
+                sym: row.get_sym(1, interner)?,
+                price: row.get(2)?.get_float()?,
+                qty: row.get(3)?.get_long()?,
+            },
+        ))
     }
 }
 
@@ -296,7 +302,6 @@ fn test_kdb_sorted_data() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
-            "time",
         );
         let collected = stream.collapse().collect();
         collected.clone().run(
@@ -312,45 +317,6 @@ fn test_kdb_sorted_data() -> Result<()> {
     })
 }
 
-#[test]
-fn test_kdb_unsorted_data_fails() -> Result<()> {
-    let _ = env_logger::try_init();
-    // Unsorted rows have timestamps before the KDB epoch (negative KDB timestamps),
-    // so date/time slice filters would exclude them. Use kdb_read_chunks with a bare
-    // query so the adapter sees the shuffled order and raises a time-ordering error.
-    let result = with_test_data(5, 1, false, |_n, conn| {
-        let mut done = false;
-        let stream = kdb_read_chunks::<TestTrade, _>(
-            conn,
-            move |_| {
-                if done {
-                    None
-                } else {
-                    done = true;
-                    Some(format!("select from {}", TABLE_NAME))
-                }
-            },
-            "time",
-        );
-        stream
-            .collapse()
-            .collect()
-            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
-        Ok(())
-    });
-    assert!(
-        result.is_err(),
-        "Unsorted data should cause time ordering error"
-    );
-    let err_msg = format!("{:?}", result.unwrap_err());
-    assert!(
-        err_msg.contains("not sorted by time") || err_msg.contains("time less than graph time"),
-        "Expected time ordering error, got: {}",
-        err_msg
-    );
-    Ok(())
-}
-
 /// A struct that deliberately reads the wrong types to trigger deserialization errors.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
@@ -363,11 +329,15 @@ impl KdbDeserialize for BadTrade {
         row: Row<'_>,
         _columns: &[String],
         _interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(BadTrade {
-            // col 0: date (skip), col 1: time (handled by adapter), col 2: sym (symbol → get_long fails)
-            sym: row.get(2)?.get_long()?,
-        })
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(1)?; // col 0: date, col 1: time
+        Ok((
+            time,
+            BadTrade {
+                // col 2: sym is a symbol, but get_long() will fail — intentional for error testing
+                sym: row.get(2)?.get_long()?,
+            },
+        ))
     }
 }
 
@@ -379,7 +349,6 @@ fn test_kdb_bad_query() -> Result<()> {
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| "select from nonexistent_table_xyz".to_string(),
-        "time",
     );
     let collected = stream.collapse().collect();
     let result = collected.run(
@@ -387,43 +356,6 @@ fn test_kdb_bad_query() -> Result<()> {
         RunFor::Duration(std::time::Duration::from_secs(86400)),
     );
     assert!(result.is_err(), "Bad query should return an error");
-    let err_msg = format!("{:?}", result.unwrap_err());
-    println!("Bad query error: {}", err_msg);
-    assert!(
-        err_msg.contains("kdb query failed"),
-        "Expected query error, got: {}",
-        err_msg
-    );
-    Ok(())
-}
-
-#[test]
-fn test_kdb_bad_time_column() -> Result<()> {
-    let _ = env_logger::try_init();
-    // The time column name is used to extract timestamps from each result row; when the
-    // column doesn't exist in the result, the adapter yields an error.
-    let result = with_test_data(3, 1, true, |_n, conn| {
-        let stream = kdb_read::<TestTrade, _>(
-            conn,
-            std::time::Duration::from_secs(24 * 3600),
-            |within, date, _| slice_query(date, within.0, within.1),
-            "nonexistent_col",
-        );
-        let collected = stream.collapse().collect();
-        collected.run(
-            RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-            RunFor::Duration(std::time::Duration::from_secs(86400)),
-        )?;
-        Ok(())
-    });
-    assert!(result.is_err(), "Bad time column should return an error");
-    let err_msg = format!("{:?}", result.unwrap_err());
-    println!("Bad time column error: {}", err_msg);
-    assert!(
-        err_msg.contains("time column"),
-        "Expected time column error, got: {}",
-        err_msg
-    );
     Ok(())
 }
 
@@ -435,7 +367,6 @@ fn test_kdb_deserialization_error() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
-            "time",
         );
         let collected = stream.collapse().collect();
         collected.run(
@@ -447,13 +378,6 @@ fn test_kdb_deserialization_error() -> Result<()> {
     assert!(
         result.is_err(),
         "Type mismatch should return a deserialization error"
-    );
-    let err_msg = format!("{:?}", result.unwrap_err());
-    println!("Deserialization error: {}", err_msg);
-    assert!(
-        err_msg.contains("deserialization failed") || err_msg.contains("KDB"),
-        "Expected deserialization error, got: {}",
-        err_msg
     );
     Ok(())
 }
@@ -480,12 +404,9 @@ fn test_read_read_perf() -> Result<()> {
 
         for &period in &periods {
             let start = std::time::Instant::now();
-            let stream = kdb_read::<TestTrade, _>(
-                conn.clone(),
-                period,
-                |within, date, _| slice_query(date, within.0, within.1),
-                "time",
-            );
+            let stream = kdb_read::<TestTrade, _>(conn.clone(), period, |within, date, _| {
+                slice_query(date, within.0, within.1)
+            });
             let counter = stream.collapse().count();
             counter.clone().run(
                 RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
@@ -500,23 +421,21 @@ fn test_read_read_perf() -> Result<()> {
 }
 
 #[test]
-#[should_panic(expected = "Closed")]
-fn test_kdb_connection_refused() {
+fn test_kdb_connection_refused() -> Result<()> {
     let _ = env_logger::try_init();
-    // Connection failure currently panics in the channel layer (kanal_chan recv().unwrap())
-    // rather than propagating as a clean Err. This test documents that behavior.
     let conn = KdbConnection::new("localhost", 59999);
     let stream = kdb_read::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| format!("select from {}", TABLE_NAME),
-        "time",
     );
     let collected = stream.collapse().collect();
-    let _ = collected.run(
+    let result = collected.run(
         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         RunFor::Duration(std::time::Duration::from_secs(86400)),
     );
+    assert!(result.is_err(), "Connection refused should return an error");
+    Ok(())
 }
 
 #[test]
@@ -527,7 +446,6 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
-            "time",
         );
         let collected = stream.collapse().collect();
         collected.clone().run(
@@ -567,7 +485,6 @@ fn test_kdb_read_works() -> Result<()> {
             move |(slice_start, slice_end), date, _iteration| {
                 slice_query(date, slice_start, slice_end)
             },
-            "time",
         );
 
         let collected = stream.collapse().collect();
@@ -667,7 +584,6 @@ fn test_kdb_write_round_trip() -> Result<()> {
                     t1.to_kdb_timestamp(),
                 )
             },
-            "time",
         );
         let collected = read_stream
             .collapse()

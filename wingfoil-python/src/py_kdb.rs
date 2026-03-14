@@ -11,9 +11,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use futures::StreamExt;
-use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::ipc::{ConnectionMethod, QStream};
+use kdb_plus_fixed::qtype;
 use wingfoil::adapters::kdb::*;
-use wingfoil::{Burst, FutStream, Node, Stream, StreamOperators};
+use wingfoil::{Burst, FutStream, NanoTime, Node, Stream, StreamOperators};
 
 /// A deserialized KDB row stored as column name/value pairs.
 /// Each row becomes a Python dict.
@@ -57,31 +58,37 @@ impl KdbDeserialize for PyKdbRow {
         row: Row<'_>,
         columns: &[String],
         _interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        let mut result = Vec::with_capacity(columns.len() - 1);
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
 
-        // Skip column 0 (time) - handled by adapter
+        let mut result = Vec::with_capacity(columns.len() - 1);
+        // Skip column 0 (time) — guaranteed first by xcols in the query wrapper.
         for (i, col_name) in columns.iter().enumerate().skip(1) {
             let k = row.get(i)?;
-            let value = if let Ok(v) = k.get_long() {
-                PyKdbValue::Long(v)
-            } else if let Ok(v) = k.get_float() {
-                PyKdbValue::Float(v)
-            } else if let Ok(v) = k.get_symbol() {
-                PyKdbValue::Symbol(v.to_string())
-            } else if let Ok(v) = k.get_bool() {
-                PyKdbValue::Bool(v)
-            } else if let Ok(v) = k.get_int() {
-                PyKdbValue::Int(v)
-            } else if let Ok(v) = k.get_real() {
-                PyKdbValue::Real(v)
-            } else {
-                PyKdbValue::Symbol(format!("{:?}", k))
+            let value = match k.get_type() {
+                qtype::LONG_ATOM => PyKdbValue::Long(k.get_long()?),
+                qtype::FLOAT_ATOM => PyKdbValue::Float(k.get_float()?),
+                qtype::SYMBOL_ATOM => PyKdbValue::Symbol(k.get_symbol()?.to_string()),
+                qtype::BOOL_ATOM => PyKdbValue::Bool(k.get_bool()?),
+                qtype::INT_ATOM => PyKdbValue::Int(k.get_int()?),
+                qtype::REAL_ATOM => PyKdbValue::Real(k.get_real()?),
+                qtype::SHORT_ATOM => PyKdbValue::Int(k.get_short()? as i32),
+                // Temporal types stored as i64 (nanoseconds since KDB epoch)
+                qtype::TIMESTAMP_ATOM | qtype::TIMESPAN_ATOM => PyKdbValue::Long(k.get_long()?),
+                // Temporal types stored as i32
+                qtype::DATE_ATOM
+                | qtype::MONTH_ATOM
+                | qtype::TIME_ATOM
+                | qtype::MINUTE_ATOM
+                | qtype::SECOND_ATOM => PyKdbValue::Int(k.get_int()?),
+                // Datetime stored as f64 (days since KDB epoch)
+                qtype::DATETIME_ATOM => PyKdbValue::Float(k.get_float()?),
+                _ => PyKdbValue::Symbol(format!("{:?}", k)),
             };
             result.push((col_name.clone(), value));
         }
 
-        Ok(PyKdbRow { columns: result })
+        Ok((time, PyKdbRow { columns: result }))
     }
 }
 
@@ -93,47 +100,37 @@ impl KdbDeserialize for PyKdbRow {
 ///     host: KDB+ server hostname
 ///     port: KDB+ server port
 ///     query: q query to execute (e.g. "select from trade")
-///     time_col: Name of the time column for chunking
-///     chunk_size: Maximum rows per query chunk (controls memory usage)
+///     time_col: Name of the time column for time-slice filtering
+///     chunk_size: Duration of each time slice in seconds (default: 3600)
 ///
 /// Returns:
 ///     Stream where each tick yields a dict of {column_name: value}
+///
+/// Requires RunMode::HistoricalFrom with a non-zero start time and RunFor::Duration.
 #[pyfunction]
-#[pyo3(signature = (host, port, query, time_col, chunk_size=10000))]
+#[pyo3(signature = (host, port, query, time_col, chunk_size=3600))]
 pub fn py_kdb_read(
     host: String,
     port: u16,
     query: String,
     time_col: String,
-    chunk_size: usize,
+    chunk_size: u64,
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
-    let mut offset = 0usize;
-    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read_chunks::<PyKdbRow, _>(
+    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read::<PyKdbRow, _>(
         conn,
-        move |last_count| {
-            match last_count {
-                None => {}
-                Some(n) if n < chunk_size => return None,
-                Some(n) => offset += n,
-            }
-            let trimmed = query.trim_start();
-            let paginated = if trimmed
-                .get(..6)
-                .is_some_and(|s| s.eq_ignore_ascii_case("select"))
-            {
-                format!(
-                    "select[{},{}] {}",
-                    offset,
-                    chunk_size,
-                    trimmed[6..].trim_start()
-                )
-            } else {
-                format!("({};{}) sublist {}", offset, chunk_size, query)
-            };
-            Some(paginated)
+        std::time::Duration::from_secs(chunk_size),
+        move |(t0, t1), _date, _iter| {
+            // xcols ensures the time column is always first (col 0) in the result,
+            // regardless of its position in the user's original query.
+            format!(
+                "`{tc} xcols select from ({q}) where {tc} >= (`timestamp$){t0}j, {tc} < (`timestamp$){t1}j",
+                tc = time_col,
+                q = query,
+                t0 = t0.to_kdb_timestamp(),
+                t1 = t1.to_kdb_timestamp(),
+            )
         },
-        &time_col,
     );
 
     // Collapse burst to single row, convert to PyElement (dict)
@@ -209,11 +206,13 @@ async fn py_kdb_write_consumer(
     .await?;
 
     while let Some((time, py_element)) = source.next().await {
-        // Convert NanoTime to proper KDB timestamp
+        // Format the KDB timestamp from NanoTime.
         let naive: NaiveDateTime = time.into();
-        let mut row_values = vec![K::new_timestamp(naive.and_utc())];
+        let ts_str = naive.format("%Y.%m.%dD%H:%M:%S%.9f").to_string();
 
-        // Extract values from Python dict based on column spec
+        // Extract values from Python dict and build q string column fragments.
+        let mut col_frags: Vec<String> = vec![format!("enlist {ts_str}")];
+
         Python::attach(|py| -> anyhow::Result<()> {
             let obj = py_element.as_ref().bind(py);
             let dict: &pyo3::Bound<'_, PyDict> = obj
@@ -225,26 +224,26 @@ async fn py_kdb_write_consumer(
                     .get_item(col_name)?
                     .ok_or_else(|| anyhow::anyhow!("missing column '{}' in dict", col_name))?;
 
-                let k = match col_type.as_str() {
+                let frag = match col_type.as_str() {
                     "symbol" => {
                         let s: String = value.extract()?;
-                        K::new_symbol(s)
+                        format!("enlist`{s}")
                     }
                     "float" => {
                         let f: f64 = value.extract()?;
-                        K::new_float(f)
+                        format!("enlist {f}f")
                     }
                     "long" => {
                         let l: i64 = value.extract()?;
-                        K::new_long(l)
+                        format!("enlist {l}j")
                     }
                     "int" => {
                         let i: i32 = value.extract()?;
-                        K::new_int(i)
+                        format!("enlist {i}i")
                     }
                     "bool" => {
                         let b: bool = value.extract()?;
-                        K::new_bool(b)
+                        format!("enlist {}b", if b { 1 } else { 0 })
                     }
                     other => {
                         anyhow::bail!(
@@ -254,20 +253,21 @@ async fn py_kdb_write_consumer(
                         );
                     }
                 };
-                row_values.push(k);
+                col_frags.push(frag);
             }
             Ok(())
         })?;
 
-        let full_row = K::new_compound_list(row_values);
-
-        let query = K::new_compound_list(vec![
-            K::new_string("insert".to_string(), kdb_plus_fixed::qattribute::NONE),
-            K::new_symbol(table_name.clone()),
-            full_row,
-        ]);
-
-        socket.send_sync_message(&query).await?;
+        // Build and send a q string insert: insert[`table; (enlist ts; enlist `sym; ...)]
+        let q = format!(
+            "insert[`{table_name}; ({cols})]",
+            cols = col_frags.join("; ")
+        );
+        let response = socket.send_sync_message(&q.as_str()).await?;
+        if response.get_type() == kdb_plus_fixed::qtype::ERROR {
+            let msg = response.get_error_string().unwrap_or("unknown").to_string();
+            anyhow::bail!("KDB insert error: {msg}");
+        }
     }
 
     Ok(())

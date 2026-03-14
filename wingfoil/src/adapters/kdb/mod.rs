@@ -17,12 +17,13 @@
 //! }
 //!
 //! impl KdbDeserialize for Trade {
-//!     fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<Self, KdbError> {
-//!         Ok(Trade {
-//!             sym: row.get_sym(1, interner)?,
-//!             price: row.get(2)?.get_float()?,
-//!             size: row.get(3)?.get_long()?,
-//!         })
+//!     fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<(NanoTime, Self), KdbError> {
+//!         let time = row.get_timestamp(1)?; // col 0: date, col 1: time
+//!         Ok((time, Trade {
+//!             sym: row.get_sym(2, interner)?,
+//!             price: row.get(3)?.get_float()?,
+//!             size: row.get(4)?.get_long()?,
+//!         }))
 //!     }
 //! }
 //!
@@ -40,7 +41,6 @@
 //!             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
 //!         )
 //!     },
-//!     "time",
 //! )
 //!     .collapse()
 //!     .map(|trade| trade.price)

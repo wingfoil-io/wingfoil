@@ -20,12 +20,16 @@ impl KdbDeserialize for Trade {
         row: Row<'_>,
         _columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(Trade {
-            sym: row.get_sym(1, interner)?,
-            price: OrderedFloat(row.get(2)?.get_float()?),
-            qty: row.get(3)?.get_long()?,
-        })
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((
+            time,
+            Trade {
+                sym: row.get_sym(1, interner)?,
+                price: OrderedFloat(row.get(2)?.get_float()?),
+                qty: row.get(3)?.get_long()?,
+            },
+        ))
     }
 }
 
@@ -76,29 +80,26 @@ fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
-    let time_col = "time";
-    let chunk = 10000usize;
     let num_rows = 10;
-    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
-    let run_for = RunFor::Forever;
+    let run_mode = RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0));
+    let run_for = RunFor::Duration(std::time::Duration::from_secs(11));
     // write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
-    // read — use kdb_read_chunks with offset-based pagination
-    let mut offset = 0usize;
-    let read = kdb_read_chunks::<Trade, _>(
+    // read — use kdb_read with time-slice filtering
+    let read = kdb_read::<Trade, _>(
         conn,
-        move |last_count| {
-            match last_count {
-                None => {}
-                Some(n) if n < chunk => return None,
-                Some(n) => offset += n,
-            }
-            Some(format!("select[{},{}] from {}", offset, chunk, table))
+        std::time::Duration::from_secs(86400),
+        move |(t0, t1), _date, _iter| {
+            format!(
+                "select from {} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+                table,
+                t0.to_kdb_timestamp(),
+                t1.to_kdb_timestamp()
+            )
         },
-        time_col,
     );
     // tie-out
     let check = validate(baseline, read);
