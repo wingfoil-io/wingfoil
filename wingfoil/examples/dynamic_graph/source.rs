@@ -14,38 +14,54 @@ pub struct Source {
     pub new_instrument: Rc<dyn Stream<Instrument>>,
     /// Fires when an instrument is deleted.
     pub del_instrument: Rc<dyn Stream<Instrument>>,
-    /// Continuous price stream, cycling through instruments.
+    /// Continuous price stream, cycling through instrument IDs.
     pub inst_price: Rc<dyn Stream<(Instrument, Price)>>,
 }
 
-/// Creates a [`Source`] with a fixed lifecycle scenario:
+/// State threaded through the lifecycle [`fold`].
 ///
-/// | Event # | Action        |
-/// |---------|---------------|
-/// | 1       | add  inst0    |
-/// | 2       | add  inst1    |
-/// | 3       | add  inst2    |
-/// | 4       | add  inst3    |
-/// | 5       | delete inst1  |
-/// | 6       | add  inst4    |
+/// Instruments are added sequentially. Every 5th event deletes the oldest
+/// live instrument (if any), producing an unbounded stream of additions and
+/// periodic deletions.
+#[derive(Clone, Debug, Default)]
+struct LifecycleState {
+    /// Counter for naming the next instrument (`inst0`, `inst1`, …).
+    next_id: u64,
+    /// Currently live instruments, in insertion order.
+    live: Vec<Instrument>,
+    /// The event to emit on this tick: `(is_add, instrument)`.
+    event: (bool, Instrument),
+}
+
+/// Creates a [`Source`] driven by two tickers:
 ///
-/// `price_ticker` fires every `period`; `event_ticker` fires every `period * 3`.
-/// `inst_price` cycles through six instrument IDs so per-instrument filters in the
-/// aggregator can route prices to the right subgraph.
+/// - `price_ticker` (every `period`) — continuous price feed
+/// - `event_ticker` (every `period * 3`) — instrument lifecycle
+///
+/// Lifecycle rule: every 5th event tick deletes the oldest live instrument;
+/// all other ticks add a fresh one. The price stream cycles through instrument
+/// IDs; prices for unknown or deleted instruments are silently dropped by the
+/// aggregator's per-instrument filters.
 pub fn source(period: Duration) -> Source {
     let price_ticker = ticker(period);
     let event_ticker = ticker(period * 3);
 
-    let lifecycle: Rc<dyn Stream<(bool, Instrument)>> =
-        event_ticker.count().map(|n: u64| match n {
-            1 => (true, "inst0".to_string()),
-            2 => (true, "inst1".to_string()),
-            3 => (true, "inst2".to_string()),
-            4 => (true, "inst3".to_string()),
-            5 => (false, "inst1".to_string()),
-            6 => (true, "inst4".to_string()),
-            _ => (true, format!("inst{n}")),
-        });
+    let lifecycle: Rc<dyn Stream<(bool, Instrument)>> = event_ticker
+        .count()
+        .fold(|state: &mut LifecycleState, n: u64| {
+            if n % 5 == 0 && !state.live.is_empty() {
+                // Delete the oldest live instrument.
+                let inst = state.live.remove(0);
+                state.event = (false, inst);
+            } else {
+                // Add a fresh instrument.
+                let inst = format!("inst{}", state.next_id);
+                state.next_id += 1;
+                state.live.push(inst.clone());
+                state.event = (true, inst);
+            }
+        })
+        .map(|s| s.event);
 
     let new_instrument = lifecycle
         .clone()
@@ -57,7 +73,7 @@ pub fn source(period: Duration) -> Source {
         .map(|(_, inst)| inst);
 
     let inst_price = price_ticker.count().map(|n: u64| {
-        let id = (n - 1) % 6;
+        let id = (n - 1) % 10;
         (format!("inst{id}"), id as f64 + n as f64 / 100.0)
     });
 
@@ -76,36 +92,35 @@ mod tests {
         collected.iter().map(|v| v.value.clone()).collect()
     }
 
+    /// After 10 event ticks the lifecycle is:
+    ///   adds:    n=1..4, 6..9  → inst0..inst3, inst4..inst7  (8 events)
+    ///   deletes: n=5, 10       → inst0, inst1               (2 events)
     #[test]
     fn source_lifecycle_sequence() {
         let period = std::time::Duration::from_secs(1);
 
-        // Test new instruments. Run 6 event-ticker cycles to cover all 6 lifecycle events.
         let src = source(period);
         let new_insts = src.new_instrument.collect();
         new_insts
             .run(
                 wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-                wingfoil::RunFor::Cycles(6),
+                wingfoil::RunFor::Cycles(10),
             )
             .unwrap();
-        assert_eq!(
-            values(&new_insts.peek_value()),
-            vec!["inst0", "inst1", "inst2", "inst3", "inst4"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>(),
-        );
+        let new_vals = values(&new_insts.peek_value());
+        assert_eq!(new_vals.len(), 8);
+        assert_eq!(new_vals[0], "inst0");
+        assert_eq!(new_vals[7], "inst7");
 
-        // Test del instruments with a fresh source.
         let src = source(period);
         let del_insts = src.del_instrument.collect();
         del_insts
             .run(
                 wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-                wingfoil::RunFor::Cycles(6),
+                wingfoil::RunFor::Cycles(10),
             )
             .unwrap();
-        assert_eq!(values(&del_insts.peek_value()), vec!["inst1".to_string()]);
+        let del_vals = values(&del_insts.peek_value());
+        assert_eq!(del_vals, vec!["inst0".to_string(), "inst1".to_string()]);
     }
 }
