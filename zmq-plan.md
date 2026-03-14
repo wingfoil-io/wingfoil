@@ -10,8 +10,8 @@ Two high-priority issues to fix in `wingfoil/src/adapters/zmq.rs`:
 ### Design
 
 - Add `ZmqEvent<T>` enum (Data or Status) sent through the in-process channel
-- `zmq_sub` internally splits the event stream using `MapFilterStream` and returns `ZmqStreams<T>` directly
-- No custom node types needed — `MapFilterStream` handles the filtering
+- `zmq_sub` internally splits the event stream using `MapFilterStream` and returns a plain tuple `(data_stream, status_stream)`
+- No custom node types, no wrapper struct — `MapFilterStream` handles the filtering
 - Wire protocol is **unchanged** — `Message<T>` still goes over ZMQ; `ZmqEvent` wrapping is purely in-process
 
 ---
@@ -62,17 +62,14 @@ New logic:
 
 ---
 
-### Task 3 — Update zmq_sub to return ZmqStreams<T> directly using MapFilterStream
+### Task 3 — Update zmq_sub to return a tuple using MapFilterStream
 
-No custom node types. Use `MapFilterStream` (from `nodes/map_filter.rs`) which takes `Box<dyn Fn(IN) -> (OUT, bool)>` — the bool controls whether the node ticks.
+No custom node types, no wrapper struct. Use `MapFilterStream` (from `nodes/map_filter.rs`) which takes `Box<dyn Fn(IN) -> (OUT, bool)>` — the bool controls whether the node ticks.
 
 ```rust
-pub struct ZmqStreams<T: Element + Send> {
-    pub data: Rc<dyn Stream<Burst<T>>>,
-    pub status: Rc<dyn Stream<ZmqStatus>>,
-}
-
-pub fn zmq_sub<T: Element + Send + DeserializeOwned>(address: &str) -> ZmqStreams<T> {
+pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
+    address: &str,
+) -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<ZmqStatus>>) {
     let events: Rc<dyn Stream<Burst<ZmqEvent<T>>>> = {
         let subscriber = ZeroMqSubscriber::new(address.to_string());
         ReceiverStream::new(move |s| subscriber.run(s), true).into_stream()
@@ -92,16 +89,14 @@ pub fn zmq_sub<T: Element + Send + DeserializeOwned>(address: &str) -> ZmqStream
             None => (ZmqStatus::default(), false),
         }
     })).into_stream();
-    ZmqStreams { data, status }
+    (data, status)
 }
 ```
 
-Call sites destructure with field names:
+Call sites:
 ```rust
-let ZmqStreams { data, status } = zmq_sub::<u64>(address);
+let (data, status) = zmq_sub::<u64>(address);
 ```
-
-`ZmqUnpack` trait is **not needed** — `zmq_sub` returns split streams directly.
 
 ---
 
@@ -131,8 +126,8 @@ fn zmq_first_message_not_dropped() {
     let port = 5560;
     let address = format!("tcp://127.0.0.1:{port}");
     let run_for = RunFor::Duration(period * 15);
-    let recv_node = zmq_sub::<u64>(&address)
-        .data
+    let (data, _status) = zmq_sub::<u64>(&address);
+    let recv_node = data
         .collect()
         .finally(|res, _| {
             let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
@@ -160,7 +155,7 @@ fn zmq_reports_connected_status() {
     let port = 5561;
     let address = format!("tcp://127.0.0.1:{port}");
     let run_for = RunFor::Duration(period * 10);
-    let ZmqStreams { data, status } = zmq_sub::<u64>(&address);
+    let (data, status) = zmq_sub::<u64>(&address);
     let data_node = data.collect().finally(|res, _| {
         let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
         assert!(!values.is_empty(), "no data received");
@@ -181,18 +176,17 @@ fn zmq_reports_connected_status() {
 
 ### Task 7 — Update existing tests
 
-1. Update `receiver()` helper — `zmq_sub` now returns `ZmqStreams`, access `.data`:
+1. Update `receiver()` helper — `zmq_sub` now returns a tuple, destructure it:
    ```rust
    fn receiver(address: &str) -> Rc<dyn Node> {
-       zmq_sub::<u64>(address)
-           .data
-           .logged("sub", Info)
+       let (data, _status) = zmq_sub::<u64>(address);
+       data.logged("sub", Info)
            .collect()
            .finally(|res, _| { /* unchanged */ })
    }
    ```
 2. `zmq_pub_historical_mode_fails` — no changes (uses `sender()` / `ZeroMqPub`)
-3. `zmq_sub_historical_mode_fails` — needs update: `zmq_sub` no longer returns `Rc<dyn Stream<...>>` directly, so `.as_node()` won't work. Use `.data.as_node()` or `.status.as_node()` instead.
+3. `zmq_sub_historical_mode_fails` — needs update: `zmq_sub` no longer returns `Rc<dyn Stream<...>>` directly, so `.as_node()` won't work. Use `zmq_sub(...).0.as_node()` instead.
 4. Remove stale commented-out code blocks (original lines 34–73 and 135–184)
 
 ---
@@ -213,5 +207,4 @@ Watch for: unused imports, dead code on `ZmqEvent` variants, missing derive boun
 - `ZmqEvent::Disconnected` is observable mid-run (e.g. publisher crashes) but not in same-graph shutdown tests
 - All existing test ports (5556–5559) are unchanged; new tests use 5560–5561
 - `ZeroMqPub` trait and `ZeroMqSenderNode` are unchanged
-- `ZmqUnpack` trait eliminated — not needed since `zmq_sub` returns `ZmqStreams` directly
-- `ZmqDataNode` and `ZmqStatusNode` eliminated — `MapFilterStream` covers both cases
+- `ZmqStreams` struct, `ZmqUnpack` trait, `ZmqDataNode`, `ZmqStatusNode` all eliminated — tuple return + `MapFilterStream` is sufficient
