@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use futures::StreamExt;
-use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::ipc::{ConnectionMethod, QStream};
 use kdb_plus_fixed::qtype;
 use wingfoil::adapters::kdb::*;
 use wingfoil::{Burst, FutStream, NanoTime, Node, Stream, StreamOperators};
@@ -206,11 +206,13 @@ async fn py_kdb_write_consumer(
     .await?;
 
     while let Some((time, py_element)) = source.next().await {
-        // Convert NanoTime to proper KDB timestamp
+        // Format the KDB timestamp from NanoTime.
         let naive: NaiveDateTime = time.into();
-        let mut row_values = vec![K::new_timestamp(naive.and_utc())];
+        let ts_str = naive.format("%Y.%m.%dD%H:%M:%S%.9f").to_string();
 
-        // Extract values from Python dict based on column spec
+        // Extract values from Python dict and build q string column fragments.
+        let mut col_frags: Vec<String> = vec![format!("enlist {ts_str}")];
+
         Python::attach(|py| -> anyhow::Result<()> {
             let obj = py_element.as_ref().bind(py);
             let dict: &pyo3::Bound<'_, PyDict> = obj
@@ -222,26 +224,26 @@ async fn py_kdb_write_consumer(
                     .get_item(col_name)?
                     .ok_or_else(|| anyhow::anyhow!("missing column '{}' in dict", col_name))?;
 
-                let k = match col_type.as_str() {
+                let frag = match col_type.as_str() {
                     "symbol" => {
                         let s: String = value.extract()?;
-                        K::new_symbol(s)
+                        format!("enlist`{s}")
                     }
                     "float" => {
                         let f: f64 = value.extract()?;
-                        K::new_float(f)
+                        format!("enlist {f}f")
                     }
                     "long" => {
                         let l: i64 = value.extract()?;
-                        K::new_long(l)
+                        format!("enlist {l}j")
                     }
                     "int" => {
                         let i: i32 = value.extract()?;
-                        K::new_int(i)
+                        format!("enlist {i}i")
                     }
                     "bool" => {
                         let b: bool = value.extract()?;
-                        K::new_bool(b)
+                        format!("enlist {}b", if b { 1 } else { 0 })
                     }
                     other => {
                         anyhow::bail!(
@@ -251,20 +253,21 @@ async fn py_kdb_write_consumer(
                         );
                     }
                 };
-                row_values.push(k);
+                col_frags.push(frag);
             }
             Ok(())
         })?;
 
-        let full_row = K::new_compound_list(row_values);
-
-        let query = K::new_compound_list(vec![
-            K::new_symbol("insert".to_string()),
-            K::new_symbol(table_name.clone()),
-            full_row,
-        ]);
-
-        socket.send_sync_message(&query).await?;
+        // Build and send a q string insert: insert[`table; (enlist ts; enlist `sym; ...)]
+        let q = format!(
+            "insert[`{table_name}; ({cols})]",
+            cols = col_frags.join("; ")
+        );
+        let response = socket.send_sync_message(&q.as_str()).await?;
+        if response.get_type() == kdb_plus_fixed::qtype::ERROR {
+            let msg = response.get_error_string().unwrap_or("unknown").to_string();
+            anyhow::bail!("KDB insert error: {msg}");
+        }
     }
 
     Ok(())

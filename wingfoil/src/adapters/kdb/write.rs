@@ -6,6 +6,7 @@ use crate::types::*;
 use chrono::NaiveDateTime;
 use futures::StreamExt;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::qtype;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -119,26 +120,22 @@ where
     )
     .await?;
 
-    // Pre-build the reusable insert query components.
-    // `insert` must be a symbol, not a string, for the KDB+ functional query form.
-    let insert_k = K::new_symbol("insert".to_string());
-    let table_k = K::new_symbol(table_name);
-
     // Process incoming bursts
     while let Some((time, batch)) = source.next().await {
-        // Compute timestamp once per burst — all records in a burst share the same time.
+        // Compute timestamp string once per burst — all records share the same time.
         let naive: NaiveDateTime = time.into();
-        let kdb_time = K::new_timestamp(naive.and_utc());
+        let ts_str = naive.format("%Y.%m.%dD%H:%M:%S%.9f").to_string();
 
         // Serialize every record in the burst (time prepended, business fields appended).
         let serialized: Vec<Vec<K>> = batch
             .into_iter()
             .map(|record| {
-                let mut fields = vec![kdb_time.clone()];
-                if let Ok(row_fields) = record.to_kdb_row().as_vec::<K>() {
-                    fields.extend(row_fields.iter().cloned());
-                }
-                fields
+                // Timestamp is tracked separately as a string; to_kdb_row() has business fields.
+                record
+                    .to_kdb_row()
+                    .as_vec::<K>()
+                    .map(|v| v.into_iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
             })
             .collect();
 
@@ -146,23 +143,129 @@ where
             continue;
         }
 
-        // Transpose row-oriented data to column-oriented for a single bulk insert:
-        //   (insert; `table; ((t0;t1;...); (sym0;sym1;...); (price0;price1;...)))
+        // Transpose to column-major and format as q string column fragments.
+        // Time column is pre-formatted; business columns come from KdbSerialize.
+        let n = serialized.len(); // number of rows (1 per burst in typical usage)
         let n_cols = serialized[0].len();
-        let mut columns: Vec<Vec<K>> = (0..n_cols)
-            .map(|_| Vec::with_capacity(serialized.len()))
-            .collect();
+        let mut columns: Vec<Vec<K>> = (0..n_cols).map(|_| Vec::with_capacity(n)).collect();
         for row in serialized {
             for (col_idx, val) in row.into_iter().enumerate() {
                 columns[col_idx].push(val);
             }
         }
-        let data = K::new_compound_list(columns.into_iter().map(K::new_compound_list).collect());
 
-        let query = K::new_compound_list(vec![insert_k.clone(), table_k.clone(), data]);
-        socket.send_sync_message(&query).await?;
+        // Build column q-string fragments with explicit type suffixes.
+        let ts_frag = if n == 1 {
+            format!("enlist {ts_str}")
+        } else {
+            // All rows in a burst share the same timestamp.
+            std::iter::repeat(ts_str.as_str())
+                .take(n)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut col_frags: Vec<String> = vec![ts_frag];
+        for col in columns {
+            col_frags.push(format_kdb_column_q(&col)?);
+        }
+
+        // Send as a q string: insert[`table; (ts_col; sym_col; price_col; qty_col)]
+        let q = format!(
+            "insert[`{table_name}; ({cols})]",
+            cols = col_frags.join("; ")
+        );
+        let response = socket.send_sync_message(&q.as_str()).await?;
+        if response.get_type() == qtype::ERROR {
+            anyhow::bail!(
+                "KDB insert error: {}",
+                response.get_error_string().unwrap_or("unknown")
+            );
+        }
     }
     Ok(())
+}
+
+/// Format a column of same-typed K atoms as a q string fragment with correct type suffixes.
+///
+/// Produces literals like `enlist`AAPL`, `enlist 42.5f`, `enlist 100j`, etc.
+/// For multi-row columns produces space-joined values with a single trailing suffix.
+fn format_kdb_column_q(atoms: &[K]) -> anyhow::Result<String> {
+    if atoms.is_empty() {
+        return Ok("()".to_string());
+    }
+    let col_type = atoms[0].get_type();
+    match col_type {
+        qtype::SYMBOL_ATOM => {
+            let syms: anyhow::Result<Vec<String>> = atoms
+                .iter()
+                .map(|k| Ok(k.get_symbol()?.to_string()))
+                .collect();
+            let syms = syms?;
+            if syms.len() == 1 {
+                Ok(format!("enlist`{}", syms[0]))
+            } else {
+                Ok(syms
+                    .iter()
+                    .map(|s| format!("`{s}"))
+                    .collect::<Vec<_>>()
+                    .join(""))
+            }
+        }
+        qtype::FLOAT_ATOM => {
+            let vals: anyhow::Result<Vec<f64>> = atoms.iter().map(|k| Ok(k.get_float()?)).collect();
+            let vals = vals?;
+            if vals.len() == 1 {
+                Ok(format!("enlist {}f", vals[0]))
+            } else {
+                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                Ok(format!("{}f", parts.join(" ")))
+            }
+        }
+        qtype::LONG_ATOM => {
+            let vals: anyhow::Result<Vec<i64>> = atoms.iter().map(|k| Ok(k.get_long()?)).collect();
+            let vals = vals?;
+            if vals.len() == 1 {
+                Ok(format!("enlist {}j", vals[0]))
+            } else {
+                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                Ok(format!("{}j", parts.join(" ")))
+            }
+        }
+        qtype::INT_ATOM => {
+            let vals: anyhow::Result<Vec<i32>> = atoms.iter().map(|k| Ok(k.get_int()?)).collect();
+            let vals = vals?;
+            if vals.len() == 1 {
+                Ok(format!("enlist {}i", vals[0]))
+            } else {
+                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                Ok(format!("{}i", parts.join(" ")))
+            }
+        }
+        qtype::BOOL_ATOM => {
+            let vals: anyhow::Result<Vec<bool>> = atoms.iter().map(|k| Ok(k.get_bool()?)).collect();
+            let vals = vals?;
+            if vals.len() == 1 {
+                Ok(format!("enlist {}b", if vals[0] { 1 } else { 0 }))
+            } else {
+                let parts: Vec<_> = vals
+                    .iter()
+                    .map(|v| format!("{}", if *v { 1 } else { 0 }))
+                    .collect();
+                Ok(format!("{}b", parts.join(" ")))
+            }
+        }
+        qtype::REAL_ATOM => {
+            let vals: anyhow::Result<Vec<f32>> = atoms.iter().map(|k| Ok(k.get_real()?)).collect();
+            let vals = vals?;
+            if vals.len() == 1 {
+                Ok(format!("enlist {}e", vals[0]))
+            } else {
+                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                Ok(format!("{}e", parts.join(" ")))
+            }
+        }
+        other => anyhow::bail!("unsupported KDB column type {other} in kdb_write"),
+    }
 }
 
 /// Extension trait for writing streams to KDB+ tables.
