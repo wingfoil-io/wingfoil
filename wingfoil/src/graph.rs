@@ -213,6 +213,16 @@ impl GraphState {
         self.node_ticked[self.node_index(node).unwrap()]
     }
 
+    /// Wire `upstream` (and its upstream subgraph) into the graph and register
+    /// it as an upstream of the calling node. `is_active` controls whether it
+    /// triggers the calling node on each tick (true) or is read-only (false).
+    /// Processed at the end of the current cycle.
+    ///
+    /// **Not yet implemented** — see `PLAN-graph-dynamism.md` (issue #54).
+    pub fn add_upstream(&mut self, _upstream: Rc<dyn Node>, _is_active: bool) {
+        todo!("add_upstream: see PLAN-graph-dynamism.md")
+    }
+
     #[allow(dead_code)]
     /// Returns true if node has ticked on the current engine cycle
     pub(crate) fn node_index_ticked(&self, node_index: usize) -> bool {
