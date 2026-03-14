@@ -15,6 +15,7 @@
 //! This example targets the graph-dynamism API described in
 //! `PLAN-graph-dynamism.md` (issue #54).
 
+mod demux;
 mod source;
 
 use log::Level::Info;
@@ -172,5 +173,8 @@ fn main() -> anyhow::Result<()> {
         .into_stream()
         .logged("price book", Info);
 
-    aggregator.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
+    aggregator.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))?;
+
+    // Alternative implementation using demux_it for per-instrument routing.
+    demux::run(period, 20)
 }
