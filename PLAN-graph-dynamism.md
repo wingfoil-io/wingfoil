@@ -32,7 +32,8 @@ From then on, when `process_C` ticks, `aggregation` is marked dirty automaticall
 
 The aggregation node maintains an internal `Vec<Rc<dyn Stream<ProcessedPrice>>>` to track
 and peek at dynamic upstreams. It uses `state.ticked(stream.as_node())` in `cycle()` to
-know which ones fired.
+know which ones fired. Note: `ticked()` returns `false` (not a panic) when called with a
+node that is not yet registered — see `ticked()` guard below.
 
 ## Scope
 
@@ -67,8 +68,23 @@ pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool)
 pub fn add_node(&mut self, node: Rc<dyn Node>)
 
 /// Deregister `node` at the end of the current cycle:
-/// unlinks it from all upstream downstream-lists, then calls stop() + teardown().
+/// unlinks it from all upstream downstream-lists and all downstream upstream-lists,
+/// then calls stop() + teardown().
 pub fn remove_node(&mut self, node: Rc<dyn Node>)
+```
+
+### `ticked()` guard
+
+`ticked()` must not panic when called with an unregistered node (e.g. a dynamic upstream
+that hasn't been wired yet in the current cycle). Change the implementation from
+`.unwrap()` to returning `false` for unknown nodes:
+
+```rust
+pub fn ticked(&self, node: Rc<dyn Node>) -> bool {
+    self.node_index(node)
+        .map(|i| self.node_ticked[i])
+        .unwrap_or(false)
+}
 ```
 
 ## Implementation
@@ -92,41 +108,87 @@ pub struct GraphState {
     // ... existing fields ...
     pending_additions: Vec<(Rc<dyn Node>, Option<(usize, bool)>)>, // NEW
     //   ^ (node_to_add, Some((calling_node_index, is_active)) | None)
-    pending_removals: Vec<usize>,  // NEW — node indices
+    pending_removals: Vec<Rc<dyn Node>>,  // NEW
+}
+```
+
+`pending_removals` stores `Rc<dyn Node>` (not indices) so that nodes queued for removal
+in the same cycle they were added can be looked up correctly after `process_pending_additions`
+resolves their indices.
+
+### `apply_nodes` guard
+
+`apply_nodes` (used for setup/start/stop/teardown) iterates `0..nodes.len()`. It must
+skip inactive nodes to avoid double-calling stop/teardown on nodes already processed by
+`process_pending_removals`:
+
+```rust
+fn apply_nodes(&mut self, ...) -> anyhow::Result<()> {
+    for ix in 0..self.state.nodes.len() {
+        if !self.state.nodes[ix].active {
+            continue;
+        }
+        // ... existing logic ...
+    }
 }
 ```
 
 ### Lifecycle at the cycle boundary
 
-After all dirty nodes have been cycled and `reset()` has run, `Graph::cycle()` calls:
+`Graph::cycle()` is updated to call the pending queues after `reset()`:
 
+```rust
+fn cycle(&mut self) -> anyhow::Result<()> {
+    for lyr in 0..self.state.dirty_nodes_by_layer.len() {
+        for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
+            let ix = self.state.dirty_nodes_by_layer[lyr][i];
+            self.cycle_node(ix)?;
+        }
+    }
+    self.reset();
+    self.process_pending_removals()?;
+    self.process_pending_additions()?;
+    Ok(())
+}
 ```
-process_pending_removals()
-process_pending_additions()
-```
+
+Ordering: removals before additions (so a remove-then-re-add of the same node in one cycle
+works correctly), and both after `reset()` so dirty structures are clean when `setup()`/
+`start()` run and potentially call `add_callback`.
 
 **`process_pending_removals()`**:
-1. For each queued index:
-   a. Remove node from all upstreams' `downstreams` lists.
-   b. Call `stop()` then `teardown()`.
-   c. Set `NodeData.active = false`.
+1. For each queued `Rc<dyn Node>`, resolve to index via `node_to_index`:
+   a. Remove the node from all of its upstreams' `downstreams` lists.
+   b. Remove the node from all of its downstreams' `upstreams` lists (so stale indices
+      don't accumulate in callers' upstream lists and don't skew future `fix_layers` calls).
+   c. Call `stop()` then `teardown()` (with `current_node_index` set appropriately).
+   d. Set `NodeData.active = false`.
 
 **`process_pending_additions()`**:
 1. Record `start_index = nodes.len()`.
 2. For each queued `(node, caller)`:
    a. `initialise_node(node)` — recurses through subgraph; `seen()` check prevents
       re-wiring already-present nodes. Returns the index for this node.
+      `initialise_node` calls `push_node` internally, which pushes `false` to
+      `node_ticked` and inserts into `node_to_index`.
 3. Collect `new_indices`: all indices `>= start_index` (truly new nodes only).
-4. For each new index: push `false` to `node_dirty`.
+4. For each new index: push `false` to `node_dirty` (mirrors how `initialise()` does it;
+   `node_ticked` is already handled by `push_node` inside `initialise_node`).
 5. For each new index: update its upstreams' `NodeData.downstreams`.
 6. Extend `dirty_nodes_by_layer` if new max layer exceeds current vec length.
-7. **Batch setup**: call `setup()` on all new nodes in order.
-8. **Batch start**: call `start()` on all new nodes in order (after all setup is done).
-9. For each queued `(node, Some((caller_index, is_active)))`:
+7. For each queued `(node, Some((caller_index, is_active)))`:
    a. Look up `node_index = node_to_index[node]` (may already have existed — use seen index).
    b. Add `(node_index, is_active)` to `nodes[caller_index].upstreams`.
    c. Add `(caller_index, is_active)` to `nodes[node_index].downstreams`.
    d. Run `fix_layers(caller_index)` to recalculate layers if needed.
+   e. Extend `dirty_nodes_by_layer` again if `fix_layers` pushed the caller to a new
+      maximum layer.
+8. **Batch setup**: call `setup()` on all new nodes in order.
+9. **Batch start**: call `start()` on all new nodes in order (after all setup is done).
+
+Steps 7–9 are ordered so that upstream relationships and layer assignments are finalised
+before `start()` runs. This matters because `start()` may call `add_callback(state.time())`
+and the node should be at its correct layer before its first tick.
 
 ### Layer fix algorithm
 
@@ -143,6 +205,12 @@ fix_layers(node_index):
 `dirty_nodes_by_layer` is a per-cycle scratch structure (cleared each cycle), so updating
 `layer` on a node simply means it will slot into the correct bucket on the next cycle.
 No data migration is needed.
+
+`fix_layers` only ever **increases** a node's layer, never decreases it. Layer values are
+therefore monotonically non-decreasing over the graph's lifetime. Calling `remove_node`
+does not trigger a layer recalculation — the caller's layer may be higher than strictly
+necessary after a removal, but this is correct (a higher layer just means the node cycles
+later than strictly necessary) and avoids the complexity of layer reduction.
 
 ### `cycle_node` guard
 
@@ -176,6 +244,11 @@ Default behaviour (no `add_callback` in `start()`) means the new subgraph begins
 processing from the next upstream tick onward. This is acceptable for most use cases —
 the calling node handles the triggering value itself.
 
+Note: `add_callback(state.time())` behaves differently between run modes. In historical
+mode the scheduled time is exact and fires on the very next engine iteration. In real-time
+mode the time has already passed by the time `start()` runs, so the callback fires
+immediately on the next pass through the ready queue. Both are correct.
+
 ## Testing
 
 - **Add downstream consumer at runtime**: ticker → count, add a `for_each` consumer
@@ -185,7 +258,11 @@ the calling node handles the triggering value itself.
 - **Passive upstream**: aggregation node adds a passive upstream; verify it is not
   triggered by it but can still peek its value.
 - **Remove node**: add a node, run for N cycles, remove it, run for N more; verify
-  stop/teardown are called and it no longer fires.
+  stop/teardown are called exactly once and it no longer fires.
+- **Remove cleans up caller upstreams**: after `remove_node`, verify the calling node's
+  `upstreams` list no longer contains the removed node's index.
 - **Layer re-sort**: add an upstream that is deeper than the calling node's current
   layer; verify calling node's layer is updated and execution order remains correct.
 - **seen() respected**: add the same node twice; verify setup/start are only called once.
+- **ticked() on unregistered node**: call `ticked()` with a node not yet in the graph;
+  verify it returns `false` rather than panicking.
