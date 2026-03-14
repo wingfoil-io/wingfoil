@@ -356,7 +356,9 @@ fn compute_time_slices(
     let end_kdb = end_time.to_kdb_timestamp();
 
     let start_day = start_kdb.div_euclid(DAY_NANOS);
-    let end_day = end_kdb.div_euclid(DAY_NANOS);
+    // Subtract 1 before dividing so that an end_time that falls exactly on midnight
+    // does not pull in an extra (empty) day. start_time is always > 0 so end_kdb >= 1.
+    let end_day = (end_kdb - 1).div_euclid(DAY_NANOS);
 
     let mut result = Vec::new();
 
@@ -661,6 +663,28 @@ mod tests {
             "10s: last t1 should be midnight"
         );
         assert_eq!(slices[0].2, 8637, "10s: first iteration should be 8637");
+    }
+
+    /// When `end_time` lands exactly on a midnight boundary (the common case when
+    /// `RunFor::Duration` is a whole number of days from the KDB epoch), no extra
+    /// empty slice for the following day should be generated.
+    #[test]
+    fn test_compute_time_slices_exact_midnight_boundary() {
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(8 * 3600); // 3 slices per day
+
+        // Exactly next midnight — what RunFor::Duration(86400s) produces when start = epoch.
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS);
+        let slices = compute_time_slices(epoch, end, period);
+        assert_eq!(
+            slices.len(),
+            3,
+            "exact midnight end should yield 3 slices (day 0 only), got {}",
+            slices.len()
+        );
+        for &(_, date, _) in &slices {
+            assert_eq!(date, 0, "all slices should be on day 0");
+        }
     }
 
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every

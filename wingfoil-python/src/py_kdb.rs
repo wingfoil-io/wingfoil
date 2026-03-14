@@ -73,6 +73,16 @@ impl KdbDeserialize for PyKdbRow {
                 qtype::INT_ATOM => PyKdbValue::Int(k.get_int()?),
                 qtype::REAL_ATOM => PyKdbValue::Real(k.get_real()?),
                 qtype::SHORT_ATOM => PyKdbValue::Int(k.get_short()? as i32),
+                // Temporal types stored as i64 (nanoseconds since KDB epoch)
+                qtype::TIMESTAMP_ATOM | qtype::TIMESPAN_ATOM => PyKdbValue::Long(k.get_long()?),
+                // Temporal types stored as i32
+                qtype::DATE_ATOM
+                | qtype::MONTH_ATOM
+                | qtype::TIME_ATOM
+                | qtype::MINUTE_ATOM
+                | qtype::SECOND_ATOM => PyKdbValue::Int(k.get_int()?),
+                // Datetime stored as f64 (days since KDB epoch)
+                qtype::DATETIME_ATOM => PyKdbValue::Float(k.get_float()?),
                 _ => PyKdbValue::Symbol(format!("{:?}", k)),
             };
             result.push((col_name.clone(), value));
@@ -249,7 +259,7 @@ async fn py_kdb_write_consumer(
         let full_row = K::new_compound_list(row_values);
 
         let query = K::new_compound_list(vec![
-            K::new_string("insert".to_string(), kdb_plus_fixed::qattribute::NONE),
+            K::new_symbol("insert".to_string()),
             K::new_symbol(table_name.clone()),
             full_row,
         ]);

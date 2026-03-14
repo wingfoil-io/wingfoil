@@ -27,23 +27,6 @@ pub trait KdbSerialize: Sized {
     /// # Note
     /// Do not include time in the returned K object - it will be prepended automatically.
     fn to_kdb_row(&self) -> K;
-
-    /// Define the table schema for auto-creation.
-    ///
-    /// Returns a q expression that creates an empty table with the correct schema.
-    /// The time column will be automatically prepended.
-    ///
-    /// # Example
-    /// ```ignore
-    /// fn table_schema() -> &'static str {
-    ///     "sym:`symbol$();price:`float$();qty:`long$()"
-    /// }
-    /// ```
-    ///
-    /// This will create: `([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())`
-    fn table_schema() -> &'static str {
-        "" // Default: no auto-creation
-    }
 }
 
 /// Write stream data to a KDB+ table.
@@ -136,33 +119,48 @@ where
     )
     .await?;
 
-    // Pre-build the reusable insert query components to avoid per-row allocation.
-    let insert_k = K::new_string("insert".to_string(), kdb_plus_fixed::qattribute::NONE);
+    // Pre-build the reusable insert query components.
+    // `insert` must be a symbol, not a string, for the KDB+ functional query form.
+    let insert_k = K::new_symbol("insert".to_string());
     let table_k = K::new_symbol(table_name);
 
-    // Process incoming records
+    // Process incoming bursts
     while let Some((time, batch)) = source.next().await {
         // Compute timestamp once per burst — all records in a burst share the same time.
         let naive: NaiveDateTime = time.into();
         let kdb_time = K::new_timestamp(naive.and_utc());
 
-        for record in batch {
-            // Serialize record (business data only, no time)
-            let row = record.to_kdb_row();
+        // Serialize every record in the burst (time prepended, business fields appended).
+        let serialized: Vec<Vec<K>> = batch
+            .into_iter()
+            .map(|record| {
+                let mut fields = vec![kdb_time.clone()];
+                if let Ok(row_fields) = record.to_kdb_row().as_vec::<K>() {
+                    fields.extend(row_fields.iter().cloned());
+                }
+                fields
+            })
+            .collect();
 
-            // Prepend time to row values as proper KDB timestamp type
-            let mut row_values = vec![kdb_time.clone()];
-            if let Ok(list) = row.as_vec::<K>() {
-                row_values.extend(list.iter().cloned());
-            }
-            let full_row = K::new_compound_list(row_values);
-
-            // Build insert query as K object: (insert; `tablename; values)
-            let query = K::new_compound_list(vec![insert_k.clone(), table_k.clone(), full_row]);
-
-            // Send sync message to ensure insert completes before continuing
-            socket.send_sync_message(&query).await?;
+        if serialized.is_empty() {
+            continue;
         }
+
+        // Transpose row-oriented data to column-oriented for a single bulk insert:
+        //   (insert; `table; ((t0;t1;...); (sym0;sym1;...); (price0;price1;...)))
+        let n_cols = serialized[0].len();
+        let mut columns: Vec<Vec<K>> = (0..n_cols)
+            .map(|_| Vec::with_capacity(serialized.len()))
+            .collect();
+        for row in serialized {
+            for (col_idx, val) in row.into_iter().enumerate() {
+                columns[col_idx].push(val);
+            }
+        }
+        let data = K::new_compound_list(columns.into_iter().map(K::new_compound_list).collect());
+
+        let query = K::new_compound_list(vec![insert_k.clone(), table_k.clone(), data]);
+        socket.send_sync_message(&query).await?;
     }
     Ok(())
 }
