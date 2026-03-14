@@ -345,5 +345,18 @@ impl PyStream {
         Ok(PyNode::new(node))
     }
 
+    /// Publish this stream of bytes to a ZMQ PUB socket bound on the given port.
+    ///
+    /// The stream values must be `bytes` objects. Only supported in real-time mode.
+    ///
+    /// Args:
+    ///     port: TCP port to bind the PUB socket on
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn zmq_pub(&self, port: u16) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_inner(&self.0, port))
+    }
+
     // end StreamOperators
 }
