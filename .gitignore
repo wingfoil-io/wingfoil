@@ -1,4 +1,3 @@
-Cargo.lock
 /target
 .vscode
 .idea
@@ -11,4 +10,3 @@ wingfoil.html
 _build
 *_generated
 perf.data*
-*plan.md

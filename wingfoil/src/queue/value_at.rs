@@ -1,12 +1,13 @@
 use crate::types::NanoTime;
 use derive_new::new;
+use serde::{Deserialize, Serialize};
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
 /// A value emitted at, or captured at a specific time.
 #[doc(hidden)]
-#[derive(Debug, Clone, new, Default)]
+#[derive(Debug, Clone, new, Default, Serialize, Deserialize)]
 pub struct ValueAt<T> {
     pub value: T,
     pub time: NanoTime,
