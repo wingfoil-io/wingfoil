@@ -138,6 +138,14 @@ impl Row<'_> {
             .element_at(self.index)
     }
 
+    /// Get a KDB timestamp column as [`NanoTime`].
+    ///
+    /// Reads the column value as an i64 (KDB nanoseconds since 2000-01-01) and
+    /// converts it to a [`NanoTime`] (nanoseconds since Unix epoch).
+    pub fn get_timestamp(&self, col: usize) -> Result<NanoTime, KdbError> {
+        Ok(NanoTime::from_kdb_timestamp(self.get(col)?.get_long()?))
+    }
+
     /// Get an interned symbol from a symbol column, avoiding per-row String allocation.
     ///
     /// Accesses the underlying `Vec<String>` directly and interns the `&str`,
@@ -259,27 +267,23 @@ impl KdbExt for K {
 
 /// Trait for deserializing KDB row data into Rust types.
 ///
-/// Implementors should extract fields from the row using indexed column access.
-/// The `columns` parameter provides column names for reference.
+/// Implementors extract fields from the row using indexed column access and return
+/// a `(NanoTime, Self)` tuple — the time is owned by the implementation rather than
+/// the adapter, giving full control over which column carries the timestamp.
 ///
-/// **IMPORTANT**: Do NOT extract the time column in your implementation. Time is
-/// automatically extracted by the adapter and propagated through the graph as part
-/// of the `(NanoTime, T)` tuple. Your struct should only contain business data.
+/// Use [`Row::get_timestamp`] to extract a KDB timestamp column as [`NanoTime`].
 pub trait KdbDeserialize: Sized {
-    /// Deserialize a KDB row into Self.
+    /// Deserialize a KDB row into `(NanoTime, Self)`.
     ///
     /// # Arguments
     /// * `row` - Row accessor providing indexed access to column values
     /// * `columns` - Column names from the table schema
     /// * `interner` - Symbol interner for deduplicating symbol strings via [`Row::get_sym`]
-    ///
-    /// # Note
-    /// Skip the time column - it's handled automatically by the adapter.
     fn from_kdb_row(
         row: Row<'_>,
         columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError>;
+    ) -> Result<(NanoTime, Self), KdbError>;
 }
 
 /// Core streaming loop driven by a caller-supplied query closure.
@@ -295,7 +299,6 @@ pub trait KdbDeserialize: Sized {
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    time_col: String,
     mut query_fn: impl FnMut(Option<usize>) -> Option<String> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
@@ -327,45 +330,10 @@ where
             let row_count = rows.len();
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
-            let time_col_idx = match columns.iter().position(|c| c == &time_col) {
-                Some(idx) => idx,
-                None => {
-                    yield Err(anyhow::anyhow!(
-                        "time column '{}' not found in result columns: {:?}",
-                        time_col, columns
-                    ));
-                    break;
-                }
-            };
-
-            let mut prev_time: Option<i64> = None;
+            let mut prev_time: Option<NanoTime> = None;
             let mut row_error = false;
             for row in &rows {
-                let time_kdb = match row.get(time_col_idx).and_then(|v| v.get_long()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!("failed to extract time from KDB row: {}", query)));
-                        row_error = true;
-                        break;
-                    }
-                };
-
-                if let Some(prev) = prev_time
-                    && time_kdb < prev
-                {
-                    yield Err(anyhow::anyhow!(
-                        "KDB data is not sorted by time column '{}': got {} after {}. \
-                        Add `{} xasc` to your query to sort the data.\nQuery: {}",
-                        time_col, time_kdb, prev, time_col, query
-                    ));
-                    row_error = true;
-                    break;
-                }
-                prev_time = Some(time_kdb);
-
-                let time = NanoTime::from_kdb_timestamp(time_kdb);
-
-                let record = match T::from_kdb_row(row, &columns, &mut interner) {
+                let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
                     Err(e) => {
                         yield Err(anyhow::Error::new(e).context(format!("KDB deserialization failed: {}", query)));
@@ -373,6 +341,19 @@ where
                         break;
                     }
                 };
+
+                if let Some(prev) = prev_time
+                    && time < prev
+                {
+                    yield Err(anyhow::anyhow!(
+                        "KDB data is not sorted by time: got {:?} after {:?}. \
+                        Add `xasc` to your query to sort the data.\nQuery: {}",
+                        time, prev, query
+                    ));
+                    row_error = true;
+                    break;
+                }
+                prev_time = Some(time);
 
                 yield Ok((time, record));
             }
@@ -443,13 +424,11 @@ pub fn kdb_read<T, F>(
     connection: KdbConnection,
     period: std::time::Duration,
     query_fn: F,
-    time_col: &str,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
     F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
-    let time_col = time_col.to_string();
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
         let end_time_result = ctx.end_time();
@@ -496,7 +475,7 @@ where
                 Some(query_fn(within, date, iteration))
             };
 
-            Ok(chunk_stream::<T>(socket, time_col, slice_fn))
+            Ok(chunk_stream::<T>(socket, slice_fn))
         }
     })
 }
@@ -665,21 +644,25 @@ mod tests {
                 row: Row<'_>,
                 _columns: &[String],
                 interner: &mut SymbolInterner,
-            ) -> Result<Self, KdbError> {
-                Ok(AllTypesRecord {
-                    date: row.get(0)?.get_int()?,
-                    timestamp: row.get(1)?.get_long()?,
-                    int_val: row.get(2)?.get_int()?,
-                    float_val: row.get(3)?.get_float()?,
-                    sym: row.get_sym(4, interner)?.to_string(),
-                    // col 5: COMPOUND_LIST[STRING] — element_at returns the STRING K;
-                    // as_string() extracts the &str directly from its internal symbol storage.
-                    string_val: row.get(5)?.as_string()?.to_string(),
-                    // col 6: COMPOUND_LIST[INT_LIST] — element_at returns the INT_LIST K
-                    vec_int: row.get(6)?.as_vec::<i32>()?.to_vec(),
-                    // col 7: COMPOUND_LIST[FLOAT_LIST] — element_at returns the FLOAT_LIST K
-                    vec_float: row.get(7)?.as_vec::<f64>()?.to_vec(),
-                })
+            ) -> Result<(NanoTime, Self), KdbError> {
+                let time = row.get_timestamp(1)?;
+                Ok((
+                    time,
+                    AllTypesRecord {
+                        date: row.get(0)?.get_int()?,
+                        timestamp: row.get(1)?.get_long()?,
+                        int_val: row.get(2)?.get_int()?,
+                        float_val: row.get(3)?.get_float()?,
+                        sym: row.get_sym(4, interner)?.to_string(),
+                        // col 5: COMPOUND_LIST[STRING] — element_at returns the STRING K;
+                        // as_string() extracts the &str directly from its internal symbol storage.
+                        string_val: row.get(5)?.as_string()?.to_string(),
+                        // col 6: COMPOUND_LIST[INT_LIST] — element_at returns the INT_LIST K
+                        vec_int: row.get(6)?.as_vec::<i32>()?.to_vec(),
+                        // col 7: COMPOUND_LIST[FLOAT_LIST] — element_at returns the FLOAT_LIST K
+                        vec_float: row.get(7)?.as_vec::<f64>()?.to_vec(),
+                    },
+                ))
             }
         }
 
@@ -748,7 +731,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
 
         let mut interner = SymbolInterner::default();
-        let record =
+        let (_, record) =
             AllTypesRecord::from_kdb_row(rows.get(0).unwrap(), &[], &mut interner).unwrap();
 
         assert_eq!(record.date, kdb_date);

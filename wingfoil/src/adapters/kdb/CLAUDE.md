@@ -23,8 +23,9 @@ kdb/
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
   - Caller constructs the full query — date/time filters, partition hints, etc.
   - Terminates automatically when all slices are exhausted
-- `KdbDeserialize` trait - Convert KDB+ rows to Rust types
-  - **IMPORTANT**: Do NOT extract the time column - it's handled automatically
+- `KdbDeserialize` trait - Convert KDB+ rows to `(NanoTime, T)` tuples
+  - `from_kdb_row` returns `Result<(NanoTime, Self), KdbError>` — implementor owns time extraction
+  - Use `row.get_timestamp(col)` to extract a KDB timestamp column as `NanoTime`
   - Your struct should only contain business data (sym, price, qty, etc.)
 
 ### Writing to KDB+
@@ -106,13 +107,13 @@ struct Trade {
 }
 
 impl KdbDeserialize for Trade {
-    fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<Self, KdbError> {
-        Ok(Trade {
-            // col 0: date (skip), col 1: time (handled by adapter)
+    fn from_kdb_row(row: Row<'_>, _columns: &[String], interner: &mut SymbolInterner) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(1)?; // col 0: date, col 1: time
+        Ok((time, Trade {
             sym: row.get_sym(2, interner)?,
             price: row.get(3)?.get_float()?,
             qty: row.get(4)?.get_long()?,
-        })
+        }))
     }
 }
 
@@ -142,7 +143,6 @@ let stream = kdb_read::<Trade, _>(
             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
         )
     },
-    "time",
 );
 stream
     .collapse()

@@ -55,12 +55,13 @@ impl KdbDeserialize for Trade {
         row: Row<'_>,
         _columns: &[String],
         interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        Ok(Trade {
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((time, Trade {
             sym: row.get_sym(1, interner)?,
             price: OrderedFloat(row.get(2)?.get_float()?),
             qty: row.get(3)?.get_long()?,
-        })
+        }))
     }
 }
 
@@ -94,7 +95,6 @@ fn main() -> Result<()> {
     env_logger::init();
     let conn = KdbConnection::new("localhost", 5000);
     let table = "test_trades";
-    let time_col = "time";
     let num_rows = 10;
     let run_mode = RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0));
     let run_for = RunFor::Duration(std::time::Duration::from_secs(11));
@@ -115,7 +115,6 @@ fn main() -> Result<()> {
                 t1.to_kdb_timestamp()
             )
         },
-        time_col,
     );
     // Validate
     let check = validate(baseline, read);

@@ -13,7 +13,7 @@ use std::rc::Rc;
 use futures::StreamExt;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use wingfoil::adapters::kdb::*;
-use wingfoil::{Burst, FutStream, Node, Stream, StreamOperators};
+use wingfoil::{Burst, FutStream, NanoTime, Node, Stream, StreamOperators};
 
 /// A deserialized KDB row stored as column name/value pairs.
 /// Each row becomes a Python dict.
@@ -57,10 +57,11 @@ impl KdbDeserialize for PyKdbRow {
         row: Row<'_>,
         columns: &[String],
         _interner: &mut SymbolInterner,
-    ) -> Result<Self, KdbError> {
-        let mut result = Vec::with_capacity(columns.len() - 1);
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
 
-        // Skip column 0 (time) - handled by adapter
+        let mut result = Vec::with_capacity(columns.len() - 1);
+        // Skip column 0 (time)
         for (i, col_name) in columns.iter().enumerate().skip(1) {
             let k = row.get(i)?;
             let value = if let Ok(v) = k.get_long() {
@@ -81,7 +82,7 @@ impl KdbDeserialize for PyKdbRow {
             result.push((col_name.clone(), value));
         }
 
-        Ok(PyKdbRow { columns: result })
+        Ok((time, PyKdbRow { columns: result }))
     }
 }
 
@@ -110,7 +111,6 @@ pub fn py_kdb_read(
     period_secs: u64,
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
-    let time_col_ref = time_col.clone();
     let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read::<PyKdbRow, _>(
         conn,
         std::time::Duration::from_secs(period_secs),
@@ -124,7 +124,6 @@ pub fn py_kdb_read(
                 t1.to_kdb_timestamp()
             )
         },
-        &time_col_ref,
     );
 
     // Collapse burst to single row, convert to PyElement (dict)
