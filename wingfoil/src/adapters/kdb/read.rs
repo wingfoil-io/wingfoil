@@ -288,27 +288,22 @@ pub trait KdbDeserialize: Sized {
 
 /// Core streaming loop driven by a caller-supplied query closure.
 ///
-/// Calls `query_fn(last_count)` before each chunk:
-/// - `None` on the first call
-/// - `Some(n)` on subsequent calls, where `n` is the row count returned by the previous query
-///
-/// Returns `None` to stop, or `Some(query_string)` to execute next.
-/// Also stops automatically when a query returns 0 rows.
+/// Calls `query_fn()` before each chunk. Returns `None` to stop, or
+/// `Some(query_string)` to execute next.
 ///
 /// `prev_time` is reset each chunk so time-of-day columns work correctly when
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    mut query_fn: impl FnMut(Option<usize>) -> Option<String> + Send + 'static,
+    mut query_fn: impl FnMut() -> Option<String> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
     T: KdbDeserialize + Send + 'static,
 {
     async_stream::stream! {
-        let mut last_count: Option<usize> = None;
         let mut interner = SymbolInterner::default();
 
-        while let Some(query) = query_fn(last_count) {
+        while let Some(query) = query_fn() {
             info!("KDB query: {}", query);
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
@@ -350,8 +345,6 @@ where
             if row_error {
                 break;
             }
-
-            last_count = Some(row_count);
         }
     }
 }
@@ -460,13 +453,9 @@ where
             )
             .await?;
 
-            // Convert the slice-based iteration into the Option<usize> protocol that
-            // chunk_stream expects. The row count from the previous query is ignored —
-            // we always advance to the next slice unconditionally.
-            // The stream stops when slices are exhausted.
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move |_last_count: Option<usize>| -> Option<String> {
+            let slice_fn = move || -> Option<String> {
                 let (within, date, iteration) = slices_iter.next()?;
                 Some(query_fn(within, date, iteration))
             };
