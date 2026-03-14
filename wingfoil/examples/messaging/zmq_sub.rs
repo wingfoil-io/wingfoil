@@ -7,8 +7,14 @@ fn main() {
     env_logger::init();
     let address = "tcp://127.0.0.1:5555";
     println!("Starting ZMQ receiver, connecting to {address}...");
-    let (data, _status) = zmq_sub::<u64>(address);
-    data.logged("received", Info)
-        .run(RunMode::RealTime, RunFor::Forever)
-        .unwrap();
+    let (data, status) = zmq_sub::<u64>(address);
+    let data_node = data.logged("received", Info).as_node();
+    let status_node = status.logged("status", Info).as_node();
+    Graph::new(
+        vec![data_node, status_node],
+        RunMode::RealTime,
+        RunFor::Forever,
+    )
+    .run()
+    .unwrap();
 }
