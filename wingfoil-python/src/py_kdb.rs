@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use futures::StreamExt;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
+use kdb_plus_fixed::qtype;
 use wingfoil::adapters::kdb::*;
 use wingfoil::{Burst, FutStream, NanoTime, Node, Stream, StreamOperators};
 
@@ -61,23 +62,18 @@ impl KdbDeserialize for PyKdbRow {
         let time = row.get_timestamp(0)?; // col 0: time
 
         let mut result = Vec::with_capacity(columns.len() - 1);
-        // Skip column 0 (time)
+        // Skip column 0 (time) — guaranteed first by xcols in the query wrapper.
         for (i, col_name) in columns.iter().enumerate().skip(1) {
             let k = row.get(i)?;
-            let value = if let Ok(v) = k.get_long() {
-                PyKdbValue::Long(v)
-            } else if let Ok(v) = k.get_float() {
-                PyKdbValue::Float(v)
-            } else if let Ok(v) = k.get_symbol() {
-                PyKdbValue::Symbol(v.to_string())
-            } else if let Ok(v) = k.get_bool() {
-                PyKdbValue::Bool(v)
-            } else if let Ok(v) = k.get_int() {
-                PyKdbValue::Int(v)
-            } else if let Ok(v) = k.get_real() {
-                PyKdbValue::Real(v)
-            } else {
-                PyKdbValue::Symbol(format!("{:?}", k))
+            let value = match k.get_type() {
+                qtype::LONG_ATOM => PyKdbValue::Long(k.get_long()?),
+                qtype::FLOAT_ATOM => PyKdbValue::Float(k.get_float()?),
+                qtype::SYMBOL_ATOM => PyKdbValue::Symbol(k.get_symbol()?.to_string()),
+                qtype::BOOL_ATOM => PyKdbValue::Bool(k.get_bool()?),
+                qtype::INT_ATOM => PyKdbValue::Int(k.get_int()?),
+                qtype::REAL_ATOM => PyKdbValue::Real(k.get_real()?),
+                qtype::SHORT_ATOM => PyKdbValue::Int(k.get_short()? as i32),
+                _ => PyKdbValue::Symbol(format!("{:?}", k)),
             };
             result.push((col_name.clone(), value));
         }
@@ -115,13 +111,14 @@ pub fn py_kdb_read(
         conn,
         std::time::Duration::from_secs(period_secs),
         move |(t0, t1), _date, _iter| {
+            // xcols ensures the time column is always first (col 0) in the result,
+            // regardless of its position in the user's original query.
             format!(
-                "select from ({}) where {} >= (`timestamp$){}j, {} < (`timestamp$){}j",
-                query,
-                time_col,
-                t0.to_kdb_timestamp(),
-                time_col,
-                t1.to_kdb_timestamp()
+                "`{tc} xcols select from ({q}) where {tc} >= (`timestamp$){t0}j, {tc} < (`timestamp$){t1}j",
+                tc = time_col,
+                q = query,
+                t0 = t0.to_kdb_timestamp(),
+                t1 = t1.to_kdb_timestamp(),
             )
         },
     );

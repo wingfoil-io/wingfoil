@@ -303,7 +303,7 @@ where
     async_stream::stream! {
         let mut interner = SymbolInterner::default();
 
-        while let Some(query) = query_fn() {
+        'outer: while let Some(query) = query_fn() {
             info!("KDB query: {}", query);
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
@@ -320,11 +320,10 @@ where
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
             let mut prev_time: Option<NanoTime> = None;
-            let mut row_error = false;
             for row in &rows {
                 let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
-                    Err(e) => { yield Err(e.into()); row_error = true; break; }
+                    Err(e) => { yield Err(e.into()); break 'outer; }
                 };
 
                 if let Some(prev) = prev_time
@@ -335,15 +334,11 @@ where
                         Add `xasc` to your query to sort the data.",
                         time, prev
                     ));
-                    row_error = true;
-                    break;
+                    break 'outer;
                 }
                 prev_time = Some(time);
 
                 yield Ok((time, record));
-            }
-            if row_error {
-                break;
             }
         }
     }

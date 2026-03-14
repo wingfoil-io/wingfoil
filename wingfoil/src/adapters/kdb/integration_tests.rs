@@ -421,11 +421,8 @@ fn test_read_read_perf() -> Result<()> {
 }
 
 #[test]
-#[should_panic(expected = "Closed")]
-fn test_kdb_connection_refused() {
+fn test_kdb_connection_refused() -> Result<()> {
     let _ = env_logger::try_init();
-    // Connection failure currently panics in the channel layer (kanal_chan recv().unwrap())
-    // rather than propagating as a clean Err. This test documents that behavior.
     let conn = KdbConnection::new("localhost", 59999);
     let stream = kdb_read::<TestTrade, _>(
         conn,
@@ -433,10 +430,12 @@ fn test_kdb_connection_refused() {
         |_, _, _| format!("select from {}", TABLE_NAME),
     );
     let collected = stream.collapse().collect();
-    let _ = collected.run(
+    let result = collected.run(
         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         RunFor::Duration(std::time::Duration::from_secs(86400)),
     );
+    assert!(result.is_err(), "Connection refused should return an error");
+    Ok(())
 }
 
 #[test]
