@@ -7,7 +7,7 @@ This directory contains the KDB+ adapter for wingfoil, enabling reading from and
 ```
 kdb/
   mod.rs               # Public API, connection types, error handling
-  read.rs              # Read functions: kdb_read_chunks, kdb_read
+  read.rs              # Read functions: kdb_read
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)
 ```
@@ -16,11 +16,6 @@ kdb/
 
 ### Reading from KDB+
 
-- `kdb_read_chunks()` - Primitive chunking function driven by a caller-supplied closure
-  - `FnMut(Option<usize>) -> Option<String>`: called before each chunk with last row count
-  - `None` on first call, `Some(n)` after each chunk; return `None` to stop
-  - Caller owns all query logic: offset arithmetic, date advancement, termination
-  - Use when you need direct control over query construction (e.g. offset pagination)
 - `kdb_read()` - Time-partitioned reads driven by a caller-supplied query closure
   - Computes time slices from `RunMode`/`RunFor` and calls `query_fn` for each slice
   - `query_fn((t0, t1), kdb_date, iteration) -> String` — half-open [t0, t1)
@@ -87,7 +82,7 @@ The integration tests in `integration_tests.rs` are gated behind the `kdb-integr
 - Serialization/deserialization correctness
 - Connection handling
 - Time-sliced reads across multiple days and periods
-- Edge cases: empty tables, bad queries, bad time columns, unsorted data
+- Edge cases: empty tables, bad queries, bad time columns
 
 ## Development Tips
 
@@ -156,24 +151,4 @@ stream
         RunFor::Duration(std::time::Duration::from_secs(86400)),
     )
     .unwrap();
-```
-
-### Reading with kdb_read_chunks (offset pagination)
-
-```rust
-// Use kdb_read_chunks for simple offset-based pagination
-let chunk = 10_000usize;
-let mut offset = 0usize;
-let stream = kdb_read_chunks::<Trade, _>(
-    conn,
-    move |last_count| {
-        match last_count {
-            None => {}
-            Some(n) if n < chunk => return None,
-            Some(n) => offset += n,
-        }
-        Some(format!("select[{},{}] from trades", offset, chunk))
-    },
-    "time",
-);
 ```

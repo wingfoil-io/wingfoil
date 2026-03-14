@@ -312,45 +312,6 @@ fn test_kdb_sorted_data() -> Result<()> {
     })
 }
 
-#[test]
-fn test_kdb_unsorted_data_fails() -> Result<()> {
-    let _ = env_logger::try_init();
-    // Unsorted rows have timestamps before the KDB epoch (negative KDB timestamps),
-    // so date/time slice filters would exclude them. Use kdb_read_chunks with a bare
-    // query so the adapter sees the shuffled order and raises a time-ordering error.
-    let result = with_test_data(5, 1, false, |_n, conn| {
-        let mut done = false;
-        let stream = kdb_read_chunks::<TestTrade, _>(
-            conn,
-            move |_| {
-                if done {
-                    None
-                } else {
-                    done = true;
-                    Some(format!("select from {}", TABLE_NAME))
-                }
-            },
-            "time",
-        );
-        stream
-            .collapse()
-            .collect()
-            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
-        Ok(())
-    });
-    assert!(
-        result.is_err(),
-        "Unsorted data should cause time ordering error"
-    );
-    let err_msg = format!("{:?}", result.unwrap_err());
-    assert!(
-        err_msg.contains("not sorted by time") || err_msg.contains("time less than graph time"),
-        "Expected time ordering error, got: {}",
-        err_msg
-    );
-    Ok(())
-}
-
 /// A struct that deliberately reads the wrong types to trigger deserialization errors.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]

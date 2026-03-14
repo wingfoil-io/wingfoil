@@ -385,60 +385,6 @@ where
     }
 }
 
-/// Stream data from KDB+ using a caller-supplied query closure for full control over
-/// chunking strategy.
-///
-/// The closure receives `Option<usize>`:
-/// - `None` on the first call — return the initial query
-/// - `Some(n)` after each chunk — `n` is the row count from the last query
-///
-/// Return `Some(query_string)` to execute the next chunk, or `None` to stop.
-/// A query that returns 0 rows calls the closure with `Some(0)` — the closure
-/// decides whether to stop (return `None`) or skip ahead (return another query).
-///
-/// Use this directly when you need query-level control, such as advancing through date
-/// partitions:
-///
-/// ```ignore
-/// let dates = vec!["2024.01.01", "2024.01.02"];
-/// let chunk = 10_000usize;
-/// let mut di = 0usize;
-/// let mut offset = 0usize;
-///
-/// kdb_read_chunks::<Trade, _>(conn, move |last_count| {
-///     match last_count {
-///         None => {}
-///         Some(n) if n < chunk => { di += 1; offset = 0; } // date exhausted, advance
-///         Some(n) => { offset += n; }                       // more on this date
-///     }
-///     if di >= dates.len() { return None; }
-///     Some(format!("select[{},{}] from trades where date={}", offset, chunk, dates[di]))
-/// }, "time")
-/// ```
-#[must_use]
-pub fn kdb_read_chunks<T, F>(
-    connection: KdbConnection,
-    query_fn: F,
-    time_col: &str,
-) -> Rc<dyn Stream<Burst<T>>>
-where
-    T: Element + Send + KdbDeserialize + 'static,
-    F: FnMut(Option<usize>) -> Option<String> + Send + 'static,
-{
-    let time_col = time_col.to_string();
-    produce_async(move |_ctx| async move {
-        let creds = connection.credentials_string();
-        let socket = QStream::connect(
-            ConnectionMethod::TCP,
-            &connection.host,
-            connection.port,
-            &creds,
-        )
-        .await?;
-        Ok(chunk_stream::<T>(socket, time_col, query_fn))
-    })
-}
-
 fn compute_time_slices(
     start_time: NanoTime,
     end_time: NanoTime,

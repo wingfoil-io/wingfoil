@@ -93,47 +93,38 @@ impl KdbDeserialize for PyKdbRow {
 ///     host: KDB+ server hostname
 ///     port: KDB+ server port
 ///     query: q query to execute (e.g. "select from trade")
-///     time_col: Name of the time column for chunking
-///     chunk_size: Maximum rows per query chunk (controls memory usage)
+///     time_col: Name of the time column for time-slice filtering
+///     period_secs: Duration of each time slice in seconds (default: 3600)
 ///
 /// Returns:
 ///     Stream where each tick yields a dict of {column_name: value}
+///
+/// Requires RunMode::HistoricalFrom with a non-zero start time and RunFor::Duration.
 #[pyfunction]
-#[pyo3(signature = (host, port, query, time_col, chunk_size=10000))]
+#[pyo3(signature = (host, port, query, time_col, period_secs=3600))]
 pub fn py_kdb_read(
     host: String,
     port: u16,
     query: String,
     time_col: String,
-    chunk_size: usize,
+    period_secs: u64,
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
-    let mut offset = 0usize;
-    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read_chunks::<PyKdbRow, _>(
+    let time_col_ref = time_col.clone();
+    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read::<PyKdbRow, _>(
         conn,
-        move |last_count| {
-            match last_count {
-                None => {}
-                Some(n) if n < chunk_size => return None,
-                Some(n) => offset += n,
-            }
-            let trimmed = query.trim_start();
-            let paginated = if trimmed
-                .get(..6)
-                .is_some_and(|s| s.eq_ignore_ascii_case("select"))
-            {
-                format!(
-                    "select[{},{}] {}",
-                    offset,
-                    chunk_size,
-                    trimmed[6..].trim_start()
-                )
-            } else {
-                format!("({};{}) sublist {}", offset, chunk_size, query)
-            };
-            Some(paginated)
+        std::time::Duration::from_secs(period_secs),
+        move |(t0, t1), _date, _iter| {
+            format!(
+                "select from ({}) where {} >= (`timestamp$){}j, {} < (`timestamp$){}j",
+                query,
+                time_col,
+                t0.to_kdb_timestamp(),
+                time_col,
+                t1.to_kdb_timestamp()
+            )
         },
-        &time_col,
+        &time_col_ref,
     );
 
     // Collapse burst to single row, convert to PyElement (dict)
