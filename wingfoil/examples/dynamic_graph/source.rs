@@ -87,40 +87,56 @@ pub fn source(period: Duration) -> Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wingfoil::Graph;
 
-    fn values<T: Clone>(collected: &[wingfoil::ValueAt<T>]) -> Vec<T> {
-        collected.iter().map(|v| v.value.clone()).collect()
-    }
-
-    /// After 10 event ticks the lifecycle is:
-    ///   adds:    n=1..4, 6..9  → inst0..inst3, inst4..inst7  (8 events)
-    ///   deletes: n=5, 10       → inst0, inst1               (2 events)
+    /// Lifecycle over 16 engine cycles (price every 1 s, event every 3 s, both
+    /// starting at t = 0):
+    ///
+    ///   event n=1 (t= 0s): add  inst0
+    ///   event n=2 (t= 3s): add  inst1
+    ///   event n=3 (t= 6s): add  inst2
+    ///   event n=4 (t= 9s): add  inst3
+    ///   event n=5 (t=12s): del  inst0   ← first delete
+    ///   event n=6 (t=15s): add  inst4
+    ///
+    ///   price ticks: 16 total (inst0..inst9 then inst0..inst5, id = (n-1) % 10)
     #[test]
     fn source_lifecycle_sequence() {
         let period = std::time::Duration::from_secs(1);
-
         let src = source(period);
-        let new_insts = src.new_instrument.collect();
-        new_insts
-            .run(
-                wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-                wingfoil::RunFor::Cycles(10),
-            )
-            .unwrap();
-        let new_vals = values(&new_insts.peek_value());
-        assert_eq!(new_vals.len(), 8);
-        assert_eq!(new_vals[0], "inst0");
-        assert_eq!(new_vals[7], "inst7");
 
-        let src = source(period);
-        let del_insts = src.del_instrument.collect();
-        del_insts
-            .run(
-                wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-                wingfoil::RunFor::Cycles(10),
-            )
-            .unwrap();
-        let del_vals = values(&del_insts.peek_value());
-        assert_eq!(del_vals, vec!["inst0".to_string(), "inst1".to_string()]);
+        let new_insts = src.new_instrument.accumulate().finally(|v, _| {
+            assert_eq!(
+                v,
+                ["inst0", "inst1", "inst2", "inst3", "inst4"]
+                    .map(String::from)
+                    .to_vec()
+            );
+            Ok(())
+        });
+
+        let del_insts = src.del_instrument.accumulate().finally(|v, _| {
+            assert_eq!(v, ["inst0"].map(String::from).to_vec());
+            Ok(())
+        });
+
+        let prices = src.inst_price.accumulate().finally(|v, _| {
+            let expected: Vec<(String, f64)> = (1u64..=16)
+                .map(|n| {
+                    let id = (n - 1) % 10;
+                    (format!("inst{id}"), id as f64 + n as f64 / 100.0)
+                })
+                .collect();
+            assert_eq!(v, expected);
+            Ok(())
+        });
+
+        Graph::new(
+            vec![new_insts, del_insts, prices],
+            wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
+            wingfoil::RunFor::Cycles(16),
+        )
+        .run()
+        .unwrap();
     }
 }
