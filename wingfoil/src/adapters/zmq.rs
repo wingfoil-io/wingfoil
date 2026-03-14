@@ -156,7 +156,6 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
         let socket = context.socket(zmq::SocketType::PUB)?;
         let address = format!("tcp://127.0.0.1:{:}", self.port);
         socket.bind(&address)?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
         self.socket = Some(socket);
         Ok(())
     }
@@ -194,6 +193,14 @@ mod tests {
 
     fn sender(period: Duration, port: u16) -> Rc<dyn Node> {
         ticker(period).count().logged("pub", Info).zmq_pub(port)
+    }
+
+    fn sender_with_delay(period: Duration, port: u16) -> Rc<dyn Node> {
+        ticker(period)
+            .count()
+            .delay(Duration::from_millis(200))
+            .logged("pub", Info)
+            .zmq_pub(port)
     }
 
     fn receiver(address: &str) -> Rc<dyn Node> {
@@ -243,6 +250,29 @@ mod tests {
         let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
         send.join().unwrap().unwrap();
         rec.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn zmq_first_message_not_dropped() {
+        _ = env_logger::try_init();
+        let period = Duration::from_millis(50);
+        let port = 5560;
+        let address = format!("tcp://127.0.0.1:{port}");
+        let run_for = RunFor::Duration(period * 15);
+        let (data, _status) = zmq_sub::<u64>(&address);
+        let recv_node = data.collect().finally(|res, _| {
+            let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+            assert!(!values.is_empty(), "no values received");
+            assert_eq!(values[0], 1, "first message dropped: got {}", values[0]);
+            Ok(())
+        });
+        Graph::new(
+            vec![sender_with_delay(period, port), recv_node],
+            RunMode::RealTime,
+            run_for,
+        )
+        .run()
+        .unwrap();
     }
 
     #[test]
