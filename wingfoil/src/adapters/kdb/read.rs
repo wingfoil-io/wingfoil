@@ -313,18 +313,12 @@ where
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
                 Ok(r) => r,
-                Err(e) => {
-                    yield Err(anyhow::Error::new(e).context(format!("KDB query failed: {}", query)));
-                    break;
-                }
+                Err(e) => { yield Err(e.into()); break; }
             };
 
             let (columns, rows) = match (result.column_names(), result.rows()) {
                 (Ok(cols), Ok(rows)) => (cols, rows),
-                (Err(e), _) | (_, Err(e)) => {
-                    yield Err(anyhow::anyhow!("{}\nkdb query failed with\n{}", query, e));
-                    break;
-                }
+                (Err(e), _) | (_, Err(e)) => { yield Err(e); break; }
             };
 
             let row_count = rows.len();
@@ -335,11 +329,7 @@ where
             for row in &rows {
                 let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!("KDB deserialization failed: {}", query)));
-                        row_error = true;
-                        break;
-                    }
+                    Err(e) => { yield Err(e.into()); row_error = true; break; }
                 };
 
                 if let Some(prev) = prev_time
@@ -347,8 +337,8 @@ where
                 {
                     yield Err(anyhow::anyhow!(
                         "KDB data is not sorted by time: got {:?} after {:?}. \
-                        Add `xasc` to your query to sort the data.\nQuery: {}",
-                        time, prev, query
+                        Add `xasc` to your query to sort the data.",
+                        time, prev
                     ));
                     row_error = true;
                     break;

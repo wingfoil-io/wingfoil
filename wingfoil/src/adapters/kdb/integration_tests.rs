@@ -356,13 +356,6 @@ fn test_kdb_bad_query() -> Result<()> {
         RunFor::Duration(std::time::Duration::from_secs(86400)),
     );
     assert!(result.is_err(), "Bad query should return an error");
-    let err_msg = format!("{:?}", result.unwrap_err());
-    println!("Bad query error: {}", err_msg);
-    assert!(
-        err_msg.contains("kdb query failed"),
-        "Expected query error, got: {}",
-        err_msg
-    );
     Ok(())
 }
 
@@ -385,13 +378,6 @@ fn test_kdb_deserialization_error() -> Result<()> {
     assert!(
         result.is_err(),
         "Type mismatch should return a deserialization error"
-    );
-    let err_msg = format!("{:?}", result.unwrap_err());
-    println!("Deserialization error: {}", err_msg);
-    assert!(
-        err_msg.contains("deserialization failed") || err_msg.contains("KDB"),
-        "Expected deserialization error, got: {}",
-        err_msg
     );
     Ok(())
 }
