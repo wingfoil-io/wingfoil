@@ -377,7 +377,13 @@ fn compute_time_slices(
         let midnight_kdb = day * DAY_NANOS;
         let next_midnight_kdb = midnight_kdb + DAY_NANOS;
 
-        let mut iteration = 0usize;
+        // For the first day, begin at the period boundary that contains start_time
+        // rather than always starting at midnight.
+        let mut iteration = if day == start_day {
+            ((start_kdb - midnight_kdb) / period_nanos) as usize
+        } else {
+            0
+        };
 
         loop {
             // Half-open intervals [t0, t1): caller uses `time >= t0, time < t1`.
@@ -595,6 +601,82 @@ mod tests {
         assert_eq!(slices[2].2, 0); // resets to 0 on new day
         assert_eq!(slices[3].1, 1);
         assert_eq!(slices[3].2, 1);
+    }
+
+    /// Start at 23:59:30 on day 0, end at 23:59:59 — only the tail of the day.
+    ///
+    /// The function must not generate slices from midnight; it should begin at
+    /// the period boundary that contains `start_time`.
+    ///
+    /// Expected slice counts:
+    /// - 60s period → 1 slice  [23:59:00, 00:00:00)  iteration 1439
+    /// - 30s period → 1 slice  [23:59:30, 00:00:00)  iteration 2879
+    /// - 10s period → 3 slices [23:59:30, 23:59:40), [23:59:40, 23:59:50), [23:59:50, 00:00:00)
+    #[test]
+    fn test_compute_time_slices_mid_day_start() {
+        // 23:59:30 = 86370 seconds from midnight in KDB nanos
+        const SECS_23_59_30: i64 = 86_370 * 1_000_000_000;
+        const SECS_23_59_59: i64 = 86_399 * 1_000_000_000;
+        const DAY_NANOS: i64 = 86_400_000_000_000;
+
+        let start = NanoTime::from_kdb_timestamp(SECS_23_59_30);
+        let end = NanoTime::from_kdb_timestamp(SECS_23_59_59);
+        let next_midnight = NanoTime::from_kdb_timestamp(DAY_NANOS);
+
+        // --- 60s period: one slice [23:59:00, 00:00:00), iteration 1439 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(60));
+        assert_eq!(
+            slices.len(),
+            1,
+            "60s: expected 1 slice, got {}",
+            slices.len()
+        );
+        let (t0, t1) = slices[0].0;
+        assert_eq!(
+            t0,
+            NanoTime::from_kdb_timestamp(86_340 * 1_000_000_000),
+            "60s: t0 should be 23:59:00"
+        );
+        assert_eq!(t1, next_midnight, "60s: t1 should be midnight");
+        assert_eq!(slices[0].2, 1439, "60s: iteration should be 1439");
+
+        // --- 30s period: one slice [23:59:30, 00:00:00), iteration 2879 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(30));
+        assert_eq!(
+            slices.len(),
+            1,
+            "30s: expected 1 slice, got {}",
+            slices.len()
+        );
+        let (t0, t1) = slices[0].0;
+        assert_eq!(t0, start, "30s: t0 should be 23:59:30");
+        assert_eq!(t1, next_midnight, "30s: t1 should be midnight");
+        assert_eq!(slices[0].2, 2879, "30s: iteration should be 2879");
+
+        // --- 10s period: three slices starting at 23:59:30 ---
+        let slices = compute_time_slices(start, end, std::time::Duration::from_secs(10));
+        assert_eq!(
+            slices.len(),
+            3,
+            "10s: expected 3 slices, got {}",
+            slices.len()
+        );
+        assert_eq!(slices[0].0.0, start, "10s: first t0 should be 23:59:30");
+        assert_eq!(
+            slices[0].0.1,
+            NanoTime::from_kdb_timestamp(86_380 * 1_000_000_000),
+            "10s: first t1 should be 23:59:40"
+        );
+        assert_eq!(
+            slices[1].0.0,
+            NanoTime::from_kdb_timestamp(86_380 * 1_000_000_000),
+            "10s: second t0 should be 23:59:40"
+        );
+        assert_eq!(
+            slices[2].0.1, next_midnight,
+            "10s: last t1 should be midnight"
+        );
+        assert_eq!(slices[0].2, 8637, "10s: first iteration should be 8637");
     }
 
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
