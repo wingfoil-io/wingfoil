@@ -1,6 +1,7 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "websockets", "kdb", "zmq-beta"]
+full = ["async", "csv", "websockets", "kdb", "zmq-beta", "dynamic-graph-beta"]
+dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
 csv = ["dep:csv"]
@@ -77,6 +78,20 @@ zmq = { version = "0.10.0", optional = true }
 
 
 [dev-dependencies]
+
+[[example]]
+name = "dynamic-group"
+path = "examples/dynamic/dynamic-group/main.rs"
+required-features = ["dynamic-graph-beta"]
+
+[[example]]
+name = "demux"
+path = "examples/dynamic/demux/main.rs"
+
+[[example]]
+name = "dynamic-manual"
+path = "examples/dynamic/dynamic-manual/main.rs"
+required-features = ["dynamic-graph-beta"]
 
 [[example]]
 name = "async"
