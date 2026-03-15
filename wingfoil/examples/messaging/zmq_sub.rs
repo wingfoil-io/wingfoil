@@ -1,4 +1,5 @@
 // NOTE: ZMQ support is beta. Enable with the `zmq-beta` feature flag.
+// Run with: RUST_LOG=info cargo run --example zmq_sub --features zmq-beta
 use log::Level::Info;
 use wingfoil::adapters::zmq::zmq_sub;
 use wingfoil::*;
