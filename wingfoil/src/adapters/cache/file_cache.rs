@@ -56,6 +56,13 @@ impl<T> FileCache<T> {
     /// The file begins with the query string followed by `\n`, then the
     /// bincode-encoded payload. This makes cache files self-documenting:
     /// `head -1 <hex>.cache` shows the exact query that produced the file.
+    ///
+    /// **Concurrent writes:** the `.tmp` path is `<hex>.tmp`, shared by all
+    /// writers for the same key. If two processes race on a cache miss for the
+    /// same slice, their in-flight `.tmp` writes may clobber each other. The
+    /// final `rename` is atomic so the `.cache` file is never left in a torn
+    /// state, but one writer's serialization work is silently discarded. For
+    /// the intended use-case (single backtesting process) this is harmless.
     pub async fn put(&self, key: &CacheKey, query: &str, data: &[(NanoTime, T)]) -> Result<()>
     where
         T: serde::Serialize,

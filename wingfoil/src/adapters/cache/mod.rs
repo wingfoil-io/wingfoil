@@ -51,13 +51,9 @@ mod tests {
 
     #[test]
     fn test_key_stability() {
-        // SHA-256 is deterministic — assert exact hex to catch accidental algorithm changes
+        // SHA-256 is deterministic across toolchain versions. Assert the exact
+        // 16-char hex prefix so any accidental algorithm change is caught.
         let key = CacheKey::from_parts(&["localhost", "5000", "select from trades"]);
-        assert_eq!(key.0.len(), 16);
-        // Verify it's valid hex
-        assert!(key.0.chars().all(|c| c.is_ascii_hexdigit()));
-        // Hardcode the stable value to catch regressions
-        let key2 = CacheKey::from_parts(&["localhost", "5000", "select from trades"]);
-        assert_eq!(key.0, key2.0);
+        assert_eq!(key.0, "5899c93491e25e68");
     }
 }

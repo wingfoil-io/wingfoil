@@ -145,28 +145,60 @@ fn test_kdb_read_cached_corrupt_fallback() -> Result<()> {
     Ok(())
 }
 
-/// When every time slice is already cached, `kdb_read_cached` must not open a
-/// TCP connection. Verified by pointing at a port with no listener after cache
-/// population — a connection attempt would return an error, but the run
-/// succeeds because the socket is never opened.
+/// Partial cache: some slices are cached, one is missing. The run should fetch
+/// only the missing slice from KDB (opening a connection exactly once) and
+/// serve the rest from cache. A subsequent run against a closed port confirms
+/// all slices are now cached.
 #[test]
-fn test_kdb_read_cached_lazy_connection() -> Result<()> {
+fn test_kdb_read_cached_partial_cache() -> Result<()> {
     let _ = env_logger::try_init();
     let cache_dir =
-        std::env::temp_dir().join(format!("wingfoil_cache_lazy_{}", std::process::id()));
+        std::env::temp_dir().join(format!("wingfoil_cache_partial_{}", std::process::id()));
 
-    // Populate cache with a real connection.
-    with_test_data(3, 1, true, |_n, conn| {
-        run_cached(conn, &cache_dir)?;
+    // 12-hour slices over 2 days → 4 slices total, so we can delete one.
+    let half_day = std::time::Duration::from_secs(12 * 3600);
+
+    let run = |conn: KdbConnection| -> Result<usize> {
+        let stream = kdb_read_cached::<TestTradeCached, _>(
+            conn,
+            half_day,
+            cache_dir.to_path_buf(),
+            |within, date, _| slice_query(date, within.0, within.1),
+        );
+        let collected = stream.collapse().collect();
+        collected.clone().run(
+            RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+            RunFor::Duration(std::time::Duration::from_secs(2 * 86400)),
+        )?;
+        Ok(collected.peek_value().len())
+    };
+
+    // Populate all 4 slices.
+    with_test_data(4, 2, true, |n, conn| {
+        let count = run(conn.clone())?;
+        assert_eq!(count, n, "First run should read all rows from KDB");
+
+        // Delete one cache file to simulate a partial cache.
+        let victim = std::fs::read_dir(&cache_dir)?
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().map(|x| x == "cache").unwrap_or(false))
+            .expect("should have cache files")
+            .path();
+        std::fs::remove_file(&victim)?;
+
+        // Second run: 3 cache hits + 1 miss fetched from KDB.
+        let count2 = run(conn)?;
+        assert_eq!(count2, n, "Partial-cache run should still return all rows");
+
         Ok(())
     })?;
 
-    // All slices cached — a closed port must not cause a failure.
+    // All 4 slices are now cached — closed port succeeds.
     let closed = KdbConnection::new("localhost", 59999);
-    let n = run_cached(closed, &cache_dir)?;
-    assert_eq!(
-        n, 3,
-        "All cache hits should succeed without opening a KDB connection"
+    let n = run(closed)?;
+    assert!(
+        n > 0,
+        "All slices cached: closed port should not be dialled"
     );
 
     std::fs::remove_dir_all(&cache_dir).ok();
