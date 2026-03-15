@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::channel::{ChannelSender, Message};
 use crate::{
@@ -10,6 +11,10 @@ use derive_new::new;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zmq;
+
+static MONITOR_ID: AtomicUsize = AtomicUsize::new(0);
+const ZMQ_EVENT_CONNECTED: u16 = 0x0001;
+const ZMQ_EVENT_DISCONNECTED: u16 = 0x0200;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ZmqStatus {
@@ -38,42 +43,68 @@ struct ZeroMqSubscriber<T: Element + Send> {
 
 impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
     fn run(&self, channel_sender: ChannelSender<ZmqEvent<T>>) -> anyhow::Result<()> {
-        let socket = self.connect()?;
-        channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Status(
-            ZmqStatus::Connected,
-        )))?;
-        let mut done = false;
-        while !done {
-            let msg: Message<T> = self.recv(&socket)?;
-            match msg {
-                Message::RealtimeValue(v) => {
-                    channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Data(v)))?;
-                }
-                Message::EndOfStream => {
-                    channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Status(
-                        ZmqStatus::Disconnected,
-                    )))?;
-                    channel_sender.send_message(Message::EndOfStream)?;
-                    done = true;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn connect(&self) -> anyhow::Result<zmq::Socket> {
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SUB)?;
         socket.connect(&self.address)?;
         socket.set_subscribe("".as_bytes())?;
-        Ok(socket)
-    }
 
-    fn recv(&self, socket: &zmq::Socket) -> anyhow::Result<Message<T>> {
-        let res = socket.recv_bytes(0)?;
-        let msg = bincode::deserialize(&res)?;
-        Ok(msg)
+        let monitor_id = MONITOR_ID.fetch_add(1, Ordering::Relaxed);
+        let monitor_addr = format!("inproc://zmq-sub-monitor-{monitor_id}");
+        socket.monitor(
+            &monitor_addr,
+            (ZMQ_EVENT_CONNECTED | ZMQ_EVENT_DISCONNECTED) as i32,
+        )?;
+        let monitor = context.socket(zmq::PAIR)?;
+        monitor.connect(&monitor_addr)?;
+
+        loop {
+            let mut items = [
+                socket.as_poll_item(zmq::POLLIN),
+                monitor.as_poll_item(zmq::POLLIN),
+            ];
+            zmq::poll(&mut items, -1)?;
+
+            if items[1].is_readable() {
+                let event_frame = monitor.recv_msg(0)?;
+                while monitor.get_rcvmore()? {
+                    monitor.recv_msg(0)?;
+                }
+                if event_frame.len() >= 2 {
+                    let event_id = u16::from_le_bytes([event_frame[0], event_frame[1]]);
+                    match event_id {
+                        ZMQ_EVENT_CONNECTED => {
+                            channel_sender.send_message(Message::RealtimeValue(
+                                ZmqEvent::Status(ZmqStatus::Connected),
+                            ))?;
+                        }
+                        ZMQ_EVENT_DISCONNECTED => {
+                            channel_sender.send_message(Message::RealtimeValue(
+                                ZmqEvent::Status(ZmqStatus::Disconnected),
+                            ))?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if items[0].is_readable() {
+                let res = socket.recv_bytes(0)?;
+                let msg: Message<T> = bincode::deserialize(&res)?;
+                match msg {
+                    Message::RealtimeValue(v) => {
+                        channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Data(v)))?;
+                    }
+                    Message::EndOfStream => {
+                        channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Status(
+                            ZmqStatus::Disconnected,
+                        )))?;
+                        channel_sender.send_message(Message::EndOfStream)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
