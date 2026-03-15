@@ -6,8 +6,9 @@ This directory contains the KDB+ adapter for wingfoil, enabling reading from and
 
 ```
 kdb/
-  mod.rs               # Public API, connection types, error handling
-  read.rs              # Read functions: kdb_read
+  mod.rs               # Public API, connection types, error handling, Sym
+  read.rs              # kdb_read() and shared helpers (compute_time_slices, KdbExt, etc.)
+  read_cached.rs       # kdb_read_cached() — file-cached variant of kdb_read
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)
 ```
@@ -23,6 +24,15 @@ kdb/
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
   - Caller constructs the full query — date/time filters, partition hints, etc.
   - Terminates automatically when all slices are exhausted
+- `kdb_read_cached()` - Cached variant of `kdb_read`
+  - Same signature as `kdb_read` plus a `cache_dir: impl Into<PathBuf>` parameter
+  - Checks `<cache_dir>/<hash>.cache` before each slice query; writes on miss
+  - Cache files persist until manually deleted — no TTL, no eviction
+  - Lazy TCP connection: if all slices are cache hits, no KDB connection is opened
+  - `T` must additionally implement `serde::Serialize + serde::Deserialize`; `Sync` is also required
+  - `Sym` is fully supported — it serializes as a plain string (interning not restored on load)
+  - If a cache file is corrupt, logs a warning and falls back to KDB, then overwrites the bad file
+  - **Schema evolution:** `bincode` is not self-describing — delete the cache dir if `T` changes
 - `KdbDeserialize` trait - Convert KDB+ rows to `(NanoTime, T)` tuples
   - `from_kdb_row` returns `Result<(NanoTime, Self), KdbError>` — implementor owns time extraction
   - Use `row.get_timestamp(col)` to extract a KDB timestamp column as `NanoTime`
@@ -127,6 +137,25 @@ impl KdbSerialize for Trade {
         ])
     }
 }
+```
+
+### Reading with kdb_read_cached
+
+```rust
+// Same query closure as kdb_read, plus a cache directory.
+// T must also implement serde::Serialize + serde::Deserialize + Sync.
+let stream = kdb_read_cached::<Trade, _>(
+    conn,
+    std::time::Duration::from_secs(3600),
+    "/tmp/my-backtest-cache",
+    |(t0, t1), date, _| {
+        format!(
+            "select from trades where date=2000.01.01+{}, \
+             time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
+        )
+    },
+);
 ```
 
 ### Reading with kdb_read

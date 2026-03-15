@@ -1,5 +1,7 @@
 //! A library of input and output adapters
 
+#[cfg(feature = "kdb")]
+pub mod cache;
 #[cfg(feature = "csv")]
 pub mod csv_streams;
 pub mod iterator_stream;

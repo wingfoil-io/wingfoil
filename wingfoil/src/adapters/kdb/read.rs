@@ -344,7 +344,7 @@ where
     }
 }
 
-fn compute_time_slices(
+pub(crate) fn compute_time_slices(
     start_time: NanoTime,
     end_time: NanoTime,
     period: std::time::Duration,

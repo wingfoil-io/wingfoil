@@ -53,12 +53,16 @@
 //! ```
 
 mod read;
+mod read_cached;
 mod write;
 
+#[cfg(all(test, feature = "kdb-integration-test"))]
+mod cache_integration_tests;
 #[cfg(all(test, feature = "kdb-integration-test"))]
 mod integration_tests;
 
 pub use read::*;
+pub use read_cached::*;
 pub use write::*;
 
 /// Re-export kdbplus error type for convenience.
@@ -92,6 +96,19 @@ impl std::fmt::Display for Sym {
 impl Default for Sym {
     fn default() -> Self {
         Sym(Arc::from(""))
+    }
+}
+
+impl serde::Serialize for Sym {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Sym {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Sym(Arc::from(s.as_str())))
     }
 }
 
