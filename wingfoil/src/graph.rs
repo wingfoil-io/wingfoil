@@ -245,6 +245,11 @@ impl GraphState {
     /// Deregister `node` at the end of the current cycle:
     /// unlinks it from all upstream downstream-lists and all downstream upstream-lists,
     /// then calls stop() + teardown().
+    ///
+    /// **Note on memory**: removed nodes are marked inactive but their entries in the
+    /// internal index (`node_to_index`, `node_ticked`, `node_dirty`, `nodes`) are never
+    /// freed. In long-running graphs that add and remove many nodes over time, these
+    /// dead entries accumulate. This is a known limitation of the current implementation.
     #[cfg(feature = "dynamic-graph-beta")]
     pub fn remove_node(&mut self, node: Rc<dyn Node>) {
         self.pending_removals.push(node);
@@ -791,15 +796,20 @@ impl Graph {
             }
         }
 
-        // Wire the dynamic caller→node edges and fix layers
+        // Wire the dynamic caller→node edges and fix layers.
+        // Track wired (caller, node) pairs to skip duplicates if add_upstream
+        // is called more than once with the same node in a single cycle.
+        let mut wired_edges: HashSet<(usize, usize)> = HashSet::new();
         for (node, caller_index, is_active, recycle) in &additions {
             let node_index = self.state.node_index(node.clone()).unwrap();
-            self.state.nodes[*caller_index]
-                .upstreams
-                .push((node_index, *is_active));
-            self.state.nodes[node_index]
-                .downstreams
-                .push((*caller_index, *is_active));
+            if wired_edges.insert((*caller_index, node_index)) {
+                self.state.nodes[*caller_index]
+                    .upstreams
+                    .push((node_index, *is_active));
+                self.state.nodes[node_index]
+                    .downstreams
+                    .push((*caller_index, *is_active));
+            }
             self.fix_layers(*caller_index);
             if *recycle {
                 let time = self.state.time + NanoTime::new(1);
@@ -858,27 +868,33 @@ impl Graph {
     /// Recalculate `node_index`'s layer based on its current upstreams,
     /// propagate any increase to its downstreams, and extend
     /// `dirty_nodes_by_layer` to accommodate the new layer.
-    fn fix_layers(&mut self, node_index: usize) {
-        let required = self.state.nodes[node_index]
-            .upstreams
-            .iter()
-            .map(|(up_idx, _)| self.state.nodes[*up_idx].layer)
-            .max()
-            .map_or(0, |m| m + 1);
-        if required > self.state.nodes[node_index].layer {
-            self.state.nodes[node_index].layer = required;
-            let downstreams: Vec<usize> = self.state.nodes[node_index]
-                .downstreams
+    ///
+    /// Iterative BFS to avoid stack overflows on deep graphs.
+    fn fix_layers(&mut self, start: usize) {
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        while let Some(node_index) = queue.pop_front() {
+            let required = self.state.nodes[node_index]
+                .upstreams
                 .iter()
-                .map(|(di, _)| *di)
-                .collect();
-            for dn_idx in downstreams {
-                self.fix_layers(dn_idx);
+                .map(|(up_idx, _)| self.state.nodes[*up_idx].layer)
+                .max()
+                .map_or(0, |m| m + 1);
+            if required > self.state.nodes[node_index].layer {
+                self.state.nodes[node_index].layer = required;
+                let downstreams: Vec<usize> = self.state.nodes[node_index]
+                    .downstreams
+                    .iter()
+                    .map(|(di, _)| *di)
+                    .collect();
+                for dn_idx in downstreams {
+                    queue.push_back(dn_idx);
+                }
             }
-        }
-        let layer = self.state.nodes[node_index].layer;
-        while self.state.dirty_nodes_by_layer.len() <= layer {
-            self.state.dirty_nodes_by_layer.push(vec![]);
+            let layer = self.state.nodes[node_index].layer;
+            while self.state.dirty_nodes_by_layer.len() <= layer {
+                self.state.dirty_nodes_by_layer.push(vec![]);
+            }
         }
     }
 

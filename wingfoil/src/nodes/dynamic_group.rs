@@ -168,6 +168,8 @@ where
         }
         if state.ticked(self.del.clone().as_node()) {
             let key = self.del.peek_value();
+            // on_remove fires before graph unwiring so the user can clean up
+            // output state while the stream is still addressable by key.
             (self.on_remove)(&mut self.value, &key);
             self.group.remove(state, &key);
         }
