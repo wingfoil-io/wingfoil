@@ -2959,7 +2959,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "wingfoil"
-version = "3.1.0"
+version = "3.2.0"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -3005,7 +3005,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-python"
-version = "3.1.0"
+version = "3.2.0"
 dependencies = [
  "anyhow",
  "chrono",
