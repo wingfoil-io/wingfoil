@@ -233,8 +233,6 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                 if let Some(chan) = self.notifier_channel.take() {
                     chan.send(state.ready_notifier())
                         .map_err(|e| anyhow::anyhow!(e))?;
-                } else {
-                    info!("state.ready_notifier() is None")
                 }
             }
             RunMode::HistoricalFrom(time) => {
