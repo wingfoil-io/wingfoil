@@ -1278,6 +1278,35 @@ Caused by:
             }
         }
 
+        /// A node that records setup/start/cycle/stop/teardown call counts.
+        struct LifecycleCounterNode {
+            trigger: Rc<dyn Node>,
+            cycle_count: Rc<RefCell<u64>>,
+            stop_count: Rc<RefCell<u64>>,
+            teardown_count: Rc<RefCell<u64>>,
+        }
+
+        impl MutableNode for LifecycleCounterNode {
+            fn upstreams(&self) -> UpStreams {
+                UpStreams::new(vec![self.trigger.clone()], vec![])
+            }
+
+            fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+                *self.cycle_count.borrow_mut() += 1;
+                Ok(true)
+            }
+
+            fn stop(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
+                *self.stop_count.borrow_mut() += 1;
+                Ok(())
+            }
+
+            fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
+                *self.teardown_count.borrow_mut() += 1;
+                Ok(())
+            }
+        }
+
         #[test]
         fn add_upstream_dynamically_fires_only_after_wired() {
             use std::time::Duration;
@@ -1711,6 +1740,124 @@ Caused by:
             assert!(
                 graph.state.nodes[node_idx].layer > graph.state.nodes[depth2_idx].layer,
                 "aggregation layer should be > depth2 layer after fix_layers"
+            );
+        }
+        #[test]
+        fn add_and_remove_in_same_cycle_node_is_wired() {
+            use std::time::Duration;
+
+            // Calling add_upstream and remove_node for the same node in the same cycle:
+            // process_pending_removals runs before process_pending_additions, so the
+            // removal is a no-op (node is not yet in the graph) and the node ends up wired.
+            struct AdderRemoverNode {
+                trigger: Rc<dyn Node>,
+                extra: Rc<dyn Node>,
+                done: bool,
+                extra_ticks: Rc<RefCell<u64>>,
+            }
+
+            impl MutableNode for AdderRemoverNode {
+                fn upstreams(&self) -> UpStreams {
+                    UpStreams::new(vec![self.trigger.clone()], vec![])
+                }
+
+                fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+                    if !self.done {
+                        state.add_upstream(self.extra.clone(), true, false);
+                        state.remove_node(self.extra.clone());
+                        self.done = true;
+                    }
+                    if state.ticked(self.extra.clone()) {
+                        *self.extra_ticks.borrow_mut() += 1;
+                    }
+                    Ok(true)
+                }
+            }
+
+            let ticker = ticker(Duration::from_nanos(1));
+            let extra: Rc<dyn Stream<u64>> = SimpleCounter {
+                trigger: ticker.clone(),
+                n: 0,
+            }
+            .into_stream();
+            let extra_ticks = Rc::new(RefCell::new(0u64));
+
+            let node = Rc::new(RefCell::new(AdderRemoverNode {
+                trigger: ticker.clone(),
+                extra: extra.clone().as_node(),
+                done: false,
+                extra_ticks: extra_ticks.clone(),
+            }));
+
+            Graph::new(
+                vec![node.clone().as_node()],
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Cycles(4),
+            )
+            .run()
+            .unwrap();
+
+            // Removal was a no-op (ran before addition), so extra is wired and fires
+            // on cycles 2, 3, 4 → 3 ticks.
+            assert_eq!(*extra_ticks.borrow(), 3, "extra_ticks");
+        }
+
+        #[test]
+        fn remove_node_that_never_cycled_calls_lifecycle() {
+            use std::time::Duration;
+
+            // Wire a node whose trigger never fires (a CallBackStream with no callbacks
+            // scheduled), so cycle() is never called on it. Removing it should still
+            // invoke stop() and teardown() exactly once.
+            //
+            // Note: a ticker is unsuitable here because even a 1-hour ticker fires once
+            // at t=0 in HistoricalFrom mode, which would cause extra to cycle.
+            let clk = ticker(Duration::from_nanos(1));
+            let never = Rc::new(RefCell::new(CallBackStream::<i32>::new()));
+
+            let cycle_count = Rc::new(RefCell::new(0u64));
+            let stop_count = Rc::new(RefCell::new(0u64));
+            let teardown_count = Rc::new(RefCell::new(0u64));
+
+            let extra = Rc::new(RefCell::new(LifecycleCounterNode {
+                trigger: never.clone().as_node(),
+                cycle_count: cycle_count.clone(),
+                stop_count: stop_count.clone(),
+                teardown_count: teardown_count.clone(),
+            }));
+
+            // Wire extra at cycle 1, remove it at cycle 3.
+            let adder = Rc::new(RefCell::new(DynAdderNode {
+                trigger: clk.clone(),
+                extra: extra.clone().as_node(),
+                add_after: 1,
+                cycle_count: 0,
+                extra_ticks: Rc::new(RefCell::new(0u64)),
+                stop_count: Rc::new(RefCell::new(0u64)),
+                teardown_count: Rc::new(RefCell::new(0u64)),
+            }));
+
+            let remover = Rc::new(RefCell::new(DynRemoverNode {
+                trigger: clk.clone(),
+                target: extra.clone().as_node(),
+                remove_after: 3,
+                cycle_count: 0,
+            }));
+
+            Graph::new(
+                vec![adder.clone().as_node(), remover.clone().as_node()],
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Cycles(5),
+            )
+            .run()
+            .unwrap();
+
+            assert_eq!(*cycle_count.borrow(), 0, "extra cycle() never called");
+            assert_eq!(*stop_count.borrow(), 1, "stop called once on removal");
+            assert_eq!(
+                *teardown_count.borrow(),
+                1,
+                "teardown called once on removal"
             );
         }
     } // mod dynamism
