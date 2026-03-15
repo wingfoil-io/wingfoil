@@ -235,11 +235,10 @@ impl GraphState {
     /// triggers the calling node on each tick (true) or is read-only (false).
     /// Processed at the end of the current cycle.
     ///
-    /// If `recycle` is true, `add_callback(state.time())` is called on the
-    /// new upstream after it is wired, scheduling it to fire on the very next
-    /// engine iteration. This lets the calling node catch the value that
-    /// triggered the `add_upstream` call without waiting for the next source
-    /// tick.
+    /// If `recycle` is true, `add_callback(state.time() + 1ns)` is called on
+    /// the new upstream after it is wired, scheduling it to fire at `t+1ns`.
+    /// This lets the calling node catch the value that triggered the
+    /// `add_upstream` call without waiting for the next source tick.
     #[cfg(feature = "dynamic-graph-beta")]
     pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool) {
         let caller_index = self.current_node_index.unwrap();
