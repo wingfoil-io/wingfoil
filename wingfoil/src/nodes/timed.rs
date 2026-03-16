@@ -87,7 +87,6 @@ impl<T: Element> StreamPeekRef<T> for TimedStream<T> {
 mod tests {
     use crate::graph::*;
     use crate::nodes::*;
-    use env_logger;
     use std::time::Duration;
 
     #[test]
