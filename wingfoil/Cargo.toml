@@ -87,7 +87,13 @@ name = "order_book"
 required-features = ["csv"]
 
 [[example]]
-name = "kdb"
+name = "kdb_round_trip"
+path = "examples/kdb/round_trip/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read"
+path = "examples/kdb/read/main.rs"
 required-features = ["kdb"]
 
 [[example]]
