@@ -33,7 +33,7 @@ impl MutableNode for TickNode {
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.add_callback(NanoTime::ZERO);
+        state.add_callback(state.start_time());
         Ok(())
     }
 }
