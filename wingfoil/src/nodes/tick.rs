@@ -4,7 +4,7 @@ use derive_new::new;
 
 /// A [Node] that ticks at a specified interval.
 /// Used by [ticker](crate::nodes::ticker).
-#[derive(new)]
+#[derive(new, Upstreams)]
 pub(crate) struct TickNode {
     interval: NanoTime,
     #[new(default)]
@@ -26,10 +26,6 @@ impl MutableNode for TickNode {
         self.at_time = Some(next_time);
         state.add_callback(next_time);
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

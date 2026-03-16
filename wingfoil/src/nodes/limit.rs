@@ -2,8 +2,9 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub struct LimitStream<T: Element> {
+    #[active]
     source: Rc<dyn Stream<T>>,
     limit: u32,
     #[new(default)]
@@ -25,8 +26,5 @@ impl<T: Element> MutableNode for LimitStream<T> {
             self.value = self.source.peek_value();
             Ok(true)
         }
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 }

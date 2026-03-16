@@ -1,5 +1,6 @@
 use crate::{
     Graph, GraphState, IntoNode, MutableNode, Node, NodeOperators, RunFor, RunMode, UpStreams,
+    WiringPoint,
 };
 
 use criterion::Criterion;
@@ -121,6 +122,12 @@ struct BenchTriggerNode {
     signal: Arc<AtomicU8>,
 }
 
+impl WiringPoint for BenchTriggerNode {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+}
+
 impl MutableNode for BenchTriggerNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         match self.signal.load(Ordering::SeqCst).into() {
@@ -133,10 +140,6 @@ impl MutableNode for BenchTriggerNode {
             }
             _ => Ok(false),
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

@@ -5,8 +5,9 @@ use std::rc::Rc;
 /// Suppresses upstream values that arrive faster than a specified interval.
 /// Passes the first value through, then ignores subsequent values until the
 /// interval elapses.
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub(crate) struct ThrottleStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     interval: NanoTime,
     #[new(default)]
@@ -30,10 +31,6 @@ impl<T: Element> MutableNode for ThrottleStream<T> {
         } else {
             Ok(false)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 

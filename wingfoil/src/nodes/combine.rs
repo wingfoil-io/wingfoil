@@ -4,8 +4,9 @@ use derive_new::new;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[derive(new)]
+#[derive(new, Upstreams)]
 struct CombineNode<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     combined: Rc<RefCell<Burst<T>>>,
 }
@@ -15,13 +16,11 @@ impl<T: Element> MutableNode for CombineNode<T> {
         self.combined.borrow_mut().push(self.upstream.peek_value());
         Ok(true)
     }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
 }
 
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 struct CombineStream2<T: Element> {
+    #[active]
     upstreams: Vec<Rc<dyn Node>>,
     combined: Rc<RefCell<Burst<T>>>,
     #[new(default)]
@@ -33,9 +32,6 @@ impl<T: Element> MutableNode for CombineStream2<T> {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         self.value = std::mem::replace(&mut *self.combined.borrow_mut(), Burst::new());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(self.upstreams.clone(), vec![])
     }
 }
 

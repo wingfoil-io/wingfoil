@@ -26,6 +26,12 @@ fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::
     }
 }
 
+impl<T: Element> WiringPoint for IteratorStream<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+}
+
 impl<T: Element> MutableNode for IteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
@@ -40,10 +46,6 @@ impl<T: Element> MutableNode for IteratorStream<T> {
             }
         }
         add_callback(&mut self.peekable, state)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -76,6 +78,12 @@ pub struct SimpleIteratorStream<T: Element> {
     value: T,
 }
 
+impl<T: Element> WiringPoint for SimpleIteratorStream<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+}
+
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         {
@@ -98,10 +106,6 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
             }
         }
         add_callback(&mut self.peekable, state)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

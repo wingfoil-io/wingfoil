@@ -5,9 +5,11 @@ use std::rc::Rc;
 
 /// Emit's its source, if and only if, it's trigger ticks.
 /// Used by [sample](crate::nodes::StreamOperators::sample).
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub struct SampleStream<T: Element> {
+    #[passive]
     upstream: Rc<dyn Stream<T>>,
+    #[active]
     trigger: Rc<dyn Node>,
     #[new(default)]
     #[output]
@@ -18,13 +20,6 @@ impl<T: Element> MutableNode for SampleStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        // only ticks on trigger
-        let active = vec![self.trigger.clone()];
-        let passive = vec![self.upstream.clone().as_node()];
-        UpStreams::new(active, passive)
     }
 }
 

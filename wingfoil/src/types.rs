@@ -7,6 +7,7 @@ use tinyvec::TinyVec;
 pub use crate::graph::GraphState;
 pub use crate::time::*;
 pub use wingfoil_derive::StreamPeekRef;
+pub use wingfoil_derive::Upstreams;
 
 /// A small vector optimised for single-element bursts.
 ///
@@ -94,14 +95,44 @@ pub trait Element: Debug + Clone + Default + 'static {}
 
 impl<T> Element for T where T: Debug + Clone + Default + 'static {}
 
+/// Provides the upstream dependency list used by the graph at wiring time.
+/// Implement this trait (or derive it with `#[derive(Upstreams)]`) alongside
+/// [MutableNode] for every node type.
+pub trait WiringPoint {
+    fn upstreams(&self) -> UpStreams;
+}
+
+/// Helper trait so the `#[derive(Upstreams)]` macro can call a single method
+/// regardless of whether the field is `Rc<dyn Node>`, `Rc<dyn Stream<T>>`, or
+/// a `Vec` of either.
+pub trait AsUpstreamNodes {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>>;
+}
+
+impl AsUpstreamNodes for Rc<dyn Node> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        vec![self.clone()]
+    }
+}
+
+impl<T> AsUpstreamNodes for Rc<dyn Stream<T>> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        vec![self.clone().as_node()]
+    }
+}
+
+impl<U: AsUpstreamNodes> AsUpstreamNodes for Vec<U> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        self.iter().flat_map(|u| u.as_upstream_nodes()).collect()
+    }
+}
+
 /// Implement this trait create your own [Node].
-pub trait MutableNode {
+pub trait MutableNode: WiringPoint {
     /// Called by the graph when it determines that this node
     /// is required to be cycled.
     /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool>;
-    /// Called by the graph at wiring time.
-    fn upstreams(&self) -> UpStreams;
     /// called by the graph after wiring and before start
     #[allow(unused_variables)]
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -172,6 +203,12 @@ pub trait Stream<T>: Node + StreamPeek<T> + AsNode {}
 
 // RefCell
 
+impl<NODE: WiringPoint> WiringPoint for RefCell<NODE> {
+    fn upstreams(&self) -> UpStreams {
+        self.borrow().upstreams()
+    }
+}
+
 impl<NODE: MutableNode> Node for RefCell<NODE> {
     fn cycle(&self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.borrow_mut().cycle(state)
@@ -193,9 +230,6 @@ impl<NODE: MutableNode> Node for RefCell<NODE> {
 impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.borrow_mut().cycle(graph_state)
-    }
-    fn upstreams(&self) -> UpStreams {
-        self.borrow().upstreams()
     }
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().start(state)

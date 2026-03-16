@@ -6,9 +6,11 @@ use crate::types::*;
 
 /// Filter's it source based on the supplied predicate.  Used by
 /// [filter](crate::nodes::StreamOperators::filter).
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub(crate) struct FilterStream<T: Element> {
+    #[active]
     source: Rc<dyn Stream<T>>,
+    #[active]
     condition: Rc<dyn Stream<bool>>,
     #[new(default)]
     #[output]
@@ -23,15 +25,5 @@ impl<T: Element> MutableNode for FilterStream<T> {
             self.value = val;
         }
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![
-                self.source.clone().as_node(),
-                self.condition.clone().as_node(),
-            ],
-            vec![],
-        )
     }
 }

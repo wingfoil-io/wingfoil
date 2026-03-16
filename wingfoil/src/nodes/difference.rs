@@ -7,8 +7,9 @@ use crate::types::*;
 
 /// Emits the difference of it's source from one cycle to the
 /// next.  Used by [difference](crate::nodes::StreamOperators::difference).
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub(crate) struct DifferenceStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     #[new(default)]
     #[output]
@@ -28,9 +29,5 @@ impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
         };
         self.prev_val = Some(self.upstream.peek_value());
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
