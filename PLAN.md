@@ -105,8 +105,7 @@ Nodes with non-trivial `peek_ref` (delegation to an inner stream) are evaluated 
 
 ---
 
-## Open Questions
+## Out of Scope
 
-1. **`demux` multiple impls**: `demux` has 4 `StreamPeekRef` impls (one per output type). A single `#[output]` attribute can only target one field. Determine if all four are trivial or require manual handling; they may need to stay manual.
-
-2. **`graph_node` two impls**: Similar to `demux` — two `StreamPeekRef` impls on the same struct. Evaluate case-by-case.
+- `demux`: 4 `StreamPeekRef` impls on one struct — stays manual.
+- `graph_node`: 2 `StreamPeekRef` impls on one struct — stays manual.
