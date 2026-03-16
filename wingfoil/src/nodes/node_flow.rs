@@ -6,7 +6,9 @@ use crate::types::*;
 use super::FeedbackSink;
 
 /// Suppresses upstream ticks that arrive faster than a specified interval.
+#[derive(Upstreams)]
 pub(crate) struct ThrottleNode {
+    #[active]
     upstream: Rc<dyn Node>,
     interval: NanoTime,
     last_emit_time: Option<NanoTime>,
@@ -34,14 +36,12 @@ impl MutableNode for ThrottleNode {
         }
         Ok(should_emit)
     }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
 }
 
 /// Delays upstream ticks by a specified duration.
+#[derive(Upstreams)]
 pub(crate) struct DelayNode {
+    #[active]
     upstream: Rc<dyn Node>,
     delay: NanoTime,
     queue: TimeQueue<()>,
@@ -76,14 +76,12 @@ impl MutableNode for DelayNode {
             Ok(ticked)
         }
     }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
 }
 
 /// Propagates at most `limit` ticks from upstream.
+#[derive(Upstreams)]
 pub(crate) struct LimitNode {
+    #[active]
     upstream: Rc<dyn Node>,
     limit: u32,
     tick_count: u32,
@@ -108,15 +106,14 @@ impl MutableNode for LimitNode {
             Ok(true)
         }
     }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
 }
 
 /// Drops upstream ticks when `condition` is false.
+#[derive(Upstreams)]
 pub(crate) struct FilterNode {
+    #[active]
     upstream: Rc<dyn Node>,
+    #[passive]
     condition: Rc<dyn Stream<bool>>,
 }
 
@@ -133,17 +130,12 @@ impl MutableNode for FilterNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         Ok(self.condition.peek_value())
     }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![self.upstream.clone()],
-            vec![self.condition.clone().as_node()],
-        )
-    }
 }
 
 /// Sends `()` to a [FeedbackSink] on each upstream tick.
+#[derive(Upstreams)]
 pub(crate) struct FeedbackSendNode {
+    #[active]
     upstream: Rc<dyn Node>,
     sink: FeedbackSink<()>,
 }
@@ -158,10 +150,6 @@ impl MutableNode for FeedbackSendNode {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.sink.send((), state);
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 

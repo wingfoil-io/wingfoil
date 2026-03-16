@@ -4,8 +4,9 @@ use std::rc::Rc;
 
 /// Passes through upstream values unchanged while calling a user-supplied
 /// closure on each value for side effects (debugging, logging, etc.).
-#[derive(StreamPeekRef)]
+#[derive(StreamPeekRef, Upstreams)]
 pub struct InspectStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     #[output]
     value: T,
@@ -27,9 +28,6 @@ impl<T: Element> MutableNode for InspectStream<T> {
         self.value = self.upstream.peek_value();
         (self.func)(&self.value);
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 

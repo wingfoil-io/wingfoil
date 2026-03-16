@@ -1,16 +1,18 @@
 use crate::graph::GraphState;
-use crate::types::{IntoNode, MutableNode, Node, UpStreams};
+use crate::types::{IntoNode, MutableNode, Node, UpStreams, WiringPoint};
 use std::rc::Rc;
 
 struct NeverTickNode {}
 
+impl WiringPoint for NeverTickNode {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::none()
+    }
+}
+
 impl MutableNode for NeverTickNode {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         Ok(false)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 }
 

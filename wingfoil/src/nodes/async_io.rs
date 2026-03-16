@@ -42,11 +42,13 @@ impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime
 
 type ConsumerFunc<T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
 
+#[derive(Upstreams)]
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
     FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
+    #[active]
     source: Rc<dyn Stream<T>>,
     sender: ChannelSender<T>,
     func: Option<ConsumerFunc<T, FUT>>,
@@ -83,10 +85,6 @@ where
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.sender.send(state, self.source.peek_value())?;
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -126,6 +124,7 @@ where
     }
 }
 
+#[derive(Upstreams)]
 struct AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,
@@ -170,10 +169,6 @@ where
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::none()
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

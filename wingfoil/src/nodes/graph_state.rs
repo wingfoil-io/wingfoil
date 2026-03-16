@@ -4,8 +4,9 @@ use std::rc::Rc;
 
 use crate::types::*;
 
-#[derive(new, StreamPeekRef)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub(crate) struct GraphStateStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Node>,
     #[new(default)]
     #[output]
@@ -17,10 +18,5 @@ impl<T: Element> MutableNode for GraphStateStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(state);
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        // only ticks on trigger
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }

@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
-use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
+use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams, WiringPoint};
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
@@ -27,18 +27,7 @@ impl Clone for PyProxyStream {
     }
 }
 
-impl MutableNode for PyProxyStream {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        Python::attach(|py| {
-            let this = self.0.bind(py);
-            let res = this
-                .call_method0("cycle")
-                .map_err(|e| anyhow::anyhow!("Failed to call cycle method: {e}"))?;
-            res.extract::<bool>()
-                .map_err(|e| anyhow::anyhow!("Failed to extract boolean result: {e}"))
-        })
-    }
-
+impl WiringPoint for PyProxyStream {
     fn upstreams(&self) -> UpStreams {
         let ups = Python::attach(|py| {
             let this = self.0.bind(py);
@@ -58,6 +47,19 @@ impl MutableNode for PyProxyStream {
                 .collect::<Vec<_>>()
         });
         UpStreams::new(ups, vec![])
+    }
+}
+
+impl MutableNode for PyProxyStream {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        Python::attach(|py| {
+            let this = self.0.bind(py);
+            let res = this
+                .call_method0("cycle")
+                .map_err(|e| anyhow::anyhow!("Failed to call cycle method: {e}"))?;
+            res.extract::<bool>()
+                .map_err(|e| anyhow::anyhow!("Failed to extract boolean result: {e}"))
+        })
     }
 }
 

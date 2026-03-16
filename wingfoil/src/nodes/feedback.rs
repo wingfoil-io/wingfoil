@@ -9,7 +9,7 @@ use crate::types::*;
 /// Source end of a [feedback] channel. Has no upstreams so the graph
 /// sees no cycle. Values pushed by the paired [FeedbackSink] are
 /// emitted on the next engine cycle.
-#[derive(StreamPeekRef)]
+#[derive(StreamPeekRef, Upstreams)]
 pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
     #[output]
     value: T,
@@ -29,10 +29,6 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
             ticked = true;
         }
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
