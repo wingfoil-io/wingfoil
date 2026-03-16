@@ -28,7 +28,6 @@ Thank you.
 We're looking for contributors to tackle:
 
   🔧 ZMQ — Service discovery for dynamic service registration
-  🗄 KDB+ caching — faster reads
   📦 Binary file I/O — Arrow, Parquet, and more
   ⚡ Kafka I/O — streaming integration
   🐍 wingfoil-python - full parity with core rust crate
@@ -61,8 +60,6 @@ New to open source or Rust? These are a great starting point.
 
   🔧 ZMQ service discovery
       https://github.com/wingfoil-io/wingfoil/issues/103
-  🗄  KDB+ caching
-      https://github.com/wingfoil-io/wingfoil/issues/90
   📦 Binary file I/O (Arrow, Parquet)
       https://github.com/wingfoil-io/wingfoil/issues/104
   🛢  SQL I/O
