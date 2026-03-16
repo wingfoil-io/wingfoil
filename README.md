@@ -52,6 +52,10 @@ You can download the wingfoil Python module from [pypi](https://pypi.org/project
 
 ## Order Book Example
 
+<div align="center">
+  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
+</div>
+
 Load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
@@ -72,9 +76,7 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .unwrap();
 ```
 
-<div align="center">
-  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
-</div>
+
 
 ## Get Involved!
 
