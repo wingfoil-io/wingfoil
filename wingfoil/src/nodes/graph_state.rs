@@ -4,10 +4,11 @@ use std::rc::Rc;
 
 use crate::types::*;
 
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct GraphStateStream<T: Element> {
     upstream: Rc<dyn Node>,
     #[new(default)]
+    #[output]
     value: T,
     func: Box<dyn Fn(&mut GraphState) -> T>,
 }
@@ -21,11 +22,5 @@ impl<T: Element> MutableNode for GraphStateStream<T> {
     fn upstreams(&self) -> UpStreams {
         // only ticks on trigger
         UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for GraphStateStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }

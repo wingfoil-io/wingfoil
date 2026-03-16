@@ -6,6 +6,7 @@ use tinyvec::TinyVec;
 
 pub use crate::graph::GraphState;
 pub use crate::time::*;
+pub use wingfoil_derive::StreamPeekRef;
 
 /// A small vector optimised for single-element bursts.
 ///

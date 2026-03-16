@@ -5,11 +5,12 @@ use std::rc::Rc;
 
 /// Emit's its source, if and only if, it's trigger ticks.
 /// Used by [sample](crate::nodes::StreamOperators::sample).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub struct SampleStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
     trigger: Rc<dyn Node>,
     #[new(default)]
+    #[output]
     value: T,
 }
 
@@ -24,12 +25,6 @@ impl<T: Element> MutableNode for SampleStream<T> {
         let active = vec![self.trigger.clone()];
         let passive = vec![self.upstream.clone().as_node()];
         UpStreams::new(active, passive)
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for SampleStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

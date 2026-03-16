@@ -4,12 +4,13 @@ use derive_new::new;
 use std::boxed::Box;
 
 /// Maps three streams into a single stream.
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct TriMapStream<IN1, IN2, IN3, OUT: Element> {
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
     upstream3: Dep<IN3>,
     #[new(default)]
+    #[output]
     value: OUT,
     func: Box<dyn Fn(IN1, IN2, IN3) -> OUT>,
 }
@@ -38,14 +39,6 @@ impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> MutableNode
             active.into_iter().map(|(n, _)| n).collect(),
             passive.into_iter().map(|(n, _)| n).collect(),
         )
-    }
-}
-
-impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> StreamPeekRef<OUT>
-    for TriMapStream<IN1, IN2, IN3, OUT>
-{
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }
 

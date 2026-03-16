@@ -2,7 +2,8 @@
 [workspace]
 members = [
     "wingfoil",
-    "wingfoil-python",    
+    "wingfoil-derive",
+    "wingfoil-python",
 ]
 resolver = "3"
 

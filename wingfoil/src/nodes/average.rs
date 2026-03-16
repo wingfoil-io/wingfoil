@@ -6,10 +6,11 @@ use num_traits::ToPrimitive;
 use std::rc::Rc;
 
 /// Computes running average.  Used by [average](crate::nodes::StreamOperators::average).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct AverageStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
     #[new(default)]
+    #[output]
     value: f64,
     #[new(default)]
     count: u64,
@@ -25,11 +26,5 @@ impl<T: Element + ToPrimitive> MutableNode for AverageStream<T> {
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element + ToPrimitive> StreamPeekRef<f64> for AverageStream<T> {
-    fn peek_ref(&self) -> &f64 {
-        &self.value
     }
 }

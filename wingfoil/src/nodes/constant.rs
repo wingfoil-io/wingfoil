@@ -2,8 +2,9 @@ use crate::types::*;
 use derive_new::new;
 
 /// Only ticks once (on the first [Graph](crate::graph::Graph) cycle).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct ConstantStream<T: Element> {
+    #[output]
     value: T,
 }
 
@@ -19,12 +20,6 @@ impl<T: Element> MutableNode for ConstantStream<T> {
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(state.start_time());
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for ConstantStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

@@ -2,10 +2,12 @@ use crate::types::*;
 
 use std::rc::Rc;
 
+#[derive(StreamPeekRef)]
 pub(crate) struct BufferStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
     capacity: usize,
     buffer: Vec<T>,
+    #[output]
     value: Vec<T>,
 }
 
@@ -24,12 +26,6 @@ impl<T: Element> MutableNode for BufferStream<T> {
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Vec<T>> for BufferStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
-        &self.value
     }
 }
 

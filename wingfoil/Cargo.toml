@@ -29,6 +29,9 @@ scrape-examples = true
 
 [dependencies]
 
+# derives
+wingfoil-derive = { path = "../wingfoil-derive", version = "0.1.0" }
+
 # workspace
 chrono = {workspace=true}
 derive_more = {workspace=true}

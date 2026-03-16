@@ -4,11 +4,12 @@ use derive_new::new;
 
 use std::rc::Rc;
 
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct FoldStream<IN: Element, OUT: Element> {
     upstream: Rc<dyn Stream<IN>>,
     func: Box<dyn Fn(&mut OUT, IN)>,
     #[new(default)]
+    #[output]
     value: OUT,
 }
 
@@ -19,12 +20,6 @@ impl<IN: Element, OUT: Element> MutableNode for FoldStream<IN, OUT> {
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<IN: Element, OUT: Element> StreamPeekRef<OUT> for FoldStream<IN, OUT> {
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }
 

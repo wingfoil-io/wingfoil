@@ -7,10 +7,11 @@ use crate::types::*;
 
 /// Map's it's source into a new [Stream] using the supplied closure.
 /// Used by [map](crate::nodes::StreamOperators::map).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub struct MapFilterStream<IN, OUT: Element> {
     upstream: Rc<dyn Stream<IN>>,
     #[new(default)]
+    #[output]
     value: OUT,
     func: Box<dyn Fn(IN) -> (OUT, bool)>,
 }
@@ -26,11 +27,5 @@ impl<IN, OUT: Element> MutableNode for MapFilterStream<IN, OUT> {
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<IN: 'static, OUT: Element> StreamPeekRef<OUT> for MapFilterStream<IN, OUT> {
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }

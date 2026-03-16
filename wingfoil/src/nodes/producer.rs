@@ -7,11 +7,12 @@ use crate::types::*;
 
 /// When triggered by it's source, it produces values
 /// using the supplied closure.
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct ProducerStream<T: Element> {
     upstream: Rc<dyn Node>,
     func: Box<dyn Fn() -> T>,
     #[new(default)]
+    #[output]
     value: T,
 }
 
@@ -23,11 +24,5 @@ impl<T: Element> MutableNode for ProducerStream<T> {
 
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for ProducerStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
