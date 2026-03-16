@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::types::*;
 
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct GraphStateStream<T: Element> {
     #[active]
     upstream: Rc<dyn Node>,

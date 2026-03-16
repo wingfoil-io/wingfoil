@@ -6,7 +6,7 @@ use crate::types::*;
 
 /// Filter's it source based on the supplied predicate.  Used by
 /// [filter](crate::nodes::StreamOperators::filter).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct FilterStream<T: Element> {
     #[active]
     source: Rc<dyn Stream<T>>,

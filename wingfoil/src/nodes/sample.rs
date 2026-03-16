@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 /// Emit's its source, if and only if, it's trigger ticks.
 /// Used by [sample](crate::nodes::StreamOperators::sample).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub struct SampleStream<T: Element> {
     #[passive]
     upstream: Rc<dyn Stream<T>>,

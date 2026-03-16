@@ -5,7 +5,7 @@ use crate::types::*;
 
 /// Maps source into a new Stream using a fallible closure.
 /// Used by [try_map](crate::nodes::StreamOperators::try_map).
-#[derive(StreamPeekRef, Upstreams)]
+#[derive(StreamPeekRef, WiringPoint)]
 pub struct TryMapStream<IN, OUT: Element> {
     #[active]
     upstream: Rc<dyn Stream<IN>>,

@@ -42,7 +42,7 @@ impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime
 
 type ConsumerFunc<T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
 
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
@@ -124,7 +124,7 @@ where
     }
 }
 
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 struct AsyncProducerStream<T, S, FUT, FUNC>
 where
     T: Element + Send,

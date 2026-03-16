@@ -7,7 +7,7 @@ use crate::types::*;
 
 /// Emits the difference of it's source from one cycle to the
 /// next.  Used by [difference](crate::nodes::StreamOperators::difference).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct DifferenceStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

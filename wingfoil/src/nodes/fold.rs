@@ -4,7 +4,7 @@ use derive_new::new;
 
 use std::rc::Rc;
 
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct FoldStream<IN: Element, OUT: Element> {
     #[active]
     upstream: Rc<dyn Stream<IN>>,

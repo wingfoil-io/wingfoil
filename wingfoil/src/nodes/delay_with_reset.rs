@@ -9,7 +9,7 @@ use derive_new::new;
 /// Like [`DelayStream`](super::delay::DelayStream) but with a reset trigger.
 /// When the trigger fires, the output snaps to the current upstream value and
 /// the pending queue is cleared.
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
     #[new(default)]
     #[output]

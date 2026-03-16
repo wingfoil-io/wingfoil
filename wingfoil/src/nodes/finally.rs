@@ -2,7 +2,7 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
-#[derive(new, Upstreams)]
+#[derive(new, WiringPoint)]
 pub struct FinallyNode<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> {
     #[active]
     source: Rc<dyn Stream<T>>,

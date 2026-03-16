@@ -2,7 +2,7 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub struct LimitStream<T: Element> {
     #[active]
     source: Rc<dyn Stream<T>>,

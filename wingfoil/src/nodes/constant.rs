@@ -2,7 +2,7 @@ use crate::types::*;
 use derive_new::new;
 
 /// Only ticks once (on the first [Graph](crate::graph::Graph) cycle).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct ConstantStream<T: Element> {
     #[output]
     value: T,

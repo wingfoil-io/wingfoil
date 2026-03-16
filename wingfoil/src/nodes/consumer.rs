@@ -7,7 +7,7 @@ use crate::types::*;
 
 /// Applies function to it's source.  It is a [Node] - it
 /// doesn't produce anything.  Used by [consume](crate::nodes::StreamOperators::for_each).
-#[derive(new, Upstreams)]
+#[derive(new, WiringPoint)]
 pub(crate) struct ConsumerNode<IN> {
     #[active]
     upstream: Rc<dyn Stream<IN>>,
@@ -23,7 +23,7 @@ impl<IN> MutableNode for ConsumerNode<IN> {
 
 /// Like [ConsumerNode] but accepts a fallible closure.
 /// Errors propagate to graph execution.
-#[derive(new, Upstreams)]
+#[derive(new, WiringPoint)]
 pub(crate) struct TryConsumerNode<IN> {
     #[active]
     upstream: Rc<dyn Stream<IN>>,

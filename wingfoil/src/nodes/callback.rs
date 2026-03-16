@@ -9,7 +9,7 @@ use derive_new::new;
 /// A queue of values that are emitted at specified times.  Useful for
 /// unit tests.  Can also be used to feed stream output back into
 /// the [Graph](crate::graph::Graph) as input on later cycles.
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub struct CallBackStream<T: Element + Hash + Eq> {
     #[new(default)]
     #[output]

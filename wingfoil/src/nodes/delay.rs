@@ -7,7 +7,7 @@ use crate::types::*;
 use derive_new::new;
 
 /// Emits it's source delayed by the specified time
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     #[new(default)]
     #[output]

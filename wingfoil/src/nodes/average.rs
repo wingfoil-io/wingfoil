@@ -6,7 +6,7 @@ use num_traits::ToPrimitive;
 use std::rc::Rc;
 
 /// Computes running average.  Used by [average](crate::nodes::StreamOperators::average).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct AverageStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

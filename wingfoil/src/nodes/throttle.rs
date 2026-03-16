@@ -5,7 +5,7 @@ use std::rc::Rc;
 /// Suppresses upstream values that arrive faster than a specified interval.
 /// Passes the first value through, then ignores subsequent values until the
 /// interval elapses.
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct ThrottleStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

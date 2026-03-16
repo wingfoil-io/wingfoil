@@ -4,7 +4,7 @@ use derive_new::new;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[derive(new, Upstreams)]
+#[derive(new, WiringPoint)]
 struct CombineNode<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,
@@ -18,7 +18,7 @@ impl<T: Element> MutableNode for CombineNode<T> {
     }
 }
 
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 struct CombineStream2<T: Element> {
     #[active]
     upstreams: Vec<Rc<dyn Node>>,

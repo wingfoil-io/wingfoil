@@ -7,7 +7,7 @@ use tinyvec::TinyVec;
 pub use crate::graph::GraphState;
 pub use crate::time::*;
 pub use wingfoil_derive::StreamPeekRef;
-pub use wingfoil_derive::Upstreams;
+pub use wingfoil_derive::WiringPoint;
 
 /// A small vector optimised for single-element bursts.
 ///
@@ -96,13 +96,13 @@ pub trait Element: Debug + Clone + Default + 'static {}
 impl<T> Element for T where T: Debug + Clone + Default + 'static {}
 
 /// Provides the upstream dependency list used by the graph at wiring time.
-/// Implement this trait (or derive it with `#[derive(Upstreams)]`) alongside
+/// Implement this trait (or derive it with `#[derive(WiringPoint)]`) alongside
 /// [MutableNode] for every node type.
 pub trait WiringPoint {
     fn upstreams(&self) -> UpStreams;
 }
 
-/// Helper trait so the `#[derive(Upstreams)]` macro can call a single method
+/// Helper trait so the `#[derive(WiringPoint)]` macro can call a single method
 /// regardless of whether the field is `Rc<dyn Node>`, `Rc<dyn Stream<T>>`, or
 /// a `Vec` of either.
 pub trait AsUpstreamNodes {

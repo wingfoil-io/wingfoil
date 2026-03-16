@@ -1,7 +1,7 @@
 use crate::types::*;
 use std::rc::Rc;
 
-#[derive(StreamPeekRef, Upstreams)]
+#[derive(StreamPeekRef, WiringPoint)]
 pub(crate) struct WindowStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

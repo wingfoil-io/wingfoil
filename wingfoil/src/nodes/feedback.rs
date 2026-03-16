@@ -9,7 +9,7 @@ use crate::types::*;
 /// Source end of a [feedback] channel. Has no upstreams so the graph
 /// sees no cycle. Values pushed by the paired [FeedbackSink] are
 /// emitted on the next engine cycle.
-#[derive(StreamPeekRef, Upstreams)]
+#[derive(StreamPeekRef, WiringPoint)]
 pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
     #[output]
     value: T,

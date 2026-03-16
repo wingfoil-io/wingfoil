@@ -6,7 +6,7 @@ use crate::types::*;
 use super::FeedbackSink;
 
 /// Suppresses upstream ticks that arrive faster than a specified interval.
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct ThrottleNode {
     #[active]
     upstream: Rc<dyn Node>,
@@ -39,7 +39,7 @@ impl MutableNode for ThrottleNode {
 }
 
 /// Delays upstream ticks by a specified duration.
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct DelayNode {
     #[active]
     upstream: Rc<dyn Node>,
@@ -79,7 +79,7 @@ impl MutableNode for DelayNode {
 }
 
 /// Propagates at most `limit` ticks from upstream.
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct LimitNode {
     #[active]
     upstream: Rc<dyn Node>,
@@ -109,7 +109,7 @@ impl MutableNode for LimitNode {
 }
 
 /// Drops upstream ticks when `condition` is false.
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct FilterNode {
     #[active]
     upstream: Rc<dyn Node>,
@@ -133,7 +133,7 @@ impl MutableNode for FilterNode {
 }
 
 /// Sends `()` to a [FeedbackSink] on each upstream tick.
-#[derive(Upstreams)]
+#[derive(WiringPoint)]
 pub(crate) struct FeedbackSendNode {
     #[active]
     upstream: Rc<dyn Node>,

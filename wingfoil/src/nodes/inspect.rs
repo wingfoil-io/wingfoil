@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 /// Passes through upstream values unchanged while calling a user-supplied
 /// closure on each value for side effects (debugging, logging, etc.).
-#[derive(StreamPeekRef, Upstreams)]
+#[derive(StreamPeekRef, WiringPoint)]
 pub struct InspectStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

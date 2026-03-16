@@ -7,7 +7,7 @@ use crate::types::*;
 
 /// When triggered by it's source, it produces values
 /// using the supplied closure.
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct ProducerStream<T: Element> {
     #[active]
     upstream: Rc<dyn Node>,

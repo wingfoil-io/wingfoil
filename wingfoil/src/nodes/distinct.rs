@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 /// Only propagates it's source when it's value changes.  Used
 /// by [distinct](crate::nodes::StreamOperators::distinct).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub(crate) struct DistinctStream<T: Element> {
     #[active]
     source: Rc<dyn Stream<T>>, // the source stream

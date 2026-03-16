@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 /// Propagates input and also pushes into buffer which is printed
 /// on Drop.
-#[derive(StreamPeekRef, Upstreams)]
+#[derive(StreamPeekRef, WiringPoint)]
 pub struct PrintStream<T: Element> {
     #[active]
     upstream: Rc<dyn Stream<T>>,

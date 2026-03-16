@@ -111,7 +111,7 @@ pub fn derive_stream_peek_ref(input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```rust,ignore
-/// #[derive(Upstreams)]
+/// #[derive(WiringPoint)]
 /// struct MapStream<IN, OUT: Element> {
 ///     #[active]
 ///     upstream: Rc<dyn Stream<IN>>,
@@ -130,7 +130,7 @@ pub fn derive_stream_peek_ref(input: TokenStream) -> TokenStream {
 /// //     }
 /// // }
 /// ```
-#[proc_macro_derive(Upstreams, attributes(active, passive))]
+#[proc_macro_derive(WiringPoint, attributes(active, passive))]
 pub fn derive_upstreams(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -143,7 +143,7 @@ pub fn derive_upstreams(input: TokenStream) -> TokenStream {
             _ => {
                 return syn::Error::new_spanned(
                     name,
-                    "#[derive(Upstreams)] requires named struct fields",
+                    "#[derive(WiringPoint)] requires named struct fields",
                 )
                 .to_compile_error()
                 .into();
@@ -152,7 +152,7 @@ pub fn derive_upstreams(input: TokenStream) -> TokenStream {
         _ => {
             return syn::Error::new_spanned(
                 name,
-                "#[derive(Upstreams)] can only be applied to structs",
+                "#[derive(WiringPoint)] can only be applied to structs",
             )
             .to_compile_error()
             .into();

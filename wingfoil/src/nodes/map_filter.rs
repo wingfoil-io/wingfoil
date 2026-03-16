@@ -7,7 +7,7 @@ use crate::types::*;
 
 /// Map's it's source into a new [Stream] using the supplied closure.
 /// Used by [map](crate::nodes::StreamOperators::map).
-#[derive(new, StreamPeekRef, Upstreams)]
+#[derive(new, StreamPeekRef, WiringPoint)]
 pub struct MapFilterStream<IN, OUT: Element> {
     #[active]
     upstream: Rc<dyn Stream<IN>>,
