@@ -7,6 +7,7 @@ use wingfoil::adapters::kdb::*;
 use wingfoil::*;
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 struct Price {
     sym: Sym,
     mid: f64,
