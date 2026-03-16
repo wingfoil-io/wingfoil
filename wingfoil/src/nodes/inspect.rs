@@ -4,8 +4,10 @@ use std::rc::Rc;
 
 /// Passes through upstream values unchanged while calling a user-supplied
 /// closure on each value for side effects (debugging, logging, etc.).
+#[derive(StreamPeekRef)]
 pub struct InspectStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
+    #[output]
     value: T,
     func: Box<dyn Fn(&T)>,
 }
@@ -28,12 +30,6 @@ impl<T: Element> MutableNode for InspectStream<T> {
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for InspectStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

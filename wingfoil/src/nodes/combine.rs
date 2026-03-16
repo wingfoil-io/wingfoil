@@ -20,11 +20,12 @@ impl<T: Element> MutableNode for CombineNode<T> {
     }
 }
 
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 struct CombineStream2<T: Element> {
     upstreams: Vec<Rc<dyn Node>>,
     combined: Rc<RefCell<Burst<T>>>,
     #[new(default)]
+    #[output]
     value: Burst<T>,
 }
 
@@ -35,12 +36,6 @@ impl<T: Element> MutableNode for CombineStream2<T> {
     }
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(self.upstreams.clone(), vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Burst<T>> for CombineStream2<T> {
-    fn peek_ref(&self) -> &Burst<T> {
-        &self.value
     }
 }
 

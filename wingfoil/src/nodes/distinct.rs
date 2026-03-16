@@ -4,10 +4,11 @@ use std::rc::Rc;
 
 /// Only propagates it's source when it's value changes.  Used
 /// by [distinct](crate::nodes::StreamOperators::distinct).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct DistinctStream<T: Element> {
     source: Rc<dyn Stream<T>>, // the source stream
     #[new(default)] // used by derive_new
+    #[output]
     value: T,
 }
 
@@ -30,15 +31,5 @@ impl<T: Element + PartialEq> MutableNode for DistinctStream<T> {
     fn upstreams(&self) -> UpStreams {
         // this node is driven only by its source
         UpStreams::new(vec![self.source.clone().as_node()], vec![])
-    }
-}
-
-// downstream nodes can inspect the current value of this
-// stream by calling this method
-impl<T: Element + PartialEq> StreamPeekRef<T> for DistinctStream<T> {
-    fn peek_ref(&self) -> &T {
-        // for large structs, please wrap in an Rc
-        // to get shallow copy semantics
-        &self.value
     }
 }

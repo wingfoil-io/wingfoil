@@ -5,11 +5,12 @@ use std::boxed::Box;
 
 /// Maps two streams into a single stream using a fallible closure.
 /// Used by [try_bimap](crate::nodes::try_bimap).
-#[derive(new)]
+#[derive(new, StreamPeekRef)]
 pub(crate) struct TryBiMapStream<IN1, IN2, OUT: Element> {
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
     #[new(default)]
+    #[output]
     value: OUT,
     func: Box<dyn Fn(IN1, IN2) -> anyhow::Result<OUT>>,
 }
@@ -34,14 +35,6 @@ impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for TryBiMapStream<IN
             active.into_iter().map(|(n, _)| n).collect(),
             passive.into_iter().map(|(n, _)| n).collect(),
         )
-    }
-}
-
-impl<IN1: 'static, IN2: 'static, OUT: Element> StreamPeekRef<OUT>
-    for TryBiMapStream<IN1, IN2, OUT>
-{
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }
 

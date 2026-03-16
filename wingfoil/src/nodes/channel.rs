@@ -74,13 +74,14 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
     }
 }
 
-#[derive(new, Debug)]
+#[derive(new, Debug, StreamPeekRef)]
 pub struct ChannelReceiverStream<T: Element + Send> {
     receiver: ChannelReceiver<T>,
     #[debug(skip)]
     trigger: Option<Rc<dyn Node>>,
     notifier_channel: Option<NotifierChannelSender>,
     #[new(default)]
+    #[output]
     value: Burst<T>,
     #[new(default)]
     finished: bool,
@@ -247,11 +248,5 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
         self.receiver.teardown();
         Ok(())
-    }
-}
-
-impl<T: Element + Send> StreamPeekRef<Burst<T>> for ChannelReceiverStream<T> {
-    fn peek_ref(&self) -> &Burst<T> {
-        &self.value
     }
 }

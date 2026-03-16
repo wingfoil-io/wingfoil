@@ -1,0 +1,14 @@
+[package]
+name = "wingfoil-derive"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Proc-macro derives for the wingfoil stream processing library"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn  = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

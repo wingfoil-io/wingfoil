@@ -10,8 +10,10 @@ type Peeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>;
 
 /// Wraps an Iterator and exposes it as a [`Stream`] of [`Burst<T>`].
 /// Multiple items with the same timestamp are grouped into a single [`Burst`] per tick.
+#[derive(StreamPeekRef)]
 pub struct IteratorStream<T: Element> {
     peekable: Peeker<T>,
+    #[output]
     value: Burst<T>,
 }
 
@@ -49,12 +51,6 @@ impl<T: Element> MutableNode for IteratorStream<T> {
     }
 }
 
-impl<T: Element> StreamPeekRef<Burst<T>> for IteratorStream<T> {
-    fn peek_ref(&self) -> &Burst<T> {
-        &self.value
-    }
-}
-
 impl<T> IteratorStream<T>
 where
     T: Element + 'static,
@@ -71,8 +67,10 @@ where
 /// The source must be strictly ascending in time. If the source
 /// can tick multiple times at the same timestamp, use
 /// [IteratorStream] instead, which emits [`Burst<T>`].
+#[derive(StreamPeekRef)]
 pub struct SimpleIteratorStream<T: Element> {
     peekable: Peeker<T>,
+    #[output]
     value: T,
 }
 
@@ -104,12 +102,6 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         add_callback(&mut self.peekable, state)?;
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for SimpleIteratorStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 
