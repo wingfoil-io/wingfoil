@@ -38,6 +38,7 @@ mod receiver;
 mod sample;
 mod throttle;
 mod tick;
+mod timed;
 mod trimap;
 mod try_bimap;
 mod try_map;
@@ -80,6 +81,7 @@ use producer::*;
 use sample::*;
 use throttle::*;
 use tick::*;
+use timed::*;
 use trimap::*;
 use try_bimap::*;
 use try_map::*;
@@ -537,6 +539,11 @@ pub trait StreamOperators<T: Element> {
     /// ```
     #[must_use]
     fn with_time(self: &Rc<Self>) -> Rc<dyn Stream<(NanoTime, T)>>;
+    /// Passes through values unchanged. On shutdown logs a summary:
+    /// tick count, elapsed wall time, and (in historical mode) elapsed engine
+    /// time and the replay speedup factor.
+    #[must_use]
+    fn timed(self: &Rc<Self>) -> Rc<dyn Stream<T>>;
 }
 
 impl<T> StreamOperators<T> for dyn Stream<T>
@@ -812,6 +819,10 @@ where
 
     fn with_time(self: &Rc<Self>) -> Rc<dyn Stream<(NanoTime, T)>> {
         WithTimeStream::new(self.clone()).into_stream()
+    }
+
+    fn timed(self: &Rc<Self>) -> Rc<dyn Stream<T>> {
+        TimedStream::new(self.clone()).into_stream()
     }
 }
 
