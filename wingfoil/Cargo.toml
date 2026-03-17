@@ -10,7 +10,7 @@ zmq-beta = ["dep:zmq", "dep:bincode"]
 
 [package]
 name = "wingfoil"
-version = "3.2.0"
+version = "3.3.0"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 publish = ["wingfoil", "crates-io"]
