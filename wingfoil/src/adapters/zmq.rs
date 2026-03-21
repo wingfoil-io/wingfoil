@@ -8,6 +8,7 @@ use crate::{
     ReceiverStream, RunMode, Stream, UpStreams,
 };
 use derive_new::new;
+use log::warn;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zmq;
@@ -89,7 +90,16 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 
             if items[0].is_readable() {
                 let res = socket.recv_bytes(0)?;
-                let msg: Message<T> = bincode::deserialize(&res)?;
+                let msg: Message<T> = match bincode::deserialize(&res) {
+                    Ok(m) => m,
+                    Err(err) => {
+                        warn!(
+                            "ZMQ sub: failed to deserialize message — \
+                             is the publisher using bincode? {err}"
+                        );
+                        continue;
+                    }
+                };
                 match msg {
                     Message::RealtimeValue(v) => {
                         channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Data(v)))?;
