@@ -3,14 +3,14 @@
 use wingfoil::*;
 
 fn main() {
+    env_logger::init();
     let mut source = constant(1_u128);
     for _ in 1..128 {
         source = add(&source, &source);
     }
-    let cycles = source.count();
-    cycles
+    source
+        .timed()
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
         .unwrap();
-    println!("cycles {:?}", cycles.peek_value());
     println!("value {:?}", source.peek_value());
 }
