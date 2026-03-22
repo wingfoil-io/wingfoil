@@ -97,8 +97,8 @@
 //! See the [async example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/async/) for more details.
 #![doc = include_str!("../examples/breadth_first/README.md")]
 //! See the [breadth first example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/breadth_first/) for more details.
-#![doc = include_str!("../examples/rfq/README.md")]
-//! See the [rfq example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/rfq/) for more details.
+#![doc = include_str!("../examples/dynamic/README.md")]
+//! See the [dynamic examples](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/dynamic/) for more details.
 //!
 //! ## Multithreading
 //!
