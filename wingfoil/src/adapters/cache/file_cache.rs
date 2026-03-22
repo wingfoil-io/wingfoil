@@ -116,11 +116,12 @@ impl<T> FileCache<T> {
         let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "cache") && p != exclude {
-                if let Ok(meta) = entry.metadata().await {
-                    let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                    files.push((p, meta.len(), mtime));
-                }
+            if p.extension().is_some_and(|e| e == "cache")
+                && p != exclude
+                && let Ok(meta) = entry.metadata().await
+            {
+                let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                files.push((p, meta.len(), mtime));
             }
         }
 

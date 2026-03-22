@@ -70,10 +70,10 @@ impl CacheConfig {
         let mut errors: Vec<String> = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "cache") {
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    errors.push(format!("{}: {}", path.display(), e));
-                }
+            if path.extension().is_some_and(|e| e == "cache")
+                && let Err(e) = tokio::fs::remove_file(&path).await
+            {
+                errors.push(format!("{}: {}", path.display(), e));
             }
         }
         if errors.is_empty() {
