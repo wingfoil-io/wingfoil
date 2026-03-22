@@ -67,8 +67,8 @@ fn main() -> Result<()> {
     // Point at a closed port: if every slice is a cache hit the run still succeeds.
     run(KdbConnection::new("localhost", 59999), config.clone())?;
 
-    println!("Clearing cache");
-    config.clear()?;
+    //println!("Clearing cache form disk..");
+    //config.clear()?;
 
     println!("Done");
     Ok(())
