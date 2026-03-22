@@ -22,8 +22,10 @@ for _ in 1..128 {
 }
 source
     .timed()
-    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
-    .unwrap();
+    .run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Forever
+    )?;
 println!("value {:?}", source.peek_value());
 ```
 
