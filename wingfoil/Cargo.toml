@@ -98,6 +98,11 @@ path = "examples/kdb/read/main.rs"
 required-features = ["kdb"]
 
 [[example]]
+name = "kdb_read_cached"
+path = "examples/kdb/read_cached/main.rs"
+required-features = ["kdb"]
+
+[[example]]
 name = "rfq"
 required-features = ["websockets"]
 
