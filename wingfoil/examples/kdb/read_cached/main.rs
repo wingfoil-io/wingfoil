@@ -67,9 +67,8 @@ fn main() -> Result<()> {
     // Point at a closed port: if every slice is a cache hit the run still succeeds.
     run(KdbConnection::new("localhost", 59999), config.clone())?;
 
-    // clear() is async; use a one-shot runtime to call it from sync main.
     println!("Clearing cache");
-    tokio::runtime::Runtime::new()?.block_on(config.clear())?;
+    config.clear()?;
 
     println!("Done");
     Ok(())

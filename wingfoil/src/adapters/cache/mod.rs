@@ -61,17 +61,17 @@ impl CacheConfig {
     /// Returns `Ok(())` if the folder does not exist (nothing to clear).
     /// Errors from individual file deletions are collected and returned as a
     /// single combined error; other files in the folder are left untouched.
-    pub async fn clear(&self) -> Result<()> {
-        let mut entries = match tokio::fs::read_dir(&self.folder).await {
+    pub fn clear(&self) -> Result<()> {
+        let entries = match std::fs::read_dir(&self.folder) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         };
         let mut errors: Vec<String> = Vec::new();
-        while let Some(entry) = entries.next_entry().await? {
+        for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "cache")
-                && let Err(e) = tokio::fs::remove_file(&path).await
+                && let Err(e) = std::fs::remove_file(&path)
             {
                 errors.push(format!("{}: {}", path.display(), e));
             }
@@ -121,27 +121,21 @@ mod tests {
         assert_eq!(key.0, "5899c93491e25e68");
     }
 
-    #[tokio::test]
-    async fn test_cache_config_clear() {
+    #[test]
+    fn test_cache_config_clear() {
         let dir = std::env::temp_dir().join(format!(
             "wingfoil_cache_config_clear_{}",
             std::process::id()
         ));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
 
         // Write some .cache files and a non-cache file
-        tokio::fs::write(dir.join("a.cache"), b"data")
-            .await
-            .unwrap();
-        tokio::fs::write(dir.join("b.cache"), b"data")
-            .await
-            .unwrap();
-        tokio::fs::write(dir.join("other.txt"), b"keep")
-            .await
-            .unwrap();
+        std::fs::write(dir.join("a.cache"), b"data").unwrap();
+        std::fs::write(dir.join("b.cache"), b"data").unwrap();
+        std::fs::write(dir.join("other.txt"), b"keep").unwrap();
 
         let config = CacheConfig::new(&dir, u64::MAX);
-        config.clear().await.unwrap();
+        config.clear().unwrap();
 
         // .cache files gone, other file remains
         assert!(!dir.join("a.cache").exists());
@@ -150,8 +144,8 @@ mod tests {
 
         // clear on non-existent folder is Ok
         let absent = CacheConfig::new(dir.join("nonexistent"), u64::MAX);
-        absent.clear().await.unwrap();
+        absent.clear().unwrap();
 
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
