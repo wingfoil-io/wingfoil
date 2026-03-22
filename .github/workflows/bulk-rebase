@@ -1,0 +1,30 @@
+name: Bulk Rebase
+on:
+  workflow_dispatch:
+jobs:
+  rebase-all:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+      - name: Rebase and Force-Push
+        run: |
+          for branch in $(git branch -r | grep -v 'origin/main' | grep -v 'origin/HEAD' | sed 's/origin\///'); do
+            echo "Processing $branch..."
+            git checkout $branch
+            if git rebase origin/main; then
+              # --force-with-lease is safer than --force
+              git push origin $branch --force-with-lease
+              echo "Successfully rebased and pushed $branch"
+            else
+              echo "Conflict on $branch. Aborting rebase."
+              git rebase --abort
+            fi
+          done
