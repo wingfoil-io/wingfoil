@@ -5,57 +5,40 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use rxrust::prelude::*;
+use std::any::Any;
 use std::convert::Infallible;
 use std::hint::black_box;
-use std::sync::{Arc, Mutex};
-
-/// Build a chain of depth N using combine_latest(src, src) at each level.
-/// Returns (root_subject, leaf_count, _subscriptions_keepalive).
-fn build_chain(
-    depth: usize,
-) -> (
-    LocalSubject<'static, u128, Infallible>,
-    Arc<Mutex<u64>>,
-    Vec<Box<dyn std::any::Any>>,
-) {
-    let root: LocalSubject<'static, u128, Infallible> = Local::subject();
-    let mut current = root.clone();
-    let mut keepalive: Vec<Box<dyn std::any::Any>> = Vec::new();
-
-    for _ in 0..depth {
-        let next: LocalSubject<'static, u128, Infallible> = Local::subject();
-        let mut next_emitter = next.clone();
-        let sub = current
-            .clone()
-            .combine_latest(current.clone(), |a: u128, b: u128| a + b)
-            .subscribe(move |v| next_emitter.next(v));
-        keepalive.push(Box::new(sub));
-        current = next;
-    }
-
-    let count = Arc::new(Mutex::new(0u64));
-    let count_clone = count.clone();
-    let sub = current.subscribe(move |v| {
-        *count_clone.lock().unwrap() += black_box(v) as u64;
-    });
-    keepalive.push(Box::new(sub));
-
-    (root, count, keepalive)
-}
-
-fn bench_depth(crit: &mut Criterion, depth: usize) {
-    let (mut root, _count, _keepalive) = build_chain(depth);
-    crit.bench_function(&format!("depth_{depth}"), |b| {
-        b.iter(|| {
-            root.next(black_box(1u128));
-            root.next(black_box(1u128));
-        });
-    });
-}
 
 fn bench(crit: &mut Criterion) {
     for depth in 1..=10 {
-        bench_depth(crit, depth);
+        let mut root: LocalSubject<'static, u128, Infallible> = Local::subject();
+        let mut current = root.clone();
+
+        // Each subscription must be kept alive or rxrust drops it.
+        // Types differ per level so we erase them into Box<dyn Any>.
+        let mut subs: Vec<Box<dyn Any>> = Vec::new();
+
+        for _ in 0..depth {
+            let next: LocalSubject<'static, u128, Infallible> = Local::subject();
+            let mut emitter = next.clone();
+            subs.push(Box::new(
+                current
+                    .clone()
+                    .combine_latest(current.clone(), |a: u128, b: u128| a + b)
+                    .subscribe(move |v| emitter.next(v)),
+            ));
+            current = next;
+        }
+        subs.push(Box::new(current.subscribe(|v| {
+            black_box(v);
+        })));
+
+        crit.bench_function(&format!("depth_{depth}"), |b| {
+            b.iter(|| {
+                root.next(black_box(1u128));
+                root.next(black_box(1u128));
+            });
+        });
     }
 }
 
