@@ -11,7 +11,7 @@ print(f"Publishing on tcp://127.0.0.1:{PORT} ...")
     wf.ticker(0.5)
     .count()
     .inspect(lambda n: print(f"publishing: {n}"))
-    .map(lambda n: struct.pack(">Q", n))  # u64 big-endian bytes
+    .map(lambda n: struct.pack("<Q", n))  # u64 little-endian bytes
     .zmq_pub(PORT)
     .run(realtime=True)
 )
