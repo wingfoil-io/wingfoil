@@ -1,6 +1,7 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "websockets", "kdb", "zmq-beta"]
+full = ["async", "csv", "websockets", "kdb", "zmq-beta", "dynamic-graph-beta"]
+dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
 csv = ["dep:csv"]
@@ -82,6 +83,20 @@ rxrust = "1.0.0-rc.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 
 [[example]]
+name = "dynamic-group"
+path = "examples/dynamic/dynamic-group/main.rs"
+required-features = ["dynamic-graph-beta"]
+
+[[example]]
+name = "demux"
+path = "examples/dynamic/demux/main.rs"
+
+[[example]]
+name = "dynamic-manual"
+path = "examples/dynamic/dynamic-manual/main.rs"
+required-features = ["dynamic-graph-beta"]
+
+[[example]]
 name = "async"
 required-features = ["async"]
 
@@ -104,9 +119,9 @@ name = "kdb_read_cached"
 path = "examples/kdb/read_cached/main.rs"
 required-features = ["kdb"]
 
+
 [[example]]
-name = "rfq"
-required-features = ["websockets"]
+name = "run_mode"
 
 [[bench]]
 name = "graph"

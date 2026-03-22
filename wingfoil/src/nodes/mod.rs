@@ -18,6 +18,8 @@ mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
+#[cfg(feature = "dynamic-graph-beta")]
+pub mod dynamic_group;
 mod feedback;
 mod filter;
 mod finally;
@@ -52,6 +54,8 @@ pub use async_io::*;
 pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
 pub use demux::*;
+#[cfg(feature = "dynamic-graph-beta")]
+pub use dynamic_group::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
