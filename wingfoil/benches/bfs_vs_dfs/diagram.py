@@ -2,7 +2,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-DEPTH = 4
+DEPTH = 2
 NODE_R = 0.28
 SPACING = 1.6
 
@@ -50,6 +50,11 @@ ax.set_aspect('equal')
 ax.axis('off')
 ax.set_title('Branch / recombine pattern\n(both inputs from the same upstream node)',
              fontsize=10, pad=12)
+
+# "repeats" ellipsis below last node
+last_x, last_y = positions[-1]
+ax.text(last_x, last_y - SPACING * 0.6, '⋮  (N levels)', ha='center',
+        va='center', fontsize=13, color='#555')
 
 fig.tight_layout()
 fig.savefig('diagram.png', dpi=150, bbox_inches='tight')
