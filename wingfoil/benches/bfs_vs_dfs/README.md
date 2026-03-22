@@ -2,9 +2,7 @@
 
 These benchmarks measure the cost of the branch/recombine pattern at depths 1–10:
 
-```
-source → add(source, source) → add(…, …) → … (N levels)
-```
+<img src="diagram.png" width="300" align="right">
 
 At depth N the graph has 2^N paths from source to sink. The execution model
 determines whether a framework pays O(N) or O(2^N) per tick.
@@ -14,10 +12,6 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 <img src="latency.png" width="700">
 
 Wingfoil stays flat while async streams and reactive double every level (O(2^N) DFS). At depth 10 both DFS approaches are ~120× slower than wingfoil; at depth 20 that gap would be ~3 million×.
-
-Reactive and async streams double every level — clear O(2^N). Wingfoil stays
-flat — O(N).  At depth 10 reactive is ~120× slower than wingfoil; at depth 20
-it would be ~3 million times slower.
 
 ### Why the difference?
 
