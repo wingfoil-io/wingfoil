@@ -45,16 +45,23 @@ for i in range(DEPTH):
             fontsize=9, color='#888', style='italic')
 
 ax.set_xlim(-1.2, 1.4)
-ax.set_ylim(-0.6, DEPTH * SPACING + 0.6)
+ax.set_ylim(positions[-1][1] - SPACING * 1.3, DEPTH * SPACING + 0.6)
 ax.set_aspect('equal')
 ax.axis('off')
 ax.set_title('Branch / recombine pattern\n(both inputs from the same upstream node)',
              fontsize=10, pad=12)
 
-# "repeats" ellipsis below last node
+# Dashed arrow + ellipsis below last node to indicate repetition
 last_x, last_y = positions[-1]
-ax.text(last_x, last_y - SPACING * 0.6, '⋮  (N levels)', ha='center',
-        va='center', fontsize=13, color='#555')
+ax.annotate(
+    '', xy=(last_x, last_y - SPACING * 0.55), xytext=(last_x, last_y - NODE_R),
+    arrowprops=dict(arrowstyle='->', color='#888', lw=1.5, linestyle='dashed'),
+    zorder=1,
+)
+ax.text(last_x, last_y - SPACING * 0.7, '⋮', ha='center',
+        va='center', fontsize=18, color='#555')
+ax.text(last_x, last_y - SPACING * 1.0, 'N levels', ha='center',
+        va='center', fontsize=10, color='#888', style='italic')
 
 fig.tight_layout()
 fig.savefig('diagram.png', dpi=150, bbox_inches='tight')
