@@ -93,6 +93,9 @@ impl ReadyNotifier {
 /// Maintains the parts of the graph state that is accessible to Nodes.
 pub struct GraphState {
     time: NanoTime,
+    /// True until the first engine cycle completes; suppresses the
+    /// strict-advance check so the very first cycle can fire at NanoTime::ZERO.
+    first_cycle: bool,
     is_last_cycle: bool,
     stop_requested: bool,
     current_node_index: Option<usize>,
@@ -119,6 +122,7 @@ impl GraphState {
         let mut id = GRAPH_ID.lock().unwrap();
         let slf = Self {
             time: NanoTime::ZERO,
+            first_cycle: true,
             is_last_cycle: false,
             stop_requested: false,
             current_node_index: None,
@@ -593,7 +597,15 @@ impl Graph {
             panic!("ready_callbacks are not supported in realtime mode.");
         }
         if self.state.has_scheduled_callbacks() {
-            self.state.time = self.state.next_scheduled_time();
+            let next = self.state.next_scheduled_time();
+            self.state.time = if self.state.first_cycle {
+                // First cycle: use the scheduled time as-is (may be NanoTime::ZERO).
+                self.state.first_cycle = false;
+                next
+            } else {
+                // Enforce strict monotonic progression: bump to prev+1 if needed.
+                next.max(self.state.time + 1)
+            };
         }
         self.process_scheduled_callbacks()
     }
@@ -620,7 +632,7 @@ impl Graph {
                 progressed = true;
             }
         }
-        self.state.time = NanoTime::now();
+        self.state.time = NanoTime::now().max(self.state.time + 1);
         progressed
     }
 
@@ -891,5 +903,83 @@ Caused by:
 
     fn push_first(inputs: &[Rc<RefCell<CallBackStream<i32>>>], value_at: ValueAt<i32>) {
         inputs[0].borrow_mut().push(value_at);
+    }
+
+    /// Minimal test node: records state.time() on each cycle, and on its first
+    /// cycle re-schedules itself at a caller-supplied time (which may equal or
+    /// precede the current engine time).
+    struct TimeCapturingNode {
+        times: Vec<NanoTime>,
+        resched_time: NanoTime,
+    }
+
+    impl MutableNode for TimeCapturingNode {
+        fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+            let t = state.time();
+            self.times.push(t);
+            if self.times.len() == 1 {
+                state.add_callback(self.resched_time);
+            }
+            Ok(true)
+        }
+
+        fn upstreams(&self) -> UpStreams {
+            UpStreams::default()
+        }
+
+        fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+            state.add_callback(NanoTime::new(100));
+            Ok(())
+        }
+    }
+
+    /// Time must advance even when a node re-schedules itself at the current time.
+    #[test]
+    fn time_advances_with_duplicate_scheduled_time() {
+        let node = Rc::new(RefCell::new(TimeCapturingNode {
+            times: vec![],
+            resched_time: NanoTime::new(100), // same as initial fire time
+        }));
+        Graph::new(
+            vec![node.clone().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(2),
+        )
+        .run()
+        .unwrap();
+
+        let times = node.borrow().times.clone();
+        assert_eq!(times.len(), 2, "expected exactly 2 cycles");
+        assert!(
+            times[1] > times[0],
+            "time did not advance between cycles: {:?} -> {:?}",
+            times[0],
+            times[1]
+        );
+    }
+
+    /// Time must not go backwards when a node re-schedules itself in the past.
+    #[test]
+    fn time_advances_with_past_scheduled_time() {
+        let node = Rc::new(RefCell::new(TimeCapturingNode {
+            times: vec![],
+            resched_time: NanoTime::new(50), // in the past relative to initial fire at 100
+        }));
+        Graph::new(
+            vec![node.clone().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(2),
+        )
+        .run()
+        .unwrap();
+
+        let times = node.borrow().times.clone();
+        assert_eq!(times.len(), 2, "expected exactly 2 cycles");
+        assert!(
+            times[1] > times[0],
+            "time went backwards or stalled: {:?} -> {:?}",
+            times[0],
+            times[1]
+        );
     }
 }
