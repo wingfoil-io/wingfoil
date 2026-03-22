@@ -13,6 +13,7 @@ fn main() {
         .count()
         //.limit(10)
         .logged("pub", Info)
+        .map(|n: u64| n.to_le_bytes().to_vec())
         .zmq_pub(port)
         .run(RunMode::RealTime, RunFor::Forever)
         .unwrap();
