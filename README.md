@@ -44,11 +44,12 @@ hello, world 2
 hello, world 3
 ```
 
-You can download from [crates.io](https://crates.io/crates/wingfoil/),
-read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/),
-review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
-or jump straight into [one of the examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book).
-You can download the wingfoil Python module from [pypi](https://pypi.org/project/wingfoil/).
+## Links
+- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
+- Download from [crates.io](https://crates.io/crates/wingfoil/)
+- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
+- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
+- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
 
 ## Order Book Example
 
@@ -76,6 +77,7 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .unwrap();
 ```
 
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/)
 
 
 ## Get Involved!
