@@ -31,6 +31,57 @@ prices:([]time:`timestamp$();sym:`symbol$();mid:`float$())
 RUST_LOG=info cargo run --example kdb_read_cached --features kdb
 ```
 
+## Code
+
+```rust
+// serde derives are required by kdb_read_cached
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct Price {
+    sym: Sym,
+    mid: f64,
+}
+
+impl KdbDeserialize for Price {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?;
+        Ok((time, Price {
+            sym: row.get_sym(1, interner)?,
+            mid: row.get(2)?.get_float()?,
+        }))
+    }
+}
+
+// 10 MiB cap — oldest cache files are evicted when the limit is exceeded.
+// Use u64::MAX for an unbounded cache.
+let config = CacheConfig::new("/tmp/wingfoil-kdb-cache", 10 * 1024 * 1024);
+
+kdb_read_cached::<Price, _>(
+    conn,
+    Duration::from_secs(10),
+    config,
+    |(t0, t1), _date, _iter| {
+        format!(
+            "select time, sym, mid from prices \
+             where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            t0.to_kdb_timestamp(),
+            t1.to_kdb_timestamp(),
+        )
+    },
+)
+.logged("prices", Info)
+.run(
+    RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+    RunFor::Duration(Duration::from_secs(100)),
+)?;
+
+// Clear all .cache files from disk
+config.clear()?;
+```
+
 ## Output
 
 ```

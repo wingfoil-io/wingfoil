@@ -26,6 +26,48 @@ prices:([]time:`timestamp$();sym:`symbol$();mid:`float$())
 RUST_LOG=info cargo run --example kdb_read --features kdb
 ```
 
+## Code
+
+```rust
+#[derive(Debug, Clone, Default)]
+struct Price {
+    sym: Sym,
+    mid: f64,
+}
+
+impl KdbDeserialize for Price {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?;
+        Ok((time, Price {
+            sym: row.get_sym(1, interner)?,
+            mid: row.get(2)?.get_float()?,
+        }))
+    }
+}
+
+kdb_read::<Price, _>(
+    conn,
+    Duration::from_secs(10),
+    |(t0, t1), _date, _iter| {
+        format!(
+            "select time, sym, mid from prices \
+             where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            t0.to_kdb_timestamp(),
+            t1.to_kdb_timestamp(),
+        )
+    },
+)
+.logged("prices", Info)
+.run(
+    RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+    RunFor::Duration(Duration::from_secs(100)),
+)?;
+```
+
 ## Output
 
 ```
