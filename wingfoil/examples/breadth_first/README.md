@@ -15,14 +15,15 @@ per tick, regardless of how many upstream paths lead to it.
 ```rust
 use wingfoil::*;
 
+env_logger::init();
 let mut source = constant(1_u128);
-for _ in 0..127 {
+for _ in 1..128 {
     source = add(&source, &source);
 }
-let cycles = source.count();
-cycles.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+source
+    .timed()
+    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
     .unwrap();
-println!("cycles {:?}", cycles.peek_value());
 println!("value {:?}", source.peek_value());
 ```
 
