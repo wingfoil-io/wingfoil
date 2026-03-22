@@ -15,18 +15,18 @@ per tick, regardless of how many upstream paths lead to it.
 ```rust
 use wingfoil::*;
 
-env_logger::init();
-let mut source = constant(1_u128);
-for _ in 1..128 {
-    source = add(&source, &source);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+    let mut source = constant(1_u128);
+    for _ in 1..128 {
+        source = add(&source, &source);
+    }
+    source
+        .timed()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+    println!("value {:?}", source.peek_value());
+    Ok(())
 }
-source
-    .timed()
-    .run(
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Forever
-    )?;
-println!("value {:?}", source.peek_value());
 ```
 
 127 levels deep — 2^127 as the correct answer — completes in **1 tick** in under 10µs:
