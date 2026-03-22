@@ -61,6 +61,7 @@ mod cache_integration_tests;
 #[cfg(all(test, feature = "kdb-integration-test"))]
 mod integration_tests;
 
+pub use crate::adapters::cache::CacheConfig;
 pub use read::*;
 pub use read_cached::*;
 pub use write::*;

@@ -11,6 +11,7 @@
 
 use super::integration_tests::{TABLE_NAME, slice_query, with_test_data};
 use super::*;
+use crate::adapters::cache::CacheConfig;
 use crate::{RunFor, RunMode, nodes::*, types::*};
 use anyhow::Result;
 
@@ -48,7 +49,7 @@ fn run_cached(conn: KdbConnection, cache_dir: &std::path::Path) -> Result<usize>
     let stream = kdb_read_cached::<TestTradeCached, _>(
         conn,
         PERIOD,
-        cache_dir.to_path_buf(),
+        CacheConfig::new(cache_dir, u64::MAX),
         |within, date, _| slice_query(date, within.0, within.1),
     );
     let collected = stream.collapse().collect();
@@ -162,7 +163,7 @@ fn test_kdb_read_cached_partial_cache() -> Result<()> {
         let stream = kdb_read_cached::<TestTradeCached, _>(
             conn,
             half_day,
-            cache_dir.to_path_buf(),
+            CacheConfig::new(&cache_dir, u64::MAX),
             |within, date, _| slice_query(date, within.0, within.1),
         );
         let collected = stream.collapse().collect();

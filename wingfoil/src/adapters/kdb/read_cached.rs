@@ -2,7 +2,7 @@
 
 use super::read::compute_time_slices;
 use super::{KdbConnection, KdbDeserialize, KdbExt, SymbolInterner};
-use crate::adapters::cache::{CacheKey, FileCache};
+use crate::adapters::cache::{CacheConfig, CacheKey, FileCache};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::bail;
@@ -17,8 +17,10 @@ use std::rc::Rc;
 /// subsequent runs the cached result is returned without opening a TCP
 /// connection to KDB+.
 ///
-/// Cache files live in `cache_dir` and persist until manually deleted. There is
-/// no TTL or eviction — delete the directory to force a fresh fetch.
+/// Cache files live in `cache_config.folder` and are evicted using an LRU
+/// policy once the total on-disk size exceeds `cache_config.max_size_bytes`.
+/// Use [`CacheConfig::clear`] to remove all cached files, or set
+/// `max_size_bytes` to `u64::MAX` for an unbounded cache.
 ///
 /// # Serde requirement
 ///
@@ -32,14 +34,15 @@ use std::rc::Rc;
 ///
 /// `bincode` is not self-describing. If `T` changes (added/renamed/reordered
 /// fields), old cache files will deserialise as garbage or return an error. The
-/// fix is to delete the cache directory and re-run.
+/// fix is to call [`CacheConfig::clear`] (or delete the cache directory) and re-run.
 ///
 /// # Example
 /// ```ignore
+/// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024);
 /// let stream = kdb_read_cached::<Trade, _>(
 ///     KdbConnection::new("localhost", 5000),
 ///     Duration::from_secs(3600),
-///     "/tmp/my-backtest-cache",
+///     config,
 ///     |(t0, t1), date, _| format!(
 ///         "select from trades where date=2000.01.01+{}, \
 ///          time >= (`timestamp$){}j, time < (`timestamp$){}j",
@@ -51,7 +54,7 @@ use std::rc::Rc;
 pub fn kdb_read_cached<T, F>(
     connection: KdbConnection,
     period: std::time::Duration,
-    cache_dir: impl Into<std::path::PathBuf> + Send + 'static,
+    cache_config: CacheConfig,
     query_fn: F,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
@@ -67,7 +70,6 @@ where
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
         let end_time_result = ctx.end_time();
-        let cache_dir = cache_dir.into();
 
         async move {
             if start_time == NanoTime::ZERO {
@@ -89,8 +91,8 @@ where
                 ),
             };
 
-            tokio::fs::create_dir_all(&cache_dir).await?;
-            let cache = FileCache::<T>::new(&cache_dir);
+            tokio::fs::create_dir_all(&cache_config.folder).await?;
+            let cache = FileCache::<T>::new(cache_config);
             let slices = compute_time_slices(start_time, end_time, period);
             let host = connection.host.clone();
             let port_str = connection.port.to_string();

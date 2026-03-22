@@ -1,6 +1,9 @@
 pub mod file_cache;
 pub use file_cache::FileCache;
 
+use anyhow::Result;
+use std::path::PathBuf;
+
 /// Opaque cache key derived from a query string.
 ///
 /// Built from `[host, port_str, query]` — the query string is the single source
@@ -20,6 +23,67 @@ impl CacheKey {
         }
         let full = format!("{:x}", h.finalize());
         Self(full[..16].to_string()) // first 16 hex chars (64 bits) of SHA-256
+    }
+}
+
+/// Configuration for a file-based cache directory.
+///
+/// Pass this to [`kdb_read_cached`] in place of a bare path. `max_size_bytes`
+/// controls the total on-disk size of `.cache` files in `folder`; when a new
+/// file would push the total over the limit, the least-recently-used files are
+/// deleted first (LRU eviction).
+///
+/// Set `max_size_bytes` to `u64::MAX` for an unbounded cache.
+///
+/// # Example
+/// ```ignore
+/// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024); // 512 MiB cap
+/// let stream = kdb_read_cached::<Trade, _>(conn, period, config, query_fn);
+/// ```
+#[derive(Debug, Clone)]
+pub struct CacheConfig {
+    pub folder: PathBuf,
+    pub max_size_bytes: u64,
+}
+
+impl CacheConfig {
+    /// Create a new `CacheConfig` with the given folder and maximum total cache
+    /// size in bytes. Use `u64::MAX` for an unbounded cache.
+    pub fn new(folder: impl Into<PathBuf>, max_size_bytes: u64) -> Self {
+        Self {
+            folder: folder.into(),
+            max_size_bytes,
+        }
+    }
+
+    /// Delete all `.cache` files inside [`Self::folder`].
+    ///
+    /// Returns `Ok(())` if the folder does not exist (nothing to clear).
+    /// Errors from individual file deletions are collected and returned as a
+    /// single combined error; other files in the folder are left untouched.
+    pub async fn clear(&self) -> Result<()> {
+        let mut entries = match tokio::fs::read_dir(&self.folder).await {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut errors: Vec<String> = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "cache") {
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    errors.push(format!("{}: {}", path.display(), e));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "cache clear errors:\n{}",
+                errors.join("\n")
+            ))
+        }
     }
 }
 
@@ -55,5 +119,39 @@ mod tests {
         // 16-char hex prefix so any accidental algorithm change is caught.
         let key = CacheKey::from_parts(&["localhost", "5000", "select from trades"]);
         assert_eq!(key.0, "5899c93491e25e68");
+    }
+
+    #[tokio::test]
+    async fn test_cache_config_clear() {
+        let dir = std::env::temp_dir().join(format!(
+            "wingfoil_cache_config_clear_{}",
+            std::process::id()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        // Write some .cache files and a non-cache file
+        tokio::fs::write(dir.join("a.cache"), b"data")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("b.cache"), b"data")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("other.txt"), b"keep")
+            .await
+            .unwrap();
+
+        let config = CacheConfig::new(&dir, u64::MAX);
+        config.clear().await.unwrap();
+
+        // .cache files gone, other file remains
+        assert!(!dir.join("a.cache").exists());
+        assert!(!dir.join("b.cache").exists());
+        assert!(dir.join("other.txt").exists());
+
+        // clear on non-existent folder is Ok
+        let absent = CacheConfig::new(dir.join("nonexistent"), u64::MAX);
+        absent.clear().await.unwrap();
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }
