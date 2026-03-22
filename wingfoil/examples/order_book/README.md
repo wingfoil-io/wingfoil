@@ -2,6 +2,11 @@
 
 ## Order Book Example
 
+- [View example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/order_book/)
+- Loads a CSV of AAPL limit orders and maintains a live order book
+- Derives trades and two-way prices, exports back to CSV
+- Demonstrates `csv_read_vec`, `split`, `distinct`, and `csv_write`
+
 In this example, we load a CSV file of limit orders
 for AAPL stock ticker trading on the NASDAQ exchange.
 The data is sourced from

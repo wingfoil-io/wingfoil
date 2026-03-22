@@ -1,5 +1,9 @@
 ## async / tokio integration
 
+- [View example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/async/)
+- Demonstrates `produce_async` and `consume_async` for seamless tokio integration
+- Shows the clean boundary between async IO at the graph edge and sync business logic
+
 In this example, we demonstrate wingfoil's integration with tokio / async.
 This makes building IO adapters at the graph edge a breeze, giving 
 the best of sync and async worlds.   

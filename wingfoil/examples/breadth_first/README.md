@@ -1,6 +1,10 @@
 
 ## Graph Execution
 
+- [View example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/breadth_first/)
+- Benchmarks BFS vs DFS execution at depths 1–10 against rxrust and async streams
+- Demonstrates why BFS eliminates the O(2^N) cost and reactive glitches of depth-first frameworks
+
 Wingfoil uses breadth-first graph execution, which eliminates the O(2^N)
 explosion that affects depth-first frameworks (reactive libraries, async streams)
 when nodes branch and recombine.
