@@ -2,7 +2,7 @@
 
 These benchmarks measure the cost of the branch/recombine pattern at depths 1–10:
 
-<img src="diagram.png" width="300" align="right">
+<img src="diagram.png" width="300" align="centre">
 
 At depth N the graph has 2^N paths from source to sink. The execution model
 determines whether a framework pays O(N) or O(2^N) per tick.
