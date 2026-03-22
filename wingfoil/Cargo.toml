@@ -5,7 +5,7 @@ kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
 csv = ["dep:csv"]
 websockets = ["dep:tokio-tungstenite", "dep:tungstenite", "async", "tokio/net", "tokio/time", "tokio/macros"]
-kdb = ["dep:kdb-plus-fixed", "async"]
+kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
 
 [package]
@@ -63,6 +63,7 @@ criterion = { version = "0.8.1" }
 quanta = "0.9.3"
 ordered-float = "4.5.0"
 bincode = { version = "1.3.3", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 # optional deps gated by feature flags
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
@@ -96,6 +97,11 @@ required-features = ["kdb"]
 [[example]]
 name = "kdb_read"
 path = "examples/kdb/read/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read_cached"
+path = "examples/kdb/read_cached/main.rs"
 required-features = ["kdb"]
 
 [[example]]

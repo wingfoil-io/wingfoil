@@ -17,7 +17,7 @@ use log::{Level, LevelFilter};
 use tokio::runtime::Runtime;
 
 /// Read tests table: (date, time, sym, price, qty)
-const TABLE_NAME: &str = "test_trades";
+pub(super) const TABLE_NAME: &str = "test_trades";
 /// Write tests table: (time, sym, price, qty) — no date, since kdb_write only prepends time
 const WRITE_TABLE_NAME: &str = "test_trades_write";
 
@@ -225,7 +225,7 @@ impl TestDataBuilder {
     }
 }
 
-fn with_test_data<F>(
+pub(super) fn with_test_data<F>(
     records_per_day: usize,
     num_days: usize,
     sorted: bool,
@@ -279,7 +279,7 @@ where
 
 /// Build a time-slice query for TABLE_NAME filtering by date and time range.
 /// Half-open interval [t0, t1): `time >= t0, time < t1`.
-fn slice_query(date: i32, t0: NanoTime, t1: NanoTime) -> String {
+pub(super) fn slice_query(date: i32, t0: NanoTime, t1: NanoTime) -> String {
     format!(
         "select from {} where date=2000.01.01+{}, time >= (`timestamp$){}j, time < (`timestamp$){}j",
         TABLE_NAME,
