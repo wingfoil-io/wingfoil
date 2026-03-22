@@ -78,8 +78,6 @@ kdb_read_cached::<Price, _>(
     RunFor::Duration(Duration::from_secs(100)),
 )?;
 
-// Clear all .cache files from disk
-config.clear()?;
 ```
 
 ## Output
@@ -94,6 +92,5 @@ Run 1: cache miss — queries KDB and writes cache files
 Run 2: cache hit — no KDB connection needed
 [INFO  prices] (NanoTime(...), Price { sym: AAPL, mid: 150.25 })
 ...
-Clearing cache
 Done
 ```
