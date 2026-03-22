@@ -11,6 +11,8 @@ print(f"Connecting to {ADDRESS} ... (Ctrl-C to exit)")
 data, status = wf.py_zmq_sub(ADDRESS)
 
 data_node = data.inspect(lambda msgs: [
+    # Each message is raw bytes; decode as little-endian u64 to match
+    # the publisher's encoding (struct.pack('<Q') / n.to_le_bytes()).
     print(f"received: {struct.unpack('<Q', m)[0]}", flush=True)
     for m in msgs
 ])
