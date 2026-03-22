@@ -1,4 +1,4 @@
-## BFS vs DFS: Branch / Recombine Benchmark
+## Breadth First vs Depth First: Branch / Recombine Benchmark
 
 These benchmarks measure the cost of the branch/recombine pattern at depths 1–10:
 
