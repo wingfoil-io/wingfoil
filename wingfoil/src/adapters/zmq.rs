@@ -89,7 +89,8 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 
             if items[0].is_readable() {
                 let res = socket.recv_bytes(0)?;
-                let msg: Message<T> = bincode::deserialize(&res)?;
+                let msg: Message<T> = bincode::deserialize(&res)
+                    .unwrap_or_else(|err| Message::Error(std::sync::Arc::new(err.into())));
                 match msg {
                     Message::RealtimeValue(v) => {
                         channel_sender.send_message(Message::RealtimeValue(ZmqEvent::Data(v)))?;
@@ -99,6 +100,10 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
                             ZmqStatus::Disconnected,
                         )))?;
                         channel_sender.send_message(Message::EndOfStream)?;
+                        return Ok(());
+                    }
+                    Message::Error(err) => {
+                        channel_sender.send_message(Message::Error(err))?;
                         return Ok(());
                     }
                     _ => {}
@@ -230,6 +235,33 @@ mod tests {
     use log::Level::Info;
     use std::rc::Rc;
     use std::time::Duration;
+
+    #[test]
+    fn zmq_deserialization_error_propagates() {
+        _ = env_logger::try_init();
+        let port = 5562;
+
+        std::thread::spawn(move || {
+            let ctx = zmq::Context::new();
+            let sock = ctx.socket(zmq::PUB).unwrap();
+            sock.bind(&format!("tcp://127.0.0.1:{port}")).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            for _ in 0..20 {
+                sock.send("not valid bincode".as_bytes(), 0).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        let (data, _status) = zmq_sub::<u64>(&format!("tcp://127.0.0.1:{port}"));
+        let result = data
+            .as_node()
+            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)));
+
+        assert!(
+            result.is_err(),
+            "expected deserialization error to propagate"
+        );
+    }
 
     fn sender(period: Duration, port: u16) -> Rc<dyn Node> {
         ticker(period).count().logged("pub", Info).zmq_pub(port)
