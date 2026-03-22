@@ -77,6 +77,8 @@ zmq = { version = "0.10.0", optional = true }
 
 
 [dev-dependencies]
+rxrust = "1.0.0-rc.3"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 
 [[example]]
 name = "async"
@@ -107,6 +109,22 @@ harness = false
 [[bench]]
 name = "nanotime"
 harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_wingfoil"
+path = "benches/bfs_vs_dfs/wingfoil.rs"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_reactive"
+path = "benches/bfs_vs_dfs/reactive.rs"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_async_streams"
+path = "benches/bfs_vs_dfs/async_streams.rs"
+harness = false
+required-features = ["async"]
 
 [[example]]
 name = "zmq_pub"
