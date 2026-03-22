@@ -11,18 +11,20 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 
 ### Results
 
-| depth | wingfoil | async streams | reactive (rxrust) |
-|------:|----------:|--------------:|------------------:|
-|     1 |   174 ns  |      109 ns   |        66 ns      |
-|     2 |   212 ns  |      165 ns   |       156 ns      |
-|     3 |   197 ns  |      274 ns   |       324 ns      |
-|     4 |   256 ns  |      545 ns   |       652 ns      |
-|     5 |   264 ns  |     1.04 µs   |      1.35 µs      |
-|     6 |   267 ns  |     2.05 µs   |      2.68 µs      |
-|     7 |   287 ns  |     4.08 µs   |      5.35 µs      |
-|     8 |   326 ns  |     8.10 µs   |     10.7  µs      |
-|     9 |   301 ns  |    16.1  µs   |     22.5  µs      |
-|    10 |   352 ns  |    32.1  µs   |     43.1  µs      |
+Y-axis is log₂(nanoseconds) so each step up represents a doubling in time.
+
+```mermaid
+xychart-beta
+    title "BFS vs DFS latency — log₂(ns)"
+    x-axis "depth" [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    y-axis "log₂(ns)" 5 --> 16
+    line [7.4, 7.7, 7.6, 8.0, 8.1, 8.1, 8.2, 8.4, 8.2, 8.5]
+    line [6.8, 7.4, 8.1, 9.1, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+    line [6.0, 7.3, 8.3, 9.4, 10.4, 11.4, 12.4, 13.4, 14.5, 15.4]
+```
+
+- **Flat line** — wingfoil (O(N), BFS)
+- **Rising lines** — async streams and reactive (O(2^N), DFS); slope ≈ 1 per level means latency doubles each level
 
 Reactive and async streams double every level — clear O(2^N). Wingfoil stays
 flat — O(N).  At depth 10 reactive is ~120× slower than wingfoil; at depth 20
