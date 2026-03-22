@@ -11,20 +11,9 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 
 ### Results
 
-Y-axis is log₂(nanoseconds) so each step up represents a doubling in time.
+<img src="latency.png" width="700">
 
-```mermaid
-xychart-beta
-    title "BFS vs DFS latency — log₂(ns)"
-    x-axis "depth" [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    y-axis "log₂(ns)" 5 --> 16
-    line [7.4, 7.7, 7.6, 8.0, 8.1, 8.1, 8.2, 8.4, 8.2, 8.5]
-    line [6.8, 7.4, 8.1, 9.1, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
-    line [6.0, 7.3, 8.3, 9.4, 10.4, 11.4, 12.4, 13.4, 14.5, 15.4]
-```
-
-- **Flat line** — wingfoil (O(N), BFS)
-- **Rising lines** — async streams and reactive (O(2^N), DFS); slope ≈ 1 per level means latency doubles each level
+Wingfoil stays flat while async streams and reactive double every level (O(2^N) DFS). At depth 10 both DFS approaches are ~120× slower than wingfoil; at depth 20 that gap would be ~3 million×.
 
 Reactive and async streams double every level — clear O(2^N). Wingfoil stays
 flat — O(N).  At depth 10 reactive is ~120× slower than wingfoil; at depth 20
