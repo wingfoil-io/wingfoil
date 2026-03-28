@@ -55,29 +55,36 @@ fn prometheus_exporter_scrapeable_by_prometheus() {
     let counter = ticker(Duration::from_millis(100)).count();
     let node = exporter.register("wingfoil_integration_counter", counter);
 
-    node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
+    // Run long enough for Prometheus to complete at least one scrape (interval = 5s)
+    node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(7)))
         .unwrap();
 
-    // Query Prometheus to verify it scraped our metric
+    // Poll Prometheus until the metric appears (scrape may lag by up to one interval)
     let prom = prometheus_url();
-    let resp = reqwest::blocking::get(format!(
-        "{prom}/api/v1/query?query=wingfoil_integration_counter"
-    ))
-    .expect("Prometheus query failed");
+    let mut found = false;
+    for attempt in 1..=12 {
+        let resp = reqwest::blocking::get(format!(
+            "{prom}/api/v1/query?query=wingfoil_integration_counter"
+        ))
+        .expect("Prometheus query failed");
 
-    assert!(
-        resp.status().is_success(),
-        "Prometheus query returned {}",
-        resp.status()
-    );
+        assert!(
+            resp.status().is_success(),
+            "Prometheus query returned {}",
+            resp.status()
+        );
 
-    let body: serde_json::Value = resp.json().expect("Prometheus response was not JSON");
-    let result = &body["data"]["result"];
-    assert!(
-        !result.as_array().unwrap_or(&vec![]).is_empty(),
-        "wingfoil_integration_counter not found in Prometheus: {body}"
-    );
-    log::info!("Prometheus scrape result: {result}");
+        let body: serde_json::Value = resp.json().expect("Prometheus response was not JSON");
+        let result = &body["data"]["result"];
+        if !result.as_array().unwrap_or(&vec![]).is_empty() {
+            log::info!("Prometheus scrape result (attempt {attempt}): {result}");
+            found = true;
+            break;
+        }
+        log::info!("attempt {attempt}: metric not yet in Prometheus, retrying...");
+        std::thread::sleep(Duration::from_secs(5));
+    }
+    assert!(found, "wingfoil_integration_counter never appeared in Prometheus after polling");
 }
 
 // ─── Grafana Live push ───────────────────────────────────────────────────────
