@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::adapters::zmq_seed;
 use crate::channel::{ChannelSender, Message};
 use crate::{
     Burst, Element, GraphState, IntoNode, IntoStream, MapFilterStream, MutableNode, Node,
@@ -11,6 +12,9 @@ use derive_new::new;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zmq;
+
+pub use crate::adapters::zmq_seed::SeedHandle;
+pub use crate::adapters::zmq_seed::start_seed;
 
 static MONITOR_ID: AtomicUsize = AtomicUsize::new(0);
 const ZMQ_EVENT_CONNECTED: u16 = 0x0001;
@@ -161,13 +165,45 @@ pub fn zmq_sub<T: Element + Send + DeserializeOwned>(
     (data, status)
 }
 
-#[derive(new)]
+struct Registration {
+    name: String,
+    seeds: Vec<String>,
+}
+
 struct ZeroMqSenderNode<T: Element + Send + Serialize> {
     src: Rc<dyn Stream<T>>,
     port: u16,
     bind_address: String,
-    #[new(default)]
+    registration: Option<Registration>,
     socket: Option<zmq::Socket>,
+}
+
+impl<T: Element + Send + Serialize> ZeroMqSenderNode<T> {
+    fn new(src: Rc<dyn Stream<T>>, port: u16, bind_address: String) -> Self {
+        Self {
+            src,
+            port,
+            bind_address,
+            registration: None,
+            socket: None,
+        }
+    }
+
+    fn new_named(
+        src: Rc<dyn Stream<T>>,
+        port: u16,
+        bind_address: String,
+        name: String,
+        seeds: Vec<String>,
+    ) -> Self {
+        Self {
+            src,
+            port,
+            bind_address,
+            registration: Some(Registration { name, seeds }),
+            socket: None,
+        }
+    }
 }
 
 const FLAGS: i32 = 0;
@@ -198,6 +234,9 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
         let address = format!("tcp://{}:{}", self.bind_address, self.port);
         socket.bind(&address)?;
         self.socket = Some(socket);
+        if let Some(reg) = &self.registration {
+            zmq_seed::register_with_seeds(&reg.name, &address, &reg.seeds)?;
+        }
         Ok(())
     }
 
@@ -215,6 +254,20 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 pub trait ZeroMqPub<T: Element + Send> {
     fn zmq_pub(&self, port: u16) -> Rc<dyn Node>;
     fn zmq_pub_on(&self, address: &str, port: u16) -> Rc<dyn Node>;
+    /// Publish and register this stream under `name` with the given seeds.
+    /// Subscribers can then use [`zmq_sub_discover`] to find it by name.
+    /// `port` is bound on `127.0.0.1`; use [`zmq_pub_named_on`](Self::zmq_pub_named_on)
+    /// for a routable address in multi-host deployments.
+    fn zmq_pub_named(&self, name: &str, port: u16, seeds: &[&str]) -> Rc<dyn Node>;
+    /// Like [`zmq_pub_named`](Self::zmq_pub_named) but binds on `address` instead of
+    /// `127.0.0.1`. The address must be reachable by subscribing nodes.
+    fn zmq_pub_named_on(
+        &self,
+        name: &str,
+        address: &str,
+        port: u16,
+        seeds: &[&str],
+    ) -> Rc<dyn Node>;
 }
 
 impl<T: Element + Send + Serialize> ZeroMqPub<T> for Rc<dyn Stream<T>> {
@@ -225,11 +278,52 @@ impl<T: Element + Send + Serialize> ZeroMqPub<T> for Rc<dyn Stream<T>> {
     fn zmq_pub_on(&self, address: &str, port: u16) -> Rc<dyn Node> {
         ZeroMqSenderNode::new(self.clone(), port, address.to_string()).into_node()
     }
+
+    fn zmq_pub_named(&self, name: &str, port: u16, seeds: &[&str]) -> Rc<dyn Node> {
+        ZeroMqSenderNode::new_named(
+            self.clone(),
+            port,
+            "127.0.0.1".to_string(),
+            name.to_string(),
+            seeds.iter().map(|s| s.to_string()).collect(),
+        )
+        .into_node()
+    }
+
+    fn zmq_pub_named_on(
+        &self,
+        name: &str,
+        address: &str,
+        port: u16,
+        seeds: &[&str],
+    ) -> Rc<dyn Node> {
+        ZeroMqSenderNode::new_named(
+            self.clone(),
+            port,
+            address.to_string(),
+            name.to_string(),
+            seeds.iter().map(|s| s.to_string()).collect(),
+        )
+        .into_node()
+    }
+}
+
+/// Discover a named publisher via seeds and subscribe to it.
+///
+/// Queries each seed in order until one resolves `name` to an address, then
+/// delegates to [`zmq_sub`]. Returns `Err` if no seed can resolve the name.
+pub fn zmq_sub_discover<T: Element + Send + DeserializeOwned>(
+    name: &str,
+    seeds: &[&str],
+) -> anyhow::Result<(Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<ZmqStatus>>)> {
+    let address = zmq_seed::query_seeds(name, seeds)?;
+    Ok(zmq_sub::<T>(&address))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub};
+    use crate::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub, zmq_sub_discover};
+    use crate::adapters::zmq_seed::{query_seeds, register_with_seeds, start_seed};
     use crate::{Graph, Node, NodeOperators, StreamOperators};
     use crate::{RunFor, RunMode, ticker};
     use log::Level::Info;
@@ -402,6 +496,124 @@ mod tests {
         assert!(
             err_msg.contains("real-time"),
             "expected error to mention real-time, got: {err_msg}"
+        );
+    }
+
+    // --- Discovery tests (ports 5580–5595) ---
+
+    #[test]
+    fn zmq_named_pub_registers_with_seed() {
+        _ = env_logger::try_init();
+        let seed_addr = "tcp://127.0.0.1:5580";
+        let port = 5581u16;
+
+        let _seed = start_seed(seed_addr).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Node must be constructed inside the thread (Rc is !Send).
+        let handle = std::thread::spawn(move || {
+            ticker(Duration::from_millis(50))
+                .count()
+                .zmq_pub_named("prices", port, &[seed_addr])
+                .run(
+                    RunMode::RealTime,
+                    RunFor::Duration(Duration::from_millis(300)),
+                )
+        });
+
+        std::thread::sleep(Duration::from_millis(150));
+        let addr = query_seeds("prices", &[seed_addr]).unwrap();
+        assert_eq!(addr, format!("tcp://127.0.0.1:{port}"));
+
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn zmq_sub_discover_end_to_end() {
+        _ = env_logger::try_init();
+        let seed_addr = "tcp://127.0.0.1:5582";
+        let port = 5583u16;
+        let run_for = RunFor::Duration(Duration::from_millis(600));
+
+        let _seed = start_seed(seed_addr).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Publisher: register with seed and publish counts.
+        // Node must be constructed inside the thread (Rc is !Send).
+        std::thread::spawn(move || {
+            ticker(Duration::from_millis(50))
+                .count()
+                .zmq_pub_named("counts", port, &[seed_addr])
+                .run(RunMode::RealTime, run_for)
+        });
+
+        // Give the publisher time to start and register.
+        std::thread::sleep(Duration::from_millis(150));
+
+        let (data, _status) = zmq_sub_discover::<u64>("counts", &[seed_addr]).unwrap();
+        let recv_node = data.collect().finally(|res, _| {
+            let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+            assert!(!values.is_empty(), "no data received via discovery");
+            Ok(())
+        });
+        recv_node.run(RunMode::RealTime, run_for).unwrap();
+    }
+
+    #[test]
+    fn zmq_sub_discover_multiple_seeds_first_down() {
+        _ = env_logger::try_init();
+        let dead_seed = "tcp://127.0.0.1:5584";
+        let live_seed = "tcp://127.0.0.1:5585";
+
+        let _seed = start_seed(live_seed).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        register_with_seeds("widget", "tcp://127.0.0.1:9999", &[live_seed.to_string()]).unwrap();
+
+        // First seed is dead — query_seeds should fall through to live_seed.
+        let addr = query_seeds("widget", &[dead_seed, live_seed]);
+        assert!(
+            addr.is_ok(),
+            "expected fallback to live seed, got: {:?}",
+            addr
+        );
+        assert_eq!(addr.unwrap(), "tcp://127.0.0.1:9999");
+    }
+
+    #[test]
+    fn zmq_sub_discover_no_seed_returns_error() {
+        let result = zmq_sub_discover::<u64>("anything", &["tcp://127.0.0.1:5586"]);
+        assert!(result.is_err(), "expected error when no seed is running");
+    }
+
+    #[test]
+    fn zmq_sub_discover_name_not_found() {
+        let seed_addr = "tcp://127.0.0.1:5587";
+        let _seed = start_seed(seed_addr).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let result = zmq_sub_discover::<u64>("nonexistent", &[seed_addr]);
+        assert!(result.is_err(), "expected error for unregistered name");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no publisher named"),
+            "unexpected error message"
+        );
+    }
+
+    #[test]
+    fn zmq_named_pub_historical_mode_fails() {
+        use crate::NanoTime;
+        let result = ticker(Duration::from_millis(10))
+            .count()
+            .zmq_pub_named("test", 5588, &["tcp://127.0.0.1:5589"])
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let err = result.expect_err("expected historical mode to fail for named zmq publisher");
+        assert!(
+            format!("{err:?}").contains("real-time"),
+            "expected error to mention real-time"
         );
     }
 }
