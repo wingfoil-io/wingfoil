@@ -84,7 +84,10 @@ fn prometheus_exporter_scrapeable_by_prometheus() {
         log::info!("attempt {attempt}: metric not yet in Prometheus, retrying...");
         std::thread::sleep(Duration::from_secs(5));
     }
-    assert!(found, "wingfoil_integration_counter never appeared in Prometheus after polling");
+    assert!(
+        found,
+        "wingfoil_integration_counter never appeared in Prometheus after polling"
+    );
 }
 
 // ─── Grafana Live push ───────────────────────────────────────────────────────
