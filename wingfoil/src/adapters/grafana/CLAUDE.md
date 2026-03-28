@@ -57,4 +57,4 @@ Before committing changes to this adapter, you MUST:
 - `reqwest` with `blocking` feature is used for Grafana Live push to stay off the async executor
 - `PrometheusExporter` spawns its own thread (same pattern as ZMQ publisher)
 - `grafana_push` is a sink returning `Rc<dyn Node>` — same pattern as `kdb_write` and `zmq_pub`
-- Grafana Live payload: Influx line protocol (simplest format Grafana Live accepts)
+- Grafana Live payload: Grafana data frame format (JSON) — Influx line protocol was tried first but Grafana 11 stream channels require native frames; numeric Display values → `number` field, others → `string` field; timestamp in milliseconds
