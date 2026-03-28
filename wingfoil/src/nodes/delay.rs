@@ -7,14 +7,16 @@ use crate::types::*;
 use derive_new::new;
 
 /// Emits it's source delayed by the specified time
-#[derive(new)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     #[new(default)]
+    #[output]
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
     #[new(default)]
     initialized: bool,
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     delay: NanoTime,
 }
@@ -43,16 +45,6 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
             }
             Ok(ticked)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

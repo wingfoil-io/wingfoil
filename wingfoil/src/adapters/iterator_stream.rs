@@ -9,8 +9,10 @@ use std::cmp::Ordering;
 type Peeker<T> = Box<std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>>;
 
 /// Wraps an Iterator and exposes it as a stream of Vectors
+#[derive(StreamPeekRef)]
 pub struct IteratorStream<T: Element> {
     peekable: Peeker<T>,
+    #[output]
     value: Vec<T>,
 }
 
@@ -21,6 +23,12 @@ fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::
             Ok(true)
         }
         None => Ok(false),
+    }
+}
+
+impl<T: Element> WiringPoint for IteratorStream<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
     }
 }
 
@@ -40,19 +48,9 @@ impl<T: Element> MutableNode for IteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
-    }
-
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         add_callback(&mut self.peekable, state)?;
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<Vec<T>> for IteratorStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
-        &self.value
     }
 }
 
@@ -73,9 +71,17 @@ where
 /// The source must be strictly ascending in time.   If the source
 /// can tick multiple times at one time, then you can use an
 /// [IteratorStream] instead, which emits `Vec<T>`.
+#[derive(StreamPeekRef)]
 pub struct SimpleIteratorStream<T: Element> {
     peekable: Peeker<T>,
+    #[output]
     value: T,
+}
+
+impl<T: Element> WiringPoint for SimpleIteratorStream<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
 }
 
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
@@ -102,19 +108,9 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
-    }
-
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         add_callback(&mut self.peekable, state)?;
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for SimpleIteratorStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

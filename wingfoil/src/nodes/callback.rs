@@ -9,18 +9,13 @@ use derive_new::new;
 /// A queue of values that are emitted at specified times.  Useful for
 /// unit tests.  Can also be used to feed stream output back into
 /// the [Graph](crate::graph::Graph) as input on later cycles.
-#[derive(new)]
+#[derive(new, StreamPeekRef, Upstreams)]
 pub struct CallBackStream<T: Element + Hash + Eq> {
     #[new(default)]
+    #[output]
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
-}
-
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for CallBackStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
-    }
 }
 
 impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
@@ -35,10 +30,6 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
             state.add_callback(callback_time);
         }
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

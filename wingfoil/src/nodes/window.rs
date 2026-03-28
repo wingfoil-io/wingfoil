@@ -1,11 +1,14 @@
 use crate::types::*;
 use std::rc::Rc;
 
+#[derive(StreamPeekRef, Upstreams)]
 pub(crate) struct WindowStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     interval: NanoTime,
     next_window: NanoTime,
     buffer: Vec<T>,
+    #[output]
     value: Vec<T>,
 }
 
@@ -39,16 +42,6 @@ impl<T: Element> MutableNode for WindowStream<T> {
         }
 
         Ok(flushed)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Vec<T>> for WindowStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
-        &self.value
     }
 }
 

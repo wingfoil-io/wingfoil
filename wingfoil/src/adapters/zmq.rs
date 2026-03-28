@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::channel::{ChannelSender, Message};
 use crate::{
     Burst, Element, GraphState, IntoNode, IntoStream, MapFilterStream, MutableNode, Node,
-    ReceiverStream, RunMode, Stream, UpStreams,
+    ReceiverStream, RunMode, Stream, UpStreams, WiringPoint,
 };
 use derive_new::new;
 use serde::Serialize;
@@ -172,6 +172,12 @@ struct ZeroMqSenderNode<T: Element + Send + Serialize> {
 
 const FLAGS: i32 = 0;
 
+impl<T: Element + Send + Serialize> WiringPoint for ZeroMqSenderNode<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.src.clone().as_node()], vec![])
+    }
+}
+
 impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let value = self.src.peek_value();
@@ -183,10 +189,6 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
             .ok_or_else(|| anyhow::anyhow!("missing socket"))?;
         sock.send(data, FLAGS)?;
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.src.clone().as_node()], vec![])
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

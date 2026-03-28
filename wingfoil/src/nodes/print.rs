@@ -5,9 +5,12 @@ use std::rc::Rc;
 
 /// Propagates input and also pushes into buffer which is printed
 /// on Drop.
+#[derive(StreamPeekRef, Upstreams)]
 pub struct PrintStream<T: Element> {
+    #[active]
     upstream: Rc<dyn Stream<T>>,
     buffer: Vec<T>,
+    #[output]
     value: T,
 }
 
@@ -26,15 +29,6 @@ impl<T: Element> MutableNode for PrintStream<T> {
         self.value = self.upstream.peek_value();
         self.buffer.push(self.value.clone());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for PrintStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 
