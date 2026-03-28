@@ -32,15 +32,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install maturin and test dependencies
-        run: pip install maturin pytest pandas
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest pandas
 
       - name: Build and install Python bindings
         run: |
           cd wingfoil-python
-          maturin develop
+          .venv/bin/maturin develop
 
       - name: Run pytest
         run: |
           cd wingfoil-python
-          pytest tests/
+          .venv/bin/pytest tests/
