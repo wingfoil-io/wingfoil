@@ -676,11 +676,9 @@ fn run_fix_thread(
         return;
     }
 
-    if !is_acceptor {
-        if let Err(e) = session.send_logon(&mut sock) {
-            finish(FixSessionStatus::Error(e.to_string()));
-            return;
-        }
+    if !is_acceptor && let Err(e) = session.send_logon(&mut sock) {
+        finish(FixSessionStatus::Error(e.to_string()));
+        return;
     }
 
     let mut parse_buf: Vec<u8> = Vec::new();
@@ -805,10 +803,10 @@ impl FixThreadedSource {
         if self.socket_handle.is_some() {
             return;
         }
-        if let Some(rx) = self.socket_back_rx.take() {
-            if let Ok(s) = rx.recv_timeout(Duration::from_secs(2)) {
-                self.socket_handle = Some(s);
-            }
+        if let Some(rx) = self.socket_back_rx.take()
+            && let Ok(s) = rx.recv_timeout(Duration::from_secs(2))
+        {
+            self.socket_handle = Some(s);
         }
     }
 }
@@ -844,8 +842,7 @@ impl MutableNode for FixThreadedSource {
             let sock_result = if is_acceptor {
                 TcpListener::bind(("0.0.0.0", port)).and_then(|l| l.accept().map(|(s, _)| s))
             } else {
-                connect_with_retry(&host, port)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+                connect_with_retry(&host, port).map_err(|e| io::Error::other(e.to_string()))
             };
 
             let sock = match sock_result {
