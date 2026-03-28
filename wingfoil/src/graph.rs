@@ -5,7 +5,9 @@ use crate::types::{NanoTime, Node};
 use crossbeam::channel::{Receiver, SendError, Sender, select};
 use lazy_static::lazy_static;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "dynamic-graph-beta")]
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Error, Write};
@@ -875,39 +877,6 @@ impl Graph {
             self.state.current_node_index = None;
         }
         Ok(())
-    }
-
-    /// Recalculate `node_index`'s layer based on its current upstreams,
-    /// propagate any increase to its downstreams, and extend
-    /// `dirty_nodes_by_layer` to accommodate the new layer.
-    ///
-    /// Iterative BFS to avoid stack overflows on deep graphs.
-    fn fix_layers(&mut self, start: usize) {
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(start);
-        while let Some(node_index) = queue.pop_front() {
-            let required = self.state.nodes[node_index]
-                .upstreams
-                .iter()
-                .map(|(up_idx, _)| self.state.nodes[*up_idx].layer)
-                .max()
-                .map_or(0, |m| m + 1);
-            if required > self.state.nodes[node_index].layer {
-                self.state.nodes[node_index].layer = required;
-                let downstreams: Vec<usize> = self.state.nodes[node_index]
-                    .downstreams
-                    .iter()
-                    .map(|(di, _)| *di)
-                    .collect();
-                for dn_idx in downstreams {
-                    queue.push_back(dn_idx);
-                }
-            }
-            let layer = self.state.nodes[node_index].layer;
-            while self.state.dirty_nodes_by_layer.len() <= layer {
-                self.state.dirty_nodes_by_layer.push(vec![]);
-            }
-        }
     }
 
     /// Format nodes around the given index for error context.
