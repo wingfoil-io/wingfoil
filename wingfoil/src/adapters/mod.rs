@@ -10,3 +10,5 @@ pub mod kdb;
 #[cfg(feature = "zmq-beta")]
 #[doc(hidden)]
 pub mod zmq;
+#[cfg(feature = "zmq-beta")]
+pub mod zmq_seed;
