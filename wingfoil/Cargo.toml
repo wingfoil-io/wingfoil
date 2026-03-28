@@ -149,7 +149,7 @@ required-features = ["async"]
 
 [[example]]
 name = "grafana_metrics"
-path = "examples/grafana_metrics.rs"
+path = "examples/grafana/main.rs"
 required-features = ["grafana"]
 
 [[example]]
