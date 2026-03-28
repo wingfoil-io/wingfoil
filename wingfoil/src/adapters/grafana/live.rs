@@ -35,7 +35,7 @@ pub trait GrafanaPush<T: Element> {
     fn grafana_push(self: &Rc<Self>, channel: &str, config: GrafanaConfig) -> Rc<dyn Node>;
 }
 
-impl<T: Element + Send + ToString + 'static> GrafanaPush<T> for dyn Stream<T> {
+impl<T: Element + Send + std::fmt::Display + 'static> GrafanaPush<T> for dyn Stream<T> {
     fn grafana_push(self: &Rc<Self>, channel: &str, config: GrafanaConfig) -> Rc<dyn Node> {
         let channel = channel.to_string();
         let consumer = Box::new(move |source: Pin<Box<dyn FutStream<T>>>| {
@@ -45,7 +45,7 @@ impl<T: Element + Send + ToString + 'static> GrafanaPush<T> for dyn Stream<T> {
     }
 }
 
-async fn push_consumer<T: Element + Send + ToString>(
+async fn push_consumer<T: Element + Send + std::fmt::Display>(
     channel: String,
     config: GrafanaConfig,
     mut source: Pin<Box<dyn FutStream<T>>>,
@@ -58,7 +58,7 @@ async fn push_consumer<T: Element + Send + ToString>(
     while let Some((time, value)) = source.next().await {
         let ns = u64::from(time);
         // Influx line protocol: <measurement> value=<value> <timestamp_ns>
-        let line = format!("{measurement} value={} {ns}\n", value.to_string());
+        let line = format!("{measurement} value={value} {ns}\n");
 
         let resp = client
             .post(&url)
@@ -105,7 +105,7 @@ mod tests {
         let value = 42u64;
         let time = NanoTime::new(1_000_000_000u64);
         let ns = u64::from(time);
-        let line = format!("{measurement} value={} {ns}\n", value.to_string());
+        let line = format!("{measurement} value={value} {ns}\n");
         assert_eq!(line, "stream_wingfoil_counter value=42 1000000000\n");
     }
 }
