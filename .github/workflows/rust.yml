@@ -72,7 +72,10 @@ jobs:
           set -o pipefail
           set -e
 
-          # First run Clippy with -D warnings to fail on any warnings
+          # Run with no features to catch warnings hidden by feature flags
+          cargo clippy --workspace --all-targets -- -D warnings
+
+          # Run with all features and -D warnings
           cargo clippy --workspace --all-targets --all-features -- -D warnings
 
           # Then run it again with JSON output for SARIF reporting
