@@ -22,8 +22,17 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
 - **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), etc.
 
+## Links
+- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
+- Download from [crates.io](https://crates.io/crates/wingfoil/)
+- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
+- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
+- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
 
 ## Quick Start
+
+In this example we build a simple, linear pipeline with all nodes ticking in lock-step.
+
 ```rust
 use wingfoil::*;
 use std::time::Duration;
@@ -44,20 +53,9 @@ hello, world 2
 hello, world 3
 ```
 
-## Links
-- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
-- Download from [crates.io](https://crates.io/crates/wingfoil/)
-- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
-- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
-- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
-
 ## Order Book Example
 
-<div align="center">
-  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
-</div>
-
-Load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and altering the frequency of data. I/O adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
 let book = RefCell::new(lobster::OrderBook::default());
@@ -77,8 +75,60 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .unwrap();
 ```
 
+This output is produced:
+
+<div align="center">
+  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
+</div>
+
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/)
 
+
+## KDB+ Example
+
+Define a typed struct, implement `KdbDeserialize` to map rows, and stream time-sliced queries directly into your graph:
+
+```rust,ignore
+#[derive(Debug, Clone, Default)]
+struct Price {
+    sym: Sym,
+    mid: f64,
+}
+
+impl KdbDeserialize for Price {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?;
+        Ok((time, Price {
+            sym: row.get_sym(1, interner)?,
+            mid: row.get(2)?.get_float()?,
+        }))
+    }
+}
+
+kdb_read::<Price, _>(
+    conn,
+    Duration::from_secs(10),
+    |(t0, t1), _date, _iter| {
+        format!(
+            "select time, sym, mid from prices \
+             where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            t0.to_kdb_timestamp(),
+            t1.to_kdb_timestamp(),
+        )
+    },
+)
+.logged("prices", Info)
+.run(
+    RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+    RunFor::Duration(Duration::from_secs(100)),
+)?;
+```
+
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/read/)
 
 ## Get Involved!
 
