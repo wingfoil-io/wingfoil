@@ -9,6 +9,9 @@ pub mod etcd;
 #[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;
+#[cfg(feature = "grafana")]
+pub mod grafana;
+pub mod iterator_stream;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 #[cfg(feature = "zmq-beta")]
