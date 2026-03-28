@@ -5,7 +5,9 @@ use crate::types::{NanoTime, Node};
 use crossbeam::channel::{Receiver, SendError, Sender, select};
 use lazy_static::lazy_static;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "dynamic-graph-beta")]
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Error, Write};
@@ -882,6 +884,7 @@ impl Graph {
     /// `dirty_nodes_by_layer` to accommodate the new layer.
     ///
     /// Iterative BFS to avoid stack overflows on deep graphs.
+    #[cfg(feature = "dynamic-graph-beta")]
     fn fix_layers(&mut self, start: usize) {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(start);
