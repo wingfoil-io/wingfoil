@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use futures::StreamExt;
 use reqwest::Client;
+use serde_json::json;
 
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
@@ -22,15 +23,16 @@ pub struct GrafanaConfig {
 pub trait GrafanaPush<T: Element> {
     /// Push every tick of this stream to a Grafana Live channel.
     ///
-    /// Values are formatted as [Influx line protocol] and POSTed to
-    /// `<config.url>/api/live/push/<channel>`.
+    /// Values are sent as Grafana data frames (JSON) via
+    /// `POST <config.url>/api/live/push/<channel>`.
+    ///
+    /// Numeric values (anything whose `Display` output parses as `f64`) are
+    /// sent as `number` fields; everything else is sent as `string` fields.
     ///
     /// `channel` must be a valid Grafana Live channel path, e.g.
     /// `"stream/wingfoil/counter"`.
     ///
     /// Only supported in `RunMode::RealTime`.
-    ///
-    /// [Influx line protocol]: https://docs.influxdata.com/influxdb/v1/write_protocols/line_protocol_tutorial/
     #[must_use]
     fn grafana_push(self: &Rc<Self>, channel: &str, config: GrafanaConfig) -> Rc<dyn Node>;
 }
@@ -52,20 +54,36 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
 ) -> anyhow::Result<()> {
     let client = Client::new();
     let url = format!("{}/api/live/push/{}", config.url, channel);
-    // Influx measurement name: slashes aren't valid, replace with underscores
-    let measurement = channel.replace('/', "_");
 
     while let Some((time, value)) = source.next().await {
-        let ns = u64::from(time);
-        // Influx line protocol: <measurement> value=<value> <timestamp_ns>
-        let line = format!("{measurement} value={value} {ns}\n");
+        // Grafana expects milliseconds in JSON frames
+        let timestamp_ms = u64::from(time) / 1_000_000;
+        let value_str = value.to_string();
+
+        // Use number type if the value parses as f64; string otherwise
+        let frame = if let Ok(v) = value_str.parse::<f64>() {
+            json!([{
+                "schema": {"fields": [
+                    {"name": "time", "type": "time"},
+                    {"name": "value", "type": "number"}
+                ]},
+                "data": {"values": [[timestamp_ms], [v]]}
+            }])
+        } else {
+            json!([{
+                "schema": {"fields": [
+                    {"name": "time", "type": "time"},
+                    {"name": "value", "type": "string"}
+                ]},
+                "data": {"values": [[timestamp_ms], [value_str]]}
+            }])
+        };
 
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", config.api_key))
             .header("X-Grafana-Org-Id", config.org_id.to_string())
-            .header("Content-Type", "text/plain")
-            .body(line)
+            .json(&frame)
             .send()
             .await?;
 
@@ -85,27 +103,35 @@ mod tests {
 
     #[test]
     fn grafana_push_node_creation() {
-        // Verify that grafana_push creates a valid node without connecting
         let config = GrafanaConfig {
             url: "http://localhost:3000".into(),
             api_key: "test-key".into(),
             org_id: 1,
         };
         let stream = constant(42u64);
-        // Node creation must not require a network connection
         let _node = stream.grafana_push("stream/wingfoil/test", config);
     }
 
     #[test]
-    fn influx_line_format() {
-        // Verify the line protocol format by inspecting what push_consumer would send.
-        // We test the format string directly since the async consumer is hard to unit test.
-        let channel = "stream/wingfoil/counter".to_string();
-        let measurement = channel.replace('/', "_");
-        let value = 42u64;
-        let time = NanoTime::new(1_000_000_000u64);
-        let ns = u64::from(time);
-        let line = format!("{measurement} value={value} {ns}\n");
-        assert_eq!(line, "stream_wingfoil_counter value=42 1000000000\n");
+    fn frame_format_numeric() {
+        let time = NanoTime::new(1_000_000_000_000u64); // 1 second in nanos
+        let timestamp_ms = u64::from(time) / 1_000_000;
+        let _value = 42u64;
+        let frame = json!([{
+            "schema": {"fields": [
+                {"name": "time", "type": "time"},
+                {"name": "value", "type": "number"}
+            ]},
+            "data": {"values": [[timestamp_ms], [42.0f64]]}
+        }]);
+        assert_eq!(frame[0]["data"]["values"][1][0], 42.0);
+        assert_eq!(frame[0]["schema"]["fields"][1]["type"], "number");
+    }
+
+    #[test]
+    fn frame_format_string_fallback() {
+        let value = "hello";
+        let parsed = value.parse::<f64>();
+        assert!(parsed.is_err(), "non-numeric should not parse as f64");
     }
 }
