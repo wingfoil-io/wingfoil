@@ -42,7 +42,7 @@ impl PrometheusExporter {
     /// `wingfoil_counter_total`.
     pub fn register<T>(&self, name: impl Into<String>, stream: Rc<dyn Stream<T>>) -> Rc<dyn Node>
     where
-        T: Element + ToString,
+        T: Element + std::fmt::Display,
     {
         PrometheusMetricNode {
             name: name.into(),
@@ -110,7 +110,7 @@ struct PrometheusMetricNode<T: Element> {
     metrics: MetricStore,
 }
 
-impl<T: Element + ToString> MutableNode for PrometheusMetricNode<T> {
+impl<T: Element + std::fmt::Display> MutableNode for PrometheusMetricNode<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let value = self.stream.peek_value().to_string();
         self.metrics

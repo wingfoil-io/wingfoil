@@ -13,7 +13,7 @@
 //! ```
 
 use super::*;
-use crate::{Graph, NanoTime, RunFor, RunMode, nodes::*};
+use crate::{Graph, RunFor, RunMode, nodes::*};
 use std::time::Duration;
 
 fn grafana_url() -> String {
