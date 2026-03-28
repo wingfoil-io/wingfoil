@@ -1,18 +1,4 @@
-//! Demonstrates the Grafana adapter: Prometheus exporter + Grafana Live push.
-//!
-//! # Prometheus exporter
-//!
-//! Serves `GET /metrics` on port 9091. Point Grafana's Prometheus data source
-//! at `http://<host>:9091` (or use the Docker stack in `docker/grafana/`).
-//!
-//! # Grafana Live push
-//!
-//! Pushes values to a Grafana Live channel. Requires a running Grafana instance
-//! and a service account token:
-//!
-//! ```sh
-//! GRAFANA_API_KEY=<token> cargo run --example grafana_metrics --features grafana
-//! ```
+#![doc = include_str!("./README.md")]
 
 use std::rc::Rc;
 use std::time::Duration;
