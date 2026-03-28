@@ -55,10 +55,6 @@ hello, world 3
 
 ## Order Book Example
 
-<div align="center">
-  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
-</div>
-
 Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and altering the frequency of data. I/O adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
@@ -78,6 +74,12 @@ Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::
     .run()
     .unwrap();
 ```
+
+This output is produced:
+
+<div align="center">
+  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
+</div>
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/)
 
