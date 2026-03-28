@@ -96,6 +96,25 @@ The receiver thread loop:
 3. Pushes `Message::RealtimeValue(FixEvent::Data(...))` or `FixEvent::Status(...)` via `ChannelSender`
 4. On disconnect sends `Message::EndOfStream`
 
+## Acceptor Node — `FixAcceptorNode`
+
+A minimal server-side node that binds a `TcpListener` and handles the acceptor role of the FIX session. Primarily intended for in-process integration testing but usable as a real acceptor.
+
+```rust
+pub fn fix_accept(
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    mode: FixPollMode,
+) -> (Rc<dyn Stream<Burst<FixMessage>>>, Rc<dyn Stream<FixSessionStatus>>)
+```
+
+Behaviour:
+- Binds `TcpListener` on `start()` (use port `0` to let the OS assign a free port; call `local_addr()` to discover it)
+- Accepts one connection (single-session); accepts `WouldBlock` on the listener in `AlwaysSpin` mode
+- Reuses `FixSession` for the acceptor role: responds to Logon with Logon, handles Heartbeat/TestRequest, sends Logout on `stop()`
+- Same dual poll modes as the initiator (`AlwaysSpin` / `Threaded`)
+
 ## Sink Node — `FixSenderNode`
 
 Implements `MutableNode`, reads from upstream `Stream<FixMessage>`, serializes to FIX wire format, writes to TCP socket.
@@ -132,15 +151,19 @@ pub trait FixOperators<T: Into<FixMessage> + Element> {
 1. **`Cargo.toml`** — add `fix` feature flag and `fefix` dependency; add `fix` to `full` feature set
 2. **`src/adapters/fix.rs`** — implement:
    - `FixMessage`, `FixSessionStatus`, `FixEvent` types
-   - `FixSession` shared session handler
-   - `FixSpinSourceNode` (AlwaysSpin path)
-   - `FixThreadedSourceNode` wrapping `ReceiverStream` (Threaded path)
+   - `FixSession` shared session handler (shared by initiator and acceptor roles)
+   - `FixSpinSourceNode` (AlwaysSpin initiator path)
+   - `FixThreadedSourceNode` wrapping `ReceiverStream` (Threaded initiator path)
+   - `FixAcceptorNode` — binds `TcpListener`, handles acceptor session role
    - `FixSenderNode` sink
    - `fix_connect()` factory dispatching on `FixPollMode`
+   - `fix_accept()` factory dispatching on `FixPollMode`
    - `FixOperators` trait extension
 3. **`src/adapters/mod.rs`** — register behind `#[cfg(feature = "fix")]`
 4. **`examples/messaging/fix_client.rs`** — connect, login, receive and print messages
-5. **Tests** — unit tests using `RunMode::HistoricalFrom` with mock `FixMessage` iterators for parse/serialize round-trip
+5. **Tests**:
+   - Unit tests: parse/serialize round-trip with mock `FixMessage` iterators (`RunMode::HistoricalFrom`)
+   - Integration test (`fix_same_process`): `fix_accept(0, ...)` + `fix_connect("127.0.0.1", port, ...)` in one `Graph`, `RunMode::RealTime` — verifies full Logon → Heartbeat → Logout handshake and data flow in-process, following the `zmq_same_thread` pattern
 
 ## Scope
 

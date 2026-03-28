@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "websockets", "kdb", "zmq-beta", "dynamic-graph-beta"]
+full = ["async", "csv", "websockets", "kdb", "zmq-beta", "dynamic-graph-beta", "fix"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -8,6 +8,7 @@ csv = ["dep:csv"]
 websockets = ["dep:tokio-tungstenite", "dep:tungstenite", "async", "tokio/net", "tokio/time", "tokio/macros"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
+fix = ["dep:fefix"]
 
 [package]
 name = "wingfoil"
@@ -76,6 +77,7 @@ tungstenite = { version = "0.14.0", features = ["rustls-tls"], optional = true }
 tokio-tungstenite = { version = "0.27.0", features = ["native-tls", "stream", "connect"], optional = true }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
+fefix = { version = "0.7", optional = true }
 
 
 [dev-dependencies]
@@ -156,3 +158,8 @@ required-features = ["zmq-beta"]
 name = "zmq_sub"
 path = "examples/messaging/zmq_sub.rs"
 required-features = ["zmq-beta"]
+
+[[example]]
+name = "fix_client"
+path = "examples/messaging/fix_client.rs"
+required-features = ["fix"]

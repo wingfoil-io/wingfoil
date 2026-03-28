@@ -4,6 +4,9 @@
 pub mod cache;
 #[cfg(feature = "csv")]
 pub mod csv_streams;
+#[cfg(feature = "fix")]
+#[doc(hidden)]
+pub mod fix;
 pub mod iterator_stream;
 #[cfg(feature = "kdb")]
 pub mod kdb;
