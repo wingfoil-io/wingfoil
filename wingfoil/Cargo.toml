@@ -1,11 +1,10 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "websockets", "kdb", "zmq-beta", "dynamic-graph-beta"]
+full = ["async", "csv", "kdb", "zmq-beta", "dynamic-graph-beta"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
 csv = ["dep:csv"]
-websockets = ["dep:tokio-tungstenite", "dep:tungstenite", "async", "tokio/net", "tokio/time", "tokio/macros"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
 
@@ -72,8 +71,6 @@ futures = { version = "0.3", optional = true }
 async-stream = { version = "0.3.6", optional = true }
 futures-util = { version = "0.3.31", optional = true }
 csv = { version = "1.4", optional = true }
-tungstenite = { version = "0.14.0", features = ["rustls-tls"], optional = true }
-tokio-tungstenite = { version = "0.27.0", features = ["native-tls", "stream", "connect"], optional = true }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
 
