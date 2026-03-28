@@ -88,20 +88,6 @@ struct Price {
     mid: f64,
 }
 
-impl KdbDeserialize for Price {
-    fn from_kdb_row(
-        row: Row<'_>,
-        _columns: &[String],
-        interner: &mut SymbolInterner,
-    ) -> Result<(NanoTime, Self), KdbError> {
-        let time = row.get_timestamp(0)?;
-        Ok((time, Price {
-            sym: row.get_sym(1, interner)?,
-            mid: row.get(2)?.get_float()?,
-        }))
-    }
-}
-
 kdb_read::<Price, _>(
     conn,
     Duration::from_secs(10),
