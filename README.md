@@ -22,8 +22,17 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
 - **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), etc.
 
+## Links
+- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
+- Download from [crates.io](https://crates.io/crates/wingfoil/)
+- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
+- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
+- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
 
 ## Quick Start
+
+In this example we build a simple, linear pipeline with all nodes ticking in lock-step.
+
 ```rust
 use wingfoil::*;
 use std::time::Duration;
@@ -43,16 +52,8 @@ hello, world 1
 hello, world 2
 hello, world 3
 ```
-In this example we build a simple, linear pipeline with all nodes ticking in lock-step.
 
-## Links
-- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
-- Download from [crates.io](https://crates.io/crates/wingfoil/)
-- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
-- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
-- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
-
-## Non-trivial Example
+## Order Book Example
 
 <div align="center">
   <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
