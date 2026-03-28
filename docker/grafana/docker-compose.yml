@@ -1,0 +1,38 @@
+services:
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: wingfoil-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      # Pre-create a service account token for tests
+      - GF_SECURITY_SECRET_KEY=wingfoil-test-secret-key
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: wingfoil-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./provisioning/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Prometheus scrapes the wingfoil metrics endpoint running on the host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
