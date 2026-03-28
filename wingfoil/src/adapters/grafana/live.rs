@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::json;
 
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
@@ -23,67 +22,61 @@ pub struct GrafanaConfig {
 pub trait GrafanaPush<T: Element> {
     /// Push every tick of this stream to a Grafana Live channel.
     ///
-    /// Values are sent as Grafana data frames (JSON) via
-    /// `POST <config.url>/api/live/push/<channel>`.
+    /// Values are sent as [Influx line protocol] via
+    /// `POST <config.url>/api/live/push/<stream_id>`.
     ///
-    /// Numeric values (anything whose `Display` output parses as `f64`) are
-    /// sent as `number` fields; everything else is sent as `string` fields.
-    ///
-    /// `channel` must be a valid Grafana Live channel path, e.g.
-    /// `"stream/wingfoil/counter"`.
+    /// `stream_id` is a single-segment identifier (no slashes), e.g.
+    /// `"wingfoil_counter"`. It maps to the Grafana Live channel
+    /// `stream/<org_id>/<stream_id>` internally. Any `/` in the provided
+    /// value are replaced with `_` automatically.
     ///
     /// Only supported in `RunMode::RealTime`.
+    ///
+    /// [Influx line protocol]: https://docs.influxdata.com/influxdb/v1/write_protocols/line_protocol_tutorial/
     #[must_use]
-    fn grafana_push(self: &Rc<Self>, channel: &str, config: GrafanaConfig) -> Rc<dyn Node>;
+    fn grafana_push(self: &Rc<Self>, stream_id: &str, config: GrafanaConfig) -> Rc<dyn Node>;
 }
 
 impl<T: Element + Send + std::fmt::Display + 'static> GrafanaPush<T> for dyn Stream<T> {
-    fn grafana_push(self: &Rc<Self>, channel: &str, config: GrafanaConfig) -> Rc<dyn Node> {
-        let channel = channel.to_string();
+    fn grafana_push(self: &Rc<Self>, stream_id: &str, config: GrafanaConfig) -> Rc<dyn Node> {
+        let stream_id = stream_id.replace('/', "_");
         let consumer = Box::new(move |source: Pin<Box<dyn FutStream<T>>>| {
-            push_consumer(channel, config, source)
+            push_consumer(stream_id, config, source)
         });
         self.consume_async(consumer)
     }
 }
 
 async fn push_consumer<T: Element + Send + std::fmt::Display>(
-    channel: String,
+    stream_id: String,
     config: GrafanaConfig,
     mut source: Pin<Box<dyn FutStream<T>>>,
 ) -> anyhow::Result<()> {
     let client = Client::new();
-    let url = format!("{}/api/live/push/{}", config.url, channel);
+    // Grafana 11: /api/live/push/:streamId — single segment, Influx line protocol
+    let url = format!("{}/api/live/push/{}", config.url, stream_id);
 
     while let Some((time, value)) = source.next().await {
-        // Grafana expects milliseconds in JSON frames
-        let timestamp_ms = u64::from(time) / 1_000_000;
+        let ns = u64::from(time);
         let value_str = value.to_string();
 
-        // Use number type if the value parses as f64; string otherwise
-        let frame = if let Ok(v) = value_str.parse::<f64>() {
-            json!([{
-                "schema": {"fields": [
-                    {"name": "time", "type": "time"},
-                    {"name": "value", "type": "number"}
-                ]},
-                "data": {"values": [[timestamp_ms], [v]]}
-            }])
+        // Influx line protocol: numeric values need a decimal point or type suffix.
+        // Try to parse as f64 and format with decimal; fall back to quoted string.
+        let field_value = if let Ok(v) = value_str.parse::<f64>() {
+            // Always include decimal point so Influx parser treats it as float
+            format!("{v:.1}")
         } else {
-            json!([{
-                "schema": {"fields": [
-                    {"name": "time", "type": "time"},
-                    {"name": "value", "type": "string"}
-                ]},
-                "data": {"values": [[timestamp_ms], [value_str]]}
-            }])
+            format!("\"{value_str}\"")
         };
+
+        let line = format!("{stream_id} value={field_value} {ns}\n");
 
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", config.api_key))
             .header("X-Grafana-Org-Id", config.org_id.to_string())
-            .json(&frame)
+            .header("Content-Type", "text/plain")
+            .body(line)
             .send()
             .await?;
 
@@ -110,29 +103,31 @@ mod tests {
             org_id: 1,
         };
         let stream = constant(42u64);
-        let _node = stream.grafana_push("stream/wingfoil/test", config);
+        let _node = stream.grafana_push("wingfoil_counter", config);
     }
 
     #[test]
-    fn frame_format_numeric() {
-        let time = NanoTime::new(1_000_000_000_000u64); // 1 second in nanos
-        let timestamp_ms = u64::from(time) / 1_000_000;
-        let _value = 42u64;
-        let frame = json!([{
-            "schema": {"fields": [
-                {"name": "time", "type": "time"},
-                {"name": "value", "type": "number"}
-            ]},
-            "data": {"values": [[timestamp_ms], [42.0f64]]}
-        }]);
-        assert_eq!(frame[0]["data"]["values"][1][0], 42.0);
-        assert_eq!(frame[0]["schema"]["fields"][1]["type"], "number");
+    fn influx_line_format_numeric() {
+        let stream_id = "wingfoil_counter";
+        let time = NanoTime::new(1_000_000_000u64);
+        let ns = u64::from(time);
+        let v = 42u64.to_string().parse::<f64>().unwrap();
+        let line = format!("{stream_id} value={v:.1} {ns}\n");
+        assert_eq!(line, "wingfoil_counter value=42.0 1000000000\n");
     }
 
     #[test]
-    fn frame_format_string_fallback() {
-        let value = "hello";
-        let parsed = value.parse::<f64>();
-        assert!(parsed.is_err(), "non-numeric should not parse as f64");
+    fn influx_line_format_string_fallback() {
+        let stream_id = "wingfoil_status";
+        let value_str = "active";
+        let field_value = format!("\"{value_str}\"");
+        let line = format!("{stream_id} value={field_value} 0\n");
+        assert_eq!(line, "wingfoil_status value=\"active\" 0\n");
+    }
+
+    #[test]
+    fn slashes_in_stream_id_are_replaced() {
+        let stream_id = "stream/wingfoil/counter".replace('/', "_");
+        assert_eq!(stream_id, "stream_wingfoil_counter");
     }
 }
