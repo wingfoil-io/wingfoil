@@ -24,6 +24,9 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Run etcd integration tests
         run: |
           cargo test --features etcd-integration-test -p wingfoil \
