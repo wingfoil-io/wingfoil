@@ -11,11 +11,7 @@ use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
 use crate::{RunFor, RunMode};
 use etcd_client::Client;
-use testcontainers::{
-    core::WaitFor,
-    runners::SyncRunner,
-    GenericImage, ImageExt,
-};
+use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
 const ETCD_PORT: u16 = 2379;
 const ETCD_IMAGE: &str = "bitnami/etcd";

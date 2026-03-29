@@ -27,8 +27,12 @@ fn main() -> anyhow::Result<()> {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
             let mut client = etcd_client::Client::connect(&[ENDPOINT], None).await?;
-            client.put(format!("{SOURCE_PREFIX}greeting"), "hello", None).await?;
-            client.put(format!("{SOURCE_PREFIX}subject"), "world", None).await?;
+            client
+                .put(format!("{SOURCE_PREFIX}greeting"), "hello", None)
+                .await?;
+            client
+                .put(format!("{SOURCE_PREFIX}subject"), "world", None)
+                .await?;
             Ok::<_, anyhow::Error>(())
         })?;
     }
@@ -41,9 +45,17 @@ fn main() -> anyhow::Result<()> {
         .collapse()
         .map(|event| {
             let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
-            let upper = event.kv.value_str().unwrap_or("").to_uppercase().into_bytes();
+            let upper = event
+                .kv
+                .value_str()
+                .unwrap_or("")
+                .to_uppercase()
+                .into_bytes();
             println!("  {} → {}", event.kv.key, String::from_utf8_lossy(&upper));
-            EtcdKv { key: dest_key, value: upper }
+            EtcdKv {
+                key: dest_key,
+                value: upper,
+            }
         })
         .etcd_pub(conn)
         .run(RunMode::RealTime, RunFor::Cycles(2))?;
