@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 127 levels deep — 2^127 as the correct answer — completes in **1 tick** in under 10µs:
 
-```
+```text
 1 ticks processed in 7.207µs, 7.207µs average.
 value 170141183460469231731687303715884105728
 ```
