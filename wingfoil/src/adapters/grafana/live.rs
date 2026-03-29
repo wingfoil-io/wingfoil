@@ -82,7 +82,10 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("(failed to read response: {e})"));
             log::error!("grafana_push: HTTP {status} from {url}: {body}");
             anyhow::bail!("grafana_push: HTTP {status}: {body}");
         }

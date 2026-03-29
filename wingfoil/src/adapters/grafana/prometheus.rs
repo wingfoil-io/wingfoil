@@ -54,8 +54,13 @@ impl PrometheusExporter {
 }
 
 fn run_server(addr: &str, metrics: MetricStore) {
-    let listener = TcpListener::bind(addr)
-        .unwrap_or_else(|e| panic!("PrometheusExporter: failed to bind {addr}: {e}"));
+    let listener = match TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("PrometheusExporter: failed to bind {addr}: {e}");
+            return;
+        }
+    };
     for stream in listener.incoming() {
         match stream {
             Ok(conn) => handle_connection(conn, &metrics),
@@ -68,7 +73,8 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
     let mut reader = BufReader::new(&conn);
 
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    if let Err(e) = reader.read_line(&mut request_line) {
+        log::warn!("PrometheusExporter: failed to read request: {e}");
         return;
     }
     // Drain HTTP headers
