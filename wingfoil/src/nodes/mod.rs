@@ -744,7 +744,7 @@ where
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Stream<T>> {
-        InitiallyNode::new(self.clone(), Some(func)).into_stream()
+        InitiallyStream::new(self.clone(), Some(func)).into_stream()
     }
 
     fn fold<OUT: Element>(

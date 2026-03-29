@@ -3,14 +3,16 @@ use derive_new::new;
 use std::rc::Rc;
 
 #[derive(new)]
-pub struct InitiallyNode<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> {
+pub struct InitiallyStream<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> {
     source: Rc<dyn Stream<T>>,
     initially: Option<F>,
     #[new(default)]
     value: T,
 }
 
-impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> MutableNode for InitiallyNode<T, F> {
+impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> MutableNode
+    for InitiallyStream<T, F>
+{
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(f) = self.initially.take() {
             f(state)?;
@@ -27,7 +29,7 @@ impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> MutableNode for I
 }
 
 impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> StreamPeekRef<T>
-    for InitiallyNode<T, F>
+    for InitiallyStream<T, F>
 {
     fn peek_ref(&self) -> &T {
         &self.value
