@@ -1,12 +1,14 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq-beta", "dynamic-graph-beta"]
+full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
 csv = ["dep:csv"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
+etcd = ["dep:etcd-client", "async"]
+etcd-integration-test = ["etcd", "dep:testcontainers"]
 
 [package]
 name = "wingfoil"
@@ -73,6 +75,8 @@ futures-util = { version = "0.3.31", optional = true }
 csv = { version = "1.4", optional = true }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
+etcd-client = { version = "0.18", optional = true }
+testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 
 
 [dev-dependencies]
@@ -153,3 +157,8 @@ required-features = ["zmq-beta"]
 name = "zmq_sub"
 path = "examples/messaging/zmq_sub.rs"
 required-features = ["zmq-beta"]
+
+[[example]]
+name = "etcd"
+path = "examples/etcd/main.rs"
+required-features = ["etcd"]
