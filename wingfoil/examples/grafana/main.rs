@@ -10,8 +10,8 @@ fn main() -> anyhow::Result<()> {
 
     // ── Prometheus exporter ────────────────────────────────────────────────
     let exporter = PrometheusExporter::new("0.0.0.0:9091");
-    exporter.serve();
-    println!("Prometheus metrics available at http://localhost:9091/metrics");
+    let port = exporter.serve()?;
+    println!("Prometheus metrics available at http://localhost:{port}/metrics");
 
     let counter = ticker(Duration::from_secs(1)).count();
     let metric_node = exporter.register("wingfoil_ticks_total", counter.clone());

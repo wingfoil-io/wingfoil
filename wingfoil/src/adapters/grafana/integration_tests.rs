@@ -50,7 +50,7 @@ fn prometheus_exporter_scrapeable_by_prometheus() {
     _ = env_logger::try_init();
     let port = metrics_port();
     let exporter = PrometheusExporter::new(format!("0.0.0.0:{port}"));
-    exporter.serve();
+    exporter.serve().unwrap();
 
     let counter = ticker(Duration::from_millis(100)).count();
     let node = exporter.register("wingfoil_integration_counter", counter);
@@ -137,10 +137,9 @@ fn grafana_live_push_wrong_key_returns_error() {
 #[test]
 fn exporter_and_push_together() {
     _ = env_logger::try_init();
-    let port = metrics_port() + 1; // avoid conflict with the scrape test
-
-    let exporter = PrometheusExporter::new(format!("0.0.0.0:{port}"));
-    exporter.serve();
+    // Use port 0 so the OS assigns a free port — avoids conflicts with other tests.
+    let exporter = PrometheusExporter::new("0.0.0.0:0");
+    exporter.serve().unwrap();
 
     let config = GrafanaConfig {
         url: grafana_url(),

@@ -3,8 +3,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::{Element, GraphState, IntoNode, MutableNode, Node, Stream, UpStreams};
+
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 type MetricStore = Arc<Mutex<HashMap<String, String>>>;
 
@@ -26,11 +29,17 @@ impl PrometheusExporter {
         }
     }
 
-    /// Spawn the HTTP server thread. Safe to call before the graph starts.
-    pub fn serve(&self) {
+    /// Spawn the HTTP server thread. Binds the listener synchronously so bind
+    /// errors are returned immediately, before the graph starts.
+    ///
+    /// Returns the port that was actually bound — useful when `addr` specifies
+    /// port `0` for OS-assigned port selection.
+    pub fn serve(&self) -> Result<u16, std::io::Error> {
+        let listener = TcpListener::bind(&self.addr)?;
+        let port = listener.local_addr()?.port();
         let metrics = self.metrics.clone();
-        let addr = self.addr.clone();
-        std::thread::spawn(move || run_server(&addr, metrics));
+        std::thread::spawn(move || run_server(listener, metrics));
+        Ok(port)
     }
 
     /// Register a stream as a Prometheus gauge metric.
@@ -53,14 +62,7 @@ impl PrometheusExporter {
     }
 }
 
-fn run_server(addr: &str, metrics: MetricStore) {
-    let listener = match TcpListener::bind(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("PrometheusExporter: failed to bind {addr}: {e}");
-            return;
-        }
-    };
+fn run_server(listener: TcpListener, metrics: MetricStore) {
     for stream in listener.incoming() {
         match stream {
             Ok(conn) => handle_connection(conn, &metrics),
@@ -70,6 +72,9 @@ fn run_server(addr: &str, metrics: MetricStore) {
 }
 
 fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
+    if let Err(e) = conn.set_read_timeout(Some(READ_TIMEOUT)) {
+        log::warn!("PrometheusExporter: failed to set read timeout: {e}");
+    }
     let mut reader = BufReader::new(&conn);
 
     let mut request_line = String::new();
@@ -88,7 +93,9 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
     }
 
     if !request_line.starts_with("GET /metrics") {
-        let _ = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        if let Err(e) = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n") {
+            log::warn!("PrometheusExporter: failed to write 404 response: {e}");
+        }
         return;
     }
 
@@ -98,7 +105,9 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
         body.len(),
         body,
     );
-    let _ = conn.write_all(response.as_bytes());
+    if let Err(e) = conn.write_all(response.as_bytes()) {
+        log::warn!("PrometheusExporter: failed to write metrics response: {e}");
+    }
 }
 
 fn build_metrics_body(metrics: &MetricStore) -> String {
@@ -163,7 +172,7 @@ mod tests {
     fn serves_registered_metric() {
         let port = 19091u16;
         let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
-        exporter.serve();
+        exporter.serve().unwrap();
 
         let counter = ticker(Duration::from_millis(10)).count();
         let node = exporter.register("test_counter", counter);
@@ -189,7 +198,7 @@ mod tests {
     fn returns_404_for_unknown_path() {
         let port = 19092u16;
         let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
-        exporter.serve();
+        exporter.serve().unwrap();
         std::thread::sleep(Duration::from_millis(50));
 
         let mut conn = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();

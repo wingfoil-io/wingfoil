@@ -1,11 +1,16 @@
 use std::pin::Pin;
 use std::rc::Rc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use reqwest::Client;
 
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
+
+static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+
+const MAX_RETRIES: u32 = 3;
 
 /// Connection configuration for a Grafana instance.
 #[derive(Debug, Clone)]
@@ -30,6 +35,12 @@ pub trait GrafanaPush<T: Element> {
     /// `stream/<org_id>/<stream_id>` internally. Any `/` in the provided
     /// value are replaced with `_` automatically.
     ///
+    /// Numeric values are formatted to one decimal place (e.g. `42.0`), which
+    /// is sufficient for monitoring metrics. String values are quoted.
+    ///
+    /// HTTP 5xx errors are retried up to 3 times with linear backoff; 4xx
+    /// errors fail immediately.
+    ///
     /// Only supported in `RunMode::RealTime`.
     ///
     /// [Influx line protocol]: https://docs.influxdata.com/influxdb/v1/write_protocols/line_protocol_tutorial/
@@ -52,7 +63,7 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
     config: GrafanaConfig,
     mut source: Pin<Box<dyn FutStream<T>>>,
 ) -> anyhow::Result<()> {
-    let client = Client::new();
+    let client = CLIENT.get_or_init(Client::new);
     // Grafana 11: /api/live/push/:streamId — single segment, Influx line protocol
     let url = format!("{}/api/live/push/{}", config.url, stream_id);
 
@@ -63,7 +74,8 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
         // Influx line protocol: numeric values need a decimal point or type suffix.
         // Try to parse as f64 and format with decimal; fall back to quoted string.
         let field_value = if let Ok(v) = value_str.parse::<f64>() {
-            // Always include decimal point so Influx parser treats it as float
+            // Always include decimal point so Influx parser treats it as float.
+            // Formatted to 1 decimal place — sufficient precision for monitoring metrics.
             format!("{v:.1}")
         } else {
             format!("\"{value_str}\"")
@@ -71,21 +83,36 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
 
         let line = format!("{stream_id} value={field_value} {ns}\n");
 
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .header("X-Grafana-Org-Id", config.org_id.to_string())
-            .header("Content-Type", "text/plain")
-            .body(line)
-            .send()
-            .await?;
+        for attempt in 1..=MAX_RETRIES {
+            let resp = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", config.api_key))
+                .header("X-Grafana-Org-Id", config.org_id.to_string())
+                .header("Content-Type", "text/plain")
+                .body(line.clone())
+                .send()
+                .await?;
 
-        if !resp.status().is_success() {
+            if resp.status().is_success() {
+                break;
+            }
+
             let status = resp.status();
             let body = resp
                 .text()
                 .await
                 .unwrap_or_else(|e| format!("(failed to read response: {e})"));
+
+            if status.is_server_error() && attempt < MAX_RETRIES {
+                let delay = Duration::from_millis(200 * u64::from(attempt));
+                log::warn!(
+                    "grafana_push: HTTP {status} (attempt {attempt}/{MAX_RETRIES}), \
+                     retrying in {delay:?}"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
             log::error!("grafana_push: HTTP {status} from {url}: {body}");
             anyhow::bail!("grafana_push: HTTP {status}: {body}");
         }
