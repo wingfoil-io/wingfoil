@@ -29,12 +29,18 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Build KDB image
+        run: docker build -t wingfoil-kdb docker/kdb/
+
       - name: Start KDB container
         run: |
+          echo "${{ secrets.KDB_LICENSE_B64 }}" | base64 -d > /tmp/kc.lic
           docker run -d \
             --name kdb \
             -p 5000:5000 \
-            kysely/kdbq-server
+            -e QLIC=/q \
+            -v /tmp/kc.lic:/q/kc.lic \
+            wingfoil-kdb
 
       - name: Wait for KDB to be ready
         run: |
