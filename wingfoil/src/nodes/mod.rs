@@ -398,6 +398,11 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Stream<T>>;
+    #[must_use]
+    fn initially_async<F, FUT>(self: &Rc<Self>, func: F) -> Rc<dyn Stream<T>>
+    where
+        F: FnOnce() -> FUT + 'static,
+        FUT: Future<Output = anyhow::Result<()>> + Send + 'static;
     /// executes supplied closure on each tick
     #[must_use]
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
@@ -745,6 +750,14 @@ where
         func: F,
     ) -> Rc<dyn Stream<T>> {
         InitiallyStream::new(self.clone(), Some(func)).into_stream()
+    }
+
+    fn initially_async<F, FUT>(self: &Rc<Self>, func: F) -> Rc<dyn Stream<T>>
+    where
+        F: FnOnce() -> FUT + 'static,
+        FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        InitiallyAsyncStream::new(self.clone(), Some(func)).into_stream()
     }
 
     fn fold<OUT: Element>(
