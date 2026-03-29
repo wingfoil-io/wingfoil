@@ -27,6 +27,7 @@ mod fold;
 #[cfg(feature = "async")]
 mod graph_node;
 mod graph_state;
+mod initially;
 mod inspect;
 mod limit;
 mod map;
@@ -75,6 +76,7 @@ use filter::*;
 use finally::*;
 use fold::*;
 use graph_state::*;
+use initially::*;
 use inspect::*;
 use limit::*;
 use map::*;
@@ -388,6 +390,11 @@ pub trait StreamOperators<T: Element> {
         FUT: Future<Output = anyhow::Result<()>> + Send + 'static;
     #[must_use]
     fn finally<F: FnOnce(T, &GraphState) -> anyhow::Result<()> + 'static>(
+        self: &Rc<Self>,
+        func: F,
+    ) -> Rc<dyn Node>;
+    #[must_use]
+    fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Node>;
@@ -731,6 +738,13 @@ where
         func: F,
     ) -> Rc<dyn Node> {
         FinallyNode::new(self.clone(), Some(func)).into_node()
+    }
+
+    fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
+        self: &Rc<Self>,
+        func: F,
+    ) -> Rc<dyn Node> {
+        InitiallyNode::new(self.clone(), Some(func)).into_node()
     }
 
     fn fold<OUT: Element>(
