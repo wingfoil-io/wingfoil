@@ -94,8 +94,6 @@ where
             tokio::fs::create_dir_all(&cache_config.folder).await?;
             let cache = FileCache::<T>::new(cache_config);
             let slices = compute_time_slices(start_time, end_time, period);
-            let host = connection.host.clone();
-            let port_str = connection.port.to_string();
 
             Ok(async_stream::stream! {
                 let mut socket: Option<QStream> = None;
@@ -104,7 +102,7 @@ where
 
                 'slices: for (within, date, iteration) in slices {
                     let query = query_fn(within, date, iteration);
-                    let key = CacheKey::from_parts(&[&host, &port_str, &query]);
+                    let key = CacheKey::from_parts(&[&query]);
 
                     let cached = match cache.get(&key).await {
                         Ok(Some(rows)) => Some(rows),
