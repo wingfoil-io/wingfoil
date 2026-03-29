@@ -397,7 +397,7 @@ pub trait StreamOperators<T: Element> {
     fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
         self: &Rc<Self>,
         func: F,
-    ) -> Rc<dyn Node>;
+    ) -> Rc<dyn Stream<T>>;
     /// executes supplied closure on each tick
     #[must_use]
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
@@ -743,8 +743,8 @@ where
     fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
         self: &Rc<Self>,
         func: F,
-    ) -> Rc<dyn Node> {
-        InitiallyNode::new(self.clone(), Some(func)).into_node()
+    ) -> Rc<dyn Stream<T>> {
+        InitiallyNode::new(self.clone(), Some(func)).into_stream()
     }
 
     fn fold<OUT: Element>(

@@ -25,3 +25,11 @@ impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> MutableNode for I
         UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 }
+
+impl<T: Element, F: FnOnce(&GraphState) -> anyhow::Result<()>> StreamPeekRef<T>
+    for InitiallyNode<T, F>
+{
+    fn peek_ref(&self) -> &T {
+        &self.value
+    }
+}

@@ -21,27 +21,24 @@ const SOURCE_PREFIX: &str = "/example/source/";
 const DEST_PREFIX: &str = "/example/dest/";
 
 fn main() -> anyhow::Result<()> {
-    // Seed source keys before the graph starts.
-    // The runtime is dropped at the end of this block — wingfoil creates its own.
-    {
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            let mut client = etcd_client::Client::connect(&[ENDPOINT], None).await?;
-            client
-                .put(format!("{SOURCE_PREFIX}greeting"), "hello", None)
-                .await?;
-            client
-                .put(format!("{SOURCE_PREFIX}subject"), "world", None)
-                .await?;
-            Ok::<_, anyhow::Error>(())
-        })?;
-    }
-
     let conn = EtcdConnection::new(ENDPOINT);
 
     // Watch source prefix, uppercase each value, write to dest prefix.
     // Two snapshot events → RunFor::Cycles(2).
+    // `initially` seeds the source keys during graph start using the graph's own runtime.
     etcd_sub(conn.clone(), SOURCE_PREFIX)
+        .initially(|state| {
+            state.tokio_runtime().block_on(async {
+                let mut client = etcd_client::Client::connect(&[ENDPOINT], None).await?;
+                client
+                    .put(format!("{SOURCE_PREFIX}greeting"), "hello", None)
+                    .await?;
+                client
+                    .put(format!("{SOURCE_PREFIX}subject"), "world", None)
+                    .await?;
+                Ok(())
+            })
+        })
         .collapse()
         .map(|event| {
             let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
