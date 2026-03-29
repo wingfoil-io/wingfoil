@@ -36,7 +36,10 @@ pub fn etcd_pub(
     ))
 }
 
-/// Extension trait providing a fluent API for writing `Burst<EtcdKv>` streams to etcd.
+/// Extension trait providing a fluent API for writing streams to etcd.
+///
+/// Implemented for both `Burst<EtcdKv>` (multi-item) and `EtcdKv` (single-item)
+/// streams, so burst wrapping is never required in user code.
 pub trait EtcdPubOperators {
     /// Write this stream to etcd via PUT.
     #[must_use]
@@ -46,5 +49,16 @@ pub trait EtcdPubOperators {
 impl EtcdPubOperators for dyn Stream<Burst<EtcdKv>> {
     fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection) -> Rc<dyn Node> {
         etcd_pub(conn, self)
+    }
+}
+
+impl EtcdPubOperators for dyn Stream<EtcdKv> {
+    fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection) -> Rc<dyn Node> {
+        let burst_stream = self.map(|kv| {
+            let mut b = Burst::new();
+            b.push(kv);
+            b
+        });
+        etcd_pub(conn, &burst_stream)
     }
 }
