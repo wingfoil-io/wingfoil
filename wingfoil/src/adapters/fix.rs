@@ -12,7 +12,8 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -211,6 +212,42 @@ fn find_message(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     let soh_off = buf[val_start..].iter().position(|&b| b == SOH)?;
     let end = val_start + soh_off + 1;
     Some((buf[..end].to_vec(), end))
+}
+
+/// Drain all complete FIX messages from `parse_buf`, dispatching session-level messages
+/// and pushing application/status events into `events`.
+/// Returns `true` if any events were pushed.
+fn drain_parse_buf(
+    parse_buf: &mut Vec<u8>,
+    socket: &mut Option<TcpStream>,
+    session: &mut FixSession,
+    events: &mut Burst<FixEvent>,
+    is_acceptor: bool,
+) -> anyhow::Result<bool> {
+    let before = events.len();
+    loop {
+        let Some((msg_bytes, consumed)) = find_message(parse_buf) else {
+            break;
+        };
+        parse_buf.drain(..consumed);
+        let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
+            continue;
+        };
+        let mut sock = match socket.take() {
+            Some(s) => s,
+            None => continue,
+        };
+        let pass = if is_acceptor {
+            handle_acceptor(session, &msg, &mut sock, events)?
+        } else {
+            handle_initiator(session, &msg, &mut sock, events)?
+        };
+        *socket = Some(sock);
+        if pass {
+            events.push(FixEvent::Data(msg));
+        }
+    }
+    Ok(events.len() > before)
 }
 
 // ── FixSession ────────────────────────────────────────────────────────────────
@@ -415,32 +452,14 @@ impl FixSpinSource {
         }
     }
 
-    fn drain_messages(&mut self, is_acceptor: bool) -> anyhow::Result<bool> {
-        let before = self.value.len();
-        loop {
-            let Some((msg_bytes, consumed)) = find_message(&self.parse_buf) else {
-                break;
-            };
-            self.parse_buf.drain(..consumed);
-            let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
-                continue;
-            };
-            let mut sock = match self.socket.take() {
-                Some(s) => s,
-                None => continue, // disconnected, skip session responses
-            };
-            let pass = if is_acceptor {
-                handle_acceptor(&mut self.session, &msg, &mut sock, &mut self.value)?
-            } else {
-                handle_initiator(&mut self.session, &msg, &mut sock, &mut self.value)?
-            };
-            self.socket = Some(sock);
-            if pass {
-                self.value.push(FixEvent::Data(msg));
-            }
-        }
-        // Ticked if any events (status or data) were pushed
-        Ok(self.value.len() > before)
+    fn drain_messages(&mut self) -> anyhow::Result<bool> {
+        drain_parse_buf(
+            &mut self.parse_buf,
+            &mut self.socket,
+            &mut self.session,
+            &mut self.value,
+            false,
+        )
     }
 }
 
@@ -489,7 +508,7 @@ impl MutableNode for FixSpinSource {
             return Ok(true);
         }
 
-        self.drain_messages(false)
+        self.drain_messages()
     }
 
     fn upstreams(&self) -> UpStreams {
@@ -595,26 +614,13 @@ impl MutableNode for FixAcceptorSpin {
         }
 
         // Process complete messages; track whether any events are emitted
-        let before = self.value.len();
-        loop {
-            let Some((msg_bytes, consumed)) = find_message(&self.parse_buf) else {
-                break;
-            };
-            self.parse_buf.drain(..consumed);
-            let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
-                continue;
-            };
-            let mut sock = match self.socket.take() {
-                Some(s) => s,
-                None => continue,
-            };
-            let pass = handle_acceptor(&mut self.session, &msg, &mut sock, &mut self.value)?;
-            self.socket = Some(sock);
-            if pass {
-                self.value.push(FixEvent::Data(msg));
-            }
-        }
-        let msg_ticked = self.value.len() > before;
+        let msg_ticked = drain_parse_buf(
+            &mut self.parse_buf,
+            &mut self.socket,
+            &mut self.session,
+            &mut self.value,
+            true,
+        )?;
 
         Ok(ticked || msg_ticked)
     }
@@ -639,15 +645,17 @@ impl StreamPeekRef<Burst<FixEvent>> for FixAcceptorSpin {
 
 // ── Threaded source (initiator or acceptor) ───────────────────────────────────
 
-/// Run the FIX session on `sock`, forwarding events to `chan`.
-/// Sends a clone of the socket back via `socket_back` so the owner can shut it down.
-fn run_fix_thread(
+/// Run a single FIX session on `sock`, forwarding events to `chan`.
+///
+/// Returns `true` if the session ended due to a normal network disconnect
+/// (the caller may reconnect), or `false` if the channel is closed (graph
+/// has stopped and the thread should exit).
+fn run_fix_session(
     mut sock: TcpStream,
-    mut session: FixSession,
+    session: &mut FixSession,
     is_acceptor: bool,
-    chan: ChannelSender<FixEvent>,
-    socket_back: mpsc::SyncSender<TcpStream>,
-) {
+    chan: &ChannelSender<FixEvent>,
+) -> bool {
     use crate::channel::Message;
 
     let send = |msg| {
@@ -655,91 +663,52 @@ fn run_fix_thread(
             .map_err(|e| anyhow::anyhow!(e))
     };
 
-    let finish = |status: FixSessionStatus| {
-        let _ = chan.send_message(Message::RealtimeValue(FixEvent::Status(status)));
-        let _ = chan.send_message(Message::EndOfStream);
-    };
-
-    // Send a clone back so stop() can call shutdown() on it.
-    match sock.try_clone() {
-        Ok(clone) => {
-            let _ = socket_back.send(clone);
-        }
-        Err(e) => {
-            finish(FixSessionStatus::Error(e.to_string()));
-            return;
-        }
-    }
-
-    if let Err(e) = send(FixEvent::Status(FixSessionStatus::LoggingIn)) {
-        let _ = e; // channel closed — nothing to do
-        return;
+    if send(FixEvent::Status(FixSessionStatus::LoggingIn)).is_err() {
+        return false;
     }
 
     if !is_acceptor && let Err(e) = session.send_logon(&mut sock) {
-        finish(FixSessionStatus::Error(e.to_string()));
-        return;
+        let _ = send(FixEvent::Status(FixSessionStatus::Error(e.to_string())));
+        return true;
     }
 
     let mut parse_buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; READ_BUF_SIZE];
+    let mut sock_opt = Some(sock);
 
     loop {
+        let sock = match sock_opt.as_mut() {
+            Some(s) => s,
+            None => return true, // disconnected during session dispatch
+        };
+
         match sock.read(&mut tmp) {
-            Ok(0) => {
-                finish(FixSessionStatus::Disconnected);
-                return;
-            }
+            Ok(0) => return true,
             Err(e)
                 if e.kind() == io::ErrorKind::ConnectionReset
                     || e.kind() == io::ErrorKind::BrokenPipe =>
             {
-                finish(FixSessionStatus::Disconnected);
-                return;
+                return true;
             }
-            Err(_) => {
-                // Shutdown or other error — clean exit.
-                finish(FixSessionStatus::Disconnected);
-                return;
-            }
+            Err(_) => return true, // shutdown or other error — clean exit
             Ok(n) => parse_buf.extend_from_slice(&tmp[..n]),
         }
 
-        loop {
-            let Some((msg_bytes, consumed)) = find_message(&parse_buf) else {
-                break;
-            };
-            parse_buf.drain(..consumed);
-            let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
-                continue;
-            };
+        let mut events: Burst<FixEvent> = TinyVec::new();
+        match drain_parse_buf(
+            &mut parse_buf,
+            &mut sock_opt,
+            session,
+            &mut events,
+            is_acceptor,
+        ) {
+            Ok(_) => {}
+            Err(_) => return true,
+        }
 
-            let mut events: Burst<FixEvent> = TinyVec::new();
-            let pass = if is_acceptor {
-                match handle_acceptor(&mut session, &msg, &mut sock, &mut events) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        finish(FixSessionStatus::Disconnected);
-                        return;
-                    }
-                }
-            } else {
-                match handle_initiator(&mut session, &msg, &mut sock, &mut events) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        finish(FixSessionStatus::Disconnected);
-                        return;
-                    }
-                }
-            };
-
-            for event in events {
-                if send(event).is_err() {
-                    return;
-                }
-            }
-            if pass && send(FixEvent::Data(msg)).is_err() {
-                return;
+        for event in events {
+            if send(event).is_err() {
+                return false;
             }
         }
     }
@@ -757,9 +726,11 @@ struct FixThreadedSource {
     chan_sender: Option<ChannelSender<FixEvent>>,
     // Thread management
     thread: Option<JoinHandle<()>>,
-    // Receives a TcpStream clone from the thread so stop() can call shutdown()
-    socket_back_rx: Option<mpsc::Receiver<TcpStream>>,
-    socket_handle: Option<TcpStream>,
+    // Current live socket, updated by the thread on each (re)connect.
+    // stop() shuts it down so the blocking read() unblocks and the thread exits.
+    socket_arc: Option<Arc<Mutex<Option<TcpStream>>>>,
+    // Set by stop() to prevent the thread from re-accepting after socket shutdown.
+    stop_flag: Arc<AtomicBool>,
 }
 
 impl FixThreadedSource {
@@ -775,8 +746,8 @@ impl FixThreadedSource {
             inner,
             chan_sender: Some(chan_sender),
             thread: None,
-            socket_back_rx: None,
-            socket_handle: None,
+            socket_arc: None,
+            stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -792,21 +763,8 @@ impl FixThreadedSource {
             inner,
             chan_sender: Some(chan_sender),
             thread: None,
-            socket_back_rx: None,
-            socket_handle: None,
-        }
-    }
-
-    /// Try to obtain the socket handle from the background thread.
-    /// Blocks up to 2 s waiting for the thread to establish its connection.
-    fn fetch_socket_handle(&mut self) {
-        if self.socket_handle.is_some() {
-            return;
-        }
-        if let Some(rx) = self.socket_back_rx.take()
-            && let Ok(s) = rx.recv_timeout(Duration::from_secs(2))
-        {
-            self.socket_handle = Some(s);
+            socket_arc: None,
+            stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -829,9 +787,11 @@ impl MutableNode for FixThreadedSource {
             chan_sender.set_notifier(state.ready_notifier());
         }
 
-        let (socket_back_tx, socket_back_rx) = mpsc::sync_channel(1);
-        self.socket_back_rx = Some(socket_back_rx);
+        let socket_arc: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
+        let socket_arc_thread = socket_arc.clone();
+        self.socket_arc = Some(socket_arc);
 
+        let stop_flag = self.stop_flag.clone();
         let host = self.host.clone();
         let port = self.port;
         let sender_id = self.sender_comp_id.clone();
@@ -839,25 +799,77 @@ impl MutableNode for FixThreadedSource {
         let is_acceptor = self.is_acceptor;
 
         let handle = std::thread::spawn(move || {
-            let sock_result = if is_acceptor {
-                TcpListener::bind(("0.0.0.0", port)).and_then(|l| l.accept().map(|(s, _)| s))
-            } else {
-                connect_with_retry(&host, port).map_err(|e| io::Error::other(e.to_string()))
+            use crate::channel::Message;
+
+            let send_status = |status: FixSessionStatus| {
+                chan_sender
+                    .send_message(Message::RealtimeValue(FixEvent::Status(status)))
+                    .is_ok()
             };
 
-            let sock = match sock_result {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = chan_sender.send_message(crate::channel::Message::RealtimeValue(
-                        FixEvent::Status(FixSessionStatus::Error(e.to_string())),
-                    ));
-                    let _ = chan_sender.send_message(crate::channel::Message::EndOfStream);
-                    return;
+            loop {
+                // Check the stop flag before each (re)connect attempt.
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
                 }
-            };
 
-            let session = FixSession::new(&sender_id, &target_id);
-            run_fix_thread(sock, session, is_acceptor, chan_sender, socket_back_tx);
+                // Connect (initiator) or bind+accept (acceptor).
+                let sock_result = if is_acceptor {
+                    TcpListener::bind(("0.0.0.0", port)).and_then(|l| l.accept().map(|(s, _)| s))
+                } else {
+                    connect_with_retry(&host, port).map_err(|e| io::Error::other(e.to_string()))
+                };
+
+                let sock = match sock_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if !send_status(FixSessionStatus::Error(e.to_string())) {
+                            break;
+                        }
+                        // For initiators, give up; for acceptors, retry.
+                        if !is_acceptor {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                };
+
+                // Store a clone so stop() can shut down the live socket.
+                match sock.try_clone() {
+                    Ok(clone) => *socket_arc_thread.lock().unwrap() = Some(clone),
+                    Err(e) => {
+                        if !send_status(FixSessionStatus::Error(e.to_string())) {
+                            break;
+                        }
+                        if !is_acceptor {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+
+                let mut session = FixSession::new(&sender_id, &target_id);
+                let still_open = run_fix_session(sock, &mut session, is_acceptor, &chan_sender);
+
+                // Clear the stale socket handle.
+                *socket_arc_thread.lock().unwrap() = None;
+
+                if !still_open {
+                    break; // channel closed — graph has stopped
+                }
+
+                if !send_status(FixSessionStatus::Disconnected) {
+                    break;
+                }
+
+                // Initiators don't auto-reconnect; acceptors loop to re-accept.
+                if !is_acceptor {
+                    break;
+                }
+            }
+
+            let _ = chan_sender.send_message(Message::EndOfStream);
         });
 
         self.thread = Some(handle);
@@ -873,10 +885,12 @@ impl MutableNode for FixThreadedSource {
     }
 
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        // Obtain the socket handle sent back by the thread, then shut it down
-        // so the blocking read() returns and the thread can exit cleanly.
-        self.fetch_socket_handle();
-        if let Some(s) = self.socket_handle.take() {
+        // Signal the thread not to re-accept after the current session ends.
+        self.stop_flag.store(true, Ordering::Relaxed);
+        // Shut down the live socket so the thread's blocking read() returns.
+        if let Some(arc) = self.socket_arc.take()
+            && let Some(s) = arc.lock().unwrap().take()
+        {
             let _ = s.shutdown(Shutdown::Both);
         }
         if let Some(handle) = self.thread.take() {
@@ -904,6 +918,7 @@ struct FixSenderNode {
     port: u16,
     session: FixSession,
     socket: Option<TcpStream>,
+    parse_buf: Vec<u8>,
 }
 
 impl MutableNode for FixSenderNode {
@@ -913,16 +928,45 @@ impl MutableNode for FixSenderNode {
         }
         let mut sock = connect_with_retry(&self.host, self.port)?;
         self.session.send_logon(&mut sock)?;
+        sock.set_nonblocking(true)?;
         self.socket = Some(sock);
         Ok(())
     }
 
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         let msg = self.src.peek_value();
-        let mut sock = self
-            .socket
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("FIX sender: not connected"))?;
+        let mut sock_opt = self.socket.take();
+
+        // Drain any incoming bytes (heartbeats, test requests, etc.)
+        if let Some(sock) = sock_opt.as_mut() {
+            let mut tmp = [0u8; READ_BUF_SIZE];
+            loop {
+                match sock.read(&mut tmp) {
+                    Ok(0) => {
+                        sock_opt = None;
+                        break;
+                    }
+                    Ok(n) => self.parse_buf.extend_from_slice(&tmp[..n]),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(_) => {
+                        sock_opt = None;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Handle session-level messages (respond to test requests, etc.)
+        let mut events: Burst<FixEvent> = TinyVec::new();
+        drain_parse_buf(
+            &mut self.parse_buf,
+            &mut sock_opt,
+            &mut self.session,
+            &mut events,
+            false,
+        )?;
+
+        let mut sock = sock_opt.ok_or_else(|| anyhow::anyhow!("FIX sender: connection lost"))?;
         self.session.send(&mut sock, &msg.msg_type, &msg.fields)?;
         self.socket = Some(sock);
         Ok(true)
@@ -1023,6 +1067,7 @@ impl FixOperators for Rc<dyn Stream<FixMessage>> {
             port,
             session: FixSession::new(sender_comp_id, target_comp_id),
             socket: None,
+            parse_buf: Vec::new(),
         }
         .into_node()
     }
@@ -1035,6 +1080,15 @@ mod tests {
     use super::*;
     use crate::{Graph, NanoTime, NodeOperators, RunFor, RunMode, StreamOperators};
     use std::time::Duration;
+
+    /// Allocate an ephemeral port by binding to :0 and immediately dropping the listener.
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
 
     #[test]
     fn encode_decode_roundtrip() {
@@ -1076,7 +1130,7 @@ mod tests {
     #[test]
     fn fix_same_process_spin() {
         let _ = env_logger::try_init();
-        let port = 19876u16;
+        let port = free_port();
         let run_for = RunFor::Duration(Duration::from_millis(500));
 
         let (acc_data, acc_status) =
@@ -1118,7 +1172,7 @@ mod tests {
     #[test]
     fn fix_same_process_threaded() {
         let _ = env_logger::try_init();
-        let port = 19877u16;
+        let port = free_port();
         let run_for = RunFor::Duration(Duration::from_millis(500));
 
         let (acc_data, acc_status) =
