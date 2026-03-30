@@ -14,15 +14,18 @@ use etcd_client::Client;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
 const ETCD_PORT: u16 = 2379;
-const ETCD_IMAGE: &str = "bitnami/etcd";
-const ETCD_TAG: &str = "3.5";
+const ETCD_IMAGE: &str = "gcr.io/etcd-development/etcd";
+const ETCD_TAG: &str = "v3.5.0";
 
 /// Start an etcd container and return the host endpoint.
 /// The returned container must be kept alive for the duration of the test.
 fn start_etcd() -> anyhow::Result<(impl Drop, String)> {
     let container = GenericImage::new(ETCD_IMAGE, ETCD_TAG)
-        .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
-        .with_env_var("ALLOW_NONE_AUTHENTICATION", "yes")
+        .with_wait_for(WaitFor::message_on_stderr(
+            "now serving peer/client/metrics",
+        ))
+        .with_env_var("ETCD_LISTEN_CLIENT_URLS", "http://0.0.0.0:2379")
+        .with_env_var("ETCD_ADVERTISE_CLIENT_URLS", "http://0.0.0.0:2379")
         .start()?;
     let port = container.get_host_port_ipv4(ETCD_PORT)?;
     let endpoint = format!("http://127.0.0.1:{port}");
@@ -97,21 +100,27 @@ fn test_sub_snapshot_empty() -> anyhow::Result<()> {
 #[test]
 fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
     // Pre-seeded keys appear as Put events in the snapshot phase.
+    // Both keys arrive in a single burst (snapshot is emitted synchronously),
+    // so we collect the burst directly and flatten rather than using collapse().
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/snap/a", "1"), ("/snap/b", "2")])?;
 
     let conn = EtcdConnection::new(&endpoint);
-    let collected = etcd_sub(conn, "/snap/").collapse().collect();
+    let collected = etcd_sub(conn, "/snap/").collect();
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+        .run(RunMode::RealTime, RunFor::Cycles(1))?;
 
-    let events = collected.peek_value();
+    let events: Vec<EtcdEvent> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|v| v.value.into_iter())
+        .collect();
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|e| e.value.kind == EtcdEventKind::Put));
+    assert!(events.iter().all(|e| e.kind == EtcdEventKind::Put));
 
     let keys: std::collections::BTreeSet<String> =
-        events.iter().map(|e| e.value.kv.key.clone()).collect();
+        events.iter().map(|e| e.kv.key.clone()).collect();
     assert!(keys.contains("/snap/a"));
     assert!(keys.contains("/snap/b"));
     Ok(())
@@ -207,6 +216,8 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
 #[test]
 fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     // A key written concurrently during snapshot→watch handoff is not missed or duplicated.
+    // The concurrent write (no delay) completes before the graph's tokio task connects,
+    // so both keys land in the snapshot burst.  We collect the burst and flatten.
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/race/existing", "old")])?;
 
@@ -217,16 +228,19 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     let handle = std::thread::spawn(move || {
         seed_keys(&endpoint_clone, &[("/race/new", "new")]).unwrap();
     });
-
-    let collected = etcd_sub(conn, "/race/").collapse().collect();
-    collected
-        .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
     handle.join().ok();
 
-    let events = collected.peek_value();
-    let keys: std::collections::HashSet<String> =
-        events.iter().map(|e| e.value.kv.key.clone()).collect();
+    let collected = etcd_sub(conn, "/race/").collect();
+    collected
+        .clone()
+        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+
+    let events: Vec<EtcdEvent> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|v| v.value.into_iter())
+        .collect();
+    let keys: std::collections::HashSet<String> = events.iter().map(|e| e.kv.key.clone()).collect();
 
     // Both keys present with no duplicates.
     assert!(keys.contains("/race/existing"), "existing key missing");

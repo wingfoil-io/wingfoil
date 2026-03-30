@@ -199,11 +199,19 @@ where
             start_time: state.start_time(),
         };
         let fut = async move {
-            let stream = func(ctx).await?;
-            let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
-            let mut source = Box::pin(source);
-            while let Some(message) = source.next().await {
-                sender.send_message(message).await;
+            match func(ctx).await {
+                Err(e) => {
+                    sender
+                        .send_message(Message::Error(std::sync::Arc::new(e)))
+                        .await;
+                }
+                Ok(stream) => {
+                    let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
+                    let mut source = Box::pin(source);
+                    while let Some(message) = source.next().await {
+                        sender.send_message(message).await;
+                    }
+                }
             }
             sender.close().await;
             Ok(())
@@ -215,9 +223,16 @@ where
     }
 
     fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        self.receiver_stream.teardown(state)?;
         if let Some(handle) = self.handle.take() {
-            state.tokio_runtime().block_on(handle)??;
+            handle.abort();
+            let result = state.tokio_runtime().block_on(handle);
+            // Sender inside the task is now dropped — receiver_stream.teardown() can proceed.
+            self.receiver_stream.teardown(state)?;
+            match result {
+                Ok(inner) => inner?,
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => return Err(anyhow::anyhow!("producer task panicked: {e}")),
+            }
         }
         Ok(())
     }
