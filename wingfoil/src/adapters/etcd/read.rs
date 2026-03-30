@@ -55,7 +55,7 @@ pub fn etcd_sub(
             .iter()
             .map(|kv| EtcdEvent {
                 kind: EtcdEventKind::Put,
-                kv: EtcdEntry {
+                entry: EtcdEntry {
                     key: String::from_utf8_lossy(kv.key()).into_owned(),
                     value: kv.value().to_vec(),
                 },
@@ -101,7 +101,7 @@ pub fn etcd_sub(
                             };
                             yield Ok((NanoTime::now(), EtcdEvent {
                                 kind,
-                                kv: EtcdEntry {
+                                entry: EtcdEntry {
                                     key: String::from_utf8_lossy(kv.key()).into_owned(),
                                     value: kv.value().to_vec(),
                                 },

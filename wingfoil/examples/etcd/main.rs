@@ -44,14 +44,18 @@ fn main() -> anyhow::Result<()> {
             burst
                 .into_iter()
                 .map(|event| {
-                    let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
+                    let dest_key = event.entry.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
                     let upper = event
-                        .kv
+                        .entry
                         .value_str()
                         .unwrap_or("")
                         .to_uppercase()
                         .into_bytes();
-                    println!("  {} → {}", event.kv.key, String::from_utf8_lossy(&upper));
+                    println!(
+                        "  {} → {}",
+                        event.entry.key,
+                        String::from_utf8_lossy(&upper)
+                    );
                     EtcdEntry {
                         key: dest_key,
                         value: upper,

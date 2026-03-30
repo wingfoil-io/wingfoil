@@ -9,7 +9,7 @@
 //!
 //! etcd_sub(conn, "/config/")
 //!     .collapse()
-//!     .for_each(|event, _| println!("{} = {:?}", event.kv.key, event.kv.value_str()))
+//!     .for_each(|event, _| println!("{} = {:?}", event.entry.key, event.entry.value_str()))
 //!     .run(RunMode::RealTime, RunFor::Forever)
 //!     .unwrap();
 //! ```
@@ -77,7 +77,7 @@ pub enum EtcdEventKind {
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEvent {
     pub kind: EtcdEventKind,
-    pub kv: EtcdEntry,
+    pub entry: EtcdEntry,
     /// The etcd cluster revision at which this event was observed.
     pub revision: i64,
 }

@@ -93,7 +93,7 @@ fn test_sub_snapshot_empty() -> anyhow::Result<()> {
     let events = collected.peek_value();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].value.kind, EtcdEventKind::Put);
-    assert_eq!(events[0].value.kv.key, "/empty/probe");
+    assert_eq!(events[0].value.entry.key, "/empty/probe");
     Ok(())
 }
 
@@ -120,7 +120,7 @@ fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
     assert!(events.iter().all(|e| e.kind == EtcdEventKind::Put));
 
     let keys: std::collections::BTreeSet<String> =
-        events.iter().map(|e| e.kv.key.clone()).collect();
+        events.iter().map(|e| e.entry.key.clone()).collect();
     assert!(keys.contains("/snap/a"));
     assert!(keys.contains("/snap/b"));
     Ok(())
@@ -147,8 +147,8 @@ fn test_sub_live_updates() -> anyhow::Result<()> {
     let events = collected.peek_value();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].value.kind, EtcdEventKind::Put);
-    assert_eq!(events[0].value.kv.key, "/live/x");
-    assert_eq!(events[0].value.kv.value, b"hello");
+    assert_eq!(events[0].value.entry.key, "/live/x");
+    assert_eq!(events[0].value.entry.value, b"hello");
     Ok(())
 }
 
@@ -209,7 +209,7 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].value.kind, EtcdEventKind::Put);
     assert_eq!(events[1].value.kind, EtcdEventKind::Delete);
-    assert_eq!(events[1].value.kv.key, "/del/k");
+    assert_eq!(events[1].value.entry.key, "/del/k");
     Ok(())
 }
 
@@ -240,7 +240,8 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
         .into_iter()
         .flat_map(|v| v.value.into_iter())
         .collect();
-    let keys: std::collections::HashSet<String> = events.iter().map(|e| e.kv.key.clone()).collect();
+    let keys: std::collections::HashSet<String> =
+        events.iter().map(|e| e.entry.key.clone()).collect();
 
     // Both keys present with no duplicates.
     assert!(keys.contains("/race/existing"), "existing key missing");
