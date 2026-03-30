@@ -40,20 +40,24 @@ fn main() -> anyhow::Result<()> {
     .etcd_pub(conn.clone());
 
     let round_trip = etcd_sub(conn.clone(), SOURCE_PREFIX)
-        .collapse()
-        .map(|event| {
-            let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
-            let upper = event
-                .kv
-                .value_str()
-                .unwrap_or("")
-                .to_uppercase()
-                .into_bytes();
-            println!("  {} → {}", event.kv.key, String::from_utf8_lossy(&upper));
-            EtcdKv {
-                key: dest_key,
-                value: upper,
-            }
+        .map(|burst| {
+            burst
+                .into_iter()
+                .map(|event| {
+                    let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
+                    let upper = event
+                        .kv
+                        .value_str()
+                        .unwrap_or("")
+                        .to_uppercase()
+                        .into_bytes();
+                    println!("  {} → {}", event.kv.key, String::from_utf8_lossy(&upper));
+                    EtcdKv {
+                        key: dest_key,
+                        value: upper,
+                    }
+                })
+                .collect::<Burst<EtcdKv>>()
         })
         .etcd_pub(conn);
 
