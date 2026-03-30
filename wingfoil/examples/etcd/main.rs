@@ -1,5 +1,9 @@
 //! etcd adapter example — watch a key prefix, transform values, write back.
 //!
+//! Two independent graph roots:
+//! - `seed`        — writes source keys once via `constant` + `etcd_pub`
+//! - `round_trip`  — watches the source prefix, uppercases values, writes to dest prefix
+//!
 //! # Prerequisites
 //!
 //! A running etcd instance:
@@ -23,20 +27,19 @@ const DEST_PREFIX: &str = "/example/dest/";
 fn main() -> anyhow::Result<()> {
     let conn = EtcdConnection::new(ENDPOINT);
 
-    // Watch source prefix, uppercase each value, write to dest prefix.
-    // Two snapshot events → RunFor::Cycles(2).
-    // `initially_async` seeds the source keys during graph start.
-    etcd_sub(conn.clone(), SOURCE_PREFIX)
-        .initially_async(|| async {
-            let mut client = etcd_client::Client::connect(&[ENDPOINT], None).await?;
-            client
-                .put(format!("{SOURCE_PREFIX}greeting"), "hello", None)
-                .await?;
-            client
-                .put(format!("{SOURCE_PREFIX}subject"), "world", None)
-                .await?;
-            Ok(())
-        })
+    let seed = constant(burst![
+        EtcdKv {
+            key: format!("{SOURCE_PREFIX}greeting"),
+            value: b"hello".to_vec()
+        },
+        EtcdKv {
+            key: format!("{SOURCE_PREFIX}subject"),
+            value: b"world".to_vec()
+        },
+    ])
+    .etcd_pub(conn.clone());
+
+    let round_trip = etcd_sub(conn.clone(), SOURCE_PREFIX)
         .collapse()
         .map(|event| {
             let dest_key = event.kv.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
@@ -52,8 +55,9 @@ fn main() -> anyhow::Result<()> {
                 value: upper,
             }
         })
-        .etcd_pub(conn)
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+        .etcd_pub(conn);
+
+    Graph::new(vec![seed, round_trip], RunMode::RealTime, RunFor::Cycles(3)).run()?;
 
     Ok(())
 }
