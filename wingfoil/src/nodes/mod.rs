@@ -27,7 +27,6 @@ mod fold;
 #[cfg(feature = "async")]
 mod graph_node;
 mod graph_state;
-mod initially;
 mod inspect;
 mod limit;
 mod map;
@@ -76,7 +75,6 @@ use filter::*;
 use finally::*;
 use fold::*;
 use graph_state::*;
-use initially::*;
 use inspect::*;
 use limit::*;
 use map::*;
@@ -393,16 +391,6 @@ pub trait StreamOperators<T: Element> {
         self: &Rc<Self>,
         func: F,
     ) -> Rc<dyn Node>;
-    #[must_use]
-    fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
-        self: &Rc<Self>,
-        func: F,
-    ) -> Rc<dyn Stream<T>>;
-    #[must_use]
-    fn initially_async<F, FUT>(self: &Rc<Self>, func: F) -> Rc<dyn Stream<T>>
-    where
-        F: FnOnce() -> FUT + 'static,
-        FUT: Future<Output = anyhow::Result<()>> + Send + 'static;
     /// executes supplied closure on each tick
     #[must_use]
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
@@ -743,21 +731,6 @@ where
         func: F,
     ) -> Rc<dyn Node> {
         FinallyNode::new(self.clone(), Some(func)).into_node()
-    }
-
-    fn initially<F: FnOnce(&GraphState) -> anyhow::Result<()> + 'static>(
-        self: &Rc<Self>,
-        func: F,
-    ) -> Rc<dyn Stream<T>> {
-        InitiallyStream::new(self.clone(), Some(func)).into_stream()
-    }
-
-    fn initially_async<F, FUT>(self: &Rc<Self>, func: F) -> Rc<dyn Stream<T>>
-    where
-        F: FnOnce() -> FUT + 'static,
-        FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        InitiallyAsyncStream::new(self.clone(), Some(func)).into_stream()
     }
 
     fn fold<OUT: Element>(
