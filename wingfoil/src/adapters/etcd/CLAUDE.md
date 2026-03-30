@@ -7,7 +7,7 @@ key-value pairs to etcd (`etcd_pub`).
 
 ```
 etcd/
-  mod.rs               # EtcdConnection, EtcdKv, EtcdEvent, public re-exports
+  mod.rs               # EtcdConnection, EtcdEntry, EtcdEvent, public re-exports
   read.rs              # etcd_sub() producer
   write.rs             # etcd_pub() consumer, EtcdPubOperators trait
   integration_tests.rs # Integration tests (requires Docker, gated by feature)
@@ -26,15 +26,15 @@ etcd/
 
 ### Writing to etcd — `etcd_pub`
 
-- `etcd_pub(conn, upstream)` — consumes `Burst<EtcdKv>`, issues one PUT per KV
-- `EtcdPubOperators::etcd_pub(conn)` — fluent API on `Rc<dyn Stream<Burst<EtcdKv>>>`
+- `etcd_pub(conn, upstream)` — consumes `Burst<EtcdEntry>`, issues one PUT per entry
+- `EtcdPubOperators::etcd_pub(conn)` — fluent API on `Rc<dyn Stream<Burst<EtcdEntry>>>`
 
 ### Types
 
 - `EtcdConnection::new(endpoint)` — single endpoint (e.g. `"http://localhost:2379"`)
 - `EtcdConnection::with_endpoints(iter)` — cluster endpoints
-- `EtcdKv { key: String, value: Vec<u8> }` — plain key-value pair; `.value_str()` for UTF-8
-- `EtcdEvent { kind: EtcdEventKind, kv: EtcdKv, revision: i64 }` — watch event
+- `EtcdEntry { key: String, value: Vec<u8> }` — plain key-value pair; `.value_str()` for UTF-8
+- `EtcdEvent { kind: EtcdEventKind, entry: EtcdEntry, revision: i64 }` — watch event
 
 ## Snapshot → Watch Handoff (Race Prevention)
 
@@ -67,8 +67,8 @@ out as a duplicate.
 
 ## Integration Test Details
 
-Tests use `testcontainers` (`SyncRunner`) to start a `bitnami/etcd:3.5` container
-per test. Docker must be running. No environment variables required.
+Tests use `testcontainers` (`SyncRunner`) to start a `gcr.io/etcd-development/etcd:v3.5.0`
+container per test. Docker must be running. No environment variables required.
 
 Feature flag: `etcd-integration-test` (implies `etcd`).
 
