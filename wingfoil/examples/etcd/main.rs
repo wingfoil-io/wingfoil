@@ -28,11 +28,11 @@ fn main() -> anyhow::Result<()> {
     let conn = EtcdConnection::new(ENDPOINT);
 
     let seed = constant(burst![
-        EtcdKv {
+        EtcdEntry {
             key: format!("{SOURCE_PREFIX}greeting"),
             value: b"hello".to_vec()
         },
-        EtcdKv {
+        EtcdEntry {
             key: format!("{SOURCE_PREFIX}subject"),
             value: b"world".to_vec()
         },
@@ -52,12 +52,12 @@ fn main() -> anyhow::Result<()> {
                         .to_uppercase()
                         .into_bytes();
                     println!("  {} → {}", event.kv.key, String::from_utf8_lossy(&upper));
-                    EtcdKv {
+                    EtcdEntry {
                         key: dest_key,
                         value: upper,
                     }
                 })
-                .collect::<Burst<EtcdKv>>()
+                .collect::<Burst<EtcdEntry>>()
         })
         .etcd_pub(conn);
 

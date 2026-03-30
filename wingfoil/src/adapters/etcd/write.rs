@@ -1,6 +1,6 @@
 //! etcd write consumer — streams key-value PUTs upstream to etcd.
 
-use super::{EtcdConnection, EtcdKv};
+use super::{EtcdConnection, EtcdEntry};
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use etcd_client::Client;
@@ -8,17 +8,17 @@ use futures::StreamExt;
 use std::pin::Pin;
 use std::rc::Rc;
 
-/// Write a `Burst<EtcdKv>` stream to etcd via PUT.
+/// Write a `Burst<EtcdEntry>` stream to etcd via PUT.
 ///
-/// Connects once at startup and issues one PUT per [`EtcdKv`] in each burst.
+/// Connects once at startup and issues one PUT per [`EtcdEntry`] in each burst.
 /// Any PUT error terminates the consumer and propagates to the graph.
 #[must_use]
 pub fn etcd_pub(
     connection: EtcdConnection,
-    upstream: &Rc<dyn Stream<Burst<EtcdKv>>>,
+    upstream: &Rc<dyn Stream<Burst<EtcdEntry>>>,
 ) -> Rc<dyn Node> {
     upstream.consume_async(Box::new(
-        move |source: Pin<Box<dyn FutStream<Burst<EtcdKv>>>>| async move {
+        move |source: Pin<Box<dyn FutStream<Burst<EtcdEntry>>>>| async move {
             let mut client = Client::connect(&connection.endpoints, None)
                 .await
                 .map_err(|e| anyhow::anyhow!("etcd connect failed: {e}"))?;
@@ -38,7 +38,7 @@ pub fn etcd_pub(
 
 /// Extension trait providing a fluent API for writing streams to etcd.
 ///
-/// Implemented for both `Burst<EtcdKv>` (multi-item) and `EtcdKv` (single-item)
+/// Implemented for both `Burst<EtcdEntry>` (multi-item) and `EtcdEntry` (single-item)
 /// streams, so burst wrapping is never required in user code.
 pub trait EtcdPubOperators {
     /// Write this stream to etcd via PUT.
@@ -46,13 +46,13 @@ pub trait EtcdPubOperators {
     fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection) -> Rc<dyn Node>;
 }
 
-impl EtcdPubOperators for dyn Stream<Burst<EtcdKv>> {
+impl EtcdPubOperators for dyn Stream<Burst<EtcdEntry>> {
     fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection) -> Rc<dyn Node> {
         etcd_pub(conn, self)
     }
 }
 
-impl EtcdPubOperators for dyn Stream<EtcdKv> {
+impl EtcdPubOperators for dyn Stream<EtcdEntry> {
     fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection) -> Rc<dyn Node> {
         let burst_stream = self.map(|kv| {
             let mut b = Burst::new();

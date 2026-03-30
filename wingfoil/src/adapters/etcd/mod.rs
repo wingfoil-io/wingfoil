@@ -48,12 +48,12 @@ impl EtcdConnection {
 
 /// A single key-value pair from etcd.
 #[derive(Debug, Clone, Default)]
-pub struct EtcdKv {
+pub struct EtcdEntry {
     pub key: String,
     pub value: Vec<u8>,
 }
 
-impl EtcdKv {
+impl EtcdEntry {
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.value)
@@ -77,7 +77,7 @@ pub enum EtcdEventKind {
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEvent {
     pub kind: EtcdEventKind,
-    pub kv: EtcdKv,
+    pub kv: EtcdEntry,
     /// The etcd cluster revision at which this event was observed.
     pub revision: i64,
 }

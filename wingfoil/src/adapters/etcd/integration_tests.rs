@@ -158,13 +158,13 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     let conn = EtcdConnection::new(&endpoint);
 
-    let kv = EtcdKv {
+    let kv = EtcdEntry {
         key: "/rt/key1".to_string(),
         value: b"value1".to_vec(),
     };
 
     // Wrap the single KV in a Burst and produce it as a one-shot stream.
-    let mut burst: Burst<EtcdKv> = Burst::new();
+    let mut burst: Burst<EtcdEntry> = Burst::new();
     burst.push(kv);
     let source = crate::nodes::constant(burst);
     etcd_pub(conn, &source).run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -251,7 +251,7 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
 
 #[test]
 fn test_etcd_kv_value_str() {
-    let kv = EtcdKv {
+    let kv = EtcdEntry {
         key: "/foo".to_string(),
         value: b"bar".to_vec(),
     };
