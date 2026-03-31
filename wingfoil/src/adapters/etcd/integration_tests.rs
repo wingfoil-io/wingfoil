@@ -167,7 +167,7 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     let mut burst: Burst<EtcdEntry> = Burst::new();
     burst.push(kv);
     let source = crate::nodes::constant(burst);
-    etcd_pub(conn, &source).run(RunMode::RealTime, RunFor::Cycles(1))?;
+    etcd_pub(conn, &source, None).run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     // Verify via direct client read.
     let rt = tokio::runtime::Runtime::new()?;
@@ -247,6 +247,108 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     assert!(keys.contains("/race/existing"), "existing key missing");
     assert!(keys.contains("/race/new"), "concurrent key missing");
     assert_eq!(keys.len(), 2, "duplicate events detected");
+    Ok(())
+}
+
+/// Read a key from etcd, returning None if it doesn't exist.
+fn get_key(endpoint: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let mut client = Client::connect(&[endpoint], None).await?;
+        let resp = client.get(key, None).await?;
+        Ok(resp.kvs().first().map(|kv| kv.value().to_vec()))
+    })
+}
+
+#[test]
+fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
+    // Keys written with a lease are revoked (deleted) when the consumer stops cleanly.
+    let (_container, endpoint) = start_etcd()?;
+    let conn = EtcdConnection::new(&endpoint);
+
+    let mut burst: Burst<EtcdEntry> = Burst::new();
+    burst.push(EtcdEntry {
+        key: "/lease/k1".to_string(),
+        value: b"hello".to_vec(),
+    });
+    let source = crate::nodes::constant(burst);
+    // Use a 30-second TTL — key should still vanish on revoke, not wait 30 s.
+    etcd_pub(conn, &source, Some(std::time::Duration::from_secs(30)))
+        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+
+    // Consumer stopped → lease was revoked → key must be gone.
+    let value = get_key(&endpoint, "/lease/k1")?;
+    assert!(value.is_none(), "key should be gone after lease revoke");
+    Ok(())
+}
+
+#[test]
+fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
+    // While the consumer is running, keepalive prevents key expiry.
+    let (_container, endpoint) = start_etcd()?;
+    let conn = EtcdConnection::new(&endpoint);
+
+    // TTL of 3 s; keepalive renews every 1 s.  Graph runs for 10 s (> TTL).
+    // The check thread polls until the key appears (handles variable startup time),
+    // then waits past the raw TTL to confirm keepalive is working.
+    let endpoint_check = endpoint.clone();
+    let handle = std::thread::spawn(move || -> anyhow::Result<()> {
+        // Poll until the key appears (consumer may take a few seconds to connect + write).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            if get_key(&endpoint_check, "/lease/heartbeat")?.is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "key never appeared within 8 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        // Sleep past the raw TTL (3 s) — key must still be alive due to keepalive.
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let v = get_key(&endpoint_check, "/lease/heartbeat")?;
+        assert!(
+            v.is_some(),
+            "key should still exist; keepalive should have renewed lease"
+        );
+        Ok(())
+    });
+
+    // Produce the key once, then keep the graph alive for 10 s.
+    let entry = crate::nodes::constant({
+        let mut b: Burst<EtcdEntry> = Burst::new();
+        b.push(EtcdEntry {
+            key: "/lease/heartbeat".to_string(),
+            value: b"alive".to_vec(),
+        });
+        b
+    });
+    etcd_pub(conn, &entry, Some(std::time::Duration::from_secs(3))).run(
+        RunMode::RealTime,
+        RunFor::Duration(std::time::Duration::from_secs(10)),
+    )?;
+
+    handle.join().unwrap()?;
+    Ok(())
+}
+
+#[test]
+fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
+    // Without a lease, keys remain after the consumer stops.
+    let (_container, endpoint) = start_etcd()?;
+    let conn = EtcdConnection::new(&endpoint);
+
+    let mut burst: Burst<EtcdEntry> = Burst::new();
+    burst.push(EtcdEntry {
+        key: "/nolease/k1".to_string(),
+        value: b"persist".to_vec(),
+    });
+    let source = crate::nodes::constant(burst);
+    etcd_pub(conn, &source, None).run(RunMode::RealTime, RunFor::Cycles(1))?;
+
+    let value = get_key(&endpoint, "/nolease/k1")?;
+    assert_eq!(value.as_deref(), Some(b"persist".as_ref()));
     Ok(())
 }
 

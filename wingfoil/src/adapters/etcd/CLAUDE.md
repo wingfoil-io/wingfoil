@@ -26,8 +26,11 @@ etcd/
 
 ### Writing to etcd — `etcd_pub`
 
-- `etcd_pub(conn, upstream)` — consumes `Burst<EtcdEntry>`, issues one PUT per entry
-- `EtcdPubOperators::etcd_pub(conn)` — fluent API on `Rc<dyn Stream<Burst<EtcdEntry>>>`
+- `etcd_pub(conn, upstream, lease_ttl)` — consumes `Burst<EtcdEntry>`, issues one PUT per entry
+- `EtcdPubOperators::etcd_pub(conn, lease_ttl)` — fluent API on `Rc<dyn Stream<Burst<EtcdEntry>>>`
+- Pass `lease_ttl: None` for plain writes (keys persist until deleted)
+- Pass `lease_ttl: Some(Duration)` to attach an etcd lease with automatic keepalive renewal;
+  the lease is revoked on clean shutdown so keys vanish immediately
 
 ### Types
 
@@ -83,6 +86,9 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 | `test_sub_snapshot_with_existing_keys` | Pre-existing keys appear in snapshot phase |
 | `test_sub_live_updates` | Live events arrive after snapshot |
 | `test_pub_round_trip` | `etcd_pub` writes are readable via direct client |
+| `test_pub_lease_keys_expire_after_revoke` | Leased keys vanish immediately when consumer stops |
+| `test_pub_lease_keepalive_extends_ttl` | Keepalive renews lease so keys survive past raw TTL |
+| `test_pub_no_lease_keys_persist` | `None` lease: keys remain after consumer stops |
 | `test_sub_delete_events` | `EtcdEventKind::Delete` is emitted correctly |
 | `test_sub_no_race_between_snapshot_and_watch` | Concurrent write not missed or duplicated |
 
