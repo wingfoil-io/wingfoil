@@ -67,6 +67,9 @@ pub enum EtcdEventKind {
     #[default]
     Put,
     /// A key was deleted.
+    ///
+    /// The associated [`EtcdEvent::entry`] carries the deleted key but an **empty value**
+    /// (`value == vec![]`). Use [`EtcdEventKind::Put`] events if you need the value.
     Delete,
 }
 

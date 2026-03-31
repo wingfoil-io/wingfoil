@@ -55,6 +55,16 @@ fn delete_key(endpoint: &str, key: &str) -> anyhow::Result<()> {
     })
 }
 
+/// Build a one-shot `constant` stream containing a single [`EtcdEntry`].
+fn make_burst(key: &str, value: &[u8]) -> Rc<dyn crate::Stream<Burst<EtcdEntry>>> {
+    let mut b: Burst<EtcdEntry> = Burst::new();
+    b.push(EtcdEntry {
+        key: key.to_string(),
+        value: value.to_vec(),
+    });
+    crate::nodes::constant(b)
+}
+
 // ---- Tests ----
 
 #[test]
@@ -89,7 +99,7 @@ fn test_sub_snapshot_empty() -> anyhow::Result<()> {
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Cycles(1))?;
-    handle.join().ok();
+    handle.join().unwrap();
 
     let events = collected.peek_value();
     assert_eq!(events.len(), 1);
@@ -143,7 +153,7 @@ fn test_sub_live_updates() -> anyhow::Result<()> {
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Cycles(1))?;
-    handle.join().ok();
+    handle.join().unwrap();
 
     let events = collected.peek_value();
     assert_eq!(events.len(), 1);
@@ -204,7 +214,7 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Cycles(2))?;
-    handle.join().ok();
+    handle.join().unwrap();
 
     let events = collected.peek_value();
     assert_eq!(events.len(), 2);
@@ -216,20 +226,19 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
 
 #[test]
 fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
-    // A key written concurrently during snapshot→watch handoff is not missed or duplicated.
-    // The concurrent write (no delay) completes before the graph's tokio task connects,
-    // so both keys land in the snapshot burst.  We collect the burst and flatten.
+    // Both a pre-seeded key and a second key written just before the graph starts
+    // must appear exactly once — no missed events, no duplicates.
+    // (Both keys land in the snapshot because the writes complete before etcd_sub connects.)
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/race/existing", "old")])?;
 
     let conn = EtcdConnection::new(&endpoint);
 
-    // Write a second key with no delay — intentional race with snapshot read.
     let endpoint_clone = endpoint.clone();
     let handle = std::thread::spawn(move || {
         seed_keys(&endpoint_clone, &[("/race/new", "new")]).unwrap();
     });
-    handle.join().ok();
+    handle.join().unwrap();
 
     let collected = etcd_sub(conn, "/race/").collect();
     collected
@@ -356,15 +365,6 @@ fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
     let value = get_key(&endpoint, "/nolease/k1")?;
     assert_eq!(value.as_deref(), Some(b"persist".as_ref()));
     Ok(())
-}
-
-fn make_burst(key: &str, value: &[u8]) -> Rc<dyn crate::Stream<Burst<EtcdEntry>>> {
-    let mut b: Burst<EtcdEntry> = Burst::new();
-    b.push(EtcdEntry {
-        key: key.to_string(),
-        value: value.to_vec(),
-    });
-    crate::nodes::constant(b)
 }
 
 #[test]

@@ -8,7 +8,10 @@
 //!
 //! A running etcd instance:
 //! ```sh
-//! docker run --rm -p 2379:2379 -e ALLOW_NONE_AUTHENTICATION=yes bitnami/etcd:3.5
+//! docker run --rm -p 2379:2379 \
+//!   -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+//!   -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+//!   gcr.io/etcd-development/etcd:v3.5.0
 //! ```
 //!
 //! # Run

@@ -163,9 +163,9 @@ impl EtcdPubOperators for dyn Stream<EtcdEntry> {
         lease_ttl: Option<Duration>,
         force: bool,
     ) -> Rc<dyn Node> {
-        let burst_stream = self.map(|kv| {
+        let burst_stream = self.map(|entry| {
             let mut b = Burst::new();
-            b.push(kv);
+            b.push(entry);
             b
         });
         etcd_pub(conn, &burst_stream, lease_ttl, force)
