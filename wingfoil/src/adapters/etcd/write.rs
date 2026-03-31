@@ -3,7 +3,7 @@
 use super::{EtcdConnection, EtcdEntry};
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
-use etcd_client::{Client, PutOptions};
+use etcd_client::{Client, Compare, CompareOp, PutOptions, Txn, TxnOp};
 use futures::StreamExt;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -24,11 +24,19 @@ use std::time::Duration;
 ///
 /// Use this for presence/heartbeat patterns where keys should disappear as soon as
 /// the producer stops.
+///
+/// # Force
+///
+/// When `force` is `true` (default), writes silently overwrite any existing key.
+/// When `force` is `false`, each write is issued as a conditional transaction that
+/// only succeeds if the key does **not** already exist. If any key in a burst is
+/// already present the consumer returns an error and the graph stops.
 #[must_use]
 pub fn etcd_pub(
     connection: EtcdConnection,
     upstream: &Rc<dyn Stream<Burst<EtcdEntry>>>,
     lease_ttl: Option<Duration>,
+    force: bool,
 ) -> Rc<dyn Node> {
     upstream.consume_async(Box::new(
         move |source: Pin<Box<dyn FutStream<Burst<EtcdEntry>>>>| async move {
@@ -74,10 +82,33 @@ pub fn etcd_pub(
             while let Some((_time, burst)) = source.next().await {
                 for entry in burst {
                     let opts = lease_id.map(|id| PutOptions::new().with_lease(id));
-                    client
-                        .put(entry.key, entry.value, opts)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("etcd put failed: {e}"))?;
+                    if force {
+                        client
+                            .put(entry.key, entry.value, opts)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("etcd put failed: {e}"))?;
+                    } else {
+                        // Conditional put: only succeed if the key does not already exist.
+                        // create_revision == 0 is etcd's canonical "key absent" condition.
+                        let txn = Txn::new()
+                            .when(vec![Compare::create_revision(
+                                entry.key.as_bytes(),
+                                CompareOp::Equal,
+                                0,
+                            )])
+                            .and_then(vec![TxnOp::put(
+                                entry.key.as_bytes(),
+                                entry.value.as_slice(),
+                                opts,
+                            )]);
+                        let resp = client
+                            .txn(txn)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("etcd txn failed: {e}"))?;
+                        if !resp.succeeded() {
+                            return Err(anyhow::anyhow!("etcd key already exists: {}", entry.key));
+                        }
+                    }
                 }
             }
 
@@ -101,11 +132,17 @@ pub fn etcd_pub(
 pub trait EtcdPubOperators {
     /// Write this stream to etcd via PUT.
     ///
-    /// Pass `lease_ttl: None` for plain writes (keys persist until overwritten or deleted).
-    /// Pass `lease_ttl: Some(duration)` to attach a lease with automatic keepalive renewal.
+    /// - `lease_ttl`: `None` for plain writes; `Some(duration)` to attach a lease with
+    ///   automatic keepalive renewal (keys vanish on consumer shutdown via revoke).
+    /// - `force`: `true` silently overwrites existing keys; `false` fails if a key already
+    ///   exists (implemented as a conditional transaction).
     #[must_use]
-    fn etcd_pub(self: &Rc<Self>, conn: EtcdConnection, lease_ttl: Option<Duration>)
-    -> Rc<dyn Node>;
+    fn etcd_pub(
+        self: &Rc<Self>,
+        conn: EtcdConnection,
+        lease_ttl: Option<Duration>,
+        force: bool,
+    ) -> Rc<dyn Node>;
 }
 
 impl EtcdPubOperators for dyn Stream<Burst<EtcdEntry>> {
@@ -113,8 +150,9 @@ impl EtcdPubOperators for dyn Stream<Burst<EtcdEntry>> {
         self: &Rc<Self>,
         conn: EtcdConnection,
         lease_ttl: Option<Duration>,
+        force: bool,
     ) -> Rc<dyn Node> {
-        etcd_pub(conn, self, lease_ttl)
+        etcd_pub(conn, self, lease_ttl, force)
     }
 }
 
@@ -123,12 +161,13 @@ impl EtcdPubOperators for dyn Stream<EtcdEntry> {
         self: &Rc<Self>,
         conn: EtcdConnection,
         lease_ttl: Option<Duration>,
+        force: bool,
     ) -> Rc<dyn Node> {
         let burst_stream = self.map(|kv| {
             let mut b = Burst::new();
             b.push(kv);
             b
         });
-        etcd_pub(conn, &burst_stream, lease_ttl)
+        etcd_pub(conn, &burst_stream, lease_ttl, force)
     }
 }

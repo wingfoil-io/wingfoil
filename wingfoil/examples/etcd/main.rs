@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
             value: b"world".to_vec()
         },
     ])
-    .etcd_pub(conn.clone(), None);
+    .etcd_pub(conn.clone(), None, true);
 
     let round_trip = etcd_sub(conn.clone(), SOURCE_PREFIX)
         .map(|burst| {
@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect::<Burst<EtcdEntry>>()
         })
-        .etcd_pub(conn, None);
+        .etcd_pub(conn, None, true);
 
     Graph::new(vec![seed, round_trip], RunMode::RealTime, RunFor::Cycles(3)).run()?;
 

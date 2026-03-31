@@ -11,6 +11,7 @@ use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
 use crate::{RunFor, RunMode};
 use etcd_client::Client;
+use std::rc::Rc;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
 const ETCD_PORT: u16 = 2379;
@@ -167,7 +168,7 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     let mut burst: Burst<EtcdEntry> = Burst::new();
     burst.push(kv);
     let source = crate::nodes::constant(burst);
-    etcd_pub(conn, &source, None).run(RunMode::RealTime, RunFor::Cycles(1))?;
+    etcd_pub(conn, &source, None, true).run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     // Verify via direct client read.
     let rt = tokio::runtime::Runtime::new()?;
@@ -273,8 +274,13 @@ fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
     });
     let source = crate::nodes::constant(burst);
     // Use a 30-second TTL — key should still vanish on revoke, not wait 30 s.
-    etcd_pub(conn, &source, Some(std::time::Duration::from_secs(30)))
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+    etcd_pub(
+        conn,
+        &source,
+        Some(std::time::Duration::from_secs(30)),
+        true,
+    )
+    .run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     // Consumer stopped → lease was revoked → key must be gone.
     let value = get_key(&endpoint, "/lease/k1")?;
@@ -324,7 +330,7 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
         });
         b
     });
-    etcd_pub(conn, &entry, Some(std::time::Duration::from_secs(3))).run(
+    etcd_pub(conn, &entry, Some(std::time::Duration::from_secs(3)), true).run(
         RunMode::RealTime,
         RunFor::Duration(std::time::Duration::from_secs(10)),
     )?;
@@ -345,10 +351,68 @@ fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
         value: b"persist".to_vec(),
     });
     let source = crate::nodes::constant(burst);
-    etcd_pub(conn, &source, None).run(RunMode::RealTime, RunFor::Cycles(1))?;
+    etcd_pub(conn, &source, None, true).run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     let value = get_key(&endpoint, "/nolease/k1")?;
     assert_eq!(value.as_deref(), Some(b"persist".as_ref()));
+    Ok(())
+}
+
+fn make_burst(key: &str, value: &[u8]) -> Rc<dyn crate::Stream<Burst<EtcdEntry>>> {
+    let mut b: Burst<EtcdEntry> = Burst::new();
+    b.push(EtcdEntry {
+        key: key.to_string(),
+        value: value.to_vec(),
+    });
+    crate::nodes::constant(b)
+}
+
+#[test]
+fn test_pub_force_true_overwrites() -> anyhow::Result<()> {
+    // force: true silently overwrites an existing key.
+    let (_container, endpoint) = start_etcd()?;
+    seed_keys(&endpoint, &[("/force/k", "original")])?;
+
+    let conn = EtcdConnection::new(&endpoint);
+    let source = make_burst("/force/k", b"updated");
+    etcd_pub(conn, &source, None, true).run(RunMode::RealTime, RunFor::Cycles(1))?;
+
+    let value = get_key(&endpoint, "/force/k")?;
+    assert_eq!(value.as_deref(), Some(b"updated".as_ref()));
+    Ok(())
+}
+
+#[test]
+fn test_pub_force_false_fails_if_exists() -> anyhow::Result<()> {
+    // force: false returns an error when the key already exists.
+    let (_container, endpoint) = start_etcd()?;
+    seed_keys(&endpoint, &[("/noforce/k", "original")])?;
+
+    let conn = EtcdConnection::new(&endpoint);
+    let source = make_burst("/noforce/k", b"should-not-overwrite");
+    let result = etcd_pub(conn, &source, None, false).run(RunMode::RealTime, RunFor::Cycles(1));
+
+    assert!(result.is_err(), "expected error when key already exists");
+    let err = result.unwrap_err();
+    let named_in_chain = err.chain().any(|e| e.to_string().contains("/noforce/k"));
+    assert!(named_in_chain, "error chain should name the key: {err:#}");
+
+    // Original value must be unchanged.
+    let value = get_key(&endpoint, "/noforce/k")?;
+    assert_eq!(value.as_deref(), Some(b"original".as_ref()));
+    Ok(())
+}
+
+#[test]
+fn test_pub_force_false_succeeds_if_absent() -> anyhow::Result<()> {
+    // force: false writes successfully when the key does not exist.
+    let (_container, endpoint) = start_etcd()?;
+    let conn = EtcdConnection::new(&endpoint);
+    let source = make_burst("/noforce/new", b"value");
+    etcd_pub(conn, &source, None, false).run(RunMode::RealTime, RunFor::Cycles(1))?;
+
+    let value = get_key(&endpoint, "/noforce/new")?;
+    assert_eq!(value.as_deref(), Some(b"value".as_ref()));
     Ok(())
 }
 
