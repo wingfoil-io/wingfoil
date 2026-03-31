@@ -2,6 +2,9 @@ name: etcd Integration Tests
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/etcd/**'
 
 env:
   CARGO_TERM_COLOR: always
