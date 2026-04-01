@@ -164,15 +164,7 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     let conn = EtcdConnection::new(&endpoint);
 
-    let kv = EtcdEntry {
-        key: "/rt/key1".to_string(),
-        value: b"value1".to_vec(),
-    };
-
-    // Wrap the single KV in a Burst and produce it as a one-shot stream.
-    let mut burst: Burst<EtcdEntry> = Burst::new();
-    burst.push(kv);
-    let source = crate::nodes::constant(burst);
+    let source = make_burst("/rt/key1", b"value1");
     etcd_pub(conn, &source, None, true).run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     // Verify via direct client read.
@@ -271,12 +263,7 @@ fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     let conn = EtcdConnection::new(&endpoint);
 
-    let mut burst: Burst<EtcdEntry> = Burst::new();
-    burst.push(EtcdEntry {
-        key: "/lease/k1".to_string(),
-        value: b"hello".to_vec(),
-    });
-    let source = crate::nodes::constant(burst);
+    let source = make_burst("/lease/k1", b"hello");
     // Use a 30-second TTL — key should still vanish on revoke, not wait 30 s.
     etcd_pub(
         conn,
@@ -326,14 +313,7 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
     });
 
     // Produce the key once, then keep the graph alive for 10 s.
-    let entry = crate::nodes::constant({
-        let mut b: Burst<EtcdEntry> = Burst::new();
-        b.push(EtcdEntry {
-            key: "/lease/heartbeat".to_string(),
-            value: b"alive".to_vec(),
-        });
-        b
-    });
+    let entry = make_burst("/lease/heartbeat", b"alive");
     etcd_pub(conn, &entry, Some(std::time::Duration::from_secs(3)), true).run(
         RunMode::RealTime,
         RunFor::Duration(std::time::Duration::from_secs(10)),
@@ -349,12 +329,7 @@ fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     let conn = EtcdConnection::new(&endpoint);
 
-    let mut burst: Burst<EtcdEntry> = Burst::new();
-    burst.push(EtcdEntry {
-        key: "/nolease/k1".to_string(),
-        value: b"persist".to_vec(),
-    });
-    let source = crate::nodes::constant(burst);
+    let source = make_burst("/nolease/k1", b"persist");
     etcd_pub(conn, &source, None, true).run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     let value = get_key(&endpoint, "/nolease/k1")?;

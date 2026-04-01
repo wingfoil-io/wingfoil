@@ -91,17 +91,17 @@ pub fn etcd_pub(
                     } else {
                         // Conditional put: only succeed if the key does not already exist.
                         // create_revision == 0 is etcd's canonical "key absent" condition.
-                        let txn = Txn::new()
-                            .when(vec![Compare::create_revision(
-                                entry.key.as_bytes(),
-                                CompareOp::Equal,
-                                0,
-                            )])
-                            .and_then(vec![TxnOp::put(
-                                entry.key.as_bytes(),
-                                entry.value.as_slice(),
-                                opts,
-                            )]);
+                        let key_absent = vec![Compare::create_revision(
+                            entry.key.as_bytes(),
+                            CompareOp::Equal,
+                            0,
+                        )];
+                        let put_op = vec![TxnOp::put(
+                            entry.key.as_bytes(),
+                            entry.value.as_slice(),
+                            opts,
+                        )];
+                        let txn = Txn::new().when(key_absent).and_then(put_op);
                         let resp = client
                             .txn(txn)
                             .await
