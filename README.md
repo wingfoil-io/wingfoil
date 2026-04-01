@@ -20,7 +20,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
-- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), etc.
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), etc.
 
 ## Quick Start
 
@@ -108,6 +108,31 @@ kdb_read::<Price, _>(
 ```
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/read/)
+
+## etcd Example
+
+Watch a key prefix, transform values, and write results back — all in a declarative graph:
+
+```rust,ignore
+use wingfoil::adapters::etcd::*;
+use wingfoil::*;
+
+let conn = EtcdConnection::new("http://localhost:2379");
+
+let round_trip = etcd_sub(conn.clone(), "/source/")
+    .map(|burst| {
+        burst.into_iter().map(|event| {
+            let upper = event.entry.value_str().unwrap_or("").to_uppercase().into_bytes();
+            EtcdEntry { key: event.entry.key.replacen("/source/", "/dest/", 1), value: upper }
+        })
+        .collect::<Burst<EtcdEntry>>()
+    })
+    .etcd_pub(conn, None, true);
+
+round_trip.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
+```
+
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/)
 
 ## Links
 - Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)

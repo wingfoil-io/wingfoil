@@ -12,15 +12,14 @@ Add two feature flags:
 ```toml
 [features]
 $ARGUMENTS = ["dep:some-client-crate", "async"]
-$ARGUMENTS-integration-test = ["$ARGUMENTS", "dep:testcontainers", "dep:testcontainers-modules"]
+$ARGUMENTS-integration-test = ["$ARGUMENTS", "dep:testcontainers"]
 
 [dependencies]
 some-client-crate = { version = "x.y", optional = true }
-testcontainers = { version = "0.23", optional = true }
-testcontainers-modules = { version = "0.11", optional = true }
+testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 ```
 
-Note: `testcontainers` must go in `[dependencies]` as optional (not `[dev-dependencies]`) because Cargo feature flags cannot gate dev-deps.
+Note: `testcontainers` must go in `[dependencies]` as optional (not `[dev-dependencies]`) because Cargo feature flags cannot gate dev-deps. Only add `testcontainers-modules` if a module for the service actually exists in that crate — otherwise use `GenericImage` directly (see step 4).
 
 ## 3. Module registration — `wingfoil/src/adapters/mod.rs`
 
@@ -31,27 +30,27 @@ pub mod $ARGUMENTS;
 
 ## 4. Docker image / container setup
 
-Choose an official or well-maintained image for the service. Prefer `testcontainers-modules` if a module exists; otherwise use `GenericImage`:
+Choose an official or well-maintained image for the service. Use `SyncRunner` (blocking) so container startup stays in a plain `#[test]` function without a wrapping async runtime:
 
 ```rust
 // In integration_tests.rs
-use testcontainers::runners::AsyncRunner;
+use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
-// Option A — if testcontainers-modules has a module:
+// Option A — if testcontainers-modules has a module for this service:
 use testcontainers_modules::some_service::SomeService;
-let container = SomeService::default().start().await?;
-let port = container.get_host_port_ipv4(DEFAULT_PORT).await?;
+let container = SomeService::default().start()?;
+let port = container.get_host_port_ipv4(DEFAULT_PORT)?;
 
-// Option B — GenericImage fallback:
-use testcontainers::GenericImage;
+// Option B — GenericImage (most common; use this when no module exists):
 let container = GenericImage::new("vendor/image", "tag")
+    .with_wait_for(WaitFor::message_on_stderr("ready to serve"))
     .with_env_var("KEY", "value")
-    .start()
-    .await?;
-let port = container.get_host_port_ipv4(DEFAULT_PORT).await?;
+    .start()?;
+let port = container.get_host_port_ipv4(DEFAULT_PORT)?;
+let endpoint = format!("http://127.0.0.1:{port}");
 ```
 
-The container is stopped automatically when dropped. No `docker-compose.yml` needed.
+The container is stopped automatically when dropped. Hold the container in a binding for the duration of the test (`let _container = ...`). No `docker-compose.yml` needed.
 
 ## 5. File structure
 
@@ -64,7 +63,7 @@ wingfoil/src/adapters/$ARGUMENTS/
   CLAUDE.md            # documents design decisions and pre-commit requirements
 ```
 
-## 6. Types — `mod.rs`
+## 6. Types and module doc — `mod.rs`
 
 All types used on-graph must satisfy `Element = Debug + Clone + Default + 'static` and be `Send`.
 
@@ -78,6 +77,52 @@ pub struct <Name>Kv { pub key: String, pub value: Vec<u8> }
 // Event type for the sub (producer) output — include a Default variant
 #[derive(Debug, Clone, Default)]
 pub struct <Name>Event { /* fields */ }
+```
+
+Add `//!` module-level doc at the top of `mod.rs` covering:
+
+- One-line description of what the adapter does
+- Setup: local Docker one-liner and Kubernetes YAML snippet (StatefulSet + Service)
+- `# Subscribing` section: minimal `ignore` code block showing `$ARGUMENTS_sub`
+- `# Publishing` section: minimal `ignore` code block showing `$ARGUMENTS_pub`
+- Any feature-specific sections (leases, conditional writes, etc.)
+
+```rust
+//! $ARGUMENTS adapter — <one-line description>.
+//!
+//! Provides two graph nodes:
+//! - [`$ARGUMENTS_sub`] — producer that ...
+//! - [`$ARGUMENTS_pub`] — consumer that ...
+//!
+//! # Setup
+//!
+//! ## Local (Docker)
+//! ```sh
+//! docker run --rm -p PORT:PORT <image>:<tag>
+//! ```
+//!
+//! ## Kubernetes
+//! ```yaml
+//! # StatefulSet + Service YAML
+//! ```
+//!
+//! # Subscribing
+//! ```ignore
+//! let conn = <Name>Connection::new("http://localhost:PORT");
+//! $ARGUMENTS_sub(conn, "prefix")
+//!     .collapse()
+//!     .for_each(|event, _| println!("{:?}", event))
+//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .unwrap();
+//! ```
+//!
+//! # Publishing
+//! ```ignore
+//! constant(burst![<Name>Kv { key: "k".into(), value: b"v".to_vec() }])
+//!     .$ARGUMENTS_pub(conn)
+//!     .run(RunMode::RealTime, RunFor::Cycles(1))
+//!     .unwrap();
+//! ```
 ```
 
 ## 7. Sub method — `read.rs` (producer)
@@ -137,17 +182,39 @@ Write tests in this order (connection refused first — no container needed):
 5. **`test_sub_no_race`** — concurrent write during snapshot→watch handoff not missed or duplicated (if applicable)
 6. **`test_delete_events`** — delete/tombstone events handled correctly (if applicable)
 
-Test structure — separate async setup from sync graph execution (matches KDB pattern):
+Test structure — container startup is synchronous (SyncRunner); async client helpers use their own `Runtime`:
 
 ```rust
+/// Start a container and return (container_guard, endpoint).
+/// Hold the returned guard for the duration of the test.
+fn start_container() -> anyhow::Result<(impl Drop, String)> {
+    let container = GenericImage::new("vendor/image", "tag")
+        .with_wait_for(WaitFor::message_on_stderr("ready"))
+        .with_env_var("KEY", "value")
+        .start()?;
+    let port = container.get_host_port_ipv4(DEFAULT_PORT)?;
+    Ok((container, format!("http://127.0.0.1:{port}")))
+}
+
+/// Seed data via the async client using a throwaway runtime.
+fn seed_data(endpoint: &str, pairs: &[(&str, &str)]) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let mut client = SomeClient::connect(&[endpoint], None).await?;
+        for (k, v) in pairs {
+            client.put(*k, *v).await?;
+        }
+        Ok(())
+    })
+}
+
 #[test]
 fn test_sub_snapshot() -> anyhow::Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    let (endpoint, _container) = rt.block_on(start_container())?;
-    rt.block_on(seed_data(&endpoint, &[("key", "val")]))?;
+    let (_container, endpoint) = start_container()?;
+    seed_data(&endpoint, &[("/prefix/key", "val")])?;
 
     let conn = <Name>Connection::new(&endpoint);
-    let collected = $ARGUMENTS_sub(conn, "prefix").collapse().collect();
+    let collected = $ARGUMENTS_sub(conn, "/prefix/").collapse().collect();
     collected.clone().run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     assert_eq!(collected.peek_value().len(), 1);
@@ -155,15 +222,51 @@ fn test_sub_snapshot() -> anyhow::Result<()> {
 }
 ```
 
-## 10. Example — `wingfoil/examples/$ARGUMENTS/main.rs`
+## 10. Example — `wingfoil/examples/$ARGUMENTS/`
 
-Show a realistic end-to-end use: seed data → `sub` → transform → `pub` → verify.
+Create two files:
+
+**`main.rs`** — realistic end-to-end use: seed data → `sub` → transform → `pub` → verify.
 
 Register in `wingfoil/Cargo.toml`:
 ```toml
 [[example]]
 name = "$ARGUMENTS"
 required-features = ["$ARGUMENTS"]
+```
+
+**`README.md`** — follows the KDB+ README pattern:
+
+```markdown
+# <Name> Adapter Example
+
+<One paragraph describing what the example demonstrates.>
+
+## Setup
+
+### Local (Docker)
+
+```sh
+docker run --rm -p PORT:PORT <image>:<tag>
+```
+
+### Kubernetes
+
+<StatefulSet + Service YAML, and how to set the endpoint in code>
+
+## Run
+
+```sh
+cargo run --example $ARGUMENTS --features $ARGUMENTS
+```
+
+## Code
+
+<Full source listing of main.rs>
+
+## Output
+
+<Expected console output>
 ```
 
 ## 11. CLAUDE.md — `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
