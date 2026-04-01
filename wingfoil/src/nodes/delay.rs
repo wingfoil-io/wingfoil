@@ -35,11 +35,13 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
                     self.initialized = true;
                 }
                 let next_time = current_time + self.delay;
-                state.add_callback(next_time);
+                state.add_callback(next_time)?;
                 self.queue.push(self.upstream.peek_value(), next_time)
             }
             while self.queue.pending(current_time) {
-                self.value = self.queue.pop();
+                if let Some(v) = self.queue.pop() {
+                    self.value = v;
+                }
                 ticked = true;
             }
             Ok(ticked)

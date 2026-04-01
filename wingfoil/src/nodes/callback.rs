@@ -22,20 +22,20 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
         while self.queue.pending(state.time()) {
-            self.value = self.queue.pop();
+            if let Some(v) = self.queue.pop() {
+                self.value = v;
+            }
             ticked = true;
         }
-        if !self.queue.is_empty() {
-            let callback_time = self.queue.next_time();
-            state.add_callback(callback_time);
+        if let Some(callback_time) = self.queue.next_time() {
+            state.add_callback(callback_time)?;
         }
         Ok(ticked)
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        if !self.queue.is_empty() {
-            let time = self.queue.next_time();
-            state.add_callback(time);
+        if let Some(time) = self.queue.next_time() {
+            state.add_callback(time)?;
         }
         Ok(())
     }

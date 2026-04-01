@@ -138,7 +138,10 @@ where
                             }
                         }
                     }
-                    let sock = socket.as_mut().unwrap();
+                    let Some(sock) = socket.as_mut() else {
+                        yield Err(anyhow::anyhow!("KDB socket not connected"));
+                        break 'slices;
+                    };
 
                     info!("KDB query: {query}");
                     let fetch_start = std::time::Instant::now();

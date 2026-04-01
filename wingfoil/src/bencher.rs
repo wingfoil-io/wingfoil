@@ -66,7 +66,7 @@ impl Bencher {
     }
 
     pub fn start(&mut self) {
-        let builder = self.builder.take().unwrap();
+        let builder = self.builder.take().expect("Bencher::start() called twice");
         let signal = self.signal.clone();
         let run_mode = self.run_mode;
         std::thread::spawn(move || {
@@ -74,9 +74,9 @@ impl Bencher {
             let node = builder(trigger).produce(move || {
                 signal.store(Signal::End.into(), Ordering::SeqCst);
             });
-            Graph::new(vec![node], run_mode, RunFor::Forever)
-                .run()
-                .unwrap();
+            if let Err(e) = Graph::new(vec![node], run_mode, RunFor::Forever).run() {
+                error!("bench graph failed: {e}");
+            }
         });
     }
 
@@ -140,7 +140,7 @@ impl MutableNode for BenchTriggerNode {
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.always_callback();
+        state.always_callback()?;
         Ok(())
     }
 }

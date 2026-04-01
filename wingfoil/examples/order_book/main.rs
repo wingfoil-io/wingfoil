@@ -18,9 +18,9 @@ struct Message {
 }
 
 #[doc(hidden)]
-pub fn main() {
+pub fn main() -> anyhow::Result<()> {
     env_logger::init();
-    set_current_dir();
+    set_current_dir()?;
     let book = RefCell::new(lobster::OrderBook::default());
     // map from seconds from midnight to NanoTime time
     let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
@@ -29,7 +29,7 @@ pub fn main() {
         .split();
     let prices_export = prices
         .filter_value(|price| !price.is_none())
-        .map(|price| price.unwrap())
+        .map(|price| price.unwrap_or_default())
         .distinct()
         .csv_write("prices.csv");
     let fills_export = fills.csv_write("fills.csv");
@@ -38,18 +38,18 @@ pub fn main() {
     Graph::new(vec![prices_export, fills_export], run_mode, run_for)
         .print()
         .run()
-        .unwrap();
 }
 
-fn set_current_dir() {
-    let mut root = env::current_exe()
-        .unwrap()
+fn set_current_dir() -> anyhow::Result<()> {
+    let root = env::current_exe()?;
+    let mut root = root
         .ancestors()
         .nth(4)
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("could not find project root"))?
         .to_path_buf();
     root.push("wingfoil/examples/order_book/data/");
-    env::set_current_dir(&root).unwrap();
+    env::set_current_dir(&root)?;
+    Ok(())
 }
 
 fn process_orders(

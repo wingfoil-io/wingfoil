@@ -147,7 +147,7 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                                 break;
                             } else {
                                 //println!("callback {}", t + 1);
-                                state.add_callback(t);
+                                state.add_callback(t)?;
                                 break;
                             }
                         }
@@ -179,7 +179,12 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                             }
 
                             // Validate: all timestamps must be >= current graph time
-                            let min_time = batch.iter().map(|va| va.time).min().unwrap();
+                            // batch is checked non-empty above, so min() always returns Some
+                            let min_time = batch
+                                .iter()
+                                .map(|va| va.time)
+                                .min()
+                                .ok_or_else(|| anyhow!("empty batch after non-empty check"))?;
                             if min_time < state.time() {
                                 return Err(anyhow!(
                                     "received HistoricalBatch with timestamp less than graph time, {} < {}",
@@ -207,7 +212,9 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                 }
                 while let Some(value_at) = self.queue.front() {
                     if value_at.time <= state.time() {
-                        values.push(self.queue.pop_front().unwrap().value);
+                        if let Some(va) = self.queue.pop_front() {
+                            values.push(va.value);
+                        }
                     } else {
                         break;
                     }
@@ -215,8 +222,8 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                 if self.queue.is_empty() {
                     // Clear message_time when queue is empty to avoid infinite callback loops
                     self.message_time = None;
-                } else {
-                    state.add_callback(self.queue.front().unwrap().time);
+                } else if let Some(front) = self.queue.front() {
+                    state.add_callback(front.time)?;
                 }
             }
         }
@@ -232,13 +239,13 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
         match state.run_mode() {
             RunMode::RealTime => {
                 if let Some(chan) = self.notifier_channel.take() {
-                    chan.send(state.ready_notifier())
+                    chan.send(state.ready_notifier()?)
                         .map_err(|e| anyhow::anyhow!(e))?;
                 }
             }
             RunMode::HistoricalFrom(time) => {
                 if self.trigger.is_none() {
-                    state.add_callback(time);
+                    state.add_callback(time)?;
                 }
             }
         }

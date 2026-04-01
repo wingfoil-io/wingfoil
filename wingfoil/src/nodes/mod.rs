@@ -982,7 +982,7 @@ mod tests {
         // Route even vs odd values to two buckets
         let (streams, overflow) = src.demux_it::<u64, _, u64>(2, |v| (*v % 2, DemuxEvent::None));
         let collected: Vec<_> = streams.iter().map(|s| s.collect()).collect();
-        let overflow_node = overflow.stream().for_each(|_, _| {});
+        let overflow_node = overflow.stream().unwrap().for_each(|_, _| {});
         let mut nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
         nodes.push(overflow_node);
         Graph::new(
