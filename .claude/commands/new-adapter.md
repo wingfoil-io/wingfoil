@@ -82,7 +82,7 @@ pub struct <Name>Event { /* fields */ }
 Add `//!` module-level doc at the top of `mod.rs` covering:
 
 - One-line description of what the adapter does
-- Setup: local Docker one-liner and Kubernetes YAML snippet (StatefulSet + Service)
+- Setup: local Docker one-liner to start the service
 - `# Subscribing` section: minimal `ignore` code block showing `$ARGUMENTS_sub`
 - `# Publishing` section: minimal `ignore` code block showing `$ARGUMENTS_pub`
 - Any feature-specific sections (leases, conditional writes, etc.)
@@ -96,14 +96,8 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 //!
 //! # Setup
 //!
-//! ## Local (Docker)
 //! ```sh
 //! docker run --rm -p PORT:PORT <image>:<tag>
-//! ```
-//!
-//! ## Kubernetes
-//! ```yaml
-//! # StatefulSet + Service YAML
 //! ```
 //!
 //! # Subscribing
@@ -244,15 +238,9 @@ required-features = ["$ARGUMENTS"]
 
 ## Setup
 
-### Local (Docker)
-
 ```sh
 docker run --rm -p PORT:PORT <image>:<tag>
 ```
-
-### Kubernetes
-
-<StatefulSet + Service YAML, and how to set the endpoint in code>
 
 ## Run
 
