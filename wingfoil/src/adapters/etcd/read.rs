@@ -113,7 +113,10 @@ pub fn etcd_sub(
                         yield Err(anyhow::anyhow!("etcd watch error: {e}"));
                         break;
                     }
-                    None => break,
+                    None => {
+                        yield Err(anyhow::anyhow!("etcd watch stream closed unexpectedly"));
+                        break;
+                    }
                 }
             }
         })

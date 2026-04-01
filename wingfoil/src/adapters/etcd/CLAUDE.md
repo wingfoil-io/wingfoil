@@ -82,7 +82,7 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 | Test | What it proves |
 |------|----------------|
 | `test_connection_refused` | Error propagates when etcd is unreachable |
-| `test_sub_snapshot_empty` | Empty snapshot + live event works correctly |
+| `test_sub_empty_snapshot_then_live_write` | Empty snapshot + live event works correctly |
 | `test_sub_snapshot_with_existing_keys` | Pre-existing keys appear in snapshot phase |
 | `test_sub_live_updates` | Live events arrive after snapshot |
 | `test_pub_round_trip` | `etcd_pub` writes are readable via direct client |
@@ -96,6 +96,6 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 
 - `etcd-client` is pinned to `"0.18"`. The API changed significantly between versions.
 - `testcontainers-modules` 0.15 does not include an etcd module; we use `GenericImage`
-  with `bitnami/etcd` directly.
+  with `gcr.io/etcd-development/etcd` directly.
 - `etcd_sub` is designed for `RunMode::RealTime`. Using it in `HistoricalFrom` mode is
   technically valid but timestamps will be wall-clock `NanoTime::now()`, not historical.

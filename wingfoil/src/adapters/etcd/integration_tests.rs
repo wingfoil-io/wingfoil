@@ -79,17 +79,12 @@ fn test_connection_refused() {
 }
 
 #[test]
-fn test_sub_snapshot_empty() -> anyhow::Result<()> {
-    // An empty prefix yields no snapshot events and the stream blocks waiting for live events.
-    // Use RunFor::Cycles(0) to stop immediately after setup.
+fn test_sub_empty_snapshot_then_live_write() -> anyhow::Result<()> {
+    // An empty prefix yields no snapshot events; a subsequent live write arrives as a Put.
     let (_container, endpoint) = start_etcd()?;
     let conn = EtcdConnection::new(&endpoint);
 
     let collected = etcd_sub(conn, "/empty/").collapse().collect();
-    // RunFor::Cycles(0) is not meaningful; instead seed nothing and use RunFor::Cycles(1)
-    // with a background write so we at least confirm the stream starts without error.
-    // Here we just verify that connecting and getting an empty snapshot doesn't error.
-    // We write one key in a background thread so the stream has something to receive.
     let endpoint_clone = endpoint.clone();
     let handle = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -309,14 +304,14 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
     let endpoint_check = endpoint.clone();
     let handle = std::thread::spawn(move || -> anyhow::Result<()> {
         // Poll until the key appears (consumer may take a few seconds to connect + write).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             if get_key(&endpoint_check, "/lease/heartbeat")?.is_some() {
                 break;
             }
-            assert!(
+            anyhow::ensure!(
                 std::time::Instant::now() < deadline,
-                "key never appeared within 8 s"
+                "key never appeared within 15 s"
             );
             std::thread::sleep(std::time::Duration::from_millis(200));
         }

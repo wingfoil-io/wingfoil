@@ -224,9 +224,10 @@ where
 
     fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(handle) = self.handle.take() {
+            // Abort first so the sender inside the task is dropped, then await completion
+            // so receiver_stream.teardown() can drain the channel without blocking.
             handle.abort();
             let result = state.tokio_runtime().block_on(handle);
-            // Sender inside the task is now dropped — receiver_stream.teardown() can proceed.
             self.receiver_stream.teardown(state)?;
             match result {
                 Ok(inner) => inner?,

@@ -48,6 +48,7 @@ pub fn etcd_pub(
             let (lease_id, keepalive_handle) = match lease_ttl {
                 None => (None, None),
                 Some(ttl) => {
+                    // etcd minimum TTL is 1 second; sub-second durations are rounded up.
                     let ttl_secs = ttl.as_secs().max(1) as i64;
                     let lease_resp = client
                         .lease_grant(ttl_secs, None)
@@ -106,7 +107,10 @@ pub fn etcd_pub(
                             .await
                             .map_err(|e| anyhow::anyhow!("etcd txn failed: {e}"))?;
                         if !resp.succeeded() {
-                            return Err(anyhow::anyhow!("etcd key already exists: {}", entry.key));
+                            return Err(anyhow::anyhow!(
+                                "etcd conditional write failed: key already exists (use force=true to overwrite): {}",
+                                entry.key
+                            ));
                         }
                     }
                 }
@@ -115,6 +119,7 @@ pub fn etcd_pub(
             // Stop keepalive and revoke lease so keys expire immediately.
             if let Some(handle) = keepalive_handle {
                 handle.abort();
+                let _ = handle.await; // ensure keepalive fully stopped before revoking
             }
             if let Some(id) = lease_id {
                 let _ = client.lease_revoke(id).await;
