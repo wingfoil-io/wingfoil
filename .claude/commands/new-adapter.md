@@ -70,9 +70,10 @@ All types used on-graph must satisfy `Element = Debug + Clone + Default + 'stati
 ```rust
 pub struct <Name>Connection { /* endpoint, credentials, etc. */ }
 
-// Value type for the pub (consumer) input
+// Value type for the pub (consumer) input — name this after the domain concept,
+// e.g. EtcdEntry, KafkaMessage, RedisCommand
 #[derive(Debug, Clone, Default)]
-pub struct <Name>Kv { pub key: String, pub value: Vec<u8> }
+pub struct <Name>Entry { /* fields appropriate to the service */ }
 
 // Event type for the sub (producer) output — include a Default variant
 #[derive(Debug, Clone, Default)]
@@ -112,7 +113,7 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 //!
 //! # Publishing
 //! ```ignore
-//! constant(burst![<Name>Kv { key: "k".into(), value: b"v".to_vec() }])
+//! constant(burst![<Name>Entry { key: "k".into(), value: b"v".to_vec() }])
 //!     .$ARGUMENTS_pub(conn)
 //!     .run(RunMode::RealTime, RunFor::Cycles(1))
 //!     .unwrap();
@@ -124,6 +125,7 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 Uses `produce_async`. Returns `Rc<dyn Stream<Burst<Event>>>`.
 
 ```rust
+#[must_use]
 pub fn $ARGUMENTS_sub(conn: <Name>Connection, /* params */) -> Rc<dyn Stream<Burst<<Name>Event>>> {
     produce_async(move |_ctx: RunParams| async move {
         Ok(async_stream::stream! {
@@ -146,21 +148,41 @@ If the service supports a **snapshot + watch** pattern (like etcd), use watch-be
 Uses `consume_async`. Returns `Rc<dyn Node>`.
 
 ```rust
-pub fn $ARGUMENTS_pub(conn: <Name>Connection, upstream: &Rc<dyn Stream<Burst<<Name>Kv>>>) -> Rc<dyn Node> {
-    upstream.consume_async(Box::new(move |source: Pin<Box<dyn FutStream<Burst<<Name>Kv>>>>| {
+#[must_use]
+pub fn $ARGUMENTS_pub(conn: <Name>Connection, upstream: &Rc<dyn Stream<Burst<<Name>Entry>>>) -> Rc<dyn Node> {
+    upstream.consume_async(Box::new(move |source: Pin<Box<dyn FutStream<Burst<<Name>Entry>>>>| {
         async move {
             // connect once
-            // while let Some((_time, burst)) = source.next().await { write each kv }
+            // while let Some((_time, burst)) = source.next().await { write each entry }
             Ok(())
         }
     }))
 }
 
-// Fluent extension trait
+// Fluent extension trait — implement for both Burst<Entry> and single Entry streams
+// so callers never need to manually wrap items in a Burst.
 pub trait <Name>PubOperators {
+    #[must_use]
     fn $ARGUMENTS_pub(self: &Rc<Self>, conn: <Name>Connection) -> Rc<dyn Node>;
 }
-impl <Name>PubOperators for dyn Stream<Burst<<Name>Kv>> { ... }
+
+impl <Name>PubOperators for dyn Stream<Burst<<Name>Entry>> {
+    fn $ARGUMENTS_pub(self: &Rc<Self>, conn: <Name>Connection) -> Rc<dyn Node> {
+        $ARGUMENTS_pub(conn, self)
+    }
+}
+
+// Single-item stream: auto-wrap each value into a one-element Burst.
+impl <Name>PubOperators for dyn Stream<<Name>Entry> {
+    fn $ARGUMENTS_pub(self: &Rc<Self>, conn: <Name>Connection) -> Rc<dyn Node> {
+        let burst_stream = self.map(|entry| {
+            let mut b = Burst::new();
+            b.push(entry);
+            b
+        });
+        $ARGUMENTS_pub(conn, &burst_stream)
+    }
+}
 ```
 
 ## 9. Integration tests — `integration_tests.rs`
@@ -283,6 +305,8 @@ $ARGUMENTS-integration:
         override: true
     - name: Cache Rust Build Artifacts
       uses: Swatinem/rust-cache@v2
+    - name: Install system dependencies  # e.g. protobuf-compiler for gRPC clients; omit if not needed
+      run: sudo apt-get install -y <pkg>
     - name: Run $ARGUMENTS integration tests
       run: |
         cargo test --features $ARGUMENTS-integration-test -p wingfoil \
