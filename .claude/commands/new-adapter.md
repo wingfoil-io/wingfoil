@@ -319,12 +319,177 @@ Update the `tag` job's `needs` to include `$ARGUMENTS-integration`.
 
 Also create a standalone `.github/workflows/$ARGUMENTS-integration.yml` with `on: workflow_dispatch` containing the same job (for manual runs outside of release).
 
-## 13. Pre-commit checklist
+## 13. Python bindings — `wingfoil-python/`
+
+### a. Feature flag — `wingfoil-python/Cargo.toml`
+
+Add the adapter's feature to the wingfoil dependency:
+
+```toml
+wingfoil = { path = "../wingfoil", features = ["kdb", "zmq-beta", "$ARGUMENTS"] }
+```
+
+### b. Binding module — `wingfoil-python/src/py_$ARGUMENTS.rs`
+
+Create a file with two functions:
+
+- **`py_$ARGUMENTS_sub`** — `#[pyfunction]` that calls the Rust `$ARGUMENTS_sub` and maps output types to Python objects.
+- **`py_$ARGUMENTS_pub_inner`** — not `#[pyfunction]`; called from the `.$ARGUMENTS_pub()` stream method. Extracts Python objects from `PyElement`, converts to the native entry type, and calls the Rust `$ARGUMENTS_pub`.
+
+Type conversion pattern:
+- **Rust → Python**: map inside `Python::attach(|py| { ... })`, build `PyDict`/`PyList`/`PyBytes` etc., wrap results in `PyElement::new(...)`
+- **Python → Rust**: inside `Python::attach`, call `elem.as_ref().bind(py)` then `downcast::<PyDict>()` etc. to extract fields
+
+```rust
+//! Python bindings for $ARGUMENTS adapter.
+
+use crate::py_element::PyElement;
+use crate::py_stream::PyStream;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList};
+use std::rc::Rc;
+use wingfoil::adapters::$ARGUMENTS::{<Name>Connection, <Name>Entry, <Name>EventKind, $ARGUMENTS_pub, $ARGUMENTS_sub};
+use wingfoil::{Burst, Node, Stream, StreamOperators};
+
+/// Subscribe to <service> keys matching a prefix.
+///
+/// Each tick yields a `list` of event dicts:
+/// `{"kind": "...", "key": str, "value": bytes, ...}`
+#[pyfunction]
+pub fn py_$ARGUMENTS_sub(endpoint: String, prefix: String) -> PyStream {
+    let conn = <Name>Connection::new(endpoint);
+    let stream = $ARGUMENTS_sub(conn, prefix);
+    let py_stream = stream.map(|burst| {
+        Python::attach(|py| {
+            let items: Vec<Py<PyAny>> = burst
+                .into_iter()
+                .map(|event| {
+                    let dict = PyDict::new(py);
+                    // populate dict fields from event
+                    dict.into_any().unbind()
+                })
+                .collect();
+            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+        })
+    });
+    PyStream(py_stream)
+}
+
+/// Inner implementation for the `.$ARGUMENTS_pub()` stream method.
+pub fn py_$ARGUMENTS_pub_inner(
+    stream: &Rc<dyn Stream<PyElement>>,
+    endpoint: String,
+    // adapter-specific params
+) -> Rc<dyn Node> {
+    let conn = <Name>Connection::new(endpoint);
+    let burst_stream: Rc<dyn Stream<Burst<<Name>Entry>>> = stream.map(move |elem| {
+        Python::attach(|py| {
+            let obj = elem.as_ref().bind(py);
+            if let Ok(dict) = obj.downcast::<PyDict>() {
+                let mut burst = Burst::new();
+                burst.push(dict_to_entry(dict));
+                burst
+            } else if let Ok(list) = obj.downcast::<PyList>() {
+                list.iter()
+                    .filter_map(|item| item.downcast::<PyDict>().ok().map(|d| dict_to_entry(&d)))
+                    .collect()
+            } else {
+                log::error!("$ARGUMENTS_pub: stream value must be a dict or list of dicts");
+                Burst::new()
+            }
+        })
+    });
+    $ARGUMENTS_pub(conn, &burst_stream, /* params */)
+}
+
+fn dict_to_entry(dict: &Bound<'_, PyDict>) -> <Name>Entry {
+    let key = dict.get_item("key").ok().flatten()
+        .and_then(|v| v.extract::<String>().ok()).unwrap_or_default();
+    let value = dict.get_item("value").ok().flatten()
+        .and_then(|v| v.extract::<Vec<u8>>().ok()).unwrap_or_default();
+    <Name>Entry { key, value }
+}
+```
+
+Note: `Burst::new()` calls `TinyVec::new()` via the type alias. For collecting iterators into a `Burst`, use `.collect::<Burst<_>>()` — `TinyVec` implements `FromIterator`.
+
+### c. Register in module — `wingfoil-python/src/lib.rs`
+
+```rust
+mod py_$ARGUMENTS;
+// inside _wingfoil():
+module.add_function(wrap_pyfunction!(py_$ARGUMENTS::py_$ARGUMENTS_sub, module)?)?;
+```
+
+### d. Stream method for pub — `wingfoil-python/src/py_stream.rs`
+
+Add a `#[pymethods]` method to `PyStream`:
+
+```rust
+/// Write this stream to <service>.
+///
+/// Stream values must be dicts with "key" (str) and "value" (bytes),
+/// or lists of such dicts for multi-entry writes per tick.
+fn $ARGUMENTS_pub(&self, endpoint: String, /* adapter-specific params */) -> PyNode {
+    PyNode::new(crate::py_$ARGUMENTS::py_$ARGUMENTS_pub_inner(&self.0, endpoint, /* params */))
+}
+```
+
+### e. Python aliases — `wingfoil-python/python/wingfoil/__init__.py`
+
+```python
+# User-friendly aliases for $ARGUMENTS functions
+$ARGUMENTS_sub = _ext.py_$ARGUMENTS_sub
+```
+
+### f. Integration tests — `wingfoil-python/tests/test_$ARGUMENTS.py`
+
+Follow the KDB+ test pattern: check if the service is available, skip if not, use stdlib HTTP/socket to seed and verify data without extra Python dependencies.
+
+For services that expose an HTTP management API (e.g. etcd v3 gRPC-gateway), use `urllib` + `json` + `base64` from stdlib to issue puts/gets.
+
+```python
+import socket
+import unittest
+
+ENDPOINT = "http://localhost:PORT"
+
+def service_available():
+    try:
+        with socket.create_connection(("localhost", PORT), timeout=1):
+            return True
+    except OSError:
+        return False
+
+SERVICE_AVAILABLE = service_available()
+
+@unittest.skipUnless(SERVICE_AVAILABLE, "<service> not running on localhost:PORT")
+class TestSub(unittest.TestCase):
+    def test_sub_returns_expected_shape(self):
+        from wingfoil import $ARGUMENTS_sub
+        stream = $ARGUMENTS_sub(ENDPOINT, "/prefix/").collect()
+        stream.run(realtime=False, duration=5.0)
+        result = stream.peek_value()
+        self.assertIsInstance(result, list)
+        # assert dict shape of each event
+
+@unittest.skipUnless(SERVICE_AVAILABLE, "<service> not running on localhost:PORT")
+class TestPub(unittest.TestCase):
+    def test_pub_round_trip(self):
+        from wingfoil import constant
+        constant({"key": "/test/k", "value": b"v"}).$ARGUMENTS_pub(ENDPOINT).run(
+            realtime=False, cycles=1
+        )
+        # verify via stdlib HTTP/socket that the key was written
+```
+
+## 14. Pre-commit checklist
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
 cargo test --features $ARGUMENTS-integration-test -p wingfoil -- --test-threads=1
+cd wingfoil-python && maturin develop && pytest tests/test_$ARGUMENTS.py
 ```
 
-All three must pass before committing.
+All four must pass before committing.
