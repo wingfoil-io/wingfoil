@@ -10,11 +10,11 @@ Demonstrates both Grafana integration points:
 Start the Docker stack from the repo root:
 
 ```sh
-cd docker/grafana && docker compose up -d   # start in background
-docker compose ps                           # check all services are healthy
-export GRAFANA_API_KEY=$(cat tokens/grafana_api_key)  # key is auto-created
+docker compose -f docker/grafana/docker-compose.yml up -d   # start in background
+docker compose -f docker/grafana/docker-compose.yml ps      # check all services are healthy
+export GRAFANA_API_KEY=$(cat docker/grafana/tokens/grafana_api_key)  # key is auto-created
 # when done:
-# docker compose down
+# docker compose -f docker/grafana/docker-compose.yml down
 ```
 
 This starts:

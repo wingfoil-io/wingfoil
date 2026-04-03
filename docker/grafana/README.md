@@ -12,12 +12,12 @@ Docker Compose stack for running wingfoil Grafana adapter integration tests.
 ## Usage
 
 ```bash
-docker compose up -d                        # start in background
-docker compose ps                           # wait for all services healthy (~10s)
-# Run integration tests (API key is read automatically from tokens/grafana_api_key)
+docker compose -f docker/grafana/docker-compose.yml up -d   # start in background
+docker compose -f docker/grafana/docker-compose.yml ps      # wait for all services healthy (~10s)
+# Run integration tests (API key is read automatically from docker/grafana/tokens/grafana_api_key)
 RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
 # when done:
-# docker compose down
+# docker compose -f docker/grafana/docker-compose.yml down
 ```
 
 ## API Key
@@ -29,7 +29,7 @@ Integration tests read this file automatically — no manual steps needed.
 
 If you need the key explicitly:
 ```bash
-cat tokens/grafana_api_key
+cat docker/grafana/tokens/grafana_api_key
 ```
 
 ## Environment Variables

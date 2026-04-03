@@ -18,7 +18,7 @@ Before committing changes to this adapter, you MUST:
 
 1. **Start the Docker stack:**
    ```bash
-   cd docker/grafana && docker compose up -d  # start in background; docker compose down when done
+   docker compose -f docker/grafana/docker-compose.yml up -d  # start in background; docker compose -f docker/grafana/docker-compose.yml down when done
    ```
 
 2. **Run integration tests (API key is read automatically from tokens/grafana_api_key):**

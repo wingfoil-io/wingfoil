@@ -2,7 +2,7 @@
 //!
 //! Requires the Docker stack from `docker/grafana/`:
 //! ```sh
-//! cd docker/grafana && docker compose up
+//! docker compose -f docker/grafana/docker-compose.yml up -d
 //! ```
 //!
 //! The API key is created automatically and written to `docker/grafana/tokens/grafana_api_key`.
@@ -30,7 +30,7 @@ fn grafana_api_key() -> String {
     );
     std::fs::read_to_string(path)
         .map(|s| s.trim().to_string())
-        .expect("set GRAFANA_TEST_API_KEY or run: cd docker/grafana && docker compose up")
+        .expect("set GRAFANA_TEST_API_KEY or run: docker compose -f docker/grafana/docker-compose.yml up -d")
 }
 
 fn grafana_org_id() -> u64 {
