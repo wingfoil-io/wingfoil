@@ -11,6 +11,8 @@ zmq-integration-test = ["zmq"]
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
 zmq-cross-lang-test = ["zmq-integration-test"]
 zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "zmq-etcd-integration-test"]
+aeron-rusteron = ["dep:rusteron-client"]
+aeron-rs = ["dep:aeron-rs"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 kafka = ["dep:rdkafka", "async"]
@@ -119,6 +121,8 @@ opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-bloc
 fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
+rusteron-client = { version = "0.1", optional = true }
+aeron-rs = { version = "0.1", optional = true }
 
 # web adapter
 axum = { version = "0.8", features = ["ws"], optional = true }
@@ -306,3 +310,8 @@ required-features = ["fluvio"]
 name = "kafka"
 path = "examples/kafka/main.rs"
 required-features = ["kafka"]
+
+[[example]]
+name = "aeron"
+path = "examples/aeron/main.rs"
+required-features = ["aeron-rusteron"]
