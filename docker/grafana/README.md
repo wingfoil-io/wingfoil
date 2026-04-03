@@ -12,20 +12,12 @@ Docker Compose stack for running wingfoil Grafana adapter integration tests.
 ## Usage
 
 ```bash
-# Start the stack
-docker compose up
-
-# Wait for healthy (grafana takes ~10s)
-docker compose ps
-
-# Run integration tests
-GRAFANA_TEST_URL=http://localhost:3000 \
-GRAFANA_TEST_API_KEY=<see below> \
-PROMETHEUS_TEST_URL=http://localhost:9090 \
+docker compose up -d                        # start in background
+docker compose ps                           # wait for all services healthy (~10s)
+# Run integration tests (API key is read automatically from tokens/grafana_api_key)
 RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
-
-# Tear down
-docker compose down
+# when done:
+# docker compose down
 ```
 
 ## API Key

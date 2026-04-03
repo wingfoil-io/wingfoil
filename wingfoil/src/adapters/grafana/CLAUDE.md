@@ -18,13 +18,11 @@ Before committing changes to this adapter, you MUST:
 
 1. **Start the Docker stack:**
    ```bash
-   cd docker/grafana && docker compose up
+   cd docker/grafana && docker compose up -d  # start in background; docker compose down when done
    ```
 
-2. **Run integration tests:**
+2. **Run integration tests (API key is read automatically from tokens/grafana_api_key):**
    ```bash
-   GRAFANA_TEST_URL=http://localhost:3000 \
-   GRAFANA_TEST_API_KEY=<token> \
    RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
    ```
    See `docker/grafana/README.md` for how to obtain the API key.
