@@ -7,7 +7,6 @@ async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "to
 csv = ["dep:csv"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
-aeron = ["dep:aerofoil"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 
@@ -78,7 +77,6 @@ kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
-aerofoil = { git = "https://github.com/olibye/aerofoil", optional = true }
 
 
 [dev-dependencies]
@@ -164,23 +162,3 @@ required-features = ["zmq-beta"]
 name = "etcd"
 path = "examples/etcd/main.rs"
 required-features = ["etcd"]
-
-[[example]]
-name = "aeron_subscriber_node_reference_access"
-path = "examples/aeron/subscriber_node_reference_access.rs"
-required-features = ["aeron"]
-
-[[example]]
-name = "aeron_subscriber_node_value_access"
-path = "examples/aeron/subscriber_node_value_access.rs"
-required-features = ["aeron"]
-
-[[example]]
-name = "aeron_dual_rc_pattern"
-path = "examples/aeron/dual_rc_pattern.rs"
-required-features = ["aeron"]
-
-[[example]]
-name = "aeron_fan_out_pattern"
-path = "examples/aeron/fan_out_pattern.rs"
-required-features = ["aeron"]
