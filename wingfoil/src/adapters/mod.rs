@@ -1,5 +1,6 @@
 //! A library of input and output adapters
 
+pub mod aeron;
 #[cfg(feature = "kdb")]
 pub mod cache;
 #[cfg(feature = "csv")]
