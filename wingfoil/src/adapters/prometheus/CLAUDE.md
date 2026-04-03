@@ -28,9 +28,8 @@ prometheus/
 
 ## Feature Flags
 
-- `prometheus` — enables the adapter (pulls in `reqwest` with the `blocking` feature).
-- `prometheus-integration-test` — enables `prometheus` + integration tests that require a running
-  Prometheus instance (see below).
+- `prometheus` — enables the adapter (no external client crate; HTTP server is hand-rolled with `std::net`).
+- `prometheus-integration-test` — enables `prometheus` + `reqwest` (blocking) for the integration tests.
 
 ## Pre-Commit Requirements
 
@@ -60,5 +59,5 @@ docker compose -f docker/grafana/docker-compose.yml down
 
 - The Prometheus scrape interval in `docker/grafana/provisioning/prometheus/prometheus.yml` is 5 s.
   The integration test polls for up to 60 s to account for scrape lag.
-- Port conflicts: unit tests use fixed ports (19091, 19092). If those are already bound the tests
-  will fail with "address already in use". Use `0` for OS-assigned ports in new tests.
+- All tests (unit and integration) use port `0` so the OS assigns a free port. Never hardcode a port
+  number in tests.

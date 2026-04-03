@@ -185,9 +185,8 @@ mod tests {
 
     #[test]
     fn serves_registered_metric() {
-        let port = 19091u16;
-        let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
-        exporter.serve().unwrap();
+        let exporter = PrometheusExporter::new("127.0.0.1:0");
+        let port = exporter.serve().unwrap();
 
         let counter = ticker(Duration::from_millis(10)).count();
         let node = exporter.register("test_counter", counter);
@@ -207,9 +206,8 @@ mod tests {
 
     #[test]
     fn historical_mode_produces_no_metrics() {
-        let port = 19093u16;
-        let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
-        exporter.serve().unwrap();
+        let exporter = PrometheusExporter::new("127.0.0.1:0");
+        let port = exporter.serve().unwrap();
 
         let counter = ticker(Duration::from_millis(10)).count();
         let node = exporter.register("hist_counter", counter);
@@ -229,9 +227,8 @@ mod tests {
 
     #[test]
     fn returns_404_for_unknown_path() {
-        let port = 19092u16;
-        let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
-        exporter.serve().unwrap();
+        let exporter = PrometheusExporter::new("127.0.0.1:0");
+        let port = exporter.serve().unwrap();
         std::thread::sleep(Duration::from_millis(50));
 
         let mut conn = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();

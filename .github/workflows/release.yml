@@ -64,8 +64,8 @@ jobs:
         env:
           RUST_LOG: INFO
 
-  prometheus-integration:
-    name: Prometheus Integration Tests
+  telemetry-integration:
+    name: Telemetry Integration Tests
     needs: preflight
     runs-on: ubuntu-latest
     steps:
@@ -140,7 +140,7 @@ jobs:
 
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests, etcd-integration, prometheus-integration, otlp-integration]
+    needs: [preflight, all-tests, etcd-integration, telemetry-integration, otlp-integration]
     runs-on: ubuntu-latest
     permissions:
       contents: write

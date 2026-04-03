@@ -31,7 +31,25 @@ fn get_raw_metrics(port: u16) -> String {
     resp.text().expect("metrics response not text")
 }
 
+fn prometheus_available() -> bool {
+    reqwest::blocking::get(format!("{}/api/v1/query?query=up", prometheus_url()))
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
 // ─── Self-contained tests (no running Prometheus required) ──────────────────
+
+#[test]
+fn test_connection_refused() {
+    // Occupy a port so the exporter cannot bind it.
+    let occupied =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind test listener");
+    let port = occupied.local_addr().unwrap().port();
+
+    let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
+    let result = exporter.serve();
+    assert!(result.is_err(), "expected bind error when port is occupied");
+}
 
 #[test]
 fn historical_mode_produces_no_scraped_metrics() {
@@ -85,6 +103,10 @@ fn multiple_metrics_all_appear_in_scrape() {
 #[test]
 fn prometheus_exporter_scrapeable_by_prometheus() {
     _ = env_logger::try_init();
+    if !prometheus_available() {
+        eprintln!("skipping: Prometheus not available at {}", prometheus_url());
+        return;
+    }
     let port = metrics_port();
     let exporter = PrometheusExporter::new(format!("0.0.0.0:{port}"));
     exporter.serve().unwrap();

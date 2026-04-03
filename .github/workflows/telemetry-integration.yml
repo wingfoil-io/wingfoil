@@ -1,4 +1,4 @@
-name: Grafana Integration Tests
+name: Telemetry Integration Tests
 
 on:
   workflow_dispatch:
@@ -8,8 +8,8 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  grafana-integration:
-    name: Grafana Integration Tests
+  telemetry-integration:
+    name: Telemetry Integration Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -28,35 +28,6 @@ jobs:
         run: docker compose up -d
         working-directory: docker/grafana
 
-      - name: Wait for Grafana to be healthy
-        run: |
-          for i in $(seq 1 24); do
-            if curl -sf http://localhost:3000/api/health > /dev/null; then
-              echo "Grafana is up"
-              break
-            fi
-            echo "Waiting for Grafana... ($i/24)"
-            sleep 5
-          done
-          curl -sf http://localhost:3000/api/health || (echo "Grafana never became healthy" && exit 1)
-
-      - name: Create Grafana service account token
-        id: grafana-token
-        run: |
-          # Create service account
-          SA_ID=$(curl -sf -X POST http://admin:admin@localhost:3000/api/serviceaccounts \
-            -H 'Content-Type: application/json' \
-            -d '{"name":"ci-wingfoil","role":"Editor"}' \
-            | jq -r '.id')
-
-          # Create token for that service account
-          TOKEN=$(curl -sf -X POST http://admin:admin@localhost:3000/api/serviceaccounts/${SA_ID}/tokens \
-            -H 'Content-Type: application/json' \
-            -d '{"name":"ci-token"}' \
-            | jq -r '.key')
-
-          echo "token=${TOKEN}" >> $GITHUB_OUTPUT
-
       - name: Wait for Prometheus to be healthy
         run: |
           for i in $(seq 1 12); do
@@ -67,15 +38,14 @@ jobs:
             echo "Waiting for Prometheus... ($i/12)"
             sleep 5
           done
+          curl -sf http://localhost:9090/-/healthy || (echo "Prometheus never became healthy" && exit 1)
 
-      - name: Run Grafana integration tests
+      - name: Run Prometheus integration tests
         run: |
           cargo test --features prometheus-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
-          GRAFANA_TEST_URL: http://localhost:3000
-          GRAFANA_TEST_API_KEY: ${{ steps.grafana-token.outputs.token }}
           PROMETHEUS_TEST_URL: http://localhost:9090
           WINGFOIL_METRICS_PORT: "9091"
 
