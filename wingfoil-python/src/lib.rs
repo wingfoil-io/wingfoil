@@ -4,6 +4,8 @@ mod py_etcd;
 #[cfg(feature = "iceoryx2-beta")]
 mod py_iceoryx2;
 mod py_kdb;
+mod py_otlp;
+mod py_prometheus;
 mod py_stream;
 mod py_zmq;
 mod types;
@@ -192,6 +194,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<py_iceoryx2::PyIceoryx2ServiceVariant>()?;
     #[cfg(feature = "iceoryx2-beta")]
     module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
+    module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

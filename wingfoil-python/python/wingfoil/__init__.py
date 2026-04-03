@@ -26,3 +26,6 @@ if hasattr(_ext, "py_iceoryx2_sub"):
     Iceoryx2ServiceVariant = _ext.Iceoryx2ServiceVariant
     Iceoryx2Mode = _ext.Iceoryx2Mode
     __all__.extend(["iceoryx2_sub", "Iceoryx2ServiceVariant", "Iceoryx2Mode"])
+
+# User-friendly aliases for Prometheus
+PrometheusExporter = _ext.PrometheusExporter
