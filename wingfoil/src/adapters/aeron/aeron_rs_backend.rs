@@ -26,6 +26,7 @@ use std::time::Duration;
 // Connection handle
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct AeronRsHandle {
     aeron: Arc<Mutex<Aeron>>,
 }
@@ -49,9 +50,8 @@ impl AeronRsHandle {
         let id = aeron.add_subscription(CString::new(channel)?, stream_id)?;
         let deadline = std::time::Instant::now() + timeout;
         let sub = loop {
-            match aeron.find_subscription(id) {
-                Ok(sub) => break sub,
-                Err(_) => {}
+            if let Ok(sub) = aeron.find_subscription(id) {
+                break sub;
             }
             if std::time::Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for subscription on {channel}:{stream_id}");
@@ -71,9 +71,8 @@ impl AeronRsHandle {
         let id = aeron.add_publication(CString::new(channel)?, stream_id)?;
         let deadline = std::time::Instant::now() + timeout;
         let pub_ = loop {
-            match aeron.find_publication(id) {
-                Ok(p) => break p,
-                Err(_) => {}
+            if let Ok(p) = aeron.find_publication(id) {
+                break p;
             }
             if std::time::Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for publication on {channel}:{stream_id}");
@@ -117,7 +116,7 @@ pub struct AeronRsPublisher {
 
 impl AeronPublisherBackend for AeronRsPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
-        let mut pub_ = self.pub_.lock().unwrap();
+        let pub_ = self.pub_.lock().unwrap();
         let len = buffer.len() as Index;
         let aligned = AlignedBuffer::with_capacity(len);
         let ab = AtomicBuffer::from_aligned(&aligned);
