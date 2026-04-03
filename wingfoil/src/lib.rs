@@ -130,6 +130,46 @@
 //! - For larger or heap-allocated types:
 //!   - Use [`Rc<T>`](https://doc.rust-lang.org/std/rc/struct.Rc.html) for single threaded contexts.
 //!   - Use [`Arc<T>`](https://doc.rust-lang.org/std/sync/struct.Arc.html) for multithreaded contexts.
+//!
+//! ## Observability
+//!
+//! Wingfoil supports both the [`log`](https://docs.rs/log) and [`tracing`](https://docs.rs/tracing)
+//! ecosystems via cargo feature flags.
+//!
+//! ### Feature flags
+//!
+//! | Feature | Effect |
+//! |---|---|
+//! | *(none)* | [`logged()`](StreamExt::logged) and [`GraphState::log()`] emit via the `log` crate — wire up any `log`-compatible backend (e.g. `env_logger`). |
+//! | `tracing` | Events are emitted via `tracing` instead. A `tracing` subscriber is required; the `log` bridge ensures events still reach `env_logger` if none is installed. |
+//! | `instrument-run` | Adds a tracing span around [`Graph::run()`]. |
+//! | `instrument-run-nodes` | Adds a tracing span around the main execution loop. |
+//! | `instrument-apply-nodes` | Adds a tracing span around each lifecycle phase (setup / start / stop / teardown), recording the phase name. |
+//! | `instrument-initialise` | Adds a tracing span around graph initialisation. |
+//! | `instrument-cycle-node` | Adds a tracing span per node cycle, recording the node index and type name. |
+//! | `instrument-all` | Enables all `instrument-*` flags above. |
+//!
+//! All `instrument-*` features imply `tracing`.
+//!
+//! ### Example
+//!
+//! ```rust,no_run
+//! use log::Level::Info;
+//! use std::time::Duration;
+//! use wingfoil::*;
+//!
+//! // With the `tracing` feature and a subscriber installed:
+//! // tracing_subscriber::fmt::init();
+//!
+//! ticker(Duration::from_secs(1))
+//!     .count()
+//!     .logged("tick", Info)  // emits a tracing event per tick when feature = "tracing"
+//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+//!     .unwrap();
+//! ```
+//!
+//! See the [tracing example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/tracing/)
+//! for a runnable demonstration.
 
 #[macro_use]
 extern crate log;

@@ -91,6 +91,7 @@ tracing = { workspace = true, features = ["log", "attributes"], optional = true 
 rxrust = "1.0.0-rc.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[example]]
 name = "dynamic-group"
@@ -171,3 +172,7 @@ required-features = ["zmq-beta"]
 name = "etcd"
 path = "examples/etcd/main.rs"
 required-features = ["etcd"]
+
+[[example]]
+name = "tracing"
+path = "examples/tracing/main.rs"
