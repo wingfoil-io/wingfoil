@@ -13,7 +13,7 @@ class TestPrometheusExporter(unittest.TestCase):
         port = exporter.serve()
         stream = ticker(0.1).count()
         node = exporter.register("test_counter", stream)
-        node.run(realtime=False, cycles=5)
+        node.run(realtime=True, cycles=5)
 
         resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics")
         body = resp.read().decode()
@@ -42,7 +42,7 @@ class TestPrometheusExporter(unittest.TestCase):
         port = exporter.serve()
         stream = ticker(0.1).count()
         node = exporter.register("gauge_metric", stream)
-        node.run(realtime=False, cycles=3)
+        node.run(realtime=True, cycles=3)
 
         resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics")
         body = resp.read().decode()
