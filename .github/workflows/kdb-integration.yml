@@ -65,6 +65,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Install maturin and build Python bindings
         run: |
           python -m venv wingfoil-python/.venv
