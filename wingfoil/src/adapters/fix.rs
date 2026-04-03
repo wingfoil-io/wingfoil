@@ -7,7 +7,7 @@
 //! - [`FixPollMode::Threaded`] — background thread + channel (~10–100 µs)
 //!
 //! Both [`fix_connect`] (initiator) and [`fix_accept`] (acceptor) return the same
-//! `(Stream<Burst<FixMessage>>, Stream<FixSessionStatus>)` pair.
+//! `(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)` pair.
 //!
 //! Use [`fix_connect_tls`] to connect to TLS-secured endpoints (e.g. LMAX London Demo).
 //! It additionally returns a [`FixInjector`] for sending outbound messages on the session.
@@ -46,6 +46,8 @@ const TAG_TEST_REQ_ID: u32 = 112;
 const TAG_ENCRYPT_METHOD: u32 = 98;
 const TAG_USERNAME: u32 = 553;
 const TAG_PASSWORD: u32 = 554;
+const TAG_RESET_ON_LOGON: u32 = 141;
+const TAG_TEXT: u32 = 58;
 
 const MSG_HEARTBEAT: &str = "0";
 const MSG_TEST_REQUEST: &str = "1";
@@ -101,7 +103,8 @@ pub enum FixSessionStatus {
     Disconnected,
     LoggingIn,
     LoggedIn,
-    LoggedOut,
+    /// Server sent a Logout (MsgType 5). Contains the `Text` field (tag 58) if present.
+    LoggedOut(Option<String>),
     Error(String),
 }
 
@@ -326,6 +329,10 @@ impl FixSession {
         let mut extra = vec![
             (TAG_ENCRYPT_METHOD, "0".to_string()),
             (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
+            // ResetOnLogon=Y tells the counterparty to reset sequence numbers,
+            // avoiding rejections due to stale expected sequence numbers from
+            // previous sessions.
+            (TAG_RESET_ON_LOGON, "Y".to_string()),
         ];
         if let Some(ref pwd) = self.password.clone() {
             // LMAX and other venues require tag 553 (Username) = SenderCompID
@@ -373,7 +380,8 @@ fn handle_initiator<W: Write>(
             Ok(false)
         }
         MSG_LOGOUT => {
-            events.push(FixEvent::Status(FixSessionStatus::LoggedOut));
+            let reason = msg.field(TAG_TEXT).map(str::to_string);
+            events.push(FixEvent::Status(FixSessionStatus::LoggedOut(reason)));
             Ok(false)
         }
         _ => Ok(true),
@@ -400,7 +408,8 @@ fn handle_acceptor<W: Write>(
             Ok(false)
         }
         MSG_LOGOUT => {
-            events.push(FixEvent::Status(FixSessionStatus::LoggedOut));
+            let reason = msg.field(TAG_TEXT).map(str::to_string);
+            events.push(FixEvent::Status(FixSessionStatus::LoggedOut(reason)));
             Ok(false)
         }
         _ => Ok(true),
@@ -451,7 +460,7 @@ fn split_events(
     events: Rc<dyn Stream<Burst<FixEvent>>>,
 ) -> (
     Rc<dyn Stream<Burst<FixMessage>>>,
-    Rc<dyn Stream<FixSessionStatus>>,
+    Rc<dyn Stream<Burst<FixSessionStatus>>>,
 ) {
     let data = MapFilterStream::new(
         events.clone(),
@@ -475,7 +484,7 @@ fn split_events(
     let status = MapFilterStream::new(
         events,
         Box::new(|burst: Burst<FixEvent>| {
-            match burst
+            let statuses: Burst<FixSessionStatus> = burst
                 .into_iter()
                 .filter_map(|e| {
                     if let FixEvent::Status(s) = e {
@@ -484,11 +493,9 @@ fn split_events(
                         None
                     }
                 })
-                .next_back()
-            {
-                Some(s) => (s, true),
-                None => (FixSessionStatus::default(), false),
-            }
+                .collect();
+            let ticked = !statuses.is_empty();
+            (statuses, ticked)
         }),
     )
     .into_stream();
@@ -1141,7 +1148,7 @@ pub fn fix_connect(
     mode: FixPollMode,
 ) -> (
     Rc<dyn Stream<Burst<FixMessage>>>,
-    Rc<dyn Stream<FixSessionStatus>>,
+    Rc<dyn Stream<Burst<FixSessionStatus>>>,
 ) {
     match mode {
         FixPollMode::AlwaysSpin => {
@@ -1178,7 +1185,7 @@ pub fn fix_connect_tls(
     password: Option<&str>,
 ) -> (
     Rc<dyn Stream<Burst<FixMessage>>>,
-    Rc<dyn Stream<FixSessionStatus>>,
+    Rc<dyn Stream<Burst<FixSessionStatus>>>,
     FixInjector,
 ) {
     let src =
@@ -1201,7 +1208,7 @@ pub fn fix_accept(
     mode: FixPollMode,
 ) -> (
     Rc<dyn Stream<Burst<FixMessage>>>,
-    Rc<dyn Stream<FixSessionStatus>>,
+    Rc<dyn Stream<Burst<FixSessionStatus>>>,
 ) {
     match mode {
         FixPollMode::AlwaysSpin => {
@@ -1321,7 +1328,7 @@ mod tests {
         );
 
         let acc_node = acc_status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "acceptor: expected LoggedIn, got: {vs:?}"
@@ -1329,7 +1336,7 @@ mod tests {
             Ok(())
         });
         let init_node = init_status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "initiator: expected LoggedIn, got: {vs:?}"
@@ -1363,7 +1370,7 @@ mod tests {
         );
 
         let acc_node = acc_status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "acceptor: expected LoggedIn, got: {vs:?}"
@@ -1371,7 +1378,7 @@ mod tests {
             Ok(())
         });
         let init_node = init_status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "initiator: expected LoggedIn, got: {vs:?}"
@@ -1401,7 +1408,7 @@ mod tests {
 #[cfg(all(test, feature = "fix-integration-test"))]
 mod integration_tests {
     use super::*;
-    use crate::{Graph, NodeOperators, RunFor, RunMode, StreamOperators};
+    use crate::{Graph, RunFor, RunMode, StreamOperators};
     use std::time::Duration;
 
     const LMAX_MD_HOST: &str = "fix-marketdata.london-demo.lmax.com";
@@ -1453,7 +1460,7 @@ mod integration_tests {
         );
 
         let status_node = status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "Expected LoggedIn, got: {vs:?}"
@@ -1510,7 +1517,7 @@ mod integration_tests {
         });
 
         let status_node = status.collect().finally(|items, _| {
-            let vs: Vec<FixSessionStatus> = items.into_iter().map(|i| i.value).collect();
+            let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
             assert!(
                 vs.contains(&FixSessionStatus::LoggedIn),
                 "Expected LoggedIn, got: {vs:?}"
