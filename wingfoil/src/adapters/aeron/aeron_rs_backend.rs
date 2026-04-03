@@ -26,12 +26,12 @@ use std::time::Duration;
 // Connection handle
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::arc_with_non_send_sync)]
 pub struct AeronRsHandle {
     aeron: Arc<Mutex<Aeron>>,
 }
 
 impl AeronRsHandle {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn connect() -> anyhow::Result<Self> {
         let ctx = Context::new();
         let aeron = Aeron::new(ctx)?;
