@@ -12,7 +12,7 @@
 //!
 //! # Run this example
 //! OTLP_ENDPOINT=http://localhost:4318 \
-//!     cargo run --example otlp_metrics --features otlp,prometheus
+//!     cargo run --example otlp --features otlp,prometheus
 //! ```
 use std::time::Duration;
 use wingfoil::adapters::otlp::{OtlpConfig, OtlpPush};

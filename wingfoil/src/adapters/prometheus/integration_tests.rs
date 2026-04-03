@@ -11,7 +11,7 @@
 //! ```
 
 use super::*;
-use crate::{RunFor, RunMode, nodes::*};
+use crate::{Graph, NanoTime, RunFor, RunMode, nodes::*};
 use std::time::Duration;
 
 fn prometheus_url() -> String {
@@ -25,7 +25,62 @@ fn metrics_port() -> u16 {
         .unwrap_or(9091)
 }
 
-// ─── Prometheus exporter ────────────────────────────────────────────────────
+fn get_raw_metrics(port: u16) -> String {
+    let resp = reqwest::blocking::get(format!("http://localhost:{port}/metrics"))
+        .expect("metrics request failed");
+    resp.text().expect("metrics response not text")
+}
+
+// ─── Self-contained tests (no running Prometheus required) ──────────────────
+
+#[test]
+fn historical_mode_produces_no_scraped_metrics() {
+    _ = env_logger::try_init();
+    // Port offset to avoid clashing with other tests
+    let exporter = PrometheusExporter::new("127.0.0.1:0");
+    let port = exporter.serve().unwrap();
+
+    let counter = ticker(Duration::from_millis(10)).count();
+    let node = exporter.register("hist_integration_counter", counter);
+
+    node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
+        .unwrap();
+
+    let body = get_raw_metrics(port);
+    assert!(
+        body.is_empty(),
+        "expected empty body in historical mode, got:\n{body}"
+    );
+}
+
+#[test]
+fn multiple_metrics_all_appear_in_scrape() {
+    _ = env_logger::try_init();
+    let exporter = PrometheusExporter::new("127.0.0.1:0");
+    let port = exporter.serve().unwrap();
+
+    let counter = ticker(Duration::from_millis(10)).count();
+    let doubled = counter.clone().map(|n| n * 2);
+
+    let node_a = exporter.register("multi_counter_a", counter);
+    let node_b = exporter.register("multi_counter_b", doubled);
+
+    Graph::new(vec![node_a, node_b], RunMode::RealTime, RunFor::Cycles(3))
+        .run()
+        .unwrap();
+
+    let body = get_raw_metrics(port);
+    assert!(
+        body.contains("multi_counter_a"),
+        "missing multi_counter_a in:\n{body}"
+    );
+    assert!(
+        body.contains("multi_counter_b"),
+        "missing multi_counter_b in:\n{body}"
+    );
+}
+
+// ─── Prometheus scrape test (requires Docker stack) ─────────────────────────
 
 #[test]
 fn prometheus_exporter_scrapeable_by_prometheus() {

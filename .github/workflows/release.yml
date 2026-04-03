@@ -38,9 +38,109 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
+  etcd-integration:
+    name: etcd Integration Tests
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Run etcd integration tests
+        run: |
+          cargo test --features etcd-integration-test -p wingfoil \
+            -- --test-threads=1 etcd::integration_tests
+        env:
+          RUST_LOG: INFO
+
+  prometheus-integration:
+    name: Prometheus Integration Tests
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Start Grafana + Prometheus stack
+        run: docker compose up -d
+        working-directory: docker/grafana
+
+      - name: Wait for Prometheus to be healthy
+        run: |
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:9090/-/healthy > /dev/null; then
+              echo "Prometheus is up"
+              break
+            fi
+            echo "Waiting for Prometheus... ($i/12)"
+            sleep 5
+          done
+          curl -sf http://localhost:9090/-/healthy || (echo "Prometheus never became healthy" && exit 1)
+
+      - name: Run Prometheus integration tests
+        run: |
+          cargo test --features prometheus-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+          PROMETHEUS_TEST_URL: http://localhost:9090
+          WINGFOIL_METRICS_PORT: "9091"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+        working-directory: docker/grafana
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down
+        working-directory: docker/grafana
+
+  otlp-integration:
+    name: OTLP Integration Tests
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run OTLP integration tests
+        run: |
+          cargo test --features otlp-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests]
+    needs: [preflight, all-tests, etcd-integration, prometheus-integration, otlp-integration]
     runs-on: ubuntu-latest
     permissions:
       contents: write

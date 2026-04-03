@@ -74,7 +74,11 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
     let gauge = meter.f64_gauge(metric_name_static).build();
 
     while let Some((_time, value)) = source.next().await {
-        let v: f64 = value.to_string().parse().unwrap_or(0.0);
+        let s = value.to_string();
+        let v: f64 = s.parse().unwrap_or_else(|_| {
+            log::warn!("otlp_push: could not parse {s:?} as f64, recording 0.0");
+            0.0
+        });
         gauge.record(v, &[]);
     }
 

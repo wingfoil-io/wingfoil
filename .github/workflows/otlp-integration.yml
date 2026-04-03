@@ -1,0 +1,32 @@
+name: OTLP Integration Tests
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  otlp-integration:
+    name: OTLP Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run OTLP integration tests
+        run: |
+          cargo test --features otlp-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO

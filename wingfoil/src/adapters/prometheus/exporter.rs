@@ -192,11 +192,7 @@ mod tests {
         let counter = ticker(Duration::from_millis(10)).count();
         let node = exporter.register("test_counter", counter);
 
-        node.run(
-            RunMode::HistoricalFrom(crate::NanoTime::ZERO),
-            RunFor::Cycles(5),
-        )
-        .unwrap();
+        node.run(RunMode::RealTime, RunFor::Cycles(5)).unwrap();
 
         let body = get_metrics(port);
         assert!(
@@ -206,6 +202,28 @@ mod tests {
         assert!(
             body.contains("# TYPE test_counter gauge"),
             "expected TYPE line in:\n{body}"
+        );
+    }
+
+    #[test]
+    fn historical_mode_produces_no_metrics() {
+        let port = 19093u16;
+        let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
+        exporter.serve().unwrap();
+
+        let counter = ticker(Duration::from_millis(10)).count();
+        let node = exporter.register("hist_counter", counter);
+
+        node.run(
+            RunMode::HistoricalFrom(crate::NanoTime::ZERO),
+            RunFor::Cycles(5),
+        )
+        .unwrap();
+
+        let body = get_metrics(port);
+        assert!(
+            body.is_empty(),
+            "expected no metrics in historical mode, got:\n{body}"
         );
     }
 
