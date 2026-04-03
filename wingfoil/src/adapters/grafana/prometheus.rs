@@ -79,7 +79,12 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
 
     let mut request_line = String::new();
     if let Err(e) = reader.read_line(&mut request_line) {
-        log::warn!("PrometheusExporter: failed to read request: {e}");
+        if !matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            log::warn!("PrometheusExporter: failed to read request: {e}");
+        }
         return;
     }
     // Drain HTTP headers
