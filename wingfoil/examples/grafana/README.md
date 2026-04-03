@@ -10,17 +10,17 @@ Demonstrates both Grafana integration points:
 Start the Docker stack from the repo root:
 
 ```sh
-cd docker/grafana && docker compose up -d
+cd docker/grafana && docker compose up
 ```
 
 This starts:
 - **Grafana** on `http://localhost:3000` (admin / admin)
 - **Prometheus** on `http://localhost:9090`, pre-configured to scrape `host.docker.internal:9091`
 
-For Grafana Live push, create a service account token (see `docker/grafana/README.md`) and export it:
+For Grafana Live push, the API key is created automatically — read it from the tokens file:
 
 ```sh
-export GRAFANA_API_KEY=<your-token>
+export GRAFANA_API_KEY=$(cat docker/grafana/tokens/grafana_api_key)
 ```
 
 ## Run
