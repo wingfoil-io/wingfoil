@@ -1,4 +1,4 @@
-//! Integration tests for the Grafana adapter.
+//! Integration tests for the Prometheus adapter.
 //!
 //! Requires the Docker stack from `docker/grafana/`:
 //! ```sh
@@ -7,7 +7,7 @@
 //!
 //! Then run:
 //! ```sh
-//! RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
+//! RUST_LOG=INFO cargo test --features prometheus-integration-test -p wingfoil -- --test-threads=1 --nocapture
 //! ```
 
 use super::*;

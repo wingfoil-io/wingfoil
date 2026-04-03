@@ -1,10 +1,10 @@
-//! Grafana I/O adapter for real-time metrics visualization.
+//! Prometheus I/O adapter for real-time metrics visualization.
 //!
 //! Serves `GET /metrics` in Prometheus text format so Grafana can scrape it
 //! via its Prometheus data source:
 //!
 //! ```no_run
-//! use wingfoil::adapters::grafana::PrometheusExporter;
+//! use wingfoil::adapters::prometheus::PrometheusExporter;
 //! use wingfoil::*;
 //! use std::time::Duration;
 //!
@@ -19,9 +19,9 @@
 //!
 //! For push-based metrics export see the `otlp` adapter.
 
-pub mod prometheus;
+pub mod exporter;
 
-pub use prometheus::PrometheusExporter;
+pub use exporter::PrometheusExporter;
 
-#[cfg(all(test, feature = "grafana-integration-test"))]
+#[cfg(all(test, feature = "prometheus-integration-test"))]
 mod integration_tests;

@@ -1,4 +1,4 @@
-# Grafana Metrics Example
+# Prometheus Metrics Example
 
 Demonstrates both Grafana integration points:
 
@@ -8,7 +8,7 @@ Demonstrates both Grafana integration points:
 ## Run
 
 ```sh
-./wingfoil/examples/grafana/run.sh
+./wingfoil/examples/prometheus/run.sh
 ```
 
 This starts the Docker stack (Grafana + Prometheus), waits for the API key to be provisioned, then runs the example. Press `Ctrl+C` to stop the example; the Docker stack keeps running.

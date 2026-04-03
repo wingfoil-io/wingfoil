@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 
 use std::time::Duration;
-use wingfoil::adapters::grafana::PrometheusExporter;
+use wingfoil::adapters::prometheus::PrometheusExporter;
 use wingfoil::*;
 
 fn main() -> anyhow::Result<()> {

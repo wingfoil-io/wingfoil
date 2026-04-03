@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "grafana", "otlp"]
+full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -19,8 +19,8 @@ instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-no
 instrument-all = ["instrument-default", "instrument-cycle-node"]
 iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
 iceoryx2-beta = ["dep:iceoryx2"]
-grafana = ["async"]
-grafana-integration-test = ["grafana", "dep:reqwest"]
+prometheus = ["async"]
+prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:reqwest", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 
@@ -185,14 +185,14 @@ harness = false
 required-features = ["iceoryx2-beta"]
 
 [[example]]
-name = "grafana_metrics"
-path = "examples/grafana/main.rs"
-required-features = ["grafana"]
+name = "prometheus_metrics"
+path = "examples/prometheus/main.rs"
+required-features = ["prometheus"]
 
 [[example]]
 name = "otlp_metrics"
 path = "examples/otlp_metrics.rs"
-required-features = ["otlp", "grafana"]
+required-features = ["otlp", "prometheus"]
 
 [[example]]
 name = "zmq_pub"

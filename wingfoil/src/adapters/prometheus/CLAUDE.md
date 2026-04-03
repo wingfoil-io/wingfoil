@@ -1,12 +1,12 @@
-# Grafana Adapter
+# Prometheus Adapter
 
-Wingfoil adapter for Grafana integration, gated behind the `grafana` feature flag.
+Wingfoil adapter for Prometheus metrics export, gated behind the `prometheus` feature flag.
 
 ## Module Structure
 
 ```
-grafana/
-  mod.rs                # Public API re-exports, GrafanaConfig
+prometheus/
+  mod.rs                # Public API re-exports
   prometheus.rs         # PrometheusExporter — serves GET /metrics
   live.rs               # grafana_push sink — POSTs to Grafana Live
   integration_tests.rs  # Integration tests (requires Docker stack)
@@ -23,7 +23,7 @@ Before committing changes to this adapter, you MUST:
 
 2. **Run integration tests (API key is read automatically from tokens/grafana_api_key):**
    ```bash
-   RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
+   RUST_LOG=INFO cargo test --features prometheus-integration-test -p wingfoil -- --test-threads=1 --nocapture
    ```
    See `docker/grafana/README.md` for how to obtain the API key.
 
@@ -36,8 +36,8 @@ Before committing changes to this adapter, you MUST:
 
 ## Feature Flags
 
-- `grafana` — enables the adapter (adds `reqwest` dep)
-- `grafana-integration-test` — enables `grafana` + integration tests that require the Docker stack
+- `prometheus` — enables the adapter (adds `reqwest` dep)
+- `prometheus-integration-test` — enables `prometheus` + integration tests that require the Docker stack
 
 ## Environment Variables (integration tests)
 

@@ -70,7 +70,7 @@ jobs:
 
       - name: Run Grafana integration tests
         run: |
-          cargo test --features grafana-integration-test -p wingfoil \
+          cargo test --features prometheus-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
