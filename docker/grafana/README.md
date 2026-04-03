@@ -6,7 +6,7 @@ Docker Compose stack for running wingfoil Grafana adapter integration tests.
 
 | Service    | Port | Purpose |
 |------------|------|---------|
-| Grafana    | 3000 | Dashboard UI + Live push target (admin/admin) |
+| Grafana    | 3000 | Dashboard UI + Live push target (no login required) |
 | Prometheus | 9090 | Scrapes wingfoil's `/metrics` endpoint on port 9091 |
 
 ## Usage

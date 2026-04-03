@@ -18,7 +18,7 @@ export GRAFANA_API_KEY=$(cat tokens/grafana_api_key)  # key is auto-created
 ```
 
 This starts:
-- **Grafana** on <http://localhost:3000> (admin / admin)
+- **Grafana** on <http://localhost:3000> (no login required)
 - **Prometheus** on <http://localhost:9090>, pre-configured to scrape `host.docker.internal:9091`
 
 ## Run
