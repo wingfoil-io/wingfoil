@@ -30,9 +30,13 @@ trap 'echo ""; echo "==> Stopping Docker stack..."; $COMPOSE down' EXIT
 
 EXPLORE_URL='http://localhost:3000/explore?orgId=1&refresh=5s&left=%7B%22datasource%22%3A%22Prometheus%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22wingfoil_ticks_total%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1m%22%2C%22to%22%3A%22now%22%7D%7D'
 
+link() { printf '\e]8;;%s\e\\%s\e]8;;\e\\\n' "$1" "$2"; }
+
 echo "==> Stack ready."
-echo "    Grafana (metric, 5s auto-refresh): $EXPLORE_URL"
-echo "    Prometheus: http://localhost:9090"
+printf "    Grafana (metric, 5s auto-refresh): "
+link "$EXPLORE_URL" "$EXPLORE_URL"
+printf "    Prometheus: "
+link "http://localhost:9090" "http://localhost:9090"
 echo ""
 echo "==> Running example (Ctrl+C to stop)..."
 RUST_LOG=info GRAFANA_API_KEY=$(cat "$TOKEN_FILE") \
