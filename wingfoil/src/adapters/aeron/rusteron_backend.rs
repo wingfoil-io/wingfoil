@@ -92,7 +92,7 @@ impl AeronSubscriberBackend for RusteronSubscriber {
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
         let mut count = 0usize;
         // rusteron fragment handler closure: receives (buffer, header)
-        self.sub.poll(
+        self.sub.poll_once(
             |buffer, _header| {
                 handler(buffer);
                 count += 1;
@@ -113,7 +113,9 @@ pub struct RusteronPublisher {
 
 impl AeronPublisherBackend for RusteronPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
-        let position = self.pub_.offer(buffer)?;
+        let position = self
+            .pub_
+            .offer(buffer, Handlers::no_reserved_value_supplier_handler());
         if position < 0 {
             anyhow::bail!("Aeron offer back-pressure: position={position}");
         }

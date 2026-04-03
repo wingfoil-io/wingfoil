@@ -12,9 +12,13 @@
 
 use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
 use aeron_rs::aeron::Aeron;
+use aeron_rs::concurrent::atomic_buffer::{AlignedBuffer, AtomicBuffer};
+use aeron_rs::concurrent::logbuffer::header::Header;
 use aeron_rs::context::Context;
 use aeron_rs::publication::Publication;
 use aeron_rs::subscription::Subscription;
+use aeron_rs::utils::types::Index;
+use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,11 +46,12 @@ impl AeronRsHandle {
         timeout: Duration,
     ) -> anyhow::Result<AeronRsSubscriber> {
         let mut aeron = self.aeron.lock().unwrap();
-        let id = aeron.add_subscription(channel.to_string(), stream_id)?;
+        let id = aeron.add_subscription(CString::new(channel)?, stream_id)?;
         let deadline = std::time::Instant::now() + timeout;
         let sub = loop {
-            if let Some(sub) = aeron.find_subscription(id)? {
-                break sub;
+            match aeron.find_subscription(id) {
+                Ok(sub) => break sub,
+                Err(_) => {}
             }
             if std::time::Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for subscription on {channel}:{stream_id}");
@@ -63,11 +68,12 @@ impl AeronRsHandle {
         timeout: Duration,
     ) -> anyhow::Result<AeronRsPublisher> {
         let mut aeron = self.aeron.lock().unwrap();
-        let id = aeron.add_publication(channel.to_string(), stream_id)?;
+        let id = aeron.add_publication(CString::new(channel)?, stream_id)?;
         let deadline = std::time::Instant::now() + timeout;
         let pub_ = loop {
-            if let Some(p) = aeron.find_publication(id)? {
-                break p;
+            match aeron.find_publication(id) {
+                Ok(p) => break p,
+                Err(_) => {}
             }
             if std::time::Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for publication on {channel}:{stream_id}");
@@ -91,12 +97,12 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
         let mut count = 0usize;
         let mut sub = self.sub.lock().unwrap();
         sub.poll(
-            &mut |buffer, _header| {
-                handler(buffer.as_slice());
+            &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {
+                handler(buffer.as_sub_slice(offset, length));
                 count += 1;
             },
             256,
-        )?;
+        );
         Ok(count)
     }
 }
@@ -112,10 +118,11 @@ pub struct AeronRsPublisher {
 impl AeronPublisherBackend for AeronRsPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
         let mut pub_ = self.pub_.lock().unwrap();
-        let position = pub_.offer_part(buffer, 0, buffer.len())?;
-        if position < 0 {
-            anyhow::bail!("Aeron offer back-pressure: position={position}");
-        }
+        let len = buffer.len() as Index;
+        let aligned = AlignedBuffer::with_capacity(len);
+        let ab = AtomicBuffer::from_aligned(&aligned);
+        ab.put_bytes(0, buffer);
+        pub_.offer_part(ab, 0, len)?;
         Ok(())
     }
 }
