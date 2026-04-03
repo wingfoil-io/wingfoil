@@ -380,6 +380,13 @@ pub(crate) fn compute_time_slices(
             // t0 and t1 are always round multiples of period (or midnight),
             // so queries contain only clean numbers with no ±1 adjustments.
             let t0 = midnight_kdb + iteration as i64 * period_nanos;
+
+            // On the last day, stop once the slice start has reached or passed
+            // end_time — any further slice would be entirely outside the range.
+            if day == end_day && t0 >= end_kdb {
+                break;
+            }
+
             let natural_t1 = t0 + period_nanos;
             // For the final slice of the day, t1 clamps to next midnight (also a round
             // number: 86400000000000j per day). For non-final slices t1 = t0 + period.
@@ -685,6 +692,115 @@ mod tests {
         for &(_, date, _) in &slices {
             assert_eq!(date, 0, "all slices should be on day 0");
         }
+    }
+
+    /// Repro: end_time just past midnight generates a full extra day of slices.
+    ///
+    /// When end_time falls 30 minutes into day 1 (with a 1-hour period), the loop
+    /// inside `compute_time_slices` does not cut off at end_time on the last day —
+    /// it runs to the end of the day (next midnight). This produces 24 extra slices
+    /// instead of 1.
+    ///
+    /// start = day 0 midnight, end = day 1 00:30, period = 1h
+    /// Expected:  24 slices for day 0  +  1 slice [00:00, 01:00) for day 1  = 25 total
+    /// Actual (bug): 24 + 24 = 48 total
+    #[test]
+    fn test_compute_time_slices_end_past_midnight_repro() {
+        const HOUR_NANOS: u64 = 3_600_000_000_000;
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(3600);
+        let start = epoch;
+        // 30 minutes into day 1
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS + 30 * 60 * 1_000_000_000);
+
+        let slices = compute_time_slices(start, end, period);
+
+        // 24 full-hour slices on day 0 + 1 slice [00:00,01:00) on day 1
+        assert_eq!(
+            slices.len(),
+            25,
+            "expected 25 slices, got {} (bug: full day 1 generated)",
+            slices.len()
+        );
+
+        let last = slices.last().unwrap();
+        assert_eq!(last.1, 1, "last slice should be on kdb_date 1");
+        assert_eq!(last.2, 0, "last slice should be iteration 0 of day 1");
+        assert_eq!(
+            last.0.0,
+            NanoTime::new(u64::from(epoch) + DAY_NANOS),
+            "last slice t0 should be day-1 midnight"
+        );
+        assert_eq!(
+            last.0.1,
+            NanoTime::new(u64::from(epoch) + DAY_NANOS + HOUR_NANOS),
+            "last slice t1 should be day-1 01:00"
+        );
+    }
+
+    /// Repro: crossing midnight with start mid-day also over-generates.
+    ///
+    /// start = day 0 23:00, end = day 1 00:30, period = 1h
+    /// Expected:  1 slice [23:00, 00:00) day 0  +  1 slice [00:00, 01:00) day 1  = 2 total
+    /// Actual (bug): 1 + 24 = 25 total
+    #[test]
+    fn test_compute_time_slices_cross_midnight_over_generates() {
+        const HOUR_NANOS: u64 = 3_600_000_000_000;
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(3600);
+        let start = NanoTime::new(u64::from(epoch) + 23 * HOUR_NANOS);
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS + 30 * 60 * 1_000_000_000);
+
+        let slices = compute_time_slices(start, end, period);
+
+        assert_eq!(
+            slices.len(),
+            2,
+            "expected 2 slices, got {} (bug: full day 1 generated)",
+            slices.len()
+        );
+
+        // Slice 0: [23:00, midnight) on day 0
+        assert_eq!(slices[0].1, 0);
+        assert_eq!(slices[0].2, 23);
+        assert_eq!(slices[0].0.0, start);
+        assert_eq!(slices[0].0.1, NanoTime::new(u64::from(epoch) + DAY_NANOS));
+
+        // Slice 1: [midnight, 01:00) on day 1
+        assert_eq!(slices[1].1, 1);
+        assert_eq!(slices[1].2, 0);
+        assert_eq!(slices[1].0.0, NanoTime::new(u64::from(epoch) + DAY_NANOS));
+        assert_eq!(
+            slices[1].0.1,
+            NanoTime::new(u64::from(epoch) + DAY_NANOS + HOUR_NANOS)
+        );
+    }
+
+    /// Repro: end_time exactly on a period boundary, one period into day 1.
+    ///
+    /// start = day 0 midnight, end = day 1 02:00, period = 2h
+    /// Expected: 12 slices on day 0 + 1 slice [00:00, 02:00) on day 1 = 13 total
+    /// Actual (bug): 12 + 12 = 24 total
+    #[test]
+    fn test_compute_time_slices_end_on_period_boundary_day1() {
+        const HOUR_NANOS: u64 = 3_600_000_000_000;
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(2 * 3600); // 2-hour periods
+        let start = epoch;
+        // end exactly at 02:00 on day 1 (on a period boundary)
+        let end = NanoTime::new(u64::from(epoch) + DAY_NANOS + 2 * HOUR_NANOS);
+
+        let slices = compute_time_slices(start, end, period);
+
+        // 12 slices on day 0 + 1 slice [00:00, 02:00) on day 1
+        assert_eq!(
+            slices.len(),
+            13,
+            "expected 13 slices, got {} (bug: full day 1 generated)",
+            slices.len()
+        );
+        assert_eq!(slices.last().unwrap().1, 1);
+        assert_eq!(slices.last().unwrap().2, 0);
     }
 
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
