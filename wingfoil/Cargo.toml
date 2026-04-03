@@ -186,12 +186,12 @@ required-features = ["iceoryx2-beta"]
 
 [[example]]
 name = "prometheus"
-path = "examples/prometheus/main.rs"
+path = "examples/telemetry/prometheus/main.rs"
 required-features = ["prometheus"]
 
 [[example]]
 name = "otlp"
-path = "examples/otlp/main.rs"
+path = "examples/telemetry/otlp/main.rs"
 required-features = ["otlp", "prometheus"]
 
 [[example]]
