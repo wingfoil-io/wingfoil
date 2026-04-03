@@ -24,6 +24,7 @@ services:
     image: curlimages/curl:latest
     container_name: wingfoil-grafana-init
     restart: "no"
+    user: root
     depends_on:
       grafana:
         condition: service_healthy
