@@ -352,13 +352,7 @@ impl GraphState {
             log!(target: &type_name, level, "[{id},{ix}]{msg}");
         }
         #[cfg(feature = "tracing")]
-        match level {
-            log::Level::Error => tracing::error!(node = %type_name, "[{id},{ix}]{msg}"),
-            log::Level::Warn => tracing::warn!(node = %type_name,  "[{id},{ix}]{msg}"),
-            log::Level::Info => tracing::info!(node = %type_name,  "[{id},{ix}]{msg}"),
-            log::Level::Debug => tracing::debug!(node = %type_name, "[{id},{ix}]{msg}"),
-            log::Level::Trace => tracing::trace!(node = %type_name, "[{id},{ix}]{msg}"),
-        }
+        tracing_log!(level, node = %type_name, "[{id},{ix}]{msg}");
     }
 
     pub(crate) fn mark_dirty(&mut self, index: usize) {
@@ -713,7 +707,6 @@ impl Graph {
         Ok(())
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         if !self.state.nodes[index].active {
             return Ok(());
