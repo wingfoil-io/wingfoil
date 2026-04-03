@@ -409,7 +409,10 @@ impl Graph {
         self.apply_nodes("teardown", |node, state| node.teardown(state))
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, func)))]
+    #[cfg_attr(
+        feature = "instrument-apply-nodes",
+        tracing::instrument(skip(self, func))
+    )]
     fn apply_nodes(
         &mut self,
         desc: &str,
@@ -472,7 +475,7 @@ impl Graph {
         }
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    #[cfg_attr(feature = "instrument-run-nodes", tracing::instrument(skip_all))]
     pub(crate) fn run_nodes(&mut self) -> anyhow::Result<()> {
         //println!("*** {:}graph {:} run_nodes", "   ".repeat(self.state.id), self.state.id);
         let run_timer = Instant::now();
@@ -547,7 +550,7 @@ impl Graph {
         Ok(())
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.setup_nodes()?;
         self.start_nodes()?;
@@ -557,7 +560,7 @@ impl Graph {
         Ok(())
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    #[cfg_attr(feature = "instrument-initialise", tracing::instrument(skip_all))]
     fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> &mut Graph {
         let timer = Instant::now();
         for node in root_nodes {
@@ -707,6 +710,7 @@ impl Graph {
         Ok(())
     }
 
+    #[cfg_attr(feature = "instrument-cycle-node", tracing::instrument(skip(self)))]
     fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         if !self.state.nodes[index].active {
             return Ok(());
