@@ -710,11 +710,16 @@ impl Graph {
         Ok(())
     }
 
-    #[cfg_attr(feature = "instrument-cycle-node", tracing::instrument(skip(self)))]
+    #[cfg_attr(
+        feature = "instrument-cycle-node",
+        tracing::instrument(skip(self), fields(node = tracing::field::Empty))
+    )]
     fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         if !self.state.nodes[index].active {
             return Ok(());
         }
+        #[cfg(feature = "instrument-cycle-node")]
+        tracing::Span::current().record("node", self.state.nodes[index].node.type_name());
         let node = &self.state.nodes[index].node;
         self.state.current_node_index = Some(index);
         let result = node.clone().cycle(&mut self.state);
