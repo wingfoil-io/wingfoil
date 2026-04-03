@@ -3,7 +3,7 @@
 //! Three run modes are shown:
 //! - `log`         — default behaviour, output via `env_logger`
 //! - `tracing`     — events routed through `tracing-subscriber` (pretty format)
-//! - `instruments` — as above, plus lifecycle spans around `run` and `run_nodes`
+//! - `instruments` — as above, plus span open/close around `run` and each engine cycle
 //!
 //! # Run
 //!
@@ -11,11 +11,11 @@
 //! # Default log output
 //! RUST_LOG=info cargo run --example tracing -- log
 //!
-//! # Events via tracing (same output, different subscriber)
+//! # Events via tracing subscriber
 //! RUST_LOG=info cargo run --example tracing --features tracing -- tracing
 //!
-//! # Events + lifecycle spans
-//! RUST_LOG=info cargo run --example tracing --features instrument-run,instrument-run-nodes -- instruments
+//! # Events + lifecycle and cycle spans
+//! RUST_LOG=info cargo run --example tracing --features instrument-default -- instruments
 //! ```
 
 use log::Level::Info;
@@ -37,25 +37,31 @@ fn main() {
         "log" => {
             env_logger::init();
         }
-        "tracing" | "instruments" => {
-            #[cfg(feature = "tracing")]
+        #[cfg(feature = "tracing")]
+        "tracing" => {
+            use tracing_subscriber::fmt::format::FmtSpan;
             tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(tracing_subscriber::filter::LevelFilter::INFO.into()),
-                )
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .init();
-            #[cfg(not(feature = "tracing"))]
-            {
-                eprintln!(
-                    "Build with --features tracing (or instrument-run,instrument-run-nodes) \
-                     to use the tracing subscriber."
-                );
-                std::process::exit(1);
-            }
+            let _ = FmtSpan::NONE; // span events not shown in this mode
+        }
+        #[cfg(feature = "tracing")]
+        "instruments" => {
+            use tracing_subscriber::fmt::format::FmtSpan;
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+                .init();
         }
         other => {
-            eprintln!("unknown mode: {other:?}. Use 'log', 'tracing', or 'instruments'.");
+            eprintln!(
+                "unknown mode: {other:?}. Use 'log'{}.",
+                if cfg!(feature = "tracing") {
+                    ", 'tracing', or 'instruments'"
+                } else {
+                    " (build with --features tracing for 'tracing' and 'instruments' modes)"
+                }
+            );
             std::process::exit(1);
         }
     }

@@ -142,12 +142,13 @@
 //! |---|---|
 //! | *(none)* | [`logged()`](StreamExt::logged) and [`GraphState::log()`] emit via the `log` crate — wire up any `log`-compatible backend (e.g. `env_logger`). |
 //! | `tracing` | Events are emitted via `tracing` instead. A `tracing` subscriber is required; the `log` bridge ensures events still reach `env_logger` if none is installed. |
-//! | `instrument-run` | Adds a tracing span around [`Graph::run()`]. |
-//! | `instrument-run-nodes` | Adds a tracing span around the main execution loop. |
+//! | `instrument-run` | Adds a tracing span around [`Graph::run()`] (the full setup→run→teardown lifecycle). |
+//! | `instrument-cycle` | Adds a tracing span around each engine cycle (one span per dirty-node batch). |
 //! | `instrument-apply-nodes` | Adds a tracing span around each lifecycle phase (setup / start / stop / teardown), recording the phase name. |
 //! | `instrument-initialise` | Adds a tracing span around graph initialisation. |
-//! | `instrument-cycle-node` | Adds a tracing span per node cycle, recording the node index and type name. |
-//! | `instrument-all` | Enables all `instrument-*` flags above. |
+//! | `instrument-cycle-node` | Adds a tracing span per node execution, recording the node index and type name. High frequency — opt in deliberately. |
+//! | `instrument-default` | Enables `instrument-run`, `instrument-cycle`, `instrument-apply-nodes`, and `instrument-initialise`. |
+//! | `instrument-all` | Enables `instrument-default` plus `instrument-cycle-node`. |
 //!
 //! All `instrument-*` features imply `tracing`.
 //!
@@ -175,14 +176,14 @@
 extern crate log;
 extern crate derive_new;
 
-/// Dispatch a `log::Level` runtime value to the matching `tracing` event macro.
-///
-/// Two forms:
-/// - `tracing_log!(level, <tracing args>)` — generic passthrough
-/// - `tracing_log!(level; time, label, value)` — wingfoil stream event; accepts a
-///   `NanoTime` and only calls `.pretty()` inside the enabled arm.
-///
-/// Only available with the `tracing` feature.
+// Dispatch a `log::Level` runtime value to the matching `tracing` event macro.
+//
+// Two forms:
+// - `tracing_log!(level, <tracing args>)` — generic passthrough
+// - `tracing_log!(level; time, label, value)` — wingfoil stream event; accepts a
+//   `NanoTime` and only calls `.pretty()` inside the enabled arm.
+//
+// Only available with the `tracing` feature.
 #[cfg(feature = "tracing")]
 macro_rules! tracing_log {
     ($level:expr; $time:expr, $label:expr, $value:expr) => {
@@ -205,8 +206,8 @@ macro_rules! tracing_log {
     };
 }
 
-/// Check whether a `log::Level` is enabled in the current `tracing` subscriber.
-/// Only available with the `tracing` feature.
+// Check whether a `log::Level` is enabled in the current `tracing` subscriber.
+// Only available with the `tracing` feature.
 #[cfg(feature = "tracing")]
 macro_rules! tracing_log_enabled {
     ($level:expr) => {

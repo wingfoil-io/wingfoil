@@ -352,7 +352,9 @@ impl GraphState {
             log!(target: &type_name, level, "[{id},{ix}]{msg}");
         }
         #[cfg(feature = "tracing")]
-        tracing_log!(level, node = %type_name, "[{id},{ix}]{msg}");
+        if tracing_log_enabled!(level) {
+            tracing_log!(level, node = %type_name, "[{id},{ix}]{msg}");
+        }
     }
 
     pub(crate) fn mark_dirty(&mut self, index: usize) {
@@ -475,7 +477,6 @@ impl Graph {
         }
     }
 
-    #[cfg_attr(feature = "instrument-run-nodes", tracing::instrument(skip_all))]
     pub(crate) fn run_nodes(&mut self) -> anyhow::Result<()> {
         //println!("*** {:}graph {:} run_nodes", "   ".repeat(self.state.id), self.state.id);
         let run_timer = Instant::now();
@@ -695,6 +696,7 @@ impl Graph {
         progressed
     }
 
+    #[cfg_attr(feature = "instrument-cycle", tracing::instrument(skip_all))]
     fn cycle(&mut self) -> anyhow::Result<()> {
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
