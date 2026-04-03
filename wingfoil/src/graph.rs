@@ -1144,6 +1144,12 @@ Caused by:
         resched_time: NanoTime,
     }
 
+    impl WiringPoint for TimeCapturingNode {
+        fn upstreams(&self) -> UpStreams {
+            UpStreams::default()
+        }
+    }
+
     impl MutableNode for TimeCapturingNode {
         fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
             let t = state.time();
@@ -1152,10 +1158,6 @@ Caused by:
                 state.add_callback(self.resched_time);
             }
             Ok(true)
-        }
-
-        fn upstreams(&self) -> UpStreams {
-            UpStreams::default()
         }
 
         fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -1245,11 +1247,13 @@ Caused by:
             teardown_count: Rc<RefCell<u64>>,
         }
 
-        impl MutableNode for DynAdderNode {
+        impl WiringPoint for DynAdderNode {
             fn upstreams(&self) -> UpStreams {
                 UpStreams::new(vec![self.trigger.clone()], vec![])
             }
+        }
 
+        impl MutableNode for DynAdderNode {
             fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                 self.cycle_count += 1;
                 if self.cycle_count == self.add_after {
@@ -1280,11 +1284,13 @@ Caused by:
             n: u64,
         }
 
-        impl MutableNode for SimpleCounter {
+        impl WiringPoint for SimpleCounter {
             fn upstreams(&self) -> UpStreams {
                 UpStreams::new(vec![self.trigger.clone()], vec![])
             }
+        }
 
+        impl MutableNode for SimpleCounter {
             fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
                 self.n += 1;
                 Ok(true)
@@ -1305,11 +1311,13 @@ Caused by:
             teardown_count: Rc<RefCell<u64>>,
         }
 
-        impl MutableNode for LifecycleCounterNode {
+        impl WiringPoint for LifecycleCounterNode {
             fn upstreams(&self) -> UpStreams {
                 UpStreams::new(vec![self.trigger.clone()], vec![])
             }
+        }
 
+        impl MutableNode for LifecycleCounterNode {
             fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
                 *self.cycle_count.borrow_mut() += 1;
                 Ok(true)
@@ -1374,11 +1382,13 @@ Caused by:
             cycle_count: u64,
         }
 
-        impl MutableNode for DynRemoverNode {
+        impl WiringPoint for DynRemoverNode {
             fn upstreams(&self) -> UpStreams {
                 UpStreams::new(vec![self.trigger.clone()], vec![])
             }
+        }
 
+        impl MutableNode for DynRemoverNode {
             fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                 self.cycle_count += 1;
                 if self.cycle_count == self.remove_after {
@@ -1501,11 +1511,13 @@ Caused by:
                 values: Rc<RefCell<Vec<u64>>>,
             }
 
-            impl MutableNode for RecycleNode {
+            impl WiringPoint for RecycleNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.trigger.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for RecycleNode {
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
                         state.add_upstream(self.extra.clone().as_node(), true, true);
@@ -1564,11 +1576,13 @@ Caused by:
                 extra_observed: Rc<RefCell<Vec<u64>>>,
             }
 
-            impl MutableNode for PassiveNode {
+            impl WiringPoint for PassiveNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.trigger.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for PassiveNode {
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
                         // passive upstream: is_active = false
@@ -1627,11 +1641,13 @@ Caused by:
                 start_count: Rc<RefCell<u32>>,
             }
 
-            impl MutableNode for CountedNode {
+            impl WiringPoint for CountedNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.ticker.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for CountedNode {
                 fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
                     Ok(true)
                 }
@@ -1654,11 +1670,13 @@ Caused by:
                 add_count: u64,
             }
 
-            impl MutableNode for DoublerNode {
+            impl WiringPoint for DoublerNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.trigger.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for DoublerNode {
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if self.add_count < 2 {
                         state.add_upstream(self.counted.clone(), true, false);
@@ -1716,11 +1734,13 @@ Caused by:
                 sum: u64,
             }
 
-            impl MutableNode for LayerCheckNode {
+            impl WiringPoint for LayerCheckNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.trigger.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for LayerCheckNode {
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
                         state.add_upstream(self.deep.clone().as_node(), true, false);
@@ -1775,11 +1795,13 @@ Caused by:
                 extra_ticks: Rc<RefCell<u64>>,
             }
 
-            impl MutableNode for AdderRemoverNode {
+            impl WiringPoint for AdderRemoverNode {
                 fn upstreams(&self) -> UpStreams {
                     UpStreams::new(vec![self.trigger.clone()], vec![])
                 }
+            }
 
+            impl MutableNode for AdderRemoverNode {
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.done {
                         state.add_upstream(self.extra.clone(), true, false);

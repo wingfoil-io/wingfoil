@@ -50,7 +50,7 @@ impl PriceAggregator {
     }
 }
 
-impl MutableNode for PriceAggregator {
+impl WiringPoint for PriceAggregator {
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(
             vec![
@@ -60,7 +60,9 @@ impl MutableNode for PriceAggregator {
             vec![],
         )
     }
+}
 
+impl MutableNode for PriceAggregator {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if state.ticked(self.new_instrument.clone().as_node()) {
             let instrument = self.new_instrument.peek_value();

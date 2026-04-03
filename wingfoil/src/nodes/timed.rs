@@ -71,7 +71,9 @@ impl<T: Element> MutableNode for TimedStream<T> {
         }
         Ok(())
     }
+}
 
+impl<T: Element> WiringPoint for TimedStream<T> {
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }

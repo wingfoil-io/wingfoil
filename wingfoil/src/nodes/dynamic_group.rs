@@ -6,7 +6,9 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::graph::GraphState;
-use crate::types::{Element, IntoStream, MutableNode, Stream, StreamPeekRef, UpStreams};
+use crate::types::{
+    Element, IntoStream, MutableNode, Stream, StreamPeekRef, UpStreams, WiringPoint,
+};
 
 /// Backing-store abstraction for [`DynamicGroup`].
 ///
@@ -146,7 +148,7 @@ struct DynamicGroupStream<K: Element, T: Element, V: Element, S: StreamStore<K, 
     value: V,
 }
 
-impl<K, T, V, S> MutableNode for DynamicGroupStream<K, T, V, S>
+impl<K, T, V, S> WiringPoint for DynamicGroupStream<K, T, V, S>
 where
     K: Element,
     T: Element,
@@ -159,7 +161,15 @@ where
             vec![],
         )
     }
+}
 
+impl<K, T, V, S> MutableNode for DynamicGroupStream<K, T, V, S>
+where
+    K: Element,
+    T: Element,
+    V: Element,
+    S: StreamStore<K, T>,
+{
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if state.ticked(self.add.clone().as_node()) {
             let key = self.add.peek_value();
