@@ -1,9 +1,5 @@
 //! Grafana I/O adapter for real-time metrics visualization.
 //!
-//! Two integration points:
-//!
-//! ## 1. Prometheus exporter
-//!
 //! Serves `GET /metrics` in Prometheus text format so Grafana can scrape it
 //! via its Prometheus data source:
 //!
@@ -21,32 +17,10 @@
 //! node.run(RunMode::RealTime, RunFor::Forever).unwrap();
 //! ```
 //!
-//! ## 2. Grafana Live push
-//!
-//! Pushes stream values directly to a Grafana Live channel:
-//!
-//! ```no_run
-//! use wingfoil::adapters::grafana::{GrafanaConfig, GrafanaPush};
-//! use wingfoil::*;
-//! use std::time::Duration;
-//!
-//! let config = GrafanaConfig {
-//!     url: "http://localhost:3000".into(),
-//!     api_key: std::env::var("GRAFANA_API_KEY").unwrap(),
-//!     org_id: 1,
-//! };
-//!
-//! ticker(Duration::from_millis(100))
-//!     .count()
-//!     .grafana_push("stream/wingfoil/counter", config)
-//!     .run(RunMode::RealTime, RunFor::Forever)
-//!     .unwrap();
-//! ```
+//! For push-based metrics export see the `otlp` adapter.
 
-pub mod live;
 pub mod prometheus;
 
-pub use live::{GrafanaConfig, GrafanaPush};
 pub use prometheus::PrometheusExporter;
 
 #[cfg(all(test, feature = "grafana-integration-test"))]

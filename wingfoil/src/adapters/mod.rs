@@ -14,6 +14,8 @@ pub mod grafana;
 pub mod iterator_stream;
 #[cfg(feature = "kdb")]
 pub mod kdb;
+#[cfg(feature = "otlp")]
+pub mod otlp;
 #[cfg(feature = "zmq-beta")]
 #[doc(hidden)]
 pub mod zmq;

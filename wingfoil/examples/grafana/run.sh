@@ -8,23 +8,9 @@ fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 COMPOSE="docker compose -f $ROOT/docker/grafana/docker-compose.yml"
-TOKEN_FILE="$ROOT/docker/grafana/tokens/grafana_api_key"
 
 echo "==> Starting Docker stack..."
 $COMPOSE up -d
-
-echo "==> Waiting for grafana-init to write API key..."
-for i in $(seq 1 30); do
-    if [ -s "$TOKEN_FILE" ]; then
-        break
-    fi
-    sleep 1
-done
-
-if [ ! -s "$TOKEN_FILE" ]; then
-    echo "ERROR: $TOKEN_FILE not found — check: $COMPOSE logs grafana-init"
-    exit 1
-fi
 
 trap 'echo ""; echo "==> Stopping Docker stack..."; $COMPOSE down' EXIT
 
@@ -38,6 +24,8 @@ link "$EXPLORE_URL" "$EXPLORE_URL"
 printf "    Prometheus: "
 link "http://localhost:9090" "http://localhost:9090"
 echo ""
+echo "    For OTLP push support, run: cargo run --example otlp_metrics --features otlp,grafana"
+echo ""
 echo "==> Running example (Ctrl+C to stop)..."
-RUST_LOG=info GRAFANA_API_KEY=$(cat "$TOKEN_FILE") \
+RUST_LOG=info \
     cargo run --manifest-path "$ROOT/Cargo.toml" --example grafana_metrics --features grafana
