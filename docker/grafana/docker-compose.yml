@@ -40,17 +40,17 @@ services:
           -d '{"name":"wingfoil-test","role":"Editor"}' > /dev/null || true
 
         # Find the service account ID
-        SA_ID=$(curl -s "http://admin:admin@grafana:3000/api/serviceaccounts/search?query=wingfoil-test&limit=1" \
+        SA_ID=$$(curl -s "http://admin:admin@grafana:3000/api/serviceaccounts/search?query=wingfoil-test&limit=1" \
           | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
-        echo "Service account ID: $SA_ID"
+        echo "Service account ID: $$SA_ID"
 
         # Create a token (timestamp suffix avoids name collisions on re-runs)
-        TOKEN_KEY=$(curl -s -X POST "http://admin:admin@grafana:3000/api/serviceaccounts/$SA_ID/tokens" \
+        TOKEN_KEY=$$(curl -s -X POST "http://admin:admin@grafana:3000/api/serviceaccounts/$$SA_ID/tokens" \
           -H 'Content-Type: application/json' \
-          -d "{\"name\":\"wingfoil-token-$(date +%s)\"}" \
+          -d "{\"name\":\"wingfoil-token-$$(date +%s)\"}" \
           | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
 
-        echo "$TOKEN_KEY" > /tokens/grafana_api_key
+        echo "$$TOKEN_KEY" > /tokens/grafana_api_key
         echo "API key written to tokens/grafana_api_key"
 
   prometheus:
