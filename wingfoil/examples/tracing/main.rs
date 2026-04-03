@@ -39,11 +39,9 @@ fn main() {
         }
         #[cfg(feature = "tracing")]
         "tracing" => {
-            use tracing_subscriber::fmt::format::FmtSpan;
             tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .init();
-            let _ = FmtSpan::NONE; // span events not shown in this mode
         }
         #[cfg(feature = "tracing")]
         "instruments" => {

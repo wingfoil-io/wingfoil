@@ -346,13 +346,14 @@ impl GraphState {
             return;
         };
         let id = self.id;
-        let type_name = self.nodes[ix].node.type_name();
         #[cfg(not(feature = "tracing"))]
         if log_enabled!(level) {
+            let type_name = self.nodes[ix].node.type_name();
             log!(target: &type_name, level, "[{id},{ix}]{msg}");
         }
         #[cfg(feature = "tracing")]
         if tracing_log_enabled!(level) {
+            let type_name = self.nodes[ix].node.type_name();
             tracing_log!(level, node = %type_name, "[{id},{ix}]{msg}");
         }
     }
