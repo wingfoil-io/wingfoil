@@ -18,8 +18,8 @@ export GRAFANA_API_KEY=$(cat tokens/grafana_api_key)  # key is auto-created
 ```
 
 This starts:
-- **Grafana** on `http://localhost:3000` (admin / admin)
-- **Prometheus** on `http://localhost:9090`, pre-configured to scrape `host.docker.internal:9091`
+- **Grafana** on <http://localhost:3000> (admin / admin)
+- **Prometheus** on <http://localhost:9090>, pre-configured to scrape `host.docker.internal:9091`
 
 ## Run
 
@@ -43,7 +43,7 @@ ticker(1s) → count() ──┬── PrometheusExporter  →  GET /metrics  �
 ```
 
 The counter increments by 1 each second. After a few seconds you should see `wingfoil_ticks_total`
-appear in the Prometheus UI at `http://localhost:9090` and in any Grafana panel pointed at the
+appear in the Prometheus UI at <http://localhost:9090> and in any Grafana panel pointed at the
 `wingfoil_ticks_total` metric or the `stream/wingfoil/ticks` Live channel.
 
 ## Output
