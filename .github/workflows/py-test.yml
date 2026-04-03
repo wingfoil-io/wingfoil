@@ -27,6 +27,9 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

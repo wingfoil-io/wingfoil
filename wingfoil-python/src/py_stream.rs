@@ -345,6 +345,28 @@ impl PyStream {
         Ok(PyNode::new(node))
     }
 
+    /// Publish this stream of dicts to etcd via PUT.
+    ///
+    /// Stream values must be dicts with `"key"` (str) and `"value"` (bytes),
+    /// or lists of such dicts for multiple writes per tick.
+    ///
+    /// Args:
+    ///     endpoint: etcd endpoint, e.g. `"http://localhost:2379"`
+    ///     lease_ttl: optional lease TTL in seconds; keys expire after this duration
+    ///                and vanish immediately on clean shutdown. Pass `None` for
+    ///                persistent keys (default).
+    ///     force: if `True` (default), silently overwrite existing keys.
+    ///            If `False`, fail if any key already exists.
+    ///
+    /// Returns:
+    ///     A Node that drives the write operation.
+    #[pyo3(signature = (endpoint, lease_ttl=None, force=true))]
+    fn etcd_pub(&self, endpoint: String, lease_ttl: Option<f64>, force: bool) -> PyNode {
+        PyNode::new(crate::py_etcd::py_etcd_pub_inner(
+            &self.0, endpoint, lease_ttl, force,
+        ))
+    }
+
     /// Publish this stream of bytes to a ZMQ PUB socket bound on the given port.
     ///
     /// The stream values must be `bytes` objects. Only supported in real-time mode.

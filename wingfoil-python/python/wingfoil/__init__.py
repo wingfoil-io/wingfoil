@@ -13,6 +13,9 @@ __version__ = getattr(_ext, "__version__", None)
 
 __all__ = list(getattr(_ext, "__all__", [])) + ["to_dataframe", "build_dataframe"]
 
+# User-friendly aliases for etcd functions
+etcd_sub = _ext.py_etcd_sub
+
 # User-friendly aliases for KDB+ functions
 kdb_read = _ext.py_kdb_read
 kdb_write = _ext.py_kdb_write

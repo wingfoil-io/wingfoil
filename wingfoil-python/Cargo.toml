@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 
 # parent
-wingfoil = { path = "../wingfoil", features = ["kdb", "zmq-beta"] }
+wingfoil = { path = "../wingfoil", features = ["kdb", "zmq-beta", "etcd"] }
 
 # workspace deps
 anyhow = {workspace = true}
