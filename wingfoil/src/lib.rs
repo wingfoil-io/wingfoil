@@ -135,6 +135,51 @@
 extern crate log;
 extern crate derive_new;
 
+/// Dispatch a `log::Level` runtime value to the matching `tracing` event macro.
+///
+/// Two forms:
+/// - `tracing_log!(level, <tracing args>)` — generic passthrough
+/// - `tracing_log!(level; time, label, value)` — wingfoil stream event; accepts a
+///   `NanoTime` and only calls `.pretty()` inside the enabled arm.
+///
+/// Only available with the `tracing` feature.
+#[cfg(feature = "tracing")]
+macro_rules! tracing_log {
+    ($level:expr; $time:expr, $label:expr, $value:expr) => {
+        match $level {
+            log::Level::Error => tracing::error!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Warn  => tracing::warn!(target:  "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Info  => tracing::info!(target:  "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Debug => tracing::debug!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Trace => tracing::trace!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+        }
+    };
+    ($level:expr, $($rest:tt)*) => {
+        match $level {
+            log::Level::Error => tracing::error!($($rest)*),
+            log::Level::Warn  => tracing::warn!($($rest)*),
+            log::Level::Info  => tracing::info!($($rest)*),
+            log::Level::Debug => tracing::debug!($($rest)*),
+            log::Level::Trace => tracing::trace!($($rest)*),
+        }
+    };
+}
+
+/// Check whether a `log::Level` is enabled in the current `tracing` subscriber.
+/// Only available with the `tracing` feature.
+#[cfg(feature = "tracing")]
+macro_rules! tracing_log_enabled {
+    ($level:expr) => {
+        match $level {
+            log::Level::Error => tracing::enabled!(tracing::Level::ERROR),
+            log::Level::Warn => tracing::enabled!(tracing::Level::WARN),
+            log::Level::Info => tracing::enabled!(tracing::Level::INFO),
+            log::Level::Debug => tracing::enabled!(tracing::Level::DEBUG),
+            log::Level::Trace => tracing::enabled!(tracing::Level::TRACE),
+        }
+    };
+}
+
 pub mod adapters;
 
 mod bencher;
