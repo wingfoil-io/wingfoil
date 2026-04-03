@@ -5,34 +5,20 @@ Demonstrates both Grafana integration points:
 1. **Prometheus exporter** — serves `GET /metrics` on port 9091 so Grafana can scrape it via its Prometheus data source.
 2. **Grafana Live push** — streams values directly to a Grafana Live channel for zero-latency panel updates.
 
-## Setup
-
-Start the Docker stack from the repo root:
-
-```sh
-docker compose -f docker/grafana/docker-compose.yml up -d   # start in background
-docker compose -f docker/grafana/docker-compose.yml ps      # check all services are healthy
-export GRAFANA_API_KEY=$(cat docker/grafana/tokens/grafana_api_key)  # key is auto-created
-# when done:
-# docker compose -f docker/grafana/docker-compose.yml down
-```
-
-This starts:
-- **Grafana** on <http://localhost:3000> (no login required)
-- **Prometheus** on <http://localhost:9090>, pre-configured to scrape `host.docker.internal:9091`
-
 ## Run
 
-Prometheus exporter only (no API key needed):
-
 ```sh
-RUST_LOG=info cargo run --example grafana_metrics --features grafana
+./wingfoil/examples/grafana/run.sh
 ```
 
-Both exporter and Grafana Live push:
+This starts the Docker stack (Grafana + Prometheus), waits for the API key to be provisioned, then runs the example. Press `Ctrl+C` to stop the example; the Docker stack keeps running.
 
+- **Grafana** on <http://localhost:3000> (no login required)
+- **Prometheus** on <http://localhost:9090>
+
+To stop the stack:
 ```sh
-RUST_LOG=info GRAFANA_API_KEY=$(cat docker/grafana/tokens/grafana_api_key) cargo run --example grafana_metrics --features grafana
+docker compose -f docker/grafana/docker-compose.yml down
 ```
 
 ## What it does
