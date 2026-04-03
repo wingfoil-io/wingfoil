@@ -8,7 +8,11 @@
 //!
 //! Both [`fix_connect`] (initiator) and [`fix_accept`] (acceptor) return the same
 //! `(Stream<Burst<FixMessage>>, Stream<FixSessionStatus>)` pair.
+//!
+//! Use [`fix_connect_tls`] to connect to TLS-secured endpoints (e.g. LMAX London Demo).
+//! It additionally returns a [`FixInjector`] for sending outbound messages on the session.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::rc::Rc;
@@ -16,6 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 use crate::channel::{ChannelSender, channel_pair};
 use crate::{
@@ -37,6 +44,8 @@ const TAG_BEGIN_STRING: u32 = 8;
 const TAG_HEARTBT_INT: u32 = 108;
 const TAG_TEST_REQ_ID: u32 = 112;
 const TAG_ENCRYPT_METHOD: u32 = 98;
+const TAG_USERNAME: u32 = 553;
+const TAG_PASSWORD: u32 = 554;
 
 const MSG_HEARTBEAT: &str = "0";
 const MSG_TEST_REQUEST: &str = "1";
@@ -115,6 +124,22 @@ pub enum FixPollMode {
     AlwaysSpin,
     /// Background thread + channel — shares CPU with other work.
     Threaded,
+}
+
+/// Handle for injecting outbound [`FixMessage`]s into an established FIX session.
+///
+/// Obtained from [`fix_connect_tls`]. Thread-safe and cheaply cloneable.
+/// Messages are sent on the next background-thread loop iteration.
+#[derive(Clone)]
+pub struct FixInjector {
+    queue: Arc<Mutex<VecDeque<FixMessage>>>,
+}
+
+impl FixInjector {
+    /// Queue `msg` for sending on the next session loop iteration.
+    pub fn inject(&self, msg: FixMessage) {
+        self.queue.lock().unwrap().push_back(msg);
+    }
 }
 
 // ── FIX tag-value codec ───────────────────────────────────────────────────────
@@ -217,9 +242,9 @@ fn find_message(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 /// Drain all complete FIX messages from `parse_buf`, dispatching session-level messages
 /// and pushing application/status events into `events`.
 /// Returns `true` if any events were pushed.
-fn drain_parse_buf(
+fn drain_parse_buf<W: Write>(
     parse_buf: &mut Vec<u8>,
-    socket: &mut Option<TcpStream>,
+    socket: &mut Option<W>,
     session: &mut FixSession,
     events: &mut Burst<FixEvent>,
     is_acceptor: bool,
@@ -256,6 +281,8 @@ struct FixSession {
     sender_comp_id: String,
     target_comp_id: String,
     out_seq: u64,
+    /// Optional credentials: sent as tags 553 (Username) and 554 (Password) in Logon.
+    password: Option<String>,
 }
 
 impl FixSession {
@@ -264,12 +291,22 @@ impl FixSession {
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
             out_seq: 0,
+            password: None,
         }
     }
 
-    fn send(
+    fn new_with_password(sender: &str, target: &str, password: &str) -> Self {
+        Self {
+            sender_comp_id: sender.to_string(),
+            target_comp_id: target.to_string(),
+            out_seq: 0,
+            password: Some(password.to_string()),
+        }
+    }
+
+    fn send<W: Write>(
         &mut self,
-        sock: &mut TcpStream,
+        sock: &mut W,
         msg_type: &str,
         extra: &[(u32, String)],
     ) -> anyhow::Result<()> {
@@ -285,24 +322,27 @@ impl FixSession {
         Ok(())
     }
 
-    fn send_logon(&mut self, sock: &mut TcpStream) -> anyhow::Result<()> {
-        self.send(
-            sock,
-            MSG_LOGON,
-            &[
-                (TAG_ENCRYPT_METHOD, "0".to_string()),
-                (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
-            ],
-        )
+    fn send_logon<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
+        let mut extra = vec![
+            (TAG_ENCRYPT_METHOD, "0".to_string()),
+            (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
+        ];
+        if let Some(ref pwd) = self.password.clone() {
+            // LMAX and other venues require tag 553 (Username) = SenderCompID
+            // and tag 554 (Password) in the Logon message.
+            extra.push((TAG_USERNAME, self.sender_comp_id.clone()));
+            extra.push((TAG_PASSWORD, pwd.clone()));
+        }
+        self.send(sock, MSG_LOGON, &extra)
     }
 
-    fn send_logout(&mut self, sock: &mut TcpStream) -> anyhow::Result<()> {
+    fn send_logout<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
         self.send(sock, MSG_LOGOUT, &[])
     }
 
-    fn send_heartbeat(
+    fn send_heartbeat<W: Write>(
         &mut self,
-        sock: &mut TcpStream,
+        sock: &mut W,
         test_req_id: Option<String>,
     ) -> anyhow::Result<()> {
         let extra = test_req_id
@@ -315,10 +355,10 @@ impl FixSession {
 /// Handle a session-level message for the **initiator** role.
 /// Appends any generated status events to `events`.
 /// Returns `true` if the message should be forwarded to the application layer.
-fn handle_initiator(
+fn handle_initiator<W: Write>(
     session: &mut FixSession,
     msg: &FixMessage,
-    sock: &mut TcpStream,
+    sock: &mut W,
     events: &mut Burst<FixEvent>,
 ) -> anyhow::Result<bool> {
     match msg.msg_type.as_str() {
@@ -341,10 +381,10 @@ fn handle_initiator(
 }
 
 /// Handle a session-level message for the **acceptor** role.
-fn handle_acceptor(
+fn handle_acceptor<W: Write>(
     session: &mut FixSession,
     msg: &FixMessage,
-    sock: &mut TcpStream,
+    sock: &mut W,
     events: &mut Burst<FixEvent>,
 ) -> anyhow::Result<bool> {
     match msg.msg_type.as_str() {
@@ -378,6 +418,33 @@ fn connect_with_retry(host: &str, port: u16) -> anyhow::Result<TcpStream> {
         }
     }
     anyhow::bail!("failed to connect to {host}:{port} after 20 attempts")
+}
+
+/// Wrap a [`TcpStream`] in a TLS client connection targeting `host`.
+///
+/// Uses the Mozilla root CA bundle via `webpki-roots`. The TLS handshake is
+/// deferred until the first read/write on the returned stream.
+fn tls_connect(
+    host: &str,
+    stream: TcpStream,
+) -> anyhow::Result<StreamOwned<ClientConnection, TcpStream>> {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = Arc::new(
+        ClientConfig::builder_with_provider(rustls::crypto::ring::default_provider().into())
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    );
+
+    let server_name: ServerName<'static> = host
+        .to_string()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid TLS server name: {host}"))?;
+
+    let conn = ClientConnection::new(config, server_name)?;
+    Ok(StreamOwned::new(conn, stream))
 }
 
 fn split_events(
@@ -646,14 +713,16 @@ impl StreamPeekRef<Burst<FixEvent>> for FixAcceptorSpin {
 // ── Threaded source (initiator or acceptor) ───────────────────────────────────
 
 /// Run a single FIX session on `sock`, forwarding events to `chan`.
+/// Outbound messages queued in `inject_queue` are flushed each loop iteration.
 ///
 /// Returns `true` if the session ended due to a normal network disconnect
 /// (the caller may reconnect), or `false` if the channel is closed (graph
 /// has stopped and the thread should exit).
-fn run_fix_session(
-    mut sock: TcpStream,
+fn run_fix_session<S: Read + Write>(
+    mut sock: S,
     session: &mut FixSession,
     is_acceptor: bool,
+    inject_queue: &Arc<Mutex<VecDeque<FixMessage>>>,
     chan: &ChannelSender<FixEvent>,
 ) -> bool {
     use crate::channel::Message;
@@ -677,12 +746,12 @@ fn run_fix_session(
     let mut sock_opt = Some(sock);
 
     loop {
-        let sock = match sock_opt.as_mut() {
+        let sock_ref = match sock_opt.as_mut() {
             Some(s) => s,
             None => return true, // disconnected during session dispatch
         };
 
-        match sock.read(&mut tmp) {
+        match sock_ref.read(&mut tmp) {
             Ok(0) => return true,
             Err(e)
                 if e.kind() == io::ErrorKind::ConnectionReset
@@ -706,6 +775,16 @@ fn run_fix_session(
             Err(_) => return true,
         }
 
+        // Flush any outbound messages injected from outside the graph
+        if let Some(ref mut s) = sock_opt {
+            let mut queue = inject_queue.lock().unwrap();
+            while let Some(msg) = queue.pop_front() {
+                if session.send(s, &msg.msg_type, &msg.fields).is_err() {
+                    return true;
+                }
+            }
+        }
+
         for event in events {
             if send(event).is_err() {
                 return false;
@@ -720,6 +799,8 @@ struct FixThreadedSource {
     port: u16,
     sender_comp_id: String,
     target_comp_id: String,
+    password: Option<String>,
+    tls: bool,
     is_acceptor: bool,
     // Graph integration
     inner: ChannelReceiverStream<FixEvent>,
@@ -731,6 +812,8 @@ struct FixThreadedSource {
     socket_arc: Option<Arc<Mutex<Option<TcpStream>>>>,
     // Set by stop() to prevent the thread from re-accepting after socket shutdown.
     stop_flag: Arc<AtomicBool>,
+    // Queue for outbound messages injected from outside the graph.
+    inject_queue: Arc<Mutex<VecDeque<FixMessage>>>,
 }
 
 impl FixThreadedSource {
@@ -742,12 +825,41 @@ impl FixThreadedSource {
             port,
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
+            password: None,
+            tls: false,
             is_acceptor: false,
             inner,
             chan_sender: Some(chan_sender),
             thread: None,
             socket_arc: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
+            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    fn new_initiator_tls(
+        host: &str,
+        port: u16,
+        sender: &str,
+        target: &str,
+        password: Option<&str>,
+    ) -> Self {
+        let (chan_sender, receiver) = channel_pair(None);
+        let inner = ChannelReceiverStream::new(receiver, None, None);
+        Self {
+            host: host.to_string(),
+            port,
+            sender_comp_id: sender.to_string(),
+            target_comp_id: target.to_string(),
+            password: password.map(str::to_string),
+            tls: true,
+            is_acceptor: false,
+            inner,
+            chan_sender: Some(chan_sender),
+            thread: None,
+            socket_arc: None,
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -759,12 +871,15 @@ impl FixThreadedSource {
             port,
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
+            password: None,
+            tls: false,
             is_acceptor: true,
             inner,
             chan_sender: Some(chan_sender),
             thread: None,
             socket_arc: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
+            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 }
@@ -792,10 +907,13 @@ impl MutableNode for FixThreadedSource {
         self.socket_arc = Some(socket_arc);
 
         let stop_flag = self.stop_flag.clone();
+        let inject_queue = self.inject_queue.clone();
         let host = self.host.clone();
         let port = self.port;
         let sender_id = self.sender_comp_id.clone();
         let target_id = self.target_comp_id.clone();
+        let password = self.password.clone();
+        let tls = self.tls;
         let is_acceptor = self.is_acceptor;
 
         let handle = std::thread::spawn(move || {
@@ -849,8 +967,34 @@ impl MutableNode for FixThreadedSource {
                     }
                 }
 
-                let mut session = FixSession::new(&sender_id, &target_id);
-                let still_open = run_fix_session(sock, &mut session, is_acceptor, &chan_sender);
+                let mut session = if let Some(ref pwd) = password {
+                    FixSession::new_with_password(&sender_id, &target_id, pwd)
+                } else {
+                    FixSession::new(&sender_id, &target_id)
+                };
+
+                let still_open = if tls {
+                    match tls_connect(&host, sock) {
+                        Ok(tls_stream) => run_fix_session(
+                            tls_stream,
+                            &mut session,
+                            is_acceptor,
+                            &inject_queue,
+                            &chan_sender,
+                        ),
+                        Err(e) => {
+                            if !send_status(FixSessionStatus::Error(e.to_string())) {
+                                break;
+                            }
+                            if !is_acceptor {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    run_fix_session(sock, &mut session, is_acceptor, &inject_queue, &chan_sender)
+                };
 
                 // Clear the stale socket handle.
                 *socket_arc_thread.lock().unwrap() = None;
@@ -986,7 +1130,7 @@ impl MutableNode for FixSenderNode {
 
 // ── Public factory functions ──────────────────────────────────────────────────
 
-/// Connect to a FIX acceptor as an initiator.
+/// Connect to a FIX acceptor as an initiator (plain TCP).
 ///
 /// Returns `(data_stream, status_stream)`.
 pub fn fix_connect(
@@ -1012,6 +1156,39 @@ pub fn fix_connect(
             split_events(events)
         }
     }
+}
+
+/// Connect to a TLS-secured FIX acceptor as an initiator.
+///
+/// Suitable for production-grade FIX gateways such as **LMAX London Demo**:
+/// - Market data: `fix-marketdata.london-demo.lmax.com:443`, `TargetCompID = LMXBDM`
+/// - Order routing: `fix-order.london-demo.lmax.com:443`, `TargetCompID = LMXBD`
+///
+/// `sender_comp_id` should be your registered username; `password` is sent as
+/// tag 554 in the Logon message (with tag 553 = `sender_comp_id`).
+///
+/// Returns `(data_stream, status_stream, injector)`. The [`FixInjector`] lets you
+/// send outbound messages (e.g. `MarketDataRequest`, `NewOrderSingle`) on the session
+/// from any thread.
+pub fn fix_connect_tls(
+    host: &str,
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    password: Option<&str>,
+) -> (
+    Rc<dyn Stream<Burst<FixMessage>>>,
+    Rc<dyn Stream<FixSessionStatus>>,
+    FixInjector,
+) {
+    let src =
+        FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, password);
+    let injector = FixInjector {
+        queue: src.inject_queue.clone(),
+    };
+    let events: Rc<dyn Stream<Burst<FixEvent>>> = src.into_stream();
+    let (data, status) = split_events(events);
+    (data, status, injector)
 }
 
 /// Bind a FIX acceptor on `port`, accepting one initiator connection.

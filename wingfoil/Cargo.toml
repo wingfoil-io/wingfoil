@@ -27,7 +27,7 @@ prometheus = []
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
-fix = ["dep:fefix"]
+fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
 
 [package]
 name = "wingfoil"
@@ -107,6 +107,8 @@ opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics"], optional = true }
 fefix = { version = "0.7", optional = true }
+rustls = { version = "0.23", features = ["ring"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 
 [dev-dependencies]
@@ -242,4 +244,9 @@ required-features = ["etcd"]
 [[example]]
 name = "fix_client"
 path = "examples/messaging/fix_client.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "lmax_demo"
+path = "examples/messaging/lmax_demo.rs"
 required-features = ["fix"]
