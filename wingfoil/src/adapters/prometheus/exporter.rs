@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::{Element, GraphState, IntoNode, MutableNode, Node, Stream, UpStreams};
+use crate::{Element, GraphState, IntoNode, MutableNode, Node, RunMode, Stream, UpStreams};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -57,6 +57,7 @@ impl PrometheusExporter {
             name: name.into(),
             stream,
             metrics: self.metrics.clone(),
+            historical: false,
         }
         .into_node()
     }
@@ -128,10 +129,19 @@ struct PrometheusMetricNode<T: Element> {
     name: String,
     stream: Rc<dyn Stream<T>>,
     metrics: MetricStore,
+    historical: bool,
 }
 
 impl<T: Element + std::fmt::Display> MutableNode for PrometheusMetricNode<T> {
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.historical = matches!(state.run_mode(), RunMode::HistoricalFrom(_));
+        Ok(())
+    }
+
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        if self.historical {
+            return Ok(true);
+        }
         let value = self.stream.peek_value().to_string();
         self.metrics
             .lock()

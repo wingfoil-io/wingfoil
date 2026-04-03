@@ -2,7 +2,7 @@
 
 use super::{EtcdConnection, EtcdEntry};
 use crate::burst;
-use crate::nodes::{FutStream, StreamOperators};
+use crate::nodes::{FutStream, RunParams, StreamOperators};
 use crate::types::*;
 use etcd_client::{Client, Compare, CompareOp, PutOptions, Txn, TxnOp};
 use futures::StreamExt;
@@ -40,7 +40,7 @@ pub fn etcd_pub(
     force: bool,
 ) -> Rc<dyn Node> {
     upstream.consume_async(Box::new(
-        move |source: Pin<Box<dyn FutStream<Burst<EtcdEntry>>>>| async move {
+        move |_ctx: RunParams, source: Pin<Box<dyn FutStream<Burst<EtcdEntry>>>>| async move {
             let mut client = Client::connect(&connection.endpoints, None)
                 .await
                 .map_err(|e| anyhow::anyhow!("etcd connect failed: {e}"))?;

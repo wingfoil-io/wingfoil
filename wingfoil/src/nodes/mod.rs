@@ -387,7 +387,7 @@ pub trait StreamOperators<T: Element> {
     #[must_use]
     fn consume_async<FUT>(
         self: &Rc<Self>,
-        func: Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
+        func: Box<dyn FnOnce(RunParams, Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
     ) -> Rc<dyn Node>
     where
         T: Element + Send,
@@ -608,7 +608,7 @@ where
     #[cfg(feature = "async")]
     fn consume_async<FUT>(
         self: &Rc<Self>,
-        func: Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
+        func: Box<dyn FnOnce(RunParams, Pin<Box<dyn FutStream<T>>>) -> FUT + Send>,
     ) -> Rc<dyn Node>
     where
         T: Element + Send,

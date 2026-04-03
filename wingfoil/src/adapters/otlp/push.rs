@@ -6,7 +6,8 @@ use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry_otlp::{MetricExporter, WithExportConfig as _};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
-use crate::nodes::{FutStream, StreamOperators};
+use crate::RunMode;
+use crate::nodes::{FutStream, RunParams, StreamOperators};
 use crate::types::*;
 
 /// Connection configuration for an OTLP metrics endpoint.
@@ -28,8 +29,8 @@ pub trait OtlpPush<T: Element> {
 impl<T: Element + Send + std::fmt::Display + 'static> OtlpPush<T> for dyn Stream<T> {
     fn otlp_push(self: &Rc<Self>, metric_name: &str, config: OtlpConfig) -> Rc<dyn Node> {
         let metric_name = metric_name.to_string();
-        let consumer = Box::new(move |source: Pin<Box<dyn FutStream<T>>>| {
-            push_consumer(metric_name, config, source)
+        let consumer = Box::new(move |ctx: RunParams, source: Pin<Box<dyn FutStream<T>>>| {
+            push_consumer(metric_name, config, ctx, source)
         });
         self.consume_async(consumer)
     }
@@ -38,8 +39,15 @@ impl<T: Element + Send + std::fmt::Display + 'static> OtlpPush<T> for dyn Stream
 async fn push_consumer<T: Element + Send + std::fmt::Display>(
     metric_name: String,
     config: OtlpConfig,
+    ctx: RunParams,
     mut source: Pin<Box<dyn FutStream<T>>>,
 ) -> anyhow::Result<()> {
+    // Telemetry has no meaning in historical/backtesting mode — drain and return.
+    if matches!(ctx.run_mode, RunMode::HistoricalFrom(_)) {
+        while source.next().await.is_some() {}
+        return Ok(());
+    }
+
     // Build OTLP HTTP exporter + meter provider
     let exporter = MetricExporter::builder()
         .with_http()

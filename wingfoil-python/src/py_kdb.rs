@@ -181,9 +181,11 @@ pub fn py_kdb_write_inner(
     columns: Vec<(String, String)>,
     upstream: &Rc<dyn Stream<PyElement>>,
 ) -> PyResult<Rc<dyn Node>> {
-    let consumer = Box::new(move |source: Pin<Box<dyn FutStream<PyElement>>>| {
-        py_kdb_write_consumer(connection, table_name, columns, source)
-    });
+    let consumer = Box::new(
+        move |_ctx: wingfoil::RunParams, source: Pin<Box<dyn FutStream<PyElement>>>| {
+            py_kdb_write_consumer(connection, table_name, columns, source)
+        },
+    );
 
     Ok(upstream.consume_async(consumer))
 }

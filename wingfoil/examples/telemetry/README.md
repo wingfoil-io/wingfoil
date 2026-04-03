@@ -16,6 +16,13 @@ visualisation layer — they differ only in how data is transported.
 When in doubt, start with `prometheus` — it works with everything and needs no extra infrastructure.
 Use `otlp` if you're pushing to a cloud backend or already running an OTel collector.
 
+## Historical / backtesting mode
+
+Both adapters are **silent no-ops** in historical mode (`RunMode::HistoricalFrom`).
+The stream is consumed and discarded without connecting to any external service.
+This means you can include telemetry in a strategy graph and run backtests freely —
+no metrics will be emitted and no connections will be attempted.
+
 ## Examples
 
 | Example | Adapter | Run |
