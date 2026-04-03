@@ -7,6 +7,8 @@ async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "to
 csv = ["dep:csv"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
+aeron-rusteron = ["dep:rusteron-client"]
+aeron-rs = ["dep:aeron-rs"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 
@@ -77,6 +79,8 @@ kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
+rusteron-client = { version = "0.1", optional = true }
+aeron-rs = { version = "0.1", optional = true }
 
 
 [dev-dependencies]
@@ -162,3 +166,8 @@ required-features = ["zmq-beta"]
 name = "etcd"
 path = "examples/etcd/main.rs"
 required-features = ["etcd"]
+
+[[example]]
+name = "aeron"
+path = "examples/aeron/main.rs"
+required-features = ["aeron-rusteron"]
