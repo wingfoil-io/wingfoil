@@ -34,7 +34,7 @@ RUST_LOG=info cargo run --example grafana_metrics --features grafana
 Both exporter and Grafana Live push:
 
 ```sh
-RUST_LOG=info GRAFANA_API_KEY=<token> cargo run --example grafana_metrics --features grafana
+RUST_LOG=info GRAFANA_API_KEY=$(cat docker/grafana/tokens/grafana_api_key) cargo run --example grafana_metrics --features grafana
 ```
 
 ## What it does
