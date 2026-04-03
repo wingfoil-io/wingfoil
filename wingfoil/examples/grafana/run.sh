@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+if ! command -v docker &>/dev/null; then
+    echo "ERROR: docker is not installed — https://docs.docker.com/get-docker/"
+    exit 1
+fi
+
 COMPOSE="docker compose -f docker/grafana/docker-compose.yml"
 TOKEN_FILE="docker/grafana/tokens/grafana_api_key"
 
