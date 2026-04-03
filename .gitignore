@@ -1,4 +1,5 @@
 /target
+docker/grafana/tokens/
 .vscode
 .idea
 flamegraph.svg

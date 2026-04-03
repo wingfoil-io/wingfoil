@@ -7,7 +7,6 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      # Pre-create a service account token for tests
       - GF_SECURITY_SECRET_KEY=wingfoil-test-secret-key
     volumes:
       - ./provisioning:/etc/grafana/provisioning
@@ -17,6 +16,38 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  grafana-init:
+    image: curlimages/curl:latest
+    container_name: wingfoil-grafana-init
+    restart: "no"
+    depends_on:
+      grafana:
+        condition: service_healthy
+    volumes:
+      - ./tokens:/tokens
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        # Create service account (ignore error if already exists)
+        curl -s -X POST http://admin:admin@grafana:3000/api/serviceaccounts \
+          -H 'Content-Type: application/json' \
+          -d '{"name":"wingfoil-test","role":"Editor"}' > /dev/null || true
+
+        # Find the service account ID
+        SA_ID=$(curl -s "http://admin:admin@grafana:3000/api/serviceaccounts/search?query=wingfoil-test&limit=1" \
+          | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+        echo "Service account ID: $SA_ID"
+
+        # Create a token (timestamp suffix avoids name collisions on re-runs)
+        TOKEN_KEY=$(curl -s -X POST "http://admin:admin@grafana:3000/api/serviceaccounts/$SA_ID/tokens" \
+          -H 'Content-Type: application/json' \
+          -d "{\"name\":\"wingfoil-token-$(date +%s)\"}" \
+          | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+
+        echo "$TOKEN_KEY" > /tokens/grafana_api_key
+        echo "API key written to tokens/grafana_api_key"
 
   prometheus:
     image: prom/prometheus:v3.1.0

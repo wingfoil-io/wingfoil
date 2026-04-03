@@ -2,13 +2,12 @@
 //!
 //! Requires the Docker stack from `docker/grafana/`:
 //! ```sh
-//! cd docker/grafana && docker compose up -d
+//! cd docker/grafana && docker compose up
 //! ```
 //!
-//! Then create a service account token (see `docker/grafana/README.md`) and run:
+//! The API key is created automatically and written to `docker/grafana/tokens/grafana_api_key`.
+//! Tests read it from there; no manual setup needed. Then run:
 //! ```sh
-//! GRAFANA_TEST_URL=http://localhost:3000 \
-//! GRAFANA_TEST_API_KEY=<token> \
 //! RUST_LOG=INFO cargo test --features grafana-integration-test -p wingfoil -- --test-threads=1 --nocapture
 //! ```
 
@@ -21,8 +20,17 @@ fn grafana_url() -> String {
 }
 
 fn grafana_api_key() -> String {
-    std::env::var("GRAFANA_TEST_API_KEY")
-        .expect("GRAFANA_TEST_API_KEY must be set for grafana integration tests")
+    if let Ok(key) = std::env::var("GRAFANA_TEST_API_KEY") {
+        return key;
+    }
+    // Fall back to the key written by `docker compose up` in docker/grafana/
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docker/grafana/tokens/grafana_api_key"
+    );
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_string())
+        .expect("set GRAFANA_TEST_API_KEY or run: cd docker/grafana && docker compose up")
 }
 
 fn grafana_org_id() -> u64 {

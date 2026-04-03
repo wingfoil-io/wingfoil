@@ -18,7 +18,7 @@ Before committing changes to this adapter, you MUST:
 
 1. **Start the Docker stack:**
    ```bash
-   cd docker/grafana && docker compose up -d
+   cd docker/grafana && docker compose up
    ```
 
 2. **Run integration tests:**

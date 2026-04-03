@@ -13,7 +13,7 @@ Docker Compose stack for running wingfoil Grafana adapter integration tests.
 
 ```bash
 # Start the stack
-docker compose up -d
+docker compose up
 
 # Wait for healthy (grafana takes ~10s)
 docker compose ps
@@ -30,21 +30,15 @@ docker compose down
 
 ## API Key
 
-Grafana Live push requires an API key. Create a service account token after first start:
+`docker compose up` automatically creates a service account and writes the token to
+`docker/grafana/tokens/grafana_api_key` via the `grafana-init` container.
 
+Integration tests read this file automatically — no manual steps needed.
+
+If you need the key explicitly:
 ```bash
-# Create service account
-curl -X POST http://admin:admin@localhost:3000/api/serviceaccounts \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"wingfoil-test","role":"Editor"}'
-
-# Create token (use the id returned above)
-curl -X POST http://admin:admin@localhost:3000/api/serviceaccounts/<id>/tokens \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"wingfoil-test-token"}'
+cat tokens/grafana_api_key
 ```
-
-Copy the `key` field from the response into `GRAFANA_TEST_API_KEY`.
 
 ## Environment Variables
 
