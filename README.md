@@ -21,7 +21,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
-- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), etc.
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
 
 ## Quick Start
 
@@ -134,6 +134,32 @@ round_trip.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
 ```
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/)
+
+## Telemetry Example
+
+Export stream metrics to Grafana via Prometheus scraping (pull) or OpenTelemetry OTLP push — or both simultaneously:
+
+```rust,ignore
+use wingfoil::adapters::prometheus::PrometheusExporter;
+use wingfoil::adapters::otlp::{OtlpConfig, OtlpPush};
+use wingfoil::*;
+
+let exporter = PrometheusExporter::new("0.0.0.0:9091");
+exporter.serve()?;
+
+let config = OtlpConfig {
+    endpoint: "http://localhost:4318".into(),
+    service_name: "my-app".into(),
+};
+
+let counter = ticker(Duration::from_secs(1)).count();
+let prometheus_node = exporter.register("wingfoil_ticks_total", counter.clone());
+let otlp_node = counter.otlp_push("wingfoil_ticks_total", config);
+
+Graph::new(vec![prometheus_node, otlp_node], RunMode::RealTime, RunFor::Forever).run()?;
+```
+
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/)
 
 ## Links
 - Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
