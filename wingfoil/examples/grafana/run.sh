@@ -6,11 +6,9 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 
-COMPOSE="docker compose -f docker/grafana/docker-compose.yml"
-TOKEN_FILE="docker/grafana/tokens/grafana_api_key"
-
-# Navigate to repo root regardless of where the script is called from
-cd "$(git rev-parse --show-toplevel)"
+ROOT="$(git rev-parse --show-toplevel)"
+COMPOSE="docker compose -f $ROOT/docker/grafana/docker-compose.yml"
+TOKEN_FILE="$ROOT/docker/grafana/tokens/grafana_api_key"
 
 echo "==> Starting Docker stack..."
 $COMPOSE up -d
@@ -36,4 +34,4 @@ echo "    Prometheus: http://localhost:9090"
 echo ""
 echo "==> Running example (Ctrl+C to stop)..."
 RUST_LOG=info GRAFANA_API_KEY=$(cat "$TOKEN_FILE") \
-    cargo run --example grafana_metrics --features grafana
+    cargo run --manifest-path "$ROOT/Cargo.toml" --example grafana_metrics --features grafana
