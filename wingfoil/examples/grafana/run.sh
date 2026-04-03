@@ -23,6 +23,8 @@ if [ ! -s "$TOKEN_FILE" ]; then
     exit 1
 fi
 
+trap 'echo ""; echo "==> Stopping Docker stack..."; $COMPOSE down' EXIT
+
 echo "==> Stack ready."
 echo "    Grafana:    http://localhost:3000"
 echo "    Prometheus: http://localhost:9090"
