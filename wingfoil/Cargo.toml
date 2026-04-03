@@ -28,6 +28,7 @@ prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
+fix-integration-test = ["fix"]
 
 [package]
 name = "wingfoil"
