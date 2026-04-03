@@ -16,6 +16,12 @@ __all__ = list(getattr(_ext, "__all__", [])) + ["to_dataframe", "build_dataframe
 # User-friendly aliases for etcd functions
 etcd_sub = _ext.py_etcd_sub
 
+# User-friendly aliases for ZMQ functions
+zmq_sub = _ext.py_zmq_sub
+zmq_sub_discover = _ext.py_zmq_sub_discover
+zmq_sub_etcd = _ext.py_zmq_sub_etcd
+start_seed = _ext.py_start_seed
+
 # User-friendly aliases for KDB+ functions
 kdb_read = _ext.py_kdb_read
 kdb_write = _ext.py_kdb_write

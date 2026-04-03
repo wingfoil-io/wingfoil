@@ -423,5 +423,88 @@ impl PyStream {
         crate::py_otlp::py_otlp_push_inner(self, metric_name, endpoint, service_name)
     }
 
+    /// Publish this stream of bytes and register as `name` with the given seeds.
+    ///
+    /// Subscribers can discover this publisher by name using `zmq_sub_discover`.
+    /// Binds on `127.0.0.1`; use `zmq_pub_named_on` for multi-host deployments.
+    ///
+    /// Args:
+    ///     name: Name to register with the seed (e.g. "quotes")
+    ///     port: TCP port to bind the PUB socket on
+    ///     seeds: List of seed endpoints (e.g. ["tcp://localhost:7777"])
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn zmq_pub_named(&self, name: String, port: u16, seeds: Vec<String>) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_named_inner(
+            &self.0, name, port, seeds,
+        ))
+    }
+
+    /// Like `zmq_pub_named` but binds on `address` instead of `127.0.0.1`.
+    ///
+    /// Use this in multi-host deployments where `127.0.0.1` is not reachable
+    /// by subscribing nodes.
+    ///
+    /// Args:
+    ///     name: Name to register with the seed
+    ///     address: Routable bind address (e.g. "192.168.1.10")
+    ///     port: TCP port to bind the PUB socket on
+    ///     seeds: List of seed endpoints
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn zmq_pub_named_on(
+        &self,
+        name: String,
+        address: String,
+        port: u16,
+        seeds: Vec<String>,
+    ) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_named_on_inner(
+            &self.0, name, address, port, seeds,
+        ))
+    }
+
+    /// Publish this stream of bytes and register as `name` in etcd.
+    ///
+    /// Binds on `127.0.0.1`; use `zmq_pub_etcd_on` for multi-host deployments.
+    ///
+    /// Args:
+    ///     name: Name / etcd key to register under (e.g. "quotes")
+    ///     port: TCP port to bind the PUB socket on
+    ///     endpoint: etcd endpoint (e.g. "http://localhost:2379")
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn zmq_pub_etcd(&self, name: String, port: u16, endpoint: String) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_etcd_inner(
+            &self.0, name, port, endpoint,
+        ))
+    }
+
+    /// Like `zmq_pub_etcd` but binds on `address` instead of `127.0.0.1`.
+    ///
+    /// Args:
+    ///     name: Name / etcd key to register under
+    ///     address: Routable bind address (e.g. "192.168.1.10")
+    ///     port: TCP port to bind the PUB socket on
+    ///     endpoint: etcd endpoint
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn zmq_pub_etcd_on(
+        &self,
+        name: String,
+        address: String,
+        port: u16,
+        endpoint: String,
+    ) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_etcd_on_inner(
+            &self.0, name, address, port, endpoint,
+        ))
+    }
+    }
+
     // end StreamOperators
 }

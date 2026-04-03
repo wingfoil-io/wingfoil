@@ -187,6 +187,10 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
     #[cfg(feature = "iceoryx2-beta")]
     module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;
+    module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub_discover, module)?)?;
+    module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub_etcd, module)?)?;
+    module.add_function(wrap_pyfunction!(py_zmq::py_start_seed, module)?)?;
+    module.add_class::<py_zmq::PySeedHandle>()?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add_class::<PyGraph>()?;

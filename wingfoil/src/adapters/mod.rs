@@ -16,7 +16,4 @@ pub mod otlp;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
 #[cfg(feature = "zmq-beta")]
-#[doc(hidden)]
 pub mod zmq;
-#[cfg(feature = "zmq-beta")]
-pub mod zmq_seed;

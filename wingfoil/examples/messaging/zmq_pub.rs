@@ -17,7 +17,7 @@ fn main() {
         // little-endian bytes. This keeps the wire format language-agnostic:
         // Python subscribers can decode with struct.unpack('<Q', msg).
         .map(|n: u64| n.to_le_bytes().to_vec())
-        .zmq_pub(port)
+        .zmq_pub(port, ())
         .run(RunMode::RealTime, RunFor::Forever)
         .unwrap();
 }

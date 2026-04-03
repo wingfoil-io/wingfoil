@@ -11,7 +11,7 @@ fn main() {
     // ZMQ carries raw bytes (Vec<u8>) so the wire format stays language-agnostic.
     // We decode each message back to u64 using the same little-endian convention
     // that the publisher used (n.to_le_bytes() / struct.pack('<Q', n)).
-    let (data, status) = zmq_sub::<Vec<u8>>(address);
+    let (data, status) = zmq_sub::<Vec<u8>>(address).expect("zmq_sub failed");
     let data_node = data
         .map(|burst: Burst<Vec<u8>>| -> Burst<u64> {
             burst

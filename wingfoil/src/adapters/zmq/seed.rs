@@ -59,7 +59,6 @@ fn run_seed(socket: zmq::Socket, running: Arc<AtomicBool>) {
 
     while running.load(Ordering::Relaxed) {
         let mut items = [socket.as_poll_item(zmq::POLLIN)];
-        // Short timeout so we check the running flag regularly.
         match zmq::poll(&mut items, 10) {
             Ok(_) => {}
             Err(_) => break,
@@ -103,7 +102,7 @@ fn run_seed(socket: zmq::Socket, running: Arc<AtomicBool>) {
 fn req_socket_for(seed: &str) -> anyhow::Result<zmq::Socket> {
     let context = zmq::Context::new();
     let socket = context.socket(zmq::REQ)?;
-    socket.set_linger(0)?; // close immediately, don't wait for pending sends
+    socket.set_linger(0)?;
     socket.set_rcvtimeo(3000)?;
     socket.set_sndtimeo(3000)?;
     socket.connect(seed)?;
@@ -195,62 +194,4 @@ pub(crate) fn query_seeds(name: &str, seeds: &[&str]) -> anyhow::Result<String> 
     }
 
     Err(last_err)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    const SEED_1: &str = "tcp://127.0.0.1:5570";
-    const SEED_2: &str = "tcp://127.0.0.1:5571";
-    const SEED_3: &str = "tcp://127.0.0.1:5572";
-    const SEED_4: &str = "tcp://127.0.0.1:5573";
-
-    #[test]
-    fn seed_register_and_lookup() {
-        let _seed = start_seed(SEED_1).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
-
-        register_with_seeds("quotes", "tcp://127.0.0.1:9001", &[SEED_1.to_string()]).unwrap();
-        let addr = query_seeds("quotes", &[SEED_1]).unwrap();
-        assert_eq!(addr, "tcp://127.0.0.1:9001");
-    }
-
-    #[test]
-    fn seed_lookup_unknown() {
-        let _seed = start_seed(SEED_2).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
-
-        let err = query_seeds("unknown", &[SEED_2]).unwrap_err();
-        assert!(
-            err.to_string().contains("no publisher named"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn seed_register_overwrites() {
-        let _seed = start_seed(SEED_3).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
-
-        register_with_seeds("foo", "tcp://127.0.0.1:9002", &[SEED_3.to_string()]).unwrap();
-        register_with_seeds("foo", "tcp://127.0.0.1:9003", &[SEED_3.to_string()]).unwrap();
-        let addr = query_seeds("foo", &[SEED_3]).unwrap();
-        assert_eq!(addr, "tcp://127.0.0.1:9003");
-    }
-
-    #[test]
-    fn seed_drop_shuts_down() {
-        let seed = start_seed(SEED_4).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Confirm seed is alive.
-        register_with_seeds("alive", "tcp://127.0.0.1:9100", &[SEED_4.to_string()]).unwrap();
-
-        // Drop sets running=false and joins the thread (exits within ~10ms poll cycle).
-        // If this hangs, the test will timeout — that itself is the failure signal.
-        drop(seed);
-        // Reached here: thread joined cleanly.
-    }
 }

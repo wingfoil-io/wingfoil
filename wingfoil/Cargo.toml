@@ -7,6 +7,8 @@ async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "to
 csv = ["dep:csv"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
+zmq-beta-integration-test = ["zmq-beta"]
+zmq-etcd-integration-test = ["zmq-beta", "etcd", "dep:testcontainers"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 tracing = ["dep:tracing"]
@@ -224,6 +226,11 @@ name = "tracing"
 path = "examples/tracing/main.rs"
 
 [[example]]
-name = "zmq_discover"
-path = "examples/messaging/zmq_discover.rs"
+name = "zmq"
+path = "examples/zmq/main.rs"
 required-features = ["zmq-beta"]
+
+[[example]]
+name = "zmq_etcd_discovery"
+path = "examples/zmq/etcd_discovery.rs"
+required-features = ["zmq-beta", "etcd"]
