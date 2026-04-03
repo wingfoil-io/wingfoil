@@ -24,8 +24,8 @@ link "$EXPLORE_URL" "$EXPLORE_URL"
 printf "    Prometheus: "
 link "http://localhost:9090" "http://localhost:9090"
 echo ""
-echo "    For OTLP push support, run: cargo run --example otlp_metrics --features otlp,prometheus"
+echo "    For OTLP push support, run: cargo run --example otlp --features otlp,prometheus"
 echo ""
 echo "==> Running example (Ctrl+C to stop)..."
 RUST_LOG=info \
-    cargo run --manifest-path "$ROOT/Cargo.toml" --example prometheus_metrics --features prometheus
+    cargo run --manifest-path "$ROOT/Cargo.toml" --example prometheus --features prometheus

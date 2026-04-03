@@ -185,13 +185,13 @@ harness = false
 required-features = ["iceoryx2-beta"]
 
 [[example]]
-name = "prometheus_metrics"
+name = "prometheus"
 path = "examples/prometheus/main.rs"
 required-features = ["prometheus"]
 
 [[example]]
-name = "otlp_metrics"
-path = "examples/otlp_metrics.rs"
+name = "otlp"
+path = "examples/otlp/main.rs"
 required-features = ["otlp", "prometheus"]
 
 [[example]]
