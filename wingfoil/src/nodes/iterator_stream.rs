@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 type Peeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>;
 
 /// Wraps an Iterator and exposes it as a [`Stream`] of [`Burst<T>`].
-/// Multiple items with the same timestamp are grouped into a single burst.
+/// Multiple items with the same timestamp are grouped into a single [`Burst`] per tick.
 pub struct IteratorStream<T: Element> {
     peekable: Peeker<T>,
     value: Burst<T>,

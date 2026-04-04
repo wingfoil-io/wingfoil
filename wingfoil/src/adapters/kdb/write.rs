@@ -1,7 +1,6 @@
 //! KDB+ write functionality for streaming data to q/kdb+ instances.
 
 use super::KdbConnection;
-use crate::burst;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use chrono::NaiveDateTime;
@@ -294,6 +293,7 @@ impl<T: Element + Send + KdbSerialize + 'static> KdbWriteOperators<T> for dyn St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::burst;
     use kdb_plus_fixed::qtype;
 
     #[test]

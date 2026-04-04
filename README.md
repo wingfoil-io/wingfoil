@@ -60,7 +60,6 @@ let prices_export = prices
     .filter_value(|price: &Option<TwoWayPrice>| !price.is_none())
     .map(|price| price.unwrap())
     .distinct()
-    .map(|p| burst![p])
     .csv_write("prices.csv");
 let fills_export = fills.csv_write("fills.csv");
 Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)

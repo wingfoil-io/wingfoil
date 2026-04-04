@@ -1,3 +1,4 @@
+use crate::burst;
 use derive_new::new;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_aux::serde_introspection::serde_introspect;
@@ -63,7 +64,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
 
 impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dyn Stream<T> {
     fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
-        self.map(|v| crate::burst![v]).csv_write(path)
+        self.map(|v| burst![v]).csv_write(path)
     }
 }
 
