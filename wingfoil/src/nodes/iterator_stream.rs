@@ -1,4 +1,4 @@
-//! Adpaters to convert an Iterators into a Streams
+//! Adapters to convert Iterators into Streams
 
 use crate::queue::ValueAt;
 use crate::types::*;
@@ -6,12 +6,13 @@ use anyhow::anyhow;
 
 use std::cmp::Ordering;
 
-type Peeker<T> = Box<std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>>;
+type Peeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>;
 
-/// Wraps an Iterator and exposes it as a stream of Vectors
+/// Wraps an Iterator and exposes it as a [`Stream`] of [`Burst<T>`].
+/// Multiple items with the same timestamp are grouped into a single burst.
 pub struct IteratorStream<T: Element> {
     peekable: Peeker<T>,
-    value: Vec<T>,
+    value: Burst<T>,
 }
 
 fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::Result<bool> {
@@ -27,14 +28,12 @@ fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::
 impl<T: Element> MutableNode for IteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
-        {
-            while let Some(value_at) = self.peekable.peek() {
-                if value_at.time == state.time() {
-                    let val = self.peekable.next().unwrap().value.clone();
-                    self.value.push(val);
-                } else {
-                    break;
-                }
+        while let Some(value_at) = self.peekable.peek() {
+            if value_at.time == state.time() {
+                let val = self.peekable.next().unwrap().value.clone();
+                self.value.push(val);
+            } else {
+                break;
             }
         }
         add_callback(&mut self.peekable, state)
@@ -50,8 +49,8 @@ impl<T: Element> MutableNode for IteratorStream<T> {
     }
 }
 
-impl<T: Element> StreamPeekRef<Vec<T>> for IteratorStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
+impl<T: Element> StreamPeekRef<Burst<T>> for IteratorStream<T> {
+    fn peek_ref(&self) -> &Burst<T> {
         &self.value
     }
 }
@@ -61,18 +60,17 @@ where
     T: Element + 'static,
 {
     pub fn new(it: Box<dyn Iterator<Item = ValueAt<T>>>) -> Self {
-        let peekable = Box::new(it.peekable());
         Self {
-            peekable,
-            value: vec![],
+            peekable: it.peekable(),
+            value: Burst::default(),
         }
     }
 }
 
 /// Wraps an Iterator and exposes it as a [Stream] of values.
-/// The source must be strictly ascending in time.   If the source
-/// can tick multiple times at one time, then you can use an
-/// [IteratorStream] instead, which emits `Vec<T>`.
+/// The source must be strictly ascending in time. If the source
+/// can tick multiple times at the same timestamp, use
+/// [IteratorStream] instead, which emits [`Burst<T>`].
 pub struct SimpleIteratorStream<T: Element> {
     peekable: Peeker<T>,
     value: T,
@@ -80,23 +78,20 @@ pub struct SimpleIteratorStream<T: Element> {
 
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        {
-            let val_at1 = self.peekable.next().unwrap();
-            self.value = val_at1.value;
+        let val_at1 = self.peekable.next().unwrap();
+        self.value = val_at1.value;
 
-            let optional_val_at2 = self.peekable.peek();
-            if let Some(val_at2) = optional_val_at2 {
-                match val_at1.time.cmp(&val_at2.time) {
-                    Ordering::Greater => {
-                        return Err(anyhow!("source time was descending!"));
-                    }
-                    Ordering::Equal => {
-                        return Err(anyhow!(
-                            "source produced multiple ticks for same time, use IteratorStream instead"
-                        ));
-                    }
-                    Ordering::Less => {}
+        if let Some(val_at2) = self.peekable.peek() {
+            match val_at1.time.cmp(&val_at2.time) {
+                Ordering::Greater => {
+                    return Err(anyhow!("source time was descending!"));
                 }
+                Ordering::Equal => {
+                    return Err(anyhow!(
+                        "source produced multiple ticks for same time, use IteratorStream instead"
+                    ));
+                }
+                Ordering::Less => {}
             }
         }
         add_callback(&mut self.peekable, state)
@@ -123,9 +118,8 @@ where
     T: Element + 'static,
 {
     pub fn new(it: Box<dyn Iterator<Item = ValueAt<T>>>) -> SimpleIteratorStream<T> {
-        let peekable = Box::new(it.peekable());
         Self {
-            peekable,
+            peekable: it.peekable(),
             value: T::default(),
         }
     }

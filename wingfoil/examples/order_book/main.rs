@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 
-use wingfoil::adapters::csv_streams::*;
-use wingfoil::{Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators};
+use wingfoil::adapters::csv::*;
+use wingfoil::{Burst, Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators};
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -24,15 +24,16 @@ pub fn main() {
     let book = RefCell::new(lobster::OrderBook::default());
     // map from seconds from midnight to NanoTime time
     let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
-    let (fills, prices) = csv_read_vec("aapl.csv", get_time, true)
+    let (fills, prices) = csv_read("aapl.csv", get_time, true)
         .map(move |chunk| process_orders(chunk, &book))
         .split();
     let prices_export = prices
         .filter_value(|price| !price.is_none())
         .map(|price| price.unwrap())
         .distinct()
+        .map(|p| Burst::from([p]))
         .csv_write("prices.csv");
-    let fills_export = fills.csv_write_vec("fills.csv");
+    let fills_export = fills.csv_write("fills.csv");
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;
     Graph::new(vec![prices_export, fills_export], run_mode, run_for)
@@ -53,10 +54,10 @@ fn set_current_dir() {
 }
 
 fn process_orders(
-    chunk: Vec<Message>,
+    chunk: Burst<Message>,
     book: &RefCell<lobster::OrderBook>,
-) -> (Vec<Fill>, Option<TwoWayPrice>) {
-    let mut fills = vec![];
+) -> (Burst<Fill>, Option<TwoWayPrice>) {
+    let mut fills: Burst<Fill> = Burst::default();
     let mut price: Option<TwoWayPrice> = None;
     // chunk contains messages with common timestamp.
     // could be 1 message or a handful of messages
