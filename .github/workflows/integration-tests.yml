@@ -4,83 +4,13 @@ on:
   workflow_call:
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-
 jobs:
   kdb-integration:
     name: KDB Integration Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/kdb-integration.yml
+    secrets: inherit
 
-      - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build KDB image
-        run: docker build -t wingfoil-kdb docker/kdb/
-
-      - name: Start KDB container
-        run: |
-          echo "${{ secrets.KDB_LICENSE_B64 }}" | base64 -d > /tmp/kc.lic
-          docker run -d \
-            --name kdb \
-            -p 5000:5000 \
-            -e QLIC=/q \
-            -v /tmp/kc.lic:/q/kc.lic \
-            wingfoil-kdb
-
-      - name: Wait for KDB to be ready
-        run: |
-          for i in $(seq 1 30); do
-            nc -z localhost 5000 && echo "KDB ready" && break
-            echo "Waiting... ($i/30)"
-            sleep 1
-          done
-          nc -z localhost 5000 || (echo "KDB never became ready" && exit 1)
-
-      - name: Run Rust KDB integration tests
-        env:
-          KDB_TEST_HOST: localhost
-          KDB_TEST_PORT: 5000
-          RUST_LOG: INFO
-        run: |
-          cargo test --features kdb-integration-test -p wingfoil \
-            -- --test-threads=1 --nocapture
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install system dependencies
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install maturin and build Python bindings
-        run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest
-          cd wingfoil-python && .venv/bin/maturin develop
-
-      - name: Run Python KDB integration tests
-        env:
-          KDB_TEST_HOST: localhost
-          KDB_TEST_PORT: 5000
-          RUST_LOG: INFO
-        run: |
-          cd wingfoil-python && .venv/bin/pytest tests/test_kdb.py -v
-
-      - name: Dump KDB logs on failure
-        if: failure()
-        run: docker logs kdb
-
-      - name: Stop KDB container
-        if: always()
-        run: docker stop kdb && docker rm kdb
+  etcd-integration:
+    name: etcd Integration Tests
+    uses: ./.github/workflows/etcd-integration.yml
+    secrets: inherit
