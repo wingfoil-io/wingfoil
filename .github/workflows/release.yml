@@ -32,143 +32,15 @@ jobs:
             exit 1
           fi
 
-  rust-ci:
-    name: Rust — Build, Test & Lint
+  all-tests:
+    name: All Tests
     needs: preflight
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install clippy-sarif
-        uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: clippy-sarif
-
-      - name: Install sarif-fmt
-        uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: sarif-fmt
-
-      - name: Build
-        run: cargo build --verbose
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Run tests
-        run: cargo nextest run --no-capture
-        env:
-          RUST_LOG: INFO
-
-      - name: Run rustfmt
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy (default features)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run clippy (all features)
-        run: |
-          set -o pipefail
-          set -e
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo clippy --workspace --all-targets --all-features --message-format=json \
-            | clippy-sarif \
-            | tee rust-clippy-results.sarif \
-            | sarif-fmt
-
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: rust-clippy-results.sarif
-          wait-for-processing: true
-
-  python-tests:
-    name: Python Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Create virtualenv and install dependencies
-        run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq
-
-      - name: Build and install Python bindings
-        run: |
-          cd wingfoil-python
-          .venv/bin/maturin develop
-
-      - name: Run pytest
-        run: |
-          cd wingfoil-python
-          .venv/bin/pytest tests/
-
-  integration-tests:
-    name: Integration Tests
-    needs: preflight
-    uses: ./.github/workflows/integration-tests.yml
+    uses: ./.github/workflows/all-tests.yml
     secrets: inherit
-
-  etcd-integration:
-    name: etcd Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Run etcd integration tests
-        run: |
-          cargo test --features etcd-integration-test -p wingfoil \
-            -- --test-threads=1 etcd::integration_tests
-        env:
-          RUST_LOG: INFO
 
   tag:
     name: Cut release tag
-    needs: [rust-ci, python-tests, integration-tests, etcd-integration]
+    needs: [preflight, all-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
