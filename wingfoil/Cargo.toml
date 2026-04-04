@@ -198,12 +198,12 @@ required-features = ["otlp", "prometheus"]
 
 [[example]]
 name = "zmq_pub"
-path = "examples/zmq/zmq_pub.rs"
+path = "examples/zmq/seed/zmq_pub.rs"
 required-features = ["zmq-beta"]
 
 [[example]]
 name = "zmq_sub"
-path = "examples/zmq/zmq_sub.rs"
+path = "examples/zmq/seed/zmq_sub.rs"
 required-features = ["zmq-beta"]
 
 [[example]]
@@ -227,10 +227,15 @@ path = "examples/tracing/main.rs"
 
 [[example]]
 name = "zmq"
-path = "examples/zmq/main.rs"
+path = "examples/zmq/seed/main.rs"
 required-features = ["zmq-beta"]
 
 [[example]]
-name = "zmq_etcd_discovery"
-path = "examples/zmq/etcd_discovery.rs"
+name = "zmq_etcd_pub"
+path = "examples/zmq/etcd/zmq_pub.rs"
+required-features = ["zmq-beta", "etcd"]
+
+[[example]]
+name = "zmq_etcd_sub"
+path = "examples/zmq/etcd/zmq_sub.rs"
 required-features = ["zmq-beta", "etcd"]
