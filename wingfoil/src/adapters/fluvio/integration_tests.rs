@@ -42,7 +42,7 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
         .with_wait_for(WaitFor::millis(8_000))
         .with_exposed_port(FLUVIO_SC_PORT.into())
         .with_exposed_port(FLUVIO_SPU_PORT.into())
-        .with_cmd(vec!["fluvio-run", "sc", "--local", "/tmp/fluvio"])
+        .with_cmd(vec!["/fluvio-run", "sc", "--local", "/tmp/fluvio"])
         .start()?;
     let port = container.get_host_port_ipv4(FLUVIO_SC_PORT)?;
     let endpoint = format!("127.0.0.1:{port}");
