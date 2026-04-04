@@ -100,9 +100,6 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 /// // Direct address
 /// let (data, status) = zmq_sub::<Vec<u8>>("tcp://localhost:5556")?;
 ///
-/// // Seed-based discovery
-/// let (data, status) = zmq_sub::<Vec<u8>>(("quotes", SeedRegistry::new(&["tcp://seed:7777"])))?;
-///
 /// // etcd-based discovery
 /// let (data, status) = zmq_sub::<Vec<u8>>(("quotes", EtcdRegistry::new(conn)))?;
 /// ```

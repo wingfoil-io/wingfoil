@@ -5,9 +5,7 @@ use crate::py_stream::PyStream;
 
 use pyo3::prelude::*;
 use std::rc::Rc;
-use wingfoil::adapters::zmq::{
-    SeedHandle, SeedRegistry, ZeroMqPub, ZmqStatus, start_seed, zmq_sub,
-};
+use wingfoil::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub};
 use wingfoil::{Node, Stream, StreamOperators};
 
 /// Subscribe to a ZMQ PUB socket.
@@ -28,28 +26,6 @@ pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
     let (data, status) =
         zmq_sub::<Vec<u8>>(address.as_str()).expect("direct address zmq_sub should not fail");
     streams_to_py(data, status)
-}
-
-/// Discover a named ZMQ publisher via seeds and subscribe to it.
-///
-/// Queries each seed in order until one resolves `name` to an address, then
-/// connects. Returns an error if no seed can resolve the name.
-///
-/// Args:
-///     name: Publisher name to look up (e.g. "quotes")
-///     seeds: List of seed endpoints (e.g. ["tcp://localhost:7777"])
-///
-/// Returns:
-///     Tuple of (data_stream, status_stream)
-///
-/// Raises:
-///     RuntimeError: if no seed can resolve the name
-#[pyfunction]
-pub fn py_zmq_sub_discover(name: String, seeds: Vec<String>) -> PyResult<(PyStream, PyStream)> {
-    let seed_refs: Vec<&str> = seeds.iter().map(|s| s.as_str()).collect();
-    let (data, status) = zmq_sub::<Vec<u8>>((name.as_str(), SeedRegistry::new(&seed_refs)))
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-    Ok(streams_to_py(data, status))
 }
 
 /// Subscribe to a named ZMQ publisher via etcd service discovery.
@@ -122,33 +98,6 @@ pub fn py_zmq_pub_inner(stream: &Rc<dyn Stream<PyElement>>, port: u16) -> Rc<dyn
     bytes_stream.zmq_pub(port, ())
 }
 
-/// Inner implementation for `zmq_pub_named` (seed-based registration).
-pub fn py_zmq_pub_named_inner(
-    stream: &Rc<dyn Stream<PyElement>>,
-    name: String,
-    port: u16,
-    seeds: Vec<String>,
-) -> Rc<dyn Node> {
-    let seed_refs: Vec<&str> = seeds.iter().map(|s| s.as_str()).collect();
-    let registry = SeedRegistry::new(&seed_refs);
-    let bytes_stream = py_bytes_stream(stream, "zmq_pub_named");
-    bytes_stream.zmq_pub(port, (name.as_str(), registry))
-}
-
-/// Inner implementation for `zmq_pub_named_on` (seed-based, routable address).
-pub fn py_zmq_pub_named_on_inner(
-    stream: &Rc<dyn Stream<PyElement>>,
-    name: String,
-    address: String,
-    port: u16,
-    seeds: Vec<String>,
-) -> Rc<dyn Node> {
-    let seed_refs: Vec<&str> = seeds.iter().map(|s| s.as_str()).collect();
-    let registry = SeedRegistry::new(&seed_refs);
-    let bytes_stream = py_bytes_stream(stream, "zmq_pub_named_on");
-    bytes_stream.zmq_pub_on(&address, port, (name.as_str(), registry))
-}
-
 /// Inner implementation for `zmq_pub_etcd` (etcd-based registration).
 pub fn py_zmq_pub_etcd_inner(
     stream: &Rc<dyn Stream<PyElement>>,
@@ -192,37 +141,3 @@ fn py_bytes_stream(
     })
 }
 
-/// Handle to a running ZMQ seed node. The seed stops when this object is deleted.
-#[pyclass(unsendable, name = "SeedHandle")]
-pub struct PySeedHandle(#[allow(dead_code)] SeedHandle);
-
-#[pymethods]
-impl PySeedHandle {
-    fn __repr__(&self) -> &str {
-        "SeedHandle(running)"
-    }
-}
-
-/// Start a ZMQ seed node bound to `address` (e.g. `"tcp://0.0.0.0:7777"`).
-///
-/// The seed acts as a name registry: publishers register their address under a
-/// name; subscribers query by name to find the publisher address. Only the
-/// once-at-startup discovery handshake goes through the seed — data still flows
-/// directly over PUB/SUB sockets.
-///
-/// The seed stops when the returned handle is deleted (or goes out of scope).
-///
-/// Args:
-///     address: ZMQ endpoint to bind on (e.g. "tcp://0.0.0.0:7777")
-///
-/// Returns:
-///     SeedHandle — drop to stop the seed
-///
-/// Raises:
-///     RuntimeError: if the seed cannot bind to the given address
-#[pyfunction]
-pub fn py_start_seed(address: String) -> PyResult<PySeedHandle> {
-    start_seed(&address)
-        .map(PySeedHandle)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-}

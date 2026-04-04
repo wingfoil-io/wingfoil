@@ -71,9 +71,6 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 /// // No registration — direct connect only
 /// stream.zmq_pub(5556, ())
 ///
-/// // Register with a seed node
-/// stream.zmq_pub(5556, ("quotes", SeedRegistry::new(&["tcp://seed:7777"])))
-///
 /// // Register with etcd
 /// stream.zmq_pub(5556, ("quotes", EtcdRegistry::new(conn)))
 /// ```

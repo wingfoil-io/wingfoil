@@ -197,21 +197,6 @@ path = "examples/telemetry/otlp/main.rs"
 required-features = ["otlp", "prometheus"]
 
 [[example]]
-name = "zmq_pub"
-path = "examples/zmq/seed/zmq_pub.rs"
-required-features = ["zmq-beta"]
-
-[[example]]
-name = "zmq_sub"
-path = "examples/zmq/seed/zmq_sub.rs"
-required-features = ["zmq-beta"]
-
-[[example]]
-name = "etcd"
-path = "examples/etcd/main.rs"
-required-features = ["etcd"]
-
-[[example]]
 name = "iceoryx2_pub"
 path = "examples/iceoryx2/pub.rs"
 required-features = ["iceoryx2-beta"]
@@ -224,11 +209,6 @@ required-features = ["iceoryx2-beta"]
 [[example]]
 name = "tracing"
 path = "examples/tracing/main.rs"
-
-[[example]]
-name = "zmq"
-path = "examples/zmq/seed/main.rs"
-required-features = ["zmq-beta"]
 
 [[example]]
 name = "zmq_etcd_pub"

@@ -2,27 +2,37 @@
 
 ```
 zmq/
-  seed/   — direct pub/sub and seed-based discovery (no external infrastructure)
-  etcd/   — etcd-based discovery (requires etcd)
+  etcd/   — etcd-based service discovery (requires etcd)
 ```
 
-## seed/
+Two modes are supported:
 
-| Example | Description | Run |
-|---------|-------------|-----|
-| `zmq_pub` | Bind a PUB socket and stream data | `cargo run --example zmq_pub --features zmq-beta` |
-| `zmq_sub` | Connect to a hardcoded PUB address | `cargo run --example zmq_sub --features zmq-beta` |
-| `zmq` | Seed-based discovery — pub registers with seed; sub discovers via seed | `cargo run --example zmq --features zmq-beta` |
+| Mode | When to use |
+|------|-------------|
+| **Direct** (`zmq_pub` / `zmq_sub` with a plain address) | Simple setups, fixed topology |
+| **etcd** (`zmq_etcd_pub` / `zmq_etcd_sub`) | Dynamic topology, existing etcd infra, auto-expiry on crash |
 
-Run `zmq_pub` and `zmq_sub` in separate terminals. The `zmq` example runs all three
-components (seed, publisher, subscriber) in one process.
+## Direct pub/sub
+
+Run in separate terminals:
+
+```sh
+RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq-beta,etcd  # or use zmq_pub (no discovery)
+RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq-beta,etcd
+```
+
+For direct connections without discovery, pass a plain address to `zmq_sub`:
+
+```rust
+let (data, status) = zmq_sub::<Vec<u8>>("tcp://localhost:5556")?;
+```
 
 ## etcd/
 
-| Example | Description | Run |
-|---------|-------------|-----|
-| `zmq_etcd_pub` | Bind a PUB socket and register address in etcd | `cargo run --example zmq_etcd_pub --features zmq-beta,etcd` |
-| `zmq_etcd_sub` | Look up publisher address from etcd and subscribe | `cargo run --example zmq_etcd_sub --features zmq-beta,etcd` |
+| Example | Description |
+|---------|-------------|
+| `zmq_etcd_pub` | Bind a PUB socket and register address in etcd under a lease |
+| `zmq_etcd_sub` | Look up publisher address from etcd and subscribe |
 
 Start etcd first:
 
@@ -33,5 +43,11 @@ docker run --rm -p 2379:2379 \
   gcr.io/etcd-development/etcd:v3.5.0
 ```
 
-Then run `zmq_etcd_pub` and `zmq_etcd_sub` in separate terminals. The publisher's
-address lease expires ~30 s after a crash, or immediately on clean shutdown.
+Then run publisher and subscriber in separate terminals:
+
+```sh
+RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq-beta,etcd
+RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq-beta,etcd
+```
+
+The publisher's address lease expires ~30 s after a crash, or immediately on clean shutdown.

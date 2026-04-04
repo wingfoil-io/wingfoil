@@ -1,13 +1,10 @@
 //! ZMQ adapter — real-time pub/sub messaging using ØMQ sockets with optional
-//! registry-based service discovery.
+//! etcd-based service discovery.
 //!
 //! Provides two graph primitives:
 //!
 //! - [`zmq_sub`] — subscriber that connects to a ZMQ PUB socket
 //! - [`ZeroMqPub::zmq_pub`] — publisher that binds a ZMQ PUB socket
-//!
-//! Both accept an optional registry argument so the same functions work for
-//! direct-address, seed-based, and etcd-based discovery.
 //!
 //! # Setup
 //!
@@ -20,18 +17,22 @@
 //! wingfoil = { version = "...", features = ["zmq-beta"] }
 //! ```
 //!
-//! # Subscribing
+//! # Direct pub/sub
 //!
 //! ```ignore
-//! use wingfoil::adapters::zmq::{zmq_sub, SeedRegistry};
+//! use std::time::Duration;
+//! use wingfoil::adapters::zmq::{ZeroMqPub, zmq_sub};
 //! use wingfoil::*;
 //!
-//! // Direct address
+//! // Publisher — binds on 127.0.0.1:5556
+//! ticker(Duration::from_millis(100))
+//!     .count()
+//!     .zmq_pub(5556, ())
+//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .unwrap();
+//!
+//! // Subscriber — direct address
 //! let (data, status) = zmq_sub::<Vec<u8>>("tcp://localhost:5556")?;
-//!
-//! // Seed-based discovery
-//! let (data, status) = zmq_sub::<Vec<u8>>(("quotes", SeedRegistry::new(&["tcp://seed:7777"])))?;
-//!
 //! data.for_each(|burst, _| {
 //!     for msg in burst { println!("{msg:?}"); }
 //! })
@@ -40,48 +41,28 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! # Publishing
+//! # etcd-based discovery
 //!
 //! ```ignore
 //! use std::time::Duration;
-//! use wingfoil::adapters::zmq::{ZeroMqPub, SeedRegistry};
+//! use wingfoil::adapters::etcd::EtcdConnection;
+//! use wingfoil::adapters::zmq::{EtcdRegistry, ZeroMqPub, zmq_sub};
 //! use wingfoil::*;
 //!
-//! // No registration — direct connect only
-//! ticker(Duration::from_millis(100))
-//!     .count()
-//!     .zmq_pub(5556, ())
-//!     .run(RunMode::RealTime, RunFor::Forever)
-//!     .unwrap();
-//! ```
+//! let conn = EtcdConnection::new("http://etcd:2379");
 //!
-//! # Service Discovery
-//!
-//! Seed nodes act as lightweight name registries: publishers register on
-//! startup, subscribers query at construction time. Data still flows
-//! peer-to-peer over normal PUB/SUB sockets.
-//!
-//! ```ignore
-//! use std::time::Duration;
-//! use wingfoil::adapters::zmq::{ZeroMqPub, SeedRegistry, zmq_sub, start_seed};
-//! use wingfoil::*;
-//!
-//! // Start a seed on a well-known address (stops when dropped).
-//! let _seed = start_seed("tcp://0.0.0.0:7777")?;
-//!
-//! let seeds = SeedRegistry::new(&["tcp://seed-host:7777"]);
-//!
-//! // Publisher registers its address with the seed.
-//! std::thread::spawn(|| {
+//! // Publisher registers its address in etcd under "quotes".
+//! std::thread::spawn(move || {
 //!     ticker(Duration::from_millis(100))
 //!         .count()
-//!         .zmq_pub(5556, ("quotes", SeedRegistry::new(&["tcp://seed-host:7777"])))
+//!         .zmq_pub(5556, ("quotes", EtcdRegistry::new(conn)))
 //!         .run(RunMode::RealTime, RunFor::Forever)
 //!         .unwrap();
 //! });
 //!
-//! // Subscriber resolves the publisher by name — no hardcoded address.
-//! let (data, _status) = zmq_sub::<u64>(("quotes", seeds))?;
+//! // Subscriber looks up the publisher address from etcd.
+//! let conn2 = EtcdConnection::new("http://etcd:2379");
+//! let (data, _status) = zmq_sub::<u64>(("quotes", EtcdRegistry::new(conn2)))?;
 //! data.for_each(|burst, _| println!("{burst:?}"))
 //!     .run(RunMode::RealTime, RunFor::Forever)
 //!     .unwrap();
@@ -90,15 +71,13 @@
 
 mod read;
 pub mod registry;
-pub mod seed;
 mod write;
 
 #[cfg(all(test, feature = "zmq-beta-integration-test"))]
 mod integration_tests;
 
 pub use read::*;
-pub use registry::{SeedRegistry, ZmqHandle, ZmqPubRegistration, ZmqRegistry, ZmqSubConfig};
-pub use seed::{SeedHandle, start_seed};
+pub use registry::{ZmqHandle, ZmqPubRegistration, ZmqRegistry, ZmqSubConfig};
 pub use write::*;
 
 #[cfg(feature = "etcd")]

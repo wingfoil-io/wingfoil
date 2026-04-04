@@ -7,8 +7,6 @@ import zmq
 import wingfoil as wf
 
 PORT = 5570
-SEED_PORT = 5590
-PUB_PORT = 5591
 
 
 def _publish_garbage(port, ready):
@@ -36,42 +34,6 @@ def test_deserialization_error_propagates():
 
     with pytest.raises(Exception):
         wf.Graph([data_node]).run(duration=3.0)
-
-
-def test_zmq_sub_discover_end_to_end():
-    """Full round-trip: start seed, named publisher, discover and receive data."""
-    seed_addr = f"tcp://127.0.0.1:{SEED_PORT}"
-    pub_port = PUB_PORT
-
-    seed = wf.start_seed(seed_addr)
-    time.sleep(0.05)
-
-    def _run_publisher():
-        node = (
-            wf.ticker(0.05)
-            .count()
-            .map(lambda v: str(v).encode())
-            .zmq_pub_named("pytest_quotes", pub_port, [seed_addr])
-        )
-        node.run(realtime=True, duration=0.6)
-
-    pub_thread = threading.Thread(target=_run_publisher, daemon=True)
-    pub_thread.start()
-    time.sleep(0.15)  # let publisher register
-
-    data, _status = wf.zmq_sub_discover("pytest_quotes", [seed_addr])
-    items = []
-    data.inspect(lambda v: items.extend(v)).run(realtime=True, duration=0.5)
-
-    assert len(items) > 0, "no data received via discovery"
-
-    del seed  # stop the seed
-    pub_thread.join(timeout=2.0)
-
-
-def test_zmq_sub_discover_no_seed_returns_error():
-    with pytest.raises(Exception):
-        wf.zmq_sub_discover("anything", ["tcp://127.0.0.1:5599"])
 
 
 # --- etcd discovery tests ---

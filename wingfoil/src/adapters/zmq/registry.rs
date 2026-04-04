@@ -1,9 +1,8 @@
 //! Registry traits and implementations for ZMQ service discovery.
 //!
 //! Provides a backend-agnostic [`ZmqRegistry`] trait that decouples ZMQ from
-//! any specific name-resolution mechanism. Two implementations are included:
+//! any specific name-resolution mechanism:
 //!
-//! - [`SeedRegistry`] — uses the built-in seed node protocol
 //! - [`EtcdRegistry`] — stores addresses in etcd under a lease
 //!   (requires the `etcd` feature)
 
@@ -85,45 +84,6 @@ impl<R: ZmqRegistry + 'static> From<(&str, R)> for ZmqSubConfig {
             name.to_string(),
             Box::new(registry),
         ))
-    }
-}
-
-// ============ SeedRegistry ============
-
-/// Service registry backed by the built-in ZMQ seed node protocol.
-///
-/// ```ignore
-/// let seeds = SeedRegistry::new(&["tcp://seed-host:7777"]);
-/// stream.zmq_pub(5556, ("quotes", seeds));
-/// ```
-pub struct SeedRegistry {
-    seeds: Vec<String>,
-}
-
-impl SeedRegistry {
-    /// Create a `SeedRegistry` pointing at the given seed endpoints.
-    pub fn new(seeds: &[&str]) -> Self {
-        Self {
-            seeds: seeds.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-}
-
-struct NoOpHandle;
-
-impl ZmqHandle for NoOpHandle {
-    fn revoke(&mut self) {}
-}
-
-impl ZmqRegistry for SeedRegistry {
-    fn register(&self, name: &str, address: &str) -> Result<Box<dyn ZmqHandle>> {
-        super::seed::register_with_seeds(name, address, &self.seeds)?;
-        Ok(Box::new(NoOpHandle))
-    }
-
-    fn lookup(&self, name: &str) -> Result<String> {
-        let seed_refs: Vec<&str> = self.seeds.iter().map(|s| s.as_str()).collect();
-        super::seed::query_seeds(name, &seed_refs)
     }
 }
 
