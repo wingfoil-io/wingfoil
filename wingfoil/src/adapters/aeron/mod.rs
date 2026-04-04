@@ -91,6 +91,9 @@ pub use aeron_rs_backend::AeronRsHandle;
 use crate::{Burst, Element, IntoStream, Stream};
 use std::rc::Rc;
 
+#[cfg(all(test, feature = "aeron-integration-test"))]
+mod integration_tests;
+
 // ---------------------------------------------------------------------------
 // AeronMode
 // ---------------------------------------------------------------------------
