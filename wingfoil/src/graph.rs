@@ -421,7 +421,6 @@ impl Graph {
         desc: &str,
         func: impl Fn(Rc<dyn Node>, &mut GraphState) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
-        //println!("*** {:}graph {:} {:}", "   ".repeat(self.state.id), self.state.id, desc);
         let timer = Instant::now();
         for ix in 0..self.state.nodes.len() {
             if !self.state.nodes[ix].active {
