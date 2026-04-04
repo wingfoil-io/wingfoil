@@ -37,10 +37,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Publisher runs in its own graph on the same thread.
-    let publisher_node = subscriber
-        .clone()
-        .as_stream()
-        .aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+    let publisher_node = subscriber.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
     // A downstream node that prints received values.
     let printer = subscriber.inspect(|burst| {
