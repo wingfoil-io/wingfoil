@@ -33,7 +33,11 @@ pub struct AeronRsHandle {
 impl AeronRsHandle {
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn connect() -> anyhow::Result<Self> {
-        let ctx = Context::new();
+        let mut ctx = Context::new();
+        // Honour the same AERON_DIR env var that the C driver uses.
+        if let Ok(dir) = std::env::var("AERON_DIR") {
+            ctx.set_aeron_dir(dir);
+        }
         let aeron = Aeron::new(ctx)?;
         Ok(Self {
             aeron: Arc::new(Mutex::new(aeron)),

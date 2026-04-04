@@ -41,6 +41,18 @@ These tools are required for building, testing, and packaging the core **wingfoi
 
 For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
 
+#### Aeron adapter
+
+The Aeron adapter requires clang, libuuid, and a recent CMake (the version in apt is often too old):
+
+```bash
+sudo apt update
+sudo apt install clang libclang-dev uuid-dev
+
+wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
+```
+
 ### Building
 
 ```bash

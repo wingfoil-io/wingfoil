@@ -11,15 +11,76 @@
 use crate::adapters::aeron::transport::AeronSubscriberBackend;
 use crate::channel::Message;
 use crate::nodes::ReceiverStream;
-use crate::{Burst, Element, IntoStream, Stream};
+use crate::{
+    Burst, Element, GraphState, IntoStream, MutableNode, Stream, StreamPeekRef, UpStreams,
+};
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use tinyvec::TinyVec;
+
+// ---------------------------------------------------------------------------
+// Wrapper node
+// ---------------------------------------------------------------------------
+
+/// Wraps [`ReceiverStream`] to add a cooperative stop signal for the
+/// background polling thread.  When the graph calls `stop()` this node sets
+/// the flag before delegating to `ReceiverStream::stop()`, so the thread
+/// exits its loop and `join()` returns promptly instead of blocking forever.
+struct ThreadedAeronNode<T: Element + Send> {
+    inner: ReceiverStream<T>,
+    stop_flag: Arc<AtomicBool>,
+}
+
+impl<T: Element + Send> MutableNode for ThreadedAeronNode<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.inner.cycle(state)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        self.inner.upstreams()
+    }
+
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.setup(state)
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.start(state)
+    }
+
+    fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        // Signal the polling thread to exit its loop before ReceiverStream
+        // calls join(), so we don't block forever on a live Aeron subscription.
+        self.stop_flag.store(true, Ordering::Relaxed);
+        // Ignore join errors — any real error was already propagated via
+        // ReceiverStream's deferred-error mechanism during cycle().
+        self.inner.stop(state).ok();
+        Ok(())
+    }
+
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.teardown(state)
+    }
+}
+
+impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ThreadedAeronNode<T> {
+    fn peek_ref(&self) -> &TinyVec<[T; 1]> {
+        self.inner.peek_ref()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
 
 /// Build a threaded Aeron subscriber stream.
 ///
 /// The background thread owns `backend` and `parser` exclusively.  It spins
 /// on `backend.poll()` continuously; when fragments arrive they are sent
-/// through the channel.  `ReceiverStream` batches whatever arrived between
+/// through the channel.  The node batches whatever arrived between
 /// graph cycles into a `Burst<T>`.
 pub(crate) fn build<T, F, B>(backend: B, parser: F) -> Rc<dyn Stream<Burst<T>>>
 where
@@ -27,11 +88,14 @@ where
     F: FnMut(&[u8]) -> Option<T> + Send + 'static,
     B: AeronSubscriberBackend,
 {
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop_flag.clone();
+
     // `ReceiverStream::new` requires `Fn` (not `FnOnce`), so we store the
     // owned state in a `Mutex<Option<…>>` and extract it on first (and only)
     // invocation of the closure.
     let state = Mutex::new(Some((backend, parser)));
-    ReceiverStream::new(
+    let inner = ReceiverStream::new(
         move |sender| {
             let (mut backend, mut parser) = state
                 .lock()
@@ -39,6 +103,9 @@ where
                 .take()
                 .expect("threaded aeron closure called more than once");
             loop {
+                if stop_thread.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
                 backend.poll(&mut |fragment| {
                     if let Some(v) = parser(fragment) {
                         // Ignore send errors — graph has stopped, thread exits on next loop.
@@ -50,8 +117,9 @@ where
             }
         },
         true, // assert_realtime: Aeron makes no sense in historical mode
-    )
-    .into_stream()
+    );
+
+    ThreadedAeronNode { inner, stop_flag }.into_stream()
 }
 
 #[cfg(test)]
