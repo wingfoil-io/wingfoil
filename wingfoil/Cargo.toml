@@ -198,12 +198,12 @@ required-features = ["otlp", "prometheus"]
 
 [[example]]
 name = "zmq_pub"
-path = "examples/messaging/zmq_pub.rs"
+path = "examples/zmq/zmq_pub.rs"
 required-features = ["zmq-beta"]
 
 [[example]]
 name = "zmq_sub"
-path = "examples/messaging/zmq_sub.rs"
+path = "examples/zmq/zmq_sub.rs"
 required-features = ["zmq-beta"]
 
 [[example]]

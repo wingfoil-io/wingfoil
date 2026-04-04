@@ -1,41 +1,37 @@
-# ZMQ Adapter Example
+# ZMQ Examples
 
-Demonstrates seed-based service discovery: a seed node acts as a lightweight
-name registry so subscribers never need to hardcode publisher addresses. The
-publisher registers itself with the seed on startup; the subscriber queries the
-seed at construction time, then connects to the publisher directly over a normal
-ZMQ PUB/SUB socket.
+All ZMQ adapter examples live here.
 
-## Setup
-
-No broker process is required. The `zmq-beta` feature bundles `libzmq` at build
-time via `zeromq-src`.
+| Example | Description | Features |
+|---------|-------------|----------|
+| `zmq_pub` | Simple publisher — binds a PUB socket and streams data | `zmq-beta` |
+| `zmq_sub` | Simple subscriber — connects to a hardcoded PUB address | `zmq-beta` |
+| `zmq` | Seed-based discovery — publisher registers with a seed; subscriber discovers via seed | `zmq-beta` |
+| `zmq_etcd_discovery` | etcd-based discovery — publisher registers address in etcd; subscriber looks it up | `zmq-beta,etcd` |
 
 ## Run
 
 ```sh
+# Direct pub/sub (run in separate terminals)
+RUST_LOG=info cargo run --example zmq_pub --features zmq-beta
+RUST_LOG=info cargo run --example zmq_sub --features zmq-beta
+
+# Seed-based discovery (all-in-one process)
 RUST_LOG=info cargo run --example zmq --features zmq-beta
+
+# etcd-based discovery (requires etcd on localhost:2379)
+docker run --rm -p 2379:2379 \
+  -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+  -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+  gcr.io/etcd-development/etcd:v3.5.0
+
+RUST_LOG=info cargo run --example zmq_etcd_discovery --features zmq-beta,etcd
 ```
 
-## Code
+## Discovery modes
 
-See [`main.rs`](main.rs).
+**Seed-based** (`zmq`, `zmq_pub`/`zmq_sub` with a seed): a lightweight in-process
+registry — no external infrastructure required. The seed stops when dropped.
 
-Three components run in the same process (in a real deployment each would be
-separate):
-
-1. **Seed** — bound on `tcp://127.0.0.1:7777`; stops when dropped.
-2. **Publisher** — binds a PUB socket on port 7778, registers as `"quotes"` with the seed.
-3. **Subscriber** — queries the seed for `"quotes"`, receives the resolved address, connects.
-
-## Output
-
-```
-[INFO  pub] 1
-[INFO  pub] 2
-[INFO  sub] [1]
-[INFO  pub] 3
-[INFO  sub] [2, 3]
-...
-received 28 values: [1, 2, 3, 4, ...]
-```
+**etcd-based** (`zmq_etcd_discovery`): publisher writes its address to etcd under a
+lease; the address disappears ~30 s after a crash, or immediately on clean shutdown.
