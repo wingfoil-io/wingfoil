@@ -1,6 +1,8 @@
 mod proxy_stream;
 mod py_element;
 mod py_etcd;
+#[cfg(feature = "iceoryx2-beta")]
+mod py_iceoryx2;
 mod py_kdb;
 mod py_stream;
 mod py_zmq;
@@ -181,9 +183,15 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
+    #[cfg(feature = "iceoryx2-beta")]
+    module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add_class::<PyGraph>()?;
+    #[cfg(feature = "iceoryx2-beta")]
+    module.add_class::<py_iceoryx2::PyIceoryx2ServiceVariant>()?;
+    #[cfg(feature = "iceoryx2-beta")]
+    module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

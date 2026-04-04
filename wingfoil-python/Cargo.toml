@@ -14,6 +14,10 @@ description = "python bindings for wingfoil - graph based stream processing fram
 name = "wingfoil"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+iceoryx2-beta = ["wingfoil/iceoryx2-beta"]
+
 [dependencies]
 
 # parent
