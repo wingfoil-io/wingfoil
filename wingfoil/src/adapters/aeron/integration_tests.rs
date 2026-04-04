@@ -7,40 +7,91 @@
 //!   -- --test-threads=1 aeron::integration_tests
 //! ```
 //!
-//! Verify the Docker image name and wait-for log string before first run:
-//! ```sh
-//! docker run --rm aeroncookbook/aeron-media-driver 2>&1 | head -20
-//! ```
+//! Image: `neomantra/aeron-cpp-debian` — ships `/usr/local/bin/aeronmd` as entrypoint.
+//! The driver writes its CNC file to `/dev/shm/aeron-default/`; we bind-mount `/dev/shm`
+//! so the host Rust process connects to the same driver via `aeron:ipc`.
 
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::{Burst, Graph, RunFor, RunMode};
 use std::time::Duration;
-use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
+use testcontainers::{
+    GenericImage, ImageExt,
+    core::{Mount, WaitFor},
+    runners::SyncRunner,
+};
 
-const AERON_CHANNEL: &str = "aeron:udp?endpoint=localhost:20121";
-/// Verify this image name / tag before first run.
-const DRIVER_IMAGE: &str = "aeroncookbook/aeron-media-driver";
+/// `neomantra/aeron-cpp-debian` ships `aeronmd` as its entrypoint and logs nothing
+/// to stdout/stderr, so we use a fixed-time WaitFor.
+const DRIVER_IMAGE: &str = "neomantra/aeron-cpp-debian";
 const DRIVER_TAG: &str = "latest";
+/// IPC channel: communicates via the shared CNC file in /dev/shm — no UDP needed.
+const AERON_CHANNEL: &str = "aeron:ipc";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Shared Aeron directory used by both the container's aeronmd and the host client.
+/// Setting the same `AERON_DIR` on both sides ensures the CNC file path matches
+/// regardless of which user aeronmd runs as inside the container.
+const AERON_DIR: &str = "/dev/shm/aeron-integration-test";
+
 /// Start an Aeron media driver container and return a guard that stops it on drop.
-/// Uses `--network host` so the Rust test process and the container share the same
-/// localhost, making `aeron:udp?endpoint=localhost:20121` reachable from both sides.
+/// Binds `/dev/shm` into the container so the host process shares the CNC file.
 fn start_media_driver() -> anyhow::Result<impl Drop> {
-    // Adjust the WaitFor string to match the actual startup log of the image.
+    // Tell the host Aeron client where to find the CNC file.
+    // SAFETY: tests run with --test-threads=1, so no concurrent env access.
+    unsafe { std::env::set_var("AERON_DIR", AERON_DIR) };
+
+    // Remove any stale CNC files left by a previous test run so the new
+    // aeronmd creates a fresh one with a valid heartbeat.
+    let _ = std::fs::remove_dir_all(AERON_DIR);
+
+    // Run as the current user so the CNC file is writable by the test process.
+    // Aeron clients open the CNC file with O_RDWR; a root-owned 0644 file
+    // would cause EACCES for non-root users.
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
     let container = GenericImage::new(DRIVER_IMAGE, DRIVER_TAG)
-        .with_wait_for(WaitFor::message_on_stdout("INFO"))
-        .with_network("host")
+        // Minimal structural wait — we poll for the CNC file below.
+        .with_wait_for(WaitFor::seconds(1))
+        // Bind-mount the host's /dev/shm so aeronmd's CNC file is visible to
+        // the host process.  Do NOT call with_shm_size — that creates a
+        // separate tmpfs which overrides the bind mount.
+        .with_mount(Mount::bind_mount("/dev/shm", "/dev/shm"))
+        .with_env_var("AERON_DIR", AERON_DIR)
+        .with_user(format!("{uid}:{gid}"))
         .start()?;
+
+    // Poll until aeronmd creates the CNC file (max 10 s).
+    let cnc = std::path::Path::new(AERON_DIR).join("cnc.dat");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !cnc.exists() {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for aeronmd CNC file: {}",
+            cnc.display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Give aeronmd a moment to finish initialising the CNC file contents
+    // after it first appears on disk.
+    std::thread::sleep(Duration::from_millis(500));
+
     Ok(container)
 }
 
 // ---- Tests ----
 
 /// Without a running media driver, `AeronHandle::connect()` must return an error.
+///
+/// We point `AERON_DIR` at an empty temp directory so that a CNC file left by
+/// an earlier test in this suite does not cause a spurious success.
 #[test]
 fn test_no_driver_connection_fails() {
+    const NO_DRIVER_DIR: &str = "/tmp/aeron-no-driver-test";
+    let _ = std::fs::remove_dir_all(NO_DRIVER_DIR);
+    // SAFETY: tests run with --test-threads=1, no concurrent env access.
+    unsafe { std::env::set_var("AERON_DIR", NO_DRIVER_DIR) };
     let result = AeronHandle::connect();
     assert!(
         result.is_err(),
