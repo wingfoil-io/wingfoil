@@ -6,6 +6,16 @@ use tinyvec::TinyVec;
 
 pub use crate::graph::GraphState;
 pub use crate::time::*;
+/// Attribute macro for `impl MutableNode` blocks.
+///
+/// Generates `fn upstreams()` and/or `impl StreamPeekRef<T>` to eliminate
+/// boilerplate in custom node definitions.  See [`MutableNode`] for the full
+/// attribute syntax.
+///
+/// **Scope requirement**: the generated `upstreams()` body calls
+/// [`AsUpstreamNodes`] unqualified, so `AsUpstreamNodes` must be in scope.
+/// `use wingfoil::*` satisfies this; selective imports must add
+/// `use wingfoil::AsUpstreamNodes` explicitly.
 pub use wingfoil_derive::node;
 
 /// A small vector optimised for single-element bursts.

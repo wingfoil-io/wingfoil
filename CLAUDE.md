@@ -87,6 +87,26 @@ These commands must pass without errors before creating a commit.
 - **Passive** upstreams are read but don't trigger execution
 - Graph executes breadth-first from source nodes
 
+### Custom Nodes
+
+Use the `#[node]` attribute macro on `impl MutableNode` to generate `upstreams()` and `StreamPeekRef`:
+
+```rust
+#[node(active = [upstream], output = value: OUT)]
+impl<IN, OUT: Element> MutableNode for MyStream<IN, OUT> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> { ... }
+}
+```
+
+- `active = [f1, f2]` — fields that trigger this node when they tick
+- `passive = [f3]` — fields read but not triggering
+- `output = field: Type` — emits `impl StreamPeekRef<Type>`
+- No `active`/`passive` → source node (default `upstreams()` returns `UpStreams::none()`)
+- Complex cases (e.g. `Dep<T>`, `Option<Rc<dyn Node>>`) → write `upstreams()` manually in the impl block
+- Requires `use wingfoil::*` (or explicit `use wingfoil::AsUpstreamNodes`) for the generated code to compile
+
+See `wingfoil/examples/dynamic/dynamic-manual/main.rs` for a fully manual custom node example.
+
 ### Common Patterns
 
 - All stream values must implement `Element` (= `Debug + Clone + Default + 'static`)
