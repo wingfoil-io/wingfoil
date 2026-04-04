@@ -5,11 +5,8 @@ use crate::types::*;
 
 /// Maps source into a new Stream using a fallible closure.
 /// Used by [try_map](crate::nodes::StreamOperators::try_map).
-#[derive(StreamPeekRef, WiringPoint)]
 pub struct TryMapStream<IN, OUT: Element> {
-    #[active]
     upstream: Rc<dyn Stream<IN>>,
-    #[output]
     value: OUT,
     func: Box<dyn Fn(IN) -> anyhow::Result<OUT>>,
 }
@@ -24,6 +21,7 @@ impl<IN, OUT: Element> TryMapStream<IN, OUT> {
     }
 }
 
+#[node(active = [upstream], output = value: OUT)]
 impl<IN, OUT: Element> MutableNode for TryMapStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream.peek_value())?;

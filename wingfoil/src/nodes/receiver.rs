@@ -1,7 +1,7 @@
 use std::thread::{self, JoinHandle};
 
 use crate::{
-    ChannelReceiverStream, Element, MutableNode, RunMode, StreamPeekRef, UpStreams, WiringPoint,
+    ChannelReceiverStream, Element, MutableNode, RunMode, StreamPeekRef, UpStreams,
     channel::{ChannelSender, channel_pair},
 };
 use tinyvec::TinyVec;
@@ -54,13 +54,11 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     assert_realtime: bool,
 }
 
-impl<T: Element + Send> WiringPoint for ReceiverStream<T> {
+impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     fn upstreams(&self) -> UpStreams {
         self.inner.upstreams()
     }
-}
 
-impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         self.state.check_running()?;
         self.inner.cycle(state)

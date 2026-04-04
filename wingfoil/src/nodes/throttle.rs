@@ -5,18 +5,17 @@ use std::rc::Rc;
 /// Suppresses upstream values that arrive faster than a specified interval.
 /// Passes the first value through, then ignores subsequent values until the
 /// interval elapses.
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct ThrottleStream<T: Element> {
-    #[active]
     upstream: Rc<dyn Stream<T>>,
     interval: NanoTime,
     #[new(default)]
     last_emit_time: Option<NanoTime>,
     #[new(default)]
-    #[output]
     value: T,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for ThrottleStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let now = state.time();

@@ -3,9 +3,9 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::channel::{ChannelSender, Message};
+use crate::types::*;
 use crate::{
-    Burst, Element, GraphState, IntoNode, IntoStream, MapFilterStream, MutableNode, Node,
-    ReceiverStream, RunMode, Stream, UpStreams, WiringPoint,
+    Burst, GraphState, IntoNode, IntoStream, MapFilterStream, Node, ReceiverStream, RunMode, Stream,
 };
 use derive_new::new;
 use serde::Serialize;
@@ -172,12 +172,7 @@ struct ZeroMqSenderNode<T: Element + Send + Serialize> {
 
 const FLAGS: i32 = 0;
 
-impl<T: Element + Send + Serialize> WiringPoint for ZeroMqSenderNode<T> {
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.src.clone().as_node()], vec![])
-    }
-}
-
+#[node(active = [src])]
 impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let value = self.src.peek_value();

@@ -4,15 +4,14 @@ use derive_new::new;
 use std::rc::Rc;
 
 /// Counts how many times upstream has ticked.
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub struct MergeStream<T: Element> {
-    #[active]
     upstreams: Vec<Rc<dyn Stream<T>>>,
     #[new(default)]
-    #[output]
     value: T,
 }
 
+#[node(active = [upstreams], output = value: T)]
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         for stream in self.upstreams.iter() {

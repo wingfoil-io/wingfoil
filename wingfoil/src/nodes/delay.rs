@@ -7,20 +7,19 @@ use crate::types::*;
 use derive_new::new;
 
 /// Emits it's source delayed by the specified time
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     #[new(default)]
-    #[output]
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
     #[new(default)]
     initialized: bool,
-    #[active]
     upstream: Rc<dyn Stream<T>>,
     delay: NanoTime,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {

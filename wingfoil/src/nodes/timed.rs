@@ -29,6 +29,10 @@ impl<T: Element> TimedStream<T> {
 }
 
 impl<T: Element> MutableNode for TimedStream<T> {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
+    }
+
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         self.wall_start = Some(Instant::now());
         Ok(())
@@ -70,12 +74,6 @@ impl<T: Element> MutableNode for TimedStream<T> {
             }
         }
         Ok(())
-    }
-}
-
-impl<T: Element> WiringPoint for TimedStream<T> {
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 

@@ -2,15 +2,15 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
-#[derive(new, WiringPoint)]
+#[derive(new)]
 pub struct FinallyNode<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> {
-    #[active]
     source: Rc<dyn Stream<T>>,
     finally: Option<F>,
     #[new(default)]
     value: T,
 }
 
+#[node(active = [source])]
 impl<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> MutableNode
     for FinallyNode<T, F>
 {

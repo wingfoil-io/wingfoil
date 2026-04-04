@@ -1,6 +1,6 @@
 use crate::{
     Burst, Element, GraphState, IntoStream, MutableNode, Node, Stream, StreamOperators,
-    StreamPeekRef, UpStreams, WiringPoint,
+    StreamPeekRef, UpStreams,
 };
 use derive_more::Debug;
 use derive_new::new;
@@ -199,7 +199,7 @@ where
     }
 }
 
-impl<T, K, F> WiringPoint for DemuxParent<T, F, K>
+impl<T, K, F> MutableNode for DemuxParent<T, F, K>
 where
     T: Element,
     F: Fn(&T) -> (K, DemuxEvent),
@@ -209,14 +209,7 @@ where
         let nodes = vec![self.source.clone().as_node()];
         UpStreams::new(nodes, vec![])
     }
-}
 
-impl<T, K, F> MutableNode for DemuxParent<T, F, K>
-where
-    T: Element,
-    F: Fn(&T) -> (K, DemuxEvent),
-    K: Hash + Eq + PartialEq + std::fmt::Debug,
-{
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         let (key, event) = (self.func)(&self.value);
@@ -274,7 +267,7 @@ where
     value: T,
 }
 
-impl<T> WiringPoint for DemuxChild<T>
+impl<T> MutableNode for DemuxChild<T>
 where
     T: Element,
 {
@@ -282,12 +275,7 @@ where
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
     }
-}
 
-impl<T> MutableNode for DemuxChild<T>
-where
-    T: Element,
-{
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         Ok(true)
@@ -368,7 +356,7 @@ where
     }
 }
 
-impl<T, K, F, I> WiringPoint for DemuxVecParent<T, F, K, I>
+impl<T, K, F, I> MutableNode for DemuxVecParent<T, F, K, I>
 where
     T: Element,
     F: Fn(&T) -> (K, DemuxEvent),
@@ -379,15 +367,7 @@ where
         let nodes = vec![self.source.clone().as_node()];
         UpStreams::new(nodes, vec![])
     }
-}
 
-impl<T, K, F, I> MutableNode for DemuxVecParent<T, F, K, I>
-where
-    T: Element,
-    F: Fn(&T) -> (K, DemuxEvent),
-    K: Hash + Eq + PartialEq + std::fmt::Debug,
-    I: IntoIterator<Item = T> + Element,
-{
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         for row in &mut self.value {
             row.clear();
@@ -455,7 +435,7 @@ where
     value: Burst<T>,
 }
 
-impl<T> WiringPoint for DemuxVecChild<T>
+impl<T> MutableNode for DemuxVecChild<T>
 where
     T: Element,
 {
@@ -463,12 +443,7 @@ where
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
     }
-}
 
-impl<T> MutableNode for DemuxVecChild<T>
-where
-    T: Element,
-{
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
         Ok(true)

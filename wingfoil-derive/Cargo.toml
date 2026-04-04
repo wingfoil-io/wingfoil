@@ -3,7 +3,11 @@ name = "wingfoil-derive"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Proc-macro derives for the wingfoil stream processing library"
+description = "Proc-macro attribute for the wingfoil stream processing library"
+repository = "https://github.com/wingfoil-io/wingfoil"
+homepage = "https://github.com/wingfoil-io/wingfoil/"
+keywords = ["graph", "stream", "dag", "hft", "trading"]
+publish = ["wingfoil", "crates-io"]
 
 [lib]
 proc-macro = true

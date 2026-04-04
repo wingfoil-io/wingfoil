@@ -5,12 +5,9 @@ use std::rc::Rc;
 
 /// Propagates input and also pushes into buffer which is printed
 /// on Drop.
-#[derive(StreamPeekRef, WiringPoint)]
 pub struct PrintStream<T: Element> {
-    #[active]
     upstream: Rc<dyn Stream<T>>,
     buffer: Vec<T>,
-    #[output]
     value: T,
 }
 
@@ -24,6 +21,7 @@ impl<T: Element> PrintStream<T> {
     }
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for PrintStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();

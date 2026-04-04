@@ -1,17 +1,15 @@
 use crate::types::*;
 use std::rc::Rc;
 
-#[derive(StreamPeekRef, WiringPoint)]
 pub(crate) struct WindowStream<T: Element> {
-    #[active]
     upstream: Rc<dyn Stream<T>>,
     interval: NanoTime,
     next_window: NanoTime,
     buffer: Vec<T>,
-    #[output]
     value: Vec<T>,
 }
 
+#[node(active = [upstream], output = value: Vec<T>)]
 impl<T: Element> MutableNode for WindowStream<T> {
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.next_window = state.time() + self.interval;

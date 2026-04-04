@@ -18,12 +18,7 @@ pub struct CsvWriterNode<T: Element> {
     headers_written: bool,
 }
 
-impl<T: Element + Serialize + DeserializeOwned + 'static> WiringPoint for CsvWriterNode<T> {
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
+#[node(active = [upstream])]
 impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {

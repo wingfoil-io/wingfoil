@@ -4,18 +4,18 @@ use derive_new::new;
 use std::boxed::Box;
 
 /// Maps three streams into a single stream.
-#[derive(new, StreamPeekRef)]
+#[derive(new)]
 pub(crate) struct TriMapStream<IN1, IN2, IN3, OUT: Element> {
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
     upstream3: Dep<IN3>,
     #[new(default)]
-    #[output]
     value: OUT,
     func: Box<dyn Fn(IN1, IN2, IN3) -> OUT>,
 }
 
-impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> WiringPoint
+#[node(output = value: OUT)]
+impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> MutableNode
     for TriMapStream<IN1, IN2, IN3, OUT>
 {
     fn upstreams(&self) -> UpStreams {
@@ -31,11 +31,6 @@ impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> WiringPoint
             passive.into_iter().map(|(n, _)| n).collect(),
         )
     }
-}
-
-impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> MutableNode
-    for TriMapStream<IN1, IN2, IN3, OUT>
-{
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(
             self.upstream1.stream().peek_value(),

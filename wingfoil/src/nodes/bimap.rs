@@ -4,17 +4,17 @@ use derive_new::new;
 use std::boxed::Box;
 
 /// Maps two streams into a single stream.  Used by [add](crate::nodes::add).
-#[derive(new, StreamPeekRef)]
+#[derive(new)]
 pub(crate) struct BiMapStream<IN1, IN2, OUT: Element> {
     upstream1: Dep<IN1>,
     upstream2: Dep<IN2>,
     #[new(default)]
-    #[output]
     value: OUT,
     func: Box<dyn Fn(IN1, IN2) -> OUT>,
 }
 
-impl<IN1: 'static, IN2: 'static, OUT: Element> WiringPoint for BiMapStream<IN1, IN2, OUT> {
+#[node(output = value: OUT)]
+impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
     fn upstreams(&self) -> UpStreams {
         let (active, passive): (Vec<_>, Vec<_>) = [
             (self.upstream1.as_node(), self.upstream1.is_active()),
@@ -27,9 +27,6 @@ impl<IN1: 'static, IN2: 'static, OUT: Element> WiringPoint for BiMapStream<IN1, 
             passive.into_iter().map(|(n, _)| n).collect(),
         )
     }
-}
-
-impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(
             self.upstream1.stream().peek_value(),

@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
-use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams, WiringPoint};
+use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
@@ -27,7 +27,7 @@ impl Clone for PyProxyStream {
     }
 }
 
-impl WiringPoint for PyProxyStream {
+impl MutableNode for PyProxyStream {
     fn upstreams(&self) -> UpStreams {
         let ups = Python::attach(|py| {
             let this = self.0.bind(py);
@@ -48,9 +48,7 @@ impl WiringPoint for PyProxyStream {
         });
         UpStreams::new(ups, vec![])
     }
-}
 
-impl MutableNode for PyProxyStream {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         Python::attach(|py| {
             let this = self.0.bind(py);

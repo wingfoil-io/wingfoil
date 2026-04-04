@@ -9,22 +9,20 @@ use derive_new::new;
 /// Like [`DelayStream`](super::delay::DelayStream) but with a reset trigger.
 /// When the trigger fires, the output snaps to the current upstream value and
 /// the pending queue is cleared.
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
     #[new(default)]
-    #[output]
     value: T,
     #[new(default)]
     queue: TimeQueue<T>,
     #[new(default)]
     initialized: bool,
-    #[active]
     upstream: Rc<dyn Stream<T>>,
-    #[active]
     trigger: Rc<dyn Node>,
     delay: NanoTime,
 }
 
+#[node(active = [upstream, trigger], output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if state.ticked(self.trigger.clone()) {

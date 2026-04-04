@@ -7,16 +7,15 @@ use crate::types::*;
 
 /// When triggered by it's source, it produces values
 /// using the supplied closure.
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct ProducerStream<T: Element> {
-    #[active]
     upstream: Rc<dyn Node>,
     func: Box<dyn Fn() -> T>,
     #[new(default)]
-    #[output]
     value: T,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for ProducerStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)();

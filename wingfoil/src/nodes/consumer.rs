@@ -7,13 +7,13 @@ use crate::types::*;
 
 /// Applies function to it's source.  It is a [Node] - it
 /// doesn't produce anything.  Used by [consume](crate::nodes::StreamOperators::for_each).
-#[derive(new, WiringPoint)]
+#[derive(new)]
 pub(crate) struct ConsumerNode<IN> {
-    #[active]
     upstream: Rc<dyn Stream<IN>>,
     func: Box<dyn Fn(IN, NanoTime)>,
 }
 
+#[node(active = [upstream])]
 impl<IN> MutableNode for ConsumerNode<IN> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(self.upstream.peek_value(), state.time());
@@ -23,13 +23,13 @@ impl<IN> MutableNode for ConsumerNode<IN> {
 
 /// Like [ConsumerNode] but accepts a fallible closure.
 /// Errors propagate to graph execution.
-#[derive(new, WiringPoint)]
+#[derive(new)]
 pub(crate) struct TryConsumerNode<IN> {
-    #[active]
     upstream: Rc<dyn Stream<IN>>,
     func: Box<dyn Fn(IN, NanoTime) -> anyhow::Result<()>>,
 }
 
+#[node(active = [upstream])]
 impl<IN> MutableNode for TryConsumerNode<IN> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(self.upstream.peek_value(), state.time())?;

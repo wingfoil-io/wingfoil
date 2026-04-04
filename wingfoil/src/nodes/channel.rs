@@ -40,7 +40,7 @@ pub(crate) struct SenderNode<T: Element + Send> {
     trigger: Option<Rc<dyn Node>>,
 }
 
-impl<T: Element + Send> WiringPoint for SenderNode<T> {
+impl<T: Element + Send> MutableNode for SenderNode<T> {
     fn upstreams(&self) -> UpStreams {
         let mut upstreams = vec![self.source.clone().as_node()];
         if let Some(trig) = &self.trigger {
@@ -48,9 +48,7 @@ impl<T: Element + Send> WiringPoint for SenderNode<T> {
         }
         UpStreams::new(upstreams, Vec::new())
     }
-}
 
-impl<T: Element + Send> MutableNode for SenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
         if state.ticked(self.source.clone().as_node()) {
@@ -76,14 +74,13 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
     }
 }
 
-#[derive(new, Debug, StreamPeekRef)]
+#[derive(new, Debug)]
 pub struct ChannelReceiverStream<T: Element + Send> {
     receiver: ChannelReceiver<T>,
     #[debug(skip)]
     trigger: Option<Rc<dyn Node>>,
     notifier_channel: Option<NotifierChannelSender>,
     #[new(default)]
-    #[output]
     value: Burst<T>,
     #[new(default)]
     finished: bool,
@@ -93,7 +90,8 @@ pub struct ChannelReceiverStream<T: Element + Send> {
     queue: VecDeque<ValueAt<T>>,
 }
 
-impl<T: Element + Send> WiringPoint for ChannelReceiverStream<T> {
+#[node(output = value: Burst<T>)]
+impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn upstreams(&self) -> UpStreams {
         let mut ups = Vec::new();
         if let Some(trigger) = &self.trigger {
@@ -101,9 +99,7 @@ impl<T: Element + Send> WiringPoint for ChannelReceiverStream<T> {
         }
         UpStreams::new(ups, vec![])
     }
-}
 
-impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn cycle(&mut self, state: &mut crate::GraphState) -> anyhow::Result<bool> {
         let mut values: Burst<T> = Burst::new();
         match state.run_mode() {

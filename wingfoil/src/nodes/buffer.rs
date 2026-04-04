@@ -2,16 +2,14 @@ use crate::types::*;
 
 use std::rc::Rc;
 
-#[derive(StreamPeekRef, WiringPoint)]
 pub(crate) struct BufferStream<T: Element> {
-    #[active]
     upstream: Rc<dyn Stream<T>>,
     capacity: usize,
     buffer: Vec<T>,
-    #[output]
     value: Vec<T>,
 }
 
+#[node(active = [upstream], output = value: Vec<T>)]
 impl<T: Element> MutableNode for BufferStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.buffer.push(self.upstream.peek_value());

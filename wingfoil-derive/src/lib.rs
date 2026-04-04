@@ -1,221 +1,156 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{
+    Ident, ImplItem, ImplItemFn, ItemImpl, Token, Type, bracketed,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+};
 
-/// Derives `StreamPeekRef<T>` for a struct with exactly one field tagged `#[output]`.
-///
-/// The generated impl delegates `peek_ref()` to a reference of that field.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// #[derive(StreamPeekRef)]
-/// struct MyNode<T: Element> {
-///     upstream: Rc<dyn Stream<T>>,
-///     #[output]
-///     value: T,
-/// }
-/// // Generates:
-/// // impl<T: Element> StreamPeekRef<T> for MyNode<T> {
-/// //     fn peek_ref(&self) -> &T { &self.value }
-/// // }
-/// ```
-#[proc_macro_derive(StreamPeekRef, attributes(output))]
-pub fn derive_stream_peek_ref(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-
-    let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-
-    let fields = match &input.data {
-        Data::Struct(s) => match &s.fields {
-            Fields::Named(f) => &f.named,
-            _ => {
-                return syn::Error::new_spanned(
-                    name,
-                    "#[derive(StreamPeekRef)] requires named struct fields",
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(
-                name,
-                "#[derive(StreamPeekRef)] can only be applied to structs",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    let output_fields: Vec<_> = fields
-        .iter()
-        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("output")))
-        .collect();
-
-    let output_field = match output_fields.len() {
-        0 => {
-            return syn::Error::new_spanned(
-                name,
-                "#[derive(StreamPeekRef)] requires exactly one field tagged #[output]",
-            )
-            .to_compile_error()
-            .into();
-        }
-        1 => output_fields[0],
-        _ => {
-            return syn::Error::new_spanned(
-                name,
-                "#[derive(StreamPeekRef)] found multiple #[output] fields; exactly one is required",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    let field_name = output_field.ident.as_ref().expect("named field");
-    let field_type = &output_field.ty;
-
-    // Add `Self: MutableNode` to the where clause so the impl is only valid when the
-    // MutableNode supertrait (with its potentially-stricter bounds) is also satisfied.
-    // This lets the derive work for structs whose MutableNode impl has extra bounds
-    // (e.g. `T: ToPrimitive`, `IN1: 'static`) that aren't on the struct definition.
-    let where_tokens = match where_clause {
-        Some(wc) => {
-            let preds = wc.predicates.iter();
-            quote! { where #(#preds,)* #name #ty_generics: MutableNode }
-        }
-        None => quote! { where #name #ty_generics: MutableNode },
-    };
-
-    quote! {
-        impl #impl_generics StreamPeekRef<#field_type> for #name #ty_generics #where_tokens {
-            fn peek_ref(&self) -> &#field_type {
-                &self.#field_name
-            }
-        }
-    }
-    .into()
+struct NodeArgs {
+    active: Vec<Ident>,
+    passive: Vec<Ident>,
+    output: Option<(Ident, Type)>,
 }
 
-/// Derives `WiringPoint` for a struct.
-///
-/// Fields tagged `#[active]` are collected as active upstreams (trigger execution).
-/// Fields tagged `#[passive]` are collected as passive upstreams (read but don't trigger).
-/// Each upstream field must implement `AsUpstreamNodes` (implemented for `Rc<dyn Node>`,
-/// `Rc<dyn Stream<T>>`, and `Vec<U: AsUpstreamNodes>`).
-///
-/// If no fields are tagged, the generated impl returns `UpStreams::none()` (source node).
-///
-/// # Example
-///
-/// ```rust,ignore
-/// #[derive(WiringPoint)]
-/// struct MapStream<IN, OUT: Element> {
-///     #[active]
-///     upstream: Rc<dyn Stream<IN>>,
-///     #[output]
-///     value: OUT,
-///     func: Box<dyn Fn(IN) -> OUT>,
-/// }
-/// // Generates:
-/// // impl<IN, OUT: Element> WiringPoint for MapStream<IN, OUT>
-/// // where MapStream<IN, OUT>: MutableNode {
-/// //     fn upstreams(&self) -> UpStreams {
-/// //         let mut active = Vec::new();
-/// //         let mut passive = Vec::new();
-/// //         active.extend(AsUpstreamNodes::as_upstream_nodes(&self.upstream));
-/// //         UpStreams::new(active, passive)
-/// //     }
-/// // }
-/// ```
-#[proc_macro_derive(WiringPoint, attributes(active, passive))]
-pub fn derive_upstreams(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+impl Parse for NodeArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut active = Vec::new();
+        let mut passive = Vec::new();
+        let mut output = None;
 
-    let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
 
-    let fields = match &input.data {
-        Data::Struct(s) => match &s.fields {
-            Fields::Named(f) => &f.named,
-            _ => {
-                return syn::Error::new_spanned(
-                    name,
-                    "#[derive(WiringPoint)] requires named struct fields",
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(
-                name,
-                "#[derive(WiringPoint)] can only be applied to structs",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    let active_fields: Vec<_> = fields
-        .iter()
-        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("active")))
-        .collect();
-
-    let passive_fields: Vec<_> = fields
-        .iter()
-        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("passive")))
-        .collect();
-
-    // Add `where Self: MutableNode` so the impl is only valid when MutableNode is also
-    // satisfied.  This lets the derive work for structs whose MutableNode impl has extra
-    // bounds (e.g. `IN1: 'static`) that aren't on the struct definition.
-    let where_tokens = match where_clause {
-        Some(wc) => {
-            let preds = wc.predicates.iter();
-            quote! { where #(#preds,)* #name #ty_generics: MutableNode }
-        }
-        None => quote! { where #name #ty_generics: MutableNode },
-    };
-
-    if active_fields.is_empty() && passive_fields.is_empty() {
-        // Source node: no upstreams, emit UpStreams::none()
-        return quote! {
-            impl #impl_generics WiringPoint for #name #ty_generics #where_tokens {
-                fn upstreams(&self) -> UpStreams {
-                    UpStreams::none()
+            match key.to_string().as_str() {
+                "active" => {
+                    let content;
+                    bracketed!(content in input);
+                    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+                    active = list.into_iter().collect();
+                }
+                "passive" => {
+                    let content;
+                    bracketed!(content in input);
+                    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+                    passive = list.into_iter().collect();
+                }
+                "output" => {
+                    let field: Ident = input.parse()?;
+                    input.parse::<Token![:]>()?;
+                    let ty: Type = input.parse()?;
+                    output = Some((field, ty));
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown key `{key}`; expected `active`, `passive`, or `output`"),
+                    ));
                 }
             }
+
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
         }
-        .into();
+
+        Ok(NodeArgs {
+            active,
+            passive,
+            output,
+        })
     }
+}
 
-    let active_extend = active_fields.iter().map(|f| {
-        let field_name = f.ident.as_ref().expect("named field");
-        quote! {
-            active.extend(AsUpstreamNodes::as_upstream_nodes(&self.#field_name));
-        }
-    });
+/// Attribute macro that reduces boilerplate in [`MutableNode`] implementations.
+///
+/// Place `#[node(...)]` on an `impl MutableNode for MyType` block. It can:
+///
+/// - Inject `fn upstreams()` from `active = [field1, field2]` and/or `passive = [field3]`
+/// - Emit a separate `impl StreamPeekRef<T>` from `output = field_name: FieldType`
+///
+/// Fields listed as `active` or `passive` must implement `AsUpstreamNodes`
+/// (`Rc<dyn Node>`, `Rc<dyn Stream<T>>`, or `Vec` of either).
+///
+/// If neither `active` nor `passive` is specified, no `upstreams()` is injected —
+/// the default `UpStreams::none()` from [`MutableNode`] is used (source node), or you
+/// can write `upstreams()` manually in the impl block for complex cases (e.g. `Dep<T>`).
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Transform node: active upstream, stream output
+/// #[node(active = [upstream], output = value: OUT)]
+/// impl<IN, OUT: Element> MutableNode for MapStream<IN, OUT> {
+///     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+///         self.value = (self.func)(self.upstream.peek_value());
+///         Ok(true)
+///     }
+/// }
+///
+/// // Sink node: active upstream, no output
+/// #[node(active = [upstream])]
+/// impl<IN> MutableNode for ConsumerNode<IN> {
+///     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> { ... }
+/// }
+///
+/// // Source node with output (upstreams default to none)
+/// #[node(output = value: T)]
+/// impl<T: Element> MutableNode for ConstantStream<T> {
+///     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> { Ok(true) }
+/// }
+///
+/// // Mixed: passive + active upstreams, output
+/// #[node(passive = [upstream], active = [trigger], output = value: T)]
+/// impl<T: Element> MutableNode for SampleStream<T> { ... }
+///
+/// // Complex upstreams (Dep<T> etc.) — write upstreams() manually, use #[node] for output only
+/// #[node(output = value: OUT)]
+/// impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
+///     fn cycle(&mut self, ...) -> anyhow::Result<bool> { ... }
+///     fn upstreams(&self) -> UpStreams { /* Dep<T> logic */ }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as NodeArgs);
+    let mut impl_block = parse_macro_input!(item as ItemImpl);
 
-    let passive_extend = passive_fields.iter().map(|f| {
-        let field_name = f.ident.as_ref().expect("named field");
-        quote! {
-            passive.extend(AsUpstreamNodes::as_upstream_nodes(&self.#field_name));
-        }
-    });
+    let self_ty = impl_block.self_ty.clone();
+    let (impl_generics, _, where_clause) = impl_block.generics.split_for_impl();
 
-    quote! {
-        impl #impl_generics WiringPoint for #name #ty_generics #where_tokens {
+    // Inject fn upstreams() if active/passive fields are specified.
+    if !args.active.is_empty() || !args.passive.is_empty() {
+        let active_fields = &args.active;
+        let passive_fields = &args.passive;
+
+        let upstreams_fn: ImplItemFn = syn::parse_quote! {
             fn upstreams(&self) -> UpStreams {
                 let mut active: ::std::vec::Vec<::std::rc::Rc<dyn Node>> = ::std::vec::Vec::new();
                 let mut passive: ::std::vec::Vec<::std::rc::Rc<dyn Node>> = ::std::vec::Vec::new();
-                #(#active_extend)*
-                #(#passive_extend)*
+                #(active.extend(AsUpstreamNodes::as_upstream_nodes(&self.#active_fields));)*
+                #(passive.extend(AsUpstreamNodes::as_upstream_nodes(&self.#passive_fields));)*
                 UpStreams::new(active, passive)
             }
+        };
+        impl_block.items.push(ImplItem::Fn(upstreams_fn));
+    }
+
+    // Emit a StreamPeekRef impl if output is specified.
+    let peek_ref_impl = args.output.map(|(field, ty)| {
+        quote! {
+            impl #impl_generics StreamPeekRef<#ty> for #self_ty #where_clause {
+                fn peek_ref(&self) -> &#ty {
+                    &self.#field
+                }
+            }
         }
+    });
+
+    quote! {
+        #impl_block
+        #peek_ref_impl
     }
     .into()
 }

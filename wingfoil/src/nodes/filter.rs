@@ -6,17 +6,15 @@ use crate::types::*;
 
 /// Filter's it source based on the supplied predicate.  Used by
 /// [filter](crate::nodes::StreamOperators::filter).
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct FilterStream<T: Element> {
-    #[active]
     source: Rc<dyn Stream<T>>,
-    #[active]
     condition: Rc<dyn Stream<bool>>,
     #[new(default)]
-    #[output]
     value: T,
 }
 
+#[node(active = [source, condition], output = value: T)]
 impl<T: Element> MutableNode for FilterStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let val = self.source.peek_value();

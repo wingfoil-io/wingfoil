@@ -2,18 +2,17 @@ use crate::types::*;
 use derive_new::new;
 use std::rc::Rc;
 
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub struct LimitStream<T: Element> {
-    #[active]
     source: Rc<dyn Stream<T>>,
     limit: u32,
     #[new(default)]
     tick_count: u32,
     #[new(default)]
-    #[output]
     value: T,
 }
 
+#[node(active = [source], output = value: T)]
 impl<T: Element> MutableNode for LimitStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.tick_count >= self.limit {

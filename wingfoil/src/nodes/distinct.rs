@@ -4,15 +4,14 @@ use std::rc::Rc;
 
 /// Only propagates it's source when it's value changes.  Used
 /// by [distinct](crate::nodes::StreamOperators::distinct).
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub(crate) struct DistinctStream<T: Element> {
-    #[active]
     source: Rc<dyn Stream<T>>, // the source stream
     #[new(default)] // used by derive_new
-    #[output]
     value: T,
 }
 
+#[node(active = [source], output = value: T)]
 impl<T: Element + PartialEq> MutableNode for DistinctStream<T> {
     // called by Graph when it determines this node needs
     // to be cycled

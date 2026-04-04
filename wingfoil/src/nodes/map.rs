@@ -7,16 +7,15 @@ use crate::types::*;
 
 /// Map's it's source into a new [Stream] using the supplied closure.
 /// Used by [map](crate::nodes::StreamOperators::map).
-#[derive(new, StreamPeekRef, WiringPoint)]
+#[derive(new)]
 pub struct MapStream<IN, OUT: Element> {
-    #[active]
     upstream: Rc<dyn Stream<IN>>,
     #[new(default)]
-    #[output]
     value: OUT,
     func: Box<dyn Fn(IN) -> OUT>,
 }
 
+#[node(active = [upstream], output = value: OUT)]
 impl<IN, OUT: Element> MutableNode for MapStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream.peek_value());

@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<T, FUNC> WiringPoint for GraphProducerStream<T, FUNC>
+impl<T, FUNC> MutableNode for GraphProducerStream<T, FUNC>
 where
     T: Element + Send,
     FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
@@ -55,13 +55,7 @@ where
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![], vec![])
     }
-}
 
-impl<T, FUNC> MutableNode for GraphProducerStream<T, FUNC>
-where
-    T: Element + Send,
-    FUNC: FnOnce() -> Rc<dyn Stream<T>> + Send + 'static,
-{
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.get_mut().unwrap().cycle(graph_state)
     }
@@ -181,7 +175,7 @@ where
     }
 }
 
-impl<IN, OUT, FUNC> WiringPoint for GraphMapStream<FUNC, IN, OUT>
+impl<IN, OUT, FUNC> MutableNode for GraphMapStream<FUNC, IN, OUT>
 where
     IN: Element + Send,
     OUT: Element + Send,
@@ -190,14 +184,7 @@ where
     fn upstreams(&self) -> UpStreams {
         UpStreams::new(vec![self.source.clone()], vec![])
     }
-}
 
-impl<IN, OUT, FUNC> MutableNode for GraphMapStream<FUNC, IN, OUT>
-where
-    IN: Element + Send,
-    OUT: Element + Send,
-    FUNC: FnOnce(Rc<dyn Stream<Burst<IN>>>) -> Rc<dyn Stream<OUT>> + Send + 'static,
-{
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         if graph_state.ticked(self.source.clone()) {
             self.sender

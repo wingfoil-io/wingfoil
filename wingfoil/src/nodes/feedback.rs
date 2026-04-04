@@ -9,14 +9,13 @@ use crate::types::*;
 /// Source end of a [feedback] channel. Has no upstreams so the graph
 /// sees no cycle. Values pushed by the paired [FeedbackSink] are
 /// emitted on the next engine cycle.
-#[derive(StreamPeekRef, WiringPoint)]
 pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
-    #[output]
     value: T,
     queue: Rc<RefCell<TimeQueue<T>>>,
     node_id: Rc<Cell<Option<usize>>>,
 }
 
+#[node(output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
