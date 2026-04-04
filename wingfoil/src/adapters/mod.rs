@@ -12,7 +12,6 @@ pub mod fix;
 #[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;
-pub mod iterator_stream;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 #[cfg(feature = "otlp")]
