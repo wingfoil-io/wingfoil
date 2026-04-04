@@ -194,7 +194,7 @@ fn py_bytes_stream(
 
 /// Handle to a running ZMQ seed node. The seed stops when this object is deleted.
 #[pyclass(unsendable, name = "SeedHandle")]
-pub struct PySeedHandle(SeedHandle);
+pub struct PySeedHandle(#[allow(dead_code)] SeedHandle);
 
 #[pymethods]
 impl PySeedHandle {
