@@ -282,37 +282,69 @@ Document:
 - Pre-commit requirements (integration test command, fmt, clippy)
 - Any gotchas (API version pins, type constraints, etc.)
 
-## 12. CI — add to release workflow
+## 12. CI — standalone workflow + register in integration-tests hub
 
-Add a job to `.github/workflows/release.yml` **parallel** to `grafana-integration`:
+### a. Create `.github/workflows/$ARGUMENTS-integration.yml`
+
+Follow the etcd pattern exactly — `workflow_call` makes it callable from the hub,
+`workflow_dispatch` allows manual runs, and `push` path trigger runs it on every
+change to the adapter:
 
 ```yaml
-$ARGUMENTS-integration:
-  name: $ARGUMENTS Integration Tests
-  needs: preflight
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - name: Install Rust Toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-    - name: Cache Rust Build Artifacts
-      uses: Swatinem/rust-cache@v2
-    - name: Install system dependencies  # e.g. protobuf-compiler for gRPC clients; omit if not needed
-      run: sudo apt-get install -y <pkg>
-    - name: Run $ARGUMENTS integration tests
-      run: |
-        cargo test --features $ARGUMENTS-integration-test -p wingfoil \
-          -- --test-threads=1 --nocapture
-      env:
-        RUST_LOG: INFO
+name: $ARGUMENTS Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/$ARGUMENTS/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  $ARGUMENTS-integration:
+    name: $ARGUMENTS Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies  # e.g. protobuf-compiler for gRPC clients; omit if not needed
+        run: sudo apt-get install -y <pkg>
+
+      - name: Run $ARGUMENTS integration tests
+        run: |
+          cargo test --features $ARGUMENTS-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
 ```
 
-Update the `tag` job's `needs` to include `$ARGUMENTS-integration`.
+### b. Register in `.github/workflows/integration-tests.yml`
 
-Also create a standalone `.github/workflows/$ARGUMENTS-integration.yml` with `on: workflow_dispatch` containing the same job (for manual runs outside of release).
+Add a job alongside the existing adapters:
+
+```yaml
+  $ARGUMENTS-integration:
+    name: $ARGUMENTS Integration Tests
+    uses: ./.github/workflows/$ARGUMENTS-integration.yml
+    secrets: inherit
+```
+
+This is how `all-tests.yml` → `integration-tests.yml` → `$ARGUMENTS-integration.yml`
+chains together. Do **not** add directly to `release.yml`.
 
 ## 13. Python bindings — `wingfoil-python/`
 
