@@ -49,3 +49,8 @@ jobs:
     name: Web Integration Tests
     uses: ./.github/workflows/web-integration.yml
     secrets: inherit
+
+  fluvio-integration:
+    name: Fluvio Integration Tests
+    uses: ./.github/workflows/fluvio-integration.yml
+    secrets: inherit

@@ -9,6 +9,8 @@ pub mod etcd;
 #[cfg(feature = "fix")]
 #[doc(hidden)]
 pub mod fix;
+#[cfg(feature = "fluvio")]
+pub mod fluvio;
 #[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;

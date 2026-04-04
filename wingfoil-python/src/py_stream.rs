@@ -382,6 +382,23 @@ impl PyStream {
         ))
     }
 
+    /// Publish this stream of dicts to a Fluvio topic.
+    ///
+    /// Stream values must be dicts with `"value"` (bytes) and optional `"key"` (str),
+    /// or lists of such dicts for multiple records per tick.
+    ///
+    /// Args:
+    ///     endpoint: Fluvio SC endpoint, e.g. `"127.0.0.1:9003"`
+    ///     topic: Fluvio topic name (must already exist)
+    ///
+    /// Returns:
+    ///     A Node that drives the write operation.
+    fn fluvio_pub(&self, endpoint: String, topic: String) -> PyNode {
+        PyNode::new(crate::py_fluvio::py_fluvio_pub_inner(
+            &self.0, endpoint, topic,
+        ))
+    }
+
     /// Publish this stream of bytes to a ZMQ PUB socket bound on the given port.
     ///
     /// The stream values must be `bytes` objects. Only supported in real-time mode.

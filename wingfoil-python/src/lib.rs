@@ -4,6 +4,7 @@ mod py_element;
 #[cfg(feature = "etcd")]
 mod py_etcd;
 mod py_fix;
+mod py_fluvio;
 #[cfg(feature = "iceoryx2-beta")]
 mod py_iceoryx2;
 mod py_kdb;
@@ -189,6 +190,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_csv::py_csv_read, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_etcd::py_etcd_sub, module)?)?;
+    module.add_function(wrap_pyfunction!(py_fluvio::py_fluvio_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
