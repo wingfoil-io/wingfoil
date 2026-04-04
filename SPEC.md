@@ -426,8 +426,11 @@ pub enum Iceoryx2Mode {
     #[default]
     Spin,
     /// Polls in a dedicated background thread and delivers via channel.
-    /// Higher latency (one channel-hop), lower CPU usage (uses WaitSet/yield).
+    /// Higher latency (one channel-hop), lower CPU usage (uses 10µs yield).
     Threaded,
+    /// Event-driven WaitSet (true blocking).
+    /// Requires publisher signal on matching Event service.
+    Signaled,
 }
 
 /// Configuration options for an iceoryx2 subscriber.
@@ -469,6 +472,9 @@ pub fn iceoryx2_sub_with<T>(
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static;
 
+/// Subscribe to a byte-slice service.
+pub fn iceoryx2_sub_slice(service_name: &str) -> Rc<dyn Stream<Burst<Vec<u8>>>>;
+
 /// Publish a stream to a service.
 /// Calls update_connections() periodically to detect new subscribers.
 pub fn iceoryx2_pub<T>(
@@ -486,6 +492,12 @@ pub fn iceoryx2_pub_with<T>(
 ) -> Rc<dyn Node>
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static;
+
+/// Publish a stream of bytes as variable-sized samples.
+pub fn iceoryx2_pub_slice(
+    upstream: Rc<dyn Stream<Burst<Vec<u8>>>>,
+    service_name: &str,
+) -> Rc<dyn Node>;
 ```
 
 **Payload Requirements:**

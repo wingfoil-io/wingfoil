@@ -71,3 +71,25 @@ Goal: clean up the worktree and commit changes using semantic, atomic commits.
 - [x] Resolve conflicts in `wingfoil/src/adapters/mod.rs` (due to `csv` refactor and `iterator_stream` move)
 - [x] Fix compilation errors in `wingfoil-python` by gating iceoryx2 bindings behind feature flag
 - [x] Verify all tests pass after rebase
+
+### 7. Advanced Features & Enhancements (COMPLETED)
+
+Goal: Leverage iceoryx2's more powerful features like dynamic slices and event-driven notifications.
+
+#### Unit 1: Dynamic Slice Adapters (Zero-Copy Variable Sized Payloads) (COMPLETED)
+- [x] Implement `iceoryx2_sub_slice` returning `Stream<Burst<Vec<u8>>>`
+- [x] Implement `iceoryx2_pub_slice` taking a byte stream
+- [x] Support variable-sized `loan_slice_uninit` and `write_from_slice`
+
+#### Unit 2: Signaled Polling Mode (0% CPU Idle) (COMPLETED)
+- [x] Add `Iceoryx2Mode::Signaled` which uses `Listener` + `WaitSet` for true blocking
+- [x] Implement internal Event service pairing (`<service>.signal`)
+- [x] Update publisher to trigger signal after every send
+
+#### Unit 3: Python Slice Migration (COMPLETED)
+- [x] Update Python bindings to use slices by default (removing `FixedBytes` restriction)
+- [x] Verify variable-sized transfers between Python processes
+
+#### Phase 3: Polish (COMPLETED)
+- [x] Improve error mapping for creation failures
+- [x] Add performance comparison benchmarks (fixed vs slice)

@@ -36,8 +36,11 @@ pub enum Iceoryx2Mode {
     #[default]
     Spin,
     /// Polls in a dedicated background thread and delivers via channel.
-    /// Higher latency (one channel-hop), lower CPU usage (uses WaitSet).
+    /// Higher latency (one channel-hop), lower CPU usage (uses 10µs yield).
     Threaded,
+    /// Event-driven WaitSet (true blocking).
+    /// Requires publisher signal on matching Event service.
+    Signaled,
 }
 
 /// Configuration options for an iceoryx2 subscriber.
@@ -93,6 +96,7 @@ mod tests {
     use crate::nodes::{NodeOperators, StreamOperators};
     use crate::{Burst, Graph, RunFor, RunMode, ticker};
     use iceoryx2::prelude::ZeroCopySend;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -129,7 +133,7 @@ mod tests {
         Graph::new(
             vec![pub_node, collected.clone().as_node()],
             RunMode::RealTime,
-            RunFor::Duration(Duration::from_millis(50)),
+            RunFor::Duration(Duration::from_millis(100)),
         )
         .run()
         .unwrap();
@@ -140,5 +144,135 @@ mod tests {
             .map(|item| item.value)
             .collect();
         assert!(!values.is_empty(), "expected at least one received sample");
+    }
+
+    #[test]
+    fn test_local_slice_pubsub_smoke() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let service_name = format!("wingfoil/test/local/slice/{}/{n}", std::process::id());
+
+        let sub = iceoryx2_sub_slice(&service_name);
+        let collected = sub.collapse().collect();
+
+        let step = Arc::new(AtomicUsize::new(0));
+        let upstream = ticker(Duration::from_millis(20)).produce(move || {
+            let mut b: Burst<Vec<u8>> = Burst::default();
+            let s = step.fetch_add(1, Ordering::Relaxed);
+            if s % 2 == 0 {
+                b.push(vec![1, 2, 3]);
+            } else {
+                b.push(vec![4, 5, 6, 7]);
+            }
+            b
+        });
+        let pub_node = iceoryx2_pub_slice(upstream, &service_name);
+
+        // Give a moment for ports to connect
+        std::thread::sleep(Duration::from_millis(100));
+
+        Graph::new(
+            vec![pub_node, collected.clone().as_node()],
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_secs(1)),
+        )
+        .run()
+        .unwrap();
+
+        let values: Vec<Vec<u8>> = collected
+            .peek_value()
+            .into_iter()
+            .map(|item| item.value)
+            .collect();
+        assert!(values.len() >= 2);
+        assert!(values.iter().any(|v| *v == vec![1, 2, 3]));
+        assert!(values.iter().any(|v| *v == vec![4, 5, 6, 7]));
+    }
+
+    #[test]
+    fn test_local_slice_signaled_pubsub_smoke() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let service_name = format!(
+            "wingfoil/test/local/slice/signaled/{}/{n}",
+            std::process::id()
+        );
+
+        let opts = Iceoryx2SubOpts {
+            variant: Iceoryx2ServiceVariant::Local,
+            mode: Iceoryx2Mode::Signaled,
+        };
+        let sub = iceoryx2_sub_slice_opts(&service_name, opts);
+        let collected = sub.collapse().collect();
+
+        let step = Arc::new(AtomicUsize::new(0));
+        let upstream = ticker(Duration::from_millis(20)).produce(move || {
+            let mut b: Burst<Vec<u8>> = Burst::default();
+            let s = step.fetch_add(1, Ordering::Relaxed);
+            if s % 2 == 0 {
+                b.push(vec![10, 20]);
+            } else {
+                b.push(vec![30, 40, 50]);
+            }
+            b
+        });
+        let pub_node =
+            iceoryx2_pub_slice_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        Graph::new(
+            vec![pub_node, collected.clone().as_node()],
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_secs(1)),
+        )
+        .run()
+        .unwrap();
+
+        let values: Vec<Vec<u8>> = collected
+            .peek_value()
+            .into_iter()
+            .map(|item| item.value)
+            .collect();
+        assert!(values.len() >= 2);
+        assert!(values.iter().any(|v| *v == vec![10, 20]));
+        assert!(values.iter().any(|v| *v == vec![30, 40, 50]));
+    }
+
+    #[test]
+    fn test_local_signaled_pubsub_smoke() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let service_name = format!("wingfoil/test/local/signaled/{}/{n}", std::process::id());
+
+        let opts = Iceoryx2SubOpts {
+            variant: Iceoryx2ServiceVariant::Local,
+            mode: Iceoryx2Mode::Signaled,
+        };
+        let sub = iceoryx2_sub_opts::<TestData>(&service_name, opts);
+        let collected = sub.collapse().collect();
+
+        let upstream = ticker(Duration::from_millis(5)).produce(|| {
+            let mut b: Burst<TestData> = Burst::default();
+            b.push(TestData { value: 123 });
+            b
+        });
+        let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
+
+        Graph::new(
+            vec![pub_node, collected.clone().as_node()],
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_millis(200)),
+        )
+        .run()
+        .unwrap();
+
+        let values: Vec<TestData> = collected
+            .peek_value()
+            .into_iter()
+            .map(|item| item.value)
+            .collect();
+        assert!(!values.is_empty(), "expected samples in signaled mode");
+        assert!(values.iter().all(|v| v.value == 123));
     }
 }

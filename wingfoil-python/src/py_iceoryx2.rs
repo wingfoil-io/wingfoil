@@ -7,14 +7,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::rc::Rc;
 use wingfoil::adapters::iceoryx2::{
-    FixedBytes, Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SubOpts, iceoryx2_pub_with,
-    iceoryx2_sub_opts,
+    Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SubOpts, iceoryx2_pub_slice_with,
+    iceoryx2_sub_slice_opts,
 };
-use wingfoil::{Burst, Node, Stream, StreamOperators};
-
-/// Maximum data size for zero-copy transfers between Python processes (64KB).
-pub const ICEORYX2_MAX_DATA_SIZE: usize = 65536;
-pub type PyFixedBytes = FixedBytes<ICEORYX2_MAX_DATA_SIZE>;
+use wingfoil::{Node, Stream, StreamOperators};
 
 #[pyclass(eq, eq_int, name = "Iceoryx2ServiceVariant")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +33,7 @@ impl From<PyIceoryx2ServiceVariant> for Iceoryx2ServiceVariant {
 pub enum PyIceoryx2Mode {
     Spin,
     Threaded,
+    Signaled,
 }
 
 impl From<PyIceoryx2Mode> for Iceoryx2Mode {
@@ -44,6 +41,7 @@ impl From<PyIceoryx2Mode> for Iceoryx2Mode {
         match v {
             PyIceoryx2Mode::Spin => Iceoryx2Mode::Spin,
             PyIceoryx2Mode::Threaded => Iceoryx2Mode::Threaded,
+            PyIceoryx2Mode::Signaled => Iceoryx2Mode::Signaled,
         }
     }
 }
@@ -53,7 +51,7 @@ impl From<PyIceoryx2Mode> for Iceoryx2Mode {
 /// Args:
 ///     service_name: iceoryx2 service name, e.g. `"my/service"`
 ///     variant: Service variant ("ipc" or "local")
-///     mode: Polling mode ("spin" or "threaded")
+///     mode: Polling mode ("spin", "threaded", or "signaled")
 #[pyfunction]
 #[pyo3(signature = (service_name, variant=PyIceoryx2ServiceVariant::Ipc, mode=PyIceoryx2Mode::Spin))]
 pub fn py_iceoryx2_sub(
@@ -65,13 +63,15 @@ pub fn py_iceoryx2_sub(
         variant: variant.into(),
         mode: mode.into(),
     };
-    let stream = iceoryx2_sub_opts::<PyFixedBytes>(&service_name, opts);
+
+    // Use the slice-based subscriber for generic bytes
+    let stream = iceoryx2_sub_slice_opts(&service_name, opts);
 
     let py_stream = stream.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst
                 .into_iter()
-                .map(|fb| PyBytes::new(py, fb.as_slice()).into_any().unbind())
+                .map(|bytes| PyBytes::new(py, &bytes).into_any().unbind())
                 .collect();
             PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
         })
@@ -86,27 +86,23 @@ pub fn py_iceoryx2_pub_inner(
     service_name: String,
     variant: PyIceoryx2ServiceVariant,
 ) -> Rc<dyn Node> {
-    let burst_stream: Rc<dyn Stream<Burst<PyFixedBytes>>> = stream.map(move |elem| {
+    let burst_stream = stream.map(move |elem| {
         Python::attach(|py| {
             let obj = elem.as_ref().bind(py);
             if let Ok(bytes) = obj.extract::<Vec<u8>>() {
-                let mut b = Burst::new();
-                b.push(PyFixedBytes::new(&bytes));
+                let mut b = wingfoil::Burst::new();
+                b.push(bytes);
                 b
             } else if let Ok(list) = obj.cast_exact::<PyList>() {
                 list.iter()
-                    .filter_map(|item| {
-                        item.extract::<Vec<u8>>()
-                            .ok()
-                            .map(|bytes| PyFixedBytes::new(&bytes))
-                    })
+                    .filter_map(|item| item.extract::<Vec<u8>>().ok())
                     .collect()
             } else {
                 log::error!("iceoryx2_pub: stream value must be bytes or list of bytes");
-                Burst::new()
+                wingfoil::Burst::new()
             }
         })
     });
 
-    iceoryx2_pub_with(burst_stream, &service_name, variant.into())
+    iceoryx2_pub_slice_with(burst_stream, &service_name, variant.into())
 }
