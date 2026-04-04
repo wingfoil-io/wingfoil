@@ -175,12 +175,7 @@ impl <Name>PubOperators for dyn Stream<Burst<<Name>Entry>> {
 // Single-item stream: auto-wrap each value into a one-element Burst.
 impl <Name>PubOperators for dyn Stream<<Name>Entry> {
     fn $ARGUMENTS_pub(self: &Rc<Self>, conn: <Name>Connection) -> Rc<dyn Node> {
-        let burst_stream = self.map(|entry| {
-            let mut b = Burst::new();
-            b.push(entry);
-            b
-        });
-        $ARGUMENTS_pub(conn, &burst_stream)
+        $ARGUMENTS_pub(conn, &self.map(|entry| burst![entry]))
     }
 }
 ```
