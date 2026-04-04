@@ -1,7 +1,7 @@
 # ZMQ Adapter
 
 Real-time pub/sub messaging using ØMQ sockets (`zmq_sub` / `zmq_pub`) with
-optional registry-based service discovery (`SeedRegistry`, `EtcdRegistry`).
+optional registry-based service discovery (`EtcdRegistry`).
 
 ## Module Structure
 
@@ -11,8 +11,7 @@ zmq/
   read.rs              # zmq_sub() — subscriber producer
   write.rs             # ZeroMqSenderNode, ZeroMqPub trait — publisher consumer
   registry.rs          # ZmqRegistry/ZmqHandle traits, ZmqPubRegistration/ZmqSubConfig,
-                       #   SeedRegistry, EtcdRegistry (cfg-gated)
-  seed.rs              # Seed protocol: SeedHandle, start_seed(), register/query helpers
+                       #   EtcdRegistry (cfg-gated)
   integration_tests.rs # All tests (gated by feature flags)
   CLAUDE.md            # This file
 ```
@@ -41,16 +40,6 @@ the graph emit `ZmqStatus::Connected` / `ZmqStatus::Disconnected` events without
 polling or external state. Monitor events are delivered on an `inproc://` socket
 polled in the same thread as the data socket.
 
-### Seed protocol
-
-Seeds use REQ/REP (strictly one-at-a-time) because discovery is low-volume —
-it happens once at startup, not in the data path. Bincode is used for wire
-encoding (already a dependency). Seeds use `zmq::poll` with a 10 ms timeout
-so the shutdown flag is checked regularly without spinning.
-
-`register_with_seeds` and `query_seeds` set a 3-second `rcvtimeo`/`sndtimeo`
-so dead seeds fail fast rather than blocking indefinitely.
-
 ## Registry-Based Discovery
 
 ### `ZmqRegistry` / `ZmqHandle` traits
@@ -73,17 +62,12 @@ method that works for all three use cases without overloading:
 ```rust
 // ZmqPubRegistration
 stream.zmq_pub(5556, ())                           // no registration
-stream.zmq_pub(5556, ("quotes", seeds_registry))   // named + backend
+stream.zmq_pub(5556, ("quotes", etcd_registry))    // named + backend
 
 // ZmqSubConfig
 zmq_sub::<T>("tcp://host:5556")?                   // direct address
-zmq_sub::<T>(("quotes", seeds_registry))?          // discovery
+zmq_sub::<T>(("quotes", etcd_registry))?           // discovery
 ```
-
-### `SeedRegistry`
-
-Always compiled. Wraps the existing seed protocol; `revoke()` is a no-op
-(seeds don't have persistent state that needs cleanup).
 
 ### `EtcdRegistry` (requires `etcd` feature)
 
@@ -94,15 +78,15 @@ keepalive loop every 10 s using its own `new_current_thread` tokio runtime.
 2. Joins the keepalive thread (may block up to 10 s).
 3. Calls `lease_revoke` so the key disappears immediately.
 
-### When to prefer etcd over seed
+### When to use etcd discovery vs direct address
 
-| Factor | Seed | etcd |
-|--------|------|------|
-| Infra | None (built-in) | Requires etcd |
-| Fault tolerance | Single-seed SPOF | HA cluster |
-| Lease / TTL | No (manual cleanup) | Yes (auto-expiry) |
-| Debuggability | ZMQ REQ/REP | `etcdctl get <name>` |
-| Use case | Simple setups | Existing etcd infra, HA |
+| Factor | Direct address | etcd |
+|--------|---------------|------|
+| Infra | None | Requires etcd |
+| Fault tolerance | Manual | HA cluster |
+| Lease / TTL | N/A | Yes (auto-expiry) |
+| Debuggability | N/A | `etcdctl get <name>` |
+| Use case | Static topology | Dynamic / HA setups |
 
 ## Pre-Commit Requirements
 
@@ -121,12 +105,9 @@ cargo test --features zmq-etcd-integration-test -p wingfoil \
 
 ## Integration Test Port Allocation
 
-| Range      | Tests                                         |
-|------------|-----------------------------------------------|
-| 5556–5562  | Core pub/sub tests                            |
-| 5570–5573  | Seed unit tests                               |
-| 5580–5595  | Seed discovery integration tests              |
-| 5596–5610  | etcd discovery integration tests              |
-| 9001–9100  | Addresses registered with seeds (test data)   |
+| Range      | Tests                              |
+|------------|------------------------------------|
+| 5556–5562  | Core pub/sub tests                 |
+| 5596–5610  | etcd discovery integration tests   |
 
 Do not use these ports for other tests in the workspace.

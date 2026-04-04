@@ -1,7 +1,11 @@
 name: ZMQ etcd Integration Tests
 
 on:
+  workflow_call:
   workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/zmq/**'
 
 env:
   CARGO_TERM_COLOR: always
