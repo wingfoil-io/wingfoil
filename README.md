@@ -53,7 +53,7 @@ Wingfoil lets you easily wire up complex business logic, splitting and recombini
 ```rust,ignore
 let book = RefCell::new(lobster::OrderBook::default());
 let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
-let (fills, prices) = csv_read_vec("aapl.csv", get_time, true)
+let (fills, prices) = csv_read("aapl.csv", get_time, true)
     .map(move |chunk| process_orders(chunk, &book))
     .split();
 let prices_export = prices
@@ -61,7 +61,7 @@ let prices_export = prices
     .map(|price| price.unwrap())
     .distinct()
     .csv_write("prices.csv");
-let fills_export = fills.csv_write_vec("fills.csv");
+let fills_export = fills.csv_write("fills.csv");
 Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
     .print()
     .run()

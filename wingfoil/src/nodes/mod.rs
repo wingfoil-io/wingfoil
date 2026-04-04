@@ -28,6 +28,7 @@ mod fold;
 mod graph_node;
 mod graph_state;
 mod inspect;
+mod iterator_stream;
 mod limit;
 mod map;
 mod map_filter;
@@ -59,6 +60,7 @@ pub use dynamic_group::*;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
+pub use iterator_stream::{IteratorStream, SimpleIteratorStream};
 pub use map_filter::MapFilterStream;
 pub use never::*;
 

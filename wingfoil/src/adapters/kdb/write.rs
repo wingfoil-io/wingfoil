@@ -293,6 +293,7 @@ impl<T: Element + Send + KdbSerialize + 'static> KdbWriteOperators<T> for dyn St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::burst;
     use kdb_plus_fixed::qtype;
 
     #[test]
@@ -354,10 +355,7 @@ mod tests {
             sym: "TEST".to_string(),
             price: 100.0,
         };
-        let mut batch: Burst<TestTrade> = Burst::new();
-        batch.push(trade);
-
-        let stream = constant(batch);
+        let stream = constant(burst![trade]);
 
         // Verify we can create the kdb_write node (doesn't require actual KDB connection)
         let _node = kdb_write(conn, "test_table", &stream);

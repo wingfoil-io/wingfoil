@@ -1,6 +1,7 @@
 //! etcd write consumer — streams key-value PUTs upstream to etcd.
 
 use super::{EtcdConnection, EtcdEntry};
+use crate::burst;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use etcd_client::{Client, Compare, CompareOp, PutOptions, Txn, TxnOp};
@@ -168,11 +169,7 @@ impl EtcdPubOperators for dyn Stream<EtcdEntry> {
         lease_ttl: Option<Duration>,
         force: bool,
     ) -> Rc<dyn Node> {
-        let burst_stream = self.map(|entry| {
-            let mut b = Burst::new();
-            b.push(entry);
-            b
-        });
+        let burst_stream = self.map(|entry| burst![entry]);
         etcd_pub(conn, &burst_stream, lease_ttl, force)
     }
 }

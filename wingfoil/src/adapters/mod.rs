@@ -3,10 +3,9 @@
 #[cfg(feature = "kdb")]
 pub mod cache;
 #[cfg(feature = "csv")]
-pub mod csv_streams;
+pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
-pub mod iterator_stream;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 #[cfg(feature = "zmq-beta")]
