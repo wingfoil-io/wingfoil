@@ -50,6 +50,7 @@ def test_zmq_sub_discover_end_to_end():
         node = (
             wf.ticker(0.05)
             .count()
+            .map(lambda v: str(v).encode())
             .zmq_pub_named("pytest_quotes", pub_port, [seed_addr])
         )
         node.run(realtime=True, duration=0.6)
@@ -109,6 +110,7 @@ class TestZmqEtcdDiscovery:
             node = (
                 wf.ticker(0.05)
                 .count()
+                .map(lambda v: str(v).encode())
                 .zmq_pub_etcd(ETCD_SERVICE, ETCD_PUB_PORT, ETCD_ENDPOINT)
             )
             node.run(realtime=True, duration=0.7)
