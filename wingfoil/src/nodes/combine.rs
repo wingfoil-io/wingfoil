@@ -56,9 +56,10 @@ pub fn combine<T: Element>(streams: Vec<Rc<dyn Stream<T>>>) -> Rc<dyn Stream<Bur
 
 #[cfg(test)]
 mod tests {
-    use crate::{NanoTime, NodeOperators, RunFor, RunMode, StreamOperators, combine, ticker};
+    use crate::{
+        NanoTime, NodeOperators, RunFor, RunMode, StreamOperators, burst, combine, ticker,
+    };
     use std::time::Duration;
-    use tinyvec::tiny_vec;
     #[test]
     fn combine_works() {
         let _ = env_logger::try_init();
@@ -73,11 +74,7 @@ mod tests {
             .logged("output", log::Level::Info)
             .accumulate()
             .finally(|res, _| {
-                let expected = vec![
-                    tiny_vec![1, 10, 100],
-                    tiny_vec![2, 20, 200],
-                    tiny_vec![3, 30, 300],
-                ];
+                let expected = vec![burst![1, 10, 100], burst![2, 20, 200], burst![3, 30, 300]];
                 println!("{:?}", res);
                 assert_eq!(res, expected);
                 Ok(())

@@ -4,6 +4,7 @@ use serde_aux::serde_introspection::serde_introspect;
 use std::fs::File;
 use std::rc::Rc;
 
+use crate::nodes::StreamOperators;
 use crate::types::*;
 
 /// Writes a [`Burst<T>`] stream to a CSV file, one row per element per tick.
@@ -57,6 +58,12 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
             .from_path(path)
             .unwrap();
         CsvWriterNode::new(self.clone(), writer).into_node()
+    }
+}
+
+impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dyn Stream<T> {
+    fn csv_write(self: &Rc<Self>, path: &str) -> Rc<dyn Node> {
+        self.map(|v| crate::burst![v]).csv_write(path)
     }
 }
 

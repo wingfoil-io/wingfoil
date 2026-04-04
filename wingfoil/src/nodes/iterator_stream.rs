@@ -62,7 +62,7 @@ where
     pub fn new(it: Box<dyn Iterator<Item = ValueAt<T>>>) -> Self {
         Self {
             peekable: it.peekable(),
-            value: Burst::default(),
+            value: Burst::new(),
         }
     }
 }

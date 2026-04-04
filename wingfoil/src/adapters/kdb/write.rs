@@ -1,6 +1,7 @@
 //! KDB+ write functionality for streaming data to q/kdb+ instances.
 
 use super::KdbConnection;
+use crate::burst;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use chrono::NaiveDateTime;
@@ -354,10 +355,7 @@ mod tests {
             sym: "TEST".to_string(),
             price: 100.0,
         };
-        let mut batch: Burst<TestTrade> = Burst::new();
-        batch.push(trade);
-
-        let stream = constant(batch);
+        let stream = constant(burst![trade]);
 
         // Verify we can create the kdb_write node (doesn't require actual KDB connection)
         let _node = kdb_write(conn, "test_table", &stream);

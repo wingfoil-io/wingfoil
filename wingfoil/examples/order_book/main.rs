@@ -1,7 +1,9 @@
 #![doc = include_str!("./README.md")]
 
 use wingfoil::adapters::csv::*;
-use wingfoil::{Burst, Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators, burst};
+use wingfoil::{
+    Burst, Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators, burst,
+};
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -57,7 +59,7 @@ fn process_orders(
     chunk: Burst<Message>,
     book: &RefCell<lobster::OrderBook>,
 ) -> (Burst<Fill>, Option<TwoWayPrice>) {
-    let mut fills: Burst<Fill> = Burst::default();
+    let mut fills: Burst<Fill> = Burst::new();
     let mut price: Option<TwoWayPrice> = None;
     // chunk contains messages with common timestamp.
     // could be 1 message or a handful of messages

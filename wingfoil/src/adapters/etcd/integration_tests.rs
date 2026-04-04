@@ -9,7 +9,7 @@
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
-use crate::{RunFor, RunMode};
+use crate::{RunFor, RunMode, burst};
 use etcd_client::Client;
 use std::rc::Rc;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
@@ -57,12 +57,10 @@ fn delete_key(endpoint: &str, key: &str) -> anyhow::Result<()> {
 
 /// Build a one-shot `constant` stream containing a single [`EtcdEntry`].
 fn make_burst(key: &str, value: &[u8]) -> Rc<dyn crate::Stream<Burst<EtcdEntry>>> {
-    let mut b: Burst<EtcdEntry> = Burst::new();
-    b.push(EtcdEntry {
+    crate::nodes::constant(burst![EtcdEntry {
         key: key.to_string(),
         value: value.to_vec(),
-    });
-    crate::nodes::constant(b)
+    }])
 }
 
 // ---- Tests ----
