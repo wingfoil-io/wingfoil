@@ -26,22 +26,51 @@ impl<T: Element> MutableNode for MergeStream<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{NodeOperators, RunFor, RunMode, StreamOperators, always, merge};
+    use crate::graph::*;
+    use crate::nodes::*;
+
     #[test]
-    fn merge_works() {
-        // cargo flamegraph  --unit-test -- merge_works
-        let src = always().count();
-        let streams = (0..10)
-            .map(|_| {
-                let mut stream = src.clone();
-                for _ in 0..10 {
-                    stream = stream.map(std::hint::black_box);
-                }
-                stream
-            })
-            .collect::<Vec<_>>();
-        merge(streams)
-            .run(RunMode::RealTime, RunFor::Cycles(1))
+    fn merge_emits_from_both_streams() {
+        // Two tickers at different rates. Merge should emit whenever either ticks.
+        // a: every 100ns, b: every 200ns (both start at t=0 in historical mode).
+        // RunFor::Duration(d) stops after the first tick where elapsed > d.
+        // With d=400ns: a fires at 0,100,200,300,400,500 (stops after 500>400),
+        //              b fires at 0,200,400.
+        // Merged unique times (a wins ties): 0,100,200,300,400,500 → 6 ticks.
+        let a = ticker(Duration::from_nanos(100)).count();
+        let b = ticker(Duration::from_nanos(200))
+            .count()
+            .map(|x: u64| x * 100);
+        let merged = merge(vec![a, b]).collect();
+        merged
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_nanos(400)),
+            )
             .unwrap();
+        let times: Vec<NanoTime> = merged.peek_value().iter().map(|v| v.time).collect();
+        assert_eq!(
+            times,
+            vec![
+                NanoTime::new(0),
+                NanoTime::new(100),
+                NanoTime::new(200),
+                NanoTime::new(300),
+                NanoTime::new(400),
+                NanoTime::new(500),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_last_ticked_value_wins() {
+        // Single-element merge is a pass-through
+        let src = ticker(Duration::from_nanos(100)).count();
+        let merged = merge(vec![src]).collect();
+        merged
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+        let values: Vec<u64> = merged.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![1, 2, 3]);
     }
 }

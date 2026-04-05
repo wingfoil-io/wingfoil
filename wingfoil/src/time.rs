@@ -183,3 +183,62 @@ impl Mul<i64> for NanoTime {
         Self(self.0 * other as RawTime)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::NanoTime;
+    use chrono::Datelike;
+    use std::time::Duration;
+
+    #[test]
+    fn kdb_timestamp_roundtrip() {
+        let t = NanoTime::new(1_600_000_000_000_000_000);
+        assert_eq!(t, NanoTime::from_kdb_timestamp(t.to_kdb_timestamp()));
+    }
+
+    #[test]
+    fn kdb_max_converts_to_i64_max() {
+        assert_eq!(NanoTime::MAX.to_kdb_timestamp(), i64::MAX);
+    }
+
+    #[test]
+    fn kdb_epoch_offset_lands_on_year_2000() {
+        // KDB timestamp 0 = 2000-01-01 00:00:00 UTC
+        let t = NanoTime::from_kdb_timestamp(0);
+        let dt: chrono::naive::NaiveDateTime = t.into();
+        assert_eq!(dt.year(), 2000);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 1);
+    }
+
+    #[test]
+    fn duration_roundtrip() {
+        let d = Duration::from_nanos(123_456_789);
+        let t = NanoTime::from(d);
+        let d2 = Duration::from(t);
+        assert_eq!(d, d2);
+    }
+
+    #[test]
+    fn arithmetic_add_sub_mul() {
+        let a = NanoTime::new(300);
+        let b = NanoTime::new(100);
+        assert_eq!(a + b, NanoTime::new(400));
+        assert_eq!(a - b, NanoTime::new(200));
+        assert_eq!(b * 3u32, NanoTime::new(300));
+        assert_eq!(b * 4u64, NanoTime::new(400));
+    }
+
+    #[test]
+    fn ordering() {
+        assert!(NanoTime::new(100) > NanoTime::new(50));
+        assert!(NanoTime::ZERO < NanoTime::MAX);
+        assert_eq!(NanoTime::new(42), NanoTime::new(42));
+    }
+
+    #[test]
+    fn from_u64_roundtrip() {
+        let raw: u64 = 999_888_777;
+        assert_eq!(u64::from(NanoTime::from(raw)), raw);
+    }
+}

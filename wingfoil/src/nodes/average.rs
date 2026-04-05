@@ -24,3 +24,30 @@ impl<T: Element + ToPrimitive> MutableNode for AverageStream<T> {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+
+    #[test]
+    fn average_of_sequence() {
+        // count() gives 1,2,3,4,5. Mean = 3.0
+        let avg = ticker(Duration::from_nanos(100)).count().average();
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((avg.peek_value() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn average_of_constant_stream() {
+        // Constant value 7 — running average should always be 7.0
+        let avg = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 7u64)
+            .average();
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
+            .unwrap();
+        assert!((avg.peek_value() - 7.0).abs() < 1e-10);
+    }
+}
