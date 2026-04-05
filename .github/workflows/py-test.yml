@@ -59,8 +59,8 @@ jobs:
             --output-path wingfoil-python/lcov-rust.info
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v5
         if: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@v5
         with:
           files: wingfoil-python/lcov-python.info
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -68,8 +68,8 @@ jobs:
           fail_ci_if_error: true
 
       - name: Upload Rust-from-Python coverage to Codecov
-        uses: codecov/codecov-action@v5
         if: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@v5
         with:
           files: wingfoil-python/lcov-rust.info
           token: ${{ secrets.CODECOV_TOKEN }}
