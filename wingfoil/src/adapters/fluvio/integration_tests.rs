@@ -17,7 +17,6 @@
 
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators, constant};
-use crate::types::Burst;
 use crate::{RunFor, RunMode, burst};
 use fluvio::consumer::ConsumerConfigExt;
 use fluvio::metadata::topic::TopicSpec;
