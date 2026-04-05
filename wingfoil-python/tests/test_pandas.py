@@ -120,3 +120,61 @@ def test_massive_fan_out():
     assert df.iloc[2]["add"] == 8
     assert df.iloc[2]["sub"] == -2
     assert df.iloc[2]["mult"] == 15
+
+
+def test_to_dataframe_time_tuple_with_object_values():
+    """to_dataframe with (time, obj) tuples where obj has __dict__ (line 19-21)."""
+    data = [
+        (1.0, SimpleObj(a=10, b=20)),
+        (2.0, SimpleObj(a=30, b=40)),
+    ]
+    df = to_dataframe(data)
+    assert len(df) == 2
+    assert "time" in df.columns
+    assert "a" in df.columns
+    assert "b" in df.columns
+    assert df.iloc[0]["time"] == 1.0
+    assert df.iloc[0]["a"] == 10
+    assert df.iloc[1]["b"] == 40
+
+
+def test_build_dataframe_skips_empty_streams():
+    """build_dataframe skips streams whose peek_value() is falsy (lines 48-50)."""
+    # A stream that ran 0 cycles has an empty list as peek_value
+    empty_stream = ticker(0.01).count().limit(3).dataframe()
+    live_stream = ticker(0.01).count().limit(3).dataframe()
+
+    # Only run live_stream — empty_stream stays empty
+    live_stream.run(realtime=False)
+
+    df = build_dataframe({"empty": empty_stream, "live": live_stream})
+    # Only "live" column should appear (empty_stream's val is falsy)
+    assert "live" in df.columns
+    assert len(df) == 3
+
+
+def test_to_dataframe_with_dict_list():
+    """to_dataframe with a plain list of dicts (lines 31-32)."""
+    data = [{"x": 1, "y": 2}, {"x": 3, "y": 4}]
+    df = to_dataframe(data)
+    assert len(df) == 2
+    assert "x" in df.columns
+    assert df.iloc[0]["x"] == 1
+
+
+def test_to_dataframe_with_object_list():
+    """to_dataframe with a plain list of objects with __dict__ (lines 33-34)."""
+    data = [SimpleObj(a=5, b=6), SimpleObj(a=7, b=8)]
+    df = to_dataframe(data)
+    assert len(df) == 2
+    assert "a" in df.columns
+    assert df.iloc[1]["b"] == 8
+
+
+def test_to_dataframe_with_raw_dict():
+    """to_dataframe with a plain dict (lines 27-28)."""
+    data = {"col1": [1, 2, 3], "col2": [4, 5, 6]}
+    df = to_dataframe(data)
+    assert len(df) == 3
+    assert "col1" in df.columns
+    assert df.iloc[2]["col2"] == 6

@@ -292,9 +292,9 @@ impl PyStream {
         })
     }
 
-    /// sum the stream (assumes addable PyElements)
+    /// sum the stream (extracts f64 values before summing)
     fn sum(&self) -> PyStream {
-        PyStream(self.0.sum())
+        self.extract::<f64>().sum().as_py_stream()
     }
 
     fn count(&self) -> PyStream {
