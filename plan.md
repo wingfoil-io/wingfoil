@@ -173,3 +173,4 @@ Reschedule note:
 2026-04-06 sweep:
 - Rebased onto latest `upstream/main`, refreshed PR closure snapshot, and continued to see upstream workflows in `action_required` state.
 - Verified we are not behind `upstream/main` (no rebase needed after the sweep); upstream is still blocking workflow execution behind maintainer approval.
+- Fixed fork PR CI ergonomics: Python workflow no longer hard-fails when Codecov tokenless uploads are rejected (Codecov token required); verified via workflow_dispatch run.

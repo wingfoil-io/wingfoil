@@ -43,7 +43,7 @@ Output artifact:
 #### Current Snapshot (2026-04-06)
 
 - PR: `#176` (`feat(adapter): iceoryx2 v2 with daemonless support and Python bindings`)
-- Head SHA: `f95eda8`
+- Head SHA: `99e488a`
 - `mergeStateStatus`: `UNSTABLE`
 - `mergeable`: `MERGEABLE`
 - Checks:
@@ -61,13 +61,15 @@ Output artifact:
 
 Current state (post-rebase, 2026-04-06):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24011878746`
-  - Latest iceoryx2 Integration Tests run `24011878748`
+  - Latest CI run `24012068885`
+  - Latest iceoryx2 Integration Tests run `24012068881`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:
   - Python Tests run `24010473156`: success
   - iceoryx2 Integration Tests run `24010473162`: success
+- Manual workflow_dispatch verification:
+  - Python Tests run `24012090606`: success (validates workflow is runnable end-to-end on the branch)
 - Reviewer feedback highlights (from latest review by `0-jake-0`):
   - Blocker: background thread lifecycle (store `JoinHandle`, join in `stop()`)
   - Blocker: ensure `Ipc` path is tested (at least one opt-in IPC round-trip)
