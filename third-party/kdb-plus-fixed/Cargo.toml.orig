@@ -1,0 +1,40 @@
+[package]
+name = "kdb-plus-fixed"
+version = "0.5.1"
+authors = ["diamondrod", "rollo-b2c2"]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/wingfoil-io/kdb-plus-fixed"
+documentation = "https://docs.rs/kdb-plus-fixed"
+readme = "../README.md"
+description = """
+Dual q/kdb+ interface for API to build a shared library and an IPC client.
+"""
+
+[dependencies]
+async-trait = {version = "0.1", optional = true}
+async-recursion = "1"
+chrono={version = "0.4", optional = true}
+once_cell = { version = "1", optional = true}
+sha1_smol = { version = "1", optional = true}
+tokio = { version = "1", features = [ "net", "rt", "io-util", "fs", "macros", "rt-multi-thread" ], optional = true }
+tokio-native-tls = { version = "0.3", optional = true }
+hickory-resolver = { version = "0.26.0-beta.3", optional = true }
+
+[features]
+# Include nothing by default
+default = []
+# Select one of two features
+api = []
+ipc = ["once_cell", "chrono", "hickory-resolver", "tokio", "tokio-native-tls", "async-trait", "sha1_smol"]
+integration-tests = ["ipc"]
+
+[dev-dependencies]
+# IPC test and example
+async-std = { version = "1.8.0", features = [ "tokio1", "attributes" ] }
+float-cmp = "0.8"
+# C API test and example
+libc = "0.2"
+
+[package.metadata.docs.rs]
+all-features = true
