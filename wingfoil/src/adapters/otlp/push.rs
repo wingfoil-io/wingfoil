@@ -69,9 +69,7 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
         .build();
 
     let meter = provider.meter("wingfoil");
-    // f64_gauge requires Cow<'static, str>; leak the string to satisfy the bound.
-    let metric_name_static: &'static str = Box::leak(metric_name.into_boxed_str());
-    let gauge = meter.f64_gauge(metric_name_static).build();
+    let gauge = meter.f64_gauge(metric_name).build();
 
     while let Some((_time, value)) = source.next().await {
         let s = value.to_string();
@@ -86,4 +84,24 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
         .shutdown()
         .map_err(|e| anyhow::anyhow!("otlp_push: shutdown error: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{NanoTime, RunFor, RunMode, nodes::*};
+    use std::time::Duration;
+
+    #[test]
+    fn historical_mode_drains_without_connecting() {
+        // No collector running — historical mode must return Ok without any network calls.
+        let config = OtlpConfig {
+            endpoint: "http://127.0.0.1:1".into(),
+            service_name: "test".into(),
+        };
+        let counter = ticker(Duration::from_millis(10)).count();
+        let node = counter.otlp_push("test_metric", config);
+        node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+    }
 }

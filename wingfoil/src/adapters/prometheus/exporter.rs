@@ -98,7 +98,7 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
         }
     }
 
-    if !request_line.starts_with("GET /metrics") {
+    if !request_line.starts_with("GET /metrics HTTP") {
         if let Err(e) = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n") {
             log::warn!("PrometheusExporter: failed to write 404 response: {e}");
         }
@@ -117,7 +117,13 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
 }
 
 fn build_metrics_body(metrics: &MetricStore) -> String {
-    let store = metrics.lock().unwrap();
+    let store = match metrics.lock() {
+        Ok(s) => s,
+        Err(_) => {
+            log::warn!("PrometheusExporter: metrics lock poisoned, serving empty body");
+            return String::new();
+        }
+    };
     let mut out = String::new();
     for (name, value) in store.iter() {
         out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));

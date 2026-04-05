@@ -35,7 +35,7 @@ class TestOtlpPush(unittest.TestCase):
             endpoint="http://localhost:4318",
             service_name="wingfoil-py-test",
         )
-        node.run(realtime=False, cycles=5)
+        node.run(realtime=True, cycles=5)
 
     def test_push_returns_node(self):
         """otlp_push returns a Node object."""
@@ -58,7 +58,7 @@ class TestOtlpPush(unittest.TestCase):
             endpoint="http://localhost:4318",
             service_name="wingfoil-py-test",
         )
-        node.run(realtime=False, cycles=1)
+        node.run(realtime=True, cycles=1)
 
 
 if __name__ == "__main__":
