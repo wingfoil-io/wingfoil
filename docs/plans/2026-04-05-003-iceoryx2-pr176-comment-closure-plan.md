@@ -58,6 +58,11 @@ Output artifact:
 - If checks are not showing on `wingfoil-io/wingfoil`, verify that workflow runs are being created with:
   - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2`
   - If no new runs appear, request a maintainer to re-run/approve workflows for the updated head SHA.
+
+Current state (post-rebase, 2026-04-05):
+- Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
+  - CI run `24010474134`
+  - iceoryx2 Integration Tests run `24010474136`
 - Reviewer feedback highlights (from latest review by `0-jake-0`):
   - Blocker: background thread lifecycle (store `JoinHandle`, join in `stop()`)
   - Blocker: ensure `Ipc` path is tested (at least one opt-in IPC round-trip)
