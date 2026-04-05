@@ -75,6 +75,7 @@ where
     }
 }
 
+#[node(active = [source])]
 impl<T, FUT> MutableNode for AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,
@@ -83,10 +84,6 @@ where
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.sender.send(state, self.source.peek_value())?;
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -170,10 +167,6 @@ where
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.receiver_stream.cycle(state)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::none()
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

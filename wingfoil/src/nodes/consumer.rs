@@ -13,14 +13,11 @@ pub(crate) struct ConsumerNode<IN> {
     func: Box<dyn Fn(IN, NanoTime)>,
 }
 
+#[node(active = [upstream])]
 impl<IN> MutableNode for ConsumerNode<IN> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(self.upstream.peek_value(), state.time());
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
@@ -32,13 +29,10 @@ pub(crate) struct TryConsumerNode<IN> {
     func: Box<dyn Fn(IN, NanoTime) -> anyhow::Result<()>>,
 }
 
+#[node(active = [upstream])]
 impl<IN> MutableNode for TryConsumerNode<IN> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(self.upstream.peek_value(), state.time())?;
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }

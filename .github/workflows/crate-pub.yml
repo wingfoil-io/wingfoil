@@ -14,10 +14,21 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Build wingfoil to generate Cargo.lock
+      # Build to generate Cargo.lock
       - name: Build wingfoil
         working-directory: wingfoil
         run: cargo build
+
+      # Publish wingfoil-derive first — wingfoil depends on it
+      - name: Publish wingfoil-derive
+        working-directory: wingfoil-derive
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
+
+      # Wait for crates.io to index wingfoil-derive
+      - name: Wait for wingfoil-derive index
+        run: sleep 15
 
       # Publish wingfoil
       - name: Publish wingfoil
@@ -26,8 +37,8 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io
 
-      # Wait a few seconds to let crates.io index update
-      - name: Wait for crates.io index
+      # Wait for crates.io to index wingfoil
+      - name: Wait for wingfoil index
         run: sleep 15
 
       # Set wingfoil version in wingfoil-python

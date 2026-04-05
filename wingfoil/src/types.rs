@@ -6,6 +6,17 @@ use tinyvec::TinyVec;
 
 pub use crate::graph::GraphState;
 pub use crate::time::*;
+/// Attribute macro for `impl MutableNode` blocks.
+///
+/// Generates `fn upstreams()` and/or `impl StreamPeekRef<T>` to eliminate
+/// boilerplate in custom node definitions.  See [`MutableNode`] for the full
+/// attribute syntax.
+///
+/// **Scope requirement**: the generated `upstreams()` body calls
+/// [`AsUpstreamNodes`] unqualified, so `AsUpstreamNodes` must be in scope.
+/// `use wingfoil::*` satisfies this; selective imports must add
+/// `use wingfoil::AsUpstreamNodes` explicitly.
+pub use wingfoil_derive::node;
 
 /// A small vector optimised for single-element bursts.
 ///
@@ -93,14 +104,44 @@ pub trait Element: Debug + Clone + Default + 'static {}
 
 impl<T> Element for T where T: Debug + Clone + Default + 'static {}
 
+/// Helper trait so the `#[node]` macro can call a single method
+/// regardless of whether the field is `Rc<dyn Node>`, `Rc<dyn Stream<T>>`, or
+/// a `Vec` of either.
+pub trait AsUpstreamNodes {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>>;
+}
+
+impl AsUpstreamNodes for Rc<dyn Node> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        vec![self.clone()]
+    }
+}
+
+impl<T> AsUpstreamNodes for Rc<dyn Stream<T>> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        vec![self.clone().as_node()]
+    }
+}
+
+impl<U: AsUpstreamNodes> AsUpstreamNodes for Vec<U> {
+    fn as_upstream_nodes(&self) -> Vec<Rc<dyn Node>> {
+        self.iter().flat_map(|u| u.as_upstream_nodes()).collect()
+    }
+}
+
 /// Implement this trait create your own [Node].
 pub trait MutableNode {
     /// Called by the graph when it determines that this node
     /// is required to be cycled.
     /// Returns Ok(true) if the node's state changed, Ok(false) otherwise.
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool>;
-    /// Called by the graph at wiring time.
-    fn upstreams(&self) -> UpStreams;
+    /// Called by the graph at wiring time to discover upstream dependencies.
+    /// Active upstreams trigger this node when they tick; passive are read-only.
+    /// Defaults to `UpStreams::none()` (source node).  Use `#[node(active = [...])]`
+    /// to generate this automatically, or override manually for complex cases.
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::none()
+    }
     /// called by the graph after wiring and before start
     #[allow(unused_variables)]
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

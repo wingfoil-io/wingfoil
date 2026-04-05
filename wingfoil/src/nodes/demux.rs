@@ -205,6 +205,11 @@ where
     F: Fn(&T) -> (K, DemuxEvent),
     K: Hash + Eq + PartialEq + std::fmt::Debug,
 {
+    fn upstreams(&self) -> UpStreams {
+        let nodes = vec![self.source.clone().as_node()];
+        UpStreams::new(nodes, vec![])
+    }
+
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         let (key, event) = (self.func)(&self.value);
@@ -250,11 +255,6 @@ where
         );
         Ok(())
     }
-
-    fn upstreams(&self) -> UpStreams {
-        let nodes = vec![self.source.clone().as_node()];
-        UpStreams::new(nodes, vec![])
-    }
 }
 
 #[derive(new)]
@@ -271,14 +271,14 @@ impl<T> MutableNode for DemuxChild<T>
 where
     T: Element,
 {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = self.source.peek_value();
-        Ok(true)
-    }
-
     fn upstreams(&self) -> UpStreams {
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
+    }
+
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value = self.source.peek_value();
+        Ok(true)
     }
 }
 
@@ -363,6 +363,11 @@ where
     K: Hash + Eq + PartialEq + std::fmt::Debug,
     I: IntoIterator<Item = T> + Element,
 {
+    fn upstreams(&self) -> UpStreams {
+        let nodes = vec![self.source.clone().as_node()];
+        UpStreams::new(nodes, vec![])
+    }
+
     fn cycle(&mut self, graph_state: &mut GraphState) -> anyhow::Result<bool> {
         for row in &mut self.value {
             row.clear();
@@ -417,11 +422,6 @@ where
         );
         Ok(())
     }
-
-    fn upstreams(&self) -> UpStreams {
-        let nodes = vec![self.source.clone().as_node()];
-        UpStreams::new(nodes, vec![])
-    }
 }
 
 #[derive(new)]
@@ -439,14 +439,14 @@ impl<T> MutableNode for DemuxVecChild<T>
 where
     T: Element,
 {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
-        Ok(true)
-    }
-
     fn upstreams(&self) -> UpStreams {
         // source never ticks but use passive wiring anyway
         UpStreams::new(vec![], vec![self.source.clone().as_node()])
+    }
+
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
+        Ok(true)
     }
 }
 

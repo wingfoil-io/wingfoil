@@ -12,6 +12,7 @@ pub struct LimitStream<T: Element> {
     value: T,
 }
 
+#[node(active = [source], output = value: T)]
 impl<T: Element> MutableNode for LimitStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.tick_count >= self.limit {
@@ -24,14 +25,5 @@ impl<T: Element> MutableNode for LimitStream<T> {
             self.value = self.source.peek_value();
             Ok(true)
         }
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for LimitStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }

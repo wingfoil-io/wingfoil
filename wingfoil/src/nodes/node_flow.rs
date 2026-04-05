@@ -22,6 +22,7 @@ impl ThrottleNode {
     }
 }
 
+#[node(active = [upstream])]
 impl MutableNode for ThrottleNode {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let now = state.time();
@@ -33,10 +34,6 @@ impl MutableNode for ThrottleNode {
             self.last_emit_time = Some(now);
         }
         Ok(should_emit)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 
@@ -57,6 +54,7 @@ impl DelayNode {
     }
 }
 
+#[node(active = [upstream])]
 impl MutableNode for DelayNode {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {
@@ -75,10 +73,6 @@ impl MutableNode for DelayNode {
             }
             Ok(ticked)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 
@@ -99,6 +93,7 @@ impl LimitNode {
     }
 }
 
+#[node(active = [upstream])]
 impl MutableNode for LimitNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         if self.tick_count >= self.limit {
@@ -107,10 +102,6 @@ impl MutableNode for LimitNode {
             self.tick_count += 1;
             Ok(true)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 
@@ -129,16 +120,10 @@ impl FilterNode {
     }
 }
 
+#[node(active = [upstream], passive = [condition])]
 impl MutableNode for FilterNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         Ok(self.condition.peek_value())
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![self.upstream.clone()],
-            vec![self.condition.clone().as_node()],
-        )
     }
 }
 
@@ -154,14 +139,11 @@ impl FeedbackSendNode {
     }
 }
 
+#[node(active = [upstream])]
 impl MutableNode for FeedbackSendNode {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.sink.send((), state);
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
     }
 }
 

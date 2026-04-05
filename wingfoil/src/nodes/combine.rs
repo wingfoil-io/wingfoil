@@ -10,13 +10,11 @@ struct CombineNode<T: Element> {
     combined: Rc<RefCell<Burst<T>>>,
 }
 
+#[node(active = [upstream])]
 impl<T: Element> MutableNode for CombineNode<T> {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         self.combined.borrow_mut().push(self.upstream.peek_value());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 
@@ -28,19 +26,11 @@ struct CombineStream2<T: Element> {
     value: Burst<T>,
 }
 
+#[node(active = [upstreams], output = value: Burst<T>)]
 impl<T: Element> MutableNode for CombineStream2<T> {
     fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
         self.value = std::mem::replace(&mut *self.combined.borrow_mut(), Burst::new());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(self.upstreams.clone(), vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Burst<T>> for CombineStream2<T> {
-    fn peek_ref(&self) -> &Burst<T> {
-        &self.value
     }
 }
 

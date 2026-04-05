@@ -1173,10 +1173,6 @@ Caused by:
             Ok(true)
         }
 
-        fn upstreams(&self) -> UpStreams {
-            UpStreams::default()
-        }
-
         fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
             state.add_callback(NanoTime::new(100));
             Ok(())

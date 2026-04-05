@@ -16,6 +16,7 @@ pub(crate) struct DifferenceStream<T: Element> {
     prev_val: Option<T>,
 }
 
+#[node(active = [upstream], output = diff: T)]
 impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let ticked = match self.prev_val.clone() {
@@ -27,15 +28,5 @@ impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
         };
         self.prev_val = Some(self.upstream.peek_value());
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element + Sub<Output = T>> StreamPeekRef<T> for DifferenceStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.diff
     }
 }

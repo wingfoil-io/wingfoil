@@ -10,15 +10,13 @@ pub struct FinallyNode<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<(
     value: T,
 }
 
+#[node(active = [source])]
 impl<T: Element, F: FnOnce(T, &GraphState) -> anyhow::Result<()>> MutableNode
     for FinallyNode<T, F>
 {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.source.peek_value();
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.source.clone().as_node()], vec![])
     }
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(f) = self.finally.take() {

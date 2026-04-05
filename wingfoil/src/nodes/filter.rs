@@ -14,6 +14,7 @@ pub(crate) struct FilterStream<T: Element> {
     value: T,
 }
 
+#[node(active = [source, condition], output = value: T)]
 impl<T: Element> MutableNode for FilterStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let val = self.source.peek_value();
@@ -22,21 +23,5 @@ impl<T: Element> MutableNode for FilterStream<T> {
             self.value = val;
         }
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![
-                self.source.clone().as_node(),
-                self.condition.clone().as_node(),
-            ],
-            vec![],
-        )
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for FilterStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }

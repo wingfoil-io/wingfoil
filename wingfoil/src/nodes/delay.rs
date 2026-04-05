@@ -19,6 +19,7 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     delay: NanoTime,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {
@@ -43,16 +44,6 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
             }
             Ok(ticked)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

@@ -21,20 +21,12 @@ impl<T: Element> PrintStream<T> {
     }
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for PrintStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
         self.buffer.push(self.value.clone());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for PrintStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

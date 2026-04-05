@@ -21,20 +21,11 @@ impl<IN, OUT: Element> TryMapStream<IN, OUT> {
     }
 }
 
+#[node(active = [upstream], output = value: OUT)]
 impl<IN, OUT: Element> MutableNode for TryMapStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(self.upstream.peek_value())?;
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<IN: 'static, OUT: Element> StreamPeekRef<OUT> for TryMapStream<IN, OUT> {
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }
 

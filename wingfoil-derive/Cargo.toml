@@ -1,0 +1,18 @@
+[package]
+name = "wingfoil-derive"
+version = "3.3.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Proc-macro attribute for the wingfoil stream processing library"
+repository = "https://github.com/wingfoil-io/wingfoil"
+homepage = "https://github.com/wingfoil-io/wingfoil/"
+keywords = ["graph", "stream", "dag", "hft", "trading"]
+publish = ["wingfoil", "crates-io"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn  = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

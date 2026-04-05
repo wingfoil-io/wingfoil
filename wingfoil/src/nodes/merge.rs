@@ -11,6 +11,7 @@ pub struct MergeStream<T: Element> {
     value: T,
 }
 
+#[node(active = [upstreams], output = value: T)]
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         for stream in self.upstreams.iter() {
@@ -20,21 +21,6 @@ impl<T: Element> MutableNode for MergeStream<T> {
             }
         }
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            self.upstreams
-                .iter()
-                .map(|stream| stream.clone().as_node())
-                .collect(),
-            vec![],
-        )
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for MergeStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

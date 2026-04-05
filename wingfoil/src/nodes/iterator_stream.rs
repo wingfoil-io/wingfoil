@@ -25,6 +25,7 @@ fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::
     }
 }
 
+#[node(output = value: Burst<T>)]
 impl<T: Element> MutableNode for IteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
@@ -39,19 +40,9 @@ impl<T: Element> MutableNode for IteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
-    }
-
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         add_callback(&mut self.peekable, state)?;
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<Burst<T>> for IteratorStream<T> {
-    fn peek_ref(&self) -> &Burst<T> {
-        &self.value
     }
 }
 
@@ -76,6 +67,7 @@ pub struct SimpleIteratorStream<T: Element> {
     value: T,
 }
 
+#[node(output = value: T)]
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let val_at1 = self.peekable.next().unwrap();
@@ -97,19 +89,9 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
         add_callback(&mut self.peekable, state)
     }
 
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
-    }
-
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         add_callback(&mut self.peekable, state)?;
         Ok(())
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for SimpleIteratorStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

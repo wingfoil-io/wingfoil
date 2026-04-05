@@ -14,18 +14,10 @@ pub(crate) struct TriMapStream<IN1, IN2, IN3, OUT: Element> {
     func: Box<dyn Fn(IN1, IN2, IN3) -> OUT>,
 }
 
+#[node(output = value: OUT)]
 impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> MutableNode
     for TriMapStream<IN1, IN2, IN3, OUT>
 {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = (self.func)(
-            self.upstream1.stream().peek_value(),
-            self.upstream2.stream().peek_value(),
-            self.upstream3.stream().peek_value(),
-        );
-        Ok(true)
-    }
-
     fn upstreams(&self) -> UpStreams {
         let (active, passive): (Vec<_>, Vec<_>) = [
             (self.upstream1.as_node(), self.upstream1.is_active()),
@@ -39,13 +31,13 @@ impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> MutableNode
             passive.into_iter().map(|(n, _)| n).collect(),
         )
     }
-}
-
-impl<IN1: 'static, IN2: 'static, IN3: 'static, OUT: Element> StreamPeekRef<OUT>
-    for TriMapStream<IN1, IN2, IN3, OUT>
-{
-    fn peek_ref(&self) -> &OUT {
-        &self.value
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value = (self.func)(
+            self.upstream1.stream().peek_value(),
+            self.upstream2.stream().peek_value(),
+            self.upstream3.stream().peek_value(),
+        );
+        Ok(true)
     }
 }
 

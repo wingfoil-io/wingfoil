@@ -22,6 +22,7 @@ pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
     delay: NanoTime,
 }
 
+#[node(active = [upstream, trigger], output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if state.ticked(self.trigger.clone()) {
@@ -53,19 +54,6 @@ impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
             }
             Ok(ticked)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(
-            vec![self.upstream.clone().as_node(), self.trigger.clone()],
-            vec![],
-        )
-    }
-}
-
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayWithResetStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

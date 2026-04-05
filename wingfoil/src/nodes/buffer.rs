@@ -9,6 +9,7 @@ pub(crate) struct BufferStream<T: Element> {
     value: Vec<T>,
 }
 
+#[node(active = [upstream], output = value: Vec<T>)]
 impl<T: Element> MutableNode for BufferStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.buffer.push(self.upstream.peek_value());
@@ -21,15 +22,6 @@ impl<T: Element> MutableNode for BufferStream<T> {
         } else {
             Ok(false)
         }
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Vec<T>> for BufferStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
-        &self.value
     }
 }
 

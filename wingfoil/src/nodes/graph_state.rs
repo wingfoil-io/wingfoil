@@ -12,20 +12,10 @@ pub(crate) struct GraphStateStream<T: Element> {
     func: Box<dyn Fn(&mut GraphState) -> T>,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for GraphStateStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(state);
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        // only ticks on trigger
-        UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for GraphStateStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }

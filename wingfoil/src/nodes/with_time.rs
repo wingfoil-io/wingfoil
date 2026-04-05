@@ -14,19 +14,10 @@ pub struct WithTimeStream<T: Element> {
     value: (NanoTime, T),
 }
 
+#[node(active = [upstream], output = value: (NanoTime, T))]
 impl<T: Element> MutableNode for WithTimeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (state.time(), self.upstream.peek_value());
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<(NanoTime, T)> for WithTimeStream<T> {
-    fn peek_ref(&self) -> &(NanoTime, T) {
-        &self.value
     }
 }

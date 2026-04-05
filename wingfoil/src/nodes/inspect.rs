@@ -20,20 +20,12 @@ impl<T: Element> InspectStream<T> {
     }
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for InspectStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
         (self.func)(&self.value);
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for InspectStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 

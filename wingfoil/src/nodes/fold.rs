@@ -12,19 +12,11 @@ pub(crate) struct FoldStream<IN: Element, OUT: Element> {
     value: OUT,
 }
 
+#[node(active = [upstream], output = value: OUT)]
 impl<IN: Element, OUT: Element> MutableNode for FoldStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(&mut self.value, self.upstream.peek_value());
         Ok(true)
-    }
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<IN: Element, OUT: Element> StreamPeekRef<OUT> for FoldStream<IN, OUT> {
-    fn peek_ref(&self) -> &OUT {
-        &self.value
     }
 }
 

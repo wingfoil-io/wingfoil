@@ -18,6 +18,7 @@ pub struct CsvWriterNode<T: Element> {
     headers_written: bool,
 }
 
+#[node(active = [upstream])]
 impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
@@ -30,10 +31,6 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvWri
                 .map_err(|e| anyhow::anyhow!("Failed to serialize CSV record: {e}"))?;
         }
         Ok(false)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
     }
 }
 

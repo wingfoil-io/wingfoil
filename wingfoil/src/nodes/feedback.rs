@@ -15,12 +15,7 @@ pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
     node_id: Rc<Cell<Option<usize>>>,
 }
 
-impl<T: Element + Hash + Eq> StreamPeekRef<T> for FeedbackStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
-    }
-}
-
+#[node(output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
@@ -33,10 +28,6 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
             ticked = true;
         }
         Ok(ticked)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

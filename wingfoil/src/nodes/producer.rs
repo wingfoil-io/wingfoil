@@ -15,19 +15,10 @@ pub(crate) struct ProducerStream<T: Element> {
     value: T,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for ProducerStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)();
         Ok(true)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for ProducerStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }

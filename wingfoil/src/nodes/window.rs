@@ -9,6 +9,7 @@ pub(crate) struct WindowStream<T: Element> {
     value: Vec<T>,
 }
 
+#[node(active = [upstream], output = value: Vec<T>)]
 impl<T: Element> MutableNode for WindowStream<T> {
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.next_window = state.time() + self.interval;
@@ -39,16 +40,6 @@ impl<T: Element> MutableNode for WindowStream<T> {
         }
 
         Ok(flushed)
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<Vec<T>> for WindowStream<T> {
-    fn peek_ref(&self) -> &Vec<T> {
-        &self.value
     }
 }
 

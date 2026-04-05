@@ -122,6 +122,10 @@ struct BenchTriggerNode {
 }
 
 impl MutableNode for BenchTriggerNode {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::default()
+    }
+
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         match self.signal.load(Ordering::SeqCst).into() {
             Signal::Begin => {
@@ -133,10 +137,6 @@ impl MutableNode for BenchTriggerNode {
             }
             _ => Ok(false),
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::default()
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {

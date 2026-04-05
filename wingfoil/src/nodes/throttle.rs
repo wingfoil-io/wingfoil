@@ -15,6 +15,7 @@ pub(crate) struct ThrottleStream<T: Element> {
     value: T,
 }
 
+#[node(active = [upstream], output = value: T)]
 impl<T: Element> MutableNode for ThrottleStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let now = state.time();
@@ -29,16 +30,6 @@ impl<T: Element> MutableNode for ThrottleStream<T> {
         } else {
             Ok(false)
         }
-    }
-
-    fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.upstream.clone().as_node()], vec![])
-    }
-}
-
-impl<T: Element> StreamPeekRef<T> for ThrottleStream<T> {
-    fn peek_ref(&self) -> &T {
-        &self.value
     }
 }
 
