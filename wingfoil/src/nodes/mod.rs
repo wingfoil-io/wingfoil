@@ -58,6 +58,7 @@ pub use channel::ChannelReceiverStream;
 pub use demux::*;
 #[cfg(feature = "dynamic-graph-beta")]
 pub use dynamic_group::*;
+use feedback::FeedbackSendStream;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
@@ -399,9 +400,10 @@ pub trait StreamOperators<T: Element> {
     /// executes supplied closure on each tick
     #[must_use]
     fn for_each(self: &Rc<Self>, func: impl Fn(T, NanoTime) + 'static) -> Rc<dyn Node>;
-    /// Sends each value to a [FeedbackSink].
+    /// Sends each value to a [FeedbackSink] and passes the value through unchanged.
+    /// Like [inspect](StreamOperators::inspect) but for feedback channels.
     #[must_use]
-    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Node>
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Stream<T>>
     where
         T: Hash + Eq;
     /// executes supplied fallible closure on each tick.
@@ -660,19 +662,11 @@ where
         ConsumerNode::new(self.clone(), Box::new(func)).into_node()
     }
 
-    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Node>
+    fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Stream<T>>
     where
         T: Hash + Eq,
     {
-        let upstream = self.clone();
-        GraphStateStream::new(
-            self.clone().as_node(),
-            Box::new(move |state: &mut GraphState| {
-                sink.send(upstream.peek_value(), state);
-            }),
-        )
-        .into_stream()
-        .as_node()
+        FeedbackSendStream::new(self.clone(), sink).into_stream()
     }
 
     fn try_for_each(
