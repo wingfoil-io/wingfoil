@@ -203,6 +203,18 @@ impl EtcdConnection {
     }
 }
 
+impl From<&str> for EtcdConnection {
+    fn from(endpoint: &str) -> Self {
+        Self::new(endpoint)
+    }
+}
+
+impl From<String> for EtcdConnection {
+    fn from(endpoint: String) -> Self {
+        Self::new(endpoint)
+    }
+}
+
 /// A single key-value pair from etcd.
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEntry {

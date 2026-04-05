@@ -211,6 +211,16 @@ name = "tracing"
 path = "examples/tracing/main.rs"
 
 [[example]]
+name = "zmq_direct_pub"
+path = "examples/zmq/direct/zmq_pub.rs"
+required-features = ["zmq-beta"]
+
+[[example]]
+name = "zmq_direct_sub"
+path = "examples/zmq/direct/zmq_sub.rs"
+required-features = ["zmq-beta"]
+
+[[example]]
 name = "zmq_etcd_pub"
 path = "examples/zmq/etcd/zmq_pub.rs"
 required-features = ["zmq-beta", "etcd"]

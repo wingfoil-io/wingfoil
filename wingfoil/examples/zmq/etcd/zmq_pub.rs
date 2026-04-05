@@ -18,7 +18,6 @@
 
 use log::Level::Info;
 use std::time::Duration;
-use wingfoil::adapters::etcd::EtcdConnection;
 use wingfoil::adapters::zmq::{EtcdRegistry, ZeroMqPub};
 use wingfoil::*;
 
@@ -29,11 +28,10 @@ fn main() -> anyhow::Result<()> {
     let pub_port = 7779u16;
     let service_name = "zmq-etcd-example/quotes";
 
-    let conn = EtcdConnection::new(etcd_endpoint);
     ticker(Duration::from_millis(100))
         .count()
         .logged("pub", Info)
-        .zmq_pub(pub_port, (service_name, EtcdRegistry::new(conn)))
+        .zmq_pub(pub_port, (service_name, EtcdRegistry::new(etcd_endpoint)))
         .run(RunMode::RealTime, RunFor::Forever)?;
 
     Ok(())

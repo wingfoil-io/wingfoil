@@ -15,7 +15,6 @@
 
 use log::Level::Info;
 use std::time::Duration;
-use wingfoil::adapters::etcd::EtcdConnection;
 use wingfoil::adapters::zmq::{EtcdRegistry, zmq_sub};
 use wingfoil::*;
 
@@ -26,8 +25,7 @@ fn main() -> anyhow::Result<()> {
     let service_name = "zmq-etcd-example/quotes";
     let run_for = RunFor::Duration(Duration::from_secs(5));
 
-    let conn = EtcdConnection::new(etcd_endpoint);
-    let (data, _status) = zmq_sub::<u64>((service_name, EtcdRegistry::new(conn)))?;
+    let (data, _status) = zmq_sub::<u64>((service_name, EtcdRegistry::new(etcd_endpoint)))?;
     data.logged("sub", Info)
         .collect()
         .finally(|res, _| {

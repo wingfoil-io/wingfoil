@@ -113,21 +113,32 @@ mod etcd_impl {
     /// the lease immediately. Subscribers do a one-shot GET at construction time.
     ///
     /// ```ignore
-    /// use wingfoil::adapters::etcd::EtcdConnection;
     /// use wingfoil::adapters::zmq::EtcdRegistry;
     ///
-    /// let conn = EtcdConnection::new("http://etcd:2379");
-    /// let etcd = EtcdRegistry::new(conn);
-    /// stream.zmq_pub(5556, ("quotes", etcd));
+    /// // Single endpoint (URL string)
+    /// stream.zmq_pub(5556, ("quotes", EtcdRegistry::new("http://etcd:2379")));
+    ///
+    /// // etcd cluster
+    /// stream.zmq_pub(5556, ("quotes", EtcdRegistry::with_endpoints([
+    ///     "http://etcd-0.etcd:2379",
+    ///     "http://etcd-1.etcd:2379",
+    /// ])));
     /// ```
     pub struct EtcdRegistry {
         conn: EtcdConnection,
     }
 
     impl EtcdRegistry {
-        /// Create an `EtcdRegistry` connected to `conn`.
-        pub fn new(conn: EtcdConnection) -> Self {
-            Self { conn }
+        /// Create an `EtcdRegistry` from a single endpoint URL or an [`EtcdConnection`].
+        pub fn new(conn: impl Into<EtcdConnection>) -> Self {
+            Self { conn: conn.into() }
+        }
+
+        /// Create an `EtcdRegistry` connected to multiple etcd endpoints (cluster).
+        pub fn with_endpoints(endpoints: impl IntoIterator<Item = impl Into<String>>) -> Self {
+            Self {
+                conn: EtcdConnection::with_endpoints(endpoints),
+            }
         }
     }
 

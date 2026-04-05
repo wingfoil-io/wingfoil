@@ -45,24 +45,20 @@
 //!
 //! ```ignore
 //! use std::time::Duration;
-//! use wingfoil::adapters::etcd::EtcdConnection;
 //! use wingfoil::adapters::zmq::{EtcdRegistry, ZeroMqPub, zmq_sub};
 //! use wingfoil::*;
-//!
-//! let conn = EtcdConnection::new("http://etcd:2379");
 //!
 //! // Publisher registers its address in etcd under "quotes".
 //! std::thread::spawn(move || {
 //!     ticker(Duration::from_millis(100))
 //!         .count()
-//!         .zmq_pub(5556, ("quotes", EtcdRegistry::new(conn)))
+//!         .zmq_pub(5556, ("quotes", EtcdRegistry::new("http://etcd:2379")))
 //!         .run(RunMode::RealTime, RunFor::Forever)
 //!         .unwrap();
 //! });
 //!
 //! // Subscriber looks up the publisher address from etcd.
-//! let conn2 = EtcdConnection::new("http://etcd:2379");
-//! let (data, _status) = zmq_sub::<u64>(("quotes", EtcdRegistry::new(conn2)))?;
+//! let (data, _status) = zmq_sub::<u64>(("quotes", EtcdRegistry::new("http://etcd:2379")))?;
 //! data.for_each(|burst, _| println!("{burst:?}"))
 //!     .run(RunMode::RealTime, RunFor::Forever)
 //!     .unwrap();
