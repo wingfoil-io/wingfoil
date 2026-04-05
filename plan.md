@@ -166,3 +166,6 @@ Operational note:
 
 Proceeding status (2026-04-05):
 - Fork CI is green for latest head SHA; upstream PR checks are blocked behind maintainer approval to run workflows (`action_required`).
+
+Reschedule note:
+- If workflows are still `action_required` by the 2026-04-06 sweep, post a single follow-up ping on PR #176 with the latest head SHA + latest run IDs, then pause pushing new heads to avoid generating additional approval-gated runs.
