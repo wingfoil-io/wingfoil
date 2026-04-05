@@ -9,53 +9,114 @@
 //! # Container startup
 //!
 //! Tests spin up `infinyon/fluvio:0.18.1` via testcontainers using host networking.
-//! A shell script starts the SC then the SPU so topic creation and produce/consume
-//! work end-to-end. Host networking is required so the SPU's public endpoint
-//! (registered with the SC as `127.0.0.1:9010`) is reachable by the test process.
+//! The startup sequence is:
+//! 1. Start the SC and wait for it to log "Streaming Controller started successfully".
+//! 2. Register the custom SPU spec via FluvioAdmin — the SC must know about the SPU
+//!    before the SPU process connects, otherwise the SC closes the connection.
+//! 3. Exec the SPU process into the running container.
+//! 4. Sleep 3 s for the SPU to complete registration.
+//!
+//! Host networking is required so the SPU's public endpoint (`127.0.0.1:9010`),
+//! which the SC hands to clients, is reachable from the test process on the host.
 
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators, constant};
 use crate::{RunFor, RunMode, burst};
 use fluvio::consumer::ConsumerConfigExt;
+use fluvio::metadata::customspu::CustomSpuSpec;
 use fluvio::metadata::topic::TopicSpec;
 use fluvio::{Fluvio, FluvioAdmin, FluvioClusterConfig, Offset};
+use fluvio_controlplane_metadata::spu::{EncryptionEnum, Endpoint, IngressPort};
 use futures::StreamExt;
-use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
+use testcontainers::{
+    GenericImage, ImageExt, core::ExecCommand, core::WaitFor, runners::SyncRunner,
+};
 
 const FLUVIO_SC_PORT: u16 = 9003;
+const FLUVIO_SC_PRIVATE_PORT: u16 = 9004;
 const FLUVIO_SPU_PORT: u16 = 9010;
+const FLUVIO_SPU_PRIVATE_PORT: u16 = 9011;
 const FLUVIO_IMAGE: &str = "infinyon/fluvio";
 const FLUVIO_TAG: &str = "0.18.1";
 
 /// Start a full Fluvio local cluster (SC + SPU) using host networking.
 ///
-/// Host networking is required so the SPU's public address (`127.0.0.1:9010`),
-/// which the SC hands to clients, is reachable from the test process outside
-/// the container.  The SC starts first; the SPU waits 5 s then registers with it.
+/// The SC container is started first.  Once the SC is ready the SPU spec is
+/// registered via the admin API so the SC recognises the SPU when it connects.
+/// The SPU process is then started via `docker exec` into the running container.
 fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
-    let startup_cmd = format!(
-        "/fluvio-run sc --local /tmp/fluvio & \
-         sleep 5 && \
-         /fluvio-run spu \
-           --id 5001 \
-           --public-server 0.0.0.0:{FLUVIO_SPU_PORT} \
-           --private-server 0.0.0.0:{FLUVIO_SPU_PORT} \
-           --sc-addr 127.0.0.1:{FLUVIO_SC_PORT} \
-           --log-base-dir /tmp/fluvio"
-    );
-
+    // Start the SC and wait for it to be ready.
     let container = GenericImage::new(FLUVIO_IMAGE, FLUVIO_TAG)
-        // Wait long enough for SC + SPU to start and the SPU to register.
-        .with_wait_for(WaitFor::millis(15_000))
-        .with_cmd(vec!["/bin/sh", "-c", &startup_cmd])
+        .with_wait_for(WaitFor::message_on_stdout(
+            "Streaming Controller started successfully",
+        ))
+        .with_cmd(vec![
+            "/bin/sh",
+            "-c",
+            "/fluvio-run sc --local /tmp/fluvio & wait",
+        ])
         .with_host_config_modifier(|hc| {
             hc.network_mode = Some("host".to_string());
         })
         .start()?;
 
-    // With host networking the SC is reachable directly on the host port.
     let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
+
+    // Register the custom SPU with the SC before starting the SPU process.
+    register_spu(&endpoint, 5001, FLUVIO_SPU_PORT, FLUVIO_SPU_PRIVATE_PORT)?;
+
+    // Start the SPU inside the already-running SC container.
+    let spu_cmd = format!(
+        "/fluvio-run spu \
+           --id 5001 \
+           --public-server 127.0.0.1:{FLUVIO_SPU_PORT} \
+           --private-server 127.0.0.1:{FLUVIO_SPU_PRIVATE_PORT} \
+           --sc-addr 127.0.0.1:{FLUVIO_SC_PRIVATE_PORT} \
+           --log-base-dir /tmp/fluvio &"
+    );
+    container.exec(ExecCommand::new(["/bin/sh", "-c", &spu_cmd]))?;
+
+    // Give the SPU time to complete registration with the SC.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
     Ok((container, endpoint))
+}
+
+/// Register a custom SPU spec with the SC via the admin API.
+///
+/// Must be called after the SC is up but before the SPU process starts.  Without
+/// pre-registration the SC closes the SPU's connection immediately.
+fn register_spu(
+    endpoint: &str,
+    spu_id: i32,
+    public_port: u16,
+    private_port: u16,
+) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let config = FluvioClusterConfig::new(endpoint);
+        let admin = FluvioAdmin::connect_with_config(&config)
+            .await
+            .map_err(|e| anyhow::anyhow!("fluvio admin connect failed: {e}"))?;
+
+        let spec = CustomSpuSpec {
+            id: spu_id,
+            public_endpoint: IngressPort::from_port_host(public_port, "127.0.0.1".to_string()),
+            private_endpoint: Endpoint {
+                port: private_port,
+                host: "127.0.0.1".to_string(),
+                encryption: EncryptionEnum::PLAINTEXT,
+            },
+            rack: None,
+            public_endpoint_local: None,
+        };
+
+        admin
+            .create::<CustomSpuSpec>(format!("spu-{spu_id}"), false, spec)
+            .await
+            .map_err(|e| anyhow::anyhow!("SPU register failed: {e:?}"))?;
+        Ok(())
+    })
 }
 
 /// Create a topic using FluvioAdmin with a throwaway async runtime.
