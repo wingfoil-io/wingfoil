@@ -59,7 +59,8 @@ fn market_data_request(instrument_id: &str) -> FixMessage {
             (269, "0".to_string()),          // MDEntryType = 0 (Bid)
             (269, "1".to_string()),          // MDEntryType = 1 (Ask)
             (146, "1".to_string()),          // NoRelatedSym = 1
-            (55, instrument_id.to_string()), // Symbol
+            (48, instrument_id.to_string()), // SecurityID — LMAX instrument ID (group delimiter)
+            (22, "8".to_string()),           // IDSource = 8 (Exchange Symbol)
         ],
     }
 }

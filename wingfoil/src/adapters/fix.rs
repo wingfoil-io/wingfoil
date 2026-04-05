@@ -758,7 +758,7 @@ fn run_fix_session<S: Read + Write>(
             None => return true, // disconnected during session dispatch
         };
 
-        match sock_ref.read(&mut tmp) {
+        let got_data = match sock_ref.read(&mut tmp) {
             Ok(0) => return true,
             Err(e)
                 if e.kind() == io::ErrorKind::ConnectionReset
@@ -766,20 +766,31 @@ fn run_fix_session<S: Read + Write>(
             {
                 return true;
             }
+            // Read timeout or would-block: no data yet, but still flush the inject queue below.
+            Err(e)
+                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock =>
+            {
+                false
+            }
             Err(_) => return true, // shutdown or other error — clean exit
-            Ok(n) => parse_buf.extend_from_slice(&tmp[..n]),
-        }
+            Ok(n) => {
+                parse_buf.extend_from_slice(&tmp[..n]);
+                true
+            }
+        };
 
         let mut events: Burst<FixEvent> = TinyVec::new();
-        match drain_parse_buf(
-            &mut parse_buf,
-            &mut sock_opt,
-            session,
-            &mut events,
-            is_acceptor,
-        ) {
-            Ok(_) => {}
-            Err(_) => return true,
+        if got_data {
+            match drain_parse_buf(
+                &mut parse_buf,
+                &mut sock_opt,
+                session,
+                &mut events,
+                is_acceptor,
+            ) {
+                Ok(_) => {}
+                Err(_) => return true,
+            }
         }
 
         // Flush any outbound messages injected from outside the graph
@@ -981,6 +992,9 @@ impl MutableNode for FixThreadedSource {
                 };
 
                 let still_open = if tls {
+                    // Set a short read timeout so the session loop can flush the inject queue
+                    // even when no data arrives from the server (e.g. between heartbeats).
+                    let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
                     match tls_connect(&host, sock) {
                         Ok(tls_stream) => run_fix_session(
                             tls_stream,
@@ -1000,6 +1014,7 @@ impl MutableNode for FixThreadedSource {
                         }
                     }
                 } else {
+                    let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
                     run_fix_session(sock, &mut session, is_acceptor, &inject_queue, &chan_sender)
                 };
 
@@ -1433,11 +1448,12 @@ mod integration_tests {
                 (263, "1".to_string()),
                 (264, "1".to_string()),
                 (265, "0".to_string()),
-                (267, "2".to_string()),
-                (269, "0".to_string()),
-                (269, "1".to_string()),
-                (146, "1".to_string()),
-                (55, EUR_USD_ID.to_string()),
+                (267, "2".to_string()),       // NoMDEntryTypes = 2
+                (269, "0".to_string()),       // MDEntryType = Bid
+                (269, "1".to_string()),       // MDEntryType = Ask
+                (146, "1".to_string()),       // NoRelatedSym = 1
+                (48, EUR_USD_ID.to_string()), // SecurityID = instrument ID (LMAX group delimiter)
+                (22, "8".to_string()),        // IDSource = 8 (Exchange Symbol)
             ],
         }
     }
