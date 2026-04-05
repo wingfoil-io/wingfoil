@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::registry::{ZmqSubConfig, ZmqSubResolution};
 use super::{ZmqEvent, ZmqStatus};
@@ -20,7 +21,11 @@ struct ZeroMqSubscriber<T: Element + Send> {
 }
 
 impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
-    fn run(&self, channel_sender: ChannelSender<ZmqEvent<T>>) -> anyhow::Result<()> {
+    fn run(
+        &self,
+        channel_sender: ChannelSender<ZmqEvent<T>>,
+        stop: Arc<AtomicBool>,
+    ) -> anyhow::Result<()> {
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SUB)?;
         socket.connect(&self.address)?;
@@ -36,11 +41,14 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
         monitor.connect(&monitor_addr)?;
 
         loop {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             let mut items = [
                 socket.as_poll_item(zmq::POLLIN),
                 monitor.as_poll_item(zmq::POLLIN),
             ];
-            zmq::poll(&mut items, -1)?;
+            zmq::poll(&mut items, 200)?;
 
             if items[1].is_readable() {
                 let event_frame = monitor.recv_msg(0)?;
@@ -122,7 +130,7 @@ fn zmq_sub_direct<T: Element + Send + DeserializeOwned>(
 ) -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<ZmqStatus>>) {
     let events: Rc<dyn Stream<Burst<ZmqEvent<T>>>> = {
         let subscriber = ZeroMqSubscriber::new(address.to_string());
-        ReceiverStream::new(move |s| subscriber.run(s), true).into_stream()
+        ReceiverStream::new(move |s, stop| subscriber.run(s, stop), true).into_stream()
     };
     let data = MapFilterStream::new(
         events.clone(),

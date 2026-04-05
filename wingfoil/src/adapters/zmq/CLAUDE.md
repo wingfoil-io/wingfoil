@@ -107,7 +107,7 @@ cargo test --features zmq-etcd-integration-test -p wingfoil \
 
 | Range      | Tests                              |
 |------------|------------------------------------|
-| 5556–5562  | Core pub/sub tests                 |
+| 5556–5563  | Core pub/sub tests                 |
 | 5596–5610  | etcd discovery integration tests   |
 
 Do not use these ports for other tests in the workspace.

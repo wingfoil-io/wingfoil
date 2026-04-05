@@ -99,9 +99,9 @@ mod etcd_impl {
     use anyhow::Result;
     use etcd_client::{Client, PutOptions};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
     use std::time::Duration;
+    use tokio::sync::Notify;
 
     const LEASE_TTL_SECS: i64 = 30;
     const KEEPALIVE_INTERVAL_SECS: u64 = 10;
@@ -134,13 +134,13 @@ mod etcd_impl {
     struct EtcdHandle {
         lease_id: i64,
         conn: EtcdConnection,
-        keepalive_running: Arc<AtomicBool>,
+        shutdown: Arc<Notify>,
         keepalive_thread: Option<JoinHandle<()>>,
     }
 
     impl ZmqHandle for EtcdHandle {
         fn revoke(&mut self) {
-            self.keepalive_running.store(false, Ordering::Relaxed);
+            self.shutdown.notify_one();
             if let Some(t) = self.keepalive_thread.take() {
                 let _ = t.join();
             }
@@ -180,8 +180,8 @@ mod etcd_impl {
             Ok::<i64, anyhow::Error>(id)
         })?;
 
-        let keepalive_running = Arc::new(AtomicBool::new(true));
-        let running_clone = keepalive_running.clone();
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_clone = shutdown.clone();
         let endpoints = conn.endpoints.clone();
 
         let keepalive_thread = std::thread::spawn(move || {
@@ -204,10 +204,10 @@ mod etcd_impl {
                         return;
                     }
                 };
-                while running_clone.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_secs(KEEPALIVE_INTERVAL_SECS)).await;
-                    if !running_clone.load(Ordering::Relaxed) {
-                        break;
+                loop {
+                    tokio::select! {
+                        _ = shutdown_clone.notified() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(KEEPALIVE_INTERVAL_SECS)) => {}
                     }
                     if keeper.keep_alive().await.is_err() {
                         break;
@@ -223,7 +223,7 @@ mod etcd_impl {
         Ok(EtcdHandle {
             lease_id,
             conn: conn.clone(),
-            keepalive_running,
+            shutdown,
             keepalive_thread: Some(keepalive_thread),
         })
     }

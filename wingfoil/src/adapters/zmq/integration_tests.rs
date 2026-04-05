@@ -177,6 +177,41 @@ fn zmq_reports_connected_status() {
     .unwrap();
 }
 
+#[test]
+fn zmq_sub_stops_cleanly_without_publisher_endofstream() {
+    _ = env_logger::try_init();
+    let port = 5563;
+    let address = format!("tcp://127.0.0.1:{port}");
+
+    // Publisher binds and holds the socket open for a bit, then drops it without
+    // sending EndOfStream (simulates a publisher crash / SIGKILL).
+    std::thread::spawn(move || {
+        let ctx = zmq::Context::new();
+        let sock = ctx.socket(zmq::PUB).unwrap();
+        sock.bind(&format!("tcp://127.0.0.1:{port}")).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        // sock drops here — no EndOfStream
+    });
+
+    let (data, _status) = zmq_sub::<u64>(&address).unwrap();
+
+    let start = std::time::Instant::now();
+    data.as_node()
+        .run(
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_millis(300)),
+        )
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    // Before the stop-flag fix this would hang indefinitely.
+    // Allow generous headroom beyond the 200ms poll timeout.
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "subscriber took too long to stop: {elapsed:?}"
+    );
+}
+
 // --- etcd discovery integration tests (ports 5596–5610) ---
 
 #[cfg(feature = "zmq-etcd-integration-test")]
