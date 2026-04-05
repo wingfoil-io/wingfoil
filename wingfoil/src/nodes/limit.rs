@@ -27,3 +27,27 @@ impl<T: Element> MutableNode for LimitStream<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+
+    #[test]
+    fn stops_after_n_ticks_with_run_forever() {
+        // RunFor::Forever would run indefinitely without limit; limit(3) must stop it.
+        let out = ticker(Duration::from_nanos(100)).count().limit(3).collect();
+        out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(out.peek_value().len(), 3);
+    }
+
+    #[test]
+    fn emits_correct_values_up_to_limit() {
+        let out = ticker(Duration::from_nanos(100)).count().limit(4).collect();
+        out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let values: Vec<u64> = out.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+    }
+}

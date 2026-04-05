@@ -27,3 +27,39 @@ impl<T: Element + PartialEq> MutableNode for DistinctStream<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+
+    #[test]
+    fn suppresses_repeated_values() {
+        // count() → map to (x+1)/2 gives: 1,1,2,2,3,3 for ticks 1..6
+        // DistinctStream starts with T::default() = 0; first value (1) differs, so it emits.
+        // distinct should emit only when the value changes: 1, 2, 3
+        let distinct = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|x: u64| x.div_ceil(2)) // 1,1,2,2,3,3 for ticks 1..6
+            .distinct()
+            .collect();
+        distinct
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let values: Vec<u64> = distinct.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn emits_every_tick_when_all_unique() {
+        // count() produces 1,2,3,4 — all distinct, so every tick should emit
+        let distinct = ticker(Duration::from_nanos(100))
+            .count()
+            .distinct()
+            .collect();
+        distinct
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+            .unwrap();
+        assert_eq!(distinct.peek_value().len(), 4);
+    }
+}

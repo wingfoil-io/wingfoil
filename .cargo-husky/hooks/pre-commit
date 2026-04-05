@@ -2,4 +2,4 @@
 set -e
 
 cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings

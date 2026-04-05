@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
 use crate::types::Element;
+#[cfg(feature = "zmq-beta")]
 use crate::{GraphState, RunMode};
 
 /// Message that can be sent between threads.
@@ -66,6 +67,7 @@ impl<T: Element + Send + PartialEq> PartialEq for Message<T> {
 impl<T: Element + Send + PartialEq> Eq for Message<T> {}
 
 impl<T: Element + Send> Message<T> {
+    #[cfg(feature = "zmq-beta")]
     pub fn build(value: T, graph_state: &GraphState) -> Message<T> {
         match graph_state.run_mode() {
             RunMode::RealTime => Message::RealtimeValue(value),

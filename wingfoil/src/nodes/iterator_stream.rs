@@ -106,3 +106,70 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::*;
+    use crate::nodes::*;
+    use crate::types::IntoStream;
+
+    fn value_ats(pairs: &[(u64, u64)]) -> Vec<ValueAt<u64>> {
+        pairs
+            .iter()
+            .map(|&(v, t)| ValueAt {
+                value: v,
+                time: NanoTime::new(t),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn simple_iterator_emits_in_order() {
+        // SimpleIteratorStream doesn't emit the final item (it acts as the scheduler
+        // for the previous item). Add a sentinel at t=300 so all "real" items emit.
+        let items = value_ats(&[(10, 0), (20, 100), (30, 200), (0, 300)]);
+        let out = SimpleIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .collect();
+        out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let values: Vec<u64> = out.peek_value().iter().map(|v| v.value).collect();
+        // Sentinel (0 at t=300) schedules t=300 but returns Ok(false), so it doesn't emit.
+        assert_eq!(values, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn iterator_stream_groups_same_timestamp_into_burst() {
+        // Two items at t=0, one at t=100, plus a sentinel at t=200.
+        // IteratorStream doesn't emit the last group (it schedules the previous one).
+        let items = value_ats(&[(1, 0), (2, 0), (3, 100), (0, 200)]);
+        let out = IteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .collect();
+        out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let ticks = out.peek_value();
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[0].value.as_slice(), &[1u64, 2u64]);
+        assert_eq!(ticks[1].value.as_slice(), &[3u64]);
+    }
+
+    #[test]
+    fn simple_iterator_errors_on_duplicate_timestamps() {
+        let items = value_ats(&[(1, 0), (2, 0)]); // same timestamp — illegal for Simple
+        let result = SimpleIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn simple_iterator_errors_on_descending_timestamps() {
+        let items = value_ats(&[(1, 100), (2, 50)]); // descending — illegal
+        let result = SimpleIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        assert!(result.is_err());
+    }
+}

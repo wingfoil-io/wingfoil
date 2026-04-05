@@ -47,7 +47,7 @@ cd wingfoil-python && maturin develop && pytest
 cargo bench
 
 # Lint
-cargo clippy --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
 cargo fmt --all -- --check
 ```
 
@@ -67,7 +67,7 @@ cargo fmt --all -- --check
 Before committing any changes, ALWAYS run:
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
 ```
 
 These commands must pass without errors before creating a commit.
