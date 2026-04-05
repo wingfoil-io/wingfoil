@@ -40,10 +40,10 @@ Output artifact:
   - failing checks + URLs
   - reviewer(s) + blocker list
 
-#### Current Snapshot (2026-04-05)
+#### Current Snapshot (2026-04-06)
 
 - PR: `#176` (`feat(adapter): iceoryx2 v2 with daemonless support and Python bindings`)
-- Head SHA: `759122e`
+- Head SHA: `feaec12`
 - `mergeStateStatus`: `UNSTABLE`
 - `mergeable`: `MERGEABLE`
 - Checks:
@@ -59,10 +59,10 @@ Output artifact:
   - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2`
   - If no new runs appear, request a maintainer to re-run/approve workflows for the updated head SHA.
 
-Current state (post-rebase, 2026-04-05):
+Current state (post-rebase, 2026-04-06):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24011257209`
-  - Latest iceoryx2 Integration Tests run `24011257201`
+  - Latest CI run `24011861740`
+  - Latest iceoryx2 Integration Tests run `24011861749`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:

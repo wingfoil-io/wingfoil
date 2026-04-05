@@ -158,7 +158,7 @@ Tracking docs:
 - Plan: `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`
 
 Reschedule:
-- Next review sweep: **2026-04-06**
+- Next review sweep: **2026-04-07**
 - Update loop: after any new comment or CI run, refresh the snapshot + mapping table in the plan doc.
 
 Operational note:
@@ -169,3 +169,6 @@ Proceeding status (2026-04-05):
 
 Reschedule note:
 - If workflows are still `action_required` by the 2026-04-06 sweep, post a single follow-up ping on PR #176 with the latest head SHA + latest run IDs, then pause pushing new heads to avoid generating additional approval-gated runs.
+
+2026-04-06 sweep:
+- Rebased onto latest `upstream/main`, refreshed PR closure snapshot, and continued to see upstream workflows in `action_required` state.
