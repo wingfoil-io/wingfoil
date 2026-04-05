@@ -3,8 +3,8 @@
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyTypeError;
+use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::rc::Rc;
 use wingfoil::adapters::iceoryx2::{
