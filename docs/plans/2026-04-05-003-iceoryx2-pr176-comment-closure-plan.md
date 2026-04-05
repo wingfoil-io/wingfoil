@@ -61,8 +61,13 @@ Output artifact:
 
 Current state (post-rebase, 2026-04-05):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - CI run `24010474134`
-  - iceoryx2 Integration Tests run `24010474136`
+  - Latest CI run `24010516499`
+  - Latest iceoryx2 Integration Tests run `24010516500`
+
+Fork validation (tommy-ca/wingfoil, 2026-04-05):
+- Push-triggered runs for the latest head SHA completed successfully:
+  - Python Tests run `24010473156`: success
+  - iceoryx2 Integration Tests run `24010473162`: success
 - Reviewer feedback highlights (from latest review by `0-jake-0`):
   - Blocker: background thread lifecycle (store `JoinHandle`, join in `stop()`)
   - Blocker: ensure `Ipc` path is tested (at least one opt-in IPC round-trip)

@@ -163,3 +163,6 @@ Reschedule:
 
 Operational note:
 - `cargo-husky` hooks may run `cargo test` on `git push` and can hang on known-flaky tests; use `git push --no-verify` when you need to update the PR branch without blocking on local hooks.
+
+Proceeding status (2026-04-05):
+- Fork CI is green for latest head SHA; upstream PR checks are blocked behind maintainer approval to run workflows (`action_required`).
