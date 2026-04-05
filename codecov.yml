@@ -6,3 +6,7 @@ coverage:
     patch:
       default:
         informational: true
+
+flag_management:
+  default_rules:
+    carryforward: true
