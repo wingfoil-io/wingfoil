@@ -63,6 +63,34 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
     }
 }
 
+/// Pass-through node that forwards upstream values unchanged while also sending
+/// each value to a [FeedbackSink] as a side effect. Created by
+/// [StreamOperators::feedback].
+pub(crate) struct FeedbackSendStream<T: Element + Hash + Eq> {
+    upstream: Rc<dyn Stream<T>>,
+    value: T,
+    sink: FeedbackSink<T>,
+}
+
+impl<T: Element + Hash + Eq> FeedbackSendStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, sink: FeedbackSink<T>) -> Self {
+        Self {
+            upstream,
+            value: T::default(),
+            sink,
+        }
+    }
+}
+
+#[node(active = [upstream], output = value: T)]
+impl<T: Element + Hash + Eq> MutableNode for FeedbackSendStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value = self.upstream.peek_value();
+        self.sink.send(self.value.clone(), state);
+        Ok(true)
+    }
+}
+
 /// Creates a feedback channel. Returns a ([FeedbackSink], [Stream])
 /// pair. The sink pushes values onto a shared [TimeQueue]; the source
 /// stream pops them on the next engine cycle.
@@ -80,6 +108,7 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
 /// );
 ///
 /// let writer = sum.feedback(tx);
+/// // writer is Rc<dyn Stream<u64>> — values pass through, feedback is a side effect
 /// ```
 #[must_use]
 pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>) {
@@ -127,7 +156,7 @@ mod tests {
         });
 
         Graph::new(
-            vec![fb, res],
+            vec![fb.as_node(), res],
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Duration(period * 5),
         )
@@ -157,7 +186,7 @@ mod tests {
         });
 
         Graph::new(
-            vec![fb, res],
+            vec![fb.as_node(), res],
             RunMode::HistoricalFrom(NanoTime::ZERO),
             RunFor::Cycles(5),
         )
