@@ -1,7 +1,7 @@
 // ZMQ publisher — direct mode (no service discovery).
 //
-// Binds a PUB socket on pub_port and publishes a counter every 100 ms.
-// The subscriber connects to the address directly.
+// Publishes a UTF-8 counter string every 100 ms. The subscriber connects
+// by address directly. Cross-language compatible — Python sub works too.
 //
 // Run publisher and subscriber in separate terminals:
 //
@@ -16,12 +16,11 @@ use wingfoil::*;
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let pub_port = 7779u16;
-
     ticker(Duration::from_millis(100))
         .count()
+        .map(|n: u64| format!("{n}").into_bytes())
         .logged("pub", Info)
-        .zmq_pub(pub_port, ())
+        .zmq_pub(7779, ())
         .run(RunMode::RealTime, RunFor::Forever)?;
 
     Ok(())

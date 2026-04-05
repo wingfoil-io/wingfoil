@@ -1,6 +1,7 @@
 // ZMQ subscriber — direct mode (no service discovery).
 //
 // Connects to the publisher address directly. Start `zmq_direct_pub` first.
+// Cross-language compatible — Python pub works too.
 //
 // Run publisher and subscriber in separate terminals:
 //
@@ -8,25 +9,21 @@
 //   RUST_LOG=info cargo run --example zmq_direct_sub --features zmq-beta
 
 use log::Level::Info;
-use std::time::Duration;
 use wingfoil::adapters::zmq::zmq_sub;
 use wingfoil::*;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let pub_address = "tcp://127.0.0.1:7779";
-    let run_for = RunFor::Duration(Duration::from_secs(5));
-
-    let (data, _status) = zmq_sub::<u64>(pub_address)?;
-    data.logged("sub", Info)
-        .collect()
-        .finally(|res, _| {
-            let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
-            println!("received {} values: {:?}", values.len(), values);
-            Ok(())
-        })
-        .run(RunMode::RealTime, run_for)?;
+    let (data, _status) = zmq_sub::<Vec<u8>>("tcp://127.0.0.1:7779")?;
+    data.map(|burst| {
+        burst
+            .into_iter()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .collect::<Vec<_>>()
+    })
+    .logged("sub", Info)
+    .run(RunMode::RealTime, RunFor::Forever)?;
 
     Ok(())
 }

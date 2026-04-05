@@ -43,10 +43,8 @@ pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
 ///     RuntimeError: if the key is absent or etcd is unreachable
 #[pyfunction]
 pub fn py_zmq_sub_etcd(name: String, endpoint: String) -> PyResult<(PyStream, PyStream)> {
-    use wingfoil::adapters::etcd::EtcdConnection;
     use wingfoil::adapters::zmq::EtcdRegistry;
-    let conn = EtcdConnection::new(endpoint);
-    let (data, status) = zmq_sub::<Vec<u8>>((name.as_str(), EtcdRegistry::new(conn)))
+    let (data, status) = zmq_sub::<Vec<u8>>((name.as_str(), EtcdRegistry::new(endpoint)))
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Ok(streams_to_py(data, status))
 }
@@ -105,9 +103,8 @@ pub fn py_zmq_pub_etcd_inner(
     port: u16,
     endpoint: String,
 ) -> Rc<dyn Node> {
-    use wingfoil::adapters::etcd::EtcdConnection;
     use wingfoil::adapters::zmq::EtcdRegistry;
-    let registry = EtcdRegistry::new(EtcdConnection::new(endpoint));
+    let registry = EtcdRegistry::new(endpoint);
     let bytes_stream = py_bytes_stream(stream, "zmq_pub_etcd");
     bytes_stream.zmq_pub(port, (name.as_str(), registry))
 }
@@ -120,9 +117,8 @@ pub fn py_zmq_pub_etcd_on_inner(
     port: u16,
     endpoint: String,
 ) -> Rc<dyn Node> {
-    use wingfoil::adapters::etcd::EtcdConnection;
     use wingfoil::adapters::zmq::EtcdRegistry;
-    let registry = EtcdRegistry::new(EtcdConnection::new(endpoint));
+    let registry = EtcdRegistry::new(endpoint);
     let bytes_stream = py_bytes_stream(stream, "zmq_pub_etcd_on");
     bytes_stream.zmq_pub_on(&address, port, (name.as_str(), registry))
 }
