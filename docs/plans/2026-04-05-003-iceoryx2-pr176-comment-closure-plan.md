@@ -51,6 +51,13 @@ Output artifact:
   - `clippy`: neutral / skipped
 - Failure note:
   - The failing CI run indicates `taiki-e/cache-cargo-install-action@v2` and `taiki-e/install-action@nextest` steps are being executed under `/usr/bin/sh` and erroring with “requires bash”. Fix: set workflow default shell to bash in `.github/workflows/rust.yml`.
+
+#### Check Visibility Note
+
+- After pushing a commit that modifies workflow files under `.github/workflows/`, the upstream PR may temporarily show no checks (depending on repository fork/approval policy for workflow changes).
+- If checks are not showing on `wingfoil-io/wingfoil`, verify that workflow runs are being created with:
+  - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2`
+  - If no new runs appear, request a maintainer to re-run/approve workflows for the updated head SHA.
 - Reviewer feedback highlights (from latest review by `0-jake-0`):
   - Blocker: background thread lifecycle (store `JoinHandle`, join in `stop()`)
   - Blocker: ensure `Ipc` path is tested (at least one opt-in IPC round-trip)
