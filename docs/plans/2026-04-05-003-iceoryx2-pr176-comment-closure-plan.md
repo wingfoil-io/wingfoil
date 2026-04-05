@@ -43,14 +43,14 @@ Output artifact:
 #### Current Snapshot (2026-04-05)
 
 - PR: `#176` (`feat(adapter): iceoryx2 v2 with daemonless support and Python bindings`)
-- `mergeStateStatus`: `DIRTY`
-- `mergeable`: `CONFLICTING`
+- Head SHA: `fd0b47a`
+- `mergeStateStatus`: `UNSTABLE`
+- `mergeable`: `MERGEABLE`
 - Checks:
-  - `Build, Test, & Lint`: **fail** (see `gh pr checks 176` output for URL)
-  - `iceoryx2 Integration Tests`: pass
-  - `clippy`: neutral / skipped
-- Failure note:
-  - The failing CI run indicates `taiki-e/cache-cargo-install-action@v2` and `taiki-e/install-action@nextest` steps are being executed under `/usr/bin/sh` and erroring with “requires bash”. Fix: set workflow default shell to bash in `.github/workflows/rust.yml`.
+  - Upstream checks are currently blocked behind maintainer approval (see “Check Visibility Note” below), so `statusCheckRollup` may show empty even when the fork is green.
+- Prior CI failure (historical):
+  - A previous upstream CI run failed because `taiki-e/cache-cargo-install-action@v2` and `taiki-e/install-action@nextest` were being executed under `/usr/bin/sh` and erroring with “requires bash”.
+  - Mitigation in this branch: set workflow default shell to bash in `.github/workflows/rust.yml`.
 
 #### Check Visibility Note
 
@@ -61,8 +61,8 @@ Output artifact:
 
 Current state (post-rebase, 2026-04-05):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24010516499`
-  - Latest iceoryx2 Integration Tests run `24010516500`
+  - Latest CI run `24011239168`
+  - Latest iceoryx2 Integration Tests run `24011239152`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:
