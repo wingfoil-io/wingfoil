@@ -15,9 +15,9 @@ struct NodeArgs {
 
 impl Parse for NodeArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut active = Vec::new();
-        let mut passive = Vec::new();
-        let mut output = None;
+        let mut active: Option<Vec<Ident>> = None;
+        let mut passive: Option<Vec<Ident>> = None;
+        let mut output: Option<(Ident, Type)> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -25,18 +25,27 @@ impl Parse for NodeArgs {
 
             match key.to_string().as_str() {
                 "active" => {
+                    if active.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate key `active`"));
+                    }
                     let content;
                     bracketed!(content in input);
                     let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
-                    active = list.into_iter().collect();
+                    active = Some(list.into_iter().collect());
                 }
                 "passive" => {
+                    if passive.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate key `passive`"));
+                    }
                     let content;
                     bracketed!(content in input);
                     let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
-                    passive = list.into_iter().collect();
+                    passive = Some(list.into_iter().collect());
                 }
                 "output" => {
+                    if output.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate key `output`"));
+                    }
                     let field: Ident = input.parse()?;
                     input.parse::<Token![:]>()?;
                     let ty: Type = input.parse()?;
@@ -56,8 +65,8 @@ impl Parse for NodeArgs {
         }
 
         Ok(NodeArgs {
-            active,
-            passive,
+            active: active.unwrap_or_default(),
+            passive: passive.unwrap_or_default(),
             output,
         })
     }
