@@ -4,11 +4,12 @@ use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
 use pyo3::prelude::*;
+use pyo3::exceptions::PyTypeError;
 use pyo3::types::{PyBytes, PyList};
 use std::rc::Rc;
 use wingfoil::adapters::iceoryx2::{
-    Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SubOpts, iceoryx2_pub_slice_with,
-    iceoryx2_sub_slice_opts,
+    Iceoryx2Mode, Iceoryx2PubSliceOpts, Iceoryx2ServiceVariant, Iceoryx2SubOpts,
+    iceoryx2_pub_slice_opts, iceoryx2_sub_slice_opts,
 };
 use wingfoil::{Node, Stream, StreamOperators};
 
@@ -52,16 +53,19 @@ impl From<PyIceoryx2Mode> for Iceoryx2Mode {
 ///     service_name: iceoryx2 service name, e.g. `"my/service"`
 ///     variant: Service variant ("ipc" or "local")
 ///     mode: Polling mode ("spin", "threaded", or "signaled")
+///     history_size: Subscriber history ring size (late-joiner buffer)
 #[pyfunction]
-#[pyo3(signature = (service_name, variant=PyIceoryx2ServiceVariant::Ipc, mode=PyIceoryx2Mode::Spin))]
+#[pyo3(signature = (service_name, variant=PyIceoryx2ServiceVariant::Ipc, mode=PyIceoryx2Mode::Spin, history_size=5))]
 pub fn py_iceoryx2_sub(
     service_name: String,
     variant: PyIceoryx2ServiceVariant,
     mode: PyIceoryx2Mode,
+    history_size: usize,
 ) -> PyStream {
     let opts = Iceoryx2SubOpts {
         variant: variant.into(),
         mode: mode.into(),
+        history_size,
     };
 
     // Use the slice-based subscriber for generic bytes
@@ -73,7 +77,11 @@ pub fn py_iceoryx2_sub(
                 .into_iter()
                 .map(|bytes| PyBytes::new(py, &bytes).into_any().unbind())
                 .collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            let list = PyList::new(py, items).unwrap_or_else(|e| {
+                log::error!("iceoryx2_sub: failed to allocate list: {e}");
+                PyList::empty(py)
+            });
+            PyElement::new(list.into_any().unbind())
         })
     });
 
@@ -85,24 +93,39 @@ pub fn py_iceoryx2_pub_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     service_name: String,
     variant: PyIceoryx2ServiceVariant,
+    history_size: usize,
+    initial_max_slice_len: usize,
 ) -> Rc<dyn Node> {
-    let burst_stream = stream.map(move |elem| {
+    let burst_stream = stream.try_map(move |elem| {
         Python::attach(|py| {
             let obj = elem.as_ref().bind(py);
             if let Ok(bytes) = obj.extract::<Vec<u8>>() {
                 let mut b = wingfoil::Burst::new();
                 b.push(bytes);
-                b
+                Ok(b)
             } else if let Ok(list) = obj.cast_exact::<PyList>() {
-                list.iter()
-                    .filter_map(|item| item.extract::<Vec<u8>>().ok())
-                    .collect()
+                let mut b = wingfoil::Burst::new();
+                for item in list.iter() {
+                    let bytes = item.extract::<Vec<u8>>().map_err(|_| {
+                        anyhow::anyhow!(PyTypeError::new_err(
+                            "iceoryx2_pub: list items must be bytes",
+                        ))
+                    })?;
+                    b.push(bytes);
+                }
+                Ok(b)
             } else {
-                log::error!("iceoryx2_pub: stream value must be bytes or list of bytes");
-                wingfoil::Burst::new()
+                Err(anyhow::anyhow!(PyTypeError::new_err(
+                    "iceoryx2_pub: stream value must be bytes or list[bytes]",
+                )))
             }
         })
     });
 
-    iceoryx2_pub_slice_with(burst_stream, &service_name, variant.into())
+    let opts = Iceoryx2PubSliceOpts {
+        variant: variant.into(),
+        history_size,
+        initial_max_slice_len,
+    };
+    iceoryx2_pub_slice_opts(burst_stream, &service_name, opts)
 }

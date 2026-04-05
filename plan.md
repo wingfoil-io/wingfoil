@@ -1,6 +1,6 @@
 # iceoryx2 Adapter Implementation Plan
 
-## Current Status: IN PROGRESS
+## Current Status: IN REVIEW (PR #176) — 2026-04-05
 
 ## Completed Work
 
@@ -20,6 +20,8 @@
 - [x] Documented zero-copy requirements (ZeroCopySend, repr(C))
 - [x] Documented deployment notes (shared memory locations, decentralized discovery)
 - [x] Documented known issues (zmq flakiness, benchmark runtime)
+- [x] Synced testing docs (`conductor/spec.md`, `conductor/plan.md`) with current implementation
+- [x] Marked historical iceoryx2 plans as completed in `docs/plans/`
 
 ### Cleanup
 - [x] Fixed unused import/variable warnings in iceoryx2 module
@@ -88,6 +90,73 @@ Goal: clean up the worktree and commit changes using semantic, atomic commits.
 - [x] Add `.github/workflows/iceoryx2-integration.yml` to run `iceoryx2-integration-test`
 - [x] Properly gate integration tests in `mod.rs`
 
-#### Comparative Benchmarks (DEFERRED)
-- [ ] Implement `wingfoil/benches/iceoryx2_modes.rs` comparing Spin vs Threaded vs Signaled
-- [ ] Document latency results in `SPEC.md` or a performance note
+#### Comparative Benchmarks (COMPLETED)
+- [x] Implement `wingfoil/benches/iceoryx2_modes.rs` comparing Spin vs Threaded vs Signaled
+- [x] Document latency results in `SPEC.md` or a performance note
+
+#### Review Fixes (COMPLETED)
+- [x] Resolve background thread blocking issue on shutdown using `wait_and_process_once_with_timeout`
+- [x] Refine slice length configuration using `initial_max_slice_len`
+- [x] Refine Python bindings to use full mode/variant options without placeholders
+
+### 9. Comprehensive Testing (TDD) (MOSTLY COMPLETED)
+
+Goal: Reach high test coverage and verify all edge cases using a Test-Driven Development approach.
+
+#### Unit Tests (Rust)
+- [x] Add `test_fixed_bytes_edge_cases`
+- [x] Add `test_invalid_service_name_fails_fast` (assert error, not strings)
+- [x] Add `test_iceoryx2_sub_opts_defaults` (variant/mode/history_size)
+
+#### Integration Tests (Rust)
+- [x] Add `test_local_spin_round_trip`
+- [x] Add `test_local_threaded_round_trip`
+- [x] Add `test_local_signaled_round_trip`
+- [x] Add `test_late_joiner_with_history` (implemented as ignored IPC test)
+- [x] Add `test_ipc_round_trip` (implemented as ignored IPC test)
+- [x] Add slice round-trip coverage (`iceoryx2_sub_slice*` + `iceoryx2_pub_slice*`)
+
+#### E2E Tests (Python)
+- [x] Create `wingfoil-python/tests/test_iceoryx2.py`
+- [x] Implement `test_iceoryx2_local_pubsub` (Spin + Threaded by default)
+- [x] Add optional `test_iceoryx2_ipc_pubsub` (skipped unless env supports shared memory)
+- [x] Implement `test_iceoryx2_slice_large_payload`
+
+Remaining work is optional IPC E2E coverage that is intentionally skipped by default.
+
+#### Suggested Commands
+
+- Default Rust tests (no IPC dependency): `cargo test -p wingfoil --features iceoryx2-beta`
+- IPC tests (explicit): `cargo test -p wingfoil --features iceoryx2-beta,iceoryx2-integration-test`
+- Python tests (uv, no pip): `cd wingfoil-python && uv python install 3.11 && uv venv --python 3.11 && uv sync --extra dev --locked && uv run maturin develop && uv run pytest -q`
+
+#### Notes
+
+- `Signaled` mode depends on the `"{service_name}.signal"` Event service; publisher/subscriber can race to open/create it during short-lived graphs. Tests should be resilient to transient open/create failures.
+- IPC `history_size` is a service-level contract; ensure publishers/subscribers agree (use publisher opts / Python `iceoryx2_pub(..., history_size=...)`).
+- Production hardening: prefer `iceoryx2_pub_opts` / `iceoryx2_pub_slice_opts` (Rust) or `Stream.iceoryx2_pub(..., history_size=..., initial_max_slice_len=...)` (Python) to make service configuration explicit and consistent across processes.
+- Clippy: fixed all iceoryx2-related warnings in `--features iceoryx2-beta` profile; remaining warnings should be treated as regressions.
+- CI hardening: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` both pass (bench + integration-test gating included).
+- Operability: service open/create failures are surfaced as `Iceoryx2Error::ServiceOpenFailed { .. }` with structured service contract context.
+- Contract helper: prefer deriving settings via `Iceoryx2ServiceContract` / `Iceoryx2SliceContract` so all participants share the same service-level configuration.
+- Convenience: use `Iceoryx2SubOpts::contract()` / `Iceoryx2PubOpts::contract()` / `Iceoryx2PubSliceOpts::contract()` to compare derived contracts at the call site.
+
+### 10. IPC Production Hardening (TDD) (COMPLETED)
+
+Tracking docs:
+- Brainstorm: `docs/brainstorms/2026-04-05-iceoryx2-ipc-production-readiness.md`
+- Plan: `docs/plans/2026-04-05-002-iceoryx2-ipc-production-hardening-plan.md`
+
+If additional IPC/operability work is needed, create a new plan file rather than extending the completed plan.
+
+### 11. PR #176 Comment Closure (REVIEW-DRIVEN) (ACTIVE)
+
+Goal: collect new reviewer comments, resolve blockers, get CI green, and land the PR.
+
+Tracking docs:
+- Brainstorm: `docs/brainstorms/2026-04-05-iceoryx2-pr176-review-closure-brainstorm.md`
+- Plan: `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`
+
+Reschedule:
+- Next review sweep: **2026-04-06**
+- Update loop: after any new comment or CI run, refresh the snapshot + mapping table in the plan doc.

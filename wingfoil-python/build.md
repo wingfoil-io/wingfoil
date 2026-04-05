@@ -1,34 +1,30 @@
 ## Building from source
 
 ```bash
-# install deps
+# install deps (system)
+#
+# - `uv` (https://astral.sh/uv) for Python toolchain + env management
+# - Rust toolchain (via rustup)
+# - `patchelf` (recommended on Linux for maturin rpath handling)
 
-sudo apt-get install python3
-sudo apt-get install python3-pip
-sudo apt-get install python3-venv
+cd wingfoil-python
 
-# set up virtual env
+# install a Python runtime (managed by uv; no global python required)
+uv python install 3.11
 
-python3 -m venv ~/.venv
+# create a local virtual env managed by uv
+uv venv --python 3.11
 
-# activate the virtual env
+# install Python dependencies from `pyproject.toml` (no pip)
+uv sync --extra dev --locked
 
-source ~/.venv/bin/activate
-
-# under virtual env install these modules
-
-pip install patchelf
-pip install maturin
-
-# under virtual env, build the wingfoil wheel
-
-maturin develop --release
+# build and install the wingfoil extension into the uv environment
+uv run maturin develop --release
 
 # run tests
+uv run pytest
 
-pip install pytest
-pytest
+# run an example
+uv run python ./examples/quick_start.py
 
-# You can run example with
-
-python3 ./examples/quick_start.py
+```

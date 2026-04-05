@@ -1,5 +1,6 @@
 //! iceoryx2 subscriber (read) implementation
 
+use core::time::Duration;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,43 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
 
-use super::{Iceoryx2Error, Iceoryx2Mode, Iceoryx2Result, Iceoryx2ServiceVariant, Iceoryx2SubOpts};
+use super::{
+    Iceoryx2Error, Iceoryx2Mode, Iceoryx2Result, Iceoryx2ServiceContract, Iceoryx2ServiceVariant,
+    Iceoryx2SubOpts,
+};
+
+fn service_open_err_with_context(
+    service_name: &str,
+    variant: Iceoryx2ServiceVariant,
+    contract: Iceoryx2ServiceContract,
+    err: impl std::fmt::Display,
+) -> Iceoryx2Error {
+    let error = err.to_string();
+    // Best-effort classification; we only classify as mismatch when the underlying error
+    // string strongly suggests incompatibility.
+    let looks_like_mismatch = {
+        let e = error.to_lowercase();
+        e.contains("incompatible") || e.contains("mismatch") || e.contains("config")
+    };
+
+    if looks_like_mismatch {
+        Iceoryx2Error::ServiceConfigMismatch {
+            error,
+            service_name: service_name.to_string(),
+            variant,
+            history_size: contract.history_size,
+            subscriber_max_buffer_size: contract.subscriber_max_buffer_size,
+        }
+    } else {
+        Iceoryx2Error::ServiceOpenFailed {
+            error,
+            service_name: service_name.to_string(),
+            variant,
+            history_size: contract.history_size,
+            subscriber_max_buffer_size: contract.subscriber_max_buffer_size,
+        }
+    }
+}
 
 /// Subscribe to an iceoryx2 service and produce a stream of samples.
 ///
@@ -47,6 +84,7 @@ where
         Iceoryx2SubOpts {
             variant,
             mode: Iceoryx2Mode::default(),
+            ..Default::default()
         },
     )
 }
@@ -93,8 +131,10 @@ where
     // Threaded mode state
     receiver: Option<ChannelReceiver<T>>,
     running: Arc<AtomicBool>,
+    thread_handle: Option<thread::JoinHandle<()>>,
     // Common state
     value: Burst<T>,
+    cycles: u64,
 }
 
 impl<T> Iceoryx2ReceiverStream<T>
@@ -108,7 +148,9 @@ where
             subscriber: None,
             receiver: None,
             running: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
             value: Burst::default(),
+            cycles: 0,
         }
     }
 }
@@ -119,12 +161,25 @@ where
 {
     fn cycle(&mut self, _state: &mut crate::GraphState) -> anyhow::Result<bool> {
         self.value.clear();
+        self.cycles += 1;
 
         match self.opts.mode {
             Iceoryx2Mode::Spin => {
                 let Some(subscriber) = &self.subscriber else {
                     return Ok(false);
                 };
+
+                // Periodically update connections
+                if self.cycles % 10 == 0 {
+                    match subscriber {
+                        Iceoryx2SubscriberPort::Ipc(s) => {
+                            let _ = s.update_connections();
+                        }
+                        Iceoryx2SubscriberPort::Local(s) => {
+                            let _ = s.update_connections();
+                        }
+                    }
+                }
 
                 match subscriber {
                     Iceoryx2SubscriberPort::Ipc(subscriber) => {
@@ -178,13 +233,28 @@ where
                         let node = NodeBuilder::new()
                             .create::<ipc::Service>()
                             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+                        let contract = Iceoryx2ServiceContract::new(self.opts.history_size);
                         let service = node
-                            .service_builder(&self.service_name.as_str().try_into()?)
+                            .service_builder(&self.service_name.as_str().try_into().map_err(
+                                |e: iceoryx2::service::service_name::ServiceNameError| {
+                                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                                },
+                            )?)
                             .publish_subscribe::<T>()
+                            .history_size(self.opts.history_size)
+                            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
                             .open_or_create()
-                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                            .map_err(|e| {
+                                service_open_err_with_context(
+                                    &self.service_name,
+                                    self.opts.variant,
+                                    contract,
+                                    e,
+                                )
+                            })?;
                         let subscriber = service
                             .subscriber_builder()
+                            .buffer_size(self.opts.history_size.max(1))
                             .create()
                             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         subscriber
@@ -196,13 +266,28 @@ where
                         let node = NodeBuilder::new()
                             .create::<local::Service>()
                             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+                        let contract = Iceoryx2ServiceContract::new(self.opts.history_size);
                         let service = node
-                            .service_builder(&self.service_name.as_str().try_into()?)
+                            .service_builder(&self.service_name.as_str().try_into().map_err(
+                                |e: iceoryx2::service::service_name::ServiceNameError| {
+                                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                                },
+                            )?)
                             .publish_subscribe::<T>()
+                            .history_size(self.opts.history_size)
+                            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
                             .open_or_create()
-                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                            .map_err(|e| {
+                                service_open_err_with_context(
+                                    &self.service_name,
+                                    self.opts.variant,
+                                    contract,
+                                    e,
+                                )
+                            })?;
                         let subscriber = service
                             .subscriber_builder()
+                            .buffer_size(self.opts.history_size.max(1))
                             .create()
                             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         subscriber
@@ -224,12 +309,12 @@ where
                 let opts = self.opts.clone();
                 let running = self.running.clone();
 
-                thread::spawn(move || {
+                self.thread_handle = Some(thread::spawn(move || {
                     if let Err(e) = run_subscriber_thread::<T>(service_name, sender, opts, running)
                     {
                         log::error!("iceoryx2 subscriber thread error: {:?}", e);
                     }
-                });
+                }));
             }
         }
 
@@ -238,6 +323,9 @@ where
 
     fn stop(&mut self, _state: &mut crate::GraphState) -> anyhow::Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
         self.subscriber = None;
         self.receiver = None;
         Ok(())
@@ -265,8 +353,10 @@ struct Iceoryx2SliceReceiverStream {
     // Threaded state
     receiver: Option<ChannelReceiver<Vec<u8>>>,
     running: Arc<AtomicBool>,
+    thread_handle: Option<thread::JoinHandle<()>>,
     // Common state
     value: Burst<Vec<u8>>,
+    cycles: u64,
 }
 
 enum Iceoryx2SliceSubscriberPort {
@@ -282,7 +372,9 @@ impl Iceoryx2SliceReceiverStream {
             subscriber: None,
             receiver: None,
             running: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
             value: Burst::default(),
+            cycles: 0,
         }
     }
 }
@@ -290,12 +382,25 @@ impl Iceoryx2SliceReceiverStream {
 impl crate::MutableNode for Iceoryx2SliceReceiverStream {
     fn cycle(&mut self, _state: &mut crate::GraphState) -> anyhow::Result<bool> {
         self.value.clear();
+        self.cycles += 1;
 
         match self.opts.mode {
             Iceoryx2Mode::Spin => {
                 let Some(subscriber) = &self.subscriber else {
                     return Ok(false);
                 };
+
+                // Periodically update connections
+                if self.cycles % 10 == 0 {
+                    match subscriber {
+                        Iceoryx2SliceSubscriberPort::Ipc(s) => {
+                            let _ = s.update_connections();
+                        }
+                        Iceoryx2SliceSubscriberPort::Local(s) => {
+                            let _ = s.update_connections();
+                        }
+                    }
+                }
 
                 match subscriber {
                     Iceoryx2SliceSubscriberPort::Ipc(subscriber) => {
@@ -347,13 +452,28 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                         let node = NodeBuilder::new()
                             .create::<ipc::Service>()
                             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+                        let contract = Iceoryx2ServiceContract::new(self.opts.history_size);
                         let service = node
-                            .service_builder(&self.service_name.as_str().try_into()?)
+                            .service_builder(&self.service_name.as_str().try_into().map_err(
+                                |e: iceoryx2::service::service_name::ServiceNameError| {
+                                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                                },
+                            )?)
                             .publish_subscribe::<[u8]>()
+                            .history_size(self.opts.history_size)
+                            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
                             .open_or_create()
-                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                            .map_err(|e| {
+                                service_open_err_with_context(
+                                    &self.service_name,
+                                    self.opts.variant,
+                                    contract,
+                                    e,
+                                )
+                            })?;
                         let subscriber = service
                             .subscriber_builder()
+                            .buffer_size(self.opts.history_size.max(1))
                             .create()
                             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Ipc(subscriber));
@@ -362,13 +482,28 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                         let node = NodeBuilder::new()
                             .create::<local::Service>()
                             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+                        let contract = Iceoryx2ServiceContract::new(self.opts.history_size);
                         let service = node
-                            .service_builder(&self.service_name.as_str().try_into()?)
+                            .service_builder(&self.service_name.as_str().try_into().map_err(
+                                |e: iceoryx2::service::service_name::ServiceNameError| {
+                                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                                },
+                            )?)
                             .publish_subscribe::<[u8]>()
+                            .history_size(self.opts.history_size)
+                            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
                             .open_or_create()
-                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                            .map_err(|e| {
+                                service_open_err_with_context(
+                                    &self.service_name,
+                                    self.opts.variant,
+                                    contract,
+                                    e,
+                                )
+                            })?;
                         let subscriber = service
                             .subscriber_builder()
+                            .buffer_size(self.opts.history_size.max(1))
                             .create()
                             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Local(subscriber));
@@ -385,12 +520,12 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 let opts = self.opts.clone();
                 let running = self.running.clone();
 
-                thread::spawn(move || {
+                self.thread_handle = Some(thread::spawn(move || {
                     if let Err(e) = run_slice_subscriber_thread(service_name, sender, opts, running)
                     {
                         log::error!("iceoryx2 slice subscriber thread error: {:?}", e);
                     }
-                });
+                }));
             }
         }
         Ok(())
@@ -398,6 +533,9 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
 
     fn stop(&mut self, _state: &mut crate::GraphState) -> anyhow::Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
         self.subscriber = None;
         self.receiver = None;
         Ok(())
@@ -446,14 +584,22 @@ where
         .create::<ipc::Service>()
         .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
 
+    let contract = Iceoryx2ServiceContract::new(opts.history_size);
     let service = node
-        .service_builder(&service_name.as_str().try_into()?)
+        .service_builder(&service_name.as_str().try_into().map_err(
+            |e: iceoryx2::service::service_name::ServiceNameError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?)
         .publish_subscribe::<T>()
+        .history_size(opts.history_size)
+        .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
         .open_or_create()
-        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        .map_err(|e| service_open_err_with_context(&service_name, opts.variant, contract, e))?;
 
     let subscriber = service
         .subscriber_builder()
+        .buffer_size(opts.history_size.max(1))
         .create()
         .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
     subscriber
@@ -462,22 +608,66 @@ where
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
-        let event_service = node
-            .service_builder(&signal_name.as_str().try_into()?)
-            .event()
-            .open_or_create()
-            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        // The publisher and subscriber may race to create/open the event service.
+        // In practice, this can briefly surface as "ServiceInCorruptedState" on some systems.
+        // Retry a few times to make Signaled mode robust in tests and short-lived graphs.
+        let event_service = {
+            let mut last_err: Option<String> = None;
+            let mut service = None;
+            for _ in 0..25 {
+                match node
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: iceoryx2::service::service_name::ServiceNameError| {
+                            Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                        },
+                    )?)
+                    .event()
+                    .open_or_create()
+                {
+                    Ok(s) => {
+                        service = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+            service.ok_or_else(|| {
+                service_open_err_with_context(
+                    &signal_name,
+                    opts.variant,
+                    Iceoryx2ServiceContract::new(0),
+                    last_err.unwrap_or_else(|| "event open_or_create failed".to_string()),
+                )
+            })?
+        };
         let listener = event_service
             .listener_builder()
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
-        let ws = WaitSetBuilder::new().create::<ipc::Service>()?;
+        let ws = WaitSetBuilder::new().create::<ipc::Service>().map_err(
+            |e: iceoryx2::waitset::WaitSetCreateError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?;
         let _attachment = ws
             .attach_notification(&listener)
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
-            let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
+            let _ = ws
+                .wait_and_process_once_with_timeout(
+                    |_| CallbackProgression::Continue,
+                    Duration::from_millis(100),
+                )
+                .map_err(|e: iceoryx2::waitset::WaitSetRunError| {
+                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                })?;
+
+            // Periodic connection update
+            let _ = subscriber.update_connections();
 
             while let Ok(Some(sample)) = subscriber.receive() {
                 let data = *sample;
@@ -488,7 +678,13 @@ where
             while let Ok(Some(_)) = listener.try_wait_one() {}
         }
     } else {
+        let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
+            loop_cycles += 1;
+            if loop_cycles % 100 == 0 {
+                let _ = subscriber.update_connections();
+            }
+
             let mut received = false;
             while let Ok(Some(sample)) = subscriber.receive() {
                 let data = *sample;
@@ -520,14 +716,22 @@ where
         .create::<local::Service>()
         .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
 
+    let contract = Iceoryx2ServiceContract::new(opts.history_size);
     let service = node
-        .service_builder(&service_name.as_str().try_into()?)
+        .service_builder(&service_name.as_str().try_into().map_err(
+            |e: iceoryx2::service::service_name::ServiceNameError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?)
         .publish_subscribe::<T>()
+        .history_size(opts.history_size)
+        .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
         .open_or_create()
-        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        .map_err(|e| service_open_err_with_context(&service_name, opts.variant, contract, e))?;
 
     let subscriber = service
         .subscriber_builder()
+        .buffer_size(opts.history_size.max(1))
         .create()
         .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
     subscriber
@@ -536,22 +740,62 @@ where
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
-        let event_service = node
-            .service_builder(&signal_name.as_str().try_into()?)
-            .event()
-            .open_or_create()
-            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let event_service = {
+            let mut last_err: Option<String> = None;
+            let mut service = None;
+            for _ in 0..25 {
+                match node
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: iceoryx2::service::service_name::ServiceNameError| {
+                            Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                        },
+                    )?)
+                    .event()
+                    .open_or_create()
+                {
+                    Ok(s) => {
+                        service = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+            service.ok_or_else(|| {
+                service_open_err_with_context(
+                    &signal_name,
+                    opts.variant,
+                    Iceoryx2ServiceContract::new(0),
+                    last_err.unwrap_or_else(|| "event open_or_create failed".to_string()),
+                )
+            })?
+        };
         let listener = event_service
             .listener_builder()
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
-        let ws = WaitSetBuilder::new().create::<local::Service>()?;
+        let ws = WaitSetBuilder::new().create::<local::Service>().map_err(
+            |e: iceoryx2::waitset::WaitSetCreateError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?;
         let _attachment = ws
             .attach_notification(&listener)
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
-            let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
+            let _ = ws
+                .wait_and_process_once_with_timeout(
+                    |_| CallbackProgression::Continue,
+                    Duration::from_millis(100),
+                )
+                .map_err(|e: iceoryx2::waitset::WaitSetRunError| {
+                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                })?;
+
+            let _ = subscriber.update_connections();
 
             while let Ok(Some(sample)) = subscriber.receive() {
                 let data = *sample;
@@ -562,7 +806,13 @@ where
             while let Ok(Some(_)) = listener.try_wait_one() {}
         }
     } else {
+        let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
+            loop_cycles += 1;
+            if loop_cycles % 100 == 0 {
+                let _ = subscriber.update_connections();
+            }
+
             let mut received = false;
             while let Ok(Some(sample)) = subscriber.receive() {
                 let data = *sample;
@@ -607,13 +857,21 @@ fn run_slice_subscriber_thread_service_ipc(
     let node = NodeBuilder::new()
         .create::<ipc::Service>()
         .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+    let contract = Iceoryx2ServiceContract::new(opts.history_size);
     let service = node
-        .service_builder(&service_name.as_str().try_into()?)
+        .service_builder(&service_name.as_str().try_into().map_err(
+            |e: iceoryx2::service::service_name::ServiceNameError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?)
         .publish_subscribe::<[u8]>()
+        .history_size(opts.history_size)
+        .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
         .open_or_create()
-        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        .map_err(|e| service_open_err_with_context(&service_name, opts.variant, contract, e))?;
     let subscriber = service
         .subscriber_builder()
+        .buffer_size(opts.history_size.max(1))
         .create()
         .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
     subscriber
@@ -622,34 +880,81 @@ fn run_slice_subscriber_thread_service_ipc(
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
-        let event_service = node
-            .service_builder(&signal_name.as_str().try_into()?)
-            .event()
-            .open_or_create()
-            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let event_service = {
+            let mut last_err: Option<String> = None;
+            let mut service = None;
+            for _ in 0..25 {
+                match node
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: iceoryx2::service::service_name::ServiceNameError| {
+                            Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                        },
+                    )?)
+                    .event()
+                    .open_or_create()
+                {
+                    Ok(s) => {
+                        service = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+            service.ok_or_else(|| {
+                service_open_err_with_context(
+                    &signal_name,
+                    opts.variant,
+                    Iceoryx2ServiceContract::new(0),
+                    last_err.unwrap_or_else(|| "event open_or_create failed".to_string()),
+                )
+            })?
+        };
         let listener = event_service
             .listener_builder()
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
-        let ws = WaitSetBuilder::new().create::<ipc::Service>()?;
+        let ws = WaitSetBuilder::new().create::<ipc::Service>().map_err(
+            |e: iceoryx2::waitset::WaitSetCreateError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?;
         let _attachment = ws
             .attach_notification(&listener)
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
-            let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
+            let _ = ws
+                .wait_and_process_once_with_timeout(
+                    |_| CallbackProgression::Continue,
+                    Duration::from_millis(100),
+                )
+                .map_err(|e: iceoryx2::waitset::WaitSetRunError| {
+                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                })?;
+
+            let _ = subscriber.update_connections();
+
             while let Ok(Some(sample)) = subscriber.receive() {
-                let data: Vec<u8> = sample.to_vec();
+                let data: Vec<u8> = (*sample).to_vec();
                 let _ = channel_sender.send_message(Message::RealtimeValue(data));
                 drop(sample);
             }
             while let Ok(Some(_)) = listener.try_wait_one() {}
         }
     } else {
+        let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
+            loop_cycles += 1;
+            if loop_cycles % 100 == 0 {
+                let _ = subscriber.update_connections();
+            }
+
             let mut received = false;
             while let Ok(Some(sample)) = subscriber.receive() {
-                let data: Vec<u8> = sample.to_vec();
+                let data: Vec<u8> = (*sample).to_vec();
                 let _ = channel_sender.send_message(Message::RealtimeValue(data));
                 drop(sample);
                 received = true;
@@ -672,13 +977,21 @@ fn run_slice_subscriber_thread_service_local(
     let node = NodeBuilder::new()
         .create::<local::Service>()
         .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
+    let contract = Iceoryx2ServiceContract::new(opts.history_size);
     let service = node
-        .service_builder(&service_name.as_str().try_into()?)
+        .service_builder(&service_name.as_str().try_into().map_err(
+            |e: iceoryx2::service::service_name::ServiceNameError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?)
         .publish_subscribe::<[u8]>()
+        .history_size(opts.history_size)
+        .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
         .open_or_create()
-        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        .map_err(|e| service_open_err_with_context(&service_name, opts.variant, contract, e))?;
     let subscriber = service
         .subscriber_builder()
+        .buffer_size(opts.history_size.max(1))
         .create()
         .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
     subscriber
@@ -687,34 +1000,81 @@ fn run_slice_subscriber_thread_service_local(
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
-        let event_service = node
-            .service_builder(&signal_name.as_str().try_into()?)
-            .event()
-            .open_or_create()
-            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let event_service = {
+            let mut last_err: Option<String> = None;
+            let mut service = None;
+            for _ in 0..25 {
+                match node
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: iceoryx2::service::service_name::ServiceNameError| {
+                            Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                        },
+                    )?)
+                    .event()
+                    .open_or_create()
+                {
+                    Ok(s) => {
+                        service = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+            service.ok_or_else(|| {
+                service_open_err_with_context(
+                    &signal_name,
+                    opts.variant,
+                    Iceoryx2ServiceContract::new(0),
+                    last_err.unwrap_or_else(|| "event open_or_create failed".to_string()),
+                )
+            })?
+        };
         let listener = event_service
             .listener_builder()
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
-        let ws = WaitSetBuilder::new().create::<local::Service>()?;
+        let ws = WaitSetBuilder::new().create::<local::Service>().map_err(
+            |e: iceoryx2::waitset::WaitSetCreateError| {
+                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+            },
+        )?;
         let _attachment = ws
             .attach_notification(&listener)
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
-            let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
+            let _ = ws
+                .wait_and_process_once_with_timeout(
+                    |_| CallbackProgression::Continue,
+                    Duration::from_millis(100),
+                )
+                .map_err(|e: iceoryx2::waitset::WaitSetRunError| {
+                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                })?;
+
+            let _ = subscriber.update_connections();
+
             while let Ok(Some(sample)) = subscriber.receive() {
-                let data: Vec<u8> = sample.to_vec();
+                let data: Vec<u8> = (*sample).to_vec();
                 let _ = channel_sender.send_message(Message::RealtimeValue(data));
                 drop(sample);
             }
             while let Ok(Some(_)) = listener.try_wait_one() {}
         }
     } else {
+        let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
+            loop_cycles += 1;
+            if loop_cycles % 100 == 0 {
+                let _ = subscriber.update_connections();
+            }
+
             let mut received = false;
             while let Ok(Some(sample)) = subscriber.receive() {
-                let data: Vec<u8> = sample.to_vec();
+                let data: Vec<u8> = (*sample).to_vec();
                 let _ = channel_sender.send_message(Message::RealtimeValue(data));
                 drop(sample);
                 received = true;

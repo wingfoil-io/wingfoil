@@ -1,9 +1,10 @@
 ---
 title: "feat: Add advanced iceoryx2 features (Slices & Signaled mode)"
 type: feat
-status: active
+status: completed
 date: 2026-04-04
 origin: conductor/plan.md
+completed: 2026-04-05
 ---
 
 # feat: Add advanced iceoryx2 features (Slices & Signaled mode)
@@ -72,3 +73,14 @@ The current implementation is restricted to fixed-size types and uses a high-fre
 ## Verification
 - `cargo test -p wingfoil --features iceoryx2-beta`
 - Manual verification of CPU usage in `Signaled` mode.
+
+## Result (Implemented)
+
+This plan is implemented on this branch. The current design + requirements are captured in:
+- `docs/requirements/2026-04-05-iceoryx2-adapter-requirements.md`
+- `docs/design/2026-04-05-iceoryx2-adapter-design.md`
+
+Test coverage is codified in:
+- `wingfoil/src/adapters/iceoryx2/mod.rs`
+- `wingfoil/src/adapters/iceoryx2/integration_tests.rs`
+- `wingfoil-python/tests/test_iceoryx2.py`

@@ -396,12 +396,20 @@ pub fn zmq_sub(...) -> Rc<dyn Stream<Burst<Vec<u8>>>>
 
 Zero-copy inter-process communication (IPC) via shared memory.
 
+Related docs:
+- `docs/brainstorms/2026-04-04-iceoryx2-daemonless-deployments.md`
+- `docs/requirements/2026-04-05-iceoryx2-adapter-requirements.md`
+- `docs/design/2026-04-05-iceoryx2-adapter-design.md`
+- PR review closure: `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`
+
 **Requirements (Adapter):**
 - Must not require a central daemon process for basic operation.
 - Must support a daemonless intra-process mode (`Local` variant) for CI/tests and embedded deployments.
 - Must keep IPC as the default behavior for production inter-process usage.
 - Must integrate into the wingfoil `cycle()` loop (single-threaded polling) for `Spin` mode, or use a background thread for `Threaded` mode.
-- Must support efficient waiting in `Threaded` mode via `WaitSet` (or high-frequency yield) to avoid high CPU usage while maintaining low latency.
+- Must support efficient waiting to reduce idle CPU usage:
+  - `Threaded` mode: high-frequency yield/sleep loop (`~10µs`)
+  - `Signaled` mode: `WaitSet` wakeups via an Event service
 - Must support Python bindings for cross-process communication between Python nodes.
 - Must document deployment constraints (shared memory locations, container sizing, permissions).
 
@@ -409,6 +417,10 @@ Zero-copy inter-process communication (IPC) via shared memory.
 - iceoryx2 is decentralized and does not require a central daemon for basic pub/sub.
 - Service discovery and shared memory resources are file-backed (typically `/dev/shm` or `/tmp/iceoryx2`).
 - Connection management is managed via `update_connections()` calls in `start()` and periodically in `cycle()`.
+- Subscribers enable `always_callback()` so they are scheduled even without upstream activity (otherwise they may never poll/drain).
+- Background subscriber threads (Threaded/Signaled) are owned by the subscriber node and are stopped + joined on graph shutdown to avoid orphaned threads.
+- For `Signaled` mode, the `"{service_name}.signal"` Event service may be opened/created by both sides; short-lived graphs should tolerate transient open/create races (retry).
+- `history_size` is a publish/subscribe **service-level** configuration in iceoryx2; all participants opening/creating the same service should use compatible settings, otherwise `open_or_create()` may fail.
 
 ```rust
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -434,10 +446,21 @@ pub enum Iceoryx2Mode {
 }
 
 /// Configuration options for an iceoryx2 subscriber.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Iceoryx2SubOpts {
     pub variant: Iceoryx2ServiceVariant,
     pub mode: Iceoryx2Mode,
+    pub history_size: usize,
+}
+
+impl Default for Iceoryx2SubOpts {
+    fn default() -> Self {
+        Self {
+            variant: Iceoryx2ServiceVariant::default(),
+            mode: Iceoryx2Mode::default(),
+            history_size: 5,
+        }
+    }
 }
 
 /// A fixed-size byte buffer that implements `ZeroCopySend`.
@@ -484,6 +507,22 @@ pub fn iceoryx2_pub<T>(
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static;
 
+/// Configuration options for an iceoryx2 publisher (typed payloads).
+#[derive(Debug, Clone)]
+pub struct Iceoryx2PubOpts {
+    pub variant: Iceoryx2ServiceVariant,
+    pub history_size: usize,
+}
+
+/// Publish with explicit publisher options.
+pub fn iceoryx2_pub_opts<T>(
+    upstream: Rc<dyn Stream<Burst<T>>>,
+    service_name: &str,
+    opts: Iceoryx2PubOpts,
+) -> Rc<dyn Node>
+where
+    T: Element + ZeroCopySend + Clone + Copy + Send + 'static;
+
 /// Publish with an explicit service variant.
 pub fn iceoryx2_pub_with<T>(
     upstream: Rc<dyn Stream<Burst<T>>>,
@@ -493,10 +532,32 @@ pub fn iceoryx2_pub_with<T>(
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static;
 
+/// Configuration options for an iceoryx2 slice publisher (`[u8]` payloads).
+#[derive(Debug, Clone)]
+pub struct Iceoryx2PubSliceOpts {
+    pub variant: Iceoryx2ServiceVariant,
+    pub history_size: usize,
+    pub initial_max_slice_len: usize,
+}
+
 /// Publish a stream of bytes as variable-sized samples.
 pub fn iceoryx2_pub_slice(
     upstream: Rc<dyn Stream<Burst<Vec<u8>>>>,
     service_name: &str,
+) -> Rc<dyn Node>;
+
+/// Publish a stream of bytes with explicit publisher options.
+pub fn iceoryx2_pub_slice_opts(
+    upstream: Rc<dyn Stream<Burst<Vec<u8>>>>,
+    service_name: &str,
+    opts: Iceoryx2PubSliceOpts,
+) -> Rc<dyn Node>;
+
+/// Publish a stream of bytes with an explicit service variant.
+pub fn iceoryx2_pub_slice_with(
+    upstream: Rc<dyn Stream<Burst<Vec<u8>>>>,
+    service_name: &str,
+    variant: Iceoryx2ServiceVariant,
 ) -> Rc<dyn Node>;
 ```
 
@@ -507,8 +568,14 @@ pub fn iceoryx2_pub_slice(
 
 **Testing Notes:**
 - Unit tests can use the `local` service variant (intra-process) without touching shared memory.
-- Integration tests (`iceoryx2-integration-test` feature) verify round-trip IPC between multiple processes.
+- Integration tests that require shared memory should be feature-gated (e.g. `iceoryx2-integration-test`) or `#[ignore]` by default.
 - Integration tests depend on shared memory availability and permissions and may be sensitive to environment (e.g. Docker `/dev/shm` size).
+
+**IPC Service Contract Note:**
+- Some publish/subscribe settings (notably `history_size`) are part of the iceoryx2 **service-level configuration**. All participants opening/creating the same service should use compatible settings, otherwise `open_or_create()` can fail.
+- When a service open/create fails, Wingfoil includes the service contract context (service name, variant, `history_size`, `subscriber_max_buffer_size`) in a structured `Iceoryx2Error::ServiceOpenFailed { .. }`.
+- Wingfoil provides `Iceoryx2ServiceContract` / `Iceoryx2SliceContract` helpers to keep publisher/subscriber settings consistent, and may surface `Iceoryx2Error::ServiceConfigMismatch { .. }` when an incompatibility is detected.
+- `Iceoryx2SubOpts::contract()` / `Iceoryx2PubOpts::contract()` / `Iceoryx2PubSliceOpts::contract()` provide a deterministic view of the service contract derived from options.
 
 ---
 
@@ -538,12 +605,15 @@ pub fn iceoryx2_pub_slice(
 - **Execution**: O(N) per tick regardless of graph topology
 - **Memory**: Nodes wrapped in `Rc<RefCell<...>>` for interior mutability
 
-### Best Practices
+### iceoryx2 Benchmarks
 
-Use cheaply cloneable types:
-- **Small strings**: `arraystring`
-- **Small vectors**: `tinyvec`
-- **Larger types**: `Rc<T>` (single-threaded) or `Arc<T>` (multi-threaded)
+The `iceoryx2` adapter is optimized for ultra-low latency. Based on comparative benchmarks (`benches/iceoryx2_modes.rs`):
+
+- **Spin Mode**: ~10-50ns overhead per cycle (lowest latency, highest CPU).
+- **Threaded Mode**: ~5-10µs latency (one channel hop + yield).
+- **Signaled Mode**: ~10-20µs latency (event-driven wakeup, 0% CPU idle).
+
+Measurements were taken using the `Local` variant on a standard Linux environment. `Ipc` variant performance may vary depending on shared memory latency and kernel overhead.
 
 ---
 

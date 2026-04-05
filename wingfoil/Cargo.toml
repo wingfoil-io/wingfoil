@@ -171,6 +171,11 @@ name = "iceoryx2"
 harness = false
 required-features = ["iceoryx2-beta"]
 
+[[bench]]
+name = "iceoryx2_modes"
+harness = false
+required-features = ["iceoryx2-beta"]
+
 [[example]]
 name = "zmq_pub"
 path = "examples/messaging/zmq_pub.rs"

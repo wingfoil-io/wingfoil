@@ -11,11 +11,11 @@ def main():
         mode=Iceoryx2Mode.Signaled
     )
     
-    # Collect and print received messages
-    collected = sub.collapse().inspect(lambda msg: print(f"Python received: {msg}"))
+    # Inspect and collect received bursts. Each tick yields a list of `bytes`.
+    collected = sub.inspect(lambda msgs: print(f"Python received: {msgs}")).collect()
     
     # Create a publisher node (Signaled mode is triggered automatically by publisher)
-    pub = ticker(0.1).map(lambda _: b"hello from python slice").iceoryx2_pub(
+    pub = ticker(0.1).count().map(lambda _: b"hello from python slice").iceoryx2_pub(
         service_name,
         variant=Iceoryx2ServiceVariant.Local
     )

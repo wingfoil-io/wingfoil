@@ -33,7 +33,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install system dependencies
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get install -y protobuf-compiler patchelf
 
       - name: Setup Python
         uses: actions/setup-python@v5
