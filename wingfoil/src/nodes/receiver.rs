@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use crate::{
-    ChannelReceiverStream, Element, MutableNode, ReadyNotifier, RunMode, StreamPeekRef,
+    ChannelReceiverStream, Element, MutableNode, ReadyNotifier, RunMode, StreamPeekRef, UpStreams,
     channel::{ChannelSender, channel_pair},
 };
 use tinyvec::TinyVec;
