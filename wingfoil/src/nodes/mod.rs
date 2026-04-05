@@ -102,6 +102,7 @@ use crate::types::*;
 pub(crate) use receiver::*;
 
 use log::Level;
+#[cfg(not(feature = "tracing"))]
 use log::log;
 use num_traits::ToPrimitive;
 use std::cmp::Eq;
@@ -751,20 +752,27 @@ where
     }
 
     fn logged(self: &Rc<Self>, label: &str, level: Level) -> Rc<dyn Stream<T>> {
-        if log::log_enabled!(level) {
-            let lbl = label.to_string();
-            let func = move |value, time: NanoTime| {
-                log!(target:"wingfoil", level, "{:} {:} {:?}", time.pretty(), lbl, value);
-                value
-            };
-            bimap(
-                Dep::Active(self.clone()),
-                Dep::Active(self.clone().as_node().ticked_at_elapsed()),
-                func,
-            )
-        } else {
-            self.clone()
+        #[cfg(not(feature = "tracing"))]
+        if !log::log_enabled!(level) {
+            return self.clone();
         }
+        #[cfg(feature = "tracing")]
+        if !tracing_log_enabled!(level) {
+            return self.clone();
+        }
+        let lbl = label.to_string();
+        let func = move |value: T, time: NanoTime| {
+            #[cfg(not(feature = "tracing"))]
+            log!(target: "wingfoil", level, "{} {} {:?}", time.pretty(), lbl, value);
+            #[cfg(feature = "tracing")]
+            tracing_log!(level; time, lbl, value);
+            value
+        };
+        bimap(
+            Dep::Active(self.clone()),
+            Dep::Active(self.clone().as_node().ticked_at_elapsed()),
+            func,
+        )
     }
 
     fn map<OUT: Element>(

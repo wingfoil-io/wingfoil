@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta"]
+full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta", "instrument-default"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -9,6 +9,14 @@ kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
+tracing = ["dep:tracing"]
+instrument-run = ["tracing"]
+instrument-cycle = ["tracing"]
+instrument-apply-nodes = ["tracing"]
+instrument-initialise = ["tracing"]
+instrument-cycle-node = ["tracing"]
+instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-nodes", "instrument-initialise"]
+instrument-all = ["instrument-default", "instrument-cycle-node"]
 
 [package]
 name = "wingfoil"
@@ -77,12 +85,14 @@ kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
+tracing = { workspace = true, features = ["log", "attributes"], optional = true }
 
 
 [dev-dependencies]
 rxrust = "1.0.0-rc.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[example]]
 name = "dynamic-group"
@@ -163,3 +173,7 @@ required-features = ["zmq-beta"]
 name = "etcd"
 path = "examples/etcd/main.rs"
 required-features = ["etcd"]
+
+[[example]]
+name = "tracing"
+path = "examples/tracing/main.rs"

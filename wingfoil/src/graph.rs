@@ -342,12 +342,19 @@ impl GraphState {
     }
 
     pub fn log(&self, level: log::Level, msg: &str) {
-        if log_enabled!(level)
-            && let Some(ix) = self.current_node_index
-        {
-            let id = self.id;
-            let type_name = &self.nodes[ix].node.type_name();
-            log!(target: type_name, level, "[{id:},{ix:}]{msg:}");
+        let Some(ix) = self.current_node_index else {
+            return;
+        };
+        let id = self.id;
+        #[cfg(not(feature = "tracing"))]
+        if log_enabled!(level) {
+            let type_name = self.nodes[ix].node.type_name();
+            log!(target: &type_name, level, "[{id},{ix}]{msg}");
+        }
+        #[cfg(feature = "tracing")]
+        if tracing_log_enabled!(level) {
+            let type_name = self.nodes[ix].node.type_name();
+            tracing_log!(level, node = %type_name, "[{id},{ix}]{msg}");
         }
     }
 
@@ -405,12 +412,15 @@ impl Graph {
         self.apply_nodes("teardown", |node, state| node.teardown(state))
     }
 
+    #[cfg_attr(
+        feature = "instrument-apply-nodes",
+        tracing::instrument(skip(self, func))
+    )]
     fn apply_nodes(
         &mut self,
         desc: &str,
         func: impl Fn(Rc<dyn Node>, &mut GraphState) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
-        //println!("*** {:}graph {:} {:}", "   ".repeat(self.state.id), self.state.id, desc);
         let timer = Instant::now();
         for ix in 0..self.state.nodes.len() {
             if !self.state.nodes[ix].active {
@@ -541,6 +551,7 @@ impl Graph {
         Ok(())
     }
 
+    #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.setup_nodes()?;
         self.start_nodes()?;
@@ -550,6 +561,7 @@ impl Graph {
         Ok(())
     }
 
+    #[cfg_attr(feature = "instrument-initialise", tracing::instrument(skip_all))]
     fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> &mut Graph {
         let timer = Instant::now();
         for node in root_nodes {
@@ -684,6 +696,7 @@ impl Graph {
         progressed
     }
 
+    #[cfg_attr(feature = "instrument-cycle", tracing::instrument(skip_all))]
     fn cycle(&mut self) -> anyhow::Result<()> {
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
@@ -699,10 +712,16 @@ impl Graph {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "instrument-cycle-node",
+        tracing::instrument(skip(self), fields(node = tracing::field::Empty))
+    )]
     fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
         if !self.state.nodes[index].active {
             return Ok(());
         }
+        #[cfg(feature = "instrument-cycle-node")]
+        tracing::Span::current().record("node", self.state.nodes[index].node.type_name());
         let node = &self.state.nodes[index].node;
         self.state.current_node_index = Some(index);
         let result = node.clone().cycle(&mut self.state);

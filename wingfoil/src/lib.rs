@@ -130,10 +130,96 @@
 //! - For larger or heap-allocated types:
 //!   - Use [`Rc<T>`](https://doc.rust-lang.org/std/rc/struct.Rc.html) for single threaded contexts.
 //!   - Use [`Arc<T>`](https://doc.rust-lang.org/std/sync/struct.Arc.html) for multithreaded contexts.
+//!
+//! ## Observability
+//!
+//! Wingfoil supports both the [`log`](https://docs.rs/log) and [`tracing`](https://docs.rs/tracing)
+//! ecosystems via cargo feature flags.
+//!
+//! ### Feature flags
+//!
+//! | Feature | Effect |
+//! |---|---|
+//! | *(none)* | [`logged()`](StreamExt::logged) and [`GraphState::log()`] emit via the `log` crate — wire up any `log`-compatible backend (e.g. `env_logger`). |
+//! | `tracing` | Events are emitted via `tracing` instead. A `tracing` subscriber is required; the `log` bridge ensures events still reach `env_logger` if none is installed. |
+//! | `instrument-run` | Adds a tracing span around [`Graph::run()`] (the full setup→run→teardown lifecycle). |
+//! | `instrument-cycle` | Adds a tracing span around each engine cycle (one span per dirty-node batch). |
+//! | `instrument-apply-nodes` | Adds a tracing span around each lifecycle phase (setup / start / stop / teardown), recording the phase name. |
+//! | `instrument-initialise` | Adds a tracing span around graph initialisation. |
+//! | `instrument-cycle-node` | Adds a tracing span per node execution, recording the node index and type name. High frequency — opt in deliberately. |
+//! | `instrument-default` | Enables `instrument-run`, `instrument-cycle`, `instrument-apply-nodes`, and `instrument-initialise`. |
+//! | `instrument-all` | Enables `instrument-default` plus `instrument-cycle-node`. |
+//!
+//! All `instrument-*` features imply `tracing`.
+//!
+//! ### Example
+//!
+//! ```rust,no_run
+//! use log::Level::Info;
+//! use std::time::Duration;
+//! use wingfoil::*;
+//!
+//! // With the `tracing` feature and a subscriber installed:
+//! // tracing_subscriber::fmt::init();
+//!
+//! ticker(Duration::from_secs(1))
+//!     .count()
+//!     .logged("tick", Info)  // emits a tracing event per tick when feature = "tracing"
+//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+//!     .unwrap();
+//! ```
+//!
+//! See the [tracing example](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/tracing/)
+//! for a runnable demonstration.
 
 #[macro_use]
 extern crate log;
 extern crate derive_new;
+
+// Dispatch a `log::Level` runtime value to the matching `tracing` event macro.
+//
+// Two forms:
+// - `tracing_log!(level, <tracing args>)` — generic passthrough
+// - `tracing_log!(level; time, label, value)` — wingfoil stream event; accepts a
+//   `NanoTime` and only calls `.pretty()` inside the enabled arm.
+//
+// Only available with the `tracing` feature.
+#[cfg(feature = "tracing")]
+macro_rules! tracing_log {
+    ($level:expr; $time:expr, $label:expr, $value:expr) => {
+        match $level {
+            log::Level::Error => tracing::error!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Warn  => tracing::warn!(target:  "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Info  => tracing::info!(target:  "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Debug => tracing::debug!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+            log::Level::Trace => tracing::trace!(target: "wingfoil", "{} {} {:?}", $time.pretty(), $label, $value),
+        }
+    };
+    ($level:expr, $($rest:tt)*) => {
+        match $level {
+            log::Level::Error => tracing::error!($($rest)*),
+            log::Level::Warn  => tracing::warn!($($rest)*),
+            log::Level::Info  => tracing::info!($($rest)*),
+            log::Level::Debug => tracing::debug!($($rest)*),
+            log::Level::Trace => tracing::trace!($($rest)*),
+        }
+    };
+}
+
+// Check whether a `log::Level` is enabled in the current `tracing` subscriber.
+// Only available with the `tracing` feature.
+#[cfg(feature = "tracing")]
+macro_rules! tracing_log_enabled {
+    ($level:expr) => {
+        match $level {
+            log::Level::Error => tracing::enabled!(tracing::Level::ERROR),
+            log::Level::Warn => tracing::enabled!(tracing::Level::WARN),
+            log::Level::Info => tracing::enabled!(tracing::Level::INFO),
+            log::Level::Debug => tracing::enabled!(tracing::Level::DEBUG),
+            log::Level::Trace => tracing::enabled!(tracing::Level::TRACE),
+        }
+    };
+}
 
 pub mod adapters;
 
