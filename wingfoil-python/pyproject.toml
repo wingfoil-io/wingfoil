@@ -29,3 +29,9 @@ features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "wingfoil._wingfoil"
 include = ["Cargo.toml"]
+
+[tool.coverage.run]
+source = ["wingfoil"]
+
+[tool.coverage.report]
+omit = ["*/_wingfoil*"]
