@@ -9,7 +9,7 @@
 //! use std::time::Duration;
 //!
 //! let exporter = PrometheusExporter::new("0.0.0.0:9091");
-//! exporter.serve(); // spawns HTTP server thread
+//! let port = exporter.serve().expect("failed to bind metrics server");
 //!
 //! let counter = ticker(Duration::from_secs(1)).count();
 //! let node = exporter.register("wingfoil_counter_total", counter.clone());

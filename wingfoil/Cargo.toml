@@ -19,9 +19,9 @@ instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-no
 instrument-all = ["instrument-default", "instrument-cycle-node"]
 iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
 iceoryx2-beta = ["dep:iceoryx2"]
-prometheus = ["async"]
+prometheus = []
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
-otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:reqwest", "async"]
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 
 [package]

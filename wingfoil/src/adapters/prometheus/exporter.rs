@@ -49,6 +49,7 @@ impl PrometheusExporter {
     ///
     /// `name` should follow Prometheus naming conventions, e.g.
     /// `wingfoil_counter_total`.
+    #[must_use = "register returns a Node that must be added to the graph or run directly"]
     pub fn register<T>(&self, name: impl Into<String>, stream: Rc<dyn Stream<T>>) -> Rc<dyn Node>
     where
         T: Element + std::fmt::Display,
