@@ -124,9 +124,43 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 
 Uses `produce_async`. Returns `Rc<dyn Stream<Burst<Event>>>`.
 
+**Flexible arguments via `impl Into<T>`:** for any parameter that callers might supply in
+multiple forms (a URL string, a config struct, a bare value), accept `impl Into<ConfigType>`
+and add `From` impls for each input shape. This keeps a single function signature while
+eliminating boilerplate at the call site:
+
+```rust
+// Instead of:   fn $ARGUMENTS_sub(conn: <Name>Connection, ...)
+// Prefer:        fn $ARGUMENTS_sub(conn: impl Into<<Name>Connection>, ...)
+//
+// Then add From impls on the config type so callers can pass a bare string,
+// a pre-built config, or whatever is natural:
+impl From<&str> for <Name>Connection { ... }
+impl From<String> for <Name>Connection { ... }
+```
+
+**Optional / mode-switching arguments:** if an argument is optional or selects between modes
+(e.g. no-op vs. discovery, no cache vs. cache config), model it as a wrapper type with `From`
+impls rather than `Option<T>` or multiple overloads:
+
+```rust
+pub struct <Name>SubConfig(pub(crate) <Name>SubMode);
+pub(crate) enum <Name>SubMode { Direct(String), Discover(String, Box<dyn <Name>Backend>) }
+
+impl From<&str>  for <Name>SubConfig { /* direct address */ }
+impl From<String> for <Name>SubConfig { /* direct address */ }
+impl<B: <Name>Backend + 'static> From<(&str, B)> for <Name>SubConfig { /* discovery */ }
+// same pattern applies for cache, auth, or any other optional config
+
+// Result: one signature, three call-site forms:
+$ARGUMENTS_sub("tcp://host:1234")              // direct string
+$ARGUMENTS_sub(config)                         // pre-built config
+$ARGUMENTS_sub(("service-name", my_backend))   // mode-switching
+```
+
 ```rust
 #[must_use]
-pub fn $ARGUMENTS_sub(conn: <Name>Connection, /* params */) -> Rc<dyn Stream<Burst<<Name>Event>>> {
+pub fn $ARGUMENTS_sub(conn: impl Into<<Name>Connection>, /* params */) -> Rc<dyn Stream<Burst<<Name>Event>>> {
     produce_async(move |_ctx: RunParams| async move {
         Ok(async_stream::stream! {
             // connect, snapshot, then live stream
@@ -146,6 +180,20 @@ If the service supports a **snapshot + watch** pattern (like etcd), use watch-be
 ## 8. Pub method — `write.rs` (consumer)
 
 Uses `consume_async`. Returns `Rc<dyn Node>`.
+
+Apply the same `impl Into<T>` and wrapper-type patterns from step 7. A common case is an
+optional registration or side-effect (e.g. register address in a registry, or skip it):
+
+```rust
+pub struct <Name>PubConfig(pub(crate) Option<(String, Box<dyn <Name>Backend>)>);
+
+impl From<()> for <Name>PubConfig { fn from(_: ()) -> Self { Self(None) } }
+impl<B: <Name>Backend + 'static> From<(&str, B)> for <Name>PubConfig { /* Some(...) */ }
+
+// Callers:
+stream.$ARGUMENTS_pub(port, ())                       // no registration
+stream.$ARGUMENTS_pub(port, ("service-name", backend)) // with registration
+```
 
 ```rust
 #[must_use]
