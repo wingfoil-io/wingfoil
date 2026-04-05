@@ -48,10 +48,8 @@ jobs:
         with:
           tool: sarif-fmt
 
-      - name: Install grcov
-        uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: grcov
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -62,10 +60,16 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Run tests
-        run: cargo nextest run --no-capture
+      - name: Run tests with coverage
+        run: cargo llvm-cov nextest --no-capture --lcov --output-path lcov.info
         env:
           RUST_LOG: INFO
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
           
       - name: Run rustfmt
         run: |
