@@ -4561,6 +4561,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "testcontainers",
+ "thiserror 2.0.18",
  "tinyvec",
  "tokio",
  "tracing",

@@ -81,6 +81,43 @@ impl<const N: usize> FixedBytes<N> {
     }
 }
 
+/// Errors that can occur in the iceoryx2 adapter.
+#[derive(Debug, thiserror::Error)]
+pub enum Iceoryx2Error {
+    #[error("Failed to create node: {0}")]
+    NodeCreationFailed(String),
+    #[error("Failed to create service: {0}")]
+    ServiceCreationFailed(String),
+    #[error("Failed to create port: {0}")]
+    PortCreationFailed(String),
+    #[error("Shared memory error: {0}")]
+    SharedMemoryError(String),
+    #[error("Data transmission error: {0}")]
+    TransmissionError(String),
+    #[error("Other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+pub type Iceoryx2Result<T> = Result<T, Iceoryx2Error>;
+
+impl From<iceoryx2::service::service_name::ServiceNameError> for Iceoryx2Error {
+    fn from(e: iceoryx2::service::service_name::ServiceNameError) -> Self {
+        Self::Other(anyhow::anyhow!(e.to_string()))
+    }
+}
+
+impl From<iceoryx2::waitset::WaitSetCreateError> for Iceoryx2Error {
+    fn from(e: iceoryx2::waitset::WaitSetCreateError) -> Self {
+        Self::Other(anyhow::anyhow!(e.to_string()))
+    }
+}
+
+impl From<iceoryx2::waitset::WaitSetRunError> for Iceoryx2Error {
+    fn from(e: iceoryx2::waitset::WaitSetRunError) -> Self {
+        Self::Other(anyhow::anyhow!(e.to_string()))
+    }
+}
+
 mod read;
 mod write;
 
@@ -252,17 +289,19 @@ mod tests {
         let sub = iceoryx2_sub_opts::<TestData>(&service_name, opts);
         let collected = sub.collapse().collect();
 
-        let upstream = ticker(Duration::from_millis(5)).produce(|| {
+        let upstream = ticker(Duration::from_millis(20)).produce(|| {
             let mut b: Burst<TestData> = Burst::default();
             b.push(TestData { value: 123 });
             b
         });
         let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
+        std::thread::sleep(Duration::from_millis(100));
+
         Graph::new(
             vec![pub_node, collected.clone().as_node()],
             RunMode::RealTime,
-            RunFor::Duration(Duration::from_millis(200)),
+            RunFor::Duration(Duration::from_secs(1)),
         )
         .run()
         .unwrap();

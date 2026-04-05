@@ -9,8 +9,9 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
+use iceoryx2::service::service_name::ServiceNameError;
 
-use super::Iceoryx2ServiceVariant;
+use super::{Iceoryx2Error, Iceoryx2ServiceVariant};
 
 /// Publish a `Burst<T>` stream to an iceoryx2 service.
 ///
@@ -127,14 +128,22 @@ where
         for data in burst {
             match publisher {
                 Iceoryx2PublisherPort::Ipc(publisher) => {
-                    let sample = publisher.loan_uninit()?;
+                    let sample = publisher
+                        .loan_uninit()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     let sample = sample.write_payload(data);
-                    sample.send()?;
+                    sample
+                        .send()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                 }
                 Iceoryx2PublisherPort::Local(publisher) => {
-                    let sample = publisher.loan_uninit()?;
+                    let sample = publisher
+                        .loan_uninit()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     let sample = sample.write_payload(data);
-                    sample.send()?;
+                    sample
+                        .send()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                 }
             }
             sent_any = true;
@@ -144,10 +153,14 @@ where
             if let Some(ref n) = self.notifier {
                 match n {
                     Iceoryx2NotifierPort::Ipc(notifier) => {
-                        notifier.notify()?;
+                        notifier
+                            .notify()
+                            .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     }
                     Iceoryx2NotifierPort::Local(notifier) => {
-                        notifier.notify()?;
+                        notifier
+                            .notify()
+                            .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     }
                 }
             }
@@ -165,40 +178,72 @@ where
 
         match self.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let node = NodeBuilder::new().create::<ipc::Service>()?;
+                let node = NodeBuilder::new()
+                    .create::<ipc::Service>()
+                    .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                 let service = node
-                    .service_builder(&self.service_name.as_str().try_into()?)
+                    .service_builder(&self.service_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .publish_subscribe::<T>()
                     .history_size(5)
-                    .open_or_create()?;
-                let publisher = service.publisher_builder().create()?;
-                publisher.update_connections()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let publisher = service
+                    .publisher_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+                publisher
+                    .update_connections()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.publisher = Some(Iceoryx2PublisherPort::Ipc(publisher));
 
                 // Always create notifier just in case subscriber uses Signaled mode
                 let event_service = node
-                    .service_builder(&signal_name.as_str().try_into()?)
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .event()
-                    .open_or_create()?;
-                let notifier = event_service.notifier_builder().create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let notifier = event_service
+                    .notifier_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let node = NodeBuilder::new().create::<local::Service>()?;
+                let node = NodeBuilder::new()
+                    .create::<local::Service>()
+                    .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                 let service = node
-                    .service_builder(&self.service_name.as_str().try_into()?)
+                    .service_builder(&self.service_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .publish_subscribe::<T>()
                     .history_size(5)
-                    .open_or_create()?;
-                let publisher = service.publisher_builder().create()?;
-                publisher.update_connections()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let publisher = service
+                    .publisher_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+                publisher
+                    .update_connections()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.publisher = Some(Iceoryx2PublisherPort::Local(publisher));
 
                 let event_service = node
-                    .service_builder(&signal_name.as_str().try_into()?)
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .event()
-                    .open_or_create()?;
-                let notifier = event_service.notifier_builder().create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let notifier = event_service
+                    .notifier_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.notifier = Some(Iceoryx2NotifierPort::Local(notifier));
             }
         }
@@ -254,14 +299,22 @@ impl MutableNode for Iceoryx2SlicePublisher {
         for data in burst {
             match publisher {
                 Iceoryx2SlicePublisherPort::Ipc(publisher) => {
-                    let sample = publisher.loan_slice_uninit(data.len())?;
+                    let sample = publisher
+                        .loan_slice_uninit(data.len())
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     let sample = sample.write_from_slice(&data);
-                    sample.send()?;
+                    sample
+                        .send()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                 }
                 Iceoryx2SlicePublisherPort::Local(publisher) => {
-                    let sample = publisher.loan_slice_uninit(data.len())?;
+                    let sample = publisher
+                        .loan_slice_uninit(data.len())
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     let sample = sample.write_from_slice(&data);
-                    sample.send()?;
+                    sample
+                        .send()
+                        .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                 }
             }
             sent_any = true;
@@ -271,10 +324,14 @@ impl MutableNode for Iceoryx2SlicePublisher {
             if let Some(ref n) = self.notifier {
                 match n {
                     Iceoryx2NotifierPort::Ipc(notifier) => {
-                        notifier.notify()?;
+                        notifier
+                            .notify()
+                            .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     }
                     Iceoryx2NotifierPort::Local(notifier) => {
-                        notifier.notify()?;
+                        notifier
+                            .notify()
+                            .map_err(|e| Iceoryx2Error::TransmissionError(e.to_string()))?;
                     }
                 }
             }
@@ -287,46 +344,76 @@ impl MutableNode for Iceoryx2SlicePublisher {
         let signal_name = format!("{}.signal", self.service_name);
         match self.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let node = NodeBuilder::new().create::<ipc::Service>()?;
+                let node = NodeBuilder::new()
+                    .create::<ipc::Service>()
+                    .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                 let service = node
-                    .service_builder(&self.service_name.as_str().try_into()?)
+                    .service_builder(&self.service_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .publish_subscribe::<[u8]>()
                     .history_size(5)
-                    .open_or_create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
                 let publisher = service
                     .publisher_builder()
                     .initial_max_slice_len(128 * 1024)
-                    .create()?;
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.publisher = Some(Iceoryx2SlicePublisherPort::Ipc(publisher));
 
                 let event_service = node
-                    .service_builder(&signal_name.as_str().try_into()?)
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .event()
-                    .open_or_create()?;
-                let notifier = event_service.notifier_builder().create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let notifier = event_service
+                    .notifier_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let node = NodeBuilder::new().create::<local::Service>()?;
+                let node = NodeBuilder::new()
+                    .create::<local::Service>()
+                    .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                 let service = node
-                    .service_builder(&self.service_name.as_str().try_into()?)
+                    .service_builder(&self.service_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .publish_subscribe::<[u8]>()
                     .history_size(5)
-                    .open_or_create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
                 let publisher = service
                     .publisher_builder()
                     .initial_max_slice_len(128 * 1024)
-                    .create()?;
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.publisher = Some(Iceoryx2SlicePublisherPort::Local(publisher));
 
                 let event_service = node
-                    .service_builder(&signal_name.as_str().try_into()?)
+                    .service_builder(&signal_name.as_str().try_into().map_err(
+                        |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+                    )?)
                     .event()
-                    .open_or_create()?;
-                let notifier = event_service.notifier_builder().create()?;
+                    .open_or_create()
+                    .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                let notifier = event_service
+                    .notifier_builder()
+                    .create()
+                    .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                 self.notifier = Some(Iceoryx2NotifierPort::Local(notifier));
             }
         }
+        Ok(())
+    }
+
+    fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        self.publisher = None;
+        self.notifier = None;
         Ok(())
     }
 

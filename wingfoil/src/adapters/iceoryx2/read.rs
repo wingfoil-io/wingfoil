@@ -13,7 +13,7 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
 
-use super::{Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SubOpts};
+use super::{Iceoryx2Error, Iceoryx2Mode, Iceoryx2Result, Iceoryx2ServiceVariant, Iceoryx2SubOpts};
 
 /// Subscribe to an iceoryx2 service and produce a stream of samples.
 ///
@@ -175,23 +175,39 @@ where
 
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let node = NodeBuilder::new().create::<ipc::Service>()?;
+                        let node = NodeBuilder::new()
+                            .create::<ipc::Service>()
+                            .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                         let service = node
                             .service_builder(&self.service_name.as_str().try_into()?)
                             .publish_subscribe::<T>()
-                            .open_or_create()?;
-                        let subscriber = service.subscriber_builder().create()?;
-                        subscriber.update_connections()?;
+                            .open_or_create()
+                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                        let subscriber = service
+                            .subscriber_builder()
+                            .create()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+                        subscriber
+                            .update_connections()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let node = NodeBuilder::new().create::<local::Service>()?;
+                        let node = NodeBuilder::new()
+                            .create::<local::Service>()
+                            .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                         let service = node
                             .service_builder(&self.service_name.as_str().try_into()?)
                             .publish_subscribe::<T>()
-                            .open_or_create()?;
-                        let subscriber = service.subscriber_builder().create()?;
-                        subscriber.update_connections()?;
+                            .open_or_create()
+                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                        let subscriber = service
+                            .subscriber_builder()
+                            .create()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+                        subscriber
+                            .update_connections()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SubscriberPort::Local(subscriber));
                     }
                 }
@@ -328,21 +344,33 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 state.always_callback();
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let node = NodeBuilder::new().create::<ipc::Service>()?;
+                        let node = NodeBuilder::new()
+                            .create::<ipc::Service>()
+                            .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                         let service = node
                             .service_builder(&self.service_name.as_str().try_into()?)
                             .publish_subscribe::<[u8]>()
-                            .open_or_create()?;
-                        let subscriber = service.subscriber_builder().create()?;
+                            .open_or_create()
+                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                        let subscriber = service
+                            .subscriber_builder()
+                            .create()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let node = NodeBuilder::new().create::<local::Service>()?;
+                        let node = NodeBuilder::new()
+                            .create::<local::Service>()
+                            .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
                         let service = node
                             .service_builder(&self.service_name.as_str().try_into()?)
                             .publish_subscribe::<[u8]>()
-                            .open_or_create()?;
-                        let subscriber = service.subscriber_builder().create()?;
+                            .open_or_create()
+                            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+                        let subscriber = service
+                            .subscriber_builder()
+                            .create()
+                            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Local(subscriber));
                     }
                 }
@@ -391,7 +419,7 @@ fn run_subscriber_thread<T>(
     channel_sender: ChannelSender<T>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()>
+) -> Iceoryx2Result<()>
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static,
 {
@@ -410,29 +438,43 @@ fn run_subscriber_thread_service_ipc<T>(
     channel_sender: ChannelSender<T>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()>
+) -> Iceoryx2Result<()>
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static,
 {
-    let node = NodeBuilder::new().create::<ipc::Service>()?;
+    let node = NodeBuilder::new()
+        .create::<ipc::Service>()
+        .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
 
     let service = node
         .service_builder(&service_name.as_str().try_into()?)
         .publish_subscribe::<T>()
-        .open_or_create()?;
+        .open_or_create()
+        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
 
-    let subscriber = service.subscriber_builder().create()?;
-    subscriber.update_connections()?;
+    let subscriber = service
+        .subscriber_builder()
+        .create()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+    subscriber
+        .update_connections()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
         let event_service = node
             .service_builder(&signal_name.as_str().try_into()?)
             .event()
-            .open_or_create()?;
-        let listener = event_service.listener_builder().create()?;
+            .open_or_create()
+            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let listener = event_service
+            .listener_builder()
+            .create()
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
         let ws = WaitSetBuilder::new().create::<ipc::Service>()?;
-        let _attachment = ws.attach_notification(&listener)?;
+        let _attachment = ws
+            .attach_notification(&listener)
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
             let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
@@ -470,29 +512,43 @@ fn run_subscriber_thread_service_local<T>(
     channel_sender: ChannelSender<T>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()>
+) -> Iceoryx2Result<()>
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static,
 {
-    let node = NodeBuilder::new().create::<local::Service>()?;
+    let node = NodeBuilder::new()
+        .create::<local::Service>()
+        .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
 
     let service = node
         .service_builder(&service_name.as_str().try_into()?)
         .publish_subscribe::<T>()
-        .open_or_create()?;
+        .open_or_create()
+        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
 
-    let subscriber = service.subscriber_builder().create()?;
-    subscriber.update_connections()?;
+    let subscriber = service
+        .subscriber_builder()
+        .create()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+    subscriber
+        .update_connections()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
         let event_service = node
             .service_builder(&signal_name.as_str().try_into()?)
             .event()
-            .open_or_create()?;
-        let listener = event_service.listener_builder().create()?;
+            .open_or_create()
+            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let listener = event_service
+            .listener_builder()
+            .create()
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
         let ws = WaitSetBuilder::new().create::<local::Service>()?;
-        let _attachment = ws.attach_notification(&listener)?;
+        let _attachment = ws
+            .attach_notification(&listener)
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
             let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
@@ -531,7 +587,7 @@ fn run_slice_subscriber_thread(
     channel_sender: ChannelSender<Vec<u8>>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
+) -> Iceoryx2Result<()> {
     match opts.variant {
         Iceoryx2ServiceVariant::Ipc => {
             run_slice_subscriber_thread_service_ipc(service_name, channel_sender, opts, running)
@@ -547,24 +603,38 @@ fn run_slice_subscriber_thread_service_ipc(
     channel_sender: ChannelSender<Vec<u8>>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    let node = NodeBuilder::new().create::<ipc::Service>()?;
+) -> Iceoryx2Result<()> {
+    let node = NodeBuilder::new()
+        .create::<ipc::Service>()
+        .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
     let service = node
         .service_builder(&service_name.as_str().try_into()?)
         .publish_subscribe::<[u8]>()
-        .open_or_create()?;
-    let subscriber = service.subscriber_builder().create()?;
-    subscriber.update_connections()?;
+        .open_or_create()
+        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+    let subscriber = service
+        .subscriber_builder()
+        .create()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+    subscriber
+        .update_connections()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
         let event_service = node
             .service_builder(&signal_name.as_str().try_into()?)
             .event()
-            .open_or_create()?;
-        let listener = event_service.listener_builder().create()?;
+            .open_or_create()
+            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let listener = event_service
+            .listener_builder()
+            .create()
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
         let ws = WaitSetBuilder::new().create::<ipc::Service>()?;
-        let _attachment = ws.attach_notification(&listener)?;
+        let _attachment = ws
+            .attach_notification(&listener)
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
             let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
@@ -598,24 +668,38 @@ fn run_slice_subscriber_thread_service_local(
     channel_sender: ChannelSender<Vec<u8>>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    let node = NodeBuilder::new().create::<local::Service>()?;
+) -> Iceoryx2Result<()> {
+    let node = NodeBuilder::new()
+        .create::<local::Service>()
+        .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
     let service = node
         .service_builder(&service_name.as_str().try_into()?)
         .publish_subscribe::<[u8]>()
-        .open_or_create()?;
-    let subscriber = service.subscriber_builder().create()?;
-    subscriber.update_connections()?;
+        .open_or_create()
+        .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+    let subscriber = service
+        .subscriber_builder()
+        .create()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+    subscriber
+        .update_connections()
+        .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
     if opts.mode == Iceoryx2Mode::Signaled {
         let signal_name = format!("{}.signal", service_name);
         let event_service = node
             .service_builder(&signal_name.as_str().try_into()?)
             .event()
-            .open_or_create()?;
-        let listener = event_service.listener_builder().create()?;
+            .open_or_create()
+            .map_err(|e| Iceoryx2Error::ServiceCreationFailed(e.to_string()))?;
+        let listener = event_service
+            .listener_builder()
+            .create()
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
         let ws = WaitSetBuilder::new().create::<local::Service>()?;
-        let _attachment = ws.attach_notification(&listener)?;
+        let _attachment = ws
+            .attach_notification(&listener)
+            .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
         while running.load(Ordering::SeqCst) {
             let _ = ws.wait_and_process_once(|_| CallbackProgression::Stop)?;
