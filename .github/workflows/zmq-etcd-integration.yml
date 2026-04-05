@@ -19,10 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2

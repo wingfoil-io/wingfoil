@@ -76,6 +76,12 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
 /// ```
 pub trait ZeroMqPub<T: Element + Send> {
     /// Bind on `127.0.0.1:port` and optionally register with a discovery backend.
+    ///
+    /// **Multi-host note:** `127.0.0.1` is a loopback address — it cannot be
+    /// reached by subscribers on other machines. When using a registry (e.g.
+    /// `EtcdRegistry`) in a multi-host deployment, use [`zmq_pub_on`](Self::zmq_pub_on)
+    /// with a routable bind address so the stored address is reachable by remote
+    /// subscribers.
     fn zmq_pub(&self, port: u16, registration: impl Into<ZmqPubRegistration>) -> Rc<dyn Node>;
     /// Bind on `address:port` and optionally register with a discovery backend.
     /// Use this in multi-host deployments where `127.0.0.1` is not reachable.

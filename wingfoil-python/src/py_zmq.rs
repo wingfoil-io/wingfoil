@@ -31,6 +31,8 @@ pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
 /// Subscribe to a named ZMQ publisher via etcd service discovery.
 ///
 /// Looks up `name` in etcd and connects to the publisher at the stored address.
+/// The lookup happens at call time — ensure the publisher is registered before
+/// calling this function.
 ///
 /// Args:
 ///     name: Publisher name / etcd key (e.g. "quotes")

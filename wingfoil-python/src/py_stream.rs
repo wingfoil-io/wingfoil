@@ -425,7 +425,8 @@ impl PyStream {
 
     /// Publish this stream of bytes and register as `name` in etcd.
     ///
-    /// Binds on `127.0.0.1`; use `zmq_pub_etcd_on` for multi-host deployments.
+    /// Binds on `127.0.0.1`; use `zmq_pub_etcd_on` for multi-host deployments
+    /// where `127.0.0.1` is not routable by subscribers on other hosts.
     ///
     /// Args:
     ///     name: Name / etcd key to register under (e.g. "quotes")

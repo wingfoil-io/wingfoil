@@ -18,7 +18,7 @@ etcd_sub = _ext.py_etcd_sub
 
 # User-friendly aliases for ZMQ functions
 zmq_sub = _ext.py_zmq_sub
-zmq_sub_etcd = _ext.py_zmq_sub_etcd
+zmq_sub_etcd = getattr(_ext, "py_zmq_sub_etcd", None)
 
 # User-friendly aliases for KDB+ functions
 kdb_read = _ext.py_kdb_read

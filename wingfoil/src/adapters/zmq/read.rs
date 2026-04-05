@@ -112,6 +112,11 @@ impl<T: Element + Send + DeserializeOwned> ZeroMqSubscriber<T> {
 /// let (data, status) = zmq_sub::<Vec<u8>>(("quotes", EtcdRegistry::new(conn)))?;
 /// ```
 ///
+/// **Note on discovery timing:** when a registry tuple is passed, the address
+/// lookup happens at call time (not at graph start). Ensure the publisher has
+/// already registered before calling `zmq_sub`; otherwise the call returns an
+/// error.
+///
 /// Returns a `(data, status)` pair:
 /// - `data` ticks with each burst of received messages
 /// - `status` ticks when the connection status changes (`Connected`/`Disconnected`)
