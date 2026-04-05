@@ -1,5 +1,5 @@
 #!/bin/sh
 set -e
 
-cargo build
-cargo test
+cargo build --workspace --exclude wingfoil-python
+cargo test --workspace --exclude wingfoil-python

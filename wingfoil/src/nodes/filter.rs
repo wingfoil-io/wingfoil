@@ -37,7 +37,7 @@ mod tests {
         // filter_value is the simpler API; filter (condition stream) is the underlying one.
         let filtered = ticker(Duration::from_nanos(100))
             .count()
-            .filter_value(|x| x % 2 == 0)
+            .filter_value(|x| x.is_multiple_of(2))
             .collect();
         filtered
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
@@ -62,7 +62,7 @@ mod tests {
     fn condition_stream_controls_emission() {
         // Source ticks every 100ns. Condition stream is true only on even counts.
         let source = ticker(Duration::from_nanos(100)).count();
-        let condition = source.map(|x: u64| x % 2 == 0);
+        let condition = source.map(|x: u64| x.is_multiple_of(2));
         let filtered = source.filter(condition).collect();
         filtered
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))

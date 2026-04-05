@@ -40,7 +40,7 @@ mod tests {
         // distinct should emit only when the value changes: 1, 2, 3
         let distinct = ticker(Duration::from_nanos(100))
             .count()
-            .map(|x: u64| (x + 1) / 2) // 1,1,2,2,3,3 for ticks 1..6
+            .map(|x: u64| x.div_ceil(2)) // 1,1,2,2,3,3 for ticks 1..6
             .distinct()
             .collect();
         distinct
