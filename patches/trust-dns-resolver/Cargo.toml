@@ -1,0 +1,9 @@
+[package]
+name = "trust-dns-resolver"
+version = "0.22.0"
+edition = "2021"
+description = "Compatibility shim: re-exports hickory-resolver (which uses idna >= 1.0.3)"
+license = "Apache-2.0"
+
+[dependencies]
+hickory-resolver = { version = "0.24", default-features = true }
