@@ -64,7 +64,7 @@ jobs:
           files: wingfoil-python/lcov-python.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
       - name: Upload Rust-from-Python coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -72,4 +72,4 @@ jobs:
           files: wingfoil-python/lcov-rust.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python-rust
-          fail_ci_if_error: false
+          fail_ci_if_error: true
