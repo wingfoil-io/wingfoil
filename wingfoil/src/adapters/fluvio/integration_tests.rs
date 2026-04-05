@@ -8,12 +8,10 @@
 //!
 //! # Container startup
 //!
-//! Tests spin up `infinyon/fluvio:0.18.1` via testcontainers. The container runs the
-//! Fluvio SC (System Controller) in local mode. After startup, topics are created via
-//! the `FluvioAdmin` API before each test that needs them.
-//!
-//! The SPU (Stream Processing Unit) must also be running for producer/consumer tests.
-//! In CI, a full local cluster is started inside the container.
+//! Tests spin up `infinyon/fluvio:0.18.1` via testcontainers using host networking.
+//! A shell script starts the SC then the SPU so topic creation and produce/consume
+//! work end-to-end. Host networking is required so the SPU's public endpoint
+//! (registered with the SC as `127.0.0.1:9010`) is reachable by the test process.
 
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators, constant};
@@ -29,22 +27,34 @@ const FLUVIO_SPU_PORT: u16 = 9010;
 const FLUVIO_IMAGE: &str = "infinyon/fluvio";
 const FLUVIO_TAG: &str = "0.18.1";
 
-/// Start a Fluvio SC container in local mode.
-/// The returned container guard must be held for the duration of the test.
+/// Start a full Fluvio local cluster (SC + SPU) using host networking.
 ///
-/// **Note:** This starts the SC process only. A full local cluster (SC + SPU) is
-/// needed for producer/consumer tests. If tests fail due to SPU not being registered,
-/// consider using a pre-started Fluvio cluster and connecting with a fixed endpoint.
+/// Host networking is required so the SPU's public address (`127.0.0.1:9010`),
+/// which the SC hands to clients, is reachable from the test process outside
+/// the container.  The SC starts first; the SPU waits 5 s then registers with it.
 fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
+    let startup_cmd = format!(
+        "/fluvio-run sc --local /tmp/fluvio & \
+         sleep 5 && \
+         /fluvio-run spu \
+           --id 5001 \
+           --public-server 0.0.0.0:{FLUVIO_SPU_PORT} \
+           --private-server 0.0.0.0:{FLUVIO_SPU_PORT} \
+           --sc-addr 127.0.0.1:{FLUVIO_SC_PORT} \
+           --log-base-dir /tmp/fluvio"
+    );
+
     let container = GenericImage::new(FLUVIO_IMAGE, FLUVIO_TAG)
-        // Wait for the SC to log that it's serving
-        .with_wait_for(WaitFor::millis(8_000))
-        .with_exposed_port(FLUVIO_SC_PORT.into())
-        .with_exposed_port(FLUVIO_SPU_PORT.into())
-        .with_cmd(vec!["/fluvio-run", "sc", "--local", "/tmp/fluvio"])
+        // Wait long enough for SC + SPU to start and the SPU to register.
+        .with_wait_for(WaitFor::millis(15_000))
+        .with_cmd(vec!["/bin/sh", "-c", &startup_cmd])
+        .with_host_config_modifier(|hc| {
+            hc.network_mode = Some("host".to_string());
+        })
         .start()?;
-    let port = container.get_host_port_ipv4(FLUVIO_SC_PORT)?;
-    let endpoint = format!("127.0.0.1:{port}");
+
+    // With host networking the SC is reachable directly on the host port.
+    let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
     Ok((container, endpoint))
 }
 
