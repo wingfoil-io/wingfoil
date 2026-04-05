@@ -24,9 +24,13 @@ jobs:
         with:
           toolchain: stable
           override: true
+          components: llvm-tools-preview
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install system dependencies
         run: sudo apt-get install -y protobuf-compiler
@@ -39,14 +43,33 @@ jobs:
       - name: Create virtualenv and install dependencies
         run: |
           python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq
+          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov
 
-      - name: Build and install Python bindings
+      - name: Build and test Python bindings with Rust coverage
         run: |
+          source <(cargo llvm-cov show-env --export-prefix)
           cd wingfoil-python
           .venv/bin/maturin develop
+          .venv/bin/pytest tests/ \
+            --cov=wingfoil \
+            --cov-report=lcov:lcov-python.info
+          cd ..
+          cargo llvm-cov report -p wingfoil -p wingfoil-python \
+            --lcov \
+            --output-path wingfoil-python/lcov-rust.info
 
-      - name: Run pytest
-        run: |
-          cd wingfoil-python
-          .venv/bin/pytest tests/
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: wingfoil-python/lcov-python.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python
+          fail_ci_if_error: true
+
+      - name: Upload Rust-from-Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: wingfoil-python/lcov-rust.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python-rust
+          fail_ci_if_error: true
