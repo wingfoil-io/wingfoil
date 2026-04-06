@@ -241,4 +241,57 @@ mod tests {
         let raw: u64 = 999_888_777;
         assert_eq!(u64::from(NanoTime::from(raw)), raw);
     }
+
+    #[test]
+    fn from_u128_truncates_to_u64() {
+        let raw: u128 = 1_234_567_890;
+        let t = NanoTime::from(raw);
+        assert_eq!(u64::from(t), raw as u64);
+    }
+
+    #[test]
+    fn from_f64_truncates() {
+        let f: f64 = 1_000_000_000.0;
+        let t = NanoTime::from(f);
+        assert_eq!(u64::from(t), 1_000_000_000u64);
+    }
+
+    #[test]
+    fn from_i64_converts() {
+        let i: i64 = 500_000_000;
+        let t = NanoTime::from(i);
+        assert_eq!(u64::from(t), 500_000_000u64);
+    }
+
+    #[test]
+    fn from_naive_datetime_roundtrips() {
+        use chrono::naive::NaiveDateTime;
+        let t = NanoTime::new(1_600_000_000_000_000_000);
+        let dt: NaiveDateTime = t.into();
+        let t2 = NanoTime::from(dt);
+        // NaiveDateTime has nanosecond precision so roundtrip is exact
+        assert_eq!(t, t2);
+    }
+
+    #[test]
+    fn into_f64_converts() {
+        let t = NanoTime::new(42);
+        let f: f64 = t.into();
+        assert_eq!(f, 42.0_f64);
+    }
+
+    #[test]
+    fn mul_i32_and_i64() {
+        let t = NanoTime::new(100);
+        assert_eq!(t * 3i32, NanoTime::new(300));
+        assert_eq!(t * 5i64, NanoTime::new(500));
+    }
+
+    #[test]
+    fn pretty_returns_formatted_string() {
+        let t = NanoTime::new(1_500_000_000);
+        let s = t.pretty();
+        // 1_500_000_000 ns * 1e-9 = 1.5 seconds
+        assert!(s.contains("1.500"), "expected 1.500 in '{s}'");
+    }
 }

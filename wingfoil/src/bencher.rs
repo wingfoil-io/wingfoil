@@ -145,6 +145,75 @@ impl MutableNode for BenchTriggerNode {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::*;
+    use crate::types::NanoTime;
+
+    // ── Signal conversions ────────────────────────────────────────────────
+
+    #[test]
+    fn signal_from_u8_all_variants() {
+        assert_eq!(Signal::from(1u8), Signal::Ready);
+        assert_eq!(Signal::from(2u8), Signal::Begin);
+        assert_eq!(Signal::from(3u8), Signal::Running);
+        assert_eq!(Signal::from(4u8), Signal::End);
+        assert_eq!(Signal::from(5u8), Signal::Kill);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid Instruction value")]
+    fn signal_from_u8_invalid_panics() {
+        let _ = Signal::from(99u8);
+    }
+
+    #[test]
+    fn signal_into_u8_roundtrips() {
+        for (sig, expected) in [
+            (Signal::Ready, 1u8),
+            (Signal::Begin, 2u8),
+            (Signal::Running, 3u8),
+            (Signal::End, 4u8),
+            (Signal::Kill, 5u8),
+        ] {
+            let back: u8 = sig.into();
+            assert_eq!(back, expected);
+            assert_eq!(Signal::from(back), sig);
+        }
+    }
+
+    // ── BenchTriggerNode::cycle branches ────────────────────────────────
+
+    #[test]
+    fn bench_trigger_cycle_ready_returns_false() {
+        let signal = Arc::new(AtomicU8::new(Signal::Ready.into()));
+        let node = BenchTriggerNode::new(signal.clone()).into_node();
+        node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        // Signal::Ready → cycle returns Ok(false), so graph never ticks downstream
+        assert_eq!(signal.load(Ordering::SeqCst), u8::from(Signal::Ready));
+    }
+
+    #[test]
+    fn bench_trigger_cycle_begin_transitions_to_running() {
+        let signal = Arc::new(AtomicU8::new(Signal::Begin.into()));
+        let node = BenchTriggerNode::new(signal.clone()).into_node();
+        node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        // Signal::Begin → cycle stores Running and returns Ok(true)
+        assert_eq!(signal.load(Ordering::SeqCst), u8::from(Signal::Running));
+    }
+
+    #[test]
+    fn bench_trigger_cycle_kill_returns_error() {
+        let signal = Arc::new(AtomicU8::new(Signal::Kill.into()));
+        let node = BenchTriggerNode::new(signal.clone()).into_node();
+        let result = node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1));
+        assert!(result.is_err());
+    }
+}
+
 // #[derive(new)]
 // struct BenchTriggerNode {
 //     signal: Arc<AtomicU8>

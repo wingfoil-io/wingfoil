@@ -1005,6 +1005,68 @@ mod tests {
 
     use itertools::Itertools;
 
+    // ── RunFor::done ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn run_for_cycles_done_when_exceeded() {
+        let rf = RunFor::Cycles(3);
+        assert!(!rf.done(3, NanoTime::ZERO)); // cycle == limit → not done
+        assert!(rf.done(4, NanoTime::ZERO)); // cycle > limit → done
+    }
+
+    #[test]
+    fn run_for_duration_done_when_elapsed_exceeds() {
+        use std::time::Duration;
+        let rf = RunFor::Duration(Duration::from_nanos(100));
+        assert!(!rf.done(0, NanoTime::new(100))); // equal → not done
+        assert!(rf.done(0, NanoTime::new(101))); // exceeded → done
+    }
+
+    #[test]
+    fn run_for_forever_never_done() {
+        let rf = RunFor::Forever;
+        assert!(!rf.done(u32::MAX, NanoTime::MAX));
+    }
+
+    // ── average_duration ─────────────────────────────────────────────────────
+
+    #[test]
+    fn average_duration_normal() {
+        // function is private — exercise it indirectly via the graph cycle timing
+        // by running a trivial graph and checking it doesn't panic.
+        let src = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        src.borrow_mut().push(ValueAt::new(1u64, NanoTime::new(10)));
+        src.clone()
+            .as_stream()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        // If average_duration panicked we wouldn't reach here.
+        // Also cover the n=0 branch by running a graph that completes normally.
+        let result = Graph::new(
+            vec![Rc::new(RefCell::new(CallBackStream::<u64>::new())).as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+        )
+        .run();
+        assert!(result.is_ok());
+    }
+
+    // ── Graph::export ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn graph_export_writes_gml_file() {
+        use std::fs;
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let mapped = src.map(|v| v + 1);
+        let graph = mapped.into_graph(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(0));
+        let path = "/tmp/wingfoil_test_export.gml";
+        graph.export(path).unwrap();
+        let content = fs::read_to_string(path).unwrap();
+        assert!(content.contains("graph ["));
+        assert!(content.contains("node ["));
+        fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn historical_mode_works() {
         // wire up graph..

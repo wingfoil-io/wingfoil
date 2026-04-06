@@ -856,3 +856,118 @@ where
         (a, b)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::ValueAt;
+    use std::cell::RefCell;
+
+    /// Helper: create a single-tick CallBackStream source.
+    fn make_source(value: u64, time: u64) -> Rc<dyn Stream<u64>> {
+        let src = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        src.borrow_mut()
+            .push(ValueAt::new(value, NanoTime::new(time)));
+        src.clone().as_stream()
+    }
+
+    // ── NodeOperators on dyn Node ────────────────────────────────────────────
+
+    #[test]
+    fn node_count_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let cnt = node.count();
+        cnt.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(cnt.peek_value(), 1);
+    }
+
+    #[test]
+    fn node_ticked_at_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let ta = node.ticked_at();
+        ta.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(ta.peek_value(), NanoTime::new(100));
+    }
+
+    #[test]
+    fn node_ticked_at_elapsed_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let te = node.ticked_at_elapsed();
+        te.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        // elapsed is time - start, start is ZERO, so elapsed == tick time
+        assert_eq!(te.peek_value(), NanoTime::new(100));
+    }
+
+    #[test]
+    fn node_produce_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let prod = node.produce(|| 99u64);
+        prod.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(prod.peek_value(), 99u64);
+    }
+
+    #[test]
+    fn node_into_graph_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let result = node
+            .into_graph(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .run();
+        assert!(result.is_ok());
+    }
+
+    // ── NodeOperators on dyn Stream<T> ──────────────────────────────────────
+
+    #[test]
+    fn stream_count_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let cnt = src.count();
+        cnt.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(cnt.peek_value(), 1);
+    }
+
+    #[test]
+    fn stream_ticked_at_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let ta = src.ticked_at();
+        ta.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(ta.peek_value(), NanoTime::new(50));
+    }
+
+    #[test]
+    fn stream_ticked_at_elapsed_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let te = src.ticked_at_elapsed();
+        te.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(te.peek_value(), NanoTime::new(50));
+    }
+
+    #[test]
+    fn stream_produce_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let prod = src.produce(|| 55u64);
+        prod.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(prod.peek_value(), 55u64);
+    }
+
+    #[test]
+    fn stream_into_graph_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let result = src
+            .into_graph(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .run();
+        assert!(result.is_ok());
+    }
+}
