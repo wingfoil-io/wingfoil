@@ -856,3 +856,192 @@ where
         (a, b)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::ValueAt;
+    use std::cell::RefCell;
+
+    /// Helper: create a single-tick CallBackStream source.
+    fn make_source(value: u64, time: u64) -> Rc<dyn Stream<u64>> {
+        let src = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        src.borrow_mut()
+            .push(ValueAt::new(value, NanoTime::new(time)));
+        src.clone().as_stream()
+    }
+
+    // ── NodeOperators on dyn Node ────────────────────────────────────────────
+
+    #[test]
+    fn node_count_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let cnt = node.count();
+        cnt.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(cnt.peek_value(), 1);
+    }
+
+    #[test]
+    fn node_ticked_at_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let ta = node.ticked_at();
+        ta.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(ta.peek_value(), NanoTime::new(100));
+    }
+
+    #[test]
+    fn node_ticked_at_elapsed_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let te = node.ticked_at_elapsed();
+        te.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        // elapsed is time - start, start is ZERO, so elapsed == tick time
+        assert_eq!(te.peek_value(), NanoTime::new(100));
+    }
+
+    #[test]
+    fn node_produce_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let prod = node.produce(|| 99u64);
+        prod.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(prod.peek_value(), 99u64);
+    }
+
+    #[test]
+    fn node_into_graph_via_dyn_node() {
+        let src: Rc<dyn Stream<u64>> = make_source(42, 100);
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let result = node
+            .into_graph(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .run();
+        assert!(result.is_ok());
+    }
+
+    // ── NodeOperators on dyn Stream<T> ──────────────────────────────────────
+
+    #[test]
+    fn stream_count_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let cnt = src.count();
+        cnt.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(cnt.peek_value(), 1);
+    }
+
+    #[test]
+    fn stream_ticked_at_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let ta = src.ticked_at();
+        ta.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(ta.peek_value(), NanoTime::new(50));
+    }
+
+    #[test]
+    fn stream_ticked_at_elapsed_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let te = src.ticked_at_elapsed();
+        te.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(te.peek_value(), NanoTime::new(50));
+    }
+
+    #[test]
+    fn stream_produce_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let prod = src.produce(|| 55u64);
+        prod.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(prod.peek_value(), 55u64);
+    }
+
+    #[test]
+    fn stream_into_graph_via_dyn_stream() {
+        let src: Rc<dyn Stream<u64>> = make_source(7, 50);
+        let result = src
+            .into_graph(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .run();
+        assert!(result.is_ok());
+    }
+
+    // ── StreamOperators ──────────────────────────────────────────────────────
+
+    #[test]
+    fn demux_it_routes_items_from_iterable_stream() {
+        let cb = Rc::new(RefCell::new(CallBackStream::<Vec<u64>>::new()));
+        cb.borrow_mut()
+            .push(ValueAt::new(vec![1u64, 2, 3, 4], NanoTime::new(10)));
+        let src: Rc<dyn Stream<Vec<u64>>> = cb.clone().as_stream();
+        // Route even vs odd values to two buckets
+        let (streams, overflow) = src.demux_it::<u64, _, u64>(2, |v| (*v % 2, DemuxEvent::None));
+        let collected: Vec<_> = streams.iter().map(|s| s.collect()).collect();
+        let overflow_node = overflow.stream().for_each(|_, _| {});
+        let mut nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
+        nodes.push(overflow_node);
+        Graph::new(
+            nodes,
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Forever,
+        )
+        .run()
+        .unwrap();
+    }
+
+    #[test]
+    fn not_inverts_bool_stream() {
+        let cb = Rc::new(RefCell::new(CallBackStream::<bool>::new()));
+        cb.borrow_mut().push(ValueAt::new(true, NanoTime::new(10)));
+        let src: Rc<dyn Stream<bool>> = cb.clone().as_stream();
+        let inverted = src.not();
+        inverted
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert!(!inverted.peek_value()); // not(true) == false
+    }
+
+    #[test]
+    fn collapse_skips_empty_iterator() {
+        // emit a vec: first tick has items, second has nothing → collapse filters second
+        let cb = Rc::new(RefCell::new(CallBackStream::<Vec<u64>>::new()));
+        cb.borrow_mut()
+            .push(ValueAt::new(vec![1u64, 2], NanoTime::new(10)));
+        cb.borrow_mut()
+            .push(ValueAt::new(vec![], NanoTime::new(20))); // empty → collapse skips
+        let collapsed = cb.clone().as_stream().collapse::<u64>();
+        let collected = collapsed.collect();
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let ticks = collected.peek_value();
+        // only the non-empty vec produces a tick
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].value, 2u64); // last() of [1,2]
+    }
+
+    #[test]
+    fn split_decomposes_tuple_stream() {
+        let cb = Rc::new(RefCell::new(CallBackStream::<(u64, u64)>::new()));
+        cb.borrow_mut()
+            .push(ValueAt::new((10u64, 20u64), NanoTime::new(5)));
+        let stream: Rc<dyn Stream<(u64, u64)>> = cb.clone().as_stream();
+        let (a, b) = stream.split();
+        let ca = a.collect();
+        let cb2 = b.collect();
+        Graph::new(
+            vec![ca.clone().as_node(), cb2.clone().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Forever,
+        )
+        .run()
+        .unwrap();
+        assert_eq!(ca.peek_value()[0].value, 10u64);
+        assert_eq!(cb2.peek_value()[0].value, 20u64);
+    }
+}

@@ -86,3 +86,123 @@ impl<T: Element + Send> Message<T> {
 pub trait ReceiverMessageSource<T: Element + Send> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::time::NanoTime;
+
+    #[test]
+    fn checkpoint_eq() {
+        let t = NanoTime::new(42);
+        assert_eq!(Message::<u64>::CheckPoint(t), Message::CheckPoint(t));
+        assert_ne!(
+            Message::<u64>::CheckPoint(t),
+            Message::CheckPoint(NanoTime::new(99))
+        );
+    }
+
+    #[test]
+    fn end_of_stream_eq() {
+        assert_eq!(Message::<u64>::EndOfStream, Message::EndOfStream);
+    }
+
+    #[test]
+    fn historical_value_eq() {
+        let v1 = ValueAt::new(1u64, NanoTime::new(10));
+        let v2 = ValueAt::new(1u64, NanoTime::new(10));
+        let v3 = ValueAt::new(2u64, NanoTime::new(10));
+        assert_eq!(
+            Message::HistoricalValue(v1.clone()),
+            Message::HistoricalValue(v2)
+        );
+        assert_ne!(Message::HistoricalValue(v1), Message::HistoricalValue(v3));
+    }
+
+    #[test]
+    fn realtime_value_eq() {
+        assert_eq!(Message::RealtimeValue(7u64), Message::RealtimeValue(7));
+        assert_ne!(Message::RealtimeValue(7u64), Message::RealtimeValue(8));
+    }
+
+    #[test]
+    fn historical_batch_eq() {
+        let b1: Box<[ValueAt<u64>]> = vec![ValueAt::new(1, NanoTime::new(1))].into_boxed_slice();
+        let b2: Box<[ValueAt<u64>]> = vec![ValueAt::new(1, NanoTime::new(1))].into_boxed_slice();
+        assert_eq!(Message::HistoricalBatch(b1), Message::HistoricalBatch(b2));
+    }
+
+    #[test]
+    fn error_never_equals_itself() {
+        let e1 = Message::<u64>::Error(std::sync::Arc::new(anyhow::anyhow!("boom")));
+        let e2 = Message::<u64>::Error(std::sync::Arc::new(anyhow::anyhow!("boom")));
+        assert_ne!(e1, e2);
+    }
+
+    #[test]
+    fn mismatching_variants_not_equal() {
+        assert_ne!(
+            Message::<u64>::EndOfStream,
+            Message::CheckPoint(NanoTime::new(0))
+        );
+    }
+
+    #[test]
+    fn serde_roundtrip_checkpoint() {
+        let msg = Message::<u64>::CheckPoint(NanoTime::new(123));
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_end_of_stream() {
+        let msg = Message::<u64>::EndOfStream;
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_historical_value() {
+        let msg = Message::HistoricalValue(ValueAt::new(42u64, NanoTime::new(5)));
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_realtime_value() {
+        let msg = Message::RealtimeValue(99u64);
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_historical_batch() {
+        let batch: Box<[ValueAt<u64>]> = vec![
+            ValueAt::new(1, NanoTime::new(1)),
+            ValueAt::new(2, NanoTime::new(2)),
+        ]
+        .into_boxed_slice();
+        let msg = Message::HistoricalBatch(batch);
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_error_variant() {
+        use std::sync::Arc;
+        let err_msg = "something went wrong";
+        let msg: Message<u64> = Message::Error(Arc::new(anyhow::anyhow!(err_msg)));
+        let json = serde_json::to_string(&msg).unwrap();
+        // Error deserializes back to an Error variant with the original message
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(decoded, Message::Error(_)));
+        if let Message::Error(e) = decoded {
+            assert!(e.to_string().contains(err_msg));
+        }
+    }
+}

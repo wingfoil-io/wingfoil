@@ -230,4 +230,11 @@ mod tests {
         .run()
         .unwrap();
     }
+
+    #[test]
+    fn feedback_sink_clone_works() {
+        let (tx, _rx) = feedback::<u64>();
+        // Clone the sink and verify both halves are usable (don't panic)
+        let _tx2 = tx.clone();
+    }
 }

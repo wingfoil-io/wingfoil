@@ -55,6 +55,105 @@ impl<T: Element + Send> ChannelReceiver<T> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{GraphState, RunFor, RunMode};
+    use crate::time::NanoTime;
+
+    fn historical_state() -> GraphState {
+        GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+            NanoTime::ZERO,
+        )
+    }
+
+    fn realtime_state() -> GraphState {
+        GraphState::new(RunMode::RealTime, RunFor::Cycles(1), NanoTime::ZERO)
+    }
+
+    #[test]
+    fn channel_pair_creates_working_channel() {
+        let (tx, rx) = channel_pair::<u64>(None);
+        tx.send_message(Message::RealtimeValue(42)).unwrap();
+        assert_eq!(rx.try_recv(), Some(Message::RealtimeValue(42)));
+    }
+
+    #[test]
+    fn try_recv_returns_none_on_empty() {
+        let (_tx, rx) = channel_pair::<u64>(None);
+        assert_eq!(rx.try_recv(), None);
+    }
+
+    #[test]
+    fn try_recv_returns_end_of_stream_when_closed() {
+        let (tx, rx) = channel_pair::<u64>(None);
+        drop(tx);
+        assert_eq!(rx.try_recv(), Some(Message::EndOfStream));
+    }
+
+    #[test]
+    fn recv_returns_end_of_stream_when_sender_dropped() {
+        let (tx, rx) = channel_pair::<u64>(None);
+        drop(tx);
+        assert_eq!(rx.recv(), Message::EndOfStream);
+    }
+
+    #[test]
+    fn send_in_historical_mode_wraps_as_historical_value() {
+        let state = historical_state();
+        let (tx, rx) = channel_pair::<u64>(None);
+        tx.send(&state, 10).unwrap();
+        let msg = rx.try_recv().unwrap();
+        assert!(matches!(msg, Message::HistoricalValue(_)));
+    }
+
+    #[test]
+    fn send_in_realtime_mode_wraps_as_realtime_value() {
+        let state = realtime_state();
+        let (tx, rx) = channel_pair::<u64>(None);
+        tx.send(&state, 10).unwrap();
+        let msg = rx.try_recv().unwrap();
+        assert_eq!(msg, Message::RealtimeValue(10));
+    }
+
+    #[test]
+    fn send_checkpoint() {
+        let state = historical_state();
+        let (tx, rx) = channel_pair::<u64>(None);
+        tx.send_checkpoint(&state).unwrap();
+        let msg = rx.try_recv().unwrap();
+        assert!(matches!(msg, Message::CheckPoint(_)));
+    }
+
+    #[test]
+    fn send_historical_batch() {
+        let (tx, rx) = channel_pair::<u64>(None);
+        let batch = vec![ValueAt::new(1, NanoTime::new(1))];
+        tx.send_historical_batch(batch).unwrap();
+        let msg = rx.try_recv().unwrap();
+        assert!(matches!(msg, Message::HistoricalBatch(_)));
+    }
+
+    #[test]
+    fn close_sends_end_of_stream_and_idempotent() {
+        let (mut tx, rx) = channel_pair::<u64>(None);
+        tx.close().unwrap();
+        assert_eq!(rx.try_recv(), Some(Message::EndOfStream));
+        // second close is a no-op
+        tx.close().unwrap();
+    }
+
+    #[test]
+    fn send_after_close_returns_error() {
+        let (mut tx, _rx) = channel_pair::<u64>(None);
+        tx.close().unwrap();
+        let state = realtime_state();
+        assert!(tx.send(&state, 1).is_err());
+    }
+}
+
 #[cfg(feature = "async")]
 impl<T: Element + Send> ReceiverMessageSource<T> for ChannelReceiver<T> {
     fn to_boxed_message_stream(self) -> Pin<Box<dyn futures::Stream<Item = Message<T>> + Send>> {

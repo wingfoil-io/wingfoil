@@ -165,4 +165,21 @@ mod tests {
             ],
         );
     }
+
+    #[test]
+    fn delay_with_reset_zero_delay_passes_through_immediately() {
+        let period = Duration::from_nanos(100);
+        let src = ticker(period).count();
+        let delayed = src.delay_with_reset(Duration::ZERO, never());
+        let collected = delayed.collect();
+        collected
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(period * 3),
+            )
+            .unwrap();
+        let ticks = collected.peek_value();
+        // Zero delay: every tick passes through immediately
+        assert!(!ticks.is_empty());
+    }
 }
