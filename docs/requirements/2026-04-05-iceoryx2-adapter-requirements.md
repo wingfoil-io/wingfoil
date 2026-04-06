@@ -143,6 +143,8 @@ Optional / feature-gated:
   - no durability/persistence guarantees (in-memory only)
   - Linux-first shared memory constraints
   - service contract coupling across languages/processes
+- Development ergonomics:
+  - A normal `git push` should be able to run pre-push hooks reliably (avoid persistent flakes in unrelated test suites).
 
 Tracking:
 - PR review closure work (CI + reviewer blockers) is tracked in `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`.

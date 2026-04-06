@@ -203,3 +203,7 @@ Test authoring note:
 - `StreamOperators::collapse()` keeps only the last item of a burst. Use it only when you want
   “latest value” semantics per tick; do not use it in history tests where you need to assert on
   all samples delivered.
+
+Developer workflow note:
+- Repo pre-push hooks may run a full `cargo test`. If your iceoryx2 work is unrelated to other
+  adapters, prefer fixing upstream test flakiness rather than routinely using `git push --no-verify`.

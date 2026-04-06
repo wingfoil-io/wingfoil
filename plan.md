@@ -23,6 +23,15 @@ User request: “research and explore this branch for iceoryx2, update requireme
 - [x] Run ignored IPC tests locally (env-dependent): `cargo test -p wingfoil --features iceoryx2-beta,iceoryx2-integration-test -- --ignored` (PASS 2026-04-06)
 - [x] Capture branch readiness review snapshot: `docs/design/2026-04-06-iceoryx2-v2-readiness-review.md`
 
+### Push Hook Reliability (Follow-Up)
+
+Observed (2026-04-06):
+- Local pre-push hook runs `cargo build` + `cargo test` and can block `git push` if unrelated tests are flaky.
+- A known offender was `adapters::zmq::tests::zmq_separate_threads` failing intermittently.
+
+Action:
+- Stabilize the ZMQ test to restore reliable `git push` without requiring `--no-verify`.
+
 ## Completed Work
 
 ### Implementation
