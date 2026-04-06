@@ -187,7 +187,7 @@ where
 
         self.cycles += 1;
         // Periodically update connections to handle late subscribers
-        if self.cycles % 10 == 0 {
+        if self.cycles.is_multiple_of(10) {
             match publisher {
                 Iceoryx2PublisherPort::Ipc(p) => p.update_connections()?,
                 Iceoryx2PublisherPort::Local(p) => p.update_connections()?,
@@ -436,7 +436,7 @@ impl MutableNode for Iceoryx2SlicePublisher {
         self.cycles += 1;
         // Periodically update connections to handle late subscribers.
         // Slice pub/sub is often used by short-lived publishers (e.g., Python tests).
-        if self.cycles % 10 == 0 {
+        if self.cycles.is_multiple_of(10) {
             match publisher {
                 Iceoryx2SlicePublisherPort::Ipc(p) => p.update_connections()?,
                 Iceoryx2SlicePublisherPort::Local(p) => p.update_connections()?,

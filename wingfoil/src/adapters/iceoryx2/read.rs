@@ -170,7 +170,7 @@ where
                 };
 
                 // Periodically update connections
-                if self.cycles % 10 == 0 {
+                if self.cycles.is_multiple_of(10) {
                     match subscriber {
                         Iceoryx2SubscriberPort::Ipc(s) => {
                             let _ = s.update_connections();
@@ -391,7 +391,7 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 };
 
                 // Periodically update connections
-                if self.cycles % 10 == 0 {
+                if self.cycles.is_multiple_of(10) {
                     match subscriber {
                         Iceoryx2SliceSubscriberPort::Ipc(s) => {
                             let _ = s.update_connections();
@@ -681,7 +681,7 @@ where
         let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
             loop_cycles += 1;
-            if loop_cycles % 100 == 0 {
+            if loop_cycles.is_multiple_of(100) {
                 let _ = subscriber.update_connections();
             }
 
@@ -809,7 +809,7 @@ where
         let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
             loop_cycles += 1;
-            if loop_cycles % 100 == 0 {
+            if loop_cycles.is_multiple_of(100) {
                 let _ = subscriber.update_connections();
             }
 
@@ -948,7 +948,7 @@ fn run_slice_subscriber_thread_service_ipc(
         let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
             loop_cycles += 1;
-            if loop_cycles % 100 == 0 {
+            if loop_cycles.is_multiple_of(100) {
                 let _ = subscriber.update_connections();
             }
 
@@ -1068,7 +1068,7 @@ fn run_slice_subscriber_thread_service_local(
         let mut loop_cycles = 0u64;
         while running.load(Ordering::SeqCst) {
             loop_cycles += 1;
-            if loop_cycles % 100 == 0 {
+            if loop_cycles.is_multiple_of(100) {
                 let _ = subscriber.update_connections();
             }
 
