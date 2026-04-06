@@ -1,6 +1,27 @@
 # iceoryx2 Adapter Implementation Plan
 
-## Current Status: IN REVIEW (PR #176) — 2026-04-05
+## Current Status: IN REVIEW (PR #176) — 2026-04-06
+
+## 2026-04-06 Readiness Refresh (Branch Audit)
+
+User request: “research and explore this branch for iceoryx2, update requirements/spec/design docs, track with plan.md, and audit/review readiness.”
+
+### Documentation Sync
+
+- [x] Refresh requirements metadata and acceptance notes (`docs/requirements/2026-04-05-iceoryx2-adapter-requirements.md`)
+- [x] Refresh design metadata and error classification notes (`docs/design/2026-04-05-iceoryx2-adapter-design.md`)
+- [x] Add beta stability notes to `SPEC.md`
+
+### Readiness Checklist (Run Again Before Landing)
+
+- [x] Re-run Rust tests (default): `cargo test -p wingfoil --features iceoryx2-beta` (PASS 2026-04-06)
+- [x] Re-run clippy (workspace): `cargo clippy --workspace --all-targets --all-features` (PASS 2026-04-06)
+- [x] Sanity-check Python build (if available in the environment): `cargo test -p wingfoil-python --features iceoryx2-beta` (PASS 2026-04-06)
+- [x] Sanity-check Python pytest (optional / env-dependent): `cd wingfoil-python && uv run pytest -q` (PASS 2026-04-06; 17 passed, 10 skipped)
+- [x] Confirm CI status on PR #176 (GitHub Actions runs are `action_required` and did not execute as of 2026-04-06)
+  - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` shows latest run IDs: 24021889959 (CI), 24021889945 (iceoryx2 Integration Tests)
+- [x] Run ignored IPC tests locally (env-dependent): `cargo test -p wingfoil --features iceoryx2-beta,iceoryx2-integration-test -- --ignored` (PASS 2026-04-06)
+- [x] Capture branch readiness review snapshot: `docs/design/2026-04-06-iceoryx2-v2-readiness-review.md`
 
 ## Completed Work
 
