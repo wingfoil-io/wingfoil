@@ -4,6 +4,8 @@ use std::time::SystemTime;
 
 use ::wingfoil::{NanoTime, RunFor, RunMode};
 
+#[cfg(feature = "iceoryx2-beta")]
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
 use std::time::Duration;
