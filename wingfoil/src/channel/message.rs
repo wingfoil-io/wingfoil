@@ -187,4 +187,18 @@ mod tests {
         let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, decoded);
     }
+
+    #[test]
+    fn serde_roundtrip_error_variant() {
+        use std::sync::Arc;
+        let err_msg = "something went wrong";
+        let msg: Message<u64> = Message::Error(Arc::new(anyhow::anyhow!(err_msg)));
+        let json = serde_json::to_string(&msg).unwrap();
+        // Error deserializes back to an Error variant with the original message
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert!(matches!(decoded, Message::Error(_)));
+        if let Message::Error(e) = decoded {
+            assert!(e.to_string().contains(err_msg));
+        }
+    }
 }

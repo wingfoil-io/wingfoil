@@ -1051,6 +1051,61 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // ── average_duration (private fn) ────────────────────────────────────────
+
+    #[test]
+    fn average_duration_zero_n_returns_zero() {
+        use std::time::Duration;
+        // n=0 branch
+        assert_eq!(average_duration(Duration::from_secs(10), 0), Duration::ZERO);
+    }
+
+    #[test]
+    fn average_duration_normal_case() {
+        use std::time::Duration;
+        // 100ns / 4 = 25ns
+        assert_eq!(
+            average_duration(Duration::from_nanos(100), 4),
+            Duration::from_nanos(25)
+        );
+    }
+
+    // ── GraphState::node_index_ticked (pub(crate)) ────────────────────────────
+
+    #[test]
+    fn node_index_ticked_reflects_cycle() {
+        let src = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        src.borrow_mut().push(ValueAt::new(1u64, NanoTime::new(1)));
+        let cnt = src.clone().as_stream().count();
+        cnt.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        // Just verify the fn exists and is callable by using it indirectly.
+        // GraphState is not directly accessible after run(), but the fn is
+        // exercised internally. We test the function directly:
+        let mut state = GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+            NanoTime::ZERO,
+        );
+        state.node_ticked.push(false);
+        assert!(!state.node_index_ticked(0));
+        state.node_ticked[0] = true;
+        assert!(state.node_index_ticked(0));
+    }
+
+    // ── GraphState::log (when current_node_index is None) ────────────────────
+
+    #[test]
+    fn graph_state_log_with_no_current_node_is_noop() {
+        let state = GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+            NanoTime::ZERO,
+        );
+        // current_node_index is None → should return immediately without panic
+        state.log(log::Level::Info, "test message");
+    }
+
     // ── Graph::export ─────────────────────────────────────────────────────────
 
     #[test]

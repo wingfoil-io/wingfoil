@@ -970,4 +970,57 @@ mod tests {
             .run();
         assert!(result.is_ok());
     }
+
+    // ── StreamOperators ──────────────────────────────────────────────────────
+
+    #[test]
+    fn not_inverts_bool_stream() {
+        let cb = Rc::new(RefCell::new(CallBackStream::<bool>::new()));
+        cb.borrow_mut().push(ValueAt::new(true, NanoTime::new(10)));
+        let src: Rc<dyn Stream<bool>> = cb.clone().as_stream();
+        let inverted = src.not();
+        inverted
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert!(!inverted.peek_value()); // not(true) == false
+    }
+
+    #[test]
+    fn collapse_skips_empty_iterator() {
+        // emit a vec: first tick has items, second has nothing → collapse filters second
+        let cb = Rc::new(RefCell::new(CallBackStream::<Vec<u64>>::new()));
+        cb.borrow_mut()
+            .push(ValueAt::new(vec![1u64, 2], NanoTime::new(10)));
+        cb.borrow_mut()
+            .push(ValueAt::new(vec![], NanoTime::new(20))); // empty → collapse skips
+        let collapsed = cb.clone().as_stream().collapse::<u64>();
+        let collected = collapsed.collect();
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let ticks = collected.peek_value();
+        // only the non-empty vec produces a tick
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].value, 2u64); // last() of [1,2]
+    }
+
+    #[test]
+    fn split_decomposes_tuple_stream() {
+        let cb = Rc::new(RefCell::new(CallBackStream::<(u64, u64)>::new()));
+        cb.borrow_mut()
+            .push(ValueAt::new((10u64, 20u64), NanoTime::new(5)));
+        let stream: Rc<dyn Stream<(u64, u64)>> = cb.clone().as_stream();
+        let (a, b) = stream.split();
+        let ca = a.collect();
+        let cb2 = b.collect();
+        Graph::new(
+            vec![ca.clone().as_node(), cb2.clone().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Forever,
+        )
+        .run()
+        .unwrap();
+        assert_eq!(ca.peek_value()[0].value, 10u64);
+        assert_eq!(cb2.peek_value()[0].value, 20u64);
+    }
 }

@@ -440,4 +440,17 @@ mod tests {
         );
         assert_eq!(state.time(), NanoTime::ZERO);
     }
+
+    // ── Debug for dyn Stream<T> ──────────────────────────────────────────────
+
+    #[test]
+    fn debug_for_dyn_stream_uses_type_name() {
+        use crate::nodes::CallBackStream;
+        use std::cell::RefCell;
+        let cb = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let stream: Rc<dyn Stream<u64>> = cb.as_stream();
+        // Debug impl delegates to type_name(); just check it doesn't panic
+        let s = format!("{:?}", &*stream);
+        assert!(!s.is_empty());
+    }
 }
