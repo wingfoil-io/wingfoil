@@ -54,7 +54,8 @@ jobs:
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
           cd ..
-          cargo llvm-cov report -p wingfoil -p wingfoil-python \
+          cargo llvm-cov report -p wingfoil-python \
+            --ignore-filename-regex 'py_etcd|py_kdb|py_zmq' \
             --lcov \
             --output-path wingfoil-python/lcov-rust.info
 
