@@ -380,5 +380,35 @@ impl PyStream {
         PyNode::new(crate::py_zmq::py_zmq_pub_inner(&self.0, port))
     }
 
+    /// Publish this stream of bytes to an iceoryx2 service.
+    ///
+    /// The stream values must be `bytes` objects. Only supported in real-time mode.
+    ///
+    /// Args:
+    ///     service_name: iceoryx2 service name, e.g. `"my/service"`
+    ///     variant: Service variant ("ipc" or "local")
+    ///     history_size: Service history ring size (must match subscribers)
+    ///     initial_max_slice_len: Initial maximum slice length (bytes)
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    #[cfg(feature = "iceoryx2-beta")]
+    #[pyo3(signature = (service_name, variant=crate::py_iceoryx2::PyIceoryx2ServiceVariant::Ipc, history_size=5, initial_max_slice_len=128*1024))]
+    fn iceoryx2_pub(
+        &self,
+        service_name: String,
+        variant: crate::py_iceoryx2::PyIceoryx2ServiceVariant,
+        history_size: usize,
+        initial_max_slice_len: usize,
+    ) -> PyNode {
+        PyNode::new(crate::py_iceoryx2::py_iceoryx2_pub_inner(
+            &self.0,
+            service_name,
+            variant,
+            history_size,
+            initial_max_slice_len,
+        ))
+    }
+
     // end StreamOperators
 }

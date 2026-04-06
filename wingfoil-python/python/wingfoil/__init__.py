@@ -19,3 +19,8 @@ etcd_sub = _ext.py_etcd_sub
 # User-friendly aliases for KDB+ functions
 kdb_read = _ext.py_kdb_read
 kdb_write = _ext.py_kdb_write
+
+# User-friendly aliases for iceoryx2 functions (feature-gated)
+if hasattr(_ext, "py_iceoryx2_sub"):
+    iceoryx2_sub = _ext.py_iceoryx2_sub
+    __all__.append("iceoryx2_sub")

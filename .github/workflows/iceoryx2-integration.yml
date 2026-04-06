@@ -1,0 +1,81 @@
+name: iceoryx2 (Local) Integration Tests
+
+on:
+  workflow_call:
+    inputs:
+      run_ignored_ipc:
+        description: Run ignored IPC tests (requires shared memory support)
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      run_ignored_ipc:
+        description: Run ignored IPC tests (requires shared memory support)
+        type: boolean
+        required: false
+        default: false
+  push:
+    paths:
+      - 'wingfoil/src/adapters/iceoryx2/**'
+  pull_request:
+    paths:
+      - 'wingfoil/src/adapters/iceoryx2/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  iceoryx2-integration:
+    name: iceoryx2 (Local) Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Run iceoryx2 integration tests
+        run: |
+          cargo test --features iceoryx2-integration-test -p wingfoil \
+            -- --test-threads=1 iceoryx2::integration_tests
+        env:
+          RUST_LOG: INFO
+
+  iceoryx2-ipc-ignored:
+    name: iceoryx2 (IPC ignored)
+    runs-on: ubuntu-latest
+    if: inputs.run_ignored_ipc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Run ignored IPC tests
+        run: |
+          cargo test --features iceoryx2-integration-test -p wingfoil \
+            -- --ignored --test-threads=1 iceoryx2::integration_tests
+        env:
+          RUST_LOG: INFO

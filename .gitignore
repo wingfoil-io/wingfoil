@@ -10,3 +10,5 @@ wingfoil.html
 _build
 *_generated
 perf.data*
+.codex
+wingfoil-python/.python-version

@@ -4,6 +4,8 @@ use std::time::SystemTime;
 
 use ::wingfoil::{NanoTime, RunFor, RunMode};
 
+#[cfg(feature = "iceoryx2-beta")]
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
 use std::time::Duration;
@@ -13,9 +15,28 @@ pub trait ToPyResult<T> {
     fn to_pyresult(self) -> PyResult<T>;
 }
 
+#[cfg(feature = "iceoryx2-beta")]
+#[derive(Debug, thiserror::Error)]
+pub enum PyBindingError {
+    #[error("{0}")]
+    TypeError(String),
+}
+
+#[cfg(feature = "iceoryx2-beta")]
+pub fn py_type_error(msg: impl Into<String>) -> anyhow::Error {
+    anyhow!(PyBindingError::TypeError(msg.into()))
+}
+
 impl<T> ToPyResult<T> for anyhow::Result<T> {
     fn to_pyresult(self) -> PyResult<T> {
-        self.map_err(|e| PyException::new_err(e.to_string()))
+        self.map_err(|e| {
+            #[cfg(feature = "iceoryx2-beta")]
+            if let Some(PyBindingError::TypeError(msg)) = e.downcast_ref::<PyBindingError>() {
+                return PyTypeError::new_err(msg.clone());
+            }
+
+            PyException::new_err(e.to_string())
+        })
     }
 }
 

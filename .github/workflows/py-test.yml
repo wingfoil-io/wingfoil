@@ -33,7 +33,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install system dependencies
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get install -y protobuf-compiler patchelf
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -49,7 +49,7 @@ jobs:
         run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cd wingfoil-python
-          .venv/bin/maturin develop
+          .venv/bin/maturin develop --features iceoryx2-beta
           .venv/bin/pytest tests/ \
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
@@ -61,16 +61,18 @@ jobs:
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@v5
+        continue-on-error: true
         with:
           files: wingfoil-python/lcov-python.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
       - name: Upload Rust-from-Python coverage to Codecov
         uses: codecov/codecov-action@v5
+        continue-on-error: true
         with:
           files: wingfoil-python/lcov-rust.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python-rust
-          fail_ci_if_error: true
+          fail_ci_if_error: false

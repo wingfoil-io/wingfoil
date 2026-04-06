@@ -24,7 +24,12 @@ classifiers = [
 [project.urls]
 homepage = "https://github.com/wingfoil-io/wingfoil/"
 
+[project.optional-dependencies]
+dev = ["maturin>=1.4,<2.0", "pytest>=7", "pyzmq>=25"]
+
 [tool.maturin]
+# Keep `iceoryx2-beta` opt-in for Python builds. Enabling it by default can
+# make wheels Linux/POSIX-only due to iceoryx2 dependencies.
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "wingfoil._wingfoil"
