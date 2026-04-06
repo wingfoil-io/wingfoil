@@ -30,6 +30,7 @@ derive_more = {workspace = true}
 env_logger = {workspace = true}
 lazy_static = {workspace = true}
 log = {workspace = true}
+thiserror = {workspace = true}
 
 # local deps
 pyo3 = { version = "0.27", features = ["extension-module", "serde"] }
@@ -39,4 +40,3 @@ futures = "0.3"
 
 [package.metadata.maturin]
 name = "wingfoil"
-

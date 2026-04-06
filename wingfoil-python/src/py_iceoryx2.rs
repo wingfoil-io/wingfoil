@@ -3,7 +3,6 @@
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
-use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::rc::Rc;
@@ -107,17 +106,15 @@ pub fn py_iceoryx2_pub_inner(
                 let mut b = wingfoil::Burst::new();
                 for item in list.iter() {
                     let bytes = item.extract::<Vec<u8>>().map_err(|_| {
-                        anyhow::anyhow!(PyTypeError::new_err(
-                            "iceoryx2_pub: list items must be bytes",
-                        ))
+                        crate::types::py_type_error("iceoryx2_pub: list items must be bytes")
                     })?;
                     b.push(bytes);
                 }
                 Ok(b)
             } else {
-                Err(anyhow::anyhow!(PyTypeError::new_err(
+                Err(crate::types::py_type_error(
                     "iceoryx2_pub: stream value must be bytes or list[bytes]",
-                )))
+                ))
             }
         })
     });
