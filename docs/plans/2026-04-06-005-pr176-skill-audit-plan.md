@@ -22,6 +22,17 @@ Artifacts:
 - Readiness snapshot: `docs/design/2026-04-06-iceoryx2-v2-readiness-review.md`
 - PR closure plan: `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`
 
+## Current Snapshot (2026-04-06)
+
+- PR head SHA: `71785ec`
+- `mergeable`: `MERGEABLE`
+- Latest reviews:
+  - `0-jake-0`: `COMMENTED` (2026-04-05)
+  - `github-advanced-security`: `COMMENTED` (2026-04-06)
+- Checks:
+  - Upstream Actions runs are present but `action_required` (not executed yet).
+  - Latest run IDs: 24028610800 (CI), 24028610802 (iceoryx2 Integration Tests)
+
 ## Phase 1: Establish Review Inputs (Deterministic)
 
 Commands:
