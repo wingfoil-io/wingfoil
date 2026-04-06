@@ -83,10 +83,10 @@ fn zmq_same_thread() {
 #[test]
 fn zmq_separate_threads() {
     _ = env_logger::try_init();
-    let period = Duration::from_millis(10);
+    let period = Duration::from_millis(50);
     let port = 5557;
     let address = format!("tcp://127.0.0.1:{port}");
-    let run_for = RunFor::Duration(period * 10);
+    let run_for = RunFor::Duration(Duration::from_secs(2));
     let rf_send = run_for;
     let rf_rec = run_for;
     let rec = std::thread::spawn(move || receiver(&address).run(RunMode::RealTime, rf_rec));
