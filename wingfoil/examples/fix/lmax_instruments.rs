@@ -63,7 +63,7 @@ fn main() {
     let data_node = data
         .map(|burst| {
             for msg in &burst {
-                let req_id = msg
+                let _req_id = msg
                     .fields
                     .iter()
                     .find(|f| f.0 == 262)
