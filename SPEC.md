@@ -401,6 +401,7 @@ Related docs:
 - `docs/requirements/2026-04-05-iceoryx2-adapter-requirements.md`
 - `docs/design/2026-04-05-iceoryx2-adapter-design.md`
 - PR review closure: `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`
+- PR audit (skills + agents): `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`
 
 **Requirements (Adapter):**
 - Must not require a central daemon process for basic operation.

@@ -148,3 +148,4 @@ Optional / feature-gated:
 
 Tracking:
 - PR review closure work (CI + reviewer blockers) is tracked in `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`.
+- Structured PR audit (skills + agents) is tracked in `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`.

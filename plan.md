@@ -37,6 +37,11 @@ Follow-up:
   which relied on filesystem mtime resolution. Stabilize it by ensuring key mtimes can be made
   strictly ordered even on coarse-resolution filesystems.
 
+## PR #176 Review + Audit (Skills + Agents)
+
+Tracking plan:
+- `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`
+
 ## Completed Work
 
 ### Implementation

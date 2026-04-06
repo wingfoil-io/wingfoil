@@ -98,6 +98,7 @@ Implementation note:
 
 Review tracking:
 - PR #176 review closure work is tracked in `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`.
+- Structured PR audit (skills + agents) is tracked in `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`.
 
 ## Connection Management
 
