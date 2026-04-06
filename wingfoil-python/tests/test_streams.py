@@ -1,5 +1,5 @@
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from wingfoil import Graph, bimap, constant, ticker
 
@@ -243,6 +243,33 @@ class TestRunModes(unittest.TestCase):
         stream = ticker(0.1).count()
         val = stream.peek_value()
         self.assertIsNone(val)
+
+    def test_run_conflicting_duration_and_cycles_raises(self):
+        stream = ticker(0.01).count().collect()
+        with self.assertRaises(BaseException):
+            stream.run(realtime=False, duration=1.0, cycles=5)
+
+    def test_run_negative_duration_raises(self):
+        stream = ticker(0.01).count().collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, duration=-1.0)
+
+    def test_run_with_start_datetime(self):
+        stream = ticker(0.01).count().collect()
+        # epoch start as UTC datetime
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        stream.run(realtime=False, start=epoch, cycles=3)
+        self.assertEqual(stream.peek_value(), [1, 2, 3])
+
+    def test_run_with_invalid_start_raises(self):
+        stream = ticker(0.01).count().collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, start="not-a-timestamp", cycles=1)
+
+    def test_sample_with_invalid_trigger_raises(self):
+        stream = constant(1)
+        with self.assertRaises(BaseException):
+            stream.sample("not_a_node_or_stream").run(realtime=False, cycles=1)
 
 
 if __name__ == '__main__':
