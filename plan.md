@@ -32,6 +32,11 @@ Observed (2026-04-06):
 Action:
 - Stabilize the ZMQ test to restore reliable `git push` without requiring `--no-verify`.
 
+Follow-up:
+- A second source of push-hook instability was `adapters::cache::file_cache::tests::test_lru_eviction`,
+  which relied on filesystem mtime resolution. Stabilize it by ensuring key mtimes can be made
+  strictly ordered even on coarse-resolution filesystems.
+
 ## Completed Work
 
 ### Implementation
