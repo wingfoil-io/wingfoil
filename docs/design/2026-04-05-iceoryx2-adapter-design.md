@@ -132,6 +132,7 @@ Implementation note:
 Python note:
 - `Stream.iceoryx2_pub(...)` also exposes `history_size` and `initial_max_slice_len` so Python publishers can match the same service contract as Rust subscribers (and vice versa).
 - Python publish values must be `bytes` or `list[bytes]`. Invalid types surface as a Python `TypeError` (rather than silently logging and emitting an empty burst).
+  - Implementation detail: Wingfoil wraps these input-validation errors as a typed Rust error and converts them to `PyTypeError` at the PyO3 boundary (so callers can catch reliably).
 
 Defaults (for interop predictability):
 - Default `history_size`: `5`
