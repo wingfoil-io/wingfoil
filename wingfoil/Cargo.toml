@@ -192,5 +192,20 @@ path = "examples/etcd/main.rs"
 required-features = ["etcd"]
 
 [[example]]
+name = "iceoryx2_pub"
+path = "examples/iceoryx2/pub.rs"
+required-features = ["iceoryx2-beta"]
+
+[[example]]
+name = "iceoryx2_sub"
+path = "examples/iceoryx2/sub.rs"
+required-features = ["iceoryx2-beta"]
+
+[[example]]
+name = "iceoryx2_bytes"
+path = "examples/iceoryx2/bytes.rs"
+required-features = ["iceoryx2-beta"]
+
+[[example]]
 name = "tracing"
 path = "examples/tracing/main.rs"
