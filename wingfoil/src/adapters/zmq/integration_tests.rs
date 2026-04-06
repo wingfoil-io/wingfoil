@@ -237,6 +237,297 @@ fn zmq_sub_stops_cleanly_without_publisher_endofstream() {
     );
 }
 
+// --- cross-language integration tests (ports 5580–5590) ---
+//
+// These tests validate that Rust and Python wingfoil processes can communicate
+// over ZMQ. They spawn Python subprocesses and require that the `wingfoil`
+// Python package is installed (via `maturin develop` in wingfoil-python/).
+//
+// Run:
+//   cargo test --features zmq-cross-lang-test -p wingfoil \
+//     -- --test-threads=1 zmq::integration_tests::cross_lang_tests
+//
+// With etcd:
+//   cargo test --features zmq-cross-lang-etcd-test -p wingfoil \
+//     -- --test-threads=1 zmq::integration_tests::cross_lang_tests
+
+#[cfg(feature = "zmq-cross-lang-test")]
+mod cross_lang_tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    fn python_available() -> bool {
+        Command::new("python3")
+            .args(["-c", "import wingfoil"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn run_python(script: &str) -> std::process::Output {
+        Command::new("python3")
+            .args(["-c", script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("failed to execute python3")
+    }
+
+    fn assert_python_ok(output: &std::process::Output, label: &str) {
+        assert!(
+            output.status.success(),
+            "{label} failed (exit {}):\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn zmq_rust_pub_python_sub_direct() {
+        if !python_available() {
+            eprintln!("SKIP: wingfoil python package not installed");
+            return;
+        }
+        _ = env_logger::try_init();
+        let port = 5580u16;
+
+        // Rust publisher: sends counter bytes for 2s.
+        let pub_handle = std::thread::spawn(move || {
+            ticker(Duration::from_millis(50))
+                .count()
+                .map(|n: u64| format!("{n}").into_bytes())
+                .zmq_pub(port, ())
+                .run(
+                    RunMode::RealTime,
+                    RunFor::Duration(Duration::from_secs(2)),
+                )
+        });
+
+        // Let publisher bind.
+        std::thread::sleep(Duration::from_millis(500));
+
+        let script = format!(
+            r#"
+import wingfoil as wf
+items = []
+data, _status = wf.zmq_sub("tcp://127.0.0.1:{port}")
+data.inspect(lambda msgs: items.extend(msgs)).run(realtime=True, duration=1.0)
+assert len(items) >= 3, f"expected >= 3 items, got {{len(items)}}"
+nums = [int(b) for b in items]
+for a, b in zip(nums, nums[1:]):
+    assert b == a + 1, f"non-consecutive: {{a}}, {{b}}"
+"#
+        );
+        let output = run_python(&script);
+        assert_python_ok(&output, "rust_pub_python_sub_direct");
+        pub_handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn zmq_python_pub_rust_sub_direct() {
+        if !python_available() {
+            eprintln!("SKIP: wingfoil python package not installed");
+            return;
+        }
+        _ = env_logger::try_init();
+        let port = 5581u16;
+
+        // Python publisher: sends counter bytes for 2s.
+        let script = format!(
+            r#"
+import wingfoil as wf
+(
+    wf.ticker(0.05)
+    .count()
+    .map(lambda n: str(n).encode())
+    .zmq_pub({port})
+    .run(realtime=True, duration=2.0)
+)
+"#
+        );
+        let child = Command::new("python3")
+            .args(["-c", &script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn python publisher");
+
+        // Let Python publisher bind.
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Rust subscriber.
+        let address = format!("tcp://127.0.0.1:{port}");
+        let (data, _status) =
+            zmq_sub::<Vec<u8>>(&address).expect("zmq_sub failed");
+        let recv_node = data.collect().finally(|res, _| {
+            let values: Vec<String> = res
+                .into_iter()
+                .flat_map(|burst| burst.value)
+                .map(|b| String::from_utf8(b).expect("invalid utf8"))
+                .collect();
+            assert!(
+                values.len() >= 3,
+                "expected >= 3 items, got {}",
+                values.len()
+            );
+            let nums: Vec<u64> = values.iter().map(|s| s.parse().unwrap()).collect();
+            for w in nums.windows(2) {
+                assert_eq!(w[1], w[0] + 1, "non-consecutive: {} {}", w[0], w[1]);
+            }
+            Ok(())
+        });
+        recv_node
+            .run(
+                RunMode::RealTime,
+                RunFor::Duration(Duration::from_secs(1)),
+            )
+            .unwrap();
+
+        let output = child.wait_with_output().expect("failed to wait on python");
+        assert_python_ok(&output, "python_pub_rust_sub_direct");
+    }
+
+    #[cfg(feature = "zmq-cross-lang-etcd-test")]
+    mod etcd {
+        use super::*;
+        use crate::adapters::etcd::EtcdConnection;
+        use crate::adapters::zmq::EtcdRegistry;
+        use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
+
+        const ETCD_PORT: u16 = 2379;
+        const ETCD_IMAGE: &str = "gcr.io/etcd-development/etcd";
+        const ETCD_TAG: &str = "v3.5.0";
+
+        fn start_etcd() -> anyhow::Result<(impl Drop, String)> {
+            let container = GenericImage::new(ETCD_IMAGE, ETCD_TAG)
+                .with_wait_for(WaitFor::message_on_stderr(
+                    "now serving peer/client/metrics",
+                ))
+                .with_env_var("ETCD_LISTEN_CLIENT_URLS", "http://0.0.0.0:2379")
+                .with_env_var("ETCD_ADVERTISE_CLIENT_URLS", "http://0.0.0.0:2379")
+                .start()?;
+            let port = container.get_host_port_ipv4(ETCD_PORT)?;
+            let endpoint = format!("http://127.0.0.1:{port}");
+            Ok((container, endpoint))
+        }
+
+        #[test]
+        fn zmq_rust_pub_python_sub_etcd() {
+            if !python_available() {
+                eprintln!("SKIP: wingfoil python package not installed");
+                return;
+            }
+            _ = env_logger::try_init();
+            let (_container, endpoint) = start_etcd().unwrap();
+            let port = 5582u16;
+            let service = "cross-lang/rust-pub";
+
+            // Rust publisher with etcd registration.
+            let ep = endpoint.clone();
+            let pub_handle = std::thread::spawn(move || {
+                let conn = EtcdConnection::new(ep);
+                ticker(Duration::from_millis(50))
+                    .count()
+                    .map(|n: u64| format!("{n}").into_bytes())
+                    .zmq_pub(port, (service, EtcdRegistry::new(conn)))
+                    .run(
+                        RunMode::RealTime,
+                        RunFor::Duration(Duration::from_secs(3)),
+                    )
+            });
+
+            // Wait for publisher to register in etcd.
+            std::thread::sleep(Duration::from_millis(800));
+
+            let script = format!(
+                r#"
+import wingfoil as wf
+items = []
+data, _status = wf.zmq_sub_etcd("{service}", "{endpoint}")
+data.inspect(lambda msgs: items.extend(msgs)).run(realtime=True, duration=1.0)
+assert len(items) >= 3, f"expected >= 3 items, got {{len(items)}}"
+nums = [int(b) for b in items]
+for a, b in zip(nums, nums[1:]):
+    assert b == a + 1, f"non-consecutive: {{a}}, {{b}}"
+"#
+            );
+            let output = run_python(&script);
+            assert_python_ok(&output, "rust_pub_python_sub_etcd");
+            pub_handle.join().unwrap().unwrap();
+        }
+
+        #[test]
+        fn zmq_python_pub_rust_sub_etcd() {
+            if !python_available() {
+                eprintln!("SKIP: wingfoil python package not installed");
+                return;
+            }
+            _ = env_logger::try_init();
+            let (_container, endpoint) = start_etcd().unwrap();
+            let port = 5583u16;
+            let service = "cross-lang/python-pub";
+
+            // Python publisher with etcd registration.
+            let script = format!(
+                r#"
+import wingfoil as wf
+(
+    wf.ticker(0.05)
+    .count()
+    .map(lambda n: str(n).encode())
+    .zmq_pub_etcd("{service}", {port}, "{endpoint}")
+    .run(realtime=True, duration=3.0)
+)
+"#
+            );
+            let child = Command::new("python3")
+                .args(["-c", &script])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("failed to spawn python publisher");
+
+            // Wait for Python publisher to register in etcd.
+            std::thread::sleep(Duration::from_millis(800));
+
+            // Rust subscriber via etcd.
+            let conn = EtcdConnection::new(&endpoint);
+            let (data, _status) =
+                zmq_sub::<Vec<u8>>((service, EtcdRegistry::new(conn)))
+                    .expect("zmq_sub_etcd failed");
+            let recv_node = data.collect().finally(|res, _| {
+                let values: Vec<String> = res
+                    .into_iter()
+                    .flat_map(|burst| burst.value)
+                    .map(|b| String::from_utf8(b).expect("invalid utf8"))
+                    .collect();
+                assert!(
+                    values.len() >= 3,
+                    "expected >= 3 items, got {}",
+                    values.len()
+                );
+                let nums: Vec<u64> = values.iter().map(|s| s.parse().unwrap()).collect();
+                for w in nums.windows(2) {
+                    assert_eq!(w[1], w[0] + 1, "non-consecutive: {} {}", w[0], w[1]);
+                }
+                Ok(())
+            });
+            recv_node
+                .run(
+                    RunMode::RealTime,
+                    RunFor::Duration(Duration::from_secs(1)),
+                )
+                .unwrap();
+
+            let output = child.wait_with_output().expect("failed to wait on python");
+            assert_python_ok(&output, "python_pub_rust_sub_etcd");
+        }
+    }
+}
+
 // --- etcd discovery integration tests (ports 5596–5610) ---
 
 #[cfg(feature = "zmq-etcd-integration-test")]

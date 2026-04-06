@@ -101,6 +101,14 @@ cargo test --features zmq-beta-integration-test -p wingfoil \
 # etcd discovery tests (requires Docker)
 cargo test --features zmq-etcd-integration-test -p wingfoil \
   -- --test-threads=1 zmq::integration_tests::etcd_tests
+
+# Cross-language tests (requires `maturin develop` in wingfoil-python/)
+cargo test --features zmq-cross-lang-test -p wingfoil \
+  -- --test-threads=1 zmq::integration_tests::cross_lang_tests
+
+# Cross-language etcd tests (requires Docker + maturin develop)
+cargo test --features zmq-cross-lang-etcd-test -p wingfoil \
+  -- --test-threads=1 zmq::integration_tests::cross_lang_tests::etcd
 ```
 
 ## Integration Test Port Allocation
@@ -108,6 +116,7 @@ cargo test --features zmq-etcd-integration-test -p wingfoil \
 | Range      | Tests                              |
 |------------|------------------------------------|
 | 5556–5563  | Core pub/sub tests                 |
+| 5580–5590  | Cross-language integration tests   |
 | 5596–5610  | etcd discovery integration tests   |
 
 Do not use these ports for other tests in the workspace.
