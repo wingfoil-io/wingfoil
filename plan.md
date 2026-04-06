@@ -42,6 +42,16 @@ Follow-up:
 Tracking plan:
 - `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`
 
+## Reschedule: Audit Follow-Up (2026-04-06)
+
+Next sweep (review-driven):
+- **2026-04-07**: apply P0/P1 audit decisions + minimal fixes, then re-run local verification and ping maintainers to approve upstream workflows.
+
+Planned actions:
+- [x] Decide Python packaging stance: make `iceoryx2-beta` opt-in for Python builds (avoid surprise non-Linux failures).
+- [x] Fix subscriber thread error propagation in Threaded/Signaled modes (send `Message::Error` on thread failure).
+- [x] Align workflow name/behavior: rename to `iceoryx2 (Local) Integration Tests` and add optional ignored-IPC job (workflow_dispatch / workflow_call input).
+
 ## Completed Work
 
 ### Implementation

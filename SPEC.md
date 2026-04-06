@@ -578,6 +578,10 @@ pub fn iceoryx2_pub_slice_with(
 - Integration tests that require shared memory should be feature-gated (e.g. `iceoryx2-integration-test`) or `#[ignore]` by default.
 - Integration tests depend on shared memory availability and permissions and may be sensitive to environment (e.g. Docker `/dev/shm` size).
 - When asserting on history / multi-sample bursts, avoid `collapse()` since it keeps only the last item of each `Burst<T>`.
+- Workflow note: the `iceoryx2 (Local) Integration Tests` workflow exercises Local-only paths by default; ignored IPC tests are opt-in.
+
+**Python Packaging Note:**
+- The Python package keeps `iceoryx2-beta` **opt-in** by default (build with `maturin --features iceoryx2-beta`) to avoid surprising non-Linux build failures.
 
 **IPC Service Contract Note:**
 - Some publish/subscribe settings (notably `history_size`) are part of the iceoryx2 **service-level configuration**. All participants opening/creating the same service should use compatible settings, otherwise `open_or_create()` can fail.

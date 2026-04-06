@@ -24,6 +24,7 @@ This document captures the requirements and acceptance criteria for the adapter 
 - Ensure correctness under common lifecycle patterns (late joiners, short-lived publishers, graph stop/start).
 - Offer predictable performance trade-offs across subscriber modes (Spin / Threaded / Signaled).
 - Support Python bindings for byte-oriented pub/sub use cases.
+- Keep Python packaging expectations clear: `iceoryx2-beta` is **opt-in** for Python builds by default (Linux/POSIX constraints).
 
 ## Non-Goals
 
@@ -93,6 +94,9 @@ Defaults (documented for interop predictability):
   - Notes:
     - “Config mismatch” detection is best-effort; do not rely on exact upstream error strings.
     - The invariant is: errors include the service contract context (`service_name`, `variant`, `history_size`, derived buffers).
+- **NFR-9 (Resource Bounds)**: Document and/or enforce reasonable bounds on service contract sizing:
+  - `history_size` should not be unbounded in user-controlled configuration without acknowledging DoS risk (shared memory / allocation pressure).
+  - slice payload sizing should be bounded (`initial_max_slice_len`, publish-time payload lengths).
 
 ## Test Requirements (TDD)
 
