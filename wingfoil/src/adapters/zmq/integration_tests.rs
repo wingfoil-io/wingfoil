@@ -148,6 +148,31 @@ fn zmq_first_message_not_dropped() {
 }
 
 #[test]
+fn zmq_first_message_not_dropped_no_delay() {
+    _ = env_logger::try_init();
+    let period = Duration::from_millis(50);
+    let port = 5564;
+    let address = format!("tcp://127.0.0.1:{port}");
+    let run_for = RunFor::Duration(period * 15);
+    let (data, _status) = zmq_sub::<u64>(&address).unwrap();
+    let recv_node = data.collect().finally(|res, _| {
+        let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+        assert!(!values.is_empty(), "no values received");
+        assert_eq!(values[0], 1, "first message dropped: got {}", values[0]);
+        Ok(())
+    });
+    // Uses sender() with NO delay — publisher sends immediately after bind.
+    // This reliably drops message 1 due to the ZMQ slow-joiner problem.
+    Graph::new(
+        vec![sender(period, port), recv_node],
+        RunMode::RealTime,
+        run_for,
+    )
+    .run()
+    .unwrap();
+}
+
+#[test]
 fn zmq_reports_connected_status() {
     _ = env_logger::try_init();
     let period = Duration::from_millis(50);
