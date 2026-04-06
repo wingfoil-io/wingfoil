@@ -9,8 +9,8 @@
 //! use [`AeronSpinSubNode`](super::sub_spin::AeronSpinSubNode) instead.
 
 use crate::adapters::aeron::transport::AeronSubscriberBackend;
-use crate::channel::Message;
-use crate::nodes::ReceiverStream;
+use crate::channel::{ChannelSender, Message};
+use crate::nodes::receiver::ReceiverStream;
 use crate::{
     Burst, Element, GraphState, IntoStream, MutableNode, Stream, StreamPeekRef, UpStreams,
 };
@@ -96,7 +96,7 @@ where
     // invocation of the closure.
     let state = Mutex::new(Some((backend, parser)));
     let inner = ReceiverStream::new(
-        move |sender| {
+        move |sender: ChannelSender<T>, _stop: Arc<AtomicBool>| {
             let (mut backend, mut parser) = state
                 .lock()
                 .unwrap()
