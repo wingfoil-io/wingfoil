@@ -300,10 +300,7 @@ mod cross_lang_tests {
                 .count()
                 .map(|n: u64| format!("{n}").into_bytes())
                 .zmq_pub(port, ())
-                .run(
-                    RunMode::RealTime,
-                    RunFor::Duration(Duration::from_secs(2)),
-                )
+                .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
         });
 
         // Let publisher bind.
@@ -360,8 +357,7 @@ import wingfoil as wf
 
         // Rust subscriber.
         let address = format!("tcp://127.0.0.1:{port}");
-        let (data, _status) =
-            zmq_sub::<Vec<u8>>(&address).expect("zmq_sub failed");
+        let (data, _status) = zmq_sub::<Vec<u8>>(&address).expect("zmq_sub failed");
         let recv_node = data.collect().finally(|res, _| {
             let values: Vec<String> = res
                 .into_iter()
@@ -380,10 +376,7 @@ import wingfoil as wf
             Ok(())
         });
         recv_node
-            .run(
-                RunMode::RealTime,
-                RunFor::Duration(Duration::from_secs(1)),
-            )
+            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))
             .unwrap();
 
         let output = child.wait_with_output().expect("failed to wait on python");
@@ -433,10 +426,7 @@ import wingfoil as wf
                     .count()
                     .map(|n: u64| format!("{n}").into_bytes())
                     .zmq_pub(port, (service, EtcdRegistry::new(conn)))
-                    .run(
-                        RunMode::RealTime,
-                        RunFor::Duration(Duration::from_secs(3)),
-                    )
+                    .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)))
             });
 
             // Wait for publisher to register in etcd.
@@ -495,9 +485,8 @@ import wingfoil as wf
 
             // Rust subscriber via etcd.
             let conn = EtcdConnection::new(&endpoint);
-            let (data, _status) =
-                zmq_sub::<Vec<u8>>((service, EtcdRegistry::new(conn)))
-                    .expect("zmq_sub_etcd failed");
+            let (data, _status) = zmq_sub::<Vec<u8>>((service, EtcdRegistry::new(conn)))
+                .expect("zmq_sub_etcd failed");
             let recv_node = data.collect().finally(|res, _| {
                 let values: Vec<String> = res
                     .into_iter()
@@ -516,10 +505,7 @@ import wingfoil as wf
                 Ok(())
             });
             recv_node
-                .run(
-                    RunMode::RealTime,
-                    RunFor::Duration(Duration::from_secs(1)),
-                )
+                .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))
                 .unwrap();
 
             let output = child.wait_with_output().expect("failed to wait on python");

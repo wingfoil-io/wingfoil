@@ -67,10 +67,10 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
             // for its subscription filter to propagate through ZMQ internals.
             // We mark as connected once at least one cycle has elapsed since
             // the ACCEPTED event, giving the filter time to arrive.
-            if let Some(accepted_at) = self.accepted_at {
-                if accepted_at.elapsed() >= Duration::from_millis(1) {
-                    self.subscriber_connected = true;
-                }
+            if let Some(accepted_at) = self.accepted_at
+                && accepted_at.elapsed() >= Duration::from_millis(1)
+            {
+                self.subscriber_connected = true;
             }
         }
 
