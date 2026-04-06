@@ -23,4 +23,6 @@ kdb_write = _ext.py_kdb_write
 # User-friendly aliases for iceoryx2 functions (feature-gated)
 if hasattr(_ext, "py_iceoryx2_sub"):
     iceoryx2_sub = _ext.py_iceoryx2_sub
-    __all__.append("iceoryx2_sub")
+    Iceoryx2ServiceVariant = _ext.Iceoryx2ServiceVariant
+    Iceoryx2Mode = _ext.Iceoryx2Mode
+    __all__.extend(["iceoryx2_sub", "Iceoryx2ServiceVariant", "Iceoryx2Mode"])

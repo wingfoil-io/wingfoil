@@ -340,7 +340,7 @@ mod tests {
         let upstream = ticker(Duration::from_millis(20)).produce(move || {
             let mut b: Burst<Vec<u8>> = Burst::default();
             let s = step.fetch_add(1, Ordering::Relaxed);
-            if s.is_multiple_of(2) {
+            if s % 2 == 0 {
                 b.push(vec![1, 2, 3]);
             } else {
                 b.push(vec![4, 5, 6, 7]);
@@ -391,7 +391,7 @@ mod tests {
         let upstream = ticker(Duration::from_millis(20)).produce(move || {
             let mut b: Burst<Vec<u8>> = Burst::default();
             let s = step.fetch_add(1, Ordering::Relaxed);
-            if s.is_multiple_of(2) {
+            if s % 2 == 0 {
                 b.push(vec![10, 20]);
             } else {
                 b.push(vec![30, 40, 50]);
