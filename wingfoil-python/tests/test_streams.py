@@ -1,5 +1,5 @@
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from wingfoil import Graph, bimap, constant, ticker
 
@@ -255,7 +255,6 @@ class TestRunModes(unittest.TestCase):
             stream.run(realtime=False, duration=-1.0)
 
     def test_run_with_start_datetime(self):
-        from datetime import datetime, timezone
         stream = ticker(0.01).count().collect()
         # epoch start as UTC datetime
         epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
