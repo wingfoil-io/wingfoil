@@ -246,7 +246,7 @@ class TestRunModes(unittest.TestCase):
 
     def test_run_conflicting_duration_and_cycles_raises(self):
         stream = ticker(0.01).count().collect()
-        with self.assertRaises(Exception):
+        with self.assertRaises(BaseException):
             stream.run(realtime=False, duration=1.0, cycles=5)
 
     def test_run_negative_duration_raises(self):
@@ -269,7 +269,7 @@ class TestRunModes(unittest.TestCase):
 
     def test_sample_with_invalid_trigger_raises(self):
         stream = constant(1)
-        with self.assertRaises(Exception):
+        with self.assertRaises(BaseException):
             stream.sample("not_a_node_or_stream").run(realtime=False, cycles=1)
 
 
