@@ -61,8 +61,8 @@ Output artifact:
 
 Current state (post-rebase, 2026-04-06):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24028610800`
-  - Latest iceoryx2 Integration Tests run `24028610802`
+  - Latest CI run `24028847326`
+  - Latest iceoryx2 Integration Tests run `24028847327`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:

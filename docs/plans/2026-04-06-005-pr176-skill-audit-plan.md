@@ -24,14 +24,51 @@ Artifacts:
 
 ## Current Snapshot (2026-04-06)
 
-- PR head SHA: `71785ec`
+- PR head SHA: `2a92d7f`
 - `mergeable`: `MERGEABLE`
 - Latest reviews:
   - `0-jake-0`: `COMMENTED` (2026-04-05)
   - `github-advanced-security`: `COMMENTED` (2026-04-06)
 - Checks:
   - Upstream Actions runs are present but `action_required` (not executed yet).
-  - Latest run IDs: 24028610800 (CI), 24028610802 (iceoryx2 Integration Tests)
+  - Latest run IDs: 24028847326 (CI), 24028847327 (iceoryx2 Integration Tests)
+
+## Findings Snapshot (2026-04-06)
+
+This section summarizes the report-only audit findings from multiple lenses (correctness, security, API contract, reliability, testing).
+
+### P0 / Merge Blockers (Decisions Required)
+
+- **Python build enables `iceoryx2-beta` by default** (`wingfoil-python/pyproject.toml`)\n
+  - Risk: likely makes the Python package effectively Linux/POSIX-only (iceoryx2 deps), which can be an unexpected packaging/API contract change.\n
+  - Decision: either explicitly document “Python is Linux-only” or make `iceoryx2-beta` opt-in for Python builds.
+
+### P1 / Should Fix
+
+- **Threaded/Signaled subscriber thread failures can become silent starvation** (`wingfoil/src/adapters/iceoryx2/read.rs`)\n
+  - Current behavior: thread errors are logged but not propagated to the graph via `Message::Error`.\n
+  - Impact: graph can keep running while adapter silently produces no data.\n
+  - Suggested fix: on thread error, send `Message::Error(Arc<anyhow::Error>)` to the channel (best-effort), then exit.
+
+- **Workflow naming vs behavior mismatch** (`.github/workflows/iceoryx2-integration.yml`)\n
+  - The workflow does not run `-- --ignored`, so IPC tests remain unexecuted by CI.\n
+  - Action: either rename to clarify it’s Local-only or add a conditional job to run ignored IPC tests when the environment supports shared memory IPC.
+
+### P2 / Document or Harden
+
+- **Resource exhaustion footguns** (history + slice sizes)\n
+  - Add bounds (or clear docs) for `history_size` and `initial_max_slice_len` (DoS risk if config is user-controlled).\n
+  - Document service-name capability model for IPC (no auth; rely on OS/container isolation).
+
+- **Python test coverage regression risk**\n
+  - Large deletions from `wingfoil-python/tests/test_streams.py` reduce non-iceoryx2 regression coverage.\n
+  - If intentional, document rationale; otherwise restore a small core suite.
+
+### P3 / Nice-to-have
+
+- Logging/diagnosability improvements:\n
+  - rate-limited debug logging for swallowed `update_connections()` errors\n
+  - more explicit handling of non-realtime `Message` variants in receiver drains
 
 ## Phase 1: Establish Review Inputs (Deterministic)
 

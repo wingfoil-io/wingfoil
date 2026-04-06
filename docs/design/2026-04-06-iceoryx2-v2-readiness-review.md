@@ -32,8 +32,8 @@ As of **2026-04-06**, GitHub Actions runs on the upstream PR are present but not
 
 - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` shows multiple runs in `action_required` state with `0s` runtime.
 - Example run IDs:
-  - 24028610800 (workflow: “CI”)
-  - 24028610802 (workflow: “iceoryx2 Integration Tests”)
+  - 24028847326 (workflow: “CI”)
+  - 24028847327 (workflow: “iceoryx2 Integration Tests”)
 
 Operational impact:
 - `gh pr checks` reports “no checks” because the runs are not approved/executed yet.
