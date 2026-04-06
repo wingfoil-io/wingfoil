@@ -289,6 +289,14 @@ mod tests {
         })
     }
 
+    fn free_local_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("expected to bind ephemeral port")
+            .local_addr()
+            .expect("expected local addr")
+            .port()
+    }
+
     #[test]
     fn zmq_same_thread() {
         _ = env_logger::try_init();
@@ -310,13 +318,18 @@ mod tests {
     fn zmq_separate_threads() {
         _ = env_logger::try_init();
         let period = Duration::from_millis(10);
-        let port = 5557;
+        // Use an ephemeral port to reduce collisions when tests are run concurrently.
+        let port = free_local_port();
         let address = format!("tcp://127.0.0.1:{port}");
-        let run_for = RunFor::Duration(period * 10);
+        // This test is sensitive to connection establishment timing across threads.
+        // Give ZMQ enough time to connect and deliver a few messages reliably.
+        let run_for = RunFor::Duration(Duration::from_secs(1));
         let rf_send = run_for;
         let rf_rec = run_for;
         let rec = std::thread::spawn(move || receiver(&address).run(RunMode::RealTime, rf_rec));
-        let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
+        let send = std::thread::spawn(move || {
+            sender_with_delay(period, port).run(RunMode::RealTime, rf_send)
+        });
         send.join().unwrap().unwrap();
         rec.join().unwrap().unwrap();
     }
