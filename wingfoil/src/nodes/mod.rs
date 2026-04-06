@@ -37,8 +37,7 @@ mod never;
 mod node_flow;
 mod print;
 mod producer;
-#[cfg(feature = "zmq")]
-mod receiver;
+pub(crate) mod receiver;
 mod sample;
 mod throttle;
 mod tick;
