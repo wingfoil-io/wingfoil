@@ -8,6 +8,12 @@ import pytest
 
 import wingfoil as wf
 
+if not hasattr(wf, "Iceoryx2Mode") or not hasattr(wf, "iceoryx2_sub"):
+    pytest.skip(
+        "iceoryx2 Python bindings are not enabled in this build (build with maturin --features iceoryx2-beta).",
+        allow_module_level=True,
+    )
+
 
 def _unique_service_name(prefix: str) -> str:
     # Keep service names unique to avoid collisions when tests run in parallel.

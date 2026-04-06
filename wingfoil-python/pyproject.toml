@@ -28,7 +28,9 @@ homepage = "https://github.com/wingfoil-io/wingfoil/"
 dev = ["maturin>=1.4,<2.0", "pytest>=7", "pyzmq>=25"]
 
 [tool.maturin]
-features = ["pyo3/extension-module", "iceoryx2-beta"]
+# Keep `iceoryx2-beta` opt-in for Python builds. Enabling it by default can
+# make wheels Linux/POSIX-only due to iceoryx2 dependencies.
+features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "wingfoil._wingfoil"
 include = ["Cargo.toml"]

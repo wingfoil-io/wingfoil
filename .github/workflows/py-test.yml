@@ -49,7 +49,7 @@ jobs:
         run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cd wingfoil-python
-          .venv/bin/maturin develop
+          .venv/bin/maturin develop --features iceoryx2-beta
           .venv/bin/pytest tests/ \
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
