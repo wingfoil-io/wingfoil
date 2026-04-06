@@ -1,4 +1,4 @@
-// LMAX London Demo — discover available instruments via SecurityListRequest
+// LMAX London Demo — probe instrument IDs by subscribing and observing the response.
 //
 // Run with:
 //   LMAX_USERNAME=xxx LMAX_PASSWORD=yyy \
@@ -13,59 +13,28 @@ const LMAX_MD_HOST: &str = "fix-marketdata.london-demo.lmax.com";
 const LMAX_MD_PORT: u16 = 443;
 const LMAX_MD_TARGET: &str = "LMXBDM";
 
-fn security_list_request() -> FixMessage {
+// Sweep a range of IDs — LMAX crypto instruments are in the 100xxx range
+fn candidates() -> Vec<String> {
+    (100900..=100999).map(|i| i.to_string()).collect()
+}
+
+fn market_data_request(instrument_id: &str, req_id: &str) -> FixMessage {
     FixMessage {
-        msg_type: "x".to_string(),
+        msg_type: "V".to_string(),
         seq_num: 0,
         sending_time: NanoTime::ZERO,
         fields: vec![
-            (320, "list1".to_string()), // SecurityReqID
-            (321, "0".to_string()),     // SecurityListRequestType = 0 (all securities)
-            (55, "[N/A]".to_string()),  // Symbol (required placeholder)
+            (262, req_id.to_string()),       // MDReqID
+            (263, "1".to_string()),          // SubscriptionRequestType = Subscribe
+            (264, "1".to_string()),          // MarketDepth = top of book
+            (265, "0".to_string()),          // MDUpdateType = Full Refresh
+            (267, "2".to_string()),          // NoMDEntryTypes = 2
+            (269, "0".to_string()),          // MDEntryType = Bid
+            (269, "1".to_string()),          // MDEntryType = Ask
+            (146, "1".to_string()),          // NoRelatedSym = 1
+            (48, instrument_id.to_string()), // SecurityID (LMAX group delimiter)
+            (22, "8".to_string()),           // IDSource = Exchange Symbol
         ],
-    }
-}
-
-fn print_security_list(msg: &FixMessage) {
-    let get = |tag: u32| -> &str {
-        msg.fields
-            .iter()
-            .find(|(t, _)| *t == tag)
-            .map(|(_, v): &(u32, String)| v.as_str())
-            .unwrap_or("-")
-    };
-    println!(
-        "SecurityList: TotNoRelatedSym={} ReqResult={}",
-        get(393),
-        get(560)
-    );
-    // Walk repeating group entries: each starts with Symbol (55)
-    let fields = &msg.fields;
-    let mut i = 0;
-    while i < fields.len() {
-        if fields[i].0 == 55 {
-            let symbol = &fields[i].1;
-            let mut security_id = "-";
-            let mut sec_type = "-";
-            let mut currency = "-";
-            let mut j = i + 1;
-            while j < fields.len() && fields[j].0 != 55 {
-                match fields[j].0 {
-                    48 => security_id = &fields[j].1,
-                    167 => sec_type = &fields[j].1,
-                    15 => currency = &fields[j].1,
-                    _ => {}
-                }
-                j += 1;
-            }
-            println!(
-                "  {:>8}  {:<30}  type={:<8}  ccy={}",
-                security_id, symbol, sec_type, currency
-            );
-            i = j;
-        } else {
-            i += 1;
-        }
     }
 }
 
@@ -85,23 +54,44 @@ fn main() {
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(2));
-        injector.inject(security_list_request());
+        for id in candidates() {
+            injector.inject(market_data_request(&id, &format!("req_{id}")));
+            std::thread::sleep(Duration::from_millis(100));
+        }
     });
 
     let data_node = data
         .map(|burst| {
             for msg in &burst {
+                let req_id = msg
+                    .fields
+                    .iter()
+                    .find(|f| f.0 == 262)
+                    .map(|f| f.1.as_str())
+                    .unwrap_or("-");
                 match msg.msg_type.as_str() {
-                    "y" => print_security_list(msg),
-                    "3" => {
-                        let text = msg
+                    "W" | "X" => {
+                        let sec_id = msg
                             .fields
                             .iter()
-                            .find(|f| f.0 == 58)
-                            .map(|(_, v)| v.as_str())
-                            .unwrap_or("(no text)");
-                        eprintln!("Reject: {text}");
+                            .find(|f| f.0 == 48)
+                            .map(|f| f.1.as_str())
+                            .unwrap_or("-");
+                        let bid = msg
+                            .fields
+                            .iter()
+                            .find(|f| f.0 == 270)
+                            .map(|f| f.1.as_str())
+                            .unwrap_or("-");
+                        let ask = msg
+                            .fields
+                            .iter()
+                            .find(|f| f.0 == 271)
+                            .map(|f| f.1.as_str())
+                            .unwrap_or("-");
+                        println!("FOUND  id={sec_id:<8}  bid={bid:<12}  ask={ask}");
                     }
+                    // Silently ignore rejects — most IDs won't exist
                     _ => {}
                 }
             }
@@ -121,7 +111,7 @@ fn main() {
     Graph::new(
         vec![data_node, status_node],
         RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(15)),
+        RunFor::Duration(Duration::from_secs(60)),
     )
     .run()
     .unwrap();
