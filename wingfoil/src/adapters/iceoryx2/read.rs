@@ -339,7 +339,7 @@ where
                     return Ok(false);
                 };
 
-                if self.cycles % 10 == 0 {
+                if self.cycles.is_multiple_of(10) {
                     subscriber.update_connections_periodic();
                 }
 
@@ -522,7 +522,7 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                     return Ok(false);
                 };
 
-                if self.cycles % 10 == 0 {
+                if self.cycles.is_multiple_of(10) {
                     subscriber.update_connections_periodic();
                 }
 

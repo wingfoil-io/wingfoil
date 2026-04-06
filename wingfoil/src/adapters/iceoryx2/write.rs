@@ -336,7 +336,7 @@ where
         };
 
         self.cycles += 1;
-        if self.cycles % 10 == 0 {
+        if self.cycles.is_multiple_of(10) {
             match publisher {
                 Iceoryx2PublisherPort::Ipc(p) => p.update_connections()?,
                 Iceoryx2PublisherPort::Local(p) => p.update_connections()?,
@@ -369,10 +369,8 @@ where
             sent_any = true;
         }
 
-        if sent_any {
-            if let Some(ref n) = self.notifier {
-                n.notify()?;
-            }
+        if sent_any && let Some(ref n) = self.notifier {
+            n.notify()?;
         }
 
         Ok(sent_any)
@@ -460,7 +458,7 @@ impl MutableNode for Iceoryx2SlicePublisher {
         };
 
         self.cycles += 1;
-        if self.cycles % 10 == 0 {
+        if self.cycles.is_multiple_of(10) {
             match publisher {
                 Iceoryx2SlicePublisherPort::Ipc(p) => p.update_connections()?,
                 Iceoryx2SlicePublisherPort::Local(p) => p.update_connections()?,
@@ -493,10 +491,8 @@ impl MutableNode for Iceoryx2SlicePublisher {
             sent_any = true;
         }
 
-        if sent_any {
-            if let Some(ref n) = self.notifier {
-                n.notify()?;
-            }
+        if sent_any && let Some(ref n) = self.notifier {
+            n.notify()?;
         }
 
         Ok(sent_any)
