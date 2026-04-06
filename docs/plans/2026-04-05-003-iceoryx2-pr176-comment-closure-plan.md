@@ -43,7 +43,7 @@ Output artifact:
 #### Current Snapshot (2026-04-06)
 
 - PR: `#176` (`feat(adapter): iceoryx2 v2 with daemonless support and Python bindings`)
-- Head SHA: `99e488a`
+- Head SHA: `2a92d7f`
 - `mergeStateStatus`: `UNSTABLE`
 - `mergeable`: `MERGEABLE`
 - Checks:
@@ -61,8 +61,8 @@ Output artifact:
 
 Current state (post-rebase, 2026-04-06):
 - Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24012068885`
-  - Latest iceoryx2 Integration Tests run `24012068881`
+  - Latest CI run `24028610800`
+  - Latest iceoryx2 Integration Tests run `24028610802`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:
@@ -94,7 +94,7 @@ For each feedback item:
 | Add meaningful round-trip tests (not just compile checks) | Blocker (older comment) | Fixed | Round-trip coverage in `wingfoil/src/adapters/iceoryx2/integration_tests.rs` (Local for all modes + contract mismatch); Python tests in `wingfoil-python/tests/test_iceoryx2.py` | “Added Local round-trip tests for all modes and slice payloads; added Python E2E tests; IPC remains opt-in/ignored.” |
 | Thread lifecycle: store `JoinHandle` and join on `stop()` | Blocker | Fixed | Thread handles stored and joined in `wingfoil/src/adapters/iceoryx2/read.rs` (`Iceoryx2ReceiverStream` and `Iceoryx2SliceReceiverStream`) | “Stored join handles for Threaded/Signaled subscriber threads and join them on `stop()` to ensure threads don’t outlive graph shutdown.” |
 | IPC (`Ipc` variant) tested | Blocker | Fixed (opt-in) | IPC tests exist behind `iceoryx2-integration-test` and `#[ignore]` in `wingfoil/src/adapters/iceoryx2/integration_tests.rs` | “Added opt-in IPC round-trip coverage gated behind `iceoryx2-integration-test` and ignored by default to keep CI deterministic.” |
-| `is_multiple_of()` MSRV concern | Blocker | Fixed | Replaced `is_multiple_of()` with `%` checks in `wingfoil/src/adapters/iceoryx2/read.rs` and `wingfoil/src/adapters/iceoryx2/write.rs` | “Replaced `is_multiple_of()` usage with `%` to avoid MSRV/toolchain ambiguity.” |
+| `is_multiple_of()` clippy/style concern | Nice-to-have | Fixed | Use `is_multiple_of()` in `wingfoil/src/adapters/iceoryx2/read.rs` and `wingfoil/src/adapters/iceoryx2/write.rs` to address clippy warnings on manual `%` patterns | “Applied clippy suggestion to use `is_multiple_of()` for periodic cadence checks.” |
 | Python: avoid `.unwrap()` on `PyList::new()` | Recommended | Fixed | `wingfoil-python/src/py_iceoryx2.rs` now falls back to `PyList::empty(py)` on allocation error | “Removed `.unwrap()` in the iceoryx2 subscriber mapping to avoid panics inside Python.” |
 | Python: avoid silent publish failure (non-bytes values) | Recommended | Fixed | `wingfoil-python/src/py_iceoryx2.rs` now uses `try_map` and errors on invalid types | “Invalid publish inputs now surface as an error instead of silently dropping data.” |
 | Nice-to-have: first-class idle strategy | Nice-to-have | Deferred | Not required to close correctness blockers; current Threaded idle is fixed ~10µs | “Deferring to follow-up; current `Threaded` has a simple ~10µs idle strategy; `Signaled` is the primary low-idle-CPU path.” |
