@@ -244,10 +244,15 @@ required-features = ["etcd"]
 
 [[example]]
 name = "fix_client"
-path = "examples/messaging/fix_client.rs"
+path = "examples/fix/fix_client.rs"
 required-features = ["fix"]
 
 [[example]]
 name = "lmax_demo"
-path = "examples/messaging/lmax_demo.rs"
+path = "examples/fix/lmax_demo.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "lmax_instruments"
+path = "examples/fix/lmax_instruments.rs"
 required-features = ["fix"]
