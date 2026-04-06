@@ -43,7 +43,7 @@ Output artifact:
 #### Current Snapshot (2026-04-06)
 
 - PR: `#176` (`feat(adapter): iceoryx2 v2 with daemonless support and Python bindings`)
-- Head SHA: `2a92d7f`
+- Head SHA: `6a146f8`
 - `mergeStateStatus`: `UNSTABLE`
 - `mergeable`: `MERGEABLE`
 - Checks:
@@ -60,9 +60,9 @@ Output artifact:
   - If no new runs appear, request a maintainer to re-run/approve workflows for the updated head SHA.
 
 Current state (post-rebase, 2026-04-06):
-- Upstream PR runs were created as `action_required` (no jobs yet), implying maintainer approval is needed to execute:
-  - Latest CI run `24028847326`
-  - Latest iceoryx2 Integration Tests run `24028847327`
+- Upstream PR runs executed successfully:
+  - Latest CI run `24029016531`
+  - Latest iceoryx2 (Local) Integration Tests run `24029016502`
 
 Fork validation (tommy-ca/wingfoil, 2026-04-05):
 - Push-triggered runs for the latest head SHA completed successfully:
@@ -98,6 +98,8 @@ For each feedback item:
 | Python: avoid `.unwrap()` on `PyList::new()` | Recommended | Fixed | `wingfoil-python/src/py_iceoryx2.rs` now falls back to `PyList::empty(py)` on allocation error | “Removed `.unwrap()` in the iceoryx2 subscriber mapping to avoid panics inside Python.” |
 | Python: avoid silent publish failure (non-bytes values) | Recommended | Fixed | `wingfoil-python/src/py_iceoryx2.rs` now uses `try_map` and errors on invalid types | “Invalid publish inputs now surface as an error instead of silently dropping data.” |
 | Nice-to-have: first-class idle strategy | Nice-to-have | Deferred | Not required to close correctness blockers; current Threaded idle is fixed ~10µs | “Deferring to follow-up; current `Threaded` has a simple ~10µs idle strategy; `Signaled` is the primary low-idle-CPU path.” |
+| Packaging: Python `iceoryx2-beta` default | Blocker (audit) | Fixed | `wingfoil-python/pyproject.toml` keeps `iceoryx2-beta` opt-in; CI builds enable it explicitly | “Kept Python portable by default; CI enables `iceoryx2-beta` when running iceoryx2 tests.” |
+| Threaded subscriber errors propagated | Recommended (audit) | Fixed | `wingfoil/src/adapters/iceoryx2/read.rs` sends `Message::Error` on thread failure | “Thread failures now propagate to graph thread instead of silent starvation.” |
 
 ### Unit 3: Fix Failing Required Checks
 

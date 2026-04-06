@@ -30,14 +30,13 @@ Primary remaining risks are *operational / CI* rather than missing code:
 
 As of **2026-04-06**, GitHub Actions runs on the upstream PR are present but not executed:
 
-- `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` shows multiple runs in `action_required` state with `0s` runtime.
+- `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` shows successful runs.
 - Example run IDs:
-  - 24028847326 (workflow: “CI”)
-  - 24028847327 (workflow: “iceoryx2 Integration Tests”)
+  - 24029016531 (workflow: “CI”)
+  - 24029016502 (workflow: “iceoryx2 (Local) Integration Tests”)
 
 Operational impact:
-- `gh pr checks` reports “no checks” because the runs are not approved/executed yet.
-- Use local `cargo test`/`clippy` as the source of truth until maintainers approve the runs.
+- `gh pr checks` may still report “no checks” depending on repo settings; use `gh run list` as the source of truth for job execution.
 
 ## What’s Implemented (Evidence)
 

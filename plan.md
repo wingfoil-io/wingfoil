@@ -19,7 +19,7 @@ User request: “research and explore this branch for iceoryx2, update requireme
 - [x] Sanity-check Python build (if available in the environment): `cargo test -p wingfoil-python --features iceoryx2-beta` (PASS 2026-04-06)
 - [x] Sanity-check Python pytest (optional / env-dependent): `cd wingfoil-python && uv run pytest -q` (PASS 2026-04-06; 17 passed, 10 skipped)
 - [x] Confirm CI status on PR #176 (GitHub Actions runs are `action_required` and did not execute as of 2026-04-06)
-  - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` shows latest run IDs: 24028847326 (CI), 24028847327 (iceoryx2 Integration Tests)
+  - `gh run list --repo wingfoil-io/wingfoil --branch feat/iceoryx2-v2` now shows successful runs: 24029016531 (CI), 24029016502 (iceoryx2 (Local) Integration Tests)
 - [x] Run ignored IPC tests locally (env-dependent): `cargo test -p wingfoil --features iceoryx2-beta,iceoryx2-integration-test -- --ignored` (PASS 2026-04-06)
 - [x] Capture branch readiness review snapshot: `docs/design/2026-04-06-iceoryx2-v2-readiness-review.md`
 

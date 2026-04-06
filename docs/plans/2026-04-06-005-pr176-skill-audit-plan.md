@@ -24,14 +24,14 @@ Artifacts:
 
 ## Current Snapshot (2026-04-06)
 
-- PR head SHA: `2a92d7f`
+- PR head SHA: `6a146f8`
 - `mergeable`: `MERGEABLE`
 - Latest reviews:
   - `0-jake-0`: `COMMENTED` (2026-04-05)
   - `github-advanced-security`: `COMMENTED` (2026-04-06)
 - Checks:
-  - Upstream Actions runs are present but `action_required` (not executed yet).
-  - Latest run IDs: 24028847326 (CI), 24028847327 (iceoryx2 Integration Tests)
+  - Upstream Actions runs are present and executed.
+  - Latest run IDs: 24029016531 (CI), 24029016502 (iceoryx2 (Local) Integration Tests)
 
 ## Findings Snapshot (2026-04-06)
 
@@ -42,6 +42,9 @@ This section summarizes the report-only audit findings from multiple lenses (cor
 - **Python build enables `iceoryx2-beta` by default** (`wingfoil-python/pyproject.toml`)\n
   - Risk: likely makes the Python package effectively Linux/POSIX-only (iceoryx2 deps), which can be an unexpected packaging/API contract change.\n
   - Decision: either explicitly document “Python is Linux-only” or make `iceoryx2-beta` opt-in for Python builds.
+
+Decision (2026-04-06):
+- `iceoryx2-beta` is now **opt-in** for Python builds by default. CI explicitly enables it when running Python tests.
 
 ### P1 / Should Fix
 
