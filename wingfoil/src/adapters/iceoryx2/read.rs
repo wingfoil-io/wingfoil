@@ -561,19 +561,29 @@ fn run_subscriber_thread<T>(
 where
     T: Element + ZeroCopySend + Clone + Copy + Send + 'static,
 {
-    match opts.variant {
+    let res = match opts.variant {
         Iceoryx2ServiceVariant::Ipc => {
-            run_subscriber_thread_service_ipc::<T>(service_name, channel_sender, opts, running)
+            run_subscriber_thread_service_ipc::<T>(service_name, &channel_sender, opts, running)
         }
         Iceoryx2ServiceVariant::Local => {
-            run_subscriber_thread_service_local::<T>(service_name, channel_sender, opts, running)
+            run_subscriber_thread_service_local::<T>(service_name, &channel_sender, opts, running)
         }
+    };
+
+    if let Err(ref e) = res {
+        // Propagate to the graph thread. Without this, failures can degrade into silent starvation
+        // (node keeps polling but never receives values).
+        let _ =
+            channel_sender.send_message(Message::Error(Arc::new(anyhow::anyhow!(e.to_string()))));
     }
+
+    let _ = channel_sender.send_message(Message::EndOfStream);
+    res
 }
 
 fn run_subscriber_thread_service_ipc<T>(
     service_name: String,
-    channel_sender: ChannelSender<T>,
+    channel_sender: &ChannelSender<T>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
 ) -> Iceoryx2Result<()>
@@ -699,13 +709,12 @@ where
         }
     }
 
-    let _ = channel_sender.send_message(Message::EndOfStream);
     Ok(())
 }
 
 fn run_subscriber_thread_service_local<T>(
     service_name: String,
-    channel_sender: ChannelSender<T>,
+    channel_sender: &ChannelSender<T>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
 ) -> Iceoryx2Result<()>
@@ -827,7 +836,6 @@ where
         }
     }
 
-    let _ = channel_sender.send_message(Message::EndOfStream);
     Ok(())
 }
 
@@ -838,19 +846,27 @@ fn run_slice_subscriber_thread(
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
 ) -> Iceoryx2Result<()> {
-    match opts.variant {
+    let res = match opts.variant {
         Iceoryx2ServiceVariant::Ipc => {
-            run_slice_subscriber_thread_service_ipc(service_name, channel_sender, opts, running)
+            run_slice_subscriber_thread_service_ipc(service_name, &channel_sender, opts, running)
         }
         Iceoryx2ServiceVariant::Local => {
-            run_slice_subscriber_thread_service_local(service_name, channel_sender, opts, running)
+            run_slice_subscriber_thread_service_local(service_name, &channel_sender, opts, running)
         }
+    };
+
+    if let Err(ref e) = res {
+        let _ =
+            channel_sender.send_message(Message::Error(Arc::new(anyhow::anyhow!(e.to_string()))));
     }
+
+    let _ = channel_sender.send_message(Message::EndOfStream);
+    res
 }
 
 fn run_slice_subscriber_thread_service_ipc(
     service_name: String,
-    channel_sender: ChannelSender<Vec<u8>>,
+    channel_sender: &ChannelSender<Vec<u8>>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
 ) -> Iceoryx2Result<()> {
@@ -964,13 +980,12 @@ fn run_slice_subscriber_thread_service_ipc(
             }
         }
     }
-    let _ = channel_sender.send_message(Message::EndOfStream);
     Ok(())
 }
 
 fn run_slice_subscriber_thread_service_local(
     service_name: String,
-    channel_sender: ChannelSender<Vec<u8>>,
+    channel_sender: &ChannelSender<Vec<u8>>,
     opts: Iceoryx2SubOpts,
     running: Arc<AtomicBool>,
 ) -> Iceoryx2Result<()> {
@@ -1084,6 +1099,5 @@ fn run_slice_subscriber_thread_service_local(
             }
         }
     }
-    let _ = channel_sender.send_message(Message::EndOfStream);
     Ok(())
 }

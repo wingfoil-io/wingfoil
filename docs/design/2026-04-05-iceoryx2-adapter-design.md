@@ -96,6 +96,10 @@ Intended use:
 Implementation note:
 - Wingfoil stores join handles for background subscriber threads and joins them during `stop()` so threads cannot outlive the graph teardown.
 
+Failure propagation note:
+- In `Threaded` / `Signaled` modes, subscriber thread errors are propagated to the graph thread via the channel as `Message::Error(...)`.
+  Without this, failures can degrade into silent starvation (node keeps polling but never receives values).
+
 Review tracking:
 - PR #176 review closure work is tracked in `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`.
 - Structured PR audit (skills + agents) is tracked in `docs/plans/2026-04-06-005-pr176-skill-audit-plan.md`.
