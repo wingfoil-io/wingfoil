@@ -422,6 +422,12 @@ Related docs:
 - For `Signaled` mode, the `"{service_name}.signal"` Event service may be opened/created by both sides; short-lived graphs should tolerate transient open/create races (retry).
 - `history_size` is a publish/subscribe **service-level** configuration in iceoryx2; all participants opening/creating the same service should use compatible settings, otherwise `open_or_create()` may fail.
 
+**Stability / Support Notes (Beta):**
+- The adapter is gated behind `iceoryx2-beta` and is intended for early adopters who can tolerate API churn.
+- Treat the iceoryx2 “service contract” as part of your deployment configuration (especially `history_size` and slice sizing).
+- Prefer `Local` in unit/integration tests by default; opt into true IPC tests only in environments with known-good shared memory sizing and permissions.
+- Error classification between `ServiceOpenFailed` vs `ServiceConfigMismatch` is best-effort; rely on the structured contract context rather than upstream error strings.
+
 ```rust
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub enum Iceoryx2ServiceVariant {
@@ -570,6 +576,7 @@ pub fn iceoryx2_pub_slice_with(
 - Unit tests can use the `local` service variant (intra-process) without touching shared memory.
 - Integration tests that require shared memory should be feature-gated (e.g. `iceoryx2-integration-test`) or `#[ignore]` by default.
 - Integration tests depend on shared memory availability and permissions and may be sensitive to environment (e.g. Docker `/dev/shm` size).
+- When asserting on history / multi-sample bursts, avoid `collapse()` since it keeps only the last item of each `Burst<T>`.
 
 **IPC Service Contract Note:**
 - Some publish/subscribe settings (notably `history_size`) are part of the iceoryx2 **service-level configuration**. All participants opening/creating the same service should use compatible settings, otherwise `open_or_create()` can fail.

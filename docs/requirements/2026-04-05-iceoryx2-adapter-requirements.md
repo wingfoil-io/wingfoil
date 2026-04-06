@@ -1,7 +1,8 @@
 ---
 date: 2026-04-05
+last_reviewed: 2026-04-06
 topic: iceoryx2-adapter-requirements
-status: active
+status: in_review
 ---
 
 # iceoryx2 Adapter — Requirements
@@ -85,6 +86,13 @@ Defaults (documented for interop predictability):
 - **NFR-6 (Thread Lifecycle)**: Background threads (Threaded/Signaled subscribers) must not outlive graph shutdown; they must be stopped and joined deterministically.
 - **NFR-7 (Python Safety)**: Python bindings must not panic on allocation/conversion failures; invalid user inputs should raise a Python error or skip sending in a way that is observable.
   - In Wingfoil’s bindings, `.iceoryx2_pub(...)` raises `TypeError` when stream values are not `bytes` or `list[bytes]` (no silent data loss).
+- **NFR-8 (Diagnosability)**: Errors must carry enough structured context to distinguish:
+  - environment failures (shared memory, permissions)
+  - transient startup races (event service open/create in Signaled mode)
+  - service contract incompatibility (e.g., mismatched `history_size`)
+  - Notes:
+    - “Config mismatch” detection is best-effort; do not rely on exact upstream error strings.
+    - The invariant is: errors include the service contract context (`service_name`, `variant`, `history_size`, derived buffers).
 
 ## Test Requirements (TDD)
 
@@ -107,6 +115,10 @@ Feature-gated or ignored by default (requires shared memory environment):
 - Late-joiner history test using non-Wingfoil publisher then Wingfoil subscriber.
 - Cross-process (“true IPC”) test that forks/spawns separate binaries (optional).
 
+Note:
+- When validating late-joiner history, ensure the test collects *all* items from each `Burst<T>`.
+  Avoid `collapse()` in the history assertions since it keeps only the last item of a burst.
+
 ### E2E Tests (Python)
 
 Default (runs in `pytest` without IPC):
@@ -127,6 +139,10 @@ Optional / feature-gated:
   - `update_connections()` rationale
   - why `always_callback()` is required for subscribers (they must be scheduled even without upstream data)
   - shared memory deployment constraints
+- “Production readiness” guidance is explicit about what is (and is not) guaranteed by the beta adapter:
+  - no durability/persistence guarantees (in-memory only)
+  - Linux-first shared memory constraints
+  - service contract coupling across languages/processes
 
 Tracking:
 - PR review closure work (CI + reviewer blockers) is tracked in `docs/plans/2026-04-05-003-iceoryx2-pr176-comment-closure-plan.md`.

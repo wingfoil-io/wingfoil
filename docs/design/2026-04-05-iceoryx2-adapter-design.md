@@ -1,7 +1,8 @@
 ---
 date: 2026-04-05
+last_reviewed: 2026-04-06
 topic: iceoryx2-adapter-design
-status: active
+status: in_review
 ---
 
 # iceoryx2 Adapter — Design
@@ -172,6 +173,18 @@ The adapter maps common errors into `Iceoryx2Error`:
 Guideline:
 - tests should assert on error presence and category, not on exact string messages.
 
+### “Config Mismatch” Classification
+
+When opening/creating a service fails, Wingfoil attempts a best-effort classification into:
+
+- `Iceoryx2Error::ServiceConfigMismatch { .. }` when the underlying error strongly suggests incompatibility
+- `Iceoryx2Error::ServiceOpenFailed { .. }` for all other open/create failures
+
+Important notes:
+- This classification is intentionally conservative; it must not depend on stable upstream error strings.
+- The stable invariant is the *structured service contract context* included with the error:
+  `service_name`, `variant`, `history_size`, and the derived `subscriber_max_buffer_size`.
+
 ## Testing Strategy (TDD)
 
 Default tests should use `Local` to avoid shared-memory dependencies.
@@ -185,3 +198,8 @@ Test matrix to keep in mind:
 - Mode: `Spin`, `Threaded`, `Signaled`
 - Payload: fixed type (`TestData`), slice (`Vec<u8>`)
 - Scenario: steady-state, late-joiner/history, short-lived publisher, graph stop/start
+
+Test authoring note:
+- `StreamOperators::collapse()` keeps only the last item of a burst. Use it only when you want
+  “latest value” semantics per tick; do not use it in history tests where you need to assert on
+  all samples delivered.
