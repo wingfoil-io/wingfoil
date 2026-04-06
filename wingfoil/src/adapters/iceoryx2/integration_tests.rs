@@ -4,6 +4,8 @@
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
+#[cfg(feature = "iceoryx2-integration-test")]
+use crate::types::IntoNode;
 use crate::{Graph, RunFor, RunMode, ticker};
 #[cfg(feature = "iceoryx2-integration-test")]
 use iceoryx2::port::update_connections::UpdateConnections;
@@ -24,6 +26,31 @@ fn unique_service_name(prefix: &str) -> String {
         "wingfoil/test/integration/{prefix}/{}/{n}",
         std::process::id()
     )
+}
+
+#[cfg(feature = "iceoryx2-integration-test")]
+struct IpcPublisherUpdateConnectionsNode {
+    publisher: iceoryx2::port::publisher::Publisher<iceoryx2::prelude::ipc::Service, TestData, ()>,
+    cycles: u64,
+}
+
+#[cfg(feature = "iceoryx2-integration-test")]
+impl crate::MutableNode for IpcPublisherUpdateConnectionsNode {
+    fn cycle(&mut self, _state: &mut crate::GraphState) -> anyhow::Result<bool> {
+        self.cycles += 1;
+        // In decentralized discovery, connections can take some wall-clock time to converge.
+        // This node intentionally slows down the ignored IPC test to make it resilient on
+        // loaded CI runners and under filesystem-backed discovery delays.
+        let _ = self.publisher.update_connections();
+        std::thread::sleep(Duration::from_millis(5));
+        Ok(false)
+    }
+
+    fn start(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
+        state.always_callback();
+        let _ = self.publisher.update_connections();
+        Ok(())
+    }
 }
 
 #[test]
@@ -342,20 +369,35 @@ fn test_late_joiner_with_history() -> anyhow::Result<()> {
 
     // Start Wingfoil subscriber and verify it can receive the history.
     let sub = iceoryx2_sub_with::<TestData>(&service_name, Iceoryx2ServiceVariant::Ipc);
-    let collected = sub.collapse().collect();
+    // Note: `collapse()` keeps only the last item of a burst. For a history test we want *all*
+    // samples that arrive across cycles, so we fold bursts into a flat vector.
+    let collected = sub.fold(Box::new(|acc: &mut Vec<TestData>, burst| {
+        for item in burst {
+            acc.push(item);
+        }
+    }));
+
+    // Connection establishment in iceoryx2 is decentralized. When the subscriber joins late,
+    // the publisher must also refresh connections while the graph is running so the subscriber
+    // can connect and read history.
+    let publisher_update = IpcPublisherUpdateConnectionsNode {
+        publisher,
+        cycles: 0,
+    }
+    .into_node();
 
     Graph::new(
-        vec![collected.clone().as_node()],
+        vec![publisher_update, collected.clone().as_node()],
         RunMode::RealTime,
-        RunFor::Cycles(50),
+        RunFor::Duration(Duration::from_millis(300)),
     )
     .run()?;
 
     let values = collected.peek_value();
     assert_eq!(values.len(), 3, "expected 3 samples from history");
-    assert_eq!(values[0].value.value, 0);
-    assert_eq!(values[1].value.value, 1);
-    assert_eq!(values[2].value.value, 2);
+    assert_eq!(values[0].value, 0);
+    assert_eq!(values[1].value, 1);
+    assert_eq!(values[2].value, 2);
     Ok(())
 }
 
