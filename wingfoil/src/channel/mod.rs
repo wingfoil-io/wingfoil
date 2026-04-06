@@ -33,3 +33,35 @@ pub type SendResult = Result<(), SendNodeError>;
 use crate::graph::ReadyNotifier;
 #[cfg(feature = "async")]
 pub type NotifierChannelSender = kanal::Sender<ReadyNotifier>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_closed_display() {
+        assert_eq!(SendNodeError::ChannelClosed.to_string(), "channel closed");
+    }
+
+    #[test]
+    fn notifier_closed_display() {
+        assert_eq!(
+            SendNodeError::NotifierClosed.to_string(),
+            "ready-notifier dropped"
+        );
+    }
+
+    #[test]
+    fn send_node_error_is_error() {
+        let e: &dyn std::error::Error = &SendNodeError::ChannelClosed;
+        assert!(e.source().is_none());
+    }
+
+    #[test]
+    fn send_node_error_eq_and_copy() {
+        let a = SendNodeError::ChannelClosed;
+        let b = a; // Copy
+        assert_eq!(a, b);
+        assert_ne!(SendNodeError::ChannelClosed, SendNodeError::NotifierClosed);
+    }
+}

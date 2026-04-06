@@ -37,3 +37,27 @@ impl<T: Element> Drop for PrintStream<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::graph::*;
+    use crate::nodes::*;
+    use crate::types::NanoTime;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn print_passes_through_values() {
+        let src: Rc<RefCell<CallBackStream<u64>>> = Rc::new(RefCell::new(CallBackStream::new()));
+        src.borrow_mut().push(ValueAt::new(1, NanoTime::new(100)));
+        src.borrow_mut().push(ValueAt::new(2, NanoTime::new(200)));
+        src.borrow_mut().push(ValueAt::new(3, NanoTime::new(300)));
+
+        let collected = src.clone().as_stream().print().collect();
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let vals: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(vals, vec![1, 2, 3]);
+    }
+}

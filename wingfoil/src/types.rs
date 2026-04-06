@@ -321,3 +321,123 @@ where
         Rc::new(RefCell::new(self))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{GraphState, RunFor, RunMode};
+    use crate::nodes::{CallBackStream, NodeOperators};
+    use std::cell::RefCell;
+
+    // ── burst! macro ────────────────────────────────────────────────────────
+
+    #[test]
+    fn burst_empty() {
+        let b: Burst<i32> = burst![];
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn burst_single() {
+        let b: Burst<i32> = burst![42];
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0], 42);
+    }
+
+    #[test]
+    fn burst_multiple() {
+        let b: Burst<i32> = burst![1, 2, 3];
+        assert_eq!(b.as_slice(), &[1, 2, 3]);
+    }
+
+    // ── Dep ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dep_active_is_active() {
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let dep = Dep::Active(src.clone());
+        assert!(dep.is_active());
+        assert!(Rc::ptr_eq(dep.stream(), &src));
+    }
+
+    #[test]
+    fn dep_passive_is_not_active() {
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let dep = Dep::Passive(src.clone());
+        assert!(!dep.is_active());
+    }
+
+    // ── UpStreams ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upstreams_none_is_empty() {
+        let u = UpStreams::none();
+        assert!(u.active.is_empty());
+        assert!(u.passive.is_empty());
+    }
+
+    #[test]
+    fn upstreams_new_stores_vecs() {
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let node = src.clone().as_node();
+        let u = UpStreams::new(vec![node], vec![]);
+        assert_eq!(u.active.len(), 1);
+        assert!(u.passive.is_empty());
+    }
+
+    // ── AsUpstreamNodes ──────────────────────────────────────────────────────
+
+    #[test]
+    fn rc_node_as_upstream_nodes() {
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let node: Rc<dyn Node> = src.clone().as_node();
+        let ups = node.as_upstream_nodes();
+        assert_eq!(ups.len(), 1);
+    }
+
+    #[test]
+    fn rc_stream_as_upstream_nodes() {
+        let src: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let ups = src.as_upstream_nodes();
+        assert_eq!(ups.len(), 1);
+    }
+
+    #[test]
+    fn vec_as_upstream_nodes() {
+        let s1: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let s2: Rc<dyn Stream<u64>> = Rc::new(RefCell::new(CallBackStream::<u64>::new()));
+        let v: Vec<Rc<dyn Stream<u64>>> = vec![s1, s2];
+        let ups = v.as_upstream_nodes();
+        assert_eq!(ups.len(), 2);
+    }
+
+    // ── IntoNode / IntoStream ────────────────────────────────────────────────
+
+    #[test]
+    fn into_node_creates_rc_dyn_node() {
+        let cb = CallBackStream::<u64>::new();
+        let node: Rc<dyn Node> = cb.into_node();
+        // should be runnable (no upstreams → source node)
+        node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+    }
+
+    #[test]
+    fn into_stream_creates_rc_dyn_stream() {
+        let src: Rc<RefCell<CallBackStream<u64>>> = Rc::new(RefCell::new(CallBackStream::new()));
+        // peek_value via the Stream trait object
+        let _: u64 = src.peek_value();
+    }
+
+    // ── GraphState integration via run ───────────────────────────────────────
+
+    #[test]
+    fn graph_state_new_starts_at_zero() {
+        let state = GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+            NanoTime::ZERO,
+        );
+        assert_eq!(state.time(), NanoTime::ZERO);
+    }
+}
