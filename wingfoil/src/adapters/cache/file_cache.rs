@@ -154,6 +154,8 @@ impl<T> FileCache<T> {
 mod tests {
     use super::*;
     use crate::adapters::cache::CacheKey;
+    use std::time::Duration;
+    use std::time::SystemTime;
 
     fn test_key(s: &str) -> CacheKey {
         CacheKey::from_parts(&["localhost", "5000", s])
@@ -161,6 +163,38 @@ mod tests {
 
     fn unbounded_cache(dir: &std::path::Path) -> FileCache<f64> {
         FileCache::new(CacheConfig::new(dir, u64::MAX))
+    }
+
+    async fn mtime(path: &std::path::Path) -> SystemTime {
+        tokio::fs::metadata(path)
+            .await
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    }
+
+    async fn ensure_mtime_newer<FUT>(
+        path: &std::path::Path,
+        older_than: SystemTime,
+        mut touch: impl FnMut() -> FUT,
+    ) where
+        FUT: std::future::Future<Output = ()>,
+    {
+        // Some filesystems have coarse mtime resolution (e.g. 1s). If two writes land in the
+        // same tick, the mtime can remain equal. To make the test robust, we:
+        // 1) touch the file
+        // 2) if it is still not newer, wait for a coarse tick and touch again
+        for _ in 0..5 {
+            touch().await;
+            if mtime(path).await > older_than {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        panic!(
+            "expected mtime for {} to advance beyond {:?}",
+            path.display(),
+            older_than
+        );
     }
 
     #[tokio::test]
@@ -274,13 +308,17 @@ mod tests {
             "key_b should exist"
         );
 
-        // Sleep briefly so key_a and key_b have distinct mtimes, then touch key_a
-        // via get() to make it the most recently used.
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        cache.get(&key_a).await.unwrap();
+        // Touch key_a via get() to make it the most recently used. This relies on `get()`
+        // updating file mtime; we wait until the filesystem reports key_a is newer than key_b.
+        let path_a = dir.join(format!("{}.cache", key_a.0));
+        let path_b = dir.join(format!("{}.cache", key_b.0));
+        let b_mtime = mtime(&path_b).await;
+        ensure_mtime_newer(&path_a, b_mtime, || async {
+            let _ = cache.get(&key_a).await.unwrap();
+        })
+        .await;
 
         // Write key_c — would exceed limit, so the LRU file (key_b, not key_a) is evicted.
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let key_c = test_key("lru_c");
         cache.put(&key_c, "q_c", &data_c).await.unwrap();
 
