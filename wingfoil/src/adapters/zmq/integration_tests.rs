@@ -4,7 +4,7 @@ use log::Level::Info;
 use std::rc::Rc;
 use std::time::Duration;
 
-// --- ZMQ integration tests (ports 5556–5562) ---
+// --- ZMQ integration tests (ports 5556–5563) ---
 
 #[test]
 fn zmq_deserialization_error_propagates() {
@@ -156,7 +156,11 @@ fn zmq_first_message_not_dropped() {
 fn zmq_first_message_not_dropped_no_delay() {
     _ = env_logger::try_init();
     let period = Duration::from_millis(50);
-    let port = 5564;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let address = format!("tcp://127.0.0.1:{port}");
     let run_for = RunFor::Duration(period * 15);
     let (data, _status) = zmq_sub::<u64>(&address).unwrap();
@@ -240,6 +244,55 @@ fn zmq_sub_stops_cleanly_without_publisher_endofstream() {
         elapsed < Duration::from_secs(2),
         "subscriber took too long to stop: {elapsed:?}"
     );
+}
+
+// --- shared etcd test helpers (requires zmq-etcd-integration-test) ---
+
+/// Start an etcd container and return (container_handle, endpoint_url).
+/// The container is stopped when the handle is dropped.
+#[cfg(feature = "zmq-etcd-integration-test")]
+fn start_etcd_container() -> anyhow::Result<(impl Drop, String)> {
+    use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
+    let container = GenericImage::new("gcr.io/etcd-development/etcd", "v3.5.0")
+        .with_wait_for(WaitFor::message_on_stderr(
+            "now serving peer/client/metrics",
+        ))
+        .with_env_var("ETCD_LISTEN_CLIENT_URLS", "http://0.0.0.0:2379")
+        .with_env_var("ETCD_ADVERTISE_CLIENT_URLS", "http://0.0.0.0:2379")
+        .start()?;
+    let port = container.get_host_port_ipv4(2379)?;
+    let endpoint = format!("http://127.0.0.1:{port}");
+    Ok((container, endpoint))
+}
+
+/// Poll etcd until `key` is present or `timeout` elapses, then return the value.
+/// Returns an error if the key is still absent after the deadline.
+#[cfg(feature = "zmq-etcd-integration-test")]
+fn wait_for_etcd_key(endpoint: &str, key: &str, timeout: Duration) -> anyhow::Result<String> {
+    use etcd_client::Client;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let val = rt.block_on(async {
+            let mut client = Client::connect([endpoint], None).await?;
+            let resp = client.get(key, None).await?;
+            anyhow::Ok(
+                resp.kvs()
+                    .first()
+                    .and_then(|kv| kv.value_str().ok())
+                    .map(|s| s.to_string()),
+            )
+        })?;
+        if let Some(v) = val {
+            return Ok(v);
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("key '{}' not found in etcd within {:?}", key, timeout);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 // --- cross-language integration tests (ports 5580–5590) ---
@@ -392,30 +445,12 @@ import wingfoil as wf
         use super::*;
         use crate::adapters::etcd::EtcdConnection;
         use crate::adapters::zmq::EtcdRegistry;
-        use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
-
-        const ETCD_PORT: u16 = 2379;
-        const ETCD_IMAGE: &str = "gcr.io/etcd-development/etcd";
-        const ETCD_TAG: &str = "v3.5.0";
-
-        fn start_etcd() -> anyhow::Result<(impl Drop, String)> {
-            let container = GenericImage::new(ETCD_IMAGE, ETCD_TAG)
-                .with_wait_for(WaitFor::message_on_stderr(
-                    "now serving peer/client/metrics",
-                ))
-                .with_env_var("ETCD_LISTEN_CLIENT_URLS", "http://0.0.0.0:2379")
-                .with_env_var("ETCD_ADVERTISE_CLIENT_URLS", "http://0.0.0.0:2379")
-                .start()?;
-            let port = container.get_host_port_ipv4(ETCD_PORT)?;
-            let endpoint = format!("http://127.0.0.1:{port}");
-            Ok((container, endpoint))
-        }
 
         #[test]
         fn zmq_rust_pub_python_sub_etcd() {
             require_python();
             _ = env_logger::try_init();
-            let (_container, endpoint) = start_etcd().unwrap();
+            let (_container, endpoint) = super::super::start_etcd_container().unwrap();
             let port = 5582u16;
             let service = "cross-lang/rust-pub";
 
@@ -430,8 +465,8 @@ import wingfoil as wf
                     .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)))
             });
 
-            // Wait for publisher to register in etcd.
-            std::thread::sleep(Duration::from_millis(800));
+            // Wait for publisher to register in etcd before starting subscriber.
+            super::super::wait_for_etcd_key(&endpoint, service, Duration::from_secs(5)).unwrap();
 
             let script = format!(
                 r#"
@@ -454,7 +489,7 @@ for a, b in zip(nums, nums[1:]):
         fn zmq_python_pub_rust_sub_etcd() {
             require_python();
             _ = env_logger::try_init();
-            let (_container, endpoint) = start_etcd().unwrap();
+            let (_container, endpoint) = super::super::start_etcd_container().unwrap();
             let port = 5583u16;
             let service = "cross-lang/python-pub";
 
@@ -478,8 +513,8 @@ import wingfoil as wf
                 .spawn()
                 .expect("failed to spawn python publisher");
 
-            // Wait for Python publisher to register in etcd.
-            std::thread::sleep(Duration::from_millis(800));
+            // Wait for Python publisher to register in etcd before connecting.
+            super::super::wait_for_etcd_key(&endpoint, service, Duration::from_secs(5)).unwrap();
 
             // Rust subscriber via etcd.
             let conn = EtcdConnection::new(&endpoint);
@@ -520,22 +555,9 @@ mod etcd_tests {
     use crate::adapters::etcd::EtcdConnection;
     use crate::adapters::zmq::EtcdRegistry;
     use etcd_client::Client;
-    use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
-
-    const ETCD_PORT: u16 = 2379;
-    const ETCD_IMAGE: &str = "gcr.io/etcd-development/etcd";
-    const ETCD_TAG: &str = "v3.5.0";
 
     fn start_etcd() -> anyhow::Result<(impl Drop, EtcdConnection)> {
-        let container = GenericImage::new(ETCD_IMAGE, ETCD_TAG)
-            .with_wait_for(WaitFor::message_on_stderr(
-                "now serving peer/client/metrics",
-            ))
-            .with_env_var("ETCD_LISTEN_CLIENT_URLS", "http://0.0.0.0:2379")
-            .with_env_var("ETCD_ADVERTISE_CLIENT_URLS", "http://0.0.0.0:2379")
-            .start()?;
-        let port = container.get_host_port_ipv4(ETCD_PORT)?;
-        let endpoint = format!("http://127.0.0.1:{port}");
+        let (container, endpoint) = super::start_etcd_container()?;
         Ok((container, EtcdConnection::new(endpoint)))
     }
 
@@ -588,13 +610,10 @@ mod etcd_tests {
                 .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
         });
 
-        std::thread::sleep(Duration::from_millis(800));
-        let val = read_key(&conn, "etcd-quotes").unwrap();
-        assert!(val.is_some(), "key not written to etcd");
-        assert!(
-            val.unwrap().contains("5596"),
-            "address should contain port 5596"
-        );
+        let val =
+            super::wait_for_etcd_key(&conn.endpoints[0], "etcd-quotes", Duration::from_secs(5))
+                .unwrap();
+        assert!(val.contains("5596"), "address should contain port 5596");
 
         handle.join().unwrap().unwrap();
     }
@@ -614,7 +633,7 @@ mod etcd_tests {
         });
 
         // Wait for publisher to bind and register in etcd.
-        std::thread::sleep(Duration::from_millis(800));
+        super::wait_for_etcd_key(&conn.endpoints[0], "etcd-data", Duration::from_secs(5)).unwrap();
 
         let (data, _status) = zmq_sub::<u64>(("etcd-data", EtcdRegistry::new(conn))).unwrap();
         let recv_node = data.collect().finally(|res, _| {

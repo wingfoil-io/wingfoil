@@ -22,10 +22,10 @@ use wingfoil::{Node, Stream, StreamOperators};
 /// Returns:
 ///     Tuple of (data_stream, status_stream)
 #[pyfunction]
-pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
-    let (data, status) =
-        zmq_sub::<Vec<u8>>(address.as_str()).expect("direct address zmq_sub should not fail");
-    streams_to_py(data, status)
+pub fn py_zmq_sub(address: String) -> PyResult<(PyStream, PyStream)> {
+    let (data, status) = zmq_sub::<Vec<u8>>(address.as_str())
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(streams_to_py(data, status))
 }
 
 /// Subscribe to a named ZMQ publisher via etcd service discovery.
