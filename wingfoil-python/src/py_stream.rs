@@ -360,6 +360,7 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the write operation.
+    #[cfg(feature = "etcd")]
     #[pyo3(signature = (endpoint, lease_ttl=None, force=true))]
     fn etcd_pub(&self, endpoint: String, lease_ttl: Option<f64>, force: bool) -> PyNode {
         PyNode::new(crate::py_etcd::py_etcd_pub_inner(
@@ -435,6 +436,7 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the publish operation.
+    #[cfg(feature = "etcd")]
     fn zmq_pub_etcd(&self, name: String, port: u16, endpoint: String) -> PyNode {
         PyNode::new(crate::py_zmq::py_zmq_pub_etcd_inner(
             &self.0, name, port, endpoint,
@@ -451,6 +453,7 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the publish operation.
+    #[cfg(feature = "etcd")]
     fn zmq_pub_etcd_on(
         &self,
         name: String,

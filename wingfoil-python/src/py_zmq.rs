@@ -43,6 +43,7 @@ pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
 ///
 /// Raises:
 ///     RuntimeError: if the key is absent or etcd is unreachable
+#[cfg(feature = "etcd")]
 #[pyfunction]
 pub fn py_zmq_sub_etcd(name: String, endpoint: String) -> PyResult<(PyStream, PyStream)> {
     use wingfoil::adapters::zmq::EtcdRegistry;
@@ -99,6 +100,7 @@ pub fn py_zmq_pub_inner(stream: &Rc<dyn Stream<PyElement>>, port: u16) -> Rc<dyn
 }
 
 /// Inner implementation for `zmq_pub_etcd` (etcd-based registration).
+#[cfg(feature = "etcd")]
 pub fn py_zmq_pub_etcd_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     name: String,
@@ -112,6 +114,7 @@ pub fn py_zmq_pub_etcd_inner(
 }
 
 /// Inner implementation for `zmq_pub_etcd_on` (etcd-based, routable address).
+#[cfg(feature = "etcd")]
 pub fn py_zmq_pub_etcd_on_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     name: String,
@@ -125,6 +128,7 @@ pub fn py_zmq_pub_etcd_on_inner(
     bytes_stream.zmq_pub_on(&address, port, (name.as_str(), registry))
 }
 
+#[cfg(feature = "etcd")]
 fn py_bytes_stream(
     stream: &Rc<dyn Stream<PyElement>>,
     label: &'static str,

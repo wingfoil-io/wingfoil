@@ -84,13 +84,18 @@ fn zmq_same_thread() {
 fn zmq_separate_threads() {
     _ = env_logger::try_init();
     let period = Duration::from_millis(50);
-    let port = 5557;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let address = format!("tcp://127.0.0.1:{port}");
     let run_for = RunFor::Duration(Duration::from_secs(2));
     let rf_send = run_for;
     let rf_rec = run_for;
     let rec = std::thread::spawn(move || receiver(&address).run(RunMode::RealTime, rf_rec));
-    let send = std::thread::spawn(move || sender(period, port).run(RunMode::RealTime, rf_send));
+    let send =
+        std::thread::spawn(move || sender_with_delay(period, port).run(RunMode::RealTime, rf_send));
     send.join().unwrap().unwrap();
     rec.join().unwrap().unwrap();
 }
@@ -256,14 +261,19 @@ mod cross_lang_tests {
     use super::*;
     use std::process::{Command, Stdio};
 
-    fn python_available() -> bool {
-        Command::new("python3")
+    fn require_python() {
+        let ok = Command::new("python3")
             .args(["-c", "import wingfoil"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        assert!(
+            ok,
+            "zmq-cross-lang-test feature is enabled but `import wingfoil` failed. \
+             Run `maturin develop` in wingfoil-python/ first."
+        );
     }
 
     fn run_python(script: &str) -> std::process::Output {
@@ -272,7 +282,7 @@ mod cross_lang_tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
-            .expect("failed to execute python3")
+            .expect("failed to execute python")
     }
 
     fn assert_python_ok(output: &std::process::Output, label: &str) {
@@ -287,10 +297,7 @@ mod cross_lang_tests {
 
     #[test]
     fn zmq_rust_pub_python_sub_direct() {
-        if !python_available() {
-            eprintln!("SKIP: wingfoil python package not installed");
-            return;
-        }
+        require_python();
         _ = env_logger::try_init();
         let port = 5580u16;
 
@@ -325,10 +332,7 @@ for a, b in zip(nums, nums[1:]):
 
     #[test]
     fn zmq_python_pub_rust_sub_direct() {
-        if !python_available() {
-            eprintln!("SKIP: wingfoil python package not installed");
-            return;
-        }
+        require_python();
         _ = env_logger::try_init();
         let port = 5581u16;
 
@@ -409,10 +413,7 @@ import wingfoil as wf
 
         #[test]
         fn zmq_rust_pub_python_sub_etcd() {
-            if !python_available() {
-                eprintln!("SKIP: wingfoil python package not installed");
-                return;
-            }
+            require_python();
             _ = env_logger::try_init();
             let (_container, endpoint) = start_etcd().unwrap();
             let port = 5582u16;
@@ -451,10 +452,7 @@ for a, b in zip(nums, nums[1:]):
 
         #[test]
         fn zmq_python_pub_rust_sub_etcd() {
-            if !python_available() {
-                eprintln!("SKIP: wingfoil python package not installed");
-                return;
-            }
+            require_python();
             _ = env_logger::try_init();
             let (_container, endpoint) = start_etcd().unwrap();
             let port = 5583u16;
@@ -587,13 +585,10 @@ mod etcd_tests {
             ticker(Duration::from_millis(50))
                 .count()
                 .zmq_pub(port, ("etcd-quotes", EtcdRegistry::new(conn_clone)))
-                .run(
-                    RunMode::RealTime,
-                    RunFor::Duration(Duration::from_millis(400)),
-                )
+                .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
         });
 
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(800));
         let val = read_key(&conn, "etcd-quotes").unwrap();
         assert!(val.is_some(), "key not written to etcd");
         assert!(
@@ -609,17 +604,17 @@ mod etcd_tests {
         _ = env_logger::try_init();
         let (_container, conn) = start_etcd().unwrap();
         let port = 5597u16;
-        let run_for = RunFor::Duration(Duration::from_millis(700));
 
         let conn_pub = conn.clone();
         std::thread::spawn(move || {
             ticker(Duration::from_millis(50))
                 .count()
                 .zmq_pub(port, ("etcd-data", EtcdRegistry::new(conn_pub)))
-                .run(RunMode::RealTime, run_for)
+                .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)))
         });
 
-        std::thread::sleep(Duration::from_millis(300));
+        // Wait for publisher to bind and register in etcd.
+        std::thread::sleep(Duration::from_millis(800));
 
         let (data, _status) = zmq_sub::<u64>(("etcd-data", EtcdRegistry::new(conn))).unwrap();
         let recv_node = data.collect().finally(|res, _| {
@@ -627,7 +622,9 @@ mod etcd_tests {
             assert!(!values.is_empty(), "no data received via etcd discovery");
             Ok(())
         });
-        recv_node.run(RunMode::RealTime, run_for).unwrap();
+        recv_node
+            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))
+            .unwrap();
     }
 
     #[test]

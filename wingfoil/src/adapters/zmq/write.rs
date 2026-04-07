@@ -13,7 +13,7 @@ const ZMQ_EVENT_ACCEPTED: u16 = 0x0008;
 /// Maximum time to buffer messages while waiting for a subscriber to connect.
 /// Messages buffered longer than this are discarded — a subscriber connecting
 /// after this window should not receive stale data.
-const BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
+const BUFFER_TIMEOUT: Duration = Duration::from_millis(500);
 
 struct ZeroMqSenderNode<T: Element + Send + Serialize> {
     src: Rc<dyn Stream<T>>,
