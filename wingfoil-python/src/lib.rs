@@ -7,6 +7,7 @@ mod py_fix;
 mod py_fluvio;
 #[cfg(feature = "iceoryx2-beta")]
 mod py_iceoryx2;
+mod py_kafka;
 mod py_kdb;
 mod py_latency;
 mod py_otlp;
@@ -191,6 +192,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_etcd::py_etcd_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_fluvio::py_fluvio_sub, module)?)?;
+    module.add_function(wrap_pyfunction!(py_kafka::py_kafka_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;

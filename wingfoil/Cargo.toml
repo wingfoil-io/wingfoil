@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web", "kafka"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -13,6 +13,8 @@ zmq-cross-lang-test = ["zmq-integration-test"]
 zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "zmq-etcd-integration-test"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
+kafka = ["dep:rdkafka", "async"]
+kafka-integration-test = ["kafka", "dep:testcontainers"]
 tracing = ["dep:tracing"]
 instrument-run = ["tracing"]
 instrument-cycle = ["tracing"]
@@ -103,6 +105,7 @@ csv = { version = "1.4", optional = true }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
+rdkafka = { version = "0.37", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"], optional = true }
 fluvio = { version = "0.50.1", optional = true }
@@ -297,3 +300,8 @@ required-features = ["web"]
 name = "fluvio"
 path = "examples/fluvio/main.rs"
 required-features = ["fluvio"]
+
+[[example]]
+name = "kafka"
+path = "examples/kafka/main.rs"
+required-features = ["kafka"]

@@ -1,0 +1,65 @@
+name: Kafka Python Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil-python/src/py_kafka.rs'
+      - 'wingfoil-python/tests/test_kafka.py'
+      - 'wingfoil/src/adapters/kafka/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  kafka-python-integration:
+    name: Kafka Python Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      redpanda:
+        image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+        ports:
+          - 9092:9092
+        options: >-
+          --health-cmd "rpk cluster health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest
+
+      - name: Build and install Python bindings
+        run: |
+          cd wingfoil-python
+          .venv/bin/maturin develop
+
+      - name: Run Kafka Python integration tests
+        run: |
+          cd wingfoil-python
+          .venv/bin/pytest tests/test_kafka.py -v

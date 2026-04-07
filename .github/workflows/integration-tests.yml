@@ -54,3 +54,13 @@ jobs:
     name: Fluvio Integration Tests
     uses: ./.github/workflows/fluvio-integration.yml
     secrets: inherit
+
+  kafka-integration:
+    name: Kafka Integration Tests
+    uses: ./.github/workflows/kafka-integration.yml
+    secrets: inherit
+
+  kafka-python-integration:
+    name: Kafka Python Integration Tests
+    uses: ./.github/workflows/kafka-python-integration.yml
+    secrets: inherit

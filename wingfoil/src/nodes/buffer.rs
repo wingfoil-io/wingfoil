@@ -55,7 +55,7 @@ mod tests {
                 let buffer = buffer.peek_value();
                 let src = count.peek_value();
                 let buffered = buffer[buffer.len() - 1];
-                info!("{:?}, {:?}, {:?}, {:?}", mode, run_for, src, buffered);
+                info!("{mode:?}, {run_for:?}, {src:?}, {buffered:?}");
                 assert_eq!(src, buffered);
             }
         }

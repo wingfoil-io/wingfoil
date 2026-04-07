@@ -125,7 +125,7 @@ fn test_kdb_read_cached_corrupt_fallback() -> Result<()> {
             .path();
         std::fs::write(
             &corrupt_path,
-            format!("select from {}\ngarbage not valid bincode", TABLE_NAME),
+            format!("select from {TABLE_NAME}\ngarbage not valid bincode"),
         )?;
 
         // Re-run with real connection: corrupt file triggers fallback, then

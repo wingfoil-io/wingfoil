@@ -83,7 +83,7 @@ impl KdbDeserialize for PyKdbRow {
                 | qtype::SECOND_ATOM => PyKdbValue::Int(k.get_int()?),
                 // Datetime stored as f64 (days since KDB epoch)
                 qtype::DATETIME_ATOM => PyKdbValue::Float(k.get_float()?),
-                _ => PyKdbValue::Symbol(format!("{:?}", k)),
+                _ => PyKdbValue::Symbol(format!("{k:?}")),
             };
             result.push((col_name.clone(), value));
         }
@@ -219,12 +219,12 @@ async fn py_kdb_write_consumer(
             let obj = py_element.as_ref().bind(py);
             let dict: &pyo3::Bound<'_, PyDict> = obj
                 .cast::<PyDict>()
-                .map_err(|e| anyhow::anyhow!("expected dict, got: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("expected dict, got: {e}"))?;
 
             for (col_name, col_type) in &columns {
                 let value = dict
                     .get_item(col_name)?
-                    .ok_or_else(|| anyhow::anyhow!("missing column '{}' in dict", col_name))?;
+                    .ok_or_else(|| anyhow::anyhow!("missing column '{col_name}' in dict"))?;
 
                 let frag = match col_type.as_str() {
                     "symbol" => {
@@ -248,11 +248,7 @@ async fn py_kdb_write_consumer(
                         format!("enlist {}b", if b { 1 } else { 0 })
                     }
                     other => {
-                        anyhow::bail!(
-                            "unsupported column type '{}' for column '{}'",
-                            other,
-                            col_name
-                        );
+                        anyhow::bail!("unsupported column type '{other}' for column '{col_name}'");
                     }
                 };
                 col_frags.push(frag);

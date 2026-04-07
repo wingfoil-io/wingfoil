@@ -65,7 +65,7 @@ mod tests {
             .accumulate()
             .finally(|res, _| {
                 let expected = vec![burst![1, 10, 100], burst![2, 20, 200], burst![3, 30, 300]];
-                println!("{:?}", res);
+                println!("{res:?}");
                 assert_eq!(res, expected);
                 Ok(())
             })

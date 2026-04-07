@@ -573,7 +573,7 @@ mod tests {
         println!("n_msgs = {n_msgs:?}");
         println!("ntopics:");
         sorted_topics.iter().for_each(|item| {
-            println!("{:?}", item);
+            println!("{item:?}");
         });
         println!();
         for rw in sorted_topics {
@@ -609,10 +609,7 @@ mod tests {
     fn run_demux_vec(with_overflow: bool) {
         let capacity = capacity(with_overflow);
         for run_mode in &*RUN_MODES {
-            println!(
-                "demux_vec\n{:?}\nwith_overflow={:?}",
-                run_mode, with_overflow
-            );
+            println!("demux_vec\n{run_mode:?}\nwith_overflow={with_overflow:?}");
             let streams = (0..N_STREAMS)
                 .map(|i| message_source(i, None))
                 .collect::<Vec<_>>();
@@ -632,7 +629,7 @@ mod tests {
     fn run_demux(with_overflow: bool) {
         let capacity = capacity(with_overflow);
         for run_mode in &*RUN_MODES {
-            println!("demux\n{:?}\nwith_overflow={:?}", run_mode, with_overflow);
+            println!("demux\n{run_mode:?}\nwith_overflow={with_overflow:?}");
             let streams = (0..N_STREAMS)
                 .map(|i| message_source(i, Some(DELAY * i as u32)))
                 .collect::<Vec<_>>();

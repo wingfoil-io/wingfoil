@@ -70,7 +70,7 @@ mod tests {
             .window(Duration::from_millis(250))
             .collect()
             .finally(|res, _| {
-                println!("{:#?}", res);
+                println!("{res:#?}");
                 let expected = vec![
                     ValueAt {
                         value: vec![1, 2, 3],

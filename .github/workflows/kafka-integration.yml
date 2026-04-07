@@ -1,0 +1,36 @@
+name: Kafka Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/kafka/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  kafka-integration:
+    name: Kafka Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Kafka integration tests
+        run: |
+          cargo test --features kafka-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO

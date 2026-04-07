@@ -99,7 +99,7 @@ where
                 }
                 Err(e) => {
                     // Task panicked or was cancelled
-                    anyhow::bail!("consumer task panicked or was cancelled: {}", e);
+                    anyhow::bail!("consumer task panicked or was cancelled: {e}");
                 }
             }
         }
@@ -405,7 +405,7 @@ where
                     Message::Error(err) => {
                         // Log the error and stop the stream.
                         // This error likely came from an async producer or consumer task.
-                        log::error!("Error in async stream: {:#?}", err);
+                        log::error!("Error in async stream: {err:#?}");
                         break;
                     },
                 }

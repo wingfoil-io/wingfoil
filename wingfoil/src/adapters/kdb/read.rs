@@ -304,7 +304,7 @@ where
         let mut interner = SymbolInterner::default();
 
         'outer: while let Some(query) = query_fn() {
-            info!("KDB query: {}", query);
+            info!("KDB query: {query}");
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
                 Ok(r) => r,
@@ -330,9 +330,8 @@ where
                     && time < prev
                 {
                     yield Err(anyhow::anyhow!(
-                        "KDB data is not sorted by time: got {:?} after {:?}. \
-                        Add `xasc` to your query to sort the data.",
-                        time, prev
+                        "KDB data is not sorted by time: got {time:?} after {prev:?}. \
+                        Add `xasc` to your query to sort the data."
                     ));
                     break 'outer;
                 }

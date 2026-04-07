@@ -14,6 +14,8 @@ pub mod fluvio;
 #[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;
+#[cfg(feature = "kafka")]
+pub mod kafka;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 #[cfg(feature = "otlp")]

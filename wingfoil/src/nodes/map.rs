@@ -64,7 +64,7 @@ mod tests {
         captured
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
             .unwrap();
-        println!("{:?}", expected);
+        println!("{expected:?}");
         println!("{:?}", captured.peek_value());
         assert_eq!(expected, captured.peek_value());
     }
