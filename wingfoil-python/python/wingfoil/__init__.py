@@ -29,3 +29,4 @@ if hasattr(_ext, "py_iceoryx2_sub"):
 
 # User-friendly aliases for Prometheus
 PrometheusExporter = _ext.PrometheusExporter
+__all__.append("PrometheusExporter")

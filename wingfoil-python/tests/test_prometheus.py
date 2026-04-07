@@ -50,16 +50,22 @@ class TestPrometheusExporter(unittest.TestCase):
 
     def test_unknown_path_returns_404(self):
         """Requests to paths other than /metrics return 404."""
-        exporter = PrometheusExporter("127.0.0.1:0")
-        port = exporter.serve()
-
         import socket
         import time
 
-        # Give the server thread a moment to start
-        time.sleep(0.05)
+        exporter = PrometheusExporter("127.0.0.1:0")
+        port = exporter.serve()
 
-        conn = socket.create_connection(("127.0.0.1", port))
+        # Retry connecting until the server thread is ready
+        for _ in range(20):
+            try:
+                conn = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail(f"could not connect to metrics server on port {port}")
+
         conn.sendall(b"GET /other HTTP/1.0\r\n\r\n")
         response = b""
         while True:
