@@ -1,9 +1,9 @@
 """Tests for the OTLP push Python bindings.
 
-Requires a running OpenTelemetry collector on localhost:4318.
-All tests are skipped if the collector is not available.
+Some tests require a running OpenTelemetry collector on localhost:4318.
+Those tests are skipped automatically if the collector is not available.
 
-Setup:
+Setup (optional):
     docker run --rm -p 4318:4318 otel/opentelemetry-collector:latest
 """
 
@@ -24,6 +24,35 @@ def collector_available():
 COLLECTOR_AVAILABLE = collector_available()
 
 
+class TestOtlpPushAlways(unittest.TestCase):
+    """Tests that run without an external collector."""
+
+    def test_historical_mode_drains_without_connecting(self):
+        """In historical mode otlp_push returns without making any network calls."""
+        from wingfoil import ticker
+
+        # Points at a port nothing is listening on — historical mode must not connect.
+        node = ticker(0.01).count().otlp_push(
+            "hist_metric",
+            endpoint="http://127.0.0.1:1",
+            service_name="wingfoil-py-test",
+        )
+        # historical mode: start=0.0 → HistoricalFrom(NanoTime::ZERO)
+        node.run(realtime=False, start=0.0, cycles=5)
+
+    def test_otlp_push_returns_node(self):
+        """otlp_push returns a Node object."""
+        from wingfoil import ticker
+        from wingfoil._wingfoil import Node
+
+        node = ticker(0.1).count().otlp_push(
+            "type_check_metric",
+            endpoint="http://127.0.0.1:1",
+            service_name="wingfoil-py-test",
+        )
+        self.assertIsInstance(node, Node)
+
+
 @unittest.skipUnless(COLLECTOR_AVAILABLE, "OTel collector not running on localhost:4318")
 class TestOtlpPush(unittest.TestCase):
     def test_push_sends_without_error(self):
@@ -36,18 +65,6 @@ class TestOtlpPush(unittest.TestCase):
             service_name="wingfoil-py-test",
         )
         node.run(realtime=True, cycles=5)
-
-    def test_push_returns_node(self):
-        """otlp_push returns a Node object."""
-        from wingfoil import ticker
-        from wingfoil._wingfoil import Node
-
-        node = ticker(0.1).count().otlp_push(
-            "test_node_type",
-            endpoint="http://localhost:4318",
-            service_name="wingfoil-py-test",
-        )
-        self.assertIsInstance(node, Node)
 
     def test_push_stream_directly(self):
         """otlp_push works on a plain stream (not just count())."""

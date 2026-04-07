@@ -109,4 +109,18 @@ mod tests {
         node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
             .unwrap();
     }
+
+    #[test]
+    fn bad_endpoint_is_handled_gracefully() {
+        // Point at a port nothing is listening on; should not panic.
+        // The OTel background exporter may log errors — that is expected.
+        let config = OtlpConfig {
+            endpoint: "http://127.0.0.1:1".into(),
+            service_name: "test".into(),
+        };
+        let counter = ticker(Duration::from_millis(50)).count();
+        let node = counter.otlp_push("bad_endpoint_metric", config);
+        // Errors from the background exporter are non-fatal; ignore the result.
+        let _ = node.run(RunMode::RealTime, RunFor::Cycles(1));
+    }
 }

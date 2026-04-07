@@ -38,16 +38,3 @@ fn otlp_push_sends_successfully() -> anyhow::Result<()> {
     node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;
     Ok(())
 }
-
-#[test]
-fn otlp_push_bad_endpoint_is_handled_gracefully() {
-    _ = env_logger::try_init();
-    let config = OtlpConfig {
-        endpoint: "http://127.0.0.1:1".into(),
-        service_name: "wingfoil-test".into(),
-    };
-    let counter = ticker(Duration::from_millis(50)).count();
-    let node = counter.otlp_push("wingfoil_bad_endpoint", config);
-    // Should not panic — errors may be logged by the background exporter thread
-    let _ = node.run(RunMode::RealTime, RunFor::Cycles(1));
-}

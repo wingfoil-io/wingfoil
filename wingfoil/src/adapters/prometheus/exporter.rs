@@ -125,8 +125,10 @@ fn build_metrics_body(metrics: &MetricStore) -> String {
             return String::new();
         }
     };
+    let mut pairs: Vec<(&String, &String)> = store.iter().collect();
+    pairs.sort_by_key(|(name, _)| *name);
     let mut out = String::new();
-    for (name, value) in store.iter() {
+    for (name, value) in pairs {
         out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
     }
     out
@@ -188,6 +190,17 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         panic!("could not connect to metrics server on port {port}");
+    }
+
+    #[test]
+    fn connection_refused_when_port_occupied() {
+        // Occupy a port so the exporter cannot bind it.
+        let occupied =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind test listener");
+        let port = occupied.local_addr().unwrap().port();
+        let exporter = PrometheusExporter::new(format!("127.0.0.1:{port}"));
+        let result = exporter.serve();
+        assert!(result.is_err(), "expected bind error when port is occupied");
     }
 
     #[test]
