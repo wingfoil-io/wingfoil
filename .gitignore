@@ -12,3 +12,4 @@ _build
 perf.data*
 .codex
 wingfoil-python/.python-version
+worktrees
