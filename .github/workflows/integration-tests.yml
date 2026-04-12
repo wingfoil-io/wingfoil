@@ -14,3 +14,13 @@ jobs:
     name: etcd Integration Tests
     uses: ./.github/workflows/etcd-integration.yml
     secrets: inherit
+
+  telemetry-integration:
+    name: Telemetry Integration Tests
+    uses: ./.github/workflows/telemetry-integration.yml
+    secrets: inherit
+
+  otlp-integration:
+    name: OTLP Integration Tests
+    uses: ./.github/workflows/otlp-integration.yml
+    secrets: inherit

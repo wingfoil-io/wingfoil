@@ -3,6 +3,9 @@ name: Telemetry Integration Tests
 on:
   workflow_dispatch:
   workflow_call:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/prometheus/**'
 
 env:
   CARGO_TERM_COLOR: always
