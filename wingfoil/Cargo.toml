@@ -231,3 +231,8 @@ required-features = ["zmq-beta", "etcd"]
 name = "zmq_etcd_sub"
 path = "examples/zmq/etcd/zmq_sub.rs"
 required-features = ["zmq-beta", "etcd"]
+
+[[example]]
+name = "etcd"
+path = "examples/etcd/main.rs"
+required-features = ["etcd"]
