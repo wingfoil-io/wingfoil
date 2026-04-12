@@ -18,7 +18,7 @@ use std::time::Duration;
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
 
 fn start_collector() -> anyhow::Result<(impl Drop, String)> {
-    let container = GenericImage::new("otel/opentelemetry-collector", "0.116.0")
+    let container = GenericImage::new("otel/opentelemetry-collector", "0.149.0")
         .with_wait_for(WaitFor::message_on_stderr("Everything is ready"))
         .start()?;
     let port = container.get_host_port_ipv4(4318)?;

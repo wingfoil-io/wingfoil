@@ -100,7 +100,7 @@ iceoryx2 = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
-opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-client", "metrics"], optional = true }
+opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics"], optional = true }
 
 
 [dev-dependencies]

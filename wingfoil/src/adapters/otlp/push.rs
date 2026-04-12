@@ -85,9 +85,11 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
         gauge.record(v, &[]);
     }
 
-    provider
-        .shutdown()
-        .map_err(|e| anyhow::anyhow!("otlp_push: shutdown error: {e}"))?;
+    // Drop provider instead of calling shutdown(). The PeriodicReader::shutdown() timeout
+    // can fail when the async runtime is unavailable. See:
+    // https://github.com/open-telemetry/opentelemetry-rust/issues/3137
+    drop(provider);
+
     Ok(())
 }
 
