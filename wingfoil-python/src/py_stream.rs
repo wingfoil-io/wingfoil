@@ -360,6 +360,7 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the write operation.
+    #[cfg(feature = "etcd")]
     #[pyo3(signature = (endpoint, lease_ttl=None, force=true))]
     fn etcd_pub(&self, endpoint: String, lease_ttl: Option<f64>, force: bool) -> PyNode {
         PyNode::new(crate::py_etcd::py_etcd_pub_inner(
@@ -421,6 +422,48 @@ impl PyStream {
     ///     A Node that drives the push operation.
     fn otlp_push(&self, metric_name: String, endpoint: String, service_name: String) -> PyNode {
         crate::py_otlp::py_otlp_push_inner(self, metric_name, endpoint, service_name)
+    }
+
+    /// Publish this stream of bytes and register as `name` in etcd.
+    ///
+    /// Binds on `127.0.0.1`; use `zmq_pub_etcd_on` for multi-host deployments
+    /// where `127.0.0.1` is not routable by subscribers on other hosts.
+    ///
+    /// Args:
+    ///     name: Name / etcd key to register under (e.g. "quotes")
+    ///     port: TCP port to bind the PUB socket on
+    ///     endpoint: etcd endpoint (e.g. "http://localhost:2379")
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    #[cfg(feature = "etcd")]
+    fn zmq_pub_etcd(&self, name: String, port: u16, endpoint: String) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_etcd_inner(
+            &self.0, name, port, endpoint,
+        ))
+    }
+
+    /// Like `zmq_pub_etcd` but binds on `address` instead of `127.0.0.1`.
+    ///
+    /// Args:
+    ///     name: Name / etcd key to register under
+    ///     address: Routable bind address (e.g. "192.168.1.10")
+    ///     port: TCP port to bind the PUB socket on
+    ///     endpoint: etcd endpoint
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    #[cfg(feature = "etcd")]
+    fn zmq_pub_etcd_on(
+        &self,
+        name: String,
+        address: String,
+        port: u16,
+        endpoint: String,
+    ) -> PyNode {
+        PyNode::new(crate::py_zmq::py_zmq_pub_etcd_on_inner(
+            &self.0, name, address, port, endpoint,
+        ))
     }
 
     // end StreamOperators

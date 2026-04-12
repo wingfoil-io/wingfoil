@@ -1,0 +1,32 @@
+name: ZMQ Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/zmq/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  zmq-integration:
+    name: ZMQ Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run ZMQ integration tests
+        run: |
+          cargo test --features zmq-beta-integration-test -p wingfoil \
+            -- --test-threads=1 zmq::integration_tests
+        env:
+          RUST_LOG: INFO

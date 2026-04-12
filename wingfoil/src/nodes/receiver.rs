@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
 use crate::{
@@ -7,15 +9,15 @@ use crate::{
 use tinyvec::TinyVec;
 
 enum State<T: Element + Send> {
-    Func(Box<dyn Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static>),
+    Func(Box<dyn Fn(ChannelSender<T>, Arc<AtomicBool>) -> anyhow::Result<()> + Send + 'static>),
     JoinHandle(JoinHandle<anyhow::Result<()>>),
     Empty,
 }
 
 impl<T: Element + Send> State<T> {
-    pub fn start(&mut self, channel_sender: ChannelSender<T>) {
+    pub fn start(&mut self, channel_sender: ChannelSender<T>, stop: Arc<AtomicBool>) {
         if let State::Func(f) = std::mem::replace(self, State::Empty) {
-            let handle = thread::spawn(move || f(channel_sender));
+            let handle = thread::spawn(move || f(channel_sender, stop));
             *self = State::JoinHandle(handle);
         }
     }
@@ -51,6 +53,7 @@ pub(crate) struct ReceiverStream<T: Element + Send> {
     inner: ChannelReceiverStream<T>,
     sender: Option<ChannelSender<T>>,
     state: State<T>,
+    stop: Arc<AtomicBool>,
     assert_realtime: bool,
 }
 
@@ -72,7 +75,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         if state.run_mode() == RunMode::RealTime {
             sender.set_notifier(state.ready_notifier());
         }
-        self.state.start(sender);
+        self.state.start(sender, self.stop.clone());
         self.inner.setup(state)
     }
 
@@ -84,6 +87,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
     }
 
     fn stop(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
+        self.stop.store(true, Ordering::Relaxed);
         self.state.stop()?;
         self.inner.stop(state)
     }
@@ -101,17 +105,19 @@ impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ReceiverStream<T> {
 
 impl<T: Element + Send> ReceiverStream<T> {
     pub(crate) fn new(
-        f: impl Fn(ChannelSender<T>) -> anyhow::Result<()> + Send + 'static,
+        f: impl Fn(ChannelSender<T>, Arc<AtomicBool>) -> anyhow::Result<()> + Send + 'static,
         assert_realtime: bool,
     ) -> Self {
         let (sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let sender = Some(sender);
+        let stop = Arc::new(AtomicBool::new(false));
         let state = State::Func(Box::new(f));
         Self {
             inner,
             sender,
             state,
+            stop,
             assert_realtime,
         }
     }

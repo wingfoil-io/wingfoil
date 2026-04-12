@@ -7,6 +7,10 @@ async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "to
 csv = ["dep:csv"]
 kdb = ["dep:kdb-plus-fixed", "dep:sha2", "dep:bincode", "async", "tokio/fs"]
 zmq-beta = ["dep:zmq", "dep:bincode"]
+zmq-beta-integration-test = ["zmq-beta"]
+zmq-etcd-integration-test = ["zmq-beta", "etcd", "dep:testcontainers"]
+zmq-cross-lang-test = ["zmq-beta-integration-test"]
+zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "zmq-etcd-integration-test"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 tracing = ["dep:tracing"]
@@ -195,21 +199,6 @@ path = "examples/telemetry/otlp/main.rs"
 required-features = ["otlp", "prometheus"]
 
 [[example]]
-name = "zmq_pub"
-path = "examples/messaging/zmq_pub.rs"
-required-features = ["zmq-beta"]
-
-[[example]]
-name = "zmq_sub"
-path = "examples/messaging/zmq_sub.rs"
-required-features = ["zmq-beta"]
-
-[[example]]
-name = "etcd"
-path = "examples/etcd/main.rs"
-required-features = ["etcd"]
-
-[[example]]
 name = "iceoryx2_pub"
 path = "examples/iceoryx2/pub.rs"
 required-features = ["iceoryx2-beta"]
@@ -222,3 +211,23 @@ required-features = ["iceoryx2-beta"]
 [[example]]
 name = "tracing"
 path = "examples/tracing/main.rs"
+
+[[example]]
+name = "zmq_direct_pub"
+path = "examples/zmq/direct/zmq_pub.rs"
+required-features = ["zmq-beta"]
+
+[[example]]
+name = "zmq_direct_sub"
+path = "examples/zmq/direct/zmq_sub.rs"
+required-features = ["zmq-beta"]
+
+[[example]]
+name = "zmq_etcd_pub"
+path = "examples/zmq/etcd/zmq_pub.rs"
+required-features = ["zmq-beta", "etcd"]
+
+[[example]]
+name = "zmq_etcd_sub"
+path = "examples/zmq/etcd/zmq_sub.rs"
+required-features = ["zmq-beta", "etcd"]

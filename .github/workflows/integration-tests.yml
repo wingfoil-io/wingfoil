@@ -24,3 +24,13 @@ jobs:
     name: OTLP Integration Tests
     uses: ./.github/workflows/otlp-integration.yml
     secrets: inherit
+
+  zmq-integration:
+    name: ZMQ Integration Tests
+    uses: ./.github/workflows/zmq-integration.yml
+    secrets: inherit
+
+  zmq-etcd-integration:
+    name: ZMQ etcd Integration Tests
+    uses: ./.github/workflows/zmq-etcd-integration.yml
+    secrets: inherit

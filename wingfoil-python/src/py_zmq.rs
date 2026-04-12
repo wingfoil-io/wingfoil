@@ -22,9 +22,40 @@ use wingfoil::{Node, Stream, StreamOperators};
 /// Returns:
 ///     Tuple of (data_stream, status_stream)
 #[pyfunction]
-pub fn py_zmq_sub(address: String) -> (PyStream, PyStream) {
-    let (data, status) = zmq_sub::<Vec<u8>>(&address);
+pub fn py_zmq_sub(address: String) -> PyResult<(PyStream, PyStream)> {
+    let (data, status) = zmq_sub::<Vec<u8>>(address.as_str())
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(streams_to_py(data, status))
+}
 
+/// Subscribe to a named ZMQ publisher via etcd service discovery.
+///
+/// Looks up `name` in etcd and connects to the publisher at the stored address.
+/// The lookup happens at call time — ensure the publisher is registered before
+/// calling this function.
+///
+/// Args:
+///     name: Publisher name / etcd key (e.g. "quotes")
+///     endpoint: etcd endpoint (e.g. "http://localhost:2379")
+///
+/// Returns:
+///     Tuple of (data_stream, status_stream)
+///
+/// Raises:
+///     RuntimeError: if the key is absent or etcd is unreachable
+#[cfg(feature = "etcd")]
+#[pyfunction]
+pub fn py_zmq_sub_etcd(name: String, endpoint: String) -> PyResult<(PyStream, PyStream)> {
+    use wingfoil::adapters::zmq::EtcdRegistry;
+    let (data, status) = zmq_sub::<Vec<u8>>((name.as_str(), EtcdRegistry::new(endpoint)))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(streams_to_py(data, status))
+}
+
+fn streams_to_py(
+    data: Rc<dyn wingfoil::Stream<wingfoil::Burst<Vec<u8>>>>,
+    status: Rc<dyn wingfoil::Stream<ZmqStatus>>,
+) -> (PyStream, PyStream) {
     let data_py = data.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst
@@ -65,5 +96,49 @@ pub fn py_zmq_pub_inner(stream: &Rc<dyn Stream<PyElement>>, port: u16) -> Rc<dyn
             })
         })
     });
-    bytes_stream.zmq_pub(port)
+    bytes_stream.zmq_pub(port, ())
+}
+
+/// Inner implementation for `zmq_pub_etcd` (etcd-based registration).
+#[cfg(feature = "etcd")]
+pub fn py_zmq_pub_etcd_inner(
+    stream: &Rc<dyn Stream<PyElement>>,
+    name: String,
+    port: u16,
+    endpoint: String,
+) -> Rc<dyn Node> {
+    use wingfoil::adapters::zmq::EtcdRegistry;
+    let registry = EtcdRegistry::new(endpoint);
+    let bytes_stream = py_bytes_stream(stream, "zmq_pub_etcd");
+    bytes_stream.zmq_pub(port, (name.as_str(), registry))
+}
+
+/// Inner implementation for `zmq_pub_etcd_on` (etcd-based, routable address).
+#[cfg(feature = "etcd")]
+pub fn py_zmq_pub_etcd_on_inner(
+    stream: &Rc<dyn Stream<PyElement>>,
+    name: String,
+    address: String,
+    port: u16,
+    endpoint: String,
+) -> Rc<dyn Node> {
+    use wingfoil::adapters::zmq::EtcdRegistry;
+    let registry = EtcdRegistry::new(endpoint);
+    let bytes_stream = py_bytes_stream(stream, "zmq_pub_etcd_on");
+    bytes_stream.zmq_pub_on(&address, port, (name.as_str(), registry))
+}
+
+#[cfg(feature = "etcd")]
+fn py_bytes_stream(
+    stream: &Rc<dyn Stream<PyElement>>,
+    label: &'static str,
+) -> Rc<dyn Stream<Vec<u8>>> {
+    stream.map(move |elem| {
+        Python::attach(|py| {
+            elem.as_ref().extract::<Vec<u8>>(py).unwrap_or_else(|e| {
+                log::error!("{label}: stream value is not bytes: {e}");
+                Vec::new()
+            })
+        })
+    })
 }
