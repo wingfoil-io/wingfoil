@@ -410,5 +410,18 @@ impl PyStream {
         ))
     }
 
+    /// Push this stream as an OTLP gauge metric.
+    ///
+    /// Args:
+    ///     metric_name: Name of the metric to report
+    ///     endpoint: OTLP HTTP endpoint, e.g. `"http://localhost:4318"`
+    ///     service_name: Service name reported in OTLP resource attributes
+    ///
+    /// Returns:
+    ///     A Node that drives the push operation.
+    fn otlp_push(&self, metric_name: String, endpoint: String, service_name: String) -> PyNode {
+        crate::py_otlp::py_otlp_push_inner(self, metric_name, endpoint, service_name)
+    }
+
     // end StreamOperators
 }

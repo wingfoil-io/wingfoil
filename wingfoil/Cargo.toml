@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta"]
+full = ["async", "csv", "kdb", "zmq-beta", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -19,6 +19,10 @@ instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-no
 instrument-all = ["instrument-default", "instrument-cycle-node"]
 iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
 iceoryx2-beta = ["dep:iceoryx2"]
+prometheus = []
+prometheus-integration-test = ["prometheus", "dep:reqwest"]
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
+otlp-integration-test = ["otlp", "dep:testcontainers"]
 
 [package]
 name = "wingfoil"
@@ -93,6 +97,10 @@ etcd-client = { version = "0.18", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"], optional = true }
 iceoryx2 = { version = "0.8", optional = true }
+reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+opentelemetry = { version = "0.28", optional = true }
+opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
+opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-client", "metrics"], optional = true }
 
 
 [dev-dependencies]
@@ -175,6 +183,16 @@ required-features = ["iceoryx2-beta"]
 name = "iceoryx2_modes"
 harness = false
 required-features = ["iceoryx2-beta"]
+
+[[example]]
+name = "prometheus"
+path = "examples/telemetry/prometheus/main.rs"
+required-features = ["prometheus"]
+
+[[example]]
+name = "otlp"
+path = "examples/telemetry/otlp/main.rs"
+required-features = ["otlp", "prometheus"]
 
 [[example]]
 name = "zmq_pub"

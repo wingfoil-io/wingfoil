@@ -48,7 +48,7 @@ let producer = move |_ctx: RunParams| async move {
     })
 };
 
-let consumer = async move |mut source: Pin<Box<dyn FutStream<u32>>>| {
+let consumer = async move |_ctx: RunParams, mut source: Pin<Box<dyn FutStream<u32>>>| {
     while let Some((time, value)) = source.next().await {
         println!("{time:?}, {value:?}");
     }

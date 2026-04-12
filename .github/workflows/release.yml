@@ -38,9 +38,15 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
+  integration-tests:
+    name: Integration Tests
+    needs: preflight
+    uses: ./.github/workflows/integration-tests.yml
+    secrets: inherit
+
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests]
+    needs: [preflight, all-tests, integration-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write

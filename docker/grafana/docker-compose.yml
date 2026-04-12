@@ -1,0 +1,71 @@
+services:
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: wingfoil-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_SECRET_KEY=wingfoil-test-secret-key
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  grafana-init:
+    image: curlimages/curl:latest
+    container_name: wingfoil-grafana-init
+    restart: "no"
+    user: root
+    depends_on:
+      grafana:
+        condition: service_healthy
+    volumes:
+      - ./tokens:/tokens
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        # Create service account (ignore error if already exists)
+        curl -s -X POST http://admin:admin@grafana:3000/api/serviceaccounts \
+          -H 'Content-Type: application/json' \
+          -d '{"name":"wingfoil-test","role":"Editor"}' > /dev/null || true
+
+        # Find the service account ID
+        SA_ID=$$(curl -s "http://admin:admin@grafana:3000/api/serviceaccounts/search?query=wingfoil-test&limit=1" \
+          | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+        echo "Service account ID: $$SA_ID"
+
+        # Create a token (timestamp suffix avoids name collisions on re-runs)
+        TOKEN_KEY=$$(curl -s -X POST "http://admin:admin@grafana:3000/api/serviceaccounts/$$SA_ID/tokens" \
+          -H 'Content-Type: application/json' \
+          -d "{\"name\":\"wingfoil-token-$$(date +%s)\"}" \
+          | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+
+        echo "$$TOKEN_KEY" > /tokens/grafana_api_key
+        echo "API key written to tokens/grafana_api_key"
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: wingfoil-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./provisioning/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Prometheus scrapes the wingfoil metrics endpoint running on the host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s

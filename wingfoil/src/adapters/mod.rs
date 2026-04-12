@@ -11,6 +11,10 @@ pub mod etcd;
 pub mod iceoryx2;
 #[cfg(feature = "kdb")]
 pub mod kdb;
+#[cfg(feature = "otlp")]
+pub mod otlp;
+#[cfg(feature = "prometheus")]
+pub mod prometheus;
 #[cfg(feature = "zmq-beta")]
 #[doc(hidden)]
 pub mod zmq;

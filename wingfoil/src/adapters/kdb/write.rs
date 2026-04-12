@@ -1,7 +1,7 @@
 //! KDB+ write functionality for streaming data to q/kdb+ instances.
 
 use super::KdbConnection;
-use crate::nodes::{FutStream, StreamOperators};
+use crate::nodes::{FutStream, RunParams, StreamOperators};
 use crate::types::*;
 use chrono::NaiveDateTime;
 use futures::StreamExt;
@@ -94,9 +94,11 @@ where
 {
     let table_name = table_name.into();
 
-    let consumer = Box::new(move |source: Pin<Box<dyn FutStream<Burst<T>>>>| {
-        kdb_write_consumer(connection, table_name, source)
-    });
+    let consumer = Box::new(
+        move |_ctx: RunParams, source: Pin<Box<dyn FutStream<Burst<T>>>>| {
+            kdb_write_consumer(connection, table_name, source)
+        },
+    );
 
     upstream.consume_async(consumer)
 }

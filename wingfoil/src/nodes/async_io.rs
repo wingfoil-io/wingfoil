@@ -40,7 +40,7 @@ pub trait FutStream<T>: futures::Stream<Item = (NanoTime, T)> + Send {}
 
 impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime, T)> + Send {}
 
-type ConsumerFunc<T, FUT> = Box<dyn FnOnce(Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
+type ConsumerFunc<T, FUT> = Box<dyn FnOnce(RunParams, Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
 
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
@@ -97,12 +97,17 @@ where
             .func
             .take()
             .ok_or_else(|| anyhow::anyhow!("func is already taken"))?;
+        let ctx = RunParams {
+            run_mode,
+            run_for,
+            start_time: state.start_time(),
+        };
         let f = async move {
             let src = rx
                 .to_boxed_message_stream()
                 .limit(run_mode, run_for)
                 .to_stream();
-            let fut = func(Box::pin(src));
+            let fut = func(ctx, Box::pin(src));
             fut.await
         };
         let handle = state.tokio_runtime().spawn(f);
@@ -443,12 +448,13 @@ mod tests {
                     })
                 };
 
-                let example_consumer = async move |mut source: Pin<Box<dyn FutStream<u32>>>| {
-                    while let Some((time, value)) = source.next().await {
-                        println!("{time:?}, {value:?}");
-                    }
-                    Ok(())
-                };
+                let example_consumer =
+                    async move |_ctx: RunParams, mut source: Pin<Box<dyn FutStream<u32>>>| {
+                        while let Some((time, value)) = source.next().await {
+                            println!("{time:?}, {value:?}");
+                        }
+                        Ok(())
+                    };
 
                 produce_async(example_producer)
                     .collapse()
