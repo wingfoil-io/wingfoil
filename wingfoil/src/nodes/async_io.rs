@@ -4,6 +4,7 @@ use crate::channel::{
 use crate::nodes::channel::ChannelReceiverStream;
 use crate::*;
 
+use anyhow::Context as _;
 use futures::stream::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
@@ -82,6 +83,26 @@ where
     FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        // Check if the consumer task has finished early (due to an error).
+        // If it has, try to get the actual error instead of "channel closed".
+        if self.handle.as_ref().is_some_and(|h| h.is_finished()) {
+            // The consumer task has exited unexpectedly. Try to get the actual error.
+            let handle = self.handle.take().expect("handle is Some");
+            match state.tokio_runtime().block_on(handle) {
+                Ok(Ok(())) => {
+                    // Task completed successfully, but that's unexpected here
+                    anyhow::bail!("consumer task exited early without error");
+                }
+                Ok(Err(e)) => {
+                    // Task returned an error - this is what we want to report
+                    return Err(e).context("consumer task failed");
+                }
+                Err(e) => {
+                    // Task panicked or was cancelled
+                    anyhow::bail!("consumer task panicked or was cancelled: {}", e);
+                }
+            }
+        }
         self.sender.send(state, self.source.peek_value())?;
         Ok(true)
     }
@@ -93,6 +114,7 @@ where
             .rx
             .take()
             .ok_or_else(|| anyhow::anyhow!("rx is already taken"))?;
+
         let func = self
             .func
             .take()
@@ -102,6 +124,7 @@ where
             run_for,
             start_time: state.start_time(),
         };
+
         let f = async move {
             let src = rx
                 .to_boxed_message_stream()
@@ -110,8 +133,10 @@ where
             let fut = func(ctx, Box::pin(src));
             fut.await
         };
+
         let handle = state.tokio_runtime().spawn(f);
         self.handle = Some(handle);
+
         Ok(())
     }
 
@@ -377,7 +402,12 @@ where
                     }
                     Message::CheckPoint(_) => {},
                     Message::EndOfStream => {},
-                    Message::Error(_) => {},
+                    Message::Error(err) => {
+                        // Log the error and stop the stream.
+                        // This error likely came from an async producer or consumer task.
+                        log::error!("Error in async stream: {:#?}", err);
+                        break;
+                    },
                 }
             }
         }

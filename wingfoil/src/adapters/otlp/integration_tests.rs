@@ -33,8 +33,8 @@ fn otlp_push_sends_successfully() -> anyhow::Result<()> {
         endpoint,
         service_name: "wingfoil-test".into(),
     };
-    let counter = ticker(Duration::from_millis(100)).count();
+    let counter = ticker(Duration::from_millis(1000)).count();
     let node = counter.otlp_push("wingfoil_integration_counter", config);
-    node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;
+    node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(10)))?;
     Ok(())
 }

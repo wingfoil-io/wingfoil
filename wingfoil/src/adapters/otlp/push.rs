@@ -88,6 +88,7 @@ async fn push_consumer<T: Element + Send + std::fmt::Display>(
     provider
         .shutdown()
         .map_err(|e| anyhow::anyhow!("otlp_push: shutdown error: {e}"))?;
+
     Ok(())
 }
 
