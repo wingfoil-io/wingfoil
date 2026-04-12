@@ -171,7 +171,8 @@ fn zmq_first_message_not_dropped_no_delay() {
         Ok(())
     });
     // Uses sender() with NO delay — publisher sends immediately after bind.
-    // This reliably drops message 1 due to the ZMQ slow-joiner problem.
+    // Verifies the publisher's buffering mechanism prevents the ZMQ slow-joiner
+    // problem even without an artificial startup delay.
     Graph::new(
         vec![sender(period, port), recv_node],
         RunMode::RealTime,

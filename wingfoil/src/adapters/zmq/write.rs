@@ -63,12 +63,12 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.subscriber_connected {
             self.check_monitor();
-            // After TCP ACCEPTED, the subscriber still needs a brief moment
-            // for its subscription filter to propagate through ZMQ internals.
-            // We mark as connected once at least one cycle has elapsed since
-            // the ACCEPTED event, giving the filter time to arrive.
+            // After TCP ACCEPTED, the subscriber still needs time for its
+            // subscription filter to propagate through ZMQ internals.
+            // 50ms is generous enough for slow CI machines while keeping
+            // buffered-message latency to roughly one graph cycle.
             if let Some(accepted_at) = self.accepted_at
-                && accepted_at.elapsed() >= Duration::from_millis(1)
+                && accepted_at.elapsed() >= Duration::from_millis(50)
             {
                 self.subscriber_connected = true;
             }
