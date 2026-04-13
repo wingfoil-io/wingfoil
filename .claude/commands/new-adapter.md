@@ -57,8 +57,8 @@ The container is stopped automatically when dropped. Hold the container in a bin
 ```
 wingfoil/src/adapters/$ARGUMENTS/
   mod.rs               # Connection config, public types, re-exports
-  read.rs              # sub function (produce_async)
-  write.rs             # pub function (consume_async)
+  read.rs              # sub function (producer)
+  write.rs             # pub function (consumer)
   integration_tests.rs # gated by $ARGUMENTS-integration-test feature
   CLAUDE.md            # documents design decisions and pre-commit requirements
 ```
@@ -122,7 +122,46 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 
 ## 7. Sub method — `read.rs` (producer)
 
-Uses `produce_async`. Returns `Rc<dyn Stream<Burst<Event>>>`.
+Choose the threading model based on the I/O library:
+
+- **`produce_async`** — when the I/O library is async (e.g. tokio-based clients like
+  `etcd-client`, `rdkafka`). Returns `Rc<dyn Stream<Burst<Event>>>`.
+- **`ReceiverStream`** — when the I/O library is synchronous and poll-based (e.g. `zmq`,
+  `iceoryx2`). Dedicates a real OS thread per subscriber to marshall incoming messages
+  into the graph via a channel. Use this to avoid wrapping every blocking call in
+  `spawn_blocking`.
+
+### produce_async pattern (async I/O)
+
+```rust
+#[must_use]
+pub fn $ARGUMENTS_sub(conn: impl Into<<Name>Connection>, /* params */) -> Rc<dyn Stream<Burst<<Name>Event>>> {
+    produce_async(move |_ctx: RunParams| async move {
+        Ok(async_stream::stream! {
+            // connect, snapshot, then live stream
+            // yield Ok((NanoTime::now(), event))
+            // yield Err(anyhow::anyhow!("...")) on fatal error
+        })
+    })
+}
+```
+
+### ReceiverStream pattern (synchronous / poll-based I/O)
+
+```rust
+pub fn $ARGUMENTS_sub<T: Element + Send>(address: &str) -> Rc<dyn Stream<Burst<T>>> {
+    let subscriber = Subscriber::new(address.to_string());
+    ReceiverStream::new(
+        move |channel_sender, stop_flag| subscriber.run(channel_sender, stop_flag),
+        true, // real-time only
+    )
+    .into_stream()
+}
+```
+
+The callback runs on a dedicated OS thread. Use `stop_flag: Arc<AtomicBool>` to
+cooperatively shut down, and `channel_sender: ChannelSender<T>` to push
+`Message::RealtimeValue(v)`, `Message::EndOfStream`, or `Message::Error(e)`.
 
 **Flexible arguments via `impl Into<T>`:** for any parameter that callers might supply in
 multiple forms (a URL string, a config struct, a bare value), accept `impl Into<ConfigType>`
@@ -158,19 +197,6 @@ $ARGUMENTS_sub(config)                         // pre-built config
 $ARGUMENTS_sub(("service-name", my_backend))   // mode-switching
 ```
 
-```rust
-#[must_use]
-pub fn $ARGUMENTS_sub(conn: impl Into<<Name>Connection>, /* params */) -> Rc<dyn Stream<Burst<<Name>Event>>> {
-    produce_async(move |_ctx: RunParams| async move {
-        Ok(async_stream::stream! {
-            // connect, snapshot, then live stream
-            // yield Ok((NanoTime::now(), event))
-            // yield Err(anyhow::anyhow!("...")) on fatal error
-        })
-    })
-}
-```
-
 If the service supports a **snapshot + watch** pattern (like etcd), use watch-before-get to avoid races:
 1. Open watch/subscribe first
 2. Read snapshot, capture its revision/cursor
@@ -179,7 +205,53 @@ If the service supports a **snapshot + watch** pattern (like etcd), use watch-be
 
 ## 8. Pub method — `write.rs` (consumer)
 
-Uses `consume_async`. Returns `Rc<dyn Node>`.
+Choose the threading model to match the I/O library (same decision as step 7):
+
+- **`consume_async`** — when the I/O library is async. Returns `Rc<dyn Node>`.
+- **`MutableNode` impl** — when the I/O library is synchronous. Implement `start` / `cycle` /
+  `stop` directly on a struct, giving full control over socket lifecycle and buffering.
+
+### consume_async pattern (async I/O)
+
+```rust
+#[must_use]
+pub fn $ARGUMENTS_pub(conn: <Name>Connection, upstream: &Rc<dyn Stream<Burst<<Name>Entry>>>) -> Rc<dyn Node> {
+    upstream.consume_async(Box::new(move |source: Pin<Box<dyn FutStream<Burst<<Name>Entry>>>>| {
+        async move {
+            // connect once
+            // while let Some((_time, burst)) = source.next().await { write each entry }
+            Ok(())
+        }
+    }))
+}
+```
+
+### MutableNode pattern (synchronous / poll-based I/O)
+
+```rust
+struct SenderNode<T: Element + Send> {
+    src: Rc<dyn Stream<T>>,
+    socket: Option<Socket>,
+    // ... buffering state, config, etc.
+}
+
+impl<T: Element + Send + Serialize> MutableNode for SenderNode<T> {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        // bind socket, register with discovery backend, etc.
+    }
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let value = self.src.peek_value();
+        // serialize and send
+        Ok(true)
+    }
+    fn stop(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
+        // send EndOfStream, revoke registrations, close socket
+    }
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.src.clone().as_node()], vec![])
+    }
+}
+```
 
 Apply the same `impl Into<T>` and wrapper-type patterns from step 7. A common case is an
 optional registration or side-effect (e.g. register address in a registry, or skip it):
@@ -195,20 +267,9 @@ stream.$ARGUMENTS_pub(port, ())                       // no registration
 stream.$ARGUMENTS_pub(port, ("service-name", backend)) // with registration
 ```
 
-```rust
-#[must_use]
-pub fn $ARGUMENTS_pub(conn: <Name>Connection, upstream: &Rc<dyn Stream<Burst<<Name>Entry>>>) -> Rc<dyn Node> {
-    upstream.consume_async(Box::new(move |source: Pin<Box<dyn FutStream<Burst<<Name>Entry>>>>| {
-        async move {
-            // connect once
-            // while let Some((_time, burst)) = source.next().await { write each entry }
-            Ok(())
-        }
-    }))
-}
+Expose a fluent extension trait so callers can chain `.$ARGUMENTS_pub(...)` on streams:
 
-// Fluent extension trait — implement for both Burst<Entry> and single Entry streams
-// so callers never need to manually wrap items in a Burst.
+```rust
 pub trait <Name>PubOperators {
     #[must_use]
     fn $ARGUMENTS_pub(self: &Rc<Self>, conn: <Name>Connection) -> Rc<dyn Node>;
