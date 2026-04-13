@@ -40,7 +40,7 @@ generate(NUM_ROWS).kdb_write(
     port=PORT,
     table=TABLE,
     columns=[("sym", "symbol"), ("price", "float"), ("qty", "long")],
-).run(realtime=False)
+).run(realtime=False, cycles=NUM_ROWS)
 
 print(f"Reading back from {TABLE}...")
 rows_stream = kdb_read(
@@ -50,7 +50,7 @@ rows_stream = kdb_read(
     time_col="time",
     chunk_size=10000,
 ).collect()
-rows_stream.run(realtime=False)
+rows_stream.run(realtime=False, cycles=NUM_ROWS)
 rows = rows_stream.peek_value()
 
 print(f"Read {len(rows)} rows")
