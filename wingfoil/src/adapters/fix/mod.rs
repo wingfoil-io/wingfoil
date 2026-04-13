@@ -1314,6 +1314,31 @@ mod tests {
     }
 
     #[test]
+    fn fix_connection_refused() {
+        let (data, status) = fix_connect("127.0.0.1", 1, "SENDER", "TARGET", FixPollMode::Threaded);
+        let status_collected = status.collect();
+        let _result = Graph::new(
+            vec![data.as_node(), status_collected.clone().as_node()],
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_millis(500)),
+        )
+        .run();
+        // The graph should complete without panicking. The status stream should
+        // contain an Error event from the failed connection attempt.
+        let statuses: Vec<FixSessionStatus> = status_collected
+            .peek_value()
+            .into_iter()
+            .flat_map(|burst| burst.value)
+            .collect();
+        assert!(
+            statuses
+                .iter()
+                .any(|s| matches!(s, FixSessionStatus::Error(_))),
+            "Expected an Error status from connection refusal, got: {statuses:?}"
+        );
+    }
+
+    #[test]
     fn fix_historical_mode_fails() {
         let (data, _) = fix_connect("127.0.0.1", 29876, "S", "T", FixPollMode::AlwaysSpin);
         let err = data

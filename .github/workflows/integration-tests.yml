@@ -34,3 +34,8 @@ jobs:
     name: ZMQ etcd Integration Tests
     uses: ./.github/workflows/zmq-etcd-integration.yml
     secrets: inherit
+
+  fix-integration:
+    name: FIX Integration Tests
+    uses: ./.github/workflows/fix-integration.yml
+    secrets: inherit

@@ -1,0 +1,38 @@
+name: FIX Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/fix/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fix-integration:
+    name: FIX Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run FIX integration tests
+        run: |
+          cargo test --features fix-integration-test -p wingfoil \
+            -- --test-threads=1 fix::integration_tests --nocapture
+        env:
+          RUST_LOG: INFO
+          LMAX_USERNAME: ${{ secrets.LMAX_USERNAME }}
+          LMAX_PASSWORD: ${{ secrets.LMAX_PASSWORD }}
