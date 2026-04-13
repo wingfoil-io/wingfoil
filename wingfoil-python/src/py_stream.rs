@@ -85,11 +85,11 @@ impl PyStream {
         Self(stream)
     }
 
-    #[pyo3(signature = (realtime=false, start=None, duration=None, cycles=None))]
+    #[pyo3(signature = (realtime, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
-        realtime: Option<bool>,
+        realtime: bool,
         start: Option<Py<PyAny>>,
         duration: Option<Py<PyAny>>,
         cycles: Option<u32>,
