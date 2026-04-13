@@ -45,7 +45,7 @@ fn main() {
 
     // Filter initiator status to LoggedIn events only.
     let init_logged_in = init_status
-        .filter_value(|burst| burst.iter().any(|s| *s == FixSessionStatus::LoggedIn))
+        .filter_value(|burst| burst.contains(&FixSessionStatus::LoggedIn))
         .logged("initiator-logon", Info);
 
     // Log acceptor status events.
