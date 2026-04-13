@@ -15,9 +15,9 @@ jobs:
     uses: ./.github/workflows/etcd-integration.yml
     secrets: inherit
 
-  telemetry-integration:
-    name: Telemetry Integration Tests
-    uses: ./.github/workflows/telemetry-integration.yml
+  prometheus-integration:
+    name: Prometheus Integration Tests
+    uses: ./.github/workflows/prometheus-integration.yml
     secrets: inherit
 
   otlp-integration:
@@ -38,4 +38,14 @@ jobs:
   fix-integration:
     name: FIX Integration Tests
     uses: ./.github/workflows/fix-integration.yml
+    secrets: inherit
+
+  iceoryx2-integration:
+    name: iceoryx2 Integration Tests
+    uses: ./.github/workflows/iceoryx2-integration.yml
+    secrets: inherit
+
+  aeron-integration:
+    name: Aeron Integration Tests
+    uses: ./.github/workflows/aeron-integration.yml
     secrets: inherit
