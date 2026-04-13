@@ -37,7 +37,7 @@ mod never;
 mod node_flow;
 mod print;
 mod producer;
-#[cfg(feature = "zmq-beta")]
+#[cfg(feature = "zmq")]
 mod receiver;
 mod sample;
 mod throttle;
@@ -101,7 +101,7 @@ use crate::graph::*;
 use crate::queue::ValueAt;
 use crate::types::*;
 
-#[cfg(feature = "zmq-beta")]
+#[cfg(feature = "zmq")]
 pub(crate) use receiver::*;
 
 use log::Level;

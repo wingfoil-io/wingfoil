@@ -18,8 +18,8 @@ Two modes are supported:
 Run publisher and subscriber in separate terminals:
 
 ```sh
-RUST_LOG=info cargo run --example zmq_direct_pub --features zmq-beta
-RUST_LOG=info cargo run --example zmq_direct_sub --features zmq-beta
+RUST_LOG=info cargo run --example zmq_direct_pub --features zmq
+RUST_LOG=info cargo run --example zmq_direct_sub --features zmq
 ```
 
 | Example | Description |
@@ -41,8 +41,8 @@ docker run --rm -p 2379:2379 \
 Then run publisher and subscriber in separate terminals:
 
 ```sh
-RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq-beta,etcd
-RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq-beta,etcd
+RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq,etcd
+RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq,etcd
 ```
 
 | Example | Description |

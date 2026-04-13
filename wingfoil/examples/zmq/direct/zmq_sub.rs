@@ -5,8 +5,8 @@
 //
 // Run publisher and subscriber in separate terminals:
 //
-//   RUST_LOG=info cargo run --example zmq_direct_pub --features zmq-beta
-//   RUST_LOG=info cargo run --example zmq_direct_sub --features zmq-beta
+//   RUST_LOG=info cargo run --example zmq_direct_pub --features zmq
+//   RUST_LOG=info cargo run --example zmq_direct_sub --features zmq
 
 use log::Level::Info;
 use wingfoil::adapters::zmq::zmq_sub;

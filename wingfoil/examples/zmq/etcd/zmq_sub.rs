@@ -12,8 +12,8 @@
 //
 // Run publisher and subscriber in separate terminals:
 //
-//   RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq-beta,etcd
-//   RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq-beta,etcd
+//   RUST_LOG=info cargo run --example zmq_etcd_pub --features zmq,etcd
+//   RUST_LOG=info cargo run --example zmq_etcd_sub --features zmq,etcd
 
 use log::Level::Info;
 use wingfoil::adapters::zmq::{EtcdRegistry, zmq_sub};

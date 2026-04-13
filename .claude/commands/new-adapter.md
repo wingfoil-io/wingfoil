@@ -462,7 +462,7 @@ chains together. Do **not** add directly to `release.yml`.
 Add the adapter's feature to the wingfoil dependency:
 
 ```toml
-wingfoil = { path = "../wingfoil", features = ["kdb", "zmq-beta", "$ARGUMENTS"] }
+wingfoil = { path = "../wingfoil", features = ["kdb", "zmq", "$ARGUMENTS"] }
 ```
 
 ### b. Binding module — `wingfoil-python/src/py_$ARGUMENTS.rs`

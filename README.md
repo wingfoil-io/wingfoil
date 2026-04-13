@@ -157,13 +157,9 @@ use wingfoil::adapters::zmq::zmq_sub;
 use wingfoil::*;
 
 let (data, _status) = zmq_sub::<Vec<u8>>("tcp://127.0.0.1:7779")?;
-data.map(|burst| {
-    burst.into_iter()
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .collect::<Vec<_>>()
-})
-.print()
-.run(RunMode::RealTime, RunFor::Forever)?;
+// See wingfoil-python/examples/zmq/ for a Python subscriber
+data.print()
+    .run(RunMode::RealTime, RunFor::Forever)?;
 ```
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/)

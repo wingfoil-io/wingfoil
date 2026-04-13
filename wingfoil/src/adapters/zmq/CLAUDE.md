@@ -24,7 +24,7 @@ ZMQ sockets are synchronous and poll-based. The subscriber uses `ReceiverStream`
 which dedicates a real OS thread per subscriber rather than `produce_async` (which
 would require tokio and wrapping every `zmq::poll` call in `spawn_blocking`).
 
-The `zmq-beta` feature deliberately does not depend on `async`; adding a tokio
+The `zmq` feature deliberately does not depend on `async`; adding a tokio
 dependency just to adapt blocking sockets would be unnecessary overhead.
 
 ### Pub/sub via MutableNode (not consume_async)
@@ -95,7 +95,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
 
 # ZMQ tests (no Docker needed)
-cargo test --features zmq-beta-integration-test -p wingfoil \
+cargo test --features zmq-integration-test -p wingfoil \
   -- --test-threads=1 zmq::integration_tests
 
 # etcd discovery tests (requires Docker)
