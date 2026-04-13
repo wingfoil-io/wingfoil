@@ -38,7 +38,7 @@ impl PyNode {
         self.0.count().as_py_stream()
     }
 
-    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    #[pyo3(signature = (realtime=false, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
@@ -137,7 +137,7 @@ impl PyGraph {
         })
     }
 
-    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    #[pyo3(signature = (realtime=false, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
