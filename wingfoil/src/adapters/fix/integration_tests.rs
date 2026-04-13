@@ -16,11 +16,13 @@ const LMAX_MD_PORT: u16 = 443;
 const LMAX_MD_TARGET: &str = "LMXBDM";
 const AVAX_USD_ID: &str = "100946"; // Avalanche/USD — 24/7 crypto market
 
-/// Read LMAX credentials from env vars; return None (and print a skip notice) if absent.
-fn lmax_credentials() -> Option<(String, String)> {
-    let user = std::env::var("LMAX_USERNAME").ok()?;
-    let pass = std::env::var("LMAX_PASSWORD").ok()?;
-    Some((user, pass))
+/// Read LMAX credentials from env vars; panics if either is missing.
+fn lmax_credentials() -> (String, String) {
+    let user = std::env::var("LMAX_USERNAME")
+        .expect("LMAX_USERNAME env var must be set for integration tests");
+    let pass = std::env::var("LMAX_PASSWORD")
+        .expect("LMAX_PASSWORD env var must be set for integration tests");
+    (user, pass)
 }
 
 fn market_data_request() -> FixMessage {
@@ -47,10 +49,7 @@ fn market_data_request() -> FixMessage {
 #[test]
 fn lmax_logon() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
-    let Some((username, password)) = lmax_credentials() else {
-        eprintln!("SKIP lmax_logon: LMAX_USERNAME/LMAX_PASSWORD not set");
-        return Ok(());
-    };
+    let (username, password) = lmax_credentials();
 
     let (_data, status, _injector) = fix_connect_tls(
         LMAX_MD_HOST,
@@ -82,10 +81,7 @@ fn lmax_logon() -> anyhow::Result<()> {
 #[test]
 fn lmax_market_data() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
-    let Some((username, password)) = lmax_credentials() else {
-        eprintln!("SKIP lmax_market_data: LMAX_USERNAME/LMAX_PASSWORD not set");
-        return Ok(());
-    };
+    let (username, password) = lmax_credentials();
 
     let (data, status, injector) = fix_connect_tls(
         LMAX_MD_HOST,
