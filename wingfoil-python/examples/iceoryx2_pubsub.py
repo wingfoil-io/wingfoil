@@ -23,7 +23,7 @@ def main():
     # Run both in a graph
     print("Starting iceoryx2 python signaled slice pub/sub (Local variant)...")
     graph = Graph([pub, collected])
-    graph.run(duration=0.5)
+    graph.run(realtime=True, duration=0.5)
     print("Done.")
 
 if __name__ == "__main__":

@@ -1002,7 +1002,30 @@ impl MutableNode for FixThreadedSource {
 
                 // Connect (initiator) or bind+accept (acceptor).
                 let sock_result = if is_acceptor {
-                    TcpListener::bind(("0.0.0.0", port)).and_then(|l| l.accept().map(|(s, _)| s))
+                    // Use non-blocking accept so we can check the stop flag between
+                    // attempts instead of blocking forever in accept().
+                    (|| -> io::Result<TcpStream> {
+                        let listener = TcpListener::bind(("0.0.0.0", port))?;
+                        listener.set_nonblocking(true)?;
+                        loop {
+                            match listener.accept() {
+                                Ok((s, _)) => {
+                                    s.set_nonblocking(false)?;
+                                    return Ok(s);
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                    if stop_flag.load(Ordering::Relaxed) {
+                                        return Err(io::Error::new(
+                                            io::ErrorKind::Interrupted,
+                                            "stop requested",
+                                        ));
+                                    }
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    })()
                 } else {
                     connect_with_retry(&host, port).map_err(|e| io::Error::other(e.to_string()))
                 };

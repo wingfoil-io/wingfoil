@@ -42,7 +42,7 @@ impl<T> ToPyResult<T> for anyhow::Result<T> {
 
 pub fn parse_run_args(
     py: Python<'_>,
-    realtime: Option<bool>,
+    realtime: bool,
     start: Option<Py<PyAny>>,
     duration: Option<Py<PyAny>>,
     cycles: Option<u32>,
@@ -50,7 +50,6 @@ pub fn parse_run_args(
     if duration.is_some() && cycles.is_some() {
         panic!("Cannot specify both duration and cycles");
     }
-    let realtime = realtime.unwrap_or(false);
     if realtime && start.is_some() {
         panic!("Cannot specify start in realtime mode");
     }

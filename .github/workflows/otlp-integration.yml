@@ -20,10 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
@@ -31,6 +28,6 @@ jobs:
       - name: Run OTLP integration tests
         run: |
           cargo test --features otlp-integration-test -p wingfoil \
-            -- --test-threads=1 --nocapture
+            -- --test-threads=1 --nocapture otlp::integration_tests
         env:
           RUST_LOG: INFO

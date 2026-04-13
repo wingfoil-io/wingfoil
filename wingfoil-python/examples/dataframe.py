@@ -4,7 +4,7 @@ def run_example():
     print("~~~ Single Stream (Primitives) ~~~")
    
     data_a = ticker(0.01).count().limit(5).dataframe()
-    data_a.run(realtime=False) 
+    data_a.run(realtime=False)
     
     df_prim = data_a.peek_value()
     print(df_prim)

@@ -38,11 +38,11 @@ impl PyNode {
         self.0.count().as_py_stream()
     }
 
-    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    #[pyo3(signature = (realtime, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
-        realtime: Option<bool>,
+        realtime: bool,
         start: Option<Py<PyAny>>,
         duration: Option<Py<PyAny>>,
         cycles: Option<u32>,
@@ -137,11 +137,11 @@ impl PyGraph {
         })
     }
 
-    #[pyo3(signature = (realtime=true, start=None, duration=None, cycles=None))]
+    #[pyo3(signature = (realtime, start=None, duration=None, cycles=None))]
     fn run(
         &self,
         py: Python<'_>,
-        realtime: Option<bool>,
+        realtime: bool,
         start: Option<Py<PyAny>>,
         duration: Option<Py<PyAny>>,
         cycles: Option<u32>,

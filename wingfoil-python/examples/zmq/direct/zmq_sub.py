@@ -25,7 +25,7 @@ data_node = data.inspect(lambda msgs: [
 status_node = status.inspect(lambda s: print(f"status: {s}", flush=True))
 
 try:
-    wf.Graph([data_node, status_node]).run()
+    wf.Graph([data_node, status_node]).run(realtime=True)
 except KeyboardInterrupt:
     print("\nExiting.")
     sys.exit(0)
