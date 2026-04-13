@@ -322,6 +322,7 @@ impl FixSession {
             extra,
         );
         sock.write_all(&bytes)?;
+        sock.flush()?;
         Ok(())
     }
 
