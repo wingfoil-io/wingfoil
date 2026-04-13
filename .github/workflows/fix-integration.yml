@@ -6,6 +6,9 @@ on:
   push:
     paths:
       - 'wingfoil/src/adapters/fix/**'
+  pull_request:
+    paths:
+      - 'wingfoil/src/adapters/fix/**'
 
 env:
   CARGO_TERM_COLOR: always
