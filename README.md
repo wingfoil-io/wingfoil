@@ -135,6 +135,39 @@ round_trip.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/)
 
+## ZeroMQ Example
+
+Publish a stream over ZMQ and subscribe from another process — cross-language compatible with the Python bindings:
+
+```rust,ignore
+// publisher
+use wingfoil::adapters::zmq::ZeroMqPub;
+use wingfoil::*;
+
+ticker(Duration::from_millis(100))
+    .count()
+    .map(|n: u64| format!("{n}").into_bytes())
+    .zmq_pub(7779, ())
+    .run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+```rust,ignore
+// subscriber
+use wingfoil::adapters::zmq::zmq_sub;
+use wingfoil::*;
+
+let (data, _status) = zmq_sub::<Vec<u8>>("tcp://127.0.0.1:7779")?;
+data.map(|burst| {
+    burst.into_iter()
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .collect::<Vec<_>>()
+})
+.print()
+.run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/)
+
 ## Telemetry Example
 
 Export stream metrics to Grafana via Prometheus scraping (pull) or OpenTelemetry OTLP push — or both simultaneously:
