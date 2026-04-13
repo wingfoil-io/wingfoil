@@ -256,3 +256,13 @@ required-features = ["fix"]
 name = "lmax_instruments"
 path = "examples/fix/lmax_instruments.rs"
 required-features = ["fix"]
+
+[[example]]
+name = "fix_echo_server"
+path = "examples/fix/fix_echo_server.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "fix_loopback"
+path = "examples/fix/fix_loopback.rs"
+required-features = ["fix"]

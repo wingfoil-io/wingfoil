@@ -21,7 +21,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
-- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [FIX protocol](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix) (FIX 4.4 with TLS), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
 
 ## Quick Start
 
@@ -165,6 +165,41 @@ data.print()
 Service discovery via etcd is also supported — see the [etcd examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/etcd/) for details.
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/)
+
+## FIX Protocol Example
+
+Connect to a FIX 4.4 exchange (e.g. LMAX London Demo) over TLS, subscribe to market data, and process incoming messages — all as a streaming graph:
+
+```rust,ignore
+use wingfoil::adapters::fix::{FixInjector, FixMessage, fix_connect_tls};
+use wingfoil::*;
+
+let (data, status, injector) = fix_connect_tls(
+    "fix-marketdata.london-demo.lmax.com", 443,
+    &username, "LMXBDM", Some(&password),
+);
+
+// Subscribe to EUR/USD after logon
+subscribe_after_logon(injector, "4001", Duration::from_secs(3));
+
+let data_node = data.logged("fix-data", Info).as_node();
+let status_node = status.logged("fix-status", Info).as_node();
+
+Graph::new(
+    vec![data_node, status_node],
+    RunMode::RealTime,
+    RunFor::Duration(Duration::from_secs(60)),
+)
+.run()
+.unwrap();
+```
+
+Run the self-contained loopback example (no external FIX engine needed):
+```sh
+RUST_LOG=info cargo run --example fix_loopback --features fix
+```
+
+[Full examples.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix/)
 
 ## Telemetry Example
 
