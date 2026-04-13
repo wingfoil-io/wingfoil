@@ -25,12 +25,14 @@ uses custom `MutableNode` implementations polled by the graph engine. Two poll m
 
 This avoids the overhead of an async runtime for a protocol where microsecond latency matters.
 
-### FixInjector instead of graph-integrated pub node
+### FixConnection and fix_sub
 
-FIX sessions are bidirectional: the same TCP connection carries both inbound market data and
-outbound requests (MarketDataRequest, NewOrderSingle). `FixInjector` queues outbound messages
-on the session thread, avoiding a separate connection. A `FixSenderNode` sink is available for
-cases where a separate outbound connection is needed (e.g. dedicated order routing).
+`fix_connect_tls` returns a `FixConnection` bundling the data/status streams and session handle.
+`FixConnection::fix_sub(&["4001"])` creates a graph node that watches the status stream and
+automatically sends `MarketDataRequest` messages once the session reaches `LoggedIn`.
+`FixConnection::inject(msg)` and `FixConnection::injector()` provide raw access for advanced
+use cases (e.g. throttled sweeps, custom message types). `FixSenderNode` is a separate sink for
+cases where a dedicated outbound connection is needed (e.g. order routing).
 
 ### No testcontainers
 

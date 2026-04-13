@@ -10,7 +10,8 @@
 //! `(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)` pair.
 //!
 //! Use [`fix_connect_tls`] to connect to TLS-secured endpoints (e.g. LMAX London Demo).
-//! It additionally returns a [`FixInjector`] for sending outbound messages on the session.
+//! It returns a [`FixConnection`] with data/status streams and
+//! [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -131,7 +132,7 @@ pub enum FixPollMode {
 
 /// Handle for injecting outbound [`FixMessage`]s into an established FIX session.
 ///
-/// Obtained from [`fix_connect_tls`]. Thread-safe and cheaply cloneable.
+/// Obtained from [`FixConnection::injector`]. Thread-safe and cheaply cloneable.
 /// Messages are sent on the next background-thread loop iteration.
 #[derive(Clone)]
 pub struct FixInjector {
@@ -142,6 +143,55 @@ impl FixInjector {
     /// Queue `msg` for sending on the next session loop iteration.
     pub fn inject(&self, msg: FixMessage) {
         self.queue.lock().unwrap().push_back(msg);
+    }
+}
+
+/// Bundles the streams and session handle returned by [`fix_connect_tls`].
+///
+/// Use [`fix_sub`](FixConnection::fix_sub) to subscribe to market data as a
+/// graph node, or [`inject`](FixConnection::inject) for raw outbound messages.
+pub struct FixConnection {
+    /// Inbound application messages (MarketDataSnapshot, execution reports, etc.).
+    pub data: Rc<dyn Stream<Burst<FixMessage>>>,
+    /// Session lifecycle events (LoggedIn, LoggedOut, …).
+    pub status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
+    injector: FixInjector,
+}
+
+impl FixConnection {
+    /// Create a graph node that subscribes to market data for the given symbols.
+    ///
+    /// The node watches the session status stream and automatically sends a
+    /// `MarketDataRequest` (MsgType V) for each symbol once the session reaches
+    /// [`FixSessionStatus::LoggedIn`]. No manual thread spawning or sleeping
+    /// required.
+    ///
+    /// ```ignore
+    /// let fix = fix_connect_tls(host, port, sender, target, Some(&pw));
+    /// let sub = fix.fix_sub(&["4001", "4002"]);
+    /// Graph::new(
+    ///     vec![fix.data.as_node(), fix.status.as_node(), sub],
+    ///     RunMode::RealTime, RunFor::Duration(Duration::from_secs(60)),
+    /// ).run().unwrap();
+    /// ```
+    pub fn fix_sub(&self, symbols: &[&str]) -> Rc<dyn Node> {
+        FixSubNode {
+            injector: self.injector.clone(),
+            status: self.status.clone(),
+            symbols: symbols.iter().map(|s| s.to_string()).collect(),
+            subscribed: false,
+        }
+        .into_node()
+    }
+
+    /// Queue a raw outbound [`FixMessage`] for sending on the session thread.
+    pub fn inject(&self, msg: FixMessage) {
+        self.injector.inject(msg);
+    }
+
+    /// Get a clone of the underlying [`FixInjector`] for manual use.
+    pub fn injector(&self) -> FixInjector {
+        self.injector.clone()
     }
 }
 
@@ -1077,6 +1127,60 @@ impl StreamPeekRef<Burst<FixEvent>> for FixThreadedSource {
     }
 }
 
+// ── FixSubNode (market data subscription sink) ──────────────────────────────
+
+/// Build a FIX MarketDataRequest (MsgType V) subscribing to top-of-book for `symbol`.
+fn market_data_request(symbol: &str, req_id: &str) -> FixMessage {
+    FixMessage {
+        msg_type: "V".to_string(),
+        seq_num: 0,
+        sending_time: NanoTime::ZERO,
+        fields: vec![
+            (262, req_id.to_string()), // MDReqID
+            (263, "1".to_string()),    // SubscriptionRequestType = Subscribe
+            (264, "1".to_string()),    // MarketDepth = top of book
+            (265, "0".to_string()),    // MDUpdateType = Full Refresh
+            (267, "2".to_string()),    // NoMDEntryTypes = 2
+            (269, "0".to_string()),    // MDEntryType = Bid
+            (269, "1".to_string()),    // MDEntryType = Ask
+            (146, "1".to_string()),    // NoRelatedSym = 1
+            (48, symbol.to_string()),  // SecurityID
+            (22, "8".to_string()),     // IDSource = Exchange Symbol
+        ],
+    }
+}
+
+struct FixSubNode {
+    injector: FixInjector,
+    status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
+    symbols: Vec<String>,
+    subscribed: bool,
+}
+
+impl MutableNode for FixSubNode {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        if self.subscribed {
+            return Ok(false);
+        }
+        let burst = self.status.peek_value();
+        let logged_in = burst
+            .iter()
+            .any(|s| matches!(s, FixSessionStatus::LoggedIn));
+        if logged_in {
+            for (i, sym) in self.symbols.iter().enumerate() {
+                let req_id = format!("sub_{i}_{sym}");
+                self.injector.inject(market_data_request(sym, &req_id));
+            }
+            self.subscribed = true;
+        }
+        Ok(false) // sink — never ticks downstream
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.status.clone().as_node()], vec![])
+    }
+}
+
 // ── FixSenderNode (sink) ──────────────────────────────────────────────────────
 
 struct FixSenderNode {
@@ -1190,20 +1294,16 @@ pub fn fix_connect(
 /// `sender_comp_id` should be your registered username; `password` is sent as
 /// tag 554 in the Logon message (with tag 553 = `sender_comp_id`).
 ///
-/// Returns `(data_stream, status_stream, injector)`. The [`FixInjector`] lets you
-/// send outbound messages (e.g. `MarketDataRequest`, `NewOrderSingle`) on the session
-/// from any thread.
+/// Returns a [`FixConnection`] with `data` and `status` streams, plus
+/// [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription
+/// and [`inject`](FixConnection::inject) for raw outbound messages.
 pub fn fix_connect_tls(
     host: &str,
     port: u16,
     sender_comp_id: &str,
     target_comp_id: &str,
     password: Option<&str>,
-) -> (
-    Rc<dyn Stream<Burst<FixMessage>>>,
-    Rc<dyn Stream<Burst<FixSessionStatus>>>,
-    FixInjector,
-) {
+) -> FixConnection {
     let src =
         FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, password);
     let injector = FixInjector {
@@ -1211,7 +1311,11 @@ pub fn fix_connect_tls(
     };
     let events: Rc<dyn Stream<Burst<FixEvent>>> = src.into_stream();
     let (data, status) = split_events(events);
-    (data, status, injector)
+    FixConnection {
+        data,
+        status,
+        injector,
+    }
 }
 
 /// Bind a FIX acceptor on `port`, accepting one initiator connection.
