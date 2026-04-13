@@ -27,7 +27,7 @@ class TestFixLoopback(unittest.TestCase):
             Graph([acc_data, status_stream]).run(realtime=True, duration=2.0)
             results["acc_status"] = status_stream.peek_value()
 
-        acc_thread = threading.Thread(target=run_acceptor)
+        acc_thread = threading.Thread(target=run_acceptor, daemon=True)
         acc_thread.start()
 
         # Give acceptor time to bind

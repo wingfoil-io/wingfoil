@@ -54,7 +54,7 @@ def test_iceoryx2_local_pubsub_bytes(mode):
     )
 
     graph = wf.Graph([pub, collected])
-    graph.run(duration=0.4)
+    graph.run(realtime=True, duration=0.4)
 
     ticks = collected.peek_value()
     assert ticks, "expected to receive at least one tick"
@@ -86,7 +86,7 @@ def test_iceoryx2_local_slice_large_payload():
     )
 
     graph = wf.Graph([pub, collected])
-    graph.run(duration=0.4)
+    graph.run(realtime=True, duration=0.4)
 
     ticks = collected.peek_value()
     assert ticks, "expected to receive at least one tick"
@@ -116,7 +116,7 @@ def test_iceoryx2_ipc_pubsub_subprocess():
     collected = sub.collect()
 
     def run_subscriber():
-        wf.Graph([collected]).run(duration=1.0)
+        wf.Graph([collected]).run(realtime=True, duration=1.0)
 
     t = threading.Thread(target=run_subscriber, daemon=True)
     t.start()
@@ -133,7 +133,7 @@ pub = (
     .map(lambda _: b"hello-ipc")
     .iceoryx2_pub(service_name, variant=wf.Iceoryx2ServiceVariant.Ipc, history_size=10)
 )
-wf.Graph([pub]).run(duration=0.4)
+wf.Graph([pub]).run(realtime=True, duration=0.4)
 """
     subprocess.run([sys.executable, "-c", code], check=True)
 
