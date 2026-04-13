@@ -4,7 +4,7 @@ def run_example():
     print("~~~ Single Stream (Primitives) ~~~")
    
     data_a = ticker(0.01).count().limit(5).dataframe()
-    data_a.run(realtime=False, cycles=5)
+    data_a.run(realtime=False)
     
     df_prim = data_a.peek_value()
     print(df_prim)
@@ -18,7 +18,7 @@ def run_example():
         .dataframe()
     )
     
-    data_b.run(realtime=False, cycles=5)
+    data_b.run(realtime=False)
     df_dict = data_b.peek_value()
     print(df_dict)
     
@@ -32,7 +32,7 @@ def run_example():
     
 
     print("Executing Rust Graph engine...")
-    Graph([stream_price, stream_qty]).run(realtime=False, cycles=5)
+    Graph([stream_price, stream_qty]).run(realtime=False)
     
     df_zipped = build_dataframe({
         "price": stream_price,

@@ -201,7 +201,7 @@ class TestNodeAndGraph(unittest.TestCase):
     def test_graph_with_multiple_streams(self):
         a = ticker(0.01).count().limit(3).collect()
         b = ticker(0.02).count().limit(2).collect()
-        Graph([a, b]).run(realtime=False, cycles=3)
+        Graph([a, b]).run(realtime=False)
         self.assertEqual(a.peek_value(), [1, 2, 3])
         self.assertEqual(b.peek_value(), [1, 2])
 

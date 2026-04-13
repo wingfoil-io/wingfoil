@@ -52,7 +52,7 @@ def test_dict_of_streams():
         "col_b": stream_b
     }
     
-    Graph([stream_a, stream_b]).run(realtime=False, cycles=3)
+    Graph([stream_a, stream_b]).run(realtime=False)
   
     df = build_dataframe(data)
 
@@ -81,7 +81,7 @@ def test_async_frequencies():
     slow_stream = slow_source.map(lambda x: x * 100).dataframe()
     
 
-    Graph([fast_stream, slow_stream]).run(realtime=False, cycles=4)
+    Graph([fast_stream, slow_stream]).run(realtime=False)
     
     df = build_dataframe({"fast": fast_stream, "slow": slow_stream})
   
@@ -106,7 +106,7 @@ def test_massive_fan_out():
     s_sub = source.map(lambda x: x - 5).dataframe()
     s_mult = source.map(lambda x: x * 5).dataframe()
     
-    Graph([s_add, s_sub, s_mult]).run(realtime=False, cycles=3)
+    Graph([s_add, s_sub, s_mult]).run(realtime=False)
     
     df = build_dataframe({
         "add": s_add, 
@@ -145,7 +145,7 @@ def test_build_dataframe_skips_empty_streams():
     live_stream = ticker(0.01).count().limit(3).dataframe()
 
     # Only run live_stream — empty_stream stays empty
-    live_stream.run(realtime=False, cycles=3)
+    live_stream.run(realtime=False)
 
     df = build_dataframe({"empty": empty_stream, "live": live_stream})
     # Only "live" column should appear (empty_stream's val is falsy)
