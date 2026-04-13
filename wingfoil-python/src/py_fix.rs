@@ -76,7 +76,7 @@ pub fn py_fix_connect_tls(
     target_comp_id: String,
     password: Option<String>,
 ) -> (PyStream, PyStream, Py<PyAny>) {
-    let (data, status, injector) = fix_connect_tls(
+    let fix = fix_connect_tls(
         &host,
         port,
         &sender_comp_id,
@@ -84,14 +84,14 @@ pub fn py_fix_connect_tls(
         password.as_deref(),
     );
 
-    let py_data = data.map(|burst| {
+    let py_data = fix.data.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|msg| msg_to_py(py, &msg)).collect();
             PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
         })
     });
 
-    let py_status = status.map(|burst| {
+    let py_status = fix.status.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|s| status_to_py(py, &s)).collect();
             PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
@@ -99,7 +99,9 @@ pub fn py_fix_connect_tls(
     });
 
     let inject_fn = Python::attach(|py| {
-        let injector_cls = PyFixInjector { injector };
+        let injector_cls = PyFixInjector {
+            injector: fix.injector(),
+        };
         Py::new(py, injector_cls).unwrap().into_any()
     });
 

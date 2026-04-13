@@ -171,22 +171,22 @@ Service discovery via etcd is also supported — see the [etcd examples](https:/
 Connect to a FIX 4.4 exchange (e.g. LMAX London Demo) over TLS, subscribe to market data, and process incoming messages — all as a streaming graph:
 
 ```rust,ignore
-use wingfoil::adapters::fix::{FixInjector, FixMessage, fix_connect_tls};
+use wingfoil::adapters::fix::fix_connect_tls;
 use wingfoil::*;
 
-let (data, status, injector) = fix_connect_tls(
+let fix = fix_connect_tls(
     "fix-marketdata.london-demo.lmax.com", 443,
     &username, "LMXBDM", Some(&password),
 );
 
-// Subscribe to EUR/USD after logon
-subscribe_after_logon(injector, "4001", Duration::from_secs(3));
+// Subscribe to EUR/USD — waits for LoggedIn, then sends the request.
+let sub = fix.fix_sub(constant(vec!["4001".into()]));
 
-let data_node = data.logged("fix-data", Info).as_node();
-let status_node = status.logged("fix-status", Info).as_node();
+let data_node = fix.data.logged("fix-data", Info).as_node();
+let status_node = fix.status.logged("fix-status", Info).as_node();
 
 Graph::new(
-    vec![data_node, status_node],
+    vec![data_node, status_node, sub],
     RunMode::RealTime,
     RunFor::Duration(Duration::from_secs(60)),
 )

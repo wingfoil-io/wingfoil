@@ -8,7 +8,7 @@
 //       -- lmax --nocapture --test-threads=1
 
 use super::*;
-use crate::{Graph, RunFor, RunMode, StreamOperators};
+use crate::{Graph, RunFor, RunMode, StreamOperators, constant};
 use std::time::Duration;
 
 const LMAX_MD_HOST: &str = "fix-marketdata.london-demo.lmax.com";
@@ -25,33 +25,13 @@ fn lmax_credentials() -> (String, String) {
     (user, pass)
 }
 
-fn market_data_request() -> FixMessage {
-    FixMessage {
-        msg_type: "V".to_string(),
-        seq_num: 0,
-        sending_time: NanoTime::ZERO,
-        fields: vec![
-            (262, "req1".to_string()),
-            (263, "1".to_string()),
-            (264, "1".to_string()),
-            (265, "0".to_string()),
-            (267, "2".to_string()),        // NoMDEntryTypes = 2
-            (269, "0".to_string()),        // MDEntryType = Bid
-            (269, "1".to_string()),        // MDEntryType = Ask
-            (146, "1".to_string()),        // NoRelatedSym = 1
-            (48, AVAX_USD_ID.to_string()), // SecurityID = instrument ID (LMAX group delimiter)
-            (22, "8".to_string()),         // IDSource = 8 (Exchange Symbol)
-        ],
-    }
-}
-
 /// Verify the FIX session reaches LoggedIn within 10 seconds.
 #[test]
 fn lmax_logon() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
     let (username, password) = lmax_credentials();
 
-    let (_data, status, _injector) = fix_connect_tls(
+    let fix = fix_connect_tls(
         LMAX_MD_HOST,
         LMAX_MD_PORT,
         &username,
@@ -59,7 +39,7 @@ fn lmax_logon() -> anyhow::Result<()> {
         Some(&password),
     );
 
-    let status_node = status.collect().finally(|items, _| {
+    let status_node = fix.status.collect().finally(|items, _| {
         let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
         assert!(
             vs.contains(&FixSessionStatus::LoggedIn),
@@ -83,7 +63,7 @@ fn lmax_market_data() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
     let (username, password) = lmax_credentials();
 
-    let (data, status, injector) = fix_connect_tls(
+    let fix = fix_connect_tls(
         LMAX_MD_HOST,
         LMAX_MD_PORT,
         &username,
@@ -91,13 +71,10 @@ fn lmax_market_data() -> anyhow::Result<()> {
         Some(&password),
     );
 
-    // Wait for logon then inject a MarketDataRequest
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(3));
-        injector.inject(market_data_request());
-    });
+    // Subscribe via graph node — waits for LoggedIn automatically
+    let sub = fix.fix_sub(constant(vec![AVAX_USD_ID.into()]));
 
-    let data_node = data.collect().finally(|items, _| {
+    let data_node = fix.data.collect().finally(|items, _| {
         let msgs: Vec<FixMessage> = items
             .into_iter()
             .flat_map(|i| i.value.into_iter())
@@ -113,7 +90,7 @@ fn lmax_market_data() -> anyhow::Result<()> {
         Ok(())
     });
 
-    let status_node = status.collect().finally(|items, _| {
+    let status_node = fix.status.collect().finally(|items, _| {
         let vs: Vec<FixSessionStatus> = items.into_iter().flat_map(|i| i.value).collect();
         assert!(
             vs.contains(&FixSessionStatus::LoggedIn),
@@ -123,7 +100,7 @@ fn lmax_market_data() -> anyhow::Result<()> {
     });
 
     Graph::new(
-        vec![data_node, status_node],
+        vec![data_node, status_node, sub],
         RunMode::RealTime,
         RunFor::Duration(Duration::from_secs(20)),
     )

@@ -44,7 +44,7 @@ fn main() {
     let password =
         std::env::var("LMAX_PASSWORD").expect("LMAX_PASSWORD environment variable not set");
 
-    let (data, status, injector) = fix_connect_tls(
+    let fix = fix_connect_tls(
         LMAX_MD_HOST,
         LMAX_MD_PORT,
         &username,
@@ -52,6 +52,9 @@ fn main() {
         Some(&password),
     );
 
+    // Sweep instrument IDs with a delay between each request.
+    // This needs raw injection because of the per-request throttling.
+    let injector = fix.injector();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(2));
         for id in candidates() {
@@ -60,15 +63,10 @@ fn main() {
         }
     });
 
-    let data_node = data
+    let data_node = fix
+        .data
         .map(|burst| {
             for msg in &burst {
-                let _req_id = msg
-                    .fields
-                    .iter()
-                    .find(|f| f.0 == 262)
-                    .map(|f| f.1.as_str())
-                    .unwrap_or("-");
                 match msg.msg_type.as_str() {
                     "W" | "X" => {
                         let sec_id = msg
@@ -99,7 +97,8 @@ fn main() {
         })
         .as_node();
 
-    let status_node = status
+    let status_node = fix
+        .status
         .map(|burst| {
             for s in &burst {
                 eprintln!("status: {s:?}");
