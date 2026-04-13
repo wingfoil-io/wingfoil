@@ -162,6 +162,8 @@ data.print()
     .run(RunMode::RealTime, RunFor::Forever)?;
 ```
 
+Service discovery via etcd is also supported — see the [etcd examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/etcd/) for details.
+
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/)
 
 ## Telemetry Example
