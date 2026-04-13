@@ -1,7 +1,6 @@
 
 ## Dynamic Graphs
 
-- [View examples](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil/examples/dynamic/)
 - Add and remove nodes at runtime without stopping execution
 - Three approaches: high-level `dynamic_group_stream`, hand-rolled `MutableNode`, and static `demux_it`
 
