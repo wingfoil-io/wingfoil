@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -27,6 +27,8 @@ prometheus = []
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
+fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
+fix-integration-test = ["fix"]
 
 [package]
 name = "wingfoil"
@@ -105,6 +107,9 @@ reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics"], optional = true }
+fefix = { version = "0.7", optional = true }
+rustls = { version = "0.23", features = ["ring"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 
 [dev-dependencies]
@@ -236,3 +241,28 @@ required-features = ["zmq", "etcd"]
 name = "etcd"
 path = "examples/etcd/main.rs"
 required-features = ["etcd"]
+
+[[example]]
+name = "fix_client"
+path = "examples/fix/fix_client.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "lmax_demo"
+path = "examples/fix/lmax_demo.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "lmax_instruments"
+path = "examples/fix/lmax_instruments.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "fix_echo_server"
+path = "examples/fix/fix_echo_server.rs"
+required-features = ["fix"]
+
+[[example]]
+name = "fix_loopback"
+path = "examples/fix/fix_loopback.rs"
+required-features = ["fix"]

@@ -31,6 +31,11 @@ if hasattr(_ext, "py_iceoryx2_sub"):
     Iceoryx2Mode = _ext.Iceoryx2Mode
     __all__.extend(["iceoryx2_sub", "Iceoryx2ServiceVariant", "Iceoryx2Mode"])
 
+# User-friendly aliases for FIX functions
+fix_connect = _ext.py_fix_connect
+fix_connect_tls = _ext.py_fix_connect_tls
+fix_accept = _ext.py_fix_accept
+
 # User-friendly aliases for Prometheus
 PrometheusExporter = _ext.PrometheusExporter
 __all__.append("PrometheusExporter")

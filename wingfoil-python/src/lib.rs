@@ -2,6 +2,7 @@ mod proxy_stream;
 mod py_element;
 #[cfg(feature = "etcd")]
 mod py_etcd;
+mod py_fix;
 #[cfg(feature = "iceoryx2-beta")]
 mod py_iceoryx2;
 mod py_kdb;
@@ -191,6 +192,9 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub_etcd, module)?)?;
+    module.add_function(wrap_pyfunction!(py_fix::py_fix_connect, module)?)?;
+    module.add_function(wrap_pyfunction!(py_fix::py_fix_connect_tls, module)?)?;
+    module.add_function(wrap_pyfunction!(py_fix::py_fix_accept, module)?)?;
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add_class::<PyGraph>()?;

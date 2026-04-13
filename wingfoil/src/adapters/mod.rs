@@ -6,6 +6,9 @@ pub mod cache;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "fix")]
+#[doc(hidden)]
+pub mod fix;
 #[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;
