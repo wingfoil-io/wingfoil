@@ -21,6 +21,35 @@ testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 
 Note: `testcontainers` must go in `[dependencies]` as optional (not `[dev-dependencies]`) because Cargo feature flags cannot gate dev-deps. Only add `testcontainers-modules` if a module for the service actually exists in that crate — otherwise use `GenericImage` directly (see step 4).
 
+**Multiple I/O libraries via feature flags:** if the adapter can use different underlying
+libraries for the same functionality (e.g. a discovery backend, a TLS provider, or an
+alternative codec), gate each library behind its own feature flag and use `#[cfg(feature = "...")]`
+to switch implementations:
+
+```toml
+[features]
+$ARGUMENTS = ["dep:primary-client"]
+$ARGUMENTS-alt-backend = ["$ARGUMENTS", "dep:alt-backend-crate"]
+
+[dependencies]
+primary-client    = { version = "x.y", optional = true }
+alt-backend-crate = { version = "x.y", optional = true }
+```
+
+Then in code, provide a trait for the pluggable concern and gate the concrete impl:
+
+```rust
+pub trait <Name>Backend: Send + 'static { /* ... */ }
+
+#[cfg(feature = "$ARGUMENTS-alt-backend")]
+impl <Name>Backend for AltBackend { /* ... */ }
+```
+
+This pattern is used by the ZMQ adapter: `zmq` works standalone for direct TCP addresses, but
+when the `etcd` feature is also enabled, `EtcdRegistry` becomes available as a `ZmqRegistry`
+backend for service discovery. The FIX adapter similarly declares `fefix` as an optional
+dependency reserved for future dictionary-driven validation alongside the hand-rolled codec.
+
 ## 3. Module registration — `wingfoil/src/adapters/mod.rs`
 
 ```rust
@@ -130,6 +159,14 @@ Choose the threading model based on the I/O library:
   `iceoryx2`). Dedicates a real OS thread per subscriber to marshall incoming messages
   into the graph via a channel. Use this to avoid wrapping every blocking call in
   `spawn_blocking`.
+- **Spin loop (`MutableNode` + `always_callback`)** — when the I/O library is synchronous,
+  non-blocking, and ultra-low latency is required (e.g. `iceoryx2` in spin mode, FIX with
+  `AlwaysSpin`). The node polls directly inside `cycle()` with no background thread. Lowest
+  latency (~1–5 µs) but highest CPU usage on the graph thread.
+
+An adapter may support **multiple strategies** selected at construction time via a mode enum
+(see "Multiple polling strategies" below). In that case the `start()` / `cycle()` paths branch
+on the chosen mode, but the public API (`Rc<dyn Stream<Burst<T>>>`) is identical regardless.
 
 ### produce_async pattern (async I/O)
 
@@ -162,6 +199,94 @@ pub fn $ARGUMENTS_sub<T: Element + Send>(address: &str) -> Rc<dyn Stream<Burst<T
 The callback runs on a dedicated OS thread. Use `stop_flag: Arc<AtomicBool>` to
 cooperatively shut down, and `channel_sender: ChannelSender<T>` to push
 `Message::RealtimeValue(v)`, `Message::EndOfStream`, or `Message::Error(e)`.
+
+### Spin loop pattern (non-blocking direct poll)
+
+When ultra-low latency matters and the I/O supports non-blocking reads, poll directly inside
+`cycle()` with no background thread. The graph engine calls `cycle()` on every tick because
+`start()` opts in via `state.always_callback()`.
+
+```rust
+struct <Name>SubNode {
+    socket: Option<TcpStream>,  // or any non-blocking I/O handle
+    value: Burst<<Name>Event>,
+    parse_buf: Vec<u8>,
+    mode: <Name>PollMode,
+}
+
+impl MutableNode for <Name>SubNode {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        if state.run_mode() != RunMode::RealTime {
+            anyhow::bail!("$ARGUMENTS spin mode only supports real-time");
+        }
+        state.always_callback(); // tell graph: call cycle() every tick, no sleep
+        let mut sock = TcpStream::connect(&self.address)?;
+        sock.set_nonblocking(true)?;
+        self.socket = Some(sock);
+        Ok(())
+    }
+
+    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> {
+        self.value.clear();
+        let Some(sock) = self.socket.as_mut() else { return Ok(false) };
+        let mut tmp = [0u8; 4096];
+        loop {
+            match sock.read(&mut tmp) {
+                Ok(0) => { /* EOF — emit disconnect event */ break; }
+                Ok(n) => self.parse_buf.extend_from_slice(&tmp[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break, // nothing to read
+                Err(e) => return Err(e.into()),
+            }
+        }
+        // parse self.parse_buf into events, push to self.value
+        Ok(!self.value.is_empty())
+    }
+
+    fn upstreams(&self) -> UpStreams { UpStreams::none() } // source node
+}
+```
+
+Key points:
+- `state.always_callback()` — the graph will busy-loop this node (~1–5 µs per cycle)
+- Non-blocking socket: `WouldBlock` means "no data right now", cycle returns immediately
+- No background thread, no channel hop — lowest possible latency
+- Highest CPU usage on the graph thread — only use when latency justifies the cost
+- See the FIX adapter (`FixPollMode::AlwaysSpin`) and iceoryx2 (`Iceoryx2Mode::Spin`) for
+  production examples
+
+### Multiple polling strategies
+
+An adapter may offer several polling strategies via a mode enum, letting callers trade latency
+for CPU. Define the enum in `mod.rs` and branch on it in `start()` / `cycle()`:
+
+```rust
+/// Polling strategy for the $ARGUMENTS subscriber.
+#[derive(Debug, Clone, Default)]
+pub enum <Name>PollMode {
+    /// Non-blocking poll inside graph `cycle()` — lowest latency, highest CPU.
+    #[default]
+    Spin,
+    /// Background thread + channel — higher latency (~10–100 µs), lower CPU.
+    Threaded,
+}
+```
+
+The public factory function accepts the mode and wires up the appropriate internals:
+
+```rust
+pub fn $ARGUMENTS_sub(
+    conn: impl Into<<Name>Connection>,
+    mode: <Name>PollMode,
+) -> Rc<dyn Stream<Burst<<Name>Event>>> {
+    match mode {
+        <Name>PollMode::Spin     => /* return spin-loop MutableNode wrapped in Rc */,
+        <Name>PollMode::Threaded => /* return ReceiverStream with background thread */,
+    }
+}
+```
+
+The caller sees the same `Rc<dyn Stream<Burst<T>>>` regardless of mode. Document the
+latency/CPU tradeoffs on each variant (see `FixPollMode` and `Iceoryx2Mode` for examples).
 
 **Flexible arguments via `impl Into<T>`:** for any parameter that callers might supply in
 multiple forms (a URL string, a config struct, a bare value), accept `impl Into<ConfigType>`
@@ -210,6 +335,11 @@ Choose the threading model to match the I/O library (same decision as step 7):
 - **`consume_async`** — when the I/O library is async. Returns `Rc<dyn Node>`.
 - **`MutableNode` impl** — when the I/O library is synchronous. Implement `start` / `cycle` /
   `stop` directly on a struct, giving full control over socket lifecycle and buffering.
+
+The same mode-enum pattern from the sub side applies here: if the adapter supports both
+spin and threaded polling, the pub node should respect the same `<Name>PollMode` and
+branch accordingly (e.g. flush outbound messages via non-blocking write in spin mode, or
+push to a channel for a background sender thread in threaded mode).
 
 ### consume_async pattern (async I/O)
 
