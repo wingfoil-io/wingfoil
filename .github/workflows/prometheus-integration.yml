@@ -1,4 +1,4 @@
-name: Telemetry Integration Tests
+name: Prometheus Integration Tests
 
 on:
   workflow_dispatch:
@@ -12,18 +12,15 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  telemetry-integration:
-    name: Telemetry Integration Tests
+  prometheus-integration:
+    name: Prometheus Integration Tests
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
@@ -47,7 +44,7 @@ jobs:
       - name: Run Prometheus integration tests
         run: |
           cargo test --features prometheus-integration-test -p wingfoil \
-            -- --test-threads=1 --nocapture
+            -- --test-threads=1 --nocapture prometheus::integration_tests
         env:
           RUST_LOG: INFO
           PROMETHEUS_TEST_URL: http://localhost:9090

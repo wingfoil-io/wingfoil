@@ -30,6 +30,6 @@ jobs:
       - name: Run ZMQ etcd integration tests
         run: |
           cargo test --features zmq-etcd-integration-test -p wingfoil \
-            -- --test-threads=1 zmq::integration_tests::etcd_tests
+            -- --test-threads=1 --nocapture zmq::integration_tests::etcd_tests
         env:
           RUST_LOG: INFO

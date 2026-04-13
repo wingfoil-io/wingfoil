@@ -27,6 +27,6 @@ jobs:
       - name: Run ZMQ integration tests
         run: |
           cargo test --features zmq-integration-test -p wingfoil \
-            -- --test-threads=1 zmq::integration_tests
+            -- --test-threads=1 --nocapture zmq::integration_tests
         env:
           RUST_LOG: INFO
