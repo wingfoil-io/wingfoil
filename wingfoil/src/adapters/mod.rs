@@ -15,5 +15,5 @@ pub mod kdb;
 pub mod otlp;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
-#[cfg(feature = "zmq-beta")]
+#[cfg(feature = "zmq")]
 pub mod zmq;

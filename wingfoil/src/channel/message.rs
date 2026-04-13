@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
 use crate::types::Element;
-#[cfg(feature = "zmq-beta")]
+#[cfg(feature = "zmq")]
 use crate::{GraphState, RunMode};
 
 /// Message that can be sent between threads.
@@ -67,10 +67,10 @@ impl<T: Element + Send + PartialEq> PartialEq for Message<T> {
 impl<T: Element + Send + PartialEq> Eq for Message<T> {}
 
 impl<T: Element + Send> Message<T> {
-    // This is used by optional adapters (e.g. `zmq-beta`). When those features are disabled,
+    // This is used by optional adapters (e.g. `zmq`). When those features are disabled,
     // the helper is not compiled. When they are enabled, it can be unused depending on which
     // adapters/tests are built, so keep clippy quiet.
-    #[cfg(feature = "zmq-beta")]
+    #[cfg(feature = "zmq")]
     #[allow(dead_code)]
     pub fn build(value: T, graph_state: &GraphState) -> Message<T> {
         match graph_state.run_mode() {

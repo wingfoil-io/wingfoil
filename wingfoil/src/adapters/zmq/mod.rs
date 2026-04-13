@@ -8,13 +8,13 @@
 //!
 //! # Setup
 //!
-//! ZMQ is peer-to-peer — no broker process is required. The `zmq-beta` feature
+//! ZMQ is peer-to-peer — no broker process is required. The `zmq` feature
 //! bundles `libzmq` at build time, so no system installation is needed.
 //!
 //! Enable the feature in `Cargo.toml`:
 //!
 //! ```toml
-//! wingfoil = { version = "...", features = ["zmq-beta"] }
+//! wingfoil = { version = "...", features = ["zmq"] }
 //! ```
 //!
 //! # Direct pub/sub
@@ -69,7 +69,7 @@ mod read;
 pub mod registry;
 mod write;
 
-#[cfg(all(test, feature = "zmq-beta-integration-test"))]
+#[cfg(all(test, feature = "zmq-integration-test"))]
 mod integration_tests;
 
 pub use read::*;
