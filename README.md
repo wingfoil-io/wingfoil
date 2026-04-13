@@ -180,7 +180,7 @@ let fix = fix_connect_tls(
 );
 
 // Subscribe to EUR/USD — waits for LoggedIn, then sends the request.
-let sub = fix.fix_sub(&["4001"]);
+let sub = fix.fix_sub(constant(vec!["4001".into()]));
 
 let data_node = fix.data.logged("fix-data", Info).as_node();
 let status_node = fix.status.logged("fix-status", Info).as_node();

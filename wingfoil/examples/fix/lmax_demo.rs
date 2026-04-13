@@ -64,7 +64,7 @@ fn main() {
     );
 
     // Subscribe to EUR/USD — the node waits for LoggedIn then sends the request.
-    let sub = fix.fix_sub(&[EUR_USD_ID]);
+    let sub = fix.fix_sub(constant(vec![EUR_USD_ID.into()]));
 
     let data_node = fix.data.logged("fix-data", Info).as_node();
     let status_node = fix.status.logged("fix-status", Info).as_node();

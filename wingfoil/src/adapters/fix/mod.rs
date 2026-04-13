@@ -159,27 +159,33 @@ pub struct FixConnection {
 }
 
 impl FixConnection {
-    /// Create a graph node that subscribes to market data for the given symbols.
+    /// Create a graph node that subscribes to market data for symbols arriving
+    /// on `symbols`.
     ///
-    /// The node watches the session status stream and automatically sends a
-    /// `MarketDataRequest` (MsgType V) for each symbol once the session reaches
-    /// [`FixSessionStatus::LoggedIn`]. No manual thread spawning or sleeping
-    /// required.
+    /// The node watches both the symbol stream (active) and the session status
+    /// stream (active). When a new batch of symbol IDs arrives and the session
+    /// is [`FixSessionStatus::LoggedIn`], a `MarketDataRequest` (MsgType V) is
+    /// sent for each unseen symbol. Symbols that arrive before logon are queued
+    /// and subscribed automatically once the session is ready.
+    ///
+    /// For a fixed set of symbols, use [`constant`](crate::constant):
     ///
     /// ```ignore
     /// let fix = fix_connect_tls(host, port, sender, target, Some(&pw));
-    /// let sub = fix.fix_sub(&["4001", "4002"]);
+    /// let sub = fix.fix_sub(constant(vec!["4001".into(), "4002".into()]));
     /// Graph::new(
     ///     vec![fix.data.as_node(), fix.status.as_node(), sub],
     ///     RunMode::RealTime, RunFor::Duration(Duration::from_secs(60)),
     /// ).run().unwrap();
     /// ```
-    pub fn fix_sub(&self, symbols: &[&str]) -> Rc<dyn Node> {
+    pub fn fix_sub(&self, symbols: Rc<dyn Stream<Vec<String>>>) -> Rc<dyn Node> {
         FixSubNode {
             injector: self.injector.clone(),
             status: self.status.clone(),
-            symbols: symbols.iter().map(|s| s.to_string()).collect(),
-            subscribed: false,
+            symbols,
+            pending: Vec::new(),
+            sent: Vec::new(),
+            logged_in: false,
         }
         .into_node()
     }
@@ -1176,31 +1182,62 @@ fn market_data_request(symbol: &str, req_id: &str) -> FixMessage {
 struct FixSubNode {
     injector: FixInjector,
     status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
-    symbols: Vec<String>,
-    subscribed: bool,
+    symbols: Rc<dyn Stream<Vec<String>>>,
+    pending: Vec<String>,
+    sent: Vec<String>,
+    logged_in: bool,
+}
+
+impl FixSubNode {
+    fn subscribe(&mut self, sym: &str) {
+        let req_id = format!("sub_{}_{sym}", self.sent.len());
+        self.injector.inject(market_data_request(sym, &req_id));
+        self.sent.push(sym.to_string());
+    }
 }
 
 impl MutableNode for FixSubNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        if self.subscribed {
-            return Ok(false);
-        }
+        // Detect LoggedIn
         let burst = self.status.peek_value();
-        let logged_in = burst
+        if burst
             .iter()
-            .any(|s| matches!(s, FixSessionStatus::LoggedIn));
-        if logged_in {
-            for (i, sym) in self.symbols.iter().enumerate() {
-                let req_id = format!("sub_{i}_{sym}");
-                self.injector.inject(market_data_request(sym, &req_id));
-            }
-            self.subscribed = true;
+            .any(|s| matches!(s, FixSessionStatus::LoggedIn))
+        {
+            self.logged_in = true;
         }
+
+        // Collect new symbols from the stream
+        for sym in self.symbols.peek_value() {
+            if !self.sent.contains(&sym) && !self.pending.contains(&sym) {
+                if self.logged_in {
+                    self.subscribe(&sym);
+                } else {
+                    self.pending.push(sym);
+                }
+            }
+        }
+
+        // Drain anything that was pending before logon
+        if self.logged_in && !self.pending.is_empty() {
+            for sym in std::mem::take(&mut self.pending) {
+                if !self.sent.contains(&sym) {
+                    self.subscribe(&sym);
+                }
+            }
+        }
+
         Ok(false) // sink — never ticks downstream
     }
 
     fn upstreams(&self) -> UpStreams {
-        UpStreams::new(vec![self.status.clone().as_node()], vec![])
+        UpStreams::new(
+            vec![
+                self.status.clone().as_node(),
+                self.symbols.clone().as_node(),
+            ],
+            vec![],
+        )
     }
 }
 

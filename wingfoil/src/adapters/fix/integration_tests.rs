@@ -8,7 +8,7 @@
 //       -- lmax --nocapture --test-threads=1
 
 use super::*;
-use crate::{Graph, RunFor, RunMode, StreamOperators};
+use crate::{Graph, RunFor, RunMode, StreamOperators, constant};
 use std::time::Duration;
 
 const LMAX_MD_HOST: &str = "fix-marketdata.london-demo.lmax.com";
@@ -72,7 +72,7 @@ fn lmax_market_data() -> anyhow::Result<()> {
     );
 
     // Subscribe via graph node — waits for LoggedIn automatically
-    let sub = fix.fix_sub(&[AVAX_USD_ID]);
+    let sub = fix.fix_sub(constant(vec![AVAX_USD_ID.into()]));
 
     let data_node = fix.data.collect().finally(|items, _| {
         let msgs: Vec<FixMessage> = items
