@@ -621,6 +621,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Install system dependencies  # e.g. protobuf-compiler for gRPC clients; omit if not needed
         run: sudo apt-get install -y <pkg>
