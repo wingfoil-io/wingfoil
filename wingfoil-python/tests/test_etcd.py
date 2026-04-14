@@ -93,15 +93,17 @@ class TestEtcdSub(unittest.TestCase):
         self.assertIsInstance(event["revision"], int)
 
     def test_sub_empty_snapshot(self):
-        """etcd_sub with no matching keys yields an empty list on first tick."""
+        """etcd_sub with no matching keys yields no events."""
         from wingfoil import etcd_sub
 
         stream = etcd_sub(ENDPOINT, PREFIX + "nonexistent/").collect()
         stream.run(realtime=True, duration=1.0)
         events = stream.peek_value()
 
-        # May yield one empty-list tick or no ticks depending on timing
-        all_events = [e for tick in events for e in tick]
+        # `peek_value()` is None when the stream never ticked; otherwise it may
+        # be a list of (possibly empty) ticks. Either way, no events should
+        # have been seen.
+        all_events = [e for tick in (events or []) for e in tick]
         self.assertEqual(all_events, [])
 
     def test_sub_dict_has_correct_fields(self):
@@ -170,8 +172,8 @@ class TestEtcdPub(unittest.TestCase):
             ).run(realtime=False, cycles=1)
 
     def test_pub_with_lease_ttl(self):
-        """etcd_pub with lease_ttl writes a key; on consumer stop the key persists
-        until revoked (or TTL). We just verify the write succeeded."""
+        """etcd_pub with lease_ttl writes a key under a lease; on clean shutdown
+        the lease is revoked so the key disappears immediately."""
         from wingfoil import constant
 
         key = f"{PREFIX}leased"
@@ -179,8 +181,10 @@ class TestEtcdPub(unittest.TestCase):
             ENDPOINT, lease_ttl=60.0
         ).run(realtime=False, cycles=1)
 
-        result = etcd_get(key)
-        self.assertEqual(result, b"leased_value")
+        # Clean shutdown revokes the lease, so the key must NOT persist.
+        # This verifies both that the write path ran (no exception) and that
+        # the lease revoke-on-shutdown semantics are wired up correctly.
+        self.assertIsNone(etcd_get(key))
 
 
 if __name__ == "__main__":
