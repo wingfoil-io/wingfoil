@@ -633,6 +633,49 @@ jobs:
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
+
+      # --- Python bindings ---
+      #
+      # Include this block if the adapter ships Python bindings. It starts a
+      # long-lived service container (the Rust tests above start their own
+      # ephemeral containers via testcontainers, so Python needs a separate
+      # one bound to the default host port the test file expects), builds the
+      # bindings with maturin, and runs the pytest selection for this adapter's
+      # marker. If the service isn't reachable the pytest step fails loudly.
+      - name: Start $ARGUMENTS container for Python tests
+        run: |
+          docker run -d --name $ARGUMENTS-py -p PORT:PORT <image>:<tag>
+          for i in $(seq 1 30); do
+            nc -z localhost PORT && echo "$ARGUMENTS ready" && break
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost PORT || (echo "$ARGUMENTS never became ready" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Install maturin and build Python bindings
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest
+          cd wingfoil-python && .venv/bin/maturin develop
+
+      - name: Run Python $ARGUMENTS integration tests
+        run: |
+          cd wingfoil-python && .venv/bin/pytest -m requires_$ARGUMENTS tests/test_$ARGUMENTS.py -v
+
+      - name: Dump $ARGUMENTS logs on failure
+        if: failure()
+        run: docker logs $ARGUMENTS-py
+
+      - name: Stop $ARGUMENTS container
+        if: always()
+        run: docker stop $ARGUMENTS-py && docker rm $ARGUMENTS-py
 ```
 
 ### b. Register in `.github/workflows/integration-tests.yml`
@@ -774,26 +817,45 @@ $ARGUMENTS_sub = _ext.py_$ARGUMENTS_sub
 
 ### f. Integration tests — `wingfoil-python/tests/test_$ARGUMENTS.py`
 
-Follow the KDB+ test pattern: check if the service is available, skip if not, use stdlib HTTP/socket to seed and verify data without extra Python dependencies.
+**Never silently skip.** Integration tests are gated by a `requires_$ARGUMENTS` pytest marker
+that is deselected by default (see `wingfoil-python/pyproject.toml` under `[tool.pytest.ini_options]`).
+The default `pytest` run never collects these tests — it cannot be falsely green against a service
+that is not up. The adapter's own integration workflow selects them with `-m requires_$ARGUMENTS`,
+and if the service is unreachable the tests fail loudly with a real `ConnectionRefused` /
+deserialization error rather than an `unittest.skip`.
 
-For services that expose an HTTP management API (e.g. etcd v3 gRPC-gateway), use `urllib` + `json` + `base64` from stdlib to issue puts/gets.
+Register the marker in `wingfoil-python/pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "requires_$ARGUMENTS: needs <service> on localhost:PORT",
+    # ... existing markers ...
+]
+# Add the new marker to the deselect expression so the default pytest run skips it.
+addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2 and not requires_$ARGUMENTS'"
+```
+
+Then write the tests — no TCP probe, no `skipUnless`, just the marker:
 
 ```python
-import socket
+"""Integration tests for $ARGUMENTS Python bindings.
+
+Selected via `-m requires_$ARGUMENTS`. Without <service> on localhost:PORT
+the tests will fail loudly — they do not silently skip.
+
+Setup:
+    docker run --rm -p PORT:PORT <image>:<tag>
+"""
+
 import unittest
+
+import pytest
 
 ENDPOINT = "http://localhost:PORT"
 
-def service_available():
-    try:
-        with socket.create_connection(("localhost", PORT), timeout=1):
-            return True
-    except OSError:
-        return False
 
-SERVICE_AVAILABLE = service_available()
-
-@unittest.skipUnless(SERVICE_AVAILABLE, "<service> not running on localhost:PORT")
+@pytest.mark.requires_$ARGUMENTS
 class TestSub(unittest.TestCase):
     def test_sub_returns_expected_shape(self):
         from wingfoil import $ARGUMENTS_sub
@@ -803,7 +865,8 @@ class TestSub(unittest.TestCase):
         self.assertIsInstance(result, list)
         # assert dict shape of each event
 
-@unittest.skipUnless(SERVICE_AVAILABLE, "<service> not running on localhost:PORT")
+
+@pytest.mark.requires_$ARGUMENTS
 class TestPub(unittest.TestCase):
     def test_pub_round_trip(self):
         from wingfoil import constant
@@ -813,13 +876,25 @@ class TestPub(unittest.TestCase):
         # verify via stdlib HTTP/socket that the key was written
 ```
 
+For services with an HTTP management API (e.g. etcd v3 gRPC-gateway), seed and verify data
+using `urllib` + `json` + `base64` from stdlib to avoid extra Python dependencies.
+
+**Feature-gated bindings (like iceoryx2):** if the Python binding is only exposed when
+wingfoil-python is built with a non-default Cargo feature, use the marker alone —
+don't skip on `hasattr(_ext, "...")`. Module-level references to feature-gated constants
+(e.g. inside `@pytest.mark.parametrize(...)` decorators) must be avoided because pytest
+imports the file during collection even when deselecting; parametrize with string IDs
+and resolve the constants inside the test body instead.
+
 ## 14. Pre-commit checklist
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
 cargo test --features $ARGUMENTS-integration-test -p wingfoil -- --test-threads=1
-cd wingfoil-python && maturin develop && pytest tests/test_$ARGUMENTS.py
+cd wingfoil-python && maturin develop && pytest -m requires_$ARGUMENTS tests/test_$ARGUMENTS.py
 ```
 
-All four must pass before committing.
+All four must pass before committing. `pytest` without `-m requires_$ARGUMENTS` will
+deselect the integration tests by default, so the marker is required to run them at
+all — make sure the backing service is up locally, or the pytest step will fail loudly.

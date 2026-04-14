@@ -40,3 +40,17 @@ source = ["wingfoil"]
 
 [tool.coverage.report]
 omit = ["*/_wingfoil*"]
+
+[tool.pytest.ini_options]
+# Integration tests are deselected by default so the regular `pytest` run is
+# never silently green against a service that is not actually up. Each
+# integration workflow opts in explicitly, e.g. `pytest -m requires_etcd`.
+# Running a marker selection without the backing service will fail loudly
+# with a real ConnectionRefused/import error — not a skip.
+markers = [
+    "requires_etcd: needs etcd on localhost:2379",
+    "requires_kdb: needs KDB+ on localhost:5000",
+    "requires_otel: needs an OTel collector on localhost:4318",
+    "requires_iceoryx2: needs wingfoil built with --features iceoryx2-beta",
+]
+addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2'"

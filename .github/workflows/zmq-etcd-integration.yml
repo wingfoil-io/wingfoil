@@ -6,6 +6,8 @@ on:
   push:
     paths:
       - 'wingfoil/src/adapters/zmq/**'
+      - 'wingfoil-python/src/py_zmq.rs'
+      - 'wingfoil-python/tests/test_zmq.py'
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,3 +37,45 @@ jobs:
             -- --test-threads=1 --nocapture zmq::integration_tests::etcd_tests
         env:
           RUST_LOG: INFO
+
+      - name: Start etcd container for Python tests
+        run: |
+          docker run -d \
+            --name etcd-py \
+            -p 2379:2379 \
+            -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+            -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+            gcr.io/etcd-development/etcd:v3.5.0
+          for i in $(seq 1 30); do
+            nc -z localhost 2379 && echo "etcd ready" && break
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 2379 || (echo "etcd never became ready" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Install maturin and build Python bindings
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest pyzmq
+          cd wingfoil-python && .venv/bin/maturin develop
+
+      - name: Run Python zmq+etcd integration tests
+        run: |
+          cd wingfoil-python && .venv/bin/pytest -m requires_etcd tests/test_zmq.py -v
+        env:
+          RUST_LOG: INFO
+
+      - name: Dump etcd logs on failure
+        if: failure()
+        run: docker logs etcd-py
+
+      - name: Stop etcd container
+        if: always()
+        run: docker stop etcd-py && docker rm etcd-py
