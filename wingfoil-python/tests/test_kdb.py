@@ -1,34 +1,21 @@
 """Integration tests for KDB+ read/write Python bindings.
 
-Requires a running KDB+ instance on localhost:5000.
-Skip these tests if KDB+ is not available by setting KDB_SKIP=1.
+Selected via `-m requires_kdb`. Without a KDB+ instance on localhost:5000
+the tests will fail loudly — they do not silently skip.
 
 Setup:
     q -p 5000
 """
 
-import os
 import socket
 import struct
 import unittest
 
+import pytest
+
 TABLE = "py_kdb_test_trades"
 HOST = "localhost"
 PORT = 5000
-
-
-def kdb_available():
-    if os.environ.get("KDB_SKIP", "0") == "1":
-        return False
-    try:
-        s = socket.create_connection((HOST, PORT), timeout=1)
-        s.close()
-        return True
-    except (ConnectionRefusedError, OSError):
-        return False
-
-
-KDB_AVAILABLE = kdb_available()
 
 
 def q_exec(query: str):
@@ -78,7 +65,7 @@ def _recv_exact(s: socket.socket, n: int) -> bytes:
     return buf
 
 
-@unittest.skipUnless(KDB_AVAILABLE, "KDB+ not running on localhost:5000")
+@pytest.mark.requires_kdb
 class TestKdbRead(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -117,7 +104,7 @@ class TestKdbRead(unittest.TestCase):
         self.assertEqual(syms, {"AAPL", "GOOG", "MSFT"})
 
 
-@unittest.skipUnless(KDB_AVAILABLE, "KDB+ not running on localhost:5000")
+@pytest.mark.requires_kdb
 class TestKdbWrite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -82,7 +82,7 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cd wingfoil-python && .venv/bin/pytest tests/test_kdb.py -v
+          cd wingfoil-python && .venv/bin/pytest -m requires_kdb tests/test_kdb.py -v
 
       - name: Dump KDB logs on failure
         if: failure()

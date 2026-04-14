@@ -1,3 +1,11 @@
+"""iceoryx2 integration tests.
+
+Selected via `-m requires_iceoryx2`. These tests require wingfoil-python to
+be built with `--features iceoryx2-beta`; if the bindings are absent, the
+`wf.iceoryx2_sub` / `wf.Iceoryx2Mode` references below fail loudly on the
+first access rather than silently skipping the module.
+"""
+
 import os
 import subprocess
 import sys
@@ -8,11 +16,7 @@ import pytest
 
 import wingfoil as wf
 
-if not hasattr(wf, "Iceoryx2Mode") or not hasattr(wf, "iceoryx2_sub"):
-    pytest.skip(
-        "iceoryx2 Python bindings are not enabled in this build (build with maturin --features iceoryx2-beta).",
-        allow_module_level=True,
-    )
+pytestmark = pytest.mark.requires_iceoryx2
 
 
 def _unique_service_name(prefix: str) -> str:
@@ -20,21 +24,13 @@ def _unique_service_name(prefix: str) -> str:
     return f"wingfoil/python/test/{prefix}/{os.getpid()}/{time.time_ns()}"
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [
-        wf.Iceoryx2Mode.Spin,
-        wf.Iceoryx2Mode.Threaded,
-        wf.Iceoryx2Mode.Signaled,
-    ],
-)
-def test_iceoryx2_local_pubsub_bytes(mode):
-    if mode == wf.Iceoryx2Mode.Spin:
-        mode_name = "spin"
-    elif mode == wf.Iceoryx2Mode.Threaded:
-        mode_name = "threaded"
-    else:
-        mode_name = "signaled"
+# Parametrize with string IDs rather than `wf.Iceoryx2Mode.*` constants so the
+# module still imports when the feature isn't compiled in. The actual mode
+# lookup happens inside the test body, which is only executed under
+# `-m requires_iceoryx2` — where missing bindings are a loud AttributeError.
+@pytest.mark.parametrize("mode_name", ["spin", "threaded", "signaled"])
+def test_iceoryx2_local_pubsub_bytes(mode_name):
+    mode = getattr(wf.Iceoryx2Mode, mode_name.capitalize())
 
     service_name = _unique_service_name(f"local/{mode_name}")
 

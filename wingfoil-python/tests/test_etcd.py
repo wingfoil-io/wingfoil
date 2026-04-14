@@ -1,7 +1,7 @@
 """Integration tests for etcd sub/pub Python bindings.
 
-Requires a running etcd instance on localhost:2379.  Skip all tests if it is
-not available.
+Selected via `-m requires_etcd`. Without an etcd instance running on
+localhost:2379 the tests will fail loudly — they do not silently skip.
 
 Setup:
     docker run --rm -p 2379:2379 \\
@@ -12,23 +12,13 @@ Setup:
 
 import base64
 import json
-import socket
 import unittest
 import urllib.request
 
+import pytest
+
 ENDPOINT = "http://localhost:2379"
 PREFIX = "/wingfoil_pytest/"
-
-
-def etcd_available():
-    try:
-        with socket.create_connection(("localhost", 2379), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-ETCD_AVAILABLE = etcd_available()
 
 
 def _http_post(path: str, payload: dict) -> dict:
@@ -74,7 +64,7 @@ def etcd_delete_prefix(prefix: str) -> None:
     )
 
 
-@unittest.skipUnless(ETCD_AVAILABLE, "etcd not running on localhost:2379")
+@pytest.mark.requires_etcd
 class TestEtcdSub(unittest.TestCase):
     def setUp(self):
         etcd_delete_prefix(PREFIX)
@@ -137,7 +127,7 @@ class TestEtcdSub(unittest.TestCase):
             self.assertIsInstance(e["revision"], int)
 
 
-@unittest.skipUnless(ETCD_AVAILABLE, "etcd not running on localhost:2379")
+@pytest.mark.requires_etcd
 class TestEtcdPub(unittest.TestCase):
     def setUp(self):
         etcd_delete_prefix(PREFIX)

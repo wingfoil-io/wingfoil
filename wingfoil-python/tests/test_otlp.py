@@ -1,27 +1,18 @@
 """Tests for the OTLP push Python bindings.
 
-Some tests require a running OpenTelemetry collector on localhost:4318.
-Those tests are skipped automatically if the collector is not available.
+The always-on class runs in every Python test job. The `TestOtlpPush` class
+is selected via `-m requires_otel` and fails loudly when a collector is not
+reachable on localhost:4318.
 
-Setup (optional):
+Setup (only needed for `-m requires_otel`):
     docker run --rm -p 4318:4318 otel/opentelemetry-collector:latest
 """
 
-import socket
 import unittest
 
+import pytest
+
 PORT = 4318
-
-
-def collector_available():
-    try:
-        with socket.create_connection(("localhost", PORT), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-COLLECTOR_AVAILABLE = collector_available()
 
 
 class TestOtlpPushAlways(unittest.TestCase):
@@ -53,7 +44,7 @@ class TestOtlpPushAlways(unittest.TestCase):
         self.assertIsInstance(node, Node)
 
 
-@unittest.skipUnless(COLLECTOR_AVAILABLE, "OTel collector not running on localhost:4318")
+@pytest.mark.requires_otel
 class TestOtlpPush(unittest.TestCase):
     def test_push_sends_without_error(self):
         """otlp_push runs without raising an exception when collector is available."""

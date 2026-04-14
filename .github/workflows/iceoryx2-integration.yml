@@ -18,6 +18,8 @@ on:
   push:
     paths:
       - 'wingfoil/src/adapters/iceoryx2/**'
+      - 'wingfoil-python/src/py_iceoryx2.rs'
+      - 'wingfoil-python/tests/test_iceoryx2.py'
 
 env:
   CARGO_TERM_COLOR: always
@@ -46,6 +48,25 @@ jobs:
         run: |
           cargo test --features iceoryx2-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture iceoryx2::integration_tests
+        env:
+          RUST_LOG: INFO
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Install maturin and build Python bindings with iceoryx2
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest
+          cd wingfoil-python && .venv/bin/maturin develop --features iceoryx2-beta
+
+      - name: Run Python iceoryx2 integration tests
+        run: |
+          cd wingfoil-python && .venv/bin/pytest -m requires_iceoryx2 tests/test_iceoryx2.py -v
         env:
           RUST_LOG: INFO
 

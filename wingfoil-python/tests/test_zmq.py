@@ -1,20 +1,22 @@
 """Integration tests for ZMQ pub/sub Python bindings.
 
 ZMQ is peer-to-peer — no broker needed. Direct pub/sub tests run without any
-external infrastructure. etcd discovery tests are skipped unless etcd is
-reachable on localhost:2379.
+external infrastructure. etcd-discovery tests are selected via
+`-m requires_etcd` and fail loudly when etcd is not reachable on
+localhost:2379 (they do not silently skip).
 
-Setup (etcd tests only):
+Setup (etcd-discovery tests only):
     docker run --rm -p 2379:2379 \\
       -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \\
       -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \\
       gcr.io/etcd-development/etcd:v3.5.0
 """
 
-import socket
 import threading
 import time
 import unittest
+
+import pytest
 
 import wingfoil as wf
 
@@ -176,18 +178,7 @@ ETCD_PUB_PORT = 5592
 ETCD_SERVICE = "pytest/etcd-quotes"
 
 
-def _etcd_available():
-    try:
-        with socket.create_connection(("127.0.0.1", 2379), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-ETCD_AVAILABLE = _etcd_available() and wf.zmq_sub_etcd is not None
-
-
-@unittest.skipUnless(ETCD_AVAILABLE, "etcd not available or etcd feature not compiled")
+@pytest.mark.requires_etcd
 class TestZmqEtcdDiscovery(unittest.TestCase):
     def test_zmq_sub_etcd_no_etcd_returns_error(self):
         """Connection refused when etcd is unreachable."""
