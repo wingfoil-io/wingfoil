@@ -65,7 +65,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests with coverage
-        run: cargo llvm-cov nextest --no-capture --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest -p wingfoil --features full --no-capture --lcov --output-path lcov.info
         env:
           RUST_LOG: INFO
 
