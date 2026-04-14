@@ -76,7 +76,7 @@ class TestEtcdSub(unittest.TestCase):
         etcd_put(f"{PREFIX}hello", b"world")
 
         stream = etcd_sub(ENDPOINT, PREFIX).collect()
-        stream.run(realtime=False, duration=3.0)
+        stream.run(realtime=True, duration=1.0)
         events = stream.peek_value()
 
         self.assertIsInstance(events, list)
@@ -97,7 +97,7 @@ class TestEtcdSub(unittest.TestCase):
         from wingfoil import etcd_sub
 
         stream = etcd_sub(ENDPOINT, PREFIX + "nonexistent/").collect()
-        stream.run(realtime=False, duration=3.0)
+        stream.run(realtime=True, duration=1.0)
         events = stream.peek_value()
 
         # May yield one empty-list tick or no ticks depending on timing
@@ -111,7 +111,7 @@ class TestEtcdSub(unittest.TestCase):
         etcd_put(f"{PREFIX}field_test", b"check")
 
         stream = etcd_sub(ENDPOINT, PREFIX).collect()
-        stream.run(realtime=False, duration=3.0)
+        stream.run(realtime=True, duration=1.0)
         ticks = stream.peek_value()
         all_events = [e for tick in ticks for e in tick]
 
