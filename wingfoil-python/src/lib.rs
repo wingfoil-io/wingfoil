@@ -1,4 +1,5 @@
 mod proxy_stream;
+mod py_csv;
 mod py_element;
 #[cfg(feature = "etcd")]
 mod py_etcd;
@@ -183,6 +184,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_function(wrap_pyfunction!(constant, module)?)?;
     module.add_function(wrap_pyfunction!(bimap, module)?)?;
+    module.add_function(wrap_pyfunction!(py_csv::py_csv_read, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_etcd::py_etcd_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;

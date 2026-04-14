@@ -321,6 +321,20 @@ impl PyStream {
         PyStream(strm)
     }
 
+    /// Write this stream of dicts to a CSV file.
+    ///
+    /// Each dict becomes one CSV row. Headers are inferred from the first dict's
+    /// keys, and a `time` column is prepended with the graph time in nanoseconds.
+    ///
+    /// Args:
+    ///     path: Output file path
+    ///
+    /// Returns:
+    ///     A Node that drives the write operation.
+    fn csv_write(&self, path: String) -> PyNode {
+        PyNode::new(crate::py_csv::py_csv_write_inner(&self.0, path))
+    }
+
     /// Write this stream to a KDB+ table.
     ///
     /// Args:

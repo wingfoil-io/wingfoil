@@ -13,6 +13,9 @@ __version__ = getattr(_ext, "__version__", None)
 
 __all__ = list(getattr(_ext, "__all__", [])) + ["to_dataframe", "build_dataframe"]
 
+# User-friendly aliases for CSV functions
+csv_read = _ext.py_csv_read
+
 # User-friendly aliases for etcd functions
 etcd_sub = _ext.py_etcd_sub
 
@@ -35,6 +38,9 @@ if hasattr(_ext, "py_iceoryx2_sub"):
 fix_connect = _ext.py_fix_connect
 fix_connect_tls = _ext.py_fix_connect_tls
 fix_accept = _ext.py_fix_accept
+
+# User-friendly aliases for OTLP
+# (otlp_push is exposed as a stream method, no top-level sub function needed)
 
 # User-friendly aliases for Prometheus
 PrometheusExporter = _ext.PrometheusExporter

@@ -59,18 +59,22 @@ pub mod $ARGUMENTS;
 
 ## 4. Docker image / container setup
 
-Choose an official or well-maintained image for the service. Use `SyncRunner` (blocking) so container startup stays in a plain `#[test]` function without a wrapping async runtime:
+Choose the test infrastructure that fits the service:
+
+### Option A — testcontainers (preferred for open-source services)
+
+Use `SyncRunner` (blocking) so container startup stays in a plain `#[test]` function without a wrapping async runtime:
 
 ```rust
 // In integration_tests.rs
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
-// Option A — if testcontainers-modules has a module for this service:
+// If testcontainers-modules has a module for this service:
 use testcontainers_modules::some_service::SomeService;
 let container = SomeService::default().start()?;
 let port = container.get_host_port_ipv4(DEFAULT_PORT)?;
 
-// Option B — GenericImage (most common; use this when no module exists):
+// Otherwise use GenericImage (most common):
 let container = GenericImage::new("vendor/image", "tag")
     .with_wait_for(WaitFor::message_on_stderr("ready to serve"))
     .with_env_var("KEY", "value")
@@ -81,16 +85,57 @@ let endpoint = format!("http://127.0.0.1:{port}");
 
 The container is stopped automatically when dropped. Hold the container in a binding for the duration of the test (`let _container = ...`). No `docker-compose.yml` needed.
 
+### Option B — external service with skip-if-unavailable
+
+When the service requires a commercial license (e.g. KDB+), cannot run in a container,
+or connects to a remote endpoint (e.g. FIX to an exchange), skip tests if the service is
+not reachable. Use a plain Docker command or manual setup documented in the adapter's
+`CLAUDE.md` and example `README.md`:
+
+```rust
+fn service_available() -> bool {
+    std::net::TcpStream::connect("localhost:PORT").is_ok()
+}
+
+#[test]
+fn test_round_trip() -> anyhow::Result<()> {
+    if !service_available() {
+        eprintln!("skipping: service not running on localhost:PORT");
+        return Ok(());
+    }
+    // ...
+}
+```
+
+### Option C — no external service needed
+
+File-based adapters (e.g. CSV) or IPC adapters (e.g. iceoryx2) may not need any
+container or external service. Unit tests with fixture files or in-process communication
+are sufficient. In this case, skip the integration test feature flag and put tests
+directly in the module's `#[cfg(test)]` blocks.
+
 ## 5. File structure
+
+The default layout for bidirectional pub/sub adapters:
 
 ```
 wingfoil/src/adapters/$ARGUMENTS/
   mod.rs               # Connection config, public types, re-exports
-  read.rs              # sub function (producer)
-  write.rs             # pub function (consumer)
+  read.rs              # sub/read function (producer)
+  write.rs             # pub/write function (consumer)
   integration_tests.rs # gated by $ARGUMENTS-integration-test feature
   CLAUDE.md            # documents design decisions and pre-commit requirements
 ```
+
+**Variations for non-standard adapters:** name files after their function when the
+`read.rs`/`write.rs` split doesn't fit:
+
+- **Push-only adapters** (e.g. OTLP): use `push.rs` instead of `write.rs`; omit `read.rs`
+- **Pull-based exporters** (e.g. Prometheus): use `exporter.rs`; omit `read.rs`/`write.rs`
+- **Stateful bidirectional sessions** (e.g. FIX): keep all logic in `mod.rs` when
+  read/write share session state that is hard to split cleanly
+- **File-based adapters** (e.g. CSV): omit `integration_tests.rs` when unit tests with
+  fixture files provide sufficient coverage
 
 ## 6. Types and module doc — `mod.rs`
 
@@ -109,12 +154,29 @@ pub struct <Name>Entry { /* fields appropriate to the service */ }
 pub struct <Name>Event { /* fields */ }
 ```
 
+**Naming conventions:** the default verbs are `_sub` (producer) and `_pub` (consumer), but
+adapters should use the verb that best fits the domain:
+
+| Pattern | Verbs | Examples |
+|---------|-------|----------|
+| Pub/sub or event streaming | `_sub` / `_pub` | etcd, zmq, iceoryx2 |
+| Batch/file I/O | `_read` / `_write` | kdb, csv |
+| Session/connection | `_connect` / `_accept` | fix |
+| Push-only telemetry | `_push` (trait method) | otlp |
+| Pull-based exporter | `.register()` (method) | prometheus |
+
+Choose the verb that reads naturally at the call site. Generic transports (zmq, iceoryx2)
+typically use generic `T` instead of concrete Entry/Event types — this is fine when the
+adapter is protocol-agnostic. Similarly, adapters that use a config struct (e.g. `OtlpConfig`,
+`Iceoryx2SubOpts`) instead of a `<Name>Connection` are fine when the domain doesn't map
+cleanly to "connect to endpoint".
+
 Add `//!` module-level doc at the top of `mod.rs` covering:
 
 - One-line description of what the adapter does
-- Setup: local Docker one-liner to start the service
-- `# Subscribing` section: minimal `ignore` code block showing `$ARGUMENTS_sub`
-- `# Publishing` section: minimal `ignore` code block showing `$ARGUMENTS_pub`
+- Setup: local Docker one-liner to start the service (omit if N/A, e.g. file-based or IPC)
+- Producer section with minimal `ignore` code block
+- Consumer section with minimal `ignore` code block (omit if adapter is single-direction)
 - Any feature-specific sections (leases, conditional writes, etc.)
 
 ```rust
