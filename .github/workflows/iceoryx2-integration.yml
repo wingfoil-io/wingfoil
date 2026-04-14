@@ -1,20 +1,8 @@
-name: iceoryx2 (Local) Integration Tests
+name: iceoryx2 Integration Tests
 
 on:
   workflow_call:
-    inputs:
-      run_ignored_ipc:
-        description: Run ignored IPC tests (requires shared memory support)
-        type: boolean
-        required: false
-        default: false
   workflow_dispatch:
-    inputs:
-      run_ignored_ipc:
-        description: Run ignored IPC tests (requires shared memory support)
-        type: boolean
-        required: false
-        default: false
   push:
     paths:
       - 'wingfoil/src/adapters/iceoryx2/**'
@@ -27,7 +15,7 @@ env:
 
 jobs:
   iceoryx2-integration:
-    name: iceoryx2 (Local) Integration Tests
+    name: iceoryx2 Integration Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -44,10 +32,10 @@ jobs:
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Run iceoryx2 integration tests
+      - name: Run iceoryx2 integration tests (Local + IPC)
         run: |
           cargo test --features iceoryx2-integration-test -p wingfoil \
-            -- --test-threads=1 --nocapture iceoryx2::integration_tests
+            -- --test-threads=1 --nocapture iceoryx2::
         env:
           RUST_LOG: INFO
 
@@ -67,31 +55,5 @@ jobs:
       - name: Run Python iceoryx2 integration tests
         run: |
           cd wingfoil-python && .venv/bin/pytest -m requires_iceoryx2 tests/test_iceoryx2.py -v
-        env:
-          RUST_LOG: INFO
-
-  iceoryx2-ipc-ignored:
-    name: iceoryx2 (IPC ignored)
-    runs-on: ubuntu-latest
-    if: inputs.run_ignored_ipc
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: integration
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Run ignored IPC tests
-        run: |
-          cargo test --features iceoryx2-integration-test -p wingfoil \
-            -- --ignored --test-threads=1 --nocapture iceoryx2::integration_tests
         env:
           RUST_LOG: INFO

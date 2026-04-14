@@ -10,6 +10,7 @@ iceoryx2/
                        #   FixedBytes<N>, Iceoryx2Error, unit tests
   read.rs              # iceoryx2_sub*, Iceoryx2ReceiverStream — subscriber (producer)
   write.rs             # iceoryx2_pub* — publisher (consumer)
+  local_tests.rs       # in-process Local-variant tests (run with default test suite)
   integration_tests.rs # gated by iceoryx2-integration-test (cross-process IPC tests)
 ```
 
