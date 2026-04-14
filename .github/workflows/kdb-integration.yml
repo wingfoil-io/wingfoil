@@ -26,6 +26,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Build KDB image
         run: docker build -t wingfoil-kdb docker/kdb/
@@ -62,6 +64,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
 
       - name: Install system dependencies
         run: sudo apt-get install -y protobuf-compiler

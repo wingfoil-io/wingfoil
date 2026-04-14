@@ -24,6 +24,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Start Grafana + Prometheus stack
         run: docker compose up -d

@@ -36,6 +36,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -60,6 +62,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
