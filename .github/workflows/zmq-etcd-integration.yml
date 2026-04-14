@@ -31,6 +31,19 @@ jobs:
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
+      - name: Pre-pull etcd image
+        # testcontainers pulls the image lazily on first use, which is
+        # vulnerable to transient registry flakes (e.g. "bytes remaining
+        # on stream"). Pull once up front with retries so every test
+        # reuses the cached image.
+        run: |
+          for i in 1 2 3; do
+            docker pull gcr.io/etcd-development/etcd:v3.5.0 && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull etcd image after 3 attempts" && exit 1
+
       - name: Run ZMQ etcd integration tests
         run: |
           cargo test --features zmq-etcd-integration-test -p wingfoil \
