@@ -1,7 +1,8 @@
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    Ident, ImplItem, ImplItemFn, ItemImpl, Token, Type, bracketed,
+    Ident, ImplItem, ImplItemFn, ItemImpl, Token, Type, Visibility, braced, bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -162,4 +163,151 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         #peek_ref_impl
     }
     .into()
+}
+
+// =============================================================================
+// latency_stages! — declare a fixed-size, named-field latency record.
+// =============================================================================
+
+struct LatencyStagesInput {
+    visibility: Visibility,
+    name: Ident,
+    stages: Vec<Ident>,
+}
+
+impl Parse for LatencyStagesInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let visibility: Visibility = input.parse()?;
+        let name: Ident = input.parse()?;
+        let content;
+        braced!(content in input);
+        let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+        let stages: Vec<Ident> = list.into_iter().collect();
+        if stages.is_empty() {
+            return Err(syn::Error::new(
+                name.span(),
+                "latency_stages! requires at least one stage",
+            ));
+        }
+        Ok(LatencyStagesInput {
+            visibility,
+            name,
+            stages,
+        })
+    }
+}
+
+/// Convert `PascalCase` to `snake_case`. Used to derive the per-struct stage module name.
+fn pascal_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Declare a fixed-size, named-field latency record suitable for embedding in
+/// a `#[repr(C)]` payload. Each field is a `u64` nanosecond timestamp.
+///
+/// The macro generates:
+/// - A `#[repr(C)]` struct with one `pub <field>: u64` per stage.
+/// - An `impl wingfoil::Latency` for the struct (gives slice access by index).
+/// - A nested module with one zero-sized marker per stage, each implementing
+///   `wingfoil::Stage<Self>` with the stage's compile-time index. Use those
+///   markers as the type parameter to `.stamp::<S>()`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use wingfoil::*;
+///
+/// latency_stages! {
+///     pub TradeLatency {
+///         ingest,
+///         decode,
+///         strategy,
+///         publish,
+///     }
+/// }
+///
+/// // Markers live in a snake_case sub-module named after the struct:
+/// use trade_latency::strategy;
+/// let stamped = upstream.stamp::<strategy>();
+/// ```
+#[proc_macro]
+pub fn latency_stages(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as LatencyStagesInput);
+    let LatencyStagesInput {
+        visibility,
+        name,
+        stages,
+    } = input;
+
+    let n = stages.len();
+    let module_name = Ident::new(&pascal_to_snake(&name.to_string()), Span::call_site());
+    let stage_strs: Vec<String> = stages.iter().map(|i| i.to_string()).collect();
+    let stage_indices: Vec<usize> = (0..n).collect();
+    let field_names = &stages;
+    let marker_names = &stages;
+
+    let expanded = quote! {
+        #[repr(C)]
+        #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug, ::std::default::Default, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::hash::Hash)]
+        #visibility struct #name {
+            #( pub #field_names: u64, )*
+        }
+
+        impl Latency for #name {
+            const N: usize = #n;
+            fn stage_names() -> &'static [&'static str] {
+                &[ #( #stage_strs ),* ]
+            }
+            #[inline]
+            fn stamps(&self) -> &[u64] {
+                // SAFETY: `#[repr(C)]` struct of N consecutive u64 fields has
+                // the same memory layout as `[u64; N]`.
+                unsafe {
+                    ::std::slice::from_raw_parts(
+                        self as *const Self as *const u64,
+                        <Self as Latency>::N,
+                    )
+                }
+            }
+            #[inline]
+            fn stamp_mut(&mut self, idx: usize) -> &mut u64 {
+                assert!(idx < <Self as Latency>::N, "stage index out of bounds");
+                // SAFETY: see `stamps`; idx is bounds-checked above.
+                unsafe { &mut *((self as *mut Self as *mut u64).add(idx)) }
+            }
+        }
+
+        // SAFETY: `#[repr(C)]` packed `u64` fields are self-contained and
+        // have a uniform memory representation, satisfying `ZeroCopySend`'s
+        // invariants. Only emitted when the `iceoryx2-beta` feature is on
+        // in the consuming crate.
+        #[cfg(feature = "iceoryx2-beta")]
+        unsafe impl ::iceoryx2::prelude::ZeroCopySend for #name {}
+
+        #[allow(non_snake_case, non_camel_case_types)]
+        #visibility mod #module_name {
+            use super::*;
+            #(
+                /// Compile-time marker for a single latency stage.
+                pub struct #marker_names;
+                impl Stage<super::#name> for #marker_names {
+                    const NAME: &'static str = #stage_strs;
+                    const INDEX: usize = #stage_indices;
+                }
+            )*
+        }
+    };
+
+    expanded.into()
 }

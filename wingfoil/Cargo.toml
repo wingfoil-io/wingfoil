@@ -214,6 +214,16 @@ path = "examples/iceoryx2/sub.rs"
 required-features = ["iceoryx2-beta"]
 
 [[example]]
+name = "latency_pub"
+path = "examples/latency/pub.rs"
+required-features = ["iceoryx2-beta"]
+
+[[example]]
+name = "latency_sub"
+path = "examples/latency/sub.rs"
+required-features = ["iceoryx2-beta"]
+
+[[example]]
 name = "tracing"
 path = "examples/tracing/main.rs"
 
