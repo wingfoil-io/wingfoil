@@ -1,0 +1,110 @@
+name: Web Integration Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/web/**'
+      - 'wingfoil-wire-types/**'
+      - 'wingfoil-wasm/**'
+      - 'wingfoil-js/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  web-rust-integration:
+    name: Web Rust Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Run web integration tests (in-process, no external services)
+        run: |
+          cargo test --features web-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture adapters::web
+        env:
+          RUST_LOG: INFO
+
+  wingfoil-wasm-build:
+    name: wingfoil-wasm build + unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build wasm-pack bundle
+        working-directory: wingfoil-wasm
+        run: wasm-pack build --target web --release
+
+      - name: Rust unit tests (native target)
+        working-directory: wingfoil-wasm
+        run: cargo test
+
+  wingfoil-js-test:
+    name: wingfoil-js build + vitest
+    runs-on: ubuntu-latest
+    needs: wingfoil-wasm-build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+
+      - name: Build wasm bundle for JS
+        working-directory: wingfoil-wasm
+        run: wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg
+
+      - name: Install JS deps
+        working-directory: wingfoil-js
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type-check
+        working-directory: wingfoil-js
+        run: pnpm run lint
+
+      - name: Run vitest
+        working-directory: wingfoil-js
+        run: pnpm test

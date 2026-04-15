@@ -50,3 +50,7 @@ fix_accept = _ext.py_fix_accept
 # User-friendly aliases for Prometheus
 PrometheusExporter = _ext.PrometheusExporter
 __all__.append("PrometheusExporter")
+
+# User-friendly aliases for the web adapter
+WebServer = _ext.WebServer
+__all__.append("WebServer")

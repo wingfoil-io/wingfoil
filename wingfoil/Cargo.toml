@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -29,6 +29,8 @@ otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", 
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
 fix-integration-test = ["fix"]
+web = ["async", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "tokio/net", "tokio/sync"]
+web-integration-test = ["web"]
 
 [package]
 name = "wingfoil"
@@ -110,6 +112,12 @@ opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-bloc
 fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
+
+# web adapter
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "4.0.1", optional = true }
 
 
 [dev-dependencies]
@@ -276,3 +284,8 @@ required-features = ["fix"]
 name = "fix_loopback"
 path = "examples/fix/fix_loopback.rs"
 required-features = ["fix"]
+
+[[example]]
+name = "web"
+path = "examples/web/main.rs"
+required-features = ["web"]

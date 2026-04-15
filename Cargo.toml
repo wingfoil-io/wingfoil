@@ -4,6 +4,12 @@ members = [
     "wingfoil",
     "wingfoil-derive",
     "wingfoil-python",
+    "wingfoil-wire-types",
+]
+# wingfoil-wasm is excluded from the default workspace because it targets
+# wasm32-unknown-unknown and depends on a different lock file / toolchain.
+exclude = [
+    "wingfoil-wasm",
 ]
 resolver = "3"
 
