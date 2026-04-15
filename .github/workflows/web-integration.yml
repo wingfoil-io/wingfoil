@@ -65,8 +65,8 @@ jobs:
         working-directory: wingfoil-wasm
         run: cargo test
 
-  wingfoil-js-test:
-    name: wingfoil-js build + vitest
+  wingfoil-js-typecheck:
+    name: wingfoil-js build + typecheck
     runs-on: ubuntu-latest
     needs: wingfoil-wasm-build
 
@@ -105,7 +105,3 @@ jobs:
       - name: Type-check
         working-directory: wingfoil-js
         run: pnpm run lint
-
-      - name: Run vitest
-        working-directory: wingfoil-js
-        run: pnpm test

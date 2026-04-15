@@ -105,8 +105,12 @@ Then, from `wingfoil-js/`:
 pnpm install
 pnpm build            # tsc → ./dist
 pnpm dev              # Vite dev server for examples/solid-dashboard
-pnpm test             # vitest unit tests
+pnpm run lint         # tsc --noEmit
 ```
+
+Codec round-trip coverage lives in the Rust unit tests of
+`wingfoil-wasm` (run with `cargo test` in that crate) and in
+`wasm-pack test` for browser-target coverage.
 
 Start the Rust example in another terminal:
 
