@@ -72,11 +72,11 @@ impl AeronHandle {
         stream_id: i32,
         timeout: Duration,
     ) -> anyhow::Result<RusteronPublisher> {
-        let pub_ = self
+        let publication = self
             .aeron
             .async_add_publication(&channel.into_c_string(), stream_id)?
             .poll_blocking(timeout)?;
-        Ok(RusteronPublisher { pub_ })
+        Ok(RusteronPublisher { publication })
     }
 }
 
@@ -108,13 +108,13 @@ impl AeronSubscriberBackend for RusteronSubscriber {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct RusteronPublisher {
-    pub_: AeronPublication,
+    publication: AeronPublication,
 }
 
 impl AeronPublisherBackend for RusteronPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
         let position = self
-            .pub_
+            .publication
             .offer(buffer, Handlers::no_reserved_value_supplier_handler());
         if position < 0 {
             anyhow::bail!("Aeron offer back-pressure: position={position}");
