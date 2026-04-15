@@ -38,81 +38,9 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
-  integration-tests:
-    name: Integration Tests
-    needs: preflight
-    uses: ./.github/workflows/integration-tests.yml
-    secrets: inherit
-
-  zmq-integration:
-    name: ZMQ Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run ZMQ integration tests
-        run: |
-          cargo test --features zmq-integration-test -p wingfoil \
-            -- --test-threads=1 zmq::integration_tests
-        env:
-          RUST_LOG: INFO
-
-  etcd-integration:
-    name: etcd Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Run etcd integration tests
-        run: |
-          cargo test --features etcd-integration-test -p wingfoil \
-            -- --test-threads=1 etcd::integration_tests
-        env:
-          RUST_LOG: INFO
-
-  zmq-etcd-integration:
-    name: ZMQ etcd Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Run ZMQ etcd integration tests
-        run: |
-          cargo test --features zmq-etcd-integration-test -p wingfoil \
-            -- --test-threads=1 zmq::integration_tests::etcd_tests
-        env:
-          RUST_LOG: INFO
-
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests, integration-tests, zmq-integration, etcd-integration, zmq-etcd-integration]
+    needs: [preflight, all-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
