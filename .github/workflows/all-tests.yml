@@ -8,10 +8,12 @@ jobs:
   rust-ci:
     name: Rust CI
     uses: ./.github/workflows/rust.yml
+    secrets: inherit
 
   python-tests:
     name: Python Tests
     uses: ./.github/workflows/py-test.yml
+    secrets: inherit
 
   integration-tests:
     name: Integration Tests
