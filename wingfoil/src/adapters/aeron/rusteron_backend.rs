@@ -27,7 +27,7 @@ use std::time::Duration;
 pub struct AeronHandle {
     // `_context` must be held alive; `aeron` borrows from it.
     _context: AeronContext,
-    pub(crate) aeron: Aeron,
+    aeron: Aeron,
 }
 
 impl AeronHandle {
@@ -84,7 +84,7 @@ impl AeronHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
-pub struct RusteronSubscriber {
+pub(crate) struct RusteronSubscriber {
     sub: AeronSubscription,
 }
 
@@ -107,7 +107,7 @@ impl AeronSubscriberBackend for RusteronSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
-pub struct RusteronPublisher {
+pub(crate) struct RusteronPublisher {
     pub_: AeronPublication,
 }
 

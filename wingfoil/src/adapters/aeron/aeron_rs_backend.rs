@@ -19,7 +19,7 @@ use aeron_rs::publication::Publication;
 use aeron_rs::subscription::Subscription;
 use aeron_rs::utils::types::Index;
 use std::ffi::CString;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -91,15 +91,14 @@ impl AeronRsHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
-pub struct AeronRsSubscriber {
-    sub: Arc<Mutex<Subscription>>,
+pub(crate) struct AeronRsSubscriber {
+    sub: Subscription,
 }
 
 impl AeronSubscriberBackend for AeronRsSubscriber {
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
         let mut count = 0usize;
-        let mut sub = self.sub.lock().unwrap();
-        sub.poll(
+        self.sub.poll(
             &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {
                 handler(buffer.as_sub_slice(offset, length));
                 count += 1;
@@ -114,18 +113,17 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
-pub struct AeronRsPublisher {
-    pub_: Arc<Mutex<Publication>>,
+pub(crate) struct AeronRsPublisher {
+    pub_: Publication,
 }
 
 impl AeronPublisherBackend for AeronRsPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
-        let pub_ = self.pub_.lock().unwrap();
         let len = buffer.len() as Index;
         let aligned = AlignedBuffer::with_capacity(len);
         let ab = AtomicBuffer::from_aligned(&aligned);
         ab.put_bytes(0, buffer);
-        pub_.offer_part(ab, 0, len)?;
+        self.pub_.offer_part(ab, 0, len)?;
         Ok(())
     }
 }
