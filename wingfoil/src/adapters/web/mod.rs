@@ -70,9 +70,7 @@ mod write;
 #[cfg(all(test, feature = "web-integration-test"))]
 mod integration_tests;
 
-pub use codec::{
-    CONTROL_TOPIC, Codec, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION, wire_version,
-};
+pub use codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION};
 pub use read::web_sub;
-pub use server::{WebServer, WebServerBuilder, addr};
+pub use server::{WebServer, WebServerBuilder};
 pub use write::{WebPubOperators, web_pub};

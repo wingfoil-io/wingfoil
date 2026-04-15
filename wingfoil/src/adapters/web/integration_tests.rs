@@ -54,54 +54,49 @@ async fn connect(port: u16) -> anyhow::Result<TungsteniteStream> {
 
 async fn send_control(
     socket: &mut TungsteniteStream,
-    codec: Codec,
+    codec: CodecKind,
     ctrl: ControlMessage,
 ) -> anyhow::Result<()> {
-    let payload = codec.encode_payload(&ctrl)?;
+    let payload = codec.encode(&ctrl)?;
     let env = Envelope {
         topic: CONTROL_TOPIC.to_string(),
         time_ns: 0,
         payload,
     };
-    let bytes = codec.encode_envelope(&env)?;
+    let bytes = codec.encode(&env)?;
     socket.send(WsMessage::Binary(bytes)).await?;
     Ok(())
 }
 
 async fn send_payload<T: Serialize>(
     socket: &mut TungsteniteStream,
-    codec: Codec,
+    codec: CodecKind,
     topic: &str,
     value: &T,
 ) -> anyhow::Result<()> {
-    let payload = codec.encode_payload(value)?;
+    let payload = codec.encode(value)?;
     let env = Envelope {
         topic: topic.to_string(),
         time_ns: 0,
         payload,
     };
-    let bytes = codec.encode_envelope(&env)?;
+    let bytes = codec.encode(&env)?;
     socket.send(WsMessage::Binary(bytes)).await?;
     Ok(())
 }
 
-async fn recv_envelope(socket: &mut TungsteniteStream, codec: Codec) -> anyhow::Result<Envelope> {
+async fn recv_envelope(
+    socket: &mut TungsteniteStream,
+    codec: CodecKind,
+) -> anyhow::Result<Envelope> {
     loop {
         let msg = socket
             .next()
             .await
             .ok_or_else(|| anyhow::anyhow!("socket closed"))??;
         match msg {
-            WsMessage::Binary(bytes) => {
-                return codec
-                    .decode_envelope(&bytes)
-                    .map_err(|e| anyhow::anyhow!("decode: {e}"));
-            }
-            WsMessage::Text(t) => {
-                return codec
-                    .decode_envelope(t.as_bytes())
-                    .map_err(|e| anyhow::anyhow!("decode: {e}"));
-            }
+            WsMessage::Binary(bytes) => return codec.decode(&bytes),
+            WsMessage::Text(t) => return codec.decode(t.as_bytes()),
             WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
             WsMessage::Close(_) => anyhow::bail!("socket closed"),
             _ => continue,
@@ -115,7 +110,7 @@ async fn recv_envelope(socket: &mut TungsteniteStream, codec: Codec) -> anyhow::
 fn spawn_subscriber(
     port: u16,
     topic: &str,
-    codec: Codec,
+    codec: CodecKind,
     max_frames: usize,
     ready: std::sync::mpsc::Sender<()>,
 ) -> std::thread::JoinHandle<anyhow::Result<Vec<Envelope>>> {
@@ -196,7 +191,7 @@ fn test_pub_round_trip_bincode() -> anyhow::Result<()> {
         assert_eq!(env.topic, "tick");
         assert!(env.time_ns >= last, "time_ns should be monotonic");
         last = env.time_ns;
-        let value: u64 = codec.decode_payload(&env.payload)?;
+        let value: u64 = codec.decode(&env.payload)?;
         assert!(value >= 1);
     }
     Ok(())
@@ -285,7 +280,7 @@ fn test_pub_round_trip_json() -> anyhow::Result<()> {
     assert!(!envs.is_empty(), "no envelopes received");
     let env = &envs[0];
     assert_eq!(env.topic, "answer");
-    let decoded: u32 = codec.decode_payload(&env.payload)?;
+    let decoded: u32 = codec.decode(&env.payload)?;
     assert_eq!(decoded, 42);
     Ok(())
 }

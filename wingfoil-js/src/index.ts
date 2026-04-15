@@ -6,15 +6,15 @@
 // (Solid / Svelte / Vue) are in sibling files and build on this core.
 
 import init, {
-  control_topic,
-  decode_control,
-  decode_envelope,
-  decode_payload,
-  encode_payload,
-  encode_subscribe,
-  encode_unsubscribe,
-  install_panic_hook,
-  wire_version,
+  controlTopic,
+  decodeControl,
+  decodeEnvelope,
+  decodePayload,
+  encodePayload,
+  encodeSubscribe,
+  encodeUnsubscribe,
+  init_panic_hook,
+  wireVersion,
 } from "../wasm-pkg/wingfoil_wasm.js";
 
 export type CodecKind = "bincode" | "json";
@@ -118,7 +118,7 @@ export class WingfoilClient {
       return;
     }
     try {
-      const bytes = encode_payload(this.codecKind, topic, value);
+      const bytes = encodePayload(this.codecKind, topic, value);
       this.socket.send(bytes);
     } catch (err) {
       console.warn("wingfoil: publish failed on", topic, err);
@@ -145,7 +145,7 @@ export class WingfoilClient {
       } else {
         await init();
       }
-      install_panic_hook();
+      init_panic_hook();
       this.wasmReady = true;
     }
     this.connect();
@@ -183,12 +183,12 @@ export class WingfoilClient {
     const bytes = new Uint8Array(data as ArrayBuffer);
     let env: Envelope;
     try {
-      env = decode_envelope(this.codecKind, bytes) as Envelope;
+      env = decodeEnvelope(this.codecKind, bytes) as Envelope;
     } catch (err) {
       console.warn("wingfoil: envelope decode failed", err);
       return;
     }
-    if (env.topic === control_topic()) {
+    if (env.topic === controlTopic()) {
       this.handleControl(env.payload);
       return;
     }
@@ -196,7 +196,7 @@ export class WingfoilClient {
     if (!listeners || listeners.size === 0) return;
     let payloadValue: unknown;
     try {
-      payloadValue = decode_payload(this.codecKind, env.payload);
+      payloadValue = decodePayload(this.codecKind, env.payload);
     } catch (err) {
       console.warn("wingfoil: payload decode failed on", env.topic, err);
       return;
@@ -212,7 +212,7 @@ export class WingfoilClient {
 
   private handleControl(payload: Uint8Array) {
     try {
-      const ctrl = decode_control(this.codecKind, payload) as {
+      const ctrl = decodeControl(this.codecKind, payload) as {
         Hello?: { codec: string; version: number };
       };
       if (ctrl.Hello) {
@@ -231,7 +231,7 @@ export class WingfoilClient {
   private sendSubscribe(topics: string[]) {
     if (!this.wasmReady || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     try {
-      this.socket.send(encode_subscribe(this.codecKind, topics));
+      this.socket.send(encodeSubscribe(this.codecKind, topics));
     } catch (err) {
       console.warn("wingfoil: subscribe encode failed", err);
     }
@@ -240,7 +240,7 @@ export class WingfoilClient {
   private sendUnsubscribe(topics: string[]) {
     if (!this.wasmReady || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     try {
-      this.socket.send(encode_unsubscribe(this.codecKind, topics));
+      this.socket.send(encodeUnsubscribe(this.codecKind, topics));
     } catch (err) {
       console.warn("wingfoil: unsubscribe encode failed", err);
     }
@@ -257,4 +257,4 @@ export class WingfoilClient {
   }
 }
 
-export { wire_version };
+export { wireVersion };

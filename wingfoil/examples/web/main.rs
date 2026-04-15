@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     let addr = std::env::var("WINGFOIL_WEB_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let server = WebServer::bind(&addr).start()?;
     let port = server.port();
-    let codec = server.codec().kind();
+    let codec = server.codec();
     println!("wingfoil web example listening on ws://127.0.0.1:{port}/ws  (codec: {codec:?})");
 
     // Publish a synthetic mid-price stream at 100 Hz.

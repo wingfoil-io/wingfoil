@@ -5675,6 +5675,7 @@ dependencies = [
 name = "wingfoil-wire-types"
 version = "4.0.1"
 dependencies = [
+ "anyhow",
  "bincode",
  "serde",
  "serde_json",

@@ -85,7 +85,7 @@ impl PyWebServer {
 
     /// Return the codec currently used on the wire ("bincode" or "json").
     fn codec_name(&self) -> &'static str {
-        match self.inner.codec().kind() {
+        match self.inner.codec() {
             CodecKind::Bincode => "bincode",
             CodecKind::Json => "json",
         }

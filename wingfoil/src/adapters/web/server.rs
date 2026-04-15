@@ -8,13 +8,14 @@
 //! [`WebServer`] handle (or until [`WebServer::stop`] is called).
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use anyhow::Context as _;
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
@@ -23,38 +24,36 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tower_http::services::ServeDir;
 
-use super::codec::{CONTROL_TOPIC, Codec, ControlMessage, Envelope};
+use super::codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION};
 
 /// Per-topic broadcast capacity for server → client publishes. Slow
 /// consumers that cannot drain at this rate receive
 /// [`broadcast::error::RecvError::Lagged`] instead of blocking the graph.
-const PUBLISH_BROADCAST_CAPACITY: usize = 1024;
+pub(crate) const PUBLISH_BROADCAST_CAPACITY: usize = 1024;
 
 /// Per-connection WS outbound queue depth. Bounded so a slow socket
 /// cannot grow memory without bound.
-const CONNECTION_OUTBOUND_CAPACITY: usize = 1024;
+pub(crate) const CONNECTION_OUTBOUND_CAPACITY: usize = 1024;
 
 /// Per-subscribed-topic mpsc capacity (client → graph). Bounded so a
 /// misbehaving client cannot grow memory without bound.
-const SUBSCRIBE_MPSC_CAPACITY: usize = 1024;
-
-/// A binary frame on its way to one or more WebSocket connections.
-type SharedFrame = Arc<Vec<u8>>;
+pub(crate) const SUBSCRIBE_MPSC_CAPACITY: usize = 1024;
 
 pub(crate) struct WebServerInner {
-    pub(crate) codec: Codec,
-    /// Topics the graph publishes. Each WS connection that subscribes
-    /// to `topic` gets its own broadcast receiver.
-    pub(crate) pub_topics: Mutex<HashMap<String, broadcast::Sender<SharedFrame>>>,
+    pub(crate) codec: CodecKind,
+    /// Topics the graph publishes. Each WS connection that subscribes to
+    /// `topic` gets its own broadcast receiver. Frames flow as
+    /// refcounted [`Bytes`] so they can be forwarded without copying.
+    pub(crate) pub_topics: Mutex<HashMap<String, broadcast::Sender<Bytes>>>,
     /// Topics the graph consumes from the browser. When a client frame
     /// arrives on one of these topics we forward the raw payload bytes
     /// to every registered mpsc sender. There is usually one sender per
     /// `web_sub::<T>()` call.
-    pub(crate) sub_topics: Mutex<HashMap<String, Vec<mpsc::Sender<Vec<u8>>>>>,
+    pub(crate) sub_topics: Mutex<HashMap<String, Vec<mpsc::Sender<Bytes>>>>,
 }
 
 impl WebServerInner {
-    fn new(codec: Codec) -> Self {
+    fn new(codec: CodecKind) -> Self {
         Self {
             codec,
             pub_topics: Mutex::new(HashMap::new()),
@@ -62,8 +61,7 @@ impl WebServerInner {
         }
     }
 
-    /// Get (or create) the broadcast sender for a publish topic.
-    pub(crate) fn get_or_create_pub_topic(&self, topic: &str) -> broadcast::Sender<SharedFrame> {
+    pub(crate) fn get_or_create_pub_topic(&self, topic: &str) -> broadcast::Sender<Bytes> {
         let mut guard = self.pub_topics.lock().expect("pub_topics lock poisoned");
         guard
             .entry(topic.to_string())
@@ -71,28 +69,23 @@ impl WebServerInner {
             .clone()
     }
 
-    /// Register an mpsc sender as a listener for a subscribe topic.
-    pub(crate) fn register_sub_sender(&self, topic: &str, tx: mpsc::Sender<Vec<u8>>) {
+    pub(crate) fn register_sub_sender(&self, topic: &str, tx: mpsc::Sender<Bytes>) {
         let mut guard = self.sub_topics.lock().expect("sub_topics lock poisoned");
         guard.entry(topic.to_string()).or_default().push(tx);
     }
 
-    /// Forward a raw payload received from a WS client to every
-    /// registered sub listener on this topic. Drops listeners whose
-    /// mpsc is closed.
-    fn dispatch_client_payload(&self, topic: &str, payload: Vec<u8>) {
+    /// Forward a payload received from a WS client to every registered
+    /// sub listener on this topic. Drops listeners whose mpsc is closed.
+    fn dispatch_client_payload(&self, topic: &str, payload: Bytes) {
         let mut guard = self.sub_topics.lock().expect("sub_topics lock poisoned");
         if let Some(senders) = guard.get_mut(topic) {
-            senders.retain(|tx| {
-                // try_send: drop newest under overload to protect graph latency.
-                match tx.try_send(payload.clone()) {
-                    Ok(()) => true,
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        log::warn!("web_sub: topic '{topic}' listener overloaded — dropping frame");
-                        true
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => false,
+            senders.retain(|tx| match tx.try_send(payload.clone()) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    log::warn!("web_sub: topic '{topic}' listener overloaded — dropping frame");
+                    true
                 }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
             });
         }
     }
@@ -107,8 +100,6 @@ pub struct WebServer {
     port: u16,
     shutdown_tx: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
-    /// If `true`, the server is a no-op because the graph is running in
-    /// historical mode (set by [`WebServerBuilder::start_historical`]).
     historical_noop: bool,
 }
 
@@ -120,7 +111,7 @@ impl WebServer {
     pub fn bind(addr: impl Into<String>) -> WebServerBuilder {
         WebServerBuilder {
             addr: addr.into(),
-            codec: Codec::BINCODE,
+            codec: CodecKind::Bincode,
             static_dir: None,
         }
     }
@@ -131,7 +122,7 @@ impl WebServer {
     }
 
     /// The codec the server is using.
-    pub fn codec(&self) -> Codec {
+    pub fn codec(&self) -> CodecKind {
         self.inner.codec
     }
 
@@ -161,14 +152,14 @@ impl Drop for WebServer {
 /// Builder for [`WebServer`].
 pub struct WebServerBuilder {
     addr: String,
-    codec: Codec,
+    codec: CodecKind,
     static_dir: Option<PathBuf>,
 }
 
 impl WebServerBuilder {
-    /// Set the wire codec (default: bincode).
-    pub fn codec(mut self, codec: impl Into<Codec>) -> Self {
-        self.codec = codec.into();
+    /// Set the wire codec (default: [`CodecKind::Bincode`]).
+    pub fn codec(mut self, codec: CodecKind) -> Self {
+        self.codec = codec;
         self
     }
 
@@ -247,8 +238,6 @@ impl WebServerBuilder {
     }
 }
 
-/// Build the axum router: `GET /ws` upgrades to a WebSocket, and
-/// optionally `GET /*` serves static files.
 fn build_router(inner: Arc<WebServerInner>, static_dir: Option<PathBuf>) -> Router {
     let mut router = Router::new()
         .route("/ws", get(ws_handler))
@@ -266,52 +255,42 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, inner))
 }
 
-/// Per-connection task. Manages two directions:
-///
-/// - **outbound** (server → client): one mpsc queue with a writer task
-///   draining into the WS sink. Forwarders (one per subscribed pub
-///   topic) push into this queue.
-/// - **inbound** (client → server): the reader task decodes every
-///   envelope and either handles a control message or dispatches the
-///   payload to the matching sub_topics listeners.
+/// Per-connection task. Outbound (server → client) uses one mpsc queue
+/// drained by a writer task; one forwarder task per subscribed pub topic
+/// pushes frames into it. Inbound (client → server) is handled inline in
+/// the reader loop below.
 async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
     let codec = inner.codec;
     let (mut ws_sink, mut ws_stream) = socket.split();
-    let (outbound_tx, mut outbound_rx) = mpsc::channel::<Vec<u8>>(CONNECTION_OUTBOUND_CAPACITY);
+    let (outbound_tx, mut outbound_rx) = mpsc::channel::<Bytes>(CONNECTION_OUTBOUND_CAPACITY);
 
-    // Writer task — drains outbound mpsc into the WS sink.
     let writer = tokio::spawn(async move {
         while let Some(bytes) = outbound_rx.recv().await {
-            if ws_sink.send(Message::Binary(bytes.into())).await.is_err() {
+            if ws_sink.send(Message::Binary(bytes)).await.is_err() {
                 break;
             }
         }
         let _ = ws_sink.close().await;
     });
 
-    // Send Hello control frame.
-    let hello_env = match encode_control(
+    let hello = ControlMessage::Hello {
         codec,
-        ControlMessage::Hello {
-            codec: codec.kind(),
-            version: super::codec::wire_version(),
-        },
-    ) {
-        Ok(bytes) => bytes,
+        version: WIRE_PROTOCOL_VERSION,
+    };
+    let hello_bytes = match encode_control_frame(codec, &hello) {
+        Ok(b) => b,
         Err(e) => {
             log::error!("web: encode hello failed: {e}");
             writer.abort();
             return;
         }
     };
-    if outbound_tx.send(hello_env).await.is_err() {
+    if outbound_tx.send(hello_bytes).await.is_err() {
         return;
     }
 
-    // Track per-topic forwarder tasks spawned in response to Subscribe frames.
     let mut forwarders: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
-    // Reader loop.
     while let Some(msg) = ws_stream.next().await {
         let msg = match msg {
             Ok(m) => m,
@@ -320,13 +299,13 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                 break;
             }
         };
-        let bytes: Vec<u8> = match msg {
-            Message::Binary(b) => b.into(),
-            Message::Text(t) => t.as_bytes().to_vec(),
+        let bytes: Bytes = match msg {
+            Message::Binary(b) => b,
+            Message::Text(t) => Bytes::copy_from_slice(t.as_bytes()),
             Message::Close(_) => break,
             Message::Ping(_) | Message::Pong(_) => continue,
         };
-        let env = match codec.decode_envelope(&bytes) {
+        let env: Envelope = match codec.decode(&bytes) {
             Ok(e) => e,
             Err(e) => {
                 log::warn!("web: bad envelope from client: {e}");
@@ -334,7 +313,7 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
             }
         };
         if env.topic == CONTROL_TOPIC {
-            let ctrl: ControlMessage = match codec.decode_payload(&env.payload) {
+            let ctrl: ControlMessage = match codec.decode(&env.payload) {
                 Ok(c) => c,
                 Err(e) => {
                     log::warn!("web: bad control payload: {e}");
@@ -369,11 +348,12 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                 }
             }
         } else {
-            inner.dispatch_client_payload(&env.topic, env.payload);
+            inner.dispatch_client_payload(&env.topic, Bytes::from(env.payload));
         }
     }
 
-    // Tear down forwarders before dropping outbound_tx so pending frames drain.
+    // Abort forwarders before dropping outbound_tx so no further frames
+    // arrive at the writer; then let the writer drain and close the socket.
     for (_, h) in forwarders.drain() {
         h.abort();
     }
@@ -383,25 +363,21 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
 
 /// Forward every frame from a broadcast receiver into the connection's
 /// outbound mpsc. On `Lagged`, skip ahead (lossy — slow consumer does
-/// not block the graph).
+/// not block the graph). Cloning `Bytes` is an Arc bump, not a copy.
 async fn forward_broadcast(
     topic: String,
-    mut rx: broadcast::Receiver<SharedFrame>,
-    out: mpsc::Sender<Vec<u8>>,
+    mut rx: broadcast::Receiver<Bytes>,
+    out: mpsc::Sender<Bytes>,
 ) {
     loop {
         match rx.recv().await {
-            Ok(bytes) => {
-                // try_send: if outbound is full, drop the frame. A
-                // permanent backlog would block the broadcast channel.
-                match out.try_send((*bytes).clone()) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        log::warn!("web_pub: client outbound full, dropping frame on '{topic}'");
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+            Ok(bytes) => match out.try_send(bytes) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    log::warn!("web_pub: client outbound full, dropping frame on '{topic}'");
                 }
-            }
+                Err(mpsc::error::TrySendError::Closed(_)) => break,
+            },
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 log::warn!("web_pub: client lagged by {n} frames on '{topic}'");
             }
@@ -410,34 +386,12 @@ async fn forward_broadcast(
     }
 }
 
-fn encode_control(codec: Codec, ctrl: ControlMessage) -> anyhow::Result<Vec<u8>> {
-    let payload = codec.encode_payload(&ctrl)?;
+fn encode_control_frame(codec: CodecKind, ctrl: &ControlMessage) -> anyhow::Result<Bytes> {
+    let payload = codec.encode(ctrl)?;
     let env = Envelope {
         topic: CONTROL_TOPIC.to_string(),
         time_ns: 0,
         payload,
     };
-    codec.encode_envelope(&env)
-}
-
-/// Construct a SocketAddr from a host/port for callers that prefer typed
-/// addresses. Exposed for completeness; [`WebServer::bind`] accepts any
-/// `Into<String>` already.
-pub fn addr(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
-    let s = format!("{host}:{port}");
-    s.parse().with_context(|| format!("web: parse addr {s}"))
-}
-
-// Re-export broadcast/mpsc capacity constants for documentation + tests.
-#[allow(dead_code)]
-pub(crate) mod capacities {
-    pub const PUBLISH_BROADCAST: usize = super::PUBLISH_BROADCAST_CAPACITY;
-    pub const CONNECTION_OUTBOUND: usize = super::CONNECTION_OUTBOUND_CAPACITY;
-    pub const SUBSCRIBE_MPSC: usize = super::SUBSCRIBE_MPSC_CAPACITY;
-}
-
-// Small helper so the `SUBSCRIBE_MPSC_CAPACITY` constant is used where
-// the public API creates the channel.
-pub(crate) fn subscribe_channel<T>() -> (mpsc::Sender<T>, mpsc::Receiver<T>) {
-    mpsc::channel(SUBSCRIBE_MPSC_CAPACITY)
+    Ok(Bytes::from(codec.encode(&env)?))
 }
