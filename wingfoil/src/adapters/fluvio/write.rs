@@ -52,16 +52,11 @@ pub fn fluvio_pub(
             let mut source = source;
             while let Some((_time, burst)) = source.next().await {
                 for record in burst {
-                    match record.key {
-                        Some(k) => producer
-                            .send(RecordKey::from(k), record.value)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("fluvio send failed: {e}"))?,
-                        None => producer
-                            .send(RecordKey::NULL, record.value)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("fluvio send failed: {e}"))?,
-                    };
+                    let key = record.key.map(RecordKey::from).unwrap_or(RecordKey::NULL);
+                    producer
+                        .send(key, record.value)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("fluvio send failed: {e}"))?;
                 }
                 // Flush once per burst to batch records within a tick for throughput
                 // while still guaranteeing delivery before the next cycle.

@@ -38,6 +38,18 @@ pub fn fluvio_sub(
     partition: u32,
     start_offset: Option<i64>,
 ) -> Rc<dyn Stream<Burst<FluvioEvent>>> {
+    // Validate offset early to fail at graph construction time, not execution time.
+    if let Some(n) = start_offset {
+        if n < 0 {
+            // Return error wrapped in a stream that always fails.
+            return produce_async(move |_: RunParams| async move {
+                Err(anyhow::anyhow!(
+                    "start_offset must be non-negative, got {}",
+                    n
+                ))
+            });
+        }
+    }
     let topic = topic.into();
     produce_async(move |_ctx: RunParams| async move {
         let cluster_config = FluvioClusterConfig::new(&connection.endpoint);

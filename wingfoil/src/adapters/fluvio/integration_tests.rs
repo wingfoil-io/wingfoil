@@ -63,7 +63,7 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
     let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
 
     // Register the custom SPU with the SC before starting the SPU process.
-    register_spu(&endpoint, 5001, FLUVIO_SPU_PORT, FLUVIO_SPU_PRIVATE_PORT)?;
+    register_spu(&endpoint)?;
 
     // Start the SPU inside the already-running SC container.
     let spu_cmd = format!(
@@ -86,12 +86,8 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
 ///
 /// Must be called after the SC is up but before the SPU process starts.  Without
 /// pre-registration the SC closes the SPU's connection immediately.
-fn register_spu(
-    endpoint: &str,
-    spu_id: i32,
-    public_port: u16,
-    private_port: u16,
-) -> anyhow::Result<()> {
+fn register_spu(endpoint: &str) -> anyhow::Result<()> {
+    const SPU_ID: i32 = 5001;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let config = FluvioClusterConfig::new(endpoint);
@@ -100,10 +96,10 @@ fn register_spu(
             .map_err(|e| anyhow::anyhow!("fluvio admin connect failed: {e}"))?;
 
         let spec = CustomSpuSpec {
-            id: spu_id,
-            public_endpoint: IngressPort::from_port_host(public_port, "127.0.0.1".to_string()),
+            id: SPU_ID,
+            public_endpoint: IngressPort::from_port_host(FLUVIO_SPU_PORT, "127.0.0.1".to_string()),
             private_endpoint: Endpoint {
-                port: private_port,
+                port: FLUVIO_SPU_PRIVATE_PORT,
                 host: "127.0.0.1".to_string(),
                 encryption: EncryptionEnum::PLAINTEXT,
             },
@@ -112,7 +108,7 @@ fn register_spu(
         };
 
         admin
-            .create::<CustomSpuSpec>(format!("spu-{spu_id}"), false, spec)
+            .create::<CustomSpuSpec>("spu-5001".to_string(), false, spec)
             .await
             .map_err(|e| anyhow::anyhow!("SPU register failed: {e:?}"))?;
         Ok(())
@@ -228,9 +224,7 @@ fn test_sub_from_beginning() -> anyhow::Result<()> {
     let conn = FluvioConnection::new(&endpoint);
     let collected = fluvio_sub(conn, topic, 0, None).collect();
     // RunFor::Cycles(2): one burst per record (two records seeded)
-    collected
-        .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+    collected.run(RunMode::RealTime, RunFor::Cycles(2))?;
 
     let bursts = collected.peek_value();
     let events: Vec<FluvioEvent> = bursts
@@ -279,9 +273,7 @@ fn test_sub_live_stream() -> anyhow::Result<()> {
 
     let conn = FluvioConnection::new(&endpoint);
     let collected = fluvio_sub(conn, topic, 0, None).collapse().collect();
-    collected
-        .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+    collected.run(RunMode::RealTime, RunFor::Cycles(1))?;
     handle.join().unwrap();
 
     let events = collected.peek_value();
@@ -344,9 +336,7 @@ fn test_sub_from_absolute_offset() -> anyhow::Result<()> {
     // Start from offset 1 — should receive "second" and "third" only.
     let conn = FluvioConnection::new(&endpoint);
     let collected = fluvio_sub(conn, topic, 0, Some(1)).collect();
-    collected
-        .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+    collected.run(RunMode::RealTime, RunFor::Cycles(2))?;
 
     let events: Vec<FluvioEvent> = collected
         .peek_value()
