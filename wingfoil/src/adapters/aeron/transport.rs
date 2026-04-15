@@ -3,14 +3,14 @@
 /// Subscribes to an Aeron channel, polling fragments non-blocking.
 pub trait AeronSubscriberBackend: Send + 'static {
     /// Poll for available fragments, calling `handler` for each one.
-    /// Returns the number of fragments processed.
+    /// Non-blocking.  Returns the number of fragments processed.
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize>;
 }
 
 /// Publishes bytes to an Aeron channel.
 pub trait AeronPublisherBackend: 'static {
-    /// Offer a buffer to the publication.  Non-blocking; returns back-pressure
-    /// errors via `Err` rather than blocking.
+    /// Offer a buffer to the publication.
+    /// Non-blocking; returns back-pressure errors via `Err` rather than blocking.
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()>;
 }
 
@@ -71,4 +71,9 @@ impl AeronPublisherBackend for MockPublisher {
         self.published.push(buffer.to_vec());
         Ok(())
     }
+}
+
+#[cfg(test)]
+pub(crate) fn i64_parser(bytes: &[u8]) -> Option<i64> {
+    bytes.try_into().ok().map(i64::from_le_bytes)
 }
