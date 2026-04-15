@@ -19,8 +19,28 @@ use aeron_rs::publication::Publication;
 use aeron_rs::subscription::Subscription;
 use aeron_rs::utils::types::Index;
 use std::ffi::CString;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn poll_until_found<T, F>(mut check: F, timeout: Duration, what: &str) -> anyhow::Result<T>
+where
+    F: FnMut() -> Option<T>,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(item) = check() {
+            return Ok(item);
+        }
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("timed out waiting for {what}");
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Connection handle
@@ -52,16 +72,11 @@ impl AeronRsHandle {
     ) -> anyhow::Result<AeronRsSubscriber> {
         let mut aeron = self.aeron.lock().unwrap();
         let id = aeron.add_subscription(CString::new(channel)?, stream_id)?;
-        let deadline = std::time::Instant::now() + timeout;
-        let sub = loop {
-            if let Ok(sub) = aeron.find_subscription(id) {
-                break sub;
-            }
-            if std::time::Instant::now() > deadline {
-                anyhow::bail!("timed out waiting for subscription on {channel}:{stream_id}");
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        };
+        let sub = poll_until_found(
+            || aeron.find_subscription(id).ok(),
+            timeout,
+            &format!("subscription on {channel}:{stream_id}"),
+        )?;
         Ok(AeronRsSubscriber { sub })
     }
 
@@ -73,17 +88,12 @@ impl AeronRsHandle {
     ) -> anyhow::Result<AeronRsPublisher> {
         let mut aeron = self.aeron.lock().unwrap();
         let id = aeron.add_publication(CString::new(channel)?, stream_id)?;
-        let deadline = std::time::Instant::now() + timeout;
-        let pub_ = loop {
-            if let Ok(p) = aeron.find_publication(id) {
-                break p;
-            }
-            if std::time::Instant::now() > deadline {
-                anyhow::bail!("timed out waiting for publication on {channel}:{stream_id}");
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        };
-        Ok(AeronRsPublisher { pub_ })
+        let publication = poll_until_found(
+            || aeron.find_publication(id).ok(),
+            timeout,
+            &format!("publication on {channel}:{stream_id}"),
+        )?;
+        Ok(AeronRsPublisher { publication })
     }
 }
 
@@ -92,13 +102,14 @@ impl AeronRsHandle {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct AeronRsSubscriber {
-    sub: Subscription,
+    sub: Arc<Mutex<Subscription>>,
 }
 
 impl AeronSubscriberBackend for AeronRsSubscriber {
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
         let mut count = 0usize;
-        self.sub.poll(
+        let mut sub = self.sub.lock().unwrap();
+        sub.poll(
             &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {
                 handler(buffer.as_sub_slice(offset, length));
                 count += 1;
@@ -114,16 +125,17 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct AeronRsPublisher {
-    pub_: Publication,
+    publication: Arc<Mutex<Publication>>,
 }
 
 impl AeronPublisherBackend for AeronRsPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
+        let publication = self.publication.lock().unwrap();
         let len = buffer.len() as Index;
         let aligned = AlignedBuffer::with_capacity(len);
         let ab = AtomicBuffer::from_aligned(&aligned);
         ab.put_bytes(0, buffer);
-        self.pub_.offer_part(ab, 0, len)?;
+        publication.offer_part(ab, 0, len)?;
         Ok(())
     }
 }

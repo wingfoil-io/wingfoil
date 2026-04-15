@@ -19,6 +19,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Duration;
 use tinyvec::TinyVec;
 
 // ---------------------------------------------------------------------------
@@ -97,23 +98,32 @@ where
     let state = Mutex::new(Some((backend, parser)));
     let inner = ReceiverStream::new(
         move |sender: ChannelSender<T>, _stop: Arc<AtomicBool>| {
-            let (mut backend, mut parser) = state
-                .lock()
-                .unwrap()
+            let mut state_guard = state.lock().expect("state lock poisoned");
+            let (mut backend, mut parser) = state_guard
                 .take()
                 .expect("threaded aeron closure called more than once");
+            drop(state_guard);
+
+            let mut idle_count = 0u32;
             loop {
                 if stop_thread.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                backend.poll(&mut |fragment| {
+                let count = backend.poll(&mut |fragment| {
                     if let Some(v) = parser(fragment) {
                         // Ignore send errors — graph has stopped, thread exits on next loop.
                         let _ = sender.send_message(Message::RealtimeValue(v));
                     }
                 })?;
-                // Yield when idle to avoid appearing as 100% CPU on profilers.
-                std::thread::yield_now();
+
+                // Exponential backoff when idle to avoid aggressive spinning.
+                if count == 0 {
+                    idle_count = (idle_count + 1).min(20); // Cap at 20 (~1ms sleep)
+                    let micros = (1u64 << idle_count.min(10)) as u64; // 1µs to 1024µs
+                    std::thread::sleep(Duration::from_micros(micros));
+                } else {
+                    idle_count = 0;
+                }
             }
         },
         true, // assert_realtime: Aeron makes no sense in historical mode
@@ -125,13 +135,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::aeron::transport::MockSubscriber;
+    use crate::adapters::aeron::transport::{MockSubscriber, i64_parser};
     use crate::{NodeOperators, RunFor, RunMode, StreamOperators};
     use std::time::Duration;
-
-    fn i64_parser(bytes: &[u8]) -> Option<i64> {
-        bytes.try_into().ok().map(i64::from_le_bytes)
-    }
 
     /// A backend that delivers one batch of messages then signals the thread
     /// to exit by returning an error.

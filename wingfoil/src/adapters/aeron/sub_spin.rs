@@ -78,12 +78,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::aeron::transport::MockSubscriber;
+    use crate::adapters::aeron::transport::{MockSubscriber, i64_parser};
     use crate::{IntoStream, NanoTime, NodeOperators, RunFor, RunMode, StreamOperators};
-
-    fn i64_parser(bytes: &[u8]) -> Option<i64> {
-        bytes.try_into().ok().map(i64::from_le_bytes)
-    }
 
     #[test]
     fn no_messages_returns_false_and_empty_burst() {
