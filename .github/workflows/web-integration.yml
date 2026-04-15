@@ -90,8 +90,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+        # No pnpm cache yet: the repo does not commit pnpm-lock.yaml, so
+        # `cache: 'pnpm'` fails to resolve a cache key. Re-enable once
+        # we pin a lockfile under wingfoil-js/.
 
       - name: Build wasm bundle for JS
         working-directory: wingfoil-wasm
