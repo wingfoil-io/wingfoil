@@ -259,7 +259,13 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[repr(C)]
-        #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug, ::std::default::Default, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::hash::Hash)]
+        #[derive(
+            ::std::clone::Clone, ::std::marker::Copy,
+            ::std::fmt::Debug, ::std::default::Default,
+            ::std::cmp::PartialEq, ::std::cmp::Eq,
+            ::std::hash::Hash,
+            ::serde::Serialize, ::serde::Deserialize,
+        )]
         #visibility struct #name {
             #( pub #field_names: u64, )*
         }

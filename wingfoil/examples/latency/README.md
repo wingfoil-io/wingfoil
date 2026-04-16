@@ -61,13 +61,40 @@ latency report (delta from previous stage, nanoseconds):
   strategy -> ack                 312           60          110          128          256          640
 ```
 
+## Time source
+
+Stamps always read wall-clock time (never engine time). Two variants:
+
+- `.stamp::<X>()` reads `state.wall_time()` — a cycle-start snap, one `u64`
+  load. Stages that tick in the same engine cycle share the timestamp, so
+  deltas between intra-cycle stages are zero. Use this for coarse
+  cross-process / cross-cycle measurement.
+- `.stamp_precise::<X>()` reads `state.wall_time_precise()` — a fresh TSC
+  read (~5-10 ns). Gives intra-cycle resolution so in-process stages get
+  distinct timestamps.
+
+This pipeline works identically in realtime and historical mode — the same
+wiring on a backtest gives you per-stage replay performance, and in
+production gives you per-stage latency.
+
+## Toggling
+
+Each method has an `_if(enabled: bool)` variant that returns the upstream
+unchanged when `enabled == false` — no node inserted into the graph, zero
+runtime cost. Thread a single config flag through your pipeline builder:
+
+```rust
+let stamp = cfg.instrument_latency;
+let pipe = incoming
+    .stamp_if::<quote_latency::receive>(stamp)
+    .map(strategy)
+    .stamp_if::<quote_latency::strategy>(stamp)
+    .stamp_if::<quote_latency::ack>(stamp);
+let (sink, _) = pipe.latency_report_if(stamp, /* print */ true);
+```
+
 ## Caveats
 
-- Stamps default to `state.time()`, the cycle-start timestamp. Stages that
-  fall in the same engine cycle will share the same timestamp (delta = 0).
-  This is the intended trade-off — it makes stamping nearly free at the
-  cost of intra-cycle resolution. Use `NanoTime::now()` directly if you
-  need finer granularity at a specific hop.
 - Both processes must declare `latency_stages! { QuoteLatency { ... } }`
   in the same order. The `shared.rs` file in this example does it once
   and is `#[path]`-included by both binaries.

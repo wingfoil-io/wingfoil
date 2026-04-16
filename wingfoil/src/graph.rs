@@ -96,6 +96,12 @@ impl ReadyNotifier {
 /// Maintains the parts of the graph state that is accessible to Nodes.
 pub struct GraphState {
     time: NanoTime,
+    /// Wall-clock timestamp of the start of the current engine cycle.
+    /// Unlike [`time`], this is always a real wall-clock snap in both realtime
+    /// and historical mode — used for latency measurement and perf telemetry.
+    /// It is populated once per cycle (before nodes are dispatched) and
+    /// explicitly does not feed business-logic decisions.
+    wall_time: NanoTime,
     /// True until the first engine cycle completes; suppresses the
     /// strict-advance check so the very first cycle can fire at NanoTime::ZERO.
     first_cycle: bool,
@@ -129,6 +135,7 @@ impl GraphState {
         let mut id = GRAPH_ID.lock().unwrap();
         let slf = Self {
             time: NanoTime::ZERO,
+            wall_time: NanoTime::ZERO,
             first_cycle: true,
             is_last_cycle: false,
             stop_requested: false,
@@ -160,6 +167,25 @@ impl GraphState {
     /// The current engine time
     pub fn time(&self) -> NanoTime {
         self.time
+    }
+
+    /// Wall-clock time of the *start* of the current engine cycle.
+    ///
+    /// Same in both realtime and historical mode — always a wall-clock snap.
+    /// Intended for latency stamping, cycle timing, and perf telemetry; never
+    /// for business-logic decisions (which should use [`time`] for
+    /// deterministic replay).
+    ///
+    /// Cost: one `u64` load. Snapped once per cycle.
+    pub fn wall_time(&self) -> NanoTime {
+        self.wall_time
+    }
+
+    /// Wall-clock time snapped fresh right now. Costs one `quanta` TSC read
+    /// (~5-10 ns on x86). Use when you need intra-cycle resolution — i.e. to
+    /// distinguish stages that run in the same engine cycle.
+    pub fn wall_time_precise(&self) -> NanoTime {
+        NanoTime::now()
     }
 
     /// The current engine time
@@ -698,6 +724,10 @@ impl Graph {
 
     #[cfg_attr(feature = "instrument-cycle", tracing::instrument(skip_all))]
     fn cycle(&mut self) -> anyhow::Result<()> {
+        // Snap wall-clock time once per cycle for latency / perf telemetry.
+        // Separate from `state.time` so historical mode still has deterministic
+        // logical time for business logic.
+        self.state.wall_time = NanoTime::now();
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
                 let ix = self.state.dirty_nodes_by_layer[lyr][i];

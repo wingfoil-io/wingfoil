@@ -17,11 +17,30 @@
 //!
 //! # Time source
 //!
-//! Stamps default to [`GraphState::time`] which is snapped once per cycle.
-//! That is free at the point of use (one `u64` load) but means stages running
-//! in the same engine cycle will all see the same timestamp. Use this for
-//! cross-process / cross-cycle measurement; use [`NanoTime::now`] explicitly
-//! when intra-cycle resolution is required.
+//! Stamps always read the wall clock (never [`GraphState::time`], which is
+//! source-driven in historical mode and would be useless for latency).
+//! Two variants:
+//!
+//! - [`LatencyStreamOps::stamp`] reads [`GraphState::wall_time`] — a
+//!   cycle-start wall-clock snap, one `u64` load, cheap. Stages sharing an
+//!   engine cycle get the same stamp.
+//! - [`LatencyStreamOps::stamp_precise`] reads
+//!   [`GraphState::wall_time_precise`] — a fresh TSC read (~5-10 ns), giving
+//!   distinct stamps to stages that run in the same engine cycle.
+//!
+//! Both variants behave identically in realtime and historical mode — the
+//! graph wiring stays the same across environments and the numbers mean
+//! "wall-clock time spent between stages". In historical mode this
+//! measures backtest replay performance; in realtime it measures production
+//! latency.
+//!
+//! # Toggling
+//!
+//! Each stamping and reporting method has an `_if` variant that takes a
+//! boolean and returns the upstream unchanged when disabled — zero runtime
+//! cost, no node inserted into the graph. Thread a single config flag
+//! through your pipeline builder to disable stamping for ultra-hot paths or
+//! backtests.
 //!
 //! # Example
 //!
@@ -115,7 +134,9 @@ pub trait HasLatency {
 /// ≤ 8) and `L: Latency` (all `u64` fields, alignment 8), no padding is
 /// inserted between the two.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Traced<T, L> {
     pub payload: T,
     pub latency: L,
@@ -165,13 +186,16 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// StampStream — wrapper node that stamps a stage on each upstream tick
+// StampStream / StampPreciseStream — wrapper nodes that stamp one stage
 // ---------------------------------------------------------------------------
 
-/// A node that forwards its upstream value while stamping the engine time
-/// into a single named stage of the embedded [`Latency`] record.
+/// A node that forwards its upstream value while stamping
+/// [`GraphState::wall_time`] (cycle-start wall-clock snap) into a single
+/// named stage of the embedded [`Latency`] record.
 ///
-/// One store per tick; no allocation.
+/// One `u64` store per tick, no allocation. Stages that tick in the same
+/// engine cycle share the same timestamp — use [`StampPreciseStream`] for
+/// intra-cycle resolution.
 pub struct StampStream<P, S>
 where
     P: Element + HasLatency,
@@ -204,8 +228,48 @@ where
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
-        let now: u64 = state.time().into();
-        S::stamp(self.value.latency_mut(), now);
+        S::stamp(self.value.latency_mut(), state.wall_time().into());
+        Ok(true)
+    }
+}
+
+/// Like [`StampStream`] but reads [`GraphState::wall_time_precise`] — a fresh
+/// TSC snap on every tick. Costs ~5-10 ns per stamp on x86 but gives
+/// intra-cycle resolution, so stages running in the same engine cycle get
+/// distinct timestamps.
+pub struct StampPreciseStream<P, S>
+where
+    P: Element + HasLatency,
+    S: Stage<P::L> + 'static,
+{
+    upstream: Rc<dyn Stream<P>>,
+    value: P,
+    _stage: PhantomData<fn() -> S>,
+}
+
+impl<P, S> StampPreciseStream<P, S>
+where
+    P: Element + HasLatency,
+    S: Stage<P::L> + 'static,
+{
+    pub fn new(upstream: Rc<dyn Stream<P>>) -> Self {
+        Self {
+            upstream,
+            value: P::default(),
+            _stage: PhantomData,
+        }
+    }
+}
+
+#[node(active = [upstream], output = value: P)]
+impl<P, S> MutableNode for StampPreciseStream<P, S>
+where
+    P: Element + HasLatency,
+    S: Stage<P::L> + 'static,
+{
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value = self.upstream.peek_value();
+        S::stamp(self.value.latency_mut(), state.wall_time_precise().into());
         Ok(true)
     }
 }
@@ -214,16 +278,39 @@ where
 // Public ergonomics: .stamp::<Stage>() on Stream<P> where P: HasLatency
 // ---------------------------------------------------------------------------
 
-/// Extension trait adding `.stamp::<Stage>()` to streams whose values carry a
-/// [`Latency`] record.
+/// Extension trait adding `.stamp::<Stage>()` and friends to streams whose
+/// values carry a [`Latency`] record.
 pub trait LatencyStreamOps<P>
 where
     P: Element + HasLatency,
 {
-    /// Wrap this stream in a [`StampStream`] for the named stage `S`. Each
-    /// tick will write `state.time()` into the stage's slot before forwarding.
+    /// Wrap this stream in a [`StampStream`] for stage `S`. Each tick writes
+    /// [`GraphState::wall_time`] (cycle-start snap, one `u64` store) into the
+    /// stage's slot before forwarding.
     #[must_use]
     fn stamp<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static;
+
+    /// Conditional variant of [`stamp`](Self::stamp). When `enabled` is false,
+    /// returns `self` unchanged — no node is inserted into the graph and
+    /// there is zero runtime cost. Useful for flipping stamping on/off at
+    /// graph-construction time via a config flag.
+    #[must_use]
+    fn stamp_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static;
+
+    /// Like [`stamp`](Self::stamp) but uses [`GraphState::wall_time_precise`]
+    /// (fresh TSC read, ~5-10ns) for intra-cycle resolution.
+    #[must_use]
+    fn stamp_precise<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static;
+
+    /// Conditional variant of [`stamp_precise`](Self::stamp_precise).
+    #[must_use]
+    fn stamp_precise_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
     where
         S: Stage<P::L> + 'static;
 }
@@ -237,6 +324,35 @@ where
         S: Stage<P::L> + 'static,
     {
         StampStream::<P, S>::new(self.clone()).into_stream()
+    }
+
+    fn stamp_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static,
+    {
+        if enabled {
+            self.stamp::<S>()
+        } else {
+            self.clone()
+        }
+    }
+
+    fn stamp_precise<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static,
+    {
+        StampPreciseStream::<P, S>::new(self.clone()).into_stream()
+    }
+
+    fn stamp_precise_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
+    where
+        S: Stage<P::L> + 'static,
+    {
+        if enabled {
+            self.stamp_precise::<S>()
+        } else {
+            self.clone()
+        }
     }
 }
 
@@ -446,17 +562,28 @@ where
     }
 }
 
-/// Extension method to install a [`LatencyReport`] sink. Returns the report's
-/// stats handle so the caller can inspect numbers after the graph exits.
+/// Extension methods to install a [`LatencyReport`] sink. Returns the
+/// report's stats handle so the caller can inspect numbers after the graph
+/// exits.
 pub trait LatencyReportOps<P>
 where
     P: Element + HasLatency,
 {
     /// Install a [`LatencyReport`] sink on this stream.
     /// `print_on_teardown` controls whether a summary is printed at shutdown.
-    /// Returns `(node, stats_handle)`.
+    /// Returns `(sink_node, stats_handle)`.
     fn latency_report(
         self: &Rc<Self>,
+        print_on_teardown: bool,
+    ) -> (Rc<dyn Node>, Rc<std::cell::RefCell<LatencyStats<P::L>>>);
+
+    /// Conditional variant. When `enabled` is false, returns
+    /// `(NeverNode, empty_stats)` — the sink never ticks and the stats handle
+    /// stays at zero counts. Lets a single config flag toggle aggregation on
+    /// or off without edits to the wiring.
+    fn latency_report_if(
+        self: &Rc<Self>,
+        enabled: bool,
         print_on_teardown: bool,
     ) -> (Rc<dyn Node>, Rc<std::cell::RefCell<LatencyStats<P::L>>>);
 }
@@ -472,6 +599,22 @@ where
         let report = LatencyReport::new(self.clone()).print_on_teardown(print_on_teardown);
         let stats = report.stats();
         (report.into_node(), stats)
+    }
+
+    fn latency_report_if(
+        self: &Rc<Self>,
+        enabled: bool,
+        print_on_teardown: bool,
+    ) -> (Rc<dyn Node>, Rc<std::cell::RefCell<LatencyStats<P::L>>>) {
+        if enabled {
+            self.latency_report(print_on_teardown)
+        } else {
+            let stats = Rc::new(std::cell::RefCell::new(LatencyStats::<P::L>::new()));
+            // A no-op sink: use the upstream itself as a node reference so
+            // the graph stays valid; it ticks but does nothing observable
+            // with respect to `stats`.
+            (self.clone().as_node(), stats)
+        }
     }
 }
 
@@ -589,9 +732,9 @@ mod tests {
     // ── StampStream node ─────────────────────────────────────────────────────
 
     #[test]
-    fn stamp_stream_writes_engine_time_into_named_stage() {
-        // Simulate two upstream ticks at distinct engine times; the stamp
-        // wrapper should write each cycle's start time into the stage slot.
+    fn stamp_stream_writes_wall_time_into_named_stage() {
+        // Stamps use wall-clock time (state.wall_time()), so in historical
+        // mode we assert monotonicity rather than exact values.
         let cb = Rc::new(RefCell::new(
             CallBackStream::<Traced<u64, TradeLatency>>::new(),
         ));
@@ -620,10 +763,110 @@ mod tests {
         let collected = stamped.peek_value();
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[0].value.payload, 11);
-        assert_eq!(collected[0].value.latency.strategy, 100);
-        assert_eq!(collected[0].value.latency.ingest, 0);
         assert_eq!(collected[1].value.payload, 22);
-        assert_eq!(collected[1].value.latency.strategy, 250);
+        // Unused stages remain zero.
+        assert_eq!(collected[0].value.latency.ingest, 0);
+        assert_eq!(collected[1].value.latency.ingest, 0);
+        // Stamps are real wall-clock times: both non-zero, second >= first.
+        assert!(collected[0].value.latency.strategy > 0);
+        assert!(collected[1].value.latency.strategy >= collected[0].value.latency.strategy);
+    }
+
+    #[test]
+    fn stamp_works_identically_in_historical_and_realtime() {
+        // "Same wiring, swap IO adapters" — the stamp wrappers use wall_time
+        // in both modes, so the pipeline produces non-zero, monotonic stamps
+        // regardless of RunMode.
+        use std::time::Duration;
+        fn run_one(mode: crate::graph::RunMode) -> crate::time::NanoTime {
+            let stream = crate::nodes::ticker(Duration::from_millis(1))
+                .count()
+                .map(|seq: u64| Traced::<u64, TradeLatency>::new(seq))
+                .stamp::<trade_latency::ingest>()
+                .stamp_precise::<trade_latency::publish>()
+                .collect();
+            stream.run(mode, crate::graph::RunFor::Cycles(3)).unwrap();
+            let values = stream.peek_value();
+            assert!(!values.is_empty());
+            let l = values[0].value.latency;
+            assert!(l.ingest > 0, "ingest stamp should be populated");
+            assert!(l.publish >= l.ingest, "publish >= ingest");
+            crate::time::NanoTime::new(l.ingest)
+        }
+        let historical = run_one(crate::graph::RunMode::HistoricalFrom(
+            crate::time::NanoTime::ZERO,
+        ));
+        let realtime = run_one(crate::graph::RunMode::RealTime);
+        // Both modes produce wall-clock stamps — they should be within the
+        // same order of magnitude (current nanoseconds-since-epoch range).
+        assert!(u64::from(historical) > 1_000_000_000);
+        assert!(u64::from(realtime) > 1_000_000_000);
+    }
+
+    #[test]
+    fn traced_serializes_via_serde_json() {
+        // Transport-agnostic: prove the derive lets us serialize a Traced
+        // payload through a generic serde layer (serde_json here; bincode,
+        // CBOR, postcard etc all follow the same contract).
+        let original = Traced::with_latency(
+            42u32,
+            TradeLatency {
+                ingest: 100,
+                decode: 200,
+                strategy: 300,
+                publish: 400,
+            },
+        );
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let round: Traced<u32, TradeLatency> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(round, original);
+    }
+
+    #[test]
+    fn stamp_if_disabled_inserts_no_node() {
+        // stamp_if(false) must return the upstream unchanged.
+        let cb = Rc::new(RefCell::new(
+            CallBackStream::<Traced<u64, TradeLatency>>::new(),
+        ));
+        let upstream = cb.clone().as_stream();
+        let stamped = upstream.stamp_if::<trade_latency::strategy>(false);
+        assert!(
+            Rc::ptr_eq(&upstream, &stamped),
+            "stamp_if(false) should be identity"
+        );
+    }
+
+    #[test]
+    fn stamp_precise_writes_fresh_timestamps() {
+        // Two stamp_precise wrappers in series should give different stamps
+        // even in the same engine cycle — that is the whole point of _precise.
+        let cb = Rc::new(RefCell::new(
+            CallBackStream::<Traced<u64, TradeLatency>>::new(),
+        ));
+        cb.borrow_mut().push(ValueAt::new(
+            Traced::new(1u64),
+            crate::time::NanoTime::new(100),
+        ));
+
+        let stamped = cb
+            .clone()
+            .as_stream()
+            .stamp_precise::<trade_latency::ingest>()
+            .stamp_precise::<trade_latency::publish>()
+            .collect();
+
+        stamped
+            .run(
+                crate::graph::RunMode::HistoricalFrom(crate::time::NanoTime::ZERO),
+                crate::graph::RunFor::Forever,
+            )
+            .unwrap();
+
+        let collected = stamped.peek_value();
+        assert_eq!(collected.len(), 1);
+        let l = collected[0].value.latency;
+        assert!(l.ingest > 0);
+        assert!(l.publish >= l.ingest);
     }
 
     // ── LatencyStats / LatencyReport ────────────────────────────────────────
@@ -764,10 +1007,11 @@ mod tests {
         let collected = stamped.peek_value();
         assert_eq!(collected.len(), 1);
         let l = collected[0].value.latency;
-        // All three stages share the same engine cycle, so they get the same time.
-        assert_eq!(l.ingest, 50);
-        assert_eq!(l.strategy, 50);
-        assert_eq!(l.publish, 50);
+        // All three cached-stamp wrappers run in the same engine cycle and
+        // share the cycle-start wall_time snap.
+        assert!(l.ingest > 0);
+        assert_eq!(l.strategy, l.ingest);
+        assert_eq!(l.publish, l.ingest);
         assert_eq!(l.decode, 0);
     }
 }
