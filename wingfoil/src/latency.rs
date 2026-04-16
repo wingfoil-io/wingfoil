@@ -405,11 +405,7 @@ impl StageStats {
 
     /// Mean delta in nanoseconds, or 0 if no samples recorded.
     pub fn mean_ns(&self) -> u64 {
-        if self.count == 0 {
-            0
-        } else {
-            self.sum_ns / self.count
-        }
+        self.sum_ns.checked_div(self.count).unwrap_or(0)
     }
 
     /// Estimate the value at quantile `q` in `[0.0, 1.0]` from the histogram.
