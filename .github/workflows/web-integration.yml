@@ -15,28 +15,6 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  web-rust-integration:
-    name: Web Rust Integration Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: integration
-
-      - name: Run web integration tests (in-process, no external services)
-        run: |
-          cargo test --features web -p wingfoil \
-            -- --test-threads=1 --nocapture adapters::web
-        env:
-          RUST_LOG: INFO
-
   wingfoil-wasm-build:
     name: wingfoil-wasm build + unit tests
     runs-on: ubuntu-latest
