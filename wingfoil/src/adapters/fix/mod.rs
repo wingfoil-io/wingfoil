@@ -309,10 +309,7 @@ fn drain_parse_buf<W: Write>(
     is_acceptor: bool,
 ) -> anyhow::Result<bool> {
     let before = events.len();
-    loop {
-        let Some((msg_bytes, consumed)) = find_message(parse_buf) else {
-            break;
-        };
+    while let Some((msg_bytes, consumed)) = find_message(parse_buf) {
         parse_buf.drain(..consumed);
         let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
             continue;
