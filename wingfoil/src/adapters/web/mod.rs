@@ -67,7 +67,7 @@ mod read;
 mod server;
 mod write;
 
-#[cfg(all(test, feature = "web-integration-test"))]
+#[cfg(test)]
 mod integration_tests;
 
 pub use codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION};
