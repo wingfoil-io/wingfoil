@@ -631,7 +631,6 @@ browse the [issue tracker](https://github.com/wingfoil-io/wingfoil/issues).
 
 More resources:
 
-- 📂 Full source: <https://github.com/wingfoil-io/wingfoil>
 - 📚 Python examples:
   <https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python/examples>
 - 🦀 Rust crate docs: <https://docs.rs/wingfoil>
