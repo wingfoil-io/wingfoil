@@ -22,7 +22,7 @@ iceoryx2-beta = ["wingfoil/iceoryx2-beta"]
 [dependencies]
 
 # parent
-wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "prometheus", "otlp", "fix"] }
+wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "prometheus", "otlp", "fix", "web"] }
 
 # workspace deps
 anyhow = {workspace = true}
@@ -37,12 +37,8 @@ thiserror = {workspace = true}
 pyo3 = { version = "0.27", features = ["extension-module", "serde"] }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"] }
 futures = "0.3"
-
-# Windows does not ship OpenSSL, and `fefix` (pulled in by the `fix` feature)
-# requires `openssl-sys`. Build a vendored OpenSSL on Windows so wheels are
-# self-contained and don't require users to install OpenSSL separately.
-[target.'cfg(target_os = "windows")'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 
 [package.metadata.maturin]

@@ -472,6 +472,26 @@ impl PyStream {
         }
     }
 
+    /// Publish this stream to a [`WebServer`] topic over WebSocket.
+    ///
+    /// Values must be JSON-compatible Python objects (dict / list /
+    /// str / int / float / bool / bytes / None). Connected browser
+    /// clients that subscribed to `topic` receive the frames.
+    ///
+    /// Args:
+    ///     server: A WebServer instance.
+    ///     topic: The topic name to publish on.
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn web_pub(&self, server: &crate::py_web::PyWebServer, topic: String) -> PyNode {
+        PyNode::new(crate::py_web::py_web_pub_inner(
+            &self.0,
+            server.inner_ref(),
+            topic,
+        ))
+    }
+
     /// Publish this stream of bytes to an iceoryx2 service.
     ///
     /// When `stages` is provided, expects the stream to carry `TracedBytes`

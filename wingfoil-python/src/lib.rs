@@ -11,6 +11,7 @@ mod py_latency;
 mod py_otlp;
 mod py_prometheus;
 mod py_stream;
+mod py_web;
 mod py_zmq;
 mod types;
 
@@ -208,6 +209,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add_class::<py_latency::PyLatency>()?;
     module.add_class::<py_latency::PyTracedBytes>()?;
+    module.add_class::<py_web::PyWebServer>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
