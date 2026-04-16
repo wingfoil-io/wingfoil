@@ -13,7 +13,7 @@ web/
   server.rs            # WebServer + axum router + per-connection task
   write.rs             # web_pub() sink + WebPubOperators fluent trait
   read.rs              # web_sub() source
-  integration_tests.rs # Gated by `web-integration-test`; in-process server + tungstenite client
+  integration_tests.rs # Ordinary `#[cfg(test)]`; in-process server + tungstenite client
   CLAUDE.md            # This file
 ```
 
@@ -89,7 +89,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # 2. Unit + integration tests (no external service required)
-cargo test --features web-integration-test -p wingfoil \
+cargo test --features web -p wingfoil \
   -- --test-threads=1 adapters::web
 ```
 

@@ -32,7 +32,7 @@ jobs:
 
       - name: Run web integration tests (in-process, no external services)
         run: |
-          cargo test --features web-integration-test -p wingfoil \
+          cargo test --features web -p wingfoil \
             -- --test-threads=1 --nocapture adapters::web
         env:
           RUST_LOG: INFO

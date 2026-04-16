@@ -1,14 +1,8 @@
 //! Integration tests for the `web` adapter.
 //!
 //! These tests spin up an in-process [`WebServer`] and connect a
-//! `tokio-tungstenite` client to it. No external service is required.
-//!
-//! Run with:
-//!
-//! ```sh
-//! cargo test --features web-integration-test -p wingfoil \
-//!   -- --test-threads=1 adapters::web::integration_tests
-//! ```
+//! `tokio-tungstenite` client to it. No external service is required,
+//! so they run as ordinary unit tests under `cargo test --features web`.
 
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};

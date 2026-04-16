@@ -30,7 +30,6 @@ otlp-integration-test = ["otlp", "dep:testcontainers"]
 fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
 fix-integration-test = ["fix"]
 web = ["async", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "tokio/net", "tokio/sync"]
-web-integration-test = ["web"]
 
 [package]
 name = "wingfoil"
