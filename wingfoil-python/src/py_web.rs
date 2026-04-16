@@ -13,7 +13,6 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyNone, PyStr
 use wingfoil::adapters::web::{CodecKind, WebServer, WebServerBuilder, web_pub, web_sub};
 use wingfoil::{Burst, Node, Stream, StreamOperators};
 
-use crate::PyNode;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 
@@ -91,17 +90,11 @@ impl PyWebServer {
         }
     }
 
-    /// Publish a stream on `topic`. Returns a sink Node.
-    ///
-    /// Stream values must be JSON-compatible Python objects (dict /
-    /// list / str / int / float / bool / bytes / None). Values that
-    /// cannot be converted are published as JSON null and logged.
-    fn pub_(&self, topic: String, stream: &PyStream) -> PyNode {
-        PyNode::new(py_web_pub_inner(&stream.0, &self.inner, topic))
-    }
-
     /// Subscribe to `topic`. Returns a source Stream of dicts / lists /
     /// primitives decoded from the clients' frames.
+    ///
+    /// To *publish* a stream, use the fluent `stream.web_pub(server,
+    /// topic)` method on the stream itself.
     fn sub(&self, topic: String) -> PyStream {
         py_web_sub(&self.inner, topic)
     }

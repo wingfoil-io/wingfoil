@@ -52,22 +52,6 @@ async fn connect(port: u16) -> anyhow::Result<TungsteniteStream> {
     }
 }
 
-async fn send_control(
-    socket: &mut TungsteniteStream,
-    codec: CodecKind,
-    ctrl: ControlMessage,
-) -> anyhow::Result<()> {
-    let payload = codec.encode(&ctrl)?;
-    let env = Envelope {
-        topic: CONTROL_TOPIC.to_string(),
-        time_ns: 0,
-        payload,
-    };
-    let bytes = codec.encode(&env)?;
-    socket.send(WsMessage::Binary(bytes)).await?;
-    Ok(())
-}
-
 async fn send_payload<T: Serialize>(
     socket: &mut TungsteniteStream,
     codec: CodecKind,
@@ -83,6 +67,14 @@ async fn send_payload<T: Serialize>(
     let bytes = codec.encode(&env)?;
     socket.send(WsMessage::Binary(bytes)).await?;
     Ok(())
+}
+
+async fn send_control(
+    socket: &mut TungsteniteStream,
+    codec: CodecKind,
+    ctrl: ControlMessage,
+) -> anyhow::Result<()> {
+    send_payload(socket, codec, CONTROL_TOPIC, &ctrl).await
 }
 
 async fn recv_envelope(
