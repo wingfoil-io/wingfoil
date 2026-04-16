@@ -1479,10 +1479,12 @@ mod tests {
     fn fix_connection_refused() {
         let (data, status) = fix_connect("127.0.0.1", 1, "SENDER", "TARGET", FixPollMode::Threaded);
         let status_collected = status.collect();
+        // Generous duration so this doesn't flake under heavy parallel
+        // test load — the Error status usually arrives within tens of ms.
         let _result = Graph::new(
             vec![data.as_node(), status_collected.clone().as_node()],
             RunMode::RealTime,
-            RunFor::Duration(Duration::from_millis(500)),
+            RunFor::Duration(Duration::from_secs(2)),
         )
         .run();
         // The graph should complete without panicking. The status stream should
