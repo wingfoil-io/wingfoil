@@ -395,26 +395,106 @@ impl PyStream {
         PyNode::new(crate::py_zmq::py_zmq_pub_inner(&self.0, port))
     }
 
+    // ── Latency stamping ─────────────────────────────────────────────────
+
+    /// Stamp a named latency stage on each tick using the cycle-start
+    /// wall-clock time. The stream must carry `TracedBytes` values.
+    ///
+    /// Args:
+    ///     stage: Stage name (must match one of the names in the `Latency`).
+    ///
+    /// Returns:
+    ///     A new Stream with the stage stamped.
+    fn stamp(&self, stage: String) -> PyStream {
+        PyStream(crate::py_latency::py_stamp_inner(&self.0, stage, false))
+    }
+
+    /// Like `stamp`, but only inserts the stamp node when `enabled` is True.
+    /// When False, returns the stream unchanged — zero runtime cost.
+    #[pyo3(signature = (stage, enabled))]
+    fn stamp_if(&self, stage: String, enabled: bool) -> PyStream {
+        if enabled {
+            self.stamp(stage)
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Stamp a named latency stage with a precise wall-clock read (~5-10ns
+    /// TSC read per tick). Gives intra-cycle resolution.
+    fn stamp_precise(&self, stage: String) -> PyStream {
+        PyStream(crate::py_latency::py_stamp_inner(&self.0, stage, true))
+    }
+
+    /// Like `stamp_precise`, but only inserts the stamp node when `enabled`
+    /// is True. When False, returns the stream unchanged.
+    #[pyo3(signature = (stage, enabled))]
+    fn stamp_precise_if(&self, stage: String, enabled: bool) -> PyStream {
+        if enabled {
+            self.stamp_precise(stage)
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Install a latency report sink. The stream must carry `TracedBytes`
+    /// values. Per-stage delta statistics (count/min/mean/p50/p99/max) are
+    /// printed on graph shutdown.
+    ///
+    /// Args:
+    ///     stages: Stage names in order (same list used for `Latency`).
+    ///     print_on_teardown: Whether to print the report on shutdown (default True).
+    ///
+    /// Returns:
+    ///     A Node that drives the report sink.
+    #[pyo3(signature = (stages, print_on_teardown=true))]
+    fn latency_report(&self, stages: Vec<String>, print_on_teardown: bool) -> PyNode {
+        PyNode::new(crate::py_latency::py_latency_report_inner(
+            &self.0,
+            stages,
+            print_on_teardown,
+        ))
+    }
+
+    /// Like `latency_report`, but only installs the sink when `enabled` is
+    /// True. When False, returns the upstream as a Node (no report sink).
+    #[pyo3(signature = (stages, enabled, print_on_teardown=true))]
+    fn latency_report_if(
+        &self,
+        stages: Vec<String>,
+        enabled: bool,
+        print_on_teardown: bool,
+    ) -> PyNode {
+        if enabled {
+            self.latency_report(stages, print_on_teardown)
+        } else {
+            PyNode::new(self.0.clone().as_node())
+        }
+    }
+
     /// Publish this stream of bytes to an iceoryx2 service.
     ///
-    /// The stream values must be `bytes` objects. Only supported in real-time mode.
+    /// When `stages` is provided, expects the stream to carry `TracedBytes`
+    /// values and serializes as `latency_header + payload_bytes` on the wire.
     ///
     /// Args:
     ///     service_name: iceoryx2 service name, e.g. `"my/service"`
     ///     variant: Service variant ("ipc" or "local")
     ///     history_size: Service history ring size (must match subscribers)
     ///     initial_max_slice_len: Initial maximum slice length (bytes)
+    ///     stages: Optional list of latency stage names for instrumented mode
     ///
     /// Returns:
     ///     A Node that drives the publish operation.
     #[cfg(feature = "iceoryx2-beta")]
-    #[pyo3(signature = (service_name, variant=crate::py_iceoryx2::PyIceoryx2ServiceVariant::Ipc, history_size=5, initial_max_slice_len=128*1024))]
+    #[pyo3(signature = (service_name, variant=crate::py_iceoryx2::PyIceoryx2ServiceVariant::Ipc, history_size=5, initial_max_slice_len=128*1024, stages=None))]
     fn iceoryx2_pub(
         &self,
         service_name: String,
         variant: crate::py_iceoryx2::PyIceoryx2ServiceVariant,
         history_size: usize,
         initial_max_slice_len: usize,
+        stages: Option<Vec<String>>,
     ) -> PyNode {
         PyNode::new(crate::py_iceoryx2::py_iceoryx2_pub_inner(
             &self.0,
@@ -422,6 +502,7 @@ impl PyStream {
             variant,
             history_size,
             initial_max_slice_len,
+            stages,
         ))
     }
 

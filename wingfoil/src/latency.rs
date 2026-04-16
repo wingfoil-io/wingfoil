@@ -389,7 +389,7 @@ impl Default for StageStats {
 
 impl StageStats {
     #[inline]
-    fn record(&mut self, delta_ns: u64) {
+    pub fn record(&mut self, delta_ns: u64) {
         self.count += 1;
         self.sum_ns = self.sum_ns.saturating_add(delta_ns);
         if delta_ns < self.min_ns {

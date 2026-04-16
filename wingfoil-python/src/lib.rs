@@ -7,6 +7,7 @@ mod py_fix;
 #[cfg(feature = "iceoryx2-beta")]
 mod py_iceoryx2;
 mod py_kdb;
+mod py_latency;
 mod py_otlp;
 mod py_prometheus;
 mod py_stream;
@@ -205,6 +206,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "iceoryx2-beta")]
     module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
+    module.add_class::<py_latency::PyLatency>()?;
+    module.add_class::<py_latency::PyTracedBytes>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
