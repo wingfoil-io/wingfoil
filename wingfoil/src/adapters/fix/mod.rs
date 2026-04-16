@@ -309,7 +309,10 @@ fn drain_parse_buf<W: Write>(
     is_acceptor: bool,
 ) -> anyhow::Result<bool> {
     let before = events.len();
-    while let Some((msg_bytes, consumed)) = find_message(parse_buf) {
+    loop {
+        let Some((msg_bytes, consumed)) = find_message(parse_buf) else {
+            break;
+        };
         parse_buf.drain(..consumed);
         let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
             continue;
@@ -1480,11 +1483,13 @@ mod tests {
         let (data, status) = fix_connect("127.0.0.1", 1, "SENDER", "TARGET", FixPollMode::Threaded);
         let status_collected = status.collect();
         // Generous duration so this doesn't flake under heavy parallel
-        // test load — the Error status usually arrives within tens of ms.
+        // test load — the Error status usually arrives within tens of ms
+        // but the background thread may be starved when 250+ tests run
+        // concurrently.
         let _result = Graph::new(
             vec![data.as_node(), status_collected.clone().as_node()],
             RunMode::RealTime,
-            RunFor::Duration(Duration::from_secs(2)),
+            RunFor::Duration(Duration::from_secs(5)),
         )
         .run();
         // The graph should complete without panicking. The status stream should

@@ -40,12 +40,6 @@ futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Windows does not ship OpenSSL, and `fefix` (pulled in by the `fix` feature)
-# requires `openssl-sys`. Build a vendored OpenSSL on Windows so wheels are
-# self-contained and don't require users to install OpenSSL separately.
-[target.'cfg(target_os = "windows")'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
-
 
 [package.metadata.maturin]
 name = "wingfoil"
