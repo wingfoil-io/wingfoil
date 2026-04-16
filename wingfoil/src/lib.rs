@@ -226,6 +226,7 @@ pub mod adapters;
 mod bencher;
 mod channel;
 mod graph;
+mod latency;
 mod nodes;
 mod queue;
 mod time;
@@ -233,6 +234,7 @@ mod types;
 
 pub use bencher::*;
 pub use graph::*;
+pub use latency::*;
 pub use nodes::*;
 pub use queue::*;
 pub use types::*;

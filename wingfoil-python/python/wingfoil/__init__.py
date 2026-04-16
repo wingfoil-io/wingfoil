@@ -13,6 +13,11 @@ __version__ = getattr(_ext, "__version__", None)
 
 __all__ = list(getattr(_ext, "__all__", [])) + ["to_dataframe", "build_dataframe"]
 
+# Latency measurement classes
+Latency = _ext.Latency
+TracedBytes = _ext.TracedBytes
+__all__.extend(["Latency", "TracedBytes"])
+
 # User-friendly aliases for CSV functions
 csv_read = _ext.py_csv_read
 
