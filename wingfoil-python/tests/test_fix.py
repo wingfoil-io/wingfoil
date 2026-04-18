@@ -69,7 +69,7 @@ class TestFixLoopback(unittest.TestCase):
         self.assertEqual(len(result), 2)
 
     def test_fix_connect_tls_returns_triple(self):
-        """fix_connect_tls returns a (data_stream, status_stream, injector) triple."""
+        """fix_connect_tls returns a (data_stream, status_stream, sender) triple."""
         from wingfoil import fix_connect_tls
 
         result = fix_connect_tls("127.0.0.1", 443, "S", "T")

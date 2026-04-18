@@ -135,18 +135,18 @@ const INJECT_QUEUE_CAPACITY: usize = 1024;
 
 /// Handle for injecting outbound [`FixMessage`]s into an established FIX session.
 ///
-/// Obtained from [`FixConnection::injector`]. Thread-safe and cheaply cloneable.
+/// Obtained from [`FixConnection::sender`]. Thread-safe and cheaply cloneable.
 /// Messages are sent on the next background-thread loop iteration.
 ///
 /// Internally backed by a lock-free bounded [`kanal`] MPSC channel: `send()`
 /// does a single CAS-style `try_send` and never blocks. If the session thread
 /// falls behind and the channel fills, the message is dropped and logged.
 #[derive(Clone)]
-pub struct FixInjector {
+pub struct FixSender {
     sender: kanal::Sender<FixMessage>,
 }
 
-impl FixInjector {
+impl FixSender {
     /// Queue `msg` for sending on the next session loop iteration.
     ///
     /// Non-blocking. If the inject channel is full (session thread stalled or
@@ -156,9 +156,9 @@ impl FixInjector {
         match self.sender.try_send(msg) {
             Ok(true) => {}
             Ok(false) => log::warn!(
-                "FixInjector: send queue full ({INJECT_QUEUE_CAPACITY}) — dropping message"
+                "FixSender: send queue full ({INJECT_QUEUE_CAPACITY}) — dropping message"
             ),
-            Err(_) => log::warn!("FixInjector: send channel closed — dropping message"),
+            Err(_) => log::warn!("FixSender: send channel closed — dropping message"),
         }
     }
 }
@@ -172,7 +172,7 @@ pub struct FixConnection {
     pub data: Rc<dyn Stream<Burst<FixMessage>>>,
     /// Session lifecycle events (LoggedIn, LoggedOut, …).
     pub status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
-    injector: FixInjector,
+    sender: FixSender,
 }
 
 impl FixConnection {
@@ -197,7 +197,7 @@ impl FixConnection {
     /// ```
     pub fn fix_sub(&self, symbols: Rc<dyn Stream<Vec<String>>>) -> Rc<dyn Node> {
         FixSubNode {
-            injector: self.injector.clone(),
+            sender: self.sender.clone(),
             status: self.status.clone(),
             symbols,
             pending: Vec::new(),
@@ -209,12 +209,12 @@ impl FixConnection {
 
     /// Queue a raw outbound [`FixMessage`] for sending on the session thread.
     pub fn send(&self, msg: FixMessage) {
-        self.injector.send(msg);
+        self.sender.send(msg);
     }
 
-    /// Get a clone of the underlying [`FixInjector`] for manual use.
-    pub fn injector(&self) -> FixInjector {
-        self.injector.clone()
+    /// Get a clone of the underlying [`FixSender`] for manual use.
+    pub fn sender(&self) -> FixSender {
+        self.sender.clone()
     }
 }
 
@@ -908,7 +908,7 @@ struct FixThreadedSource {
     // Set by stop() to prevent the thread from re-accepting after socket shutdown.
     stop_flag: Arc<AtomicBool>,
     // Bounded kanal channel for outbound messages injected from outside the graph.
-    // `inject_sender` is cloned into each `FixInjector`; `inject_receiver` is moved
+    // `inject_sender` is cloned into each `FixSender`; `inject_receiver` is moved
     // into the session thread on setup.
     inject_sender: kanal::Sender<FixMessage>,
     inject_receiver: Option<kanal::Receiver<FixMessage>>,
@@ -1212,7 +1212,7 @@ fn market_data_request(symbol: &str, req_id: &str) -> FixMessage {
 }
 
 struct FixSubNode {
-    injector: FixInjector,
+    sender: FixSender,
     status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
     symbols: Rc<dyn Stream<Vec<String>>>,
     pending: Vec<String>,
@@ -1223,7 +1223,7 @@ struct FixSubNode {
 impl FixSubNode {
     fn subscribe(&mut self, sym: &str) {
         let req_id = format!("sub_{}_{sym}", self.sent.len());
-        self.injector.send(market_data_request(sym, &req_id));
+        self.sender.send(market_data_request(sym, &req_id));
         self.sent.push(sym.to_string());
     }
 }
@@ -1407,7 +1407,7 @@ pub fn fix_connect_tls(
 ) -> FixConnection {
     let src =
         FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, password);
-    let injector = FixInjector {
+    let sender = FixSender {
         sender: src.inject_sender.clone(),
     };
     let events: Rc<dyn Stream<Burst<FixEvent>>> = src.into_stream();
@@ -1415,7 +1415,7 @@ pub fn fix_connect_tls(
     FixConnection {
         data,
         status,
-        injector,
+        sender,
     }
 }
 

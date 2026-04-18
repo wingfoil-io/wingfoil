@@ -54,11 +54,11 @@ fn main() {
 
     // Sweep instrument IDs with a delay between each request.
     // This needs raw injection because of the per-request throttling.
-    let injector = fix.injector();
+    let sender = fix.sender();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(2));
         for id in candidates() {
-            injector.send(market_data_request(&id, &format!("req_{id}")));
+            sender.send(market_data_request(&id, &format!("req_{id}")));
             std::thread::sleep(Duration::from_millis(100));
         }
     });
