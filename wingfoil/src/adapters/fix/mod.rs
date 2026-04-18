@@ -138,7 +138,7 @@ const INJECT_QUEUE_CAPACITY: usize = 1024;
 /// Obtained from [`FixConnection::injector`]. Thread-safe and cheaply cloneable.
 /// Messages are sent on the next background-thread loop iteration.
 ///
-/// Internally backed by a lock-free bounded [`kanal`] MPSC channel: `inject()`
+/// Internally backed by a lock-free bounded [`kanal`] MPSC channel: `send()`
 /// does a single CAS-style `try_send` and never blocks. If the session thread
 /// falls behind and the channel fills, the message is dropped and logged.
 #[derive(Clone)]
@@ -152,13 +152,13 @@ impl FixInjector {
     /// Non-blocking. If the inject channel is full (session thread stalled or
     /// the socket is backpressured) or closed (session has ended), the message
     /// is dropped and a warning logged.
-    pub fn inject(&self, msg: FixMessage) {
+    pub fn send(&self, msg: FixMessage) {
         match self.sender.try_send(msg) {
             Ok(true) => {}
             Ok(false) => log::warn!(
-                "FixInjector: inject queue full ({INJECT_QUEUE_CAPACITY}) — dropping message"
+                "FixInjector: send queue full ({INJECT_QUEUE_CAPACITY}) — dropping message"
             ),
-            Err(_) => log::warn!("FixInjector: inject channel closed — dropping message"),
+            Err(_) => log::warn!("FixInjector: send channel closed — dropping message"),
         }
     }
 }
@@ -166,7 +166,7 @@ impl FixInjector {
 /// Bundles the streams and session handle returned by [`fix_connect_tls`].
 ///
 /// Use [`fix_sub`](FixConnection::fix_sub) to subscribe to market data as a
-/// graph node, or [`inject`](FixConnection::inject) for raw outbound messages.
+/// graph node, or [`send`](FixConnection::send) for raw outbound messages.
 pub struct FixConnection {
     /// Inbound application messages (MarketDataSnapshot, execution reports, etc.).
     pub data: Rc<dyn Stream<Burst<FixMessage>>>,
@@ -208,8 +208,8 @@ impl FixConnection {
     }
 
     /// Queue a raw outbound [`FixMessage`] for sending on the session thread.
-    pub fn inject(&self, msg: FixMessage) {
-        self.injector.inject(msg);
+    pub fn send(&self, msg: FixMessage) {
+        self.injector.send(msg);
     }
 
     /// Get a clone of the underlying [`FixInjector`] for manual use.
@@ -1223,7 +1223,7 @@ struct FixSubNode {
 impl FixSubNode {
     fn subscribe(&mut self, sym: &str) {
         let req_id = format!("sub_{}_{sym}", self.sent.len());
-        self.injector.inject(market_data_request(sym, &req_id));
+        self.injector.send(market_data_request(sym, &req_id));
         self.sent.push(sym.to_string());
     }
 }
@@ -1397,7 +1397,7 @@ pub fn fix_connect(
 ///
 /// Returns a [`FixConnection`] with `data` and `status` streams, plus
 /// [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription
-/// and [`inject`](FixConnection::inject) for raw outbound messages.
+/// and [`send`](FixConnection::send) for raw outbound messages.
 pub fn fix_connect_tls(
     host: &str,
     port: u16,

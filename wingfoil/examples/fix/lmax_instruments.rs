@@ -58,7 +58,7 @@ fn main() {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(2));
         for id in candidates() {
-            injector.inject(market_data_request(&id, &format!("req_{id}")));
+            injector.send(market_data_request(&id, &format!("req_{id}")));
             std::thread::sleep(Duration::from_millis(100));
         }
     });

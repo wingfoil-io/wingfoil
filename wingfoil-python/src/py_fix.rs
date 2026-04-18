@@ -156,7 +156,7 @@ impl PyFixInjector {
     ///
     /// Args:
     ///     msg: A dict with "msg_type" (str) and "fields" (list of [tag, value] pairs).
-    fn inject(&self, msg: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn send(&self, msg: &Bound<'_, PyDict>) -> PyResult<()> {
         let msg_type = msg
             .get_item("msg_type")?
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("missing 'msg_type'"))?
@@ -180,7 +180,7 @@ impl PyFixInjector {
             fields.push((tag, value));
         }
 
-        self.injector.inject(FixMessage {
+        self.injector.send(FixMessage {
             msg_type,
             seq_num: 0,
             sending_time: wingfoil::NanoTime::ZERO,

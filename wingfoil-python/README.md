@@ -543,7 +543,7 @@ data, status, injector = fix_connect_tls(
 )
 
 # Send a FIX message on the session:
-injector.inject({
+injector.send({
     "msg_type": "V",
     "fields": [(262, "req1"), (263, "1"), (264, "0")],
 })
