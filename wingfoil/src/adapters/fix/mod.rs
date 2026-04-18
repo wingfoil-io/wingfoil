@@ -129,18 +129,50 @@ pub enum FixPollMode {
     Threaded,
 }
 
-/// Bounded capacity of the outbound inject channel. Matches the drop-newest
-/// slow-consumer protection used by other wingfoil adapters.
+/// Bounded capacity of the outbound inject channel. `try_send` returns full
+/// when this many messages are backlogged; callers receive
+/// [`SendError::QueueFull`] and decide the policy (halt, retry, log-and-drop,
+/// etc.).
 const INJECT_QUEUE_CAPACITY: usize = 1024;
 
-/// Handle for injecting outbound [`FixMessage`]s into an established FIX session.
+/// Reasons `FixSender::send` can fail.
+///
+/// Both variants mean the message was not queued. `QueueFull` is transient —
+/// the session thread is stalled but may recover. `Closed` is terminal — the
+/// session has ended and all subsequent sends will also return `Closed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError {
+    /// The bounded send queue is full ({INJECT_QUEUE_CAPACITY} messages).
+    /// The session thread is not draining fast enough, typically because the
+    /// socket is backpressured.
+    QueueFull,
+    /// The inject channel is closed — the session thread has exited.
+    Closed,
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::QueueFull => {
+                write!(f, "FIX send queue full ({INJECT_QUEUE_CAPACITY} messages)")
+            }
+            SendError::Closed => f.write_str("FIX send channel closed"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
+/// Handle for sending outbound [`FixMessage`]s on an established FIX session.
 ///
 /// Obtained from [`FixConnection::sender`]. Thread-safe and cheaply cloneable.
 /// Messages are sent on the next background-thread loop iteration.
 ///
 /// Internally backed by a lock-free bounded [`kanal`] MPSC channel: `send()`
-/// does a single CAS-style `try_send` and never blocks. If the session thread
-/// falls behind and the channel fills, the message is dropped and logged.
+/// does a single CAS-style `try_send` and never blocks. Failure (full or
+/// closed) is surfaced via [`SendError`] so callers choose the policy:
+/// halt trading, route to a dead-letter queue, retry, or log-and-drop via
+/// [`FixSender::send_or_log`].
 #[derive(Clone)]
 pub struct FixSender {
     sender: kanal::Sender<FixMessage>,
@@ -149,16 +181,25 @@ pub struct FixSender {
 impl FixSender {
     /// Queue `msg` for sending on the next session loop iteration.
     ///
-    /// Non-blocking. If the inject channel is full (session thread stalled or
-    /// the socket is backpressured) or closed (session has ended), the message
-    /// is dropped and a warning logged.
-    pub fn send(&self, msg: FixMessage) {
+    /// Non-blocking. Returns [`SendError::QueueFull`] if the session thread is
+    /// stalled and the bounded channel is full, or [`SendError::Closed`] if
+    /// the session has ended. The message is not queued in either case.
+    pub fn send(&self, msg: FixMessage) -> Result<(), SendError> {
         match self.sender.try_send(msg) {
-            Ok(true) => {}
-            Ok(false) => log::warn!(
-                "FixSender: send queue full ({INJECT_QUEUE_CAPACITY}) — dropping message"
-            ),
-            Err(_) => log::warn!("FixSender: send channel closed — dropping message"),
+            Ok(true) => Ok(()),
+            Ok(false) => Err(SendError::QueueFull),
+            Err(_) => Err(SendError::Closed),
+        }
+    }
+
+    /// Convenience wrapper around [`send`](Self::send) that logs and drops on
+    /// failure. Appropriate for non-critical paths (e.g. market-data
+    /// subscriptions that are idempotent and resendable). For order routing or
+    /// other paths where silent drops are unacceptable, use [`send`](Self::send)
+    /// directly and handle the [`SendError`].
+    pub fn send_or_log(&self, msg: FixMessage) {
+        if let Err(e) = self.send(msg) {
+            log::warn!("FixSender: {e} — dropping message");
         }
     }
 }
@@ -208,8 +249,10 @@ impl FixConnection {
     }
 
     /// Queue a raw outbound [`FixMessage`] for sending on the session thread.
-    pub fn send(&self, msg: FixMessage) {
-        self.sender.send(msg);
+    ///
+    /// See [`FixSender::send`] for error semantics.
+    pub fn send(&self, msg: FixMessage) -> Result<(), SendError> {
+        self.sender.send(msg)
     }
 
     /// Get a clone of the underlying [`FixSender`] for manual use.
@@ -1223,7 +1266,7 @@ struct FixSubNode {
 impl FixSubNode {
     fn subscribe(&mut self, sym: &str) {
         let req_id = format!("sub_{}_{sym}", self.sent.len());
-        self.sender.send(market_data_request(sym, &req_id));
+        self.sender.send_or_log(market_data_request(sym, &req_id));
         self.sent.push(sym.to_string());
     }
 }

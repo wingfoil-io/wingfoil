@@ -180,13 +180,14 @@ impl PyFixSender {
             fields.push((tag, value));
         }
 
-        self.sender.send(FixMessage {
-            msg_type,
-            seq_num: 0,
-            sending_time: wingfoil::NanoTime::ZERO,
-            fields,
-        });
-        Ok(())
+        self.sender
+            .send(FixMessage {
+                msg_type,
+                seq_num: 0,
+                sending_time: wingfoil::NanoTime::ZERO,
+                fields,
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }
 
