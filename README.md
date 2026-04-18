@@ -21,7 +21,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
-- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [FIX protocol](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix) (FIX 4.4 with TLS), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio) distributed streaming, [FIX protocol](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix) (FIX 4.4 with TLS), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
 
 ## Quick Start
 
@@ -134,6 +134,31 @@ round_trip.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
 ```
 
 [Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/)
+
+## Fluvio Example
+
+Stream records from a Fluvio topic, transform them, and write results back — leveraging Fluvio's distributed streaming platform for durable pub/sub:
+
+```rust,ignore
+use wingfoil::adapters::fluvio::*;
+use wingfoil::*;
+
+let conn = FluvioConnection::new("127.0.0.1:9003");
+
+let round_trip = fluvio_sub(conn.clone(), "source", 0, None)
+    .map(|burst| {
+        burst.into_iter().map(|event| {
+            let upper = String::from_utf8_lossy(&event.value).to_uppercase();
+            FluvioRecord::with_key(event.key_str().unwrap_or(""), upper.into_bytes())
+        })
+        .collect::<Burst<FluvioRecord>>()
+    })
+    .fluvio_pub(conn, "dest");
+
+round_trip.run(RunMode::RealTime, RunFor::Cycles(10)).unwrap();
+```
+
+[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio/)
 
 ## ZeroMQ Example
 
