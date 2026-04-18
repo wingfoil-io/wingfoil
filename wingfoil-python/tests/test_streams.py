@@ -272,5 +272,21 @@ class TestRunModes(unittest.TestCase):
             stream.sample("not_a_node_or_stream").run(realtime=False, cycles=1)
 
 
+class TestDataframe(unittest.TestCase):
+    def test_dataframe_returns_time_value_tuples(self):
+        # dataframe() pairs each value with its graph time and collects
+        # into a list of (time_seconds, value) tuples.
+        stream = ticker(0.1).count().dataframe()
+        stream.run(realtime=False, cycles=3)
+        result = stream.peek_value()
+        self.assertEqual(len(result), 3)
+        times = [t for t, _ in result]
+        values = [v for _, v in result]
+        self.assertEqual(values, [1, 2, 3])
+        # Times are monotonically increasing floats.
+        self.assertTrue(all(isinstance(t, float) for t in times))
+        self.assertTrue(all(times[i] < times[i + 1] for i in range(len(times) - 1)))
+
+
 if __name__ == '__main__':
     unittest.main()
