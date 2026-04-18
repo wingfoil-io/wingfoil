@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -21,6 +21,8 @@ instrument-initialise = ["tracing"]
 instrument-cycle-node = ["tracing"]
 instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-nodes", "instrument-initialise"]
 instrument-all = ["instrument-default", "instrument-cycle-node"]
+fluvio = ["dep:fluvio", "async"]
+fluvio-integration-test = ["fluvio", "dep:testcontainers", "dep:fluvio-controlplane-metadata"]
 iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
 iceoryx2-beta = ["dep:iceoryx2"]
 prometheus = []
@@ -103,6 +105,8 @@ zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"], optional = true }
+fluvio = { version = "0.50.1", optional = true }
+fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 iceoryx2 = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 opentelemetry = { version = "0.28", optional = true }
@@ -288,3 +292,8 @@ required-features = ["fix"]
 name = "web"
 path = "examples/web/main.rs"
 required-features = ["web"]
+
+[[example]]
+name = "fluvio"
+path = "examples/fluvio/main.rs"
+required-features = ["fluvio"]

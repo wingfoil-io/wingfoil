@@ -22,7 +22,7 @@ iceoryx2-beta = ["wingfoil/iceoryx2-beta"]
 [dependencies]
 
 # parent
-wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "prometheus", "otlp", "fix", "web"] }
+wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "fluvio", "prometheus", "otlp", "fix", "web"] }
 
 # workspace deps
 anyhow = {workspace = true}
