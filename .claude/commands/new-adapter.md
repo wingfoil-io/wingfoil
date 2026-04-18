@@ -1,5 +1,39 @@
 Implement a new I/O adapter for wingfoil named `$ARGUMENTS`. Follow these steps in order. Work test-driven: write each test before its implementation.
 
+## Invariants
+
+These rules apply to every step below.
+
+### No locks on the graph execution path
+
+`Mutex` / `RwLock` must not be locked inside `cycle()`, `setup()`, or any other
+method the graph engine calls per-tick. Graph execution is single-threaded on
+the graph thread; taking a lock there adds uncontended-lock overhead on every
+tick and risks blocking the hot path behind a background thread (HTTP scraper,
+async task, reconnect loop, etc.).
+
+Locks *are* acceptable in, and only in:
+
+- **Wiring / factory functions** — e.g. `$ARGUMENTS_pub(...)`, `$ARGUMENTS_sub(...)`,
+  `WebServer::bind(...)`, `PrometheusExporter::register(...)`. Runs once before
+  the graph starts.
+- **`start()` / `stop()` / `teardown()`** — once-per-run lifecycle hooks.
+- **Background threads** — the OS thread spawned by `ReceiverStream`, the dedicated
+  HTTP/tokio thread behind `WebServer` / `PrometheusExporter`, a FIX session thread,
+  etc. These are *not* the graph thread.
+- **Cross-thread handles handed to user code** — e.g. `FixInjector::inject()` called
+  from outside the graph.
+
+To communicate between a background thread and graph `cycle()`, use the existing
+channel primitives (`ChannelSender` / `ChannelReceiver`, `ReceiverStream`,
+`produce_async` / `consume_async`) rather than a shared `Mutex<...>`. Channels
+give single-producer / single-consumer lock-free hand-off and preserve the
+"cycle never blocks" invariant.
+
+The Prometheus exporter currently locks inside `cycle()` to publish metric
+values to the HTTP scrape thread — this is a known exception, not a pattern to
+copy.
+
 ## 1. Branch
 
 ```bash
