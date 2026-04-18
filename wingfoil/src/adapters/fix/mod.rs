@@ -1275,6 +1275,15 @@ impl MutableNode for FixSubNode {
 
 // ── FixSenderNode (sink) ──────────────────────────────────────────────────────
 
+// Writes FIX messages directly from `cycle` — no channel, no background thread.
+// Back-pressure is applied by the kernel TCP send buffer: if the socket
+// blocks, so does the graph cycle.
+//
+// Shape-wise this is the direct-write equivalent of `AsyncConsumerNode` in
+// nodes/async_io.rs, which instead puts a kanal `ChannelSender` between the
+// graph thread and the sink. If `channel_pair` ever grows a bounded+blocking
+// mode (see comment there), the two could be unified behind a generic
+// "sink node" abstraction parameterised by the actual write call.
 struct FixSenderNode {
     src: Rc<dyn Stream<FixMessage>>,
     host: String,
