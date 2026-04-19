@@ -259,9 +259,7 @@ mod etcd_impl {
                         .to_string();
                     Ok(addr)
                 }
-                None => Err(anyhow::anyhow!(
-                    "no publisher named {name:?} found in etcd"
-                )),
+                None => Err(anyhow::anyhow!("no publisher named {name:?} found in etcd")),
             }
         })
     }
