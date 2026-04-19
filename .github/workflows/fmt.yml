@@ -21,6 +21,9 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Run cargo fmt
         run: cargo fmt --all
 
