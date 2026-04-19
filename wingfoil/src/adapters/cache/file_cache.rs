@@ -89,7 +89,7 @@ impl<T> FileCache<T> {
         let tmp = path.with_extension("tmp");
 
         let serializable: Vec<(u64, &T)> = data.iter().map(|(t, v)| (u64::from(*t), v)).collect();
-        let mut buf = format!("{}\n", query).into_bytes();
+        let mut buf = format!("{query}\n").into_bytes();
         buf.extend(bincode::serialize(&serializable)?);
         tokio::fs::write(&tmp, &buf).await?;
 

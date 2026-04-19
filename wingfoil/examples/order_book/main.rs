@@ -172,6 +172,6 @@ fn parse_order(msg: Message) -> lobster::OrderType {
             price,
         }
     } else {
-        panic!("unrecognised order type: {:}", message_type);
+        panic!("unrecognised order type: {message_type:}");
     }
 }

@@ -119,7 +119,7 @@ impl TestDataBuilder {
             .context("Failed to send query to KDB+")?;
 
         if result.get_type() == -128 {
-            anyhow::bail!("KDB+ query error: {:?}", result);
+            anyhow::bail!("KDB+ query error: {result:?}");
         }
         Ok(())
     }
@@ -127,8 +127,7 @@ impl TestDataBuilder {
     /// Create the read table with a date column: (date, time, sym, price, qty).
     async fn create_table(&self) -> Result<()> {
         self.execute(&format!(
-            "{}:([]date:`date$();time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())",
-            TABLE_NAME
+            "{TABLE_NAME}:([]date:`date$();time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())"
         ))
         .await?;
         Ok(())
@@ -149,38 +148,30 @@ impl TestDataBuilder {
         let (date_expr, time_expr) = if sorted {
             (
                 // Each date repeated records_per_day times, num_days dates in order
-                format!(
-                    "raze {{{}#2000.01.01+x}} each til {}",
-                    records_per_day, num_days
-                ),
+                format!("raze {{{records_per_day}#2000.01.01+x}} each til {num_days}"),
                 // Within each day d: evenly distribute records across 24 hours so that
                 // timestamps never spill into the next day regardless of records_per_day.
                 // Interval = floor(86400s / records_per_day) in nanoseconds.
                 format!(
-                    "raze {{(`timestamp$2000.01.01+x)+(86400000000000j div {}j)*til {}}} each til {}",
-                    records_per_day, records_per_day, num_days
+                    "raze {{(`timestamp$2000.01.01+x)+(86400000000000j div {records_per_day}j)*til {records_per_day}}} each til {num_days}"
                 ),
             )
         } else {
             (
                 // All rows on the same date; shuffled timestamps will go backwards
-                format!("{}#2000.01.01", n),
-                format!("2000.01.01D00:00:00.000000000+1000000000j*neg {}?{}", n, n),
+                format!("{n}#2000.01.01"),
+                format!("2000.01.01D00:00:00.000000000+1000000000j*neg {n}?{n}"),
             )
         };
         let query = format!(
-            "insert[`{table};({dates};{times};{n}?`AAPL`GOOG`MSFT;{n}?100.0;{n}?1000j)]",
-            table = TABLE_NAME,
-            dates = date_expr,
-            times = time_expr,
-            n = n,
+            "insert[`{TABLE_NAME};({date_expr};{time_expr};{n}?`AAPL`GOOG`MSFT;{n}?100.0;{n}?1000j)]",
         );
         self.execute(&query).await?;
         Ok(())
     }
 
     async fn drop_table(&self) -> Result<()> {
-        self.execute(&format!("delete {} from `.", TABLE_NAME))
+        self.execute(&format!("delete {TABLE_NAME} from `."))
             .await?;
         Ok(())
     }
@@ -188,8 +179,7 @@ impl TestDataBuilder {
     /// Create the write table without a date column: (time, sym, price, qty).
     async fn create_write_table(&self) -> Result<()> {
         self.execute(&format!(
-            "{}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())",
-            WRITE_TABLE_NAME
+            "{WRITE_TABLE_NAME}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())"
         ))
         .await?;
         Ok(())
@@ -198,16 +188,14 @@ impl TestDataBuilder {
     /// Insert `n` sorted rows into WRITE_TABLE_NAME (for write-append test setup).
     async fn write_rows_to_write_table(&self, n: usize) -> Result<()> {
         let query = format!(
-            "insert[`{table};(2000.01.01D00:00:00.000000000+1000000000j*til {n};{n}?`AAPL`GOOG`MSFT;{n}?100.0;{n}?1000j)]",
-            table = WRITE_TABLE_NAME,
-            n = n,
+            "insert[`{WRITE_TABLE_NAME};(2000.01.01D00:00:00.000000000+1000000000j*til {n};{n}?`AAPL`GOOG`MSFT;{n}?100.0;{n}?1000j)]",
         );
         self.execute(&query).await?;
         Ok(())
     }
 
     async fn drop_write_table(&self) -> Result<()> {
-        self.execute(&format!("delete {} from `.", WRITE_TABLE_NAME))
+        self.execute(&format!("delete {WRITE_TABLE_NAME} from `."))
             .await?;
         Ok(())
     }
@@ -427,7 +415,7 @@ fn test_kdb_connection_refused() -> Result<()> {
     let stream = kdb_read::<TestTrade, _>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
-        |_, _, _| format!("select from {}", TABLE_NAME),
+        |_, _, _| format!("select from {TABLE_NAME}"),
     );
     let collected = stream.collapse().collect();
     let result = collected.run(
@@ -540,13 +528,13 @@ fn write_and_verify(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<usize
             &creds,
         )
         .await?;
-        let query = format!("count {}", WRITE_TABLE_NAME);
+        let query = format!("count {WRITE_TABLE_NAME}");
         let result = socket.send_sync_message(&query.as_str()).await?;
         let count = result.get_long()?;
         Ok::<i64, anyhow::Error>(count)
     })?;
 
-    println!("Wrote {} trades, verified {} in KDB", n, count);
+    println!("Wrote {n} trades, verified {count} in KDB");
     Ok(count as usize)
 }
 
@@ -647,13 +635,13 @@ fn test_kdb_write_append() -> Result<()> {
             let creds = conn.credentials_string();
             let mut socket =
                 QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds).await?;
-            let query = format!("count {}", WRITE_TABLE_NAME);
+            let query = format!("count {WRITE_TABLE_NAME}");
             let result = socket.send_sync_message(&query.as_str()).await?;
             result.get_long().map_err(anyhow::Error::new)
         })?;
 
         assert_eq!(count, 5, "Should have 3 original + 2 appended = 5 rows");
-        println!("Append test: 3 + 2 = {} rows", count);
+        println!("Append test: 3 + 2 = {count} rows");
         Ok(())
     })();
 

@@ -61,16 +61,12 @@ impl<T: Element> MutableNode for TimedStream<T> {
                     f64::INFINITY
                 };
                 info!(
-                    "{} ticks processed in {:?}, {:?} average.   \
-                     Covered {:?} of historical data (x{:.1}).",
-                    cycles_fmt, wall, avg, engine_elapsed, speedup,
+                    "{cycles_fmt} ticks processed in {wall:?}, {avg:?} average.   \
+                     Covered {engine_elapsed:?} of historical data (x{speedup:.1}).",
                 );
             }
             _ => {
-                info!(
-                    "{} ticks processed in {:?}, {:?} average.",
-                    cycles_fmt, wall, avg,
-                );
+                info!("{cycles_fmt} ticks processed in {wall:?}, {avg:?} average.",);
             }
         }
         Ok(())

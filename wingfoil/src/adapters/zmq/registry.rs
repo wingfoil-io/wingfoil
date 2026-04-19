@@ -260,8 +260,7 @@ mod etcd_impl {
                     Ok(addr)
                 }
                 None => Err(anyhow::anyhow!(
-                    "no publisher named {:?} found in etcd",
-                    name
+                    "no publisher named {name:?} found in etcd"
                 )),
             }
         })

@@ -399,6 +399,22 @@ impl PyStream {
         ))
     }
 
+    /// Produce this stream of dicts to Kafka.
+    ///
+    /// Stream values must be dicts with `"value"` (bytes) and optionally
+    /// `"topic"` (str) and `"key"` (bytes), or lists of such dicts for
+    /// multi-message writes per tick.
+    ///
+    /// Args:
+    ///     brokers: Kafka bootstrap servers, e.g. `"localhost:9092"`
+    ///     topic: Default topic for records that don't specify one
+    ///
+    /// Returns:
+    ///     A Node that drives the produce operation.
+    fn kafka_pub(&self, brokers: String, topic: String) -> PyNode {
+        PyNode::new(crate::py_kafka::py_kafka_pub_inner(&self.0, brokers, topic))
+    }
+
     /// Publish this stream of bytes to a ZMQ PUB socket bound on the given port.
     ///
     /// The stream values must be `bytes` objects. Only supported in real-time mode.

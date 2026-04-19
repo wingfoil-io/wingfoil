@@ -341,8 +341,8 @@ mod tests {
                         let expected = (1..=actual.len())
                             .map(|x| x as u64 * 100)
                             .collect::<Vec<_>>();
-                        println!("expected {:?}", expected);
-                        println!("actual   {:?}", actual);
+                        println!("expected {expected:?}");
+                        println!("actual   {actual:?}");
                         println!();
                         let tol = if run_mode == RunMode::RealTime { 4 } else { 0 };
                         assert!(actual.len() + tol >= n_ticks as usize);

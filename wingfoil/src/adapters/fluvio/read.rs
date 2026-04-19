@@ -43,8 +43,7 @@ pub fn fluvio_sub(
     let validation_error = if let Some(n) = start_offset {
         if n < 0 {
             Some(anyhow::anyhow!(
-                "start_offset must be non-negative, got {}",
-                n
+                "start_offset must be non-negative, got {n}"
             ))
         } else {
             None

@@ -1230,8 +1230,8 @@ mod tests {
         //.unwrap();
         let captured_data = captured.peek_value();
         println!();
-        println!("captured_data  {:?}", captured_data);
-        println!("expected       {:?}", expected);
+        println!("captured_data  {captured_data:?}");
+        println!("expected       {expected:?}");
         println!();
         assert_eq!(captured_data, expected);
     }
@@ -1270,7 +1270,7 @@ mod tests {
         graph.print();
         let result = graph.run();
 
-        assert!(result.is_err(), "Expected error but got: {:?}", result);
+        assert!(result.is_err(), "Expected error but got: {result:?}");
         let err_msg = format!("{:?}", result.unwrap_err());
 
         let expected = r#"Error in node [14]:
