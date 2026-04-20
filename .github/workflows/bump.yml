@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WF_REBASE_PAT }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
