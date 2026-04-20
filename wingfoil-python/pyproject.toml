@@ -50,5 +50,6 @@ markers = [
     "requires_otel: needs an OTel collector on localhost:4318",
     "requires_iceoryx2: needs wingfoil built with --features iceoryx2-beta",
     "requires_web: needs a wingfoil web server (runs in-process)",
+    "requires_kafka: needs a Kafka-compatible broker on localhost:9092",
 ]
-addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2 and not requires_web'"
+addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2 and not requires_web and not requires_kafka'"

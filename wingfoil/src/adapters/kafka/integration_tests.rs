@@ -19,16 +19,33 @@ use std::rc::Rc;
 use std::time::Duration;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
-const REDPANDA_PORT: u16 = 9092;
 const REDPANDA_IMAGE: &str = "docker.redpanda.com/redpandadata/redpanda";
 const REDPANDA_TAG: &str = "v24.1.1";
 
+/// Pick an OS-assigned free TCP port.
+///
+/// The port is released when the returned listener drops, so there is a
+/// small TOCTOU window before the container binds it. Good enough for tests.
+fn free_port() -> anyhow::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(listener.local_addr()?.port())
+}
+
 /// Start a Redpanda container and return the host endpoint.
+///
+/// Uses a fresh OS-assigned port for each container. Redpanda's
+/// `--advertise-kafka-addr` must match the address clients connect to, so
+/// the container binds the same port internally, mapped 1:1 to the host.
+/// This avoids collisions with any broker a developer might already be
+/// running on 9092. Parallel tests on the same machine are still serialized
+/// by `--test-threads=1` in the pre-commit/CI commands.
+///
 /// The returned container must be kept alive for the duration of the test.
 fn start_redpanda() -> anyhow::Result<(impl Drop, String)> {
+    let port = free_port()?;
     let container = GenericImage::new(REDPANDA_IMAGE, REDPANDA_TAG)
         .with_wait_for(WaitFor::message_on_stderr("Started Kafka API server"))
-        .with_mapped_port(REDPANDA_PORT, REDPANDA_PORT.into())
+        .with_mapped_port(port, port.into())
         .with_cmd(vec![
             "redpanda".to_string(),
             "start".to_string(),
@@ -43,12 +60,12 @@ fn start_redpanda() -> anyhow::Result<(impl Drop, String)> {
             "0".to_string(),
             "--check=false".to_string(),
             "--kafka-addr".to_string(),
-            format!("0.0.0.0:{REDPANDA_PORT}"),
+            format!("0.0.0.0:{port}"),
             "--advertise-kafka-addr".to_string(),
-            format!("127.0.0.1:{REDPANDA_PORT}"),
+            format!("127.0.0.1:{port}"),
         ])
         .start()?;
-    let endpoint = format!("127.0.0.1:{REDPANDA_PORT}");
+    let endpoint = format!("127.0.0.1:{port}");
     Ok((container, endpoint))
 }
 

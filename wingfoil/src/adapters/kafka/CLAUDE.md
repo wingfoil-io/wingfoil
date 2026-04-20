@@ -26,10 +26,13 @@ kafka/
 
 ### Writing to Kafka — `kafka_pub`
 
-- `kafka_pub(conn, upstream)` — consumes `Burst<KafkaRecord>`, produces one message per record
+- `kafka_pub(conn, upstream)` — consumes `Burst<KafkaRecord>`, produces every record in the burst concurrently
 - `KafkaPubOperators::kafka_pub(conn)` — fluent API on `Rc<dyn Stream<Burst<KafkaRecord>>>`
 - Each `KafkaRecord` specifies its target topic, allowing multi-topic writes from a single consumer
-- Uses `FutureProducer` with delivery confirmation (5s timeout)
+- All records in a burst are handed to the producer up front and their delivery futures drained
+  together via `FuturesUnordered`, so per-burst latency is one broker roundtrip rather than N
+- Uses `FutureProducer` with delivery confirmation (5s per send)
+- Calls `producer.flush(5s)` on upstream end so queued retries drain before the task exits
 
 ### Types
 
@@ -39,7 +42,8 @@ kafka/
 
 ## Dependencies
 
-- `rdkafka` with `cmake-build` feature — compiles librdkafka from source, no system dependency needed
+- `rdkafka` using its default build path (`./configure` + `make` for the bundled librdkafka).
+  The `cmake-build` feature is **not** enabled, because its curl.h dependency breaks CI.
 - Redpanda for integration tests — Kafka-compatible, fast startup
 
 ## Pre-Commit Requirements
@@ -67,7 +71,18 @@ Docker must be running.
 
 Feature flag: `kafka-integration-test` (implies `kafka`).
 
-Tests must be run with `--test-threads=1` to avoid port conflicts between containers.
+Tests must be run with `--test-threads=1`. Each container picks a fresh OS-assigned
+host port via `free_port()` so parallel developers (or a local broker on the standard
+9092) do not collide, but only one test at a time grabs a port — running multiple in
+parallel races on the "bind → drop → container start" window.
+
+### Advertise-address gotcha
+
+Redpanda's `--advertise-kafka-addr` is the address clients are told to reconnect to
+after the initial bootstrap. It must match what the client can actually reach, so the
+container's internal listen port is identical to the host port (1:1 port mapping via
+`with_mapped_port(port, port)`). This is why we can't simply rely on testcontainers'
+dynamic port mapping — the advertised port has to be known before the container starts.
 
 ### Test coverage
 
@@ -84,9 +99,21 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 
 ## Notes
 
-- `rdkafka` bundles `librdkafka` via the `cmake-build` feature flag. This requires
-  `cmake` to be installed on the build system.
+- `rdkafka` bundles `librdkafka` via its default build (`./configure` + `make`). The
+  `cmake-build` feature flag is deliberately **not** used — it pulls in a curl.h
+  dependency that breaks CI.
 - Redpanda is used for tests instead of Apache Kafka because it starts much faster
   and is fully Kafka-protocol compatible.
 - `kafka_sub` is designed for `RunMode::RealTime`. Using it in `HistoricalFrom` mode is
   technically valid but timestamps will be wall-clock `NanoTime::now()`, not historical.
+
+## Python bindings
+
+- Integration tests live in `wingfoil-python/tests/test_kafka.py`.
+- Gated by the `requires_kafka` pytest marker, registered in
+  `wingfoil-python/pyproject.toml` and deselected by default — a plain
+  `pytest` run will not collect them.
+- The Python integration workflow opts in explicitly:
+  `pytest -m requires_kafka tests/test_kafka.py`. If the broker is not up
+  the tests fail loudly with a real connection error rather than silently
+  skipping (so CI can never be false-green).

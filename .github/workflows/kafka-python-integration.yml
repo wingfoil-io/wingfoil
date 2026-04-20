@@ -40,9 +40,8 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
+        with:
+          shared-key: integration
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -62,4 +61,4 @@ jobs:
       - name: Run Kafka Python integration tests
         run: |
           cd wingfoil-python
-          .venv/bin/pytest tests/test_kafka.py -v
+          .venv/bin/pytest -m requires_kafka tests/test_kafka.py -v
