@@ -84,7 +84,7 @@ impl AeronHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
-pub(crate) struct RusteronSubscriber {
+pub struct RusteronSubscriber {
     sub: AeronSubscription,
 }
 
@@ -107,7 +107,7 @@ impl AeronSubscriberBackend for RusteronSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
-pub(crate) struct RusteronPublisher {
+pub struct RusteronPublisher {
     publication: AeronPublication,
 }
 
