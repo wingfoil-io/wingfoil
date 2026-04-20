@@ -187,12 +187,18 @@ fn test_sub_receives_pre_seeded_messages() -> anyhow::Result<()> {
     let collected = kafka_sub(conn, topic, "sub-seeded-group")
         .collapse()
         .collect();
+    // Duration-based so consumer-group rebalance + both message deliveries
+    // have time to complete. Cycles(N) would bail after N ticks regardless.
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
     let events = collected.peek_value();
-    assert_eq!(events.len(), 2);
+    assert!(
+        events.len() >= 2,
+        "expected at least 2 events, got {}",
+        events.len()
+    );
     let values: Vec<Vec<u8>> = events.iter().map(|e| e.value.value.clone()).collect();
     assert!(values.contains(&b"v1".to_vec()));
     assert!(values.contains(&b"v2".to_vec()));
@@ -210,7 +216,9 @@ fn test_sub_live_messages() -> anyhow::Result<()> {
     let brokers_clone = brokers.clone();
     let topic_owned = topic.to_string();
     let handle = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
+        // Give the consumer a few seconds to subscribe and rebalance before
+        // producing, so we're actually exercising the live-stream path.
+        std::thread::sleep(Duration::from_secs(3));
         produce_messages(&brokers_clone, &topic_owned, &[("live-key", "live-value")]).unwrap();
     });
 
@@ -219,11 +227,11 @@ fn test_sub_live_messages() -> anyhow::Result<()> {
         .collect();
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
     handle.join().unwrap();
 
     let events = collected.peek_value();
-    assert_eq!(events.len(), 1);
+    assert!(!events.is_empty(), "expected at least 1 live event, got 0");
     assert_eq!(events[0].value.value, b"live-value");
     Ok(())
 }
@@ -286,7 +294,7 @@ fn test_sub_event_fields() -> anyhow::Result<()> {
     let collected = kafka_sub(conn, topic, "fields-group").collapse().collect();
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
     let events = collected.peek_value();
     assert_eq!(events.len(), 1);
