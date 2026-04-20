@@ -10,6 +10,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.WF_REBASE_PAT }}
 
       - name: Install Rust Toolchains
         uses: actions-rs/toolchain@v1
@@ -44,5 +46,5 @@ jobs:
         uses: ad-m/github-push-action@v0.6.0
         if: success()
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.WF_REBASE_PAT }}
           branch: ${{ github.ref_name }}
