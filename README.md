@@ -79,7 +79,34 @@ This output is produced:
 
 ## More Examples
 
-The [examples directory](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/) covers I/O adapters (KDB+, Kafka, Fluvio, etcd, ZeroMQ, FIX, iceoryx2, WebSockets), telemetry (Prometheus, OTLP), async and multi-threaded execution, dynamic graphs, backtesting, tracing, and latency measurement. See the [examples README](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/README.md) for a summary of each one.
+Short code snippets for each adapter live in the [examples README](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/README.md). The examples below are all runnable — see each one's `README.md` for setup and commands.
+
+### Core concepts
+
+| Example | Description |
+|---|---|
+| [`order_book`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, export to CSV. |
+| [`breadth_first`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/breadth_first/) | Why wingfoil's BFS execution avoids the O(2^N) node explosion of naive depth-first DAGs. |
+| [`run_mode`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring for backtesting. |
+| [`async`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async/) | Integrate Tokio async/await at graph edges (I/O adapters) while keeping the core graph synchronous. |
+| [`threading`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading/) | Distribute graph execution across worker threads with `producer()` / `mapper()`. |
+| [`dynamic`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic/) | Add and remove nodes at runtime. Includes `demux`, `dynamic-group`, and `dynamic-manual` variants. |
+| [`tracing`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
+| [`latency`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
+
+### I/O adapters
+
+| Example | Description |
+|---|---|
+| [`kdb`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/) | KDB+ integration: time-sliced reads, cached reads (LRU file cache), and round-trip write/read/validate. |
+| [`kafka`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka/) | Kafka / Redpanda adapter — subscribe, transform, publish pipeline via `rdkafka`. |
+| [`fluvio`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio/) | Fluvio distributed streaming — subscribe, transform, publish pipeline. |
+| [`fix`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix/) | FIX 4.4 protocol: self-contained loopback, client, echo server, and live LMAX market data over TLS. |
+| [`zmq`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/) | ZeroMQ pub/sub with direct addressing or etcd-based service discovery. |
+| [`etcd`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/) | etcd key-value store adapter for sub/pub with transformation. |
+| [`iceoryx2`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
+| [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
+| [`telemetry`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/) | Metrics export via Prometheus scraping (pull) and OpenTelemetry OTLP (push). |
 
 ## Links
 - Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)

@@ -610,29 +610,43 @@ cargo run --example $ARGUMENTS --features $ARGUMENTS
 <Expected console output>
 ```
 
-### Register in the examples index — `wingfoil/examples/README.md`
+### Register in the examples index
 
-The top-level project `README.md` only keeps the Quick Start and Order Book
-example. Every other example is discovered via the examples index at
-`wingfoil/examples/README.md`. Two edits are required:
+The "Core concepts" / "I/O adapters" tables live in **two** files:
 
-1. **Add a row to the "I/O adapters" table** (or "Core concepts" table if the
-   example is not an I/O adapter). Keep the description to one line, matching
-   the tone of the existing rows:
+- `/README.md` (top-level project README) — tables only, with absolute
+  `https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/...`
+  links so the tables render correctly on crates.io, docs.rs, etc.
+- `wingfoil/examples/README.md` — same tables with relative links, plus
+  per-adapter snippet sections lower down.
+
+Three edits are required:
+
+1. **Add a row to the "I/O adapters" table in `/README.md`** (or "Core
+   concepts" if the example is not an I/O adapter). Use an **absolute**
+   GitHub URL. Keep the description to one line:
 
    ```markdown
-   | [`$ARGUMENTS`](./$ARGUMENTS/) | <one-line description — what the adapter does and what the example demonstrates>. |
+   | [`$ARGUMENTS`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/$ARGUMENTS/) | <one-line description — what the adapter does and what the example demonstrates>. |
    ```
 
-2. **Add a short snippet section further down** with the same ~15-line
-   minimal example the module-level doc in `mod.rs` uses, followed by a
+2. **Add the same row to the "I/O adapters" table in
+   `wingfoil/examples/README.md`** with a **relative** link:
+
+   ```markdown
+   | [`$ARGUMENTS`](./$ARGUMENTS/) | <one-line description>. |
+   ```
+
+3. **Add a short snippet section further down in
+   `wingfoil/examples/README.md`** with the same ~15-line minimal example the
+   module-level doc in `mod.rs` uses, followed by a
    `[Full example.](./$ARGUMENTS/)` link. Match the format of the existing
    `### Kafka`, `### Fluvio`, `### etcd` sections.
 
-Do **not** add the snippet to the top-level `/README.md` — that file is kept
-intentionally short. If the adapter is important enough that it genuinely
-belongs on the front page, flag it for the user rather than silently adding
-it there.
+Do **not** add the snippet to `/README.md` — only the one-row table entry
+goes there. If the adapter is so significant that it warrants a flagship
+section on the front page (like Order Book), flag it for the user rather
+than silently adding it there.
 
 ## 11. CLAUDE.md — `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
 
