@@ -40,8 +40,12 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
 
       - name: Install protoc
+        # etcd-client's build script needs protoc, and wingfoil-python's
+        # Cargo.toml enables the etcd feature unconditionally via maturin.
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Setup Python
@@ -62,4 +66,4 @@ jobs:
       - name: Run Kafka Python integration tests
         run: |
           cd wingfoil-python
-          .venv/bin/pytest tests/test_kafka.py -v
+          .venv/bin/pytest -m requires_kafka tests/test_kafka.py -v

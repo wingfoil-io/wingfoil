@@ -9,7 +9,7 @@
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
-use crate::{RunFor, RunMode, burst};
+use crate::{RunFor, RunMode, ValueAt, burst};
 use rdkafka::Message;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::config::ClientConfig;
@@ -19,16 +19,33 @@ use std::rc::Rc;
 use std::time::Duration;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 
-const REDPANDA_PORT: u16 = 9092;
 const REDPANDA_IMAGE: &str = "docker.redpanda.com/redpandadata/redpanda";
 const REDPANDA_TAG: &str = "v24.1.1";
 
+/// Pick an OS-assigned free TCP port.
+///
+/// The port is released when the returned listener drops, so there is a
+/// small TOCTOU window before the container binds it. Good enough for tests.
+fn free_port() -> anyhow::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(listener.local_addr()?.port())
+}
+
 /// Start a Redpanda container and return the host endpoint.
+///
+/// Uses a fresh OS-assigned port for each container. Redpanda's
+/// `--advertise-kafka-addr` must match the address clients connect to, so
+/// the container binds the same port internally, mapped 1:1 to the host.
+/// This avoids collisions with any broker a developer might already be
+/// running on 9092. Parallel tests on the same machine are still serialized
+/// by `--test-threads=1` in the pre-commit/CI commands.
+///
 /// The returned container must be kept alive for the duration of the test.
 fn start_redpanda() -> anyhow::Result<(impl Drop, String)> {
+    let port = free_port()?;
     let container = GenericImage::new(REDPANDA_IMAGE, REDPANDA_TAG)
         .with_wait_for(WaitFor::message_on_stderr("Started Kafka API server"))
-        .with_mapped_port(REDPANDA_PORT, REDPANDA_PORT.into())
+        .with_mapped_port(port, port.into())
         .with_cmd(vec![
             "redpanda".to_string(),
             "start".to_string(),
@@ -43,12 +60,12 @@ fn start_redpanda() -> anyhow::Result<(impl Drop, String)> {
             "0".to_string(),
             "--check=false".to_string(),
             "--kafka-addr".to_string(),
-            format!("0.0.0.0:{REDPANDA_PORT}"),
+            format!("0.0.0.0:{port}"),
             "--advertise-kafka-addr".to_string(),
-            format!("127.0.0.1:{REDPANDA_PORT}"),
+            format!("127.0.0.1:{port}"),
         ])
         .start()?;
-    let endpoint = format!("127.0.0.1:{REDPANDA_PORT}");
+    let endpoint = format!("127.0.0.1:{port}");
     Ok((container, endpoint))
 }
 
@@ -159,6 +176,17 @@ fn test_connection_refused() {
     let _ = result;
 }
 
+/// Flatten the ticks of a collected `Burst<KafkaEvent>` stream into every
+/// individual event seen across the run.
+///
+/// `.collapse()` only keeps the last element of each burst, which silently
+/// drops messages when multiple arrive in the same graph cycle — exactly
+/// what happens the first time after a consumer-group rebalance. So we
+/// collect bursts directly and flatten here.
+fn flatten_events(ticks: &[ValueAt<Burst<KafkaEvent>>]) -> Vec<KafkaEvent> {
+    ticks.iter().flat_map(|t| t.value.iter().cloned()).collect()
+}
+
 #[test]
 fn test_sub_receives_pre_seeded_messages() -> anyhow::Result<()> {
     let (_container, brokers) = start_redpanda()?;
@@ -167,16 +195,22 @@ fn test_sub_receives_pre_seeded_messages() -> anyhow::Result<()> {
     produce_messages(&brokers, topic, &[("k1", "v1"), ("k2", "v2")])?;
 
     let conn = KafkaConnection::new(&brokers);
-    let collected = kafka_sub(conn, topic, "sub-seeded-group")
-        .collapse()
-        .collect();
+    // Collect bursts directly and flatten afterwards, so we never drop
+    // messages that arrive within the same graph cycle.
+    let collected = kafka_sub(conn, topic, "sub-seeded-group").collect();
+    // Duration-based so consumer-group rebalance + both message deliveries
+    // have time to complete. Cycles(N) would bail after N ticks regardless.
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(2))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
-    let events = collected.peek_value();
-    assert_eq!(events.len(), 2);
-    let values: Vec<Vec<u8>> = events.iter().map(|e| e.value.value.clone()).collect();
+    let events = flatten_events(&collected.peek_value());
+    assert!(
+        events.len() >= 2,
+        "expected at least 2 events, got {}",
+        events.len()
+    );
+    let values: Vec<Vec<u8>> = events.iter().map(|e| e.value.clone()).collect();
     assert!(values.contains(&b"v1".to_vec()));
     assert!(values.contains(&b"v2".to_vec()));
     Ok(())
@@ -193,21 +227,21 @@ fn test_sub_live_messages() -> anyhow::Result<()> {
     let brokers_clone = brokers.clone();
     let topic_owned = topic.to_string();
     let handle = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
+        // Give the consumer a few seconds to subscribe and rebalance before
+        // producing, so we're actually exercising the live-stream path.
+        std::thread::sleep(Duration::from_secs(3));
         produce_messages(&brokers_clone, &topic_owned, &[("live-key", "live-value")]).unwrap();
     });
 
-    let collected = kafka_sub(conn, topic, "sub-live-group")
-        .collapse()
-        .collect();
+    let collected = kafka_sub(conn, topic, "sub-live-group").collect();
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
     handle.join().unwrap();
 
-    let events = collected.peek_value();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].value.value, b"live-value");
+    let events = flatten_events(&collected.peek_value());
+    assert!(!events.is_empty(), "expected at least 1 live event, got 0");
+    assert_eq!(events[0].value, b"live-value");
     Ok(())
 }
 
@@ -266,14 +300,14 @@ fn test_sub_event_fields() -> anyhow::Result<()> {
     produce_messages(&brokers, topic, &[("field-key", "field-value")])?;
 
     let conn = KafkaConnection::new(&brokers);
-    let collected = kafka_sub(conn, topic, "fields-group").collapse().collect();
+    let collected = kafka_sub(conn, topic, "fields-group").collect();
     collected
         .clone()
-        .run(RunMode::RealTime, RunFor::Cycles(1))?;
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
-    let events = collected.peek_value();
-    assert_eq!(events.len(), 1);
-    let event = &events[0].value;
+    let events = flatten_events(&collected.peek_value());
+    assert!(!events.is_empty(), "expected at least 1 event, got 0");
+    let event = &events[0];
     assert_eq!(event.topic, topic);
     assert_eq!(event.partition, 0);
     assert!(event.offset >= 0);

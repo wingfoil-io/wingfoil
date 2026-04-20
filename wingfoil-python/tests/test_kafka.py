@@ -1,9 +1,9 @@
 """Integration tests for Kafka sub/pub Python bindings.
 
-Requires a running Kafka-compatible broker on localhost:9092. Tests are
-automatically skipped if no broker is available, making them safe to include
-in a general pytest run. In CI, these are exercised by the
-kafka-python-integration workflow which spins up a Redpanda service container.
+Selected via `-m requires_kafka`. Without a Kafka-compatible broker on
+localhost:9092 the tests fail loudly with a real connection error — they
+do NOT silently skip, so CI cannot be falsely green against a broker that
+never came up.
 
 Local setup (Redpanda):
     docker run --rm -p 9092:9092 \\
@@ -12,25 +12,15 @@ Local setup (Redpanda):
       --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr localhost:9092
 """
 
-import socket
 import unittest
+
+import pytest
 
 BROKERS = "localhost:9092"
 TOPIC_PREFIX = "wingfoil_pytest_"
 
 
-def kafka_available():
-    try:
-        with socket.create_connection(("localhost", 9092), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-KAFKA_AVAILABLE = kafka_available()
-
-
-@unittest.skipUnless(KAFKA_AVAILABLE, "Kafka not running on localhost:9092")
+@pytest.mark.requires_kafka
 class TestKafkaSub(unittest.TestCase):
     def test_sub_returns_expected_shape(self):
         from wingfoil import kafka_sub
@@ -42,12 +32,9 @@ class TestKafkaSub(unittest.TestCase):
         self.assertIsInstance(result, list)
 
     def test_sub_dict_has_correct_fields(self):
-        from wingfoil import kafka_sub
+        from wingfoil import constant, kafka_sub
 
         topic = f"{TOPIC_PREFIX}sub_fields"
-        # Pre-produce a message via the pub binding
-        from wingfoil import constant
-
         constant({"topic": topic, "value": b"check"}).kafka_pub(
             BROKERS, topic
         ).run(realtime=True, cycles=1)
@@ -69,18 +56,15 @@ class TestKafkaSub(unittest.TestCase):
             self.assertIsInstance(e["value"], bytes)
 
 
-@unittest.skipUnless(KAFKA_AVAILABLE, "Kafka not running on localhost:9092")
+@pytest.mark.requires_kafka
 class TestKafkaPub(unittest.TestCase):
     def test_pub_single_dict_round_trip(self):
-        from wingfoil import constant
+        from wingfoil import constant, kafka_sub
 
         topic = f"{TOPIC_PREFIX}pub_single"
         constant({"topic": topic, "key": b"k", "value": b"hello_from_python"}).kafka_pub(
             BROKERS, topic
         ).run(realtime=True, cycles=1)
-
-        # Verify via sub
-        from wingfoil import kafka_sub
 
         stream = kafka_sub(BROKERS, topic, "pytest-pub-verify").collect()
         stream.run(realtime=True, duration=5.0)
@@ -90,7 +74,7 @@ class TestKafkaPub(unittest.TestCase):
         self.assertIn(b"hello_from_python", values)
 
     def test_pub_list_of_dicts_round_trip(self):
-        from wingfoil import constant
+        from wingfoil import constant, kafka_sub
 
         topic = f"{TOPIC_PREFIX}pub_multi"
         entries = [
@@ -98,8 +82,6 @@ class TestKafkaPub(unittest.TestCase):
             {"topic": topic, "key": b"b", "value": b"bbb"},
         ]
         constant(entries).kafka_pub(BROKERS, topic).run(realtime=True, cycles=1)
-
-        from wingfoil import kafka_sub
 
         stream = kafka_sub(BROKERS, topic, "pytest-multi-verify").collect()
         stream.run(realtime=True, duration=5.0)
