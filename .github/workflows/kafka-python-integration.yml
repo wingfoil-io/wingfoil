@@ -43,6 +43,11 @@ jobs:
         with:
           shared-key: integration
 
+      - name: Install protoc
+        # etcd-client's build script needs protoc, and wingfoil-python's
+        # Cargo.toml enables the etcd feature unconditionally via maturin.
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
