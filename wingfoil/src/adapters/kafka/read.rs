@@ -6,6 +6,8 @@ use crate::types::*;
 use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::error::KafkaError;
+use rdkafka::types::RDKafkaErrorCode;
 use std::rc::Rc;
 
 /// Consume messages from a Kafka `topic` as [`KafkaEvent`]s.
@@ -63,6 +65,7 @@ pub fn kafka_sub(
                         };
                         yield Ok((NanoTime::now(), event));
                     }
+                    Err(e) if is_transient_subscribe_error(&e) => continue,
                     Err(e) => {
                         yield Err(anyhow::anyhow!("kafka consume error: {e}"));
                         break;
@@ -71,4 +74,15 @@ pub fn kafka_sub(
             }
         })
     })
+}
+
+/// `UnknownTopicOrPartition` is reported while the broker is still catching up on
+/// topic metadata (or the topic is pending auto-create). librdkafka keeps
+/// retrying the subscription in the background, so we swallow it and wait for
+/// the next event rather than terminating the stream.
+fn is_transient_subscribe_error(err: &KafkaError) -> bool {
+    matches!(
+        err,
+        KafkaError::MessageConsumption(RDKafkaErrorCode::UnknownTopicOrPartition)
+    )
 }

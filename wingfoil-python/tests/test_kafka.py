@@ -29,7 +29,11 @@ class TestKafkaSub(unittest.TestCase):
         stream = kafka_sub(BROKERS, topic, "pytest-sub-group").collect()
         stream.run(realtime=True, duration=3.0)
         result = stream.peek_value()
-        self.assertIsInstance(result, list)
+        # Nobody publishes to this topic, so the upstream may never tick. In
+        # wingfoil a node that has never ticked has no value (peek_value ==
+        # None); when it does tick, collect() yields a list. Either is a valid
+        # "expected shape" for this smoke test.
+        self.assertTrue(result is None or isinstance(result, list))
 
     def test_sub_dict_has_correct_fields(self):
         from wingfoil import constant, kafka_sub
