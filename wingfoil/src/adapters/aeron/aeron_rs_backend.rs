@@ -101,7 +101,7 @@ impl AeronRsHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
-pub(crate) struct AeronRsSubscriber {
+pub struct AeronRsSubscriber {
     sub: Arc<Mutex<Subscription>>,
 }
 
@@ -124,7 +124,7 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
-pub(crate) struct AeronRsPublisher {
+pub struct AeronRsPublisher {
     publication: Arc<Mutex<Publication>>,
 }
 
