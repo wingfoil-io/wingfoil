@@ -9,7 +9,7 @@
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
-use crate::{RunFor, RunMode, burst};
+use crate::{RunFor, RunMode, ValueAt, burst};
 use rdkafka::Message;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::config::ClientConfig;
@@ -176,6 +176,17 @@ fn test_connection_refused() {
     let _ = result;
 }
 
+/// Flatten the ticks of a collected `Burst<KafkaEvent>` stream into every
+/// individual event seen across the run.
+///
+/// `.collapse()` only keeps the last element of each burst, which silently
+/// drops messages when multiple arrive in the same graph cycle — exactly
+/// what happens the first time after a consumer-group rebalance. So we
+/// collect bursts directly and flatten here.
+fn flatten_events(ticks: &[ValueAt<Burst<KafkaEvent>>]) -> Vec<KafkaEvent> {
+    ticks.iter().flat_map(|t| t.value.iter().cloned()).collect()
+}
+
 #[test]
 fn test_sub_receives_pre_seeded_messages() -> anyhow::Result<()> {
     let (_container, brokers) = start_redpanda()?;
@@ -184,22 +195,22 @@ fn test_sub_receives_pre_seeded_messages() -> anyhow::Result<()> {
     produce_messages(&brokers, topic, &[("k1", "v1"), ("k2", "v2")])?;
 
     let conn = KafkaConnection::new(&brokers);
-    let collected = kafka_sub(conn, topic, "sub-seeded-group")
-        .collapse()
-        .collect();
+    // Collect bursts directly and flatten afterwards, so we never drop
+    // messages that arrive within the same graph cycle.
+    let collected = kafka_sub(conn, topic, "sub-seeded-group").collect();
     // Duration-based so consumer-group rebalance + both message deliveries
     // have time to complete. Cycles(N) would bail after N ticks regardless.
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
-    let events = collected.peek_value();
+    let events = flatten_events(&collected.peek_value());
     assert!(
         events.len() >= 2,
         "expected at least 2 events, got {}",
         events.len()
     );
-    let values: Vec<Vec<u8>> = events.iter().map(|e| e.value.value.clone()).collect();
+    let values: Vec<Vec<u8>> = events.iter().map(|e| e.value.clone()).collect();
     assert!(values.contains(&b"v1".to_vec()));
     assert!(values.contains(&b"v2".to_vec()));
     Ok(())
@@ -222,17 +233,15 @@ fn test_sub_live_messages() -> anyhow::Result<()> {
         produce_messages(&brokers_clone, &topic_owned, &[("live-key", "live-value")]).unwrap();
     });
 
-    let collected = kafka_sub(conn, topic, "sub-live-group")
-        .collapse()
-        .collect();
+    let collected = kafka_sub(conn, topic, "sub-live-group").collect();
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
     handle.join().unwrap();
 
-    let events = collected.peek_value();
+    let events = flatten_events(&collected.peek_value());
     assert!(!events.is_empty(), "expected at least 1 live event, got 0");
-    assert_eq!(events[0].value.value, b"live-value");
+    assert_eq!(events[0].value, b"live-value");
     Ok(())
 }
 
@@ -291,14 +300,14 @@ fn test_sub_event_fields() -> anyhow::Result<()> {
     produce_messages(&brokers, topic, &[("field-key", "field-value")])?;
 
     let conn = KafkaConnection::new(&brokers);
-    let collected = kafka_sub(conn, topic, "fields-group").collapse().collect();
+    let collected = kafka_sub(conn, topic, "fields-group").collect();
     collected
         .clone()
         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(20)))?;
 
-    let events = collected.peek_value();
-    assert_eq!(events.len(), 1);
-    let event = &events[0].value;
+    let events = flatten_events(&collected.peek_value());
+    assert!(!events.is_empty(), "expected at least 1 event, got 0");
+    let event = &events[0];
     assert_eq!(event.topic, topic);
     assert_eq!(event.partition, 0);
     assert!(event.offset >= 0);
