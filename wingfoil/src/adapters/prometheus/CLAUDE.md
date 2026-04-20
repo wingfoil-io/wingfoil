@@ -18,8 +18,12 @@ prometheus/
 - Prometheus text format is hand-rolled (no `prometheus` crate) — format is simple, avoids a heavy dep.
 - `PrometheusExporter` spawns its own OS thread (same pattern as the ZMQ publisher).
   `serve()` binds synchronously so bind errors surface before the graph starts.
-- Metric nodes are regular `MutableNode` sinks; they read `peek_value()` each tick and write to a
-  shared `Arc<Mutex<HashMap>>` that the HTTP thread reads on each scrape.
+- Metric nodes are regular `MutableNode` sinks; they read `peek_value()` each tick and publish the
+  stringified value into a per-metric `Arc<ArcSwap<String>>` slot with a lock-free atomic pointer
+  swap. The exporter holds a `Mutex<Vec<(name, slot)>>` registry that is locked only at
+  `register()` time and once per HTTP scrape (off the graph thread) — never from `cycle()`. On
+  scrape the HTTP thread snapshots the registry, drops the lock, then `.load()`s each slot to
+  render the response.
 - **Historical / backtesting mode**: `setup()` detects `RunMode::HistoricalFrom` and sets an internal
   flag so `cycle()` becomes a no-op. No metrics are written and no connections are made. The HTTP
   server is still started if `serve()` was called, but it just serves an empty body.

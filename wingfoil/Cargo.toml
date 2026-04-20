@@ -27,7 +27,7 @@ fluvio = ["dep:fluvio", "async"]
 fluvio-integration-test = ["fluvio", "dep:testcontainers", "dep:fluvio-controlplane-metadata"]
 iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
 iceoryx2-beta = ["dep:iceoryx2"]
-prometheus = []
+prometheus = ["dep:arc-swap"]
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
@@ -112,6 +112,7 @@ fluvio = { version = "0.50.1", optional = true }
 fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 iceoryx2 = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+arc-swap = { version = "1.7", optional = true }
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics"], optional = true }

@@ -1,15 +1,26 @@
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arc_swap::ArcSwapOption;
+
 use crate::{Element, GraphState, IntoNode, MutableNode, Node, RunMode, Stream, UpStreams};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-type MetricStore = Arc<Mutex<HashMap<String, String>>>;
+/// Latest stringified value for a single metric. `ArcSwapOption` lets `cycle()`
+/// publish a new value with a lock-free atomic pointer swap, and the HTTP
+/// scrape thread read it without coordinating with the graph thread. `None`
+/// means "never ticked" — such slots are omitted from the scrape response so
+/// historical-mode graphs produce an empty body.
+type MetricSlot = Arc<ArcSwapOption<String>>;
+
+/// Registry of all metrics the HTTP thread should render. Only locked when a
+/// new metric is registered (wiring time) and once per HTTP scrape (off the
+/// graph thread) — never from `cycle()`.
+type Registry = Arc<Mutex<Vec<(String, MetricSlot)>>>;
 
 /// Serves a Prometheus-compatible `GET /metrics` endpoint.
 ///
@@ -18,14 +29,14 @@ type MetricStore = Arc<Mutex<HashMap<String, String>>>;
 /// the returned sink nodes as part of your graph.
 pub struct PrometheusExporter {
     addr: String,
-    metrics: MetricStore,
+    registry: Registry,
 }
 
 impl PrometheusExporter {
     pub fn new(addr: impl Into<String>) -> Self {
         Self {
             addr: addr.into(),
-            metrics: Arc::new(Mutex::new(HashMap::new())),
+            registry: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -37,8 +48,8 @@ impl PrometheusExporter {
     pub fn serve(&self) -> Result<u16, std::io::Error> {
         let listener = TcpListener::bind(&self.addr)?;
         let port = listener.local_addr()?.port();
-        let metrics = self.metrics.clone();
-        std::thread::spawn(move || run_server(listener, metrics));
+        let registry = self.registry.clone();
+        std::thread::spawn(move || run_server(listener, registry));
         Ok(port)
     }
 
@@ -54,26 +65,31 @@ impl PrometheusExporter {
     where
         T: Element + std::fmt::Display,
     {
+        let name = name.into();
+        let slot: MetricSlot = Arc::new(ArcSwapOption::empty());
+        self.registry
+            .lock()
+            .expect("PrometheusExporter: registry lock poisoned")
+            .push((name, slot.clone()));
         PrometheusMetricNode {
-            name: name.into(),
             stream,
-            metrics: self.metrics.clone(),
+            slot,
             historical: false,
         }
         .into_node()
     }
 }
 
-fn run_server(listener: TcpListener, metrics: MetricStore) {
+fn run_server(listener: TcpListener, registry: Registry) {
     for stream in listener.incoming() {
         match stream {
-            Ok(conn) => handle_connection(conn, &metrics),
+            Ok(conn) => handle_connection(conn, &registry),
             Err(_) => break,
         }
     }
 }
 
-fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
+fn handle_connection(mut conn: TcpStream, registry: &Registry) {
     if let Err(e) = conn.set_read_timeout(Some(READ_TIMEOUT)) {
         log::warn!("PrometheusExporter: failed to set read timeout: {e}");
     }
@@ -106,7 +122,7 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
         return;
     }
 
-    let body = build_metrics_body(metrics);
+    let body = build_metrics_body(registry);
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
@@ -117,16 +133,21 @@ fn handle_connection(mut conn: TcpStream, metrics: &MetricStore) {
     }
 }
 
-fn build_metrics_body(metrics: &MetricStore) -> String {
-    let store = match metrics.lock() {
-        Ok(s) => s,
+fn build_metrics_body(registry: &Registry) -> String {
+    // Snapshot the registry under the lock, then release it before loading any
+    // slots so a slow serialize can never block a concurrent register() call.
+    let snapshot: Vec<(String, MetricSlot)> = match registry.lock() {
+        Ok(g) => g.clone(),
         Err(_) => {
-            log::warn!("PrometheusExporter: metrics lock poisoned, serving empty body");
+            log::warn!("PrometheusExporter: registry lock poisoned, serving empty body");
             return String::new();
         }
     };
-    let mut pairs: Vec<(&String, &String)> = store.iter().collect();
-    pairs.sort_by_key(|(name, _)| *name);
+    let mut pairs: Vec<(String, Arc<String>)> = snapshot
+        .into_iter()
+        .filter_map(|(name, slot)| slot.load_full().map(|v| (name, v)))
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::new();
     for (name, value) in pairs {
         out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
@@ -135,9 +156,8 @@ fn build_metrics_body(metrics: &MetricStore) -> String {
 }
 
 struct PrometheusMetricNode<T: Element> {
-    name: String,
     stream: Rc<dyn Stream<T>>,
-    metrics: MetricStore,
+    slot: MetricSlot,
     historical: bool,
 }
 
@@ -152,10 +172,7 @@ impl<T: Element + std::fmt::Display> MutableNode for PrometheusMetricNode<T> {
             return Ok(true);
         }
         let value = self.stream.peek_value().to_string();
-        self.metrics
-            .lock()
-            .map_err(|_| anyhow::anyhow!("PrometheusExporter: metrics lock poisoned"))?
-            .insert(self.name.clone(), value);
+        self.slot.store(Some(Arc::new(value)));
         Ok(true)
     }
 
