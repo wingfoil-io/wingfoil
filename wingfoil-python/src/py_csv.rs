@@ -48,9 +48,10 @@ pub fn py_csv_read(path: String, time_column: String) -> PyStream {
     PyStream(py_stream)
 }
 
-/// State for the CSV writer: column order and a buffered writer.
+/// State for the CSV writer: column order and a line-buffered writer
+/// (flushes on each newline so data is visible without waiting for drop).
 struct CsvWriteState {
-    file: std::io::BufWriter<std::fs::File>,
+    file: std::io::LineWriter<std::fs::File>,
     headers: Option<Vec<String>>,
 }
 
@@ -59,12 +60,12 @@ impl CsvWriteState {
         let file = std::fs::File::create(path)
             .unwrap_or_else(|e| panic!("failed to open CSV file for writing: {e}"));
         Self {
-            file: std::io::BufWriter::new(file),
+            file: std::io::LineWriter::new(file),
             headers: None,
         }
     }
 
-    fn write_row(&mut self, header_row: &[String], values: &[String]) {
+    fn write_row(&mut self, values: &[String]) {
         let line = values
             .iter()
             .enumerate()
@@ -82,8 +83,9 @@ impl CsvWriteState {
                 }
                 acc
             });
-        let _ = writeln!(self.file, "{line}");
-        let _ = header_row; // used by caller to set headers, not needed here
+        if let Err(e) = writeln!(self.file, "{line}") {
+            log::error!("csv_write: failed to write row: {e}");
+        }
     }
 }
 
@@ -108,7 +110,7 @@ pub fn py_csv_write_inner(stream: &Rc<dyn Stream<PyElement>>, path: String) -> R
                         .collect();
                     let mut header_row = vec!["time".to_string()];
                     header_row.extend(keys.clone());
-                    guard.write_row(&[], &header_row);
+                    guard.write_row(&header_row);
                     guard.headers = Some(keys);
                 }
 
@@ -124,7 +126,7 @@ pub fn py_csv_write_inner(stream: &Rc<dyn Stream<PyElement>>, path: String) -> R
                         .unwrap_or_default();
                     values.push(v);
                 }
-                guard.write_row(&[], &values);
+                guard.write_row(&values);
             }
         });
     })

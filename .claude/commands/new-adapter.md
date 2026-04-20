@@ -921,15 +921,108 @@ don't skip on `hasattr(_ext, "...")`. Module-level references to feature-gated c
 imports the file during collection even when deselecting; parametrize with string IDs
 and resolve the constants inside the test body instead.
 
+### g. Unit-level coverage tests (no live service)
+
+The integration tests above are deselected from the default `pytest` run, so they
+contribute **nothing** to the default coverage report. For every adapter, also add
+unit-level tests that run without a live service. These tests are what keep the
+binding module visible in coverage (`py_<name>.rs`) and catch regressions in the
+pyo3 marshaling glue.
+
+Cover three categories in the same `tests/test_$ARGUMENTS.py` file (no pytest marker
+so they run by default alongside unit tests):
+
+1. **Construction** — that `py_$ARGUMENTS_sub` and the `.$ARGUMENTS_pub()` stream
+   method each construct their stream/node without an active connection. This
+   exercises argument parsing, default values, and `#[pyo3(signature = ...)]` bindings.
+
+2. **Marshaling closures under failure** — run the pub node with an unreachable
+   endpoint (e.g. `127.0.0.1:1`). The upstream value ticks before the async consumer
+   attempts to connect, so the `map` closure that converts `PyElement` → native entry
+   (`dict_to_record`, etc.) is exercised end-to-end; the run then fails at connect
+   time, which the test asserts via `assertRaises(Exception)`. Cover each input
+   shape the closure accepts (single dict, list of dicts, and the fallthrough error
+   branch for unsupported types).
+
+3. **Early validation errors** — any argument that is validated before the I/O
+   begins (e.g. `start_offset < 0`, unknown codec name, empty stages list) should
+   have its own test asserting the raised exception.
+
+```python
+# Unreachable endpoint: TCP reject on loopback, guaranteed never to host a service.
+UNREACHABLE_ENDPOINT = "127.0.0.1:1"
+
+
+class TestFluvioConstruction(unittest.TestCase):
+    def test_fluvio_sub_default_partition_and_offset(self):
+        from wingfoil import $ARGUMENTS_sub
+
+        stream = $ARGUMENTS_sub(UNREACHABLE_ENDPOINT, "topic")
+        self.assertIsNotNone(stream)
+
+    def test_pub_method_constructs_node(self):
+        from wingfoil import constant
+
+        node = constant({"value": b"v"}).$ARGUMENTS_pub(UNREACHABLE_ENDPOINT, "topic")
+        self.assertIsNotNone(node)
+
+
+class TestFluvioUnreachable(unittest.TestCase):
+    def test_pub_single_dict_marshals_then_errors(self):
+        # dict_to_record runs on the upstream tick; connect then fails.
+        from wingfoil import constant
+
+        node = constant({"value": b"v", "key": "k"}).$ARGUMENTS_pub(
+            UNREACHABLE_ENDPOINT, "topic"
+        )
+        with self.assertRaises(Exception):
+            node.run(realtime=True, cycles=1)
+
+    def test_pub_list_of_dicts_marshals_then_errors(self):
+        from wingfoil import constant
+
+        records = [{"key": "k", "value": b"v"}, {"value": b"v2"}]  # keyless path
+        node = constant(records).$ARGUMENTS_pub(UNREACHABLE_ENDPOINT, "topic")
+        with self.assertRaises(Exception):
+            node.run(realtime=True, cycles=1)
+
+    def test_pub_bad_value_type_marshals_empty_burst(self):
+        # Fallthrough branch: neither dict nor list. Logs an error and emits
+        # an empty burst; the run still fails at connect time.
+        from wingfoil import constant
+
+        node = constant("not a dict").$ARGUMENTS_pub(UNREACHABLE_ENDPOINT, "topic")
+        with self.assertRaises(Exception):
+            node.run(realtime=True, cycles=1)
+
+    def test_sub_invalid_arg_errors(self):
+        # If sub validates any argument eagerly (e.g. negative offset), assert it.
+        from wingfoil import $ARGUMENTS_sub
+
+        stream = $ARGUMENTS_sub(UNREACHABLE_ENDPOINT, "topic", start_offset=-1)
+        with self.assertRaises(Exception):
+            stream.collect().run(realtime=True, cycles=1)
+```
+
+Source-only adapters (`py_$ARGUMENTS_sub` without a pub counterpart) should still
+cover construction and any eager argument validation. Codec / builder pyclasses
+(e.g. `PyWebServer`) should have construction tests for every constructor option
+and every rejected invalid value.
+
 ## 14. Pre-commit checklist
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
 cargo test --features $ARGUMENTS-integration-test -p wingfoil -- --test-threads=1
-cd wingfoil-python && maturin develop && pytest -m requires_$ARGUMENTS tests/test_$ARGUMENTS.py
+cd wingfoil-python && maturin develop
+# Unit-level coverage tests (no marker; default run):
+wingfoil-python$ pytest tests/test_$ARGUMENTS.py
+# Integration tests (require live service):
+wingfoil-python$ pytest -m requires_$ARGUMENTS tests/test_$ARGUMENTS.py
 ```
 
-All four must pass before committing. `pytest` without `-m requires_$ARGUMENTS` will
-deselect the integration tests by default, so the marker is required to run them at
-all — make sure the backing service is up locally, or the pytest step will fail loudly.
+All five must pass before committing. The default `pytest` run (no `-m`) deselects
+`requires_$ARGUMENTS` tests and picks up the unit-level coverage tests from step 13.g.
+The marker'd run exercises the live-service paths — make sure the backing service
+is up locally or that step will fail loudly.
