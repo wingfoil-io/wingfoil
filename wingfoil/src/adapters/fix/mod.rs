@@ -1687,6 +1687,35 @@ mod tests {
         .run()
         .unwrap();
     }
+
+    /// Fills the inject channel to capacity with no draining receiver and
+    /// asserts the next `send` returns `SendError::QueueFull`. Also confirms
+    /// that `send_or_log` swallows the error (doesn't panic) on the same
+    /// overflowed channel.
+    #[test]
+    fn fix_sender_queue_full() {
+        let (tx, _rx) = kanal::bounded::<FixMessage>(INJECT_QUEUE_CAPACITY);
+        let sender = FixSender { sender: tx };
+        let msg = FixMessage::default();
+
+        for i in 0..INJECT_QUEUE_CAPACITY {
+            sender
+                .send(msg.clone())
+                .unwrap_or_else(|e| panic!("send {i} of {INJECT_QUEUE_CAPACITY} failed: {e}"));
+        }
+        assert_eq!(sender.send(msg.clone()), Err(SendError::QueueFull));
+        // send_or_log on a full queue must not panic.
+        sender.send_or_log(msg);
+    }
+
+    /// With the receiver dropped, `send` must return `SendError::Closed`.
+    #[test]
+    fn fix_sender_closed() {
+        let (tx, rx) = kanal::bounded::<FixMessage>(INJECT_QUEUE_CAPACITY);
+        let sender = FixSender { sender: tx };
+        drop(rx);
+        assert_eq!(sender.send(FixMessage::default()), Err(SendError::Closed));
+    }
 }
 
 #[cfg(all(test, feature = "fix-integration-test"))]
