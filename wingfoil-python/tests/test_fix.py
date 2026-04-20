@@ -77,39 +77,46 @@ class TestFixLoopback(unittest.TestCase):
         self.assertEqual(len(result), 3)
 
 
-class TestFixInjector(unittest.TestCase):
-    """Injector API is exposed by fix_connect_tls; we don't need an actual
+class TestFixSender(unittest.TestCase):
+    """Sender API is exposed by fix_connect_tls; we don't need an actual
     TLS server running to exercise argument validation."""
 
-    def _make_injector(self):
+    def _make_sender(self):
         from wingfoil import fix_connect_tls
 
-        _, _, injector = fix_connect_tls(
+        _, _, sender = fix_connect_tls(
             "127.0.0.1", 443, "SENDER", "TARGET", password="secret"
         )
-        return injector
+        return sender
 
-    def test_inject_accepts_valid_message(self):
-        injector = self._make_injector()
-        # Should return None on success; queues the message for the session.
-        injector.inject({"msg_type": "D", "fields": [[55, "AAPL"], [38, "100"]]})
+    def test_send_accepts_valid_message(self):
+        sender = self._make_sender()
+        # Validates the arg-parsing path end-to-end. The session thread may
+        # already have closed the channel (no TLS server is listening on
+        # 127.0.0.1:443), so a RuntimeError from a closed channel is also
+        # an acceptable outcome — the point is that parsing succeeds and
+        # doesn't raise KeyError/ValueError.
+        try:
+            sender.send({"msg_type": "D", "fields": [[55, "AAPL"], [38, "100"]]})
+        except RuntimeError:
+            pass
 
-    def test_inject_missing_msg_type_raises(self):
-        injector = self._make_injector()
+    def test_send_missing_msg_type_raises(self):
+        sender = self._make_sender()
         with self.assertRaises(KeyError):
-            injector.inject({"fields": []})
+            sender.send({"fields": []})
 
-    def test_inject_missing_fields_raises(self):
-        injector = self._make_injector()
+    def test_send_missing_fields_raises(self):
+        sender = self._make_sender()
         with self.assertRaises(KeyError):
-            injector.inject({"msg_type": "D"})
+            sender.send({"msg_type": "D"})
 
-    def test_inject_field_wrong_length_raises(self):
-        injector = self._make_injector()
+    def test_send_field_wrong_length_raises(self):
+        sender = self._make_sender()
         with self.assertRaises(ValueError):
-            injector.inject({"msg_type": "D", "fields": [[55]]})
+            sender.send({"msg_type": "D", "fields": [[55]]})
         with self.assertRaises(ValueError):
-            injector.inject({"msg_type": "D", "fields": [[55, "x", "y"]]})
+            sender.send({"msg_type": "D", "fields": [[55, "x", "y"]]})
 
 
 class TestFixConnectTlsNoPassword(unittest.TestCase):
@@ -117,10 +124,10 @@ class TestFixConnectTlsNoPassword(unittest.TestCase):
         from wingfoil import fix_connect_tls
 
         # Password defaults to None; exercises the Option<String>.as_deref() branch.
-        data, status, injector = fix_connect_tls("127.0.0.1", 443, "S", "T")
+        data, status, sender = fix_connect_tls("127.0.0.1", 443, "S", "T")
         self.assertIsNotNone(data)
         self.assertIsNotNone(status)
-        self.assertIsNotNone(injector)
+        self.assertIsNotNone(sender)
 
 
 class TestFixLoopbackData(unittest.TestCase):
