@@ -43,6 +43,15 @@ impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime
 
 type ConsumerFunc<T, FUT> = Box<dyn FnOnce(RunParams, Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
 
+// Routes the source stream into a user-supplied async consumer via a kanal
+// `ChannelSender`. The channel is currently unbounded (see `channel_pair`), so
+// a slow consumer grows memory rather than back-pressuring the graph.
+//
+// Shape-wise this is the channel-backed equivalent of `FixSenderNode` in
+// adapters/fix/mod.rs, which writes directly from `cycle` and gets back-
+// pressure for free from the kernel TCP buffer. If `channel_pair` grows a
+// bounded+blocking mode, the two could share a single "sink node"
+// abstraction parameterised by the actual write call.
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
     T: Element + Send,

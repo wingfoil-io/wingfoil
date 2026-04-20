@@ -504,7 +504,7 @@ Both ends accept `variant` (`Ipc` for cross-process, `Local` for same-process),
 ### FIX protocol
 
 FIX 4.4 initiator, TLS initiator, and acceptor. All return
-`(data_stream, status_stream)`; TLS additionally returns an injector object
+`(data_stream, status_stream)`; TLS additionally returns a sender object
 for sending outbound messages.
 
 ```python
@@ -529,12 +529,12 @@ Each `data` tick yields a `list[dict]` where every dict is
 Status values are `"disconnected" | "logging_in" | "logged_in"` or a dict
 `{"status": "logged_out"|"error", "reason"|"message": str}`.
 
-TLS initiator (e.g. LMAX) with an injector:
+TLS initiator (e.g. LMAX) with a sender:
 
 ```python
 from wingfoil import fix_connect_tls
 
-data, status, injector = fix_connect_tls(
+data, status, sender = fix_connect_tls(
     host="fix-marketdata.london-digital.lmax.com",
     port=443,
     sender_comp_id="USERNAME",
@@ -543,7 +543,7 @@ data, status, injector = fix_connect_tls(
 )
 
 # Send a FIX message on the session:
-injector.inject({
+sender.send({
     "msg_type": "V",
     "fields": [(262, "req1"), (263, "1"), (264, "0")],
 })

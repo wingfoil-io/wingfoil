@@ -13,7 +13,6 @@
 //! It returns a [`FixConnection`] with data/status streams and
 //! [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription.
 
-use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::rc::Rc;
@@ -130,32 +129,91 @@ pub enum FixPollMode {
     Threaded,
 }
 
-/// Handle for injecting outbound [`FixMessage`]s into an established FIX session.
+/// Bounded capacity of the outbound inject channel. `try_send` returns full
+/// when this many messages are backlogged; callers receive
+/// [`SendError::QueueFull`] and decide the policy (halt, retry, log-and-drop,
+/// etc.).
+const INJECT_QUEUE_CAPACITY: usize = 1024;
+
+/// Reasons `FixSender::send` can fail.
 ///
-/// Obtained from [`FixConnection::injector`]. Thread-safe and cheaply cloneable.
-/// Messages are sent on the next background-thread loop iteration.
-#[derive(Clone)]
-pub struct FixInjector {
-    queue: Arc<Mutex<VecDeque<FixMessage>>>,
+/// Both variants mean the message was not queued. `QueueFull` is transient —
+/// the session thread is stalled but may recover. `Closed` is terminal — the
+/// session has ended and all subsequent sends will also return `Closed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError {
+    /// The bounded send queue is full ({INJECT_QUEUE_CAPACITY} messages).
+    /// The session thread is not draining fast enough, typically because the
+    /// socket is backpressured.
+    QueueFull,
+    /// The inject channel is closed — the session thread has exited.
+    Closed,
 }
 
-impl FixInjector {
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::QueueFull => {
+                write!(f, "FIX send queue full ({INJECT_QUEUE_CAPACITY} messages)")
+            }
+            SendError::Closed => f.write_str("FIX send channel closed"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
+/// Handle for sending outbound [`FixMessage`]s on an established FIX session.
+///
+/// Obtained from [`FixConnection::sender`]. Thread-safe and cheaply cloneable.
+/// Messages are sent on the next background-thread loop iteration.
+///
+/// Internally backed by a lock-free bounded [`kanal`] MPSC channel: `send()`
+/// does a single CAS-style `try_send` and never blocks. Failure (full or
+/// closed) is surfaced via [`SendError`] so callers choose the policy:
+/// halt trading, route to a dead-letter queue, retry, or log-and-drop via
+/// [`FixSender::send_or_log`].
+#[derive(Clone)]
+pub struct FixSender {
+    sender: kanal::Sender<FixMessage>,
+}
+
+impl FixSender {
     /// Queue `msg` for sending on the next session loop iteration.
-    pub fn inject(&self, msg: FixMessage) {
-        self.queue.lock().unwrap().push_back(msg);
+    ///
+    /// Non-blocking. Returns [`SendError::QueueFull`] if the session thread is
+    /// stalled and the bounded channel is full, or [`SendError::Closed`] if
+    /// the session has ended. The message is not queued in either case.
+    pub fn send(&self, msg: FixMessage) -> Result<(), SendError> {
+        match self.sender.try_send(msg) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(SendError::QueueFull),
+            Err(_) => Err(SendError::Closed),
+        }
+    }
+
+    /// Convenience wrapper around [`send`](Self::send) that logs and drops on
+    /// failure. Appropriate for non-critical paths (e.g. market-data
+    /// subscriptions that are idempotent and resendable). For order routing or
+    /// other paths where silent drops are unacceptable, use [`send`](Self::send)
+    /// directly and handle the [`SendError`].
+    pub fn send_or_log(&self, msg: FixMessage) {
+        if let Err(e) = self.send(msg) {
+            log::warn!("FixSender: {e} — dropping message");
+        }
     }
 }
 
 /// Bundles the streams and session handle returned by [`fix_connect_tls`].
 ///
 /// Use [`fix_sub`](FixConnection::fix_sub) to subscribe to market data as a
-/// graph node, or [`inject`](FixConnection::inject) for raw outbound messages.
+/// graph node, or [`send`](FixConnection::send) for raw outbound messages.
 pub struct FixConnection {
     /// Inbound application messages (MarketDataSnapshot, execution reports, etc.).
     pub data: Rc<dyn Stream<Burst<FixMessage>>>,
     /// Session lifecycle events (LoggedIn, LoggedOut, …).
     pub status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
-    injector: FixInjector,
+    sender: FixSender,
 }
 
 impl FixConnection {
@@ -180,7 +238,7 @@ impl FixConnection {
     /// ```
     pub fn fix_sub(&self, symbols: Rc<dyn Stream<Vec<String>>>) -> Rc<dyn Node> {
         FixSubNode {
-            injector: self.injector.clone(),
+            sender: self.sender.clone(),
             status: self.status.clone(),
             symbols,
             pending: Vec::new(),
@@ -191,13 +249,15 @@ impl FixConnection {
     }
 
     /// Queue a raw outbound [`FixMessage`] for sending on the session thread.
-    pub fn inject(&self, msg: FixMessage) {
-        self.injector.inject(msg);
+    ///
+    /// See [`FixSender::send`] for error semantics.
+    pub fn send(&self, msg: FixMessage) -> Result<(), SendError> {
+        self.sender.send(msg)
     }
 
-    /// Get a clone of the underlying [`FixInjector`] for manual use.
-    pub fn injector(&self) -> FixInjector {
-        self.injector.clone()
+    /// Get a clone of the underlying [`FixSender`] for manual use.
+    pub fn sender(&self) -> FixSender {
+        self.sender.clone()
     }
 }
 
@@ -774,7 +834,7 @@ impl StreamPeekRef<Burst<FixEvent>> for FixAcceptorSpin {
 // ── Threaded source (initiator or acceptor) ───────────────────────────────────
 
 /// Run a single FIX session on `sock`, forwarding events to `chan`.
-/// Outbound messages queued in `inject_queue` are flushed each loop iteration.
+/// Outbound messages queued on `inject_rx` are flushed each loop iteration.
 ///
 /// Returns `true` if the session ended due to a normal network disconnect
 /// (the caller may reconnect), or `false` if the channel is closed (graph
@@ -783,7 +843,7 @@ fn run_fix_session<S: Read + Write>(
     mut sock: S,
     session: &mut FixSession,
     is_acceptor: bool,
-    inject_queue: &Arc<Mutex<VecDeque<FixMessage>>>,
+    inject_rx: &kanal::Receiver<FixMessage>,
     chan: &ChannelSender<FixEvent>,
 ) -> bool {
     use crate::channel::Message;
@@ -847,12 +907,18 @@ fn run_fix_session<S: Read + Write>(
             }
         }
 
-        // Flush any outbound messages injected from outside the graph
+        // Flush any outbound messages injected from outside the graph.
+        // `try_recv` is lock-free; no lock is held across `session.send()`.
         if let Some(ref mut s) = sock_opt {
-            let mut queue = inject_queue.lock().unwrap();
-            while let Some(msg) = queue.pop_front() {
-                if session.send(s, &msg.msg_type, &msg.fields).is_err() {
-                    return true;
+            loop {
+                match inject_rx.try_recv() {
+                    Ok(Some(msg)) => {
+                        if session.send(s, &msg.msg_type, &msg.fields).is_err() {
+                            return true;
+                        }
+                    }
+                    Ok(None) => break, // queue empty
+                    Err(_) => break,   // all senders dropped — nothing more will arrive
                 }
             }
         }
@@ -884,14 +950,18 @@ struct FixThreadedSource {
     socket_arc: Option<Arc<Mutex<Option<TcpStream>>>>,
     // Set by stop() to prevent the thread from re-accepting after socket shutdown.
     stop_flag: Arc<AtomicBool>,
-    // Queue for outbound messages injected from outside the graph.
-    inject_queue: Arc<Mutex<VecDeque<FixMessage>>>,
+    // Bounded kanal channel for outbound messages injected from outside the graph.
+    // `inject_sender` is cloned into each `FixSender`; `inject_receiver` is moved
+    // into the session thread on setup.
+    inject_sender: kanal::Sender<FixMessage>,
+    inject_receiver: Option<kanal::Receiver<FixMessage>>,
 }
 
 impl FixThreadedSource {
     fn new_initiator(host: &str, port: u16, sender: &str, target: &str) -> Self {
         let (chan_sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
+        let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
             host: host.to_string(),
             port,
@@ -905,7 +975,8 @@ impl FixThreadedSource {
             thread: None,
             socket_arc: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
-            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
+            inject_sender,
+            inject_receiver: Some(inject_receiver),
         }
     }
 
@@ -918,6 +989,7 @@ impl FixThreadedSource {
     ) -> Self {
         let (chan_sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
+        let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
             host: host.to_string(),
             port,
@@ -931,13 +1003,15 @@ impl FixThreadedSource {
             thread: None,
             socket_arc: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
-            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
+            inject_sender,
+            inject_receiver: Some(inject_receiver),
         }
     }
 
     fn new_acceptor(port: u16, sender: &str, target: &str) -> Self {
         let (chan_sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
+        let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
             host: "0.0.0.0".to_string(),
             port,
@@ -951,7 +1025,8 @@ impl FixThreadedSource {
             thread: None,
             socket_arc: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
-            inject_queue: Arc::new(Mutex::new(VecDeque::new())),
+            inject_sender,
+            inject_receiver: Some(inject_receiver),
         }
     }
 }
@@ -979,7 +1054,10 @@ impl MutableNode for FixThreadedSource {
         self.socket_arc = Some(socket_arc);
 
         let stop_flag = self.stop_flag.clone();
-        let inject_queue = self.inject_queue.clone();
+        let inject_rx = self
+            .inject_receiver
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("FixThreadedSource: already set up"))?;
         let host = self.host.clone();
         let port = self.port;
         let sender_id = self.sender_comp_id.clone();
@@ -1077,7 +1155,7 @@ impl MutableNode for FixThreadedSource {
                             tls_stream,
                             &mut session,
                             is_acceptor,
-                            &inject_queue,
+                            &inject_rx,
                             &chan_sender,
                         ),
                         Err(e) => {
@@ -1092,7 +1170,7 @@ impl MutableNode for FixThreadedSource {
                     }
                 } else {
                     let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
-                    run_fix_session(sock, &mut session, is_acceptor, &inject_queue, &chan_sender)
+                    run_fix_session(sock, &mut session, is_acceptor, &inject_rx, &chan_sender)
                 };
 
                 // Clear the stale socket handle.
@@ -1177,7 +1255,7 @@ fn market_data_request(symbol: &str, req_id: &str) -> FixMessage {
 }
 
 struct FixSubNode {
-    injector: FixInjector,
+    sender: FixSender,
     status: Rc<dyn Stream<Burst<FixSessionStatus>>>,
     symbols: Rc<dyn Stream<Vec<String>>>,
     pending: Vec<String>,
@@ -1188,7 +1266,7 @@ struct FixSubNode {
 impl FixSubNode {
     fn subscribe(&mut self, sym: &str) {
         let req_id = format!("sub_{}_{sym}", self.sent.len());
-        self.injector.inject(market_data_request(sym, &req_id));
+        self.sender.send_or_log(market_data_request(sym, &req_id));
         self.sent.push(sym.to_string());
     }
 }
@@ -1240,6 +1318,15 @@ impl MutableNode for FixSubNode {
 
 // ── FixSenderNode (sink) ──────────────────────────────────────────────────────
 
+// Writes FIX messages directly from `cycle` — no channel, no background thread.
+// Back-pressure is applied by the kernel TCP send buffer: if the socket
+// blocks, so does the graph cycle.
+//
+// Shape-wise this is the direct-write equivalent of `AsyncConsumerNode` in
+// nodes/async_io.rs, which instead puts a kanal `ChannelSender` between the
+// graph thread and the sink. If `channel_pair` ever grows a bounded+blocking
+// mode (see comment there), the two could be unified behind a generic
+// "sink node" abstraction parameterised by the actual write call.
 struct FixSenderNode {
     src: Rc<dyn Stream<FixMessage>>,
     host: String,
@@ -1353,7 +1440,7 @@ pub fn fix_connect(
 ///
 /// Returns a [`FixConnection`] with `data` and `status` streams, plus
 /// [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription
-/// and [`inject`](FixConnection::inject) for raw outbound messages.
+/// and [`send`](FixConnection::send) for raw outbound messages.
 pub fn fix_connect_tls(
     host: &str,
     port: u16,
@@ -1363,15 +1450,15 @@ pub fn fix_connect_tls(
 ) -> FixConnection {
     let src =
         FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, password);
-    let injector = FixInjector {
-        queue: src.inject_queue.clone(),
+    let sender = FixSender {
+        sender: src.inject_sender.clone(),
     };
     let events: Rc<dyn Stream<Burst<FixEvent>>> = src.into_stream();
     let (data, status) = split_events(events);
     FixConnection {
         data,
         status,
-        injector,
+        sender,
     }
 }
 
@@ -1599,6 +1686,35 @@ mod tests {
         )
         .run()
         .unwrap();
+    }
+
+    /// Fills the inject channel to capacity with no draining receiver and
+    /// asserts the next `send` returns `SendError::QueueFull`. Also confirms
+    /// that `send_or_log` swallows the error (doesn't panic) on the same
+    /// overflowed channel.
+    #[test]
+    fn fix_sender_queue_full() {
+        let (tx, _rx) = kanal::bounded::<FixMessage>(INJECT_QUEUE_CAPACITY);
+        let sender = FixSender { sender: tx };
+        let msg = FixMessage::default();
+
+        for i in 0..INJECT_QUEUE_CAPACITY {
+            sender
+                .send(msg.clone())
+                .unwrap_or_else(|e| panic!("send {i} of {INJECT_QUEUE_CAPACITY} failed: {e}"));
+        }
+        assert_eq!(sender.send(msg.clone()), Err(SendError::QueueFull));
+        // send_or_log on a full queue must not panic.
+        sender.send_or_log(msg);
+    }
+
+    /// With the receiver dropped, `send` must return `SendError::Closed`.
+    #[test]
+    fn fix_sender_closed() {
+        let (tx, rx) = kanal::bounded::<FixMessage>(INJECT_QUEUE_CAPACITY);
+        let sender = FixSender { sender: tx };
+        drop(rx);
+        assert_eq!(sender.send(FixMessage::default()), Err(SendError::Closed));
     }
 }
 

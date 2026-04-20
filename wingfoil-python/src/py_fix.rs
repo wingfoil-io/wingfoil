@@ -54,11 +54,11 @@ pub fn py_fix_connect(
 }
 
 /// Connect to a TLS-secured FIX acceptor (e.g. LMAX) and return
-/// `(data_stream, status_stream, injector_func)`.
+/// `(data_stream, status_stream, sender)`.
 ///
-/// The injector is a callable that sends a FIX message dict on the session:
+/// The sender is a `FixSender` whose `send()` method sends a FIX message dict:
 /// ```python
-/// injector({"msg_type": "V", "fields": [(262, "req1"), (263, "1")]})
+/// sender.send({"msg_type": "V", "fields": [(262, "req1"), (263, "1")]})
 /// ```
 ///
 /// Args:
@@ -98,14 +98,14 @@ pub fn py_fix_connect_tls(
         })
     });
 
-    let inject_fn = Python::attach(|py| {
-        let injector_cls = PyFixInjector {
-            injector: fix.injector(),
+    let sender_obj = Python::attach(|py| {
+        let sender_cls = PyFixSender {
+            sender: fix.sender(),
         };
-        Py::new(py, injector_cls).unwrap().into_any()
+        Py::new(py, sender_cls).unwrap().into_any()
     });
 
-    (PyStream(py_data), PyStream(py_status), inject_fn)
+    (PyStream(py_data), PyStream(py_status), sender_obj)
 }
 
 /// Bind a FIX acceptor and return `(data_stream, status_stream)`.
@@ -144,19 +144,19 @@ pub fn py_fix_accept(
     (PyStream(py_data), PyStream(py_status))
 }
 
-/// Python wrapper around [`FixInjector`] for sending outbound FIX messages.
+/// Python wrapper around [`FixSender`] for sending outbound FIX messages.
 #[pyclass(unsendable)]
-struct PyFixInjector {
-    injector: wingfoil::adapters::fix::FixInjector,
+struct PyFixSender {
+    sender: wingfoil::adapters::fix::FixSender,
 }
 
 #[pymethods]
-impl PyFixInjector {
+impl PyFixSender {
     /// Send a FIX message on the session.
     ///
     /// Args:
     ///     msg: A dict with "msg_type" (str) and "fields" (list of [tag, value] pairs).
-    fn inject(&self, msg: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn send(&self, msg: &Bound<'_, PyDict>) -> PyResult<()> {
         let msg_type = msg
             .get_item("msg_type")?
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("missing 'msg_type'"))?
@@ -180,13 +180,14 @@ impl PyFixInjector {
             fields.push((tag, value));
         }
 
-        self.injector.inject(FixMessage {
-            msg_type,
-            seq_num: 0,
-            sending_time: wingfoil::NanoTime::ZERO,
-            fields,
-        });
-        Ok(())
+        self.sender
+            .send(FixMessage {
+                msg_type,
+                seq_num: 0,
+                sending_time: wingfoil::NanoTime::ZERO,
+                fields,
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }
 
