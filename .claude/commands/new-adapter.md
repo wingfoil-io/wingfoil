@@ -30,9 +30,10 @@ channel primitives (`ChannelSender` / `ChannelReceiver`, `ReceiverStream`,
 give single-producer / single-consumer lock-free hand-off and preserve the
 "cycle never blocks" invariant.
 
-The Prometheus exporter currently locks inside `cycle()` to publish metric
-values to the HTTP scrape thread — this is a known exception, not a pattern to
-copy.
+When the payload is a whole value that a background thread reads ad-hoc (not a
+stream of deltas), `arc_swap::ArcSwap<T>` gives a lock-free atomic pointer swap
+in `cycle()` that the reader can `.load()` off-thread — see
+`wingfoil/src/adapters/prometheus/exporter.rs` for the per-slot pattern.
 
 ## 1. Branch
 
