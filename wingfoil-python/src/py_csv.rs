@@ -83,7 +83,9 @@ impl CsvWriteState {
                 }
                 acc
             });
-        let _ = writeln!(self.file, "{line}");
+        if let Err(e) = writeln!(self.file, "{line}") {
+            log::error!("csv_write: failed to write row: {e}");
+        }
     }
 }
 
