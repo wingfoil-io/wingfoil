@@ -1064,3 +1064,46 @@ All five must pass before committing. The default `pytest` run (no `-m`) deselec
 `requires_$ARGUMENTS` tests and picks up the unit-level coverage tests from step 13.g.
 The marker'd run exercises the live-service paths — make sure the backing service
 is up locally or that step will fail loudly.
+
+## 15. Self-review with a fresh context
+
+Before opening a PR, do a clean-context review pass. This catches drift between
+what the skill prescribes and what actually got built — missing `CLAUDE.md`,
+forgotten Python alias, skipped CI registration, snippet not added to
+`wingfoil/examples/README.md`, etc. — that is easy to miss after spending hours
+in the implementation.
+
+Run this as a subagent (so the parent context stays clean) with these tasks:
+
+1. **Re-read this skill file end to end.** Then walk the diff (`git diff main...HEAD`)
+   step-by-step against sections 1–14 and produce a checklist of what is present,
+   what is missing, and what diverges. Flag every divergence — even intentional
+   ones — so the author can confirm or fix.
+
+2. **Validate every step's artifacts exist:**
+   - Branch matches step 1
+   - Both feature flags in `wingfoil/Cargo.toml` (step 2)
+   - `pub mod` in `wingfoil/src/adapters/mod.rs` (step 3)
+   - File layout matches step 5 (or a documented variation)
+   - Module-level `//!` doc covers setup + producer + consumer (step 6)
+   - Integration tests gated by `$ARGUMENTS-integration-test` (step 9)
+   - Example + `README.md` + entries in **both** `/README.md` and
+     `wingfoil/examples/README.md` tables, plus snippet section (step 10)
+   - Adapter `CLAUDE.md` present (step 11)
+   - Standalone CI workflow + entry in `integration-tests.yml` (step 12)
+   - Python feature flag, binding module, `lib.rs` registration, `PyStream`
+     method, `__init__.py` alias, marker registered in `pyproject.toml`, and
+     both unit + integration tests (step 13)
+
+3. **Run the pre-commit checklist from step 14** and confirm all five commands
+   pass. Do not skip any.
+
+4. **Review for quality and simplicity** (the `simplify` skill territory):
+   - No `Mutex`/`RwLock` taken inside `cycle()` / `setup()` (the invariant at the
+     top of this skill)
+   - No speculative abstractions, dead code, or backwards-compat shims
+   - No comments that just restate the code
+   - No half-finished implementations
+
+Fix any issues found before committing. Treat a clean self-review as part of
+"done" — not an optional extra.
