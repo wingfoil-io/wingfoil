@@ -52,7 +52,8 @@ Structure the issue body in this order. Every section is required unless marked 
 ## 3. Title and labels
 
 - **Title format**: `Add $ARGUMENTS adapter for <one-line purpose>` — keep under 70 characters.
-- **Labels**: `enhancement`. Add `adapter` if the repository has that label configured; check with `mcp__github__get_label` before setting it — do not invent labels.
+- **Labels** (required, both): `enhancement`, `io-adapter`. Every I/O adapter issue in this repo carries the `io-adapter` label so they can be filtered together — do not omit it. If the adapter is scoping-only analytics (no external I/O, e.g. `augurs`) keep `io-adapter` anyway for now; the user can relabel later if they introduce a separate category.
+- **Optional labels**: only add if the user explicitly requests or the existing issue pattern justifies it — `priority: <low|medium|high>`, `size: <small|medium|large>`, `monitoring`. Verify with `mcp__github__get_label` before using any label you are not sure exists; do not invent labels.
 - Do **not** assign anyone or set a milestone unless the user asks.
 
 ## 4. After filing
