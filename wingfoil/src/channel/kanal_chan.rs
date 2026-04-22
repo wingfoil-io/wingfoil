@@ -238,13 +238,20 @@ impl<T: Element + Send> ChannelSender<T> {
     }
 
     #[cfg(feature = "async")]
-    pub fn into_async(self) -> AsyncChannelSender<T> {
-        let ChannelSender {
-            mut kanal_sender,
-            ready_notifier,
-        } = self;
-        let kanal_sender = kanal_sender.take().unwrap();
+    pub fn into_async(mut self) -> AsyncChannelSender<T> {
+        let kanal_sender = self.kanal_sender.take().unwrap();
+        let ready_notifier = self.ready_notifier.take();
         AsyncChannelSender::new(kanal_sender, ready_notifier)
+    }
+}
+
+impl<T: Element + Send> Drop for ChannelSender<T> {
+    fn drop(&mut self) {
+        // Wake the graph once more so a receiver polling this sender can
+        // observe the disconnect (e.g. to surface a thread-exit error).
+        if let Some(notifier) = &self.ready_notifier {
+            let _ = notifier.notify();
+        }
     }
 }
 
