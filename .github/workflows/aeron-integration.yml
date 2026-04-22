@@ -28,7 +28,7 @@ jobs:
           shared-key: integration
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev uuid-dev libbsd-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev uuid-dev libbsd-dev protobuf-compiler
 
       - name: Run Aeron integration tests
         run: |

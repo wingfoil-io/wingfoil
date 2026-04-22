@@ -73,21 +73,19 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
             return Err(e);
         }
 
-        // Check whether the background thread has exited.
+        // Drain the channel first, then check thread state. This avoids a race
+        // where the thread exits after check_running but before we drain: if we
+        // checked first, a still-running thread would skip error handling, and
+        // nothing would wake the graph once the sender drops.
+        let cycle_result = self.inner.cycle(state)?;
         if let Err(thread_err) = self.state.check_running() {
-            // Drain whatever the thread left in the channel before we surface the error.
-            let cycle_result = self.inner.cycle(state)?;
-            // Save the error for the next cycle so downstream nodes can process
-            // the data we just delivered.
             self.pending_err = Some(thread_err);
             // Self-notify: schedule one more graph cycle to propagate the error.
             if let Some(notifier) = &self.notifier {
                 let _ = notifier.notify();
             }
-            return Ok(cycle_result);
         }
-
-        self.inner.cycle(state)
+        Ok(cycle_result)
     }
 
     fn setup(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {

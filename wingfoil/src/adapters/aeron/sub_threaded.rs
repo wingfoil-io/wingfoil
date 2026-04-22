@@ -119,7 +119,7 @@ where
                 // Exponential backoff when idle to avoid aggressive spinning.
                 if count == 0 {
                     idle_count = (idle_count + 1).min(20); // Cap at 20 (~1ms sleep)
-                    let micros = (1u64 << idle_count.min(10)) as u64; // 1µs to 1024µs
+                    let micros = 1u64 << idle_count.min(10); // 1µs to 1024µs
                     std::thread::sleep(Duration::from_micros(micros));
                 } else {
                     idle_count = 0;
