@@ -1,0 +1,56 @@
+Create a GitHub issue in `wingfoil-io/wingfoil` scoping a new I/O adapter named `$ARGUMENTS`. Do not implement the adapter — only open the issue. Use the `mcp__github__issue_write` tool with `method: "create"`.
+
+This command is the scoping counterpart to `/new-adapter`. The issue it files should read as a faithful pre-implementation plan: anyone picking it up later (or running `/new-adapter $ARGUMENTS`) should find every decision already framed.
+
+## 1. Gather context before writing
+
+Before drafting the issue body, collect:
+
+- **Upstream library** — crate name, version, repo URL, license.
+- **Service / protocol** — what the adapter talks to (broker, DB, wire protocol, file format, pre-trained model, etc.).
+- **I/O shape** — producer-only, consumer-only, or bidirectional pub/sub; batch vs. streaming; snapshot+watch or pure event-stream.
+- **Threading model** — async (`produce_async` / `consume_async`), sync poll-based (`ReceiverStream` / `MutableNode`), or spin-loop (`always_callback`). Pick based on how the upstream client is shaped.
+- **Test infrastructure** — testcontainers (preferred), external service with skip-if-unavailable, or no external service.
+- **Existing adapters to mirror** — pick the closest analogue from `wingfoil/src/adapters/` and cite it; this is how the issue signals the intended shape.
+
+If any of these are unclear, ask the user before filing the issue rather than guessing.
+
+## 2. Required body sections
+
+Structure the issue body in this order. Every section is required unless marked optional.
+
+1. **Motivation** — one short paragraph: what this adapter enables, why it belongs in wingfoil, and what concrete use case motivates it (trading signal, telemetry sink, IPC, forecasting, etc.). Link any related issue.
+2. **Upstream library** — crate name + version + link + license, and one line on why it was chosen over alternatives.
+3. **Scope** — bullet list of the node(s) this adapter exposes: `$ARGUMENTS_sub`, `$ARGUMENTS_pub`, or the adapter-specific verbs (`_read` / `_write`, `_connect` / `_accept`, `_push`, `.register()`). State input and output stream types.
+4. **File layout** — the directory tree under `wingfoil/src/adapters/$ARGUMENTS/` (`mod.rs`, `read.rs`, `write.rs`, `integration_tests.rs`, `CLAUDE.md`), called out against the `new-adapter` step-5 defaults and any deviation justified.
+5. **Feature flags** — `$ARGUMENTS` and `$ARGUMENTS-integration-test`, plus any sub-feature for pluggable backends (cite the zmq/etcd pattern if relevant).
+6. **Threading / execution model** — which of `produce_async`, `ReceiverStream`, `MutableNode`, or spin-loop applies, and why. If multiple modes are offered, name the poll-mode enum variants.
+7. **Test infrastructure** — testcontainers image + tag, or "external service / skip-if-unavailable", or "unit tests only". Note any license constraint.
+8. **Python bindings** — whether the adapter will ship `py_$ARGUMENTS_sub` / `.$ARGUMENTS_pub()` and the `requires_$ARGUMENTS` pytest marker. Omit if bindings are out of scope; state that explicitly.
+9. **CI** — note that a standalone `.github/workflows/$ARGUMENTS-integration.yml` will be added and registered in `integration-tests.yml`.
+10. **Deliverables / acceptance criteria** — checklist mirroring the `/new-adapter` steps:
+    - [ ] Feature flags + module registration
+    - [ ] `mod.rs` with module doc + types
+    - [ ] Producer (`read.rs` or equivalent)
+    - [ ] Consumer (`write.rs` or equivalent)
+    - [ ] Integration tests gated behind `$ARGUMENTS-integration-test`
+    - [ ] Example under `wingfoil/examples/$ARGUMENTS/` + README
+    - [ ] `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
+    - [ ] CI workflow + hub registration
+    - [ ] Python bindings (or explicit non-goal)
+    - [ ] Top-level README + `wingfoil/examples/README.md` entries
+11. **Non-goals** — what is explicitly out of scope (training, schema evolution, auth methods deferred, etc.).
+12. **Open questions** — unresolved design questions for discussion in the issue thread.
+13. **References** — upstream docs, related wingfoil adapters to mirror, related issues.
+
+## 3. Title and labels
+
+- **Title format**: `Add $ARGUMENTS adapter for <one-line purpose>` — keep under 70 characters.
+- **Labels**: `enhancement`. Add `adapter` if the repository has that label configured; check with `mcp__github__get_label` before setting it — do not invent labels.
+- Do **not** assign anyone or set a milestone unless the user asks.
+
+## 4. After filing
+
+- Report the issue number and URL back to the user in one line.
+- Do not check out branches, edit code, or run `/new-adapter` as a follow-up unless explicitly asked.
+- If the user then asks to implement, hand off to `/new-adapter $ARGUMENTS`.
