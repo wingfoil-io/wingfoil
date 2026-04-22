@@ -11,6 +11,8 @@ zmq-integration-test = ["zmq"]
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
 zmq-cross-lang-test = ["zmq-integration-test"]
 zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "zmq-etcd-integration-test"]
+aeron-rusteron = ["dep:rusteron-client"]
+aeron-rs = ["dep:aeron-rs"]
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 kafka = ["dep:rdkafka", "async"]
@@ -34,6 +36,7 @@ otlp-integration-test = ["otlp", "dep:testcontainers"]
 fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
 fix-integration-test = ["fix"]
 web = ["async", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "tokio/net", "tokio/sync"]
+aeron-integration-test = ["aeron-rusteron", "aeron-rs", "dep:testcontainers", "dep:libc"]
 
 [package]
 name = "wingfoil"
@@ -119,6 +122,8 @@ opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-bloc
 fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
+rusteron-client = { version = "0.1", optional = true }
+aeron-rs = { version = "0.1", optional = true }
 
 # web adapter
 axum = { version = "0.8", features = ["ws"], optional = true }
@@ -126,6 +131,8 @@ tower-http = { version = "0.6", features = ["fs"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
 wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "4.0.1", optional = true }
 
+
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 rxrust = "1.0.0-rc.3"
@@ -306,3 +313,8 @@ required-features = ["fluvio"]
 name = "kafka"
 path = "examples/kafka/main.rs"
 required-features = ["kafka"]
+
+[[example]]
+name = "aeron"
+path = "examples/aeron/main.rs"
+required-features = ["aeron-rusteron"]
