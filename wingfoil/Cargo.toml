@@ -114,8 +114,8 @@ iceoryx2 = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 arc-swap = { version = "1.7", optional = true }
 opentelemetry = { version = "0.28", optional = true }
-opentelemetry_sdk = { version = "0.28", features = ["metrics"], optional = true }
-opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics"], optional = true }
+opentelemetry_sdk = { version = "0.28", features = ["metrics", "trace", "rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"], optional = true }
 fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }

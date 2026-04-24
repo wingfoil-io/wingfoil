@@ -1,14 +1,22 @@
 # OTLP Adapter
 
-Wingfoil adapter that pushes stream values as OpenTelemetry gauge metrics to any
-OTLP-compatible backend (Grafana Alloy, Datadog, Honeycomb, New Relic, etc.).
+Wingfoil adapter for OpenTelemetry export. Two independent pathways:
+
+- **Metrics** ([`push.rs`](push.rs)): `OtlpPush::otlp_push` pushes stream
+  values as OpenTelemetry gauge metrics to any OTLP-compatible backend.
+- **Traces** ([`traces.rs`](traces.rs)): `OtlpSpans::otlp_spans` emits
+  one OpenTelemetry span per hop on a `Stream<P: HasLatency>`, with
+  caller-supplied attributes (session ID, request ID, etc.) attached to
+  the parent span. Use this for high-cardinality per-request data that
+  would explode Prometheus label cardinality.
 
 ## Module Structure
 
 ```
 otlp/
   mod.rs               # Public API re-exports, module-level docs
-  push.rs              # OtlpPush trait + push_consumer async fn
+  push.rs              # OtlpPush trait + push_consumer async fn (metrics)
+  traces.rs            # OtlpSpans trait + spans_consumer async fn (traces)
   integration_tests.rs # Integration tests (testcontainers — no external setup needed)
   CLAUDE.md            # This file
 ```
