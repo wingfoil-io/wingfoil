@@ -107,14 +107,11 @@ fn main() -> anyhow::Result<()> {
     let session_ttl = env_u64("WINGFOIL_SESSION_SECS", 60);
     let precise = precise_stamps_enabled();
 
-    let static_dir: PathBuf = [
-        env!("CARGO_MANIFEST_DIR"),
-        "examples",
-        "latency_e2e",
-        "static",
-    ]
-    .iter()
-    .collect();
+    let static_dir: PathBuf = std::env::var("WINGFOIL_STATIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/latency_e2e/static")
+        });
 
     let server = WebServer::bind(&addr)
         .codec(CodecKind::Json)

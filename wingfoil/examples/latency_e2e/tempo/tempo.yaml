@@ -23,8 +23,10 @@ compactor:
 
 storage:
   trace:
-    backend: local
+    backend: s3
     wal:
       path: /tmp/tempo/wal
-    local:
-      path: /tmp/tempo/blocks
+    s3:
+      bucket: ${TEMPO_S3_BUCKET:-wingfoil-tempo-traces}
+      endpoint: s3.amazonaws.com
+      region: ${AWS_REGION:-us-east-1}
