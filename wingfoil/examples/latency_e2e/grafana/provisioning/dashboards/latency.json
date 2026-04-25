@@ -1,0 +1,101 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "per-hop p99 latency (ns) — aggregate across all sessions",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns",
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 5, "pointSize": 4 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "{__name__=~\"latency_e2e_.*_p99_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "per-hop p50 latency (ns)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "ns" } },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean"] } },
+      "targets": [
+        { "expr": "{__name__=~\"latency_e2e_.*_p50_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "active sessions",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 18 },
+      "options": { "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "latency_e2e_active_sessions", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "orders rate (per s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 18 },
+      "options": { "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "rate(latency_e2e_admitted_total[1m])", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "rejected orders (cap reached)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 18 },
+      "options": { "colorMode": "value", "graphMode": "area" },
+      "targets": [{ "expr": "increase(latency_e2e_rejected_total[5m])", "refId": "A" }]
+    },
+    {
+      "type": "traces",
+      "title": "your session traces — $session",
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.name=\"wingfoil-latency-e2e\" && span.session.id=\"$session\" }",
+          "limit": 50,
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["wingfoil", "latency"],
+  "templating": {
+    "list": [
+      {
+        "name": "session",
+        "label": "session.id",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" },
+        "hide": 0,
+        "description": "Session UUID (32 hex chars). Pre-filled via URL var when embedded in the client page."
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "wingfoil latency end-to-end",
+  "uid": "wingfoil-latency-e2e",
+  "version": 2,
+  "weekStart": ""
+}

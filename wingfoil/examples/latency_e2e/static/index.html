@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>wingfoil latency end-to-end</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" />
+  <style>
+    :root {
+      --bg: #0d1117; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
+      --green: #3fb950; --red: #f85149; --accent: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    header { padding: 12px 20px; border-bottom: 1px solid #21262d; display: flex; gap: 16px; align-items: center; }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    main { padding: 20px; display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
+    .panel { background: var(--panel); border: 1px solid #21262d; border-radius: 6px; padding: 14px; }
+    .panel h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+    .row .k { color: var(--muted); }
+    .row .v { font-variant-numeric: tabular-nums; }
+    button { background: var(--accent); color: white; border: 0; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; }
+    button:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
+    button.stop { background: var(--red); }
+    select, input[type=number] { background: #0d1117; color: var(--fg); border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .pill.live { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+    .pill.idle { background: rgba(139, 148, 158, 0.15); color: var(--muted); }
+    .stage-bar { display: grid; grid-template-columns: 110px 1fr 90px; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+    .stage-bar .name { color: var(--muted); }
+    .stage-bar .bar { background: #0d1117; height: 14px; border-radius: 3px; overflow: hidden; }
+    .stage-bar .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #1f6feb); transition: width 0.15s; }
+    .stage-bar .v { text-align: right; font-variant-numeric: tabular-nums; }
+    #chart { background: var(--panel); border-radius: 6px; padding: 8px; }
+    a { color: var(--accent); }
+    code { background: #0d1117; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>wingfoil latency end-to-end</h1>
+    <span id="status" class="pill idle">disconnected</span>
+    <span style="color:var(--muted)">session <code id="session">—</code></span>
+    <span style="margin-left:auto"><a href="/metrics">prometheus</a> · operator dashboard typically lives in Grafana</span>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>controls</h2>
+      <div class="controls">
+        <label>side
+          <select id="side">
+            <option value="alt">alternate</option>
+            <option value="0">buy</option>
+            <option value="1">sell</option>
+          </select>
+        </label>
+        <label>qty <input id="qty" type="number" min="1" value="1" style="width:70px"/></label>
+        <label>rate Hz <input id="rate" type="number" min="1" max="20" value="2" style="width:60px"/></label>
+        <button id="start">start</button>
+      </div>
+      <h2>session stats</h2>
+      <div class="row"><span class="k">orders sent</span><span class="v" id="sent">0</span></div>
+      <div class="row"><span class="k">fills received</span><span class="v" id="filled">0</span></div>
+      <div class="row"><span class="k">avg fill price</span><span class="v" id="px">—</span></div>
+      <div class="row"><span class="k">total round-trip (click → fill)</span><span class="v" id="rtt">—</span></div>
+      <h2 style="margin-top:14px">last fill — per-hop ns</h2>
+      <div id="stages"></div>
+    </section>
+    <section>
+      <div id="chart"></div>
+      <p style="color:var(--muted);font-size:12px">
+        Each line is one hop's latency for orders submitted by <em>this
+        browser session</em> only. Aggregate per-hop p50/p99 across all
+        sessions are in Prometheus at <a href="/metrics" target="_blank"><code>:9091/metrics</code></a>.
+        Per-session traces — indexed by high-cardinality <code>session.id</code>,
+        which Prometheus can't handle — are pushed to Tempo via OTLP and
+        surfaced in the Grafana dashboard below, pre-filtered to this session.
+      </p>
+      <iframe id="grafana" title="Grafana — session traces" style="width:100%;height:640px;border:1px solid #21262d;border-radius:6px;background:#0d1117"></iframe>
+      <p style="color:var(--muted);font-size:12px">
+        Grafana not loading? Start the operator stack:
+        <code>docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d</code>
+      </p>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
