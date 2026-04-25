@@ -16,6 +16,15 @@
 //! (no heap allocations, no pointers to external data).
 
 use iceoryx2::prelude::ZeroCopySend;
+use iceoryx2::node::Node;
+use iceoryx2::service::{ipc, local};
+
+pub(crate) enum Iceoryx2NodeHandle {
+    #[allow(dead_code)]
+    Ipc(Node<ipc::Service>),
+    #[allow(dead_code)]
+    Local(Node<local::Service>),
+}
 
 pub const ICEORYX2_DEFAULT_HISTORY_SIZE: usize = 5;
 pub const ICEORYX2_DEFAULT_SUBSCRIBER_MAX_BUFFER_SIZE: usize = 16;

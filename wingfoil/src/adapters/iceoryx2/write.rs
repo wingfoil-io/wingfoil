@@ -14,8 +14,8 @@ use iceoryx2::prelude::*;
 use iceoryx2::service::service_name::ServiceNameError;
 
 use super::{
-    Iceoryx2Error, Iceoryx2PubOpts, Iceoryx2PubSliceOpts, Iceoryx2ServiceContract,
-    Iceoryx2ServiceVariant,
+    Iceoryx2Error, Iceoryx2NodeHandle, Iceoryx2PubOpts, Iceoryx2PubSliceOpts,
+    Iceoryx2ServiceContract, Iceoryx2ServiceVariant,
 };
 
 fn service_open_err_with_context(
@@ -114,7 +114,7 @@ macro_rules! create_publisher_and_notifier {
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
-        (publisher, notifier)
+        (node, publisher, notifier)
     }};
 }
 
@@ -181,7 +181,7 @@ macro_rules! create_slice_publisher_and_notifier {
             .create()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
 
-        (publisher, notifier)
+        (node, publisher, notifier)
     }};
 }
 
@@ -301,6 +301,7 @@ where
     upstream: Rc<dyn Stream<Burst<T>>>,
     service_name: String,
     opts: Iceoryx2PubOpts,
+    node: Option<Iceoryx2NodeHandle>,
     publisher: Option<Iceoryx2PublisherPort<T>>,
     notifier: Option<Iceoryx2NotifierPort>,
     cycles: u64,
@@ -319,6 +320,7 @@ where
             upstream,
             service_name,
             opts,
+            node: None,
             publisher: None,
             notifier: None,
             cycles: 0,
@@ -383,24 +385,28 @@ where
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let (publisher, notifier) = create_publisher_and_notifier!(
+                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(Config::global_config());
+                let (node, publisher, notifier) = create_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
                     self.opts.variant,
                     self.opts.history_size,
                     T
                 );
+                self.node = Some(Iceoryx2NodeHandle::Ipc(node));
                 self.publisher = Some(Iceoryx2PublisherPort::Ipc(publisher));
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let (publisher, notifier) = create_publisher_and_notifier!(
+                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(Config::global_config());
+                let (node, publisher, notifier) = create_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,
                     self.opts.variant,
                     self.opts.history_size,
                     T
                 );
+                self.node = Some(Iceoryx2NodeHandle::Local(node));
                 self.publisher = Some(Iceoryx2PublisherPort::Local(publisher));
                 self.notifier = Some(Iceoryx2NotifierPort::Local(notifier));
             }
@@ -412,6 +418,7 @@ where
     fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         self.publisher = None;
         self.notifier = None;
+        self.node = None;
         Ok(())
     }
 }
@@ -424,6 +431,7 @@ struct Iceoryx2SlicePublisher {
     upstream: Rc<dyn Stream<Burst<Vec<u8>>>>,
     service_name: String,
     opts: Iceoryx2PubSliceOpts,
+    node: Option<Iceoryx2NodeHandle>,
     publisher: Option<Iceoryx2SlicePublisherPort>,
     notifier: Option<Iceoryx2NotifierPort>,
     cycles: u64,
@@ -444,6 +452,7 @@ impl Iceoryx2SlicePublisher {
             upstream,
             service_name,
             opts,
+            node: None,
             publisher: None,
             notifier: None,
             cycles: 0,
@@ -501,24 +510,28 @@ impl MutableNode for Iceoryx2SlicePublisher {
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let (publisher, notifier) = create_slice_publisher_and_notifier!(
+                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(Config::global_config());
+                let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
                     self.opts.variant,
                     self.opts.history_size,
                     self.opts.initial_max_slice_len
                 );
+                self.node = Some(Iceoryx2NodeHandle::Ipc(node));
                 self.publisher = Some(Iceoryx2SlicePublisherPort::Ipc(publisher));
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let (publisher, notifier) = create_slice_publisher_and_notifier!(
+                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(Config::global_config());
+                let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,
                     self.opts.variant,
                     self.opts.history_size,
                     self.opts.initial_max_slice_len
                 );
+                self.node = Some(Iceoryx2NodeHandle::Local(node));
                 self.publisher = Some(Iceoryx2SlicePublisherPort::Local(publisher));
                 self.notifier = Some(Iceoryx2NotifierPort::Local(notifier));
             }
@@ -529,6 +542,7 @@ impl MutableNode for Iceoryx2SlicePublisher {
     fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         self.publisher = None;
         self.notifier = None;
+        self.node = None;
         Ok(())
     }
 
