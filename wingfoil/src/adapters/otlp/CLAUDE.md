@@ -26,9 +26,9 @@ otlp/
 - Uses the OpenTelemetry Rust SDK (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`).
   Metrics are exported via HTTP/protobuf (`http-proto` feature) to the OTLP `/v1/metrics` endpoint.
 - A `SdkMeterProvider` with a 500 ms `PeriodicReader` is created per consumer invocation so that
-  the final batch of metrics is flushed on `shutdown()` before the function returns.
-- The metric name is leaked to a `&'static str` (`Box::leak`) because the OTel SDK's
-  `f64_gauge` builder requires `Cow<'static, str>`. This is a one-time allocation per run.
+  the final batch of metrics is flushed before the function returns.
+- The metric name must be a `&'static str` (static string literal) to satisfy the OTel SDK's
+  `f64_gauge` builder requirements.
 - **Historical / backtesting mode**: the consumer checks `ctx.run_mode` via `RunParams` and
   drains the source stream without connecting to any external service. No OTel provider is
   built and no network calls are made.

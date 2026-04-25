@@ -7,8 +7,8 @@
 //! # Usage
 //!
 //! ```sh
-//! # Start an OTel collector (e.g. via docker/grafana stack or standalone)
-//! docker run --rm -p 4318:4318 otel/opentelemetry-collector:latest
+//! # Start an OTel collector
+//! docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 //!
 //! # Run this example
 //! OTLP_ENDPOINT=http://localhost:4318 \

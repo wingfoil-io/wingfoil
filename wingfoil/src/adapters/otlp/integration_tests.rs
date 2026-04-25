@@ -1,15 +1,11 @@
 //! Integration tests for the OTLP adapter.
 //!
-//! Requires a running OpenTelemetry collector. Start one with:
-//! ```sh
-//! docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.116.0
-//! ```
-//!
-//! Or use testcontainers (started automatically by the tests below).
+//! Uses testcontainers to start an OpenTelemetry collector automatically
+//! (no manual Docker setup required).
 //!
 //! Run with:
 //! ```sh
-//! RUST_LOG=INFO cargo test --features otlp-integration-test -p wingfoil -- --test-threads=1 --nocapture
+//! RUST_LOG=INFO cargo test --features otlp-integration-test -p wingfoil -- --test-threads=1 --nocapture adapters::otlp::integration_tests
 //! ```
 
 use crate::adapters::otlp::{OtlpConfig, OtlpPush};

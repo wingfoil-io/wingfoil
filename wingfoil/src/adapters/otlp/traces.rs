@@ -54,16 +54,20 @@ use crate::latency::{HasLatency, Latency};
 use crate::nodes::{FutStream, RunParams, StreamOperators};
 use crate::types::*;
 
-/// Fluent sink method: push stream values as OTLP trace spans.
+/// Fluent sink method: export stream values as OTLP trace spans.
 pub trait OtlpSpans<P>
 where
     P: Element + HasLatency,
 {
     /// Emit one parent span per upstream tick, plus one child span per
-    /// adjacent stage pair. The parent's name is `span_name`; children
-    /// are named `"<prev_stage>__<next_stage>"`. The attribute
-    /// extractor is called once per tick and its `KeyValue`s are
+    /// adjacent stage pair. The parent's name is `span_name` (must be a
+    /// static string literal); children are named `"<prev_stage>__<next_stage>"`.
+    /// The attribute extractor is called once per tick and its `KeyValue`s are
     /// attached to the parent span (not duplicated on each child).
+    ///
+    /// Spans with incomplete or backwards timestamps are silently skipped.
+    /// Use this for high-cardinality per-request data (session IDs, user IDs)
+    /// that would explode Prometheus label cardinality.
     #[must_use]
     fn otlp_spans<F>(
         self: &Rc<Self>,
