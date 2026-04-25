@@ -1,14 +1,22 @@
 # OTLP Adapter
 
-Wingfoil adapter that pushes stream values as OpenTelemetry gauge metrics to any
-OTLP-compatible backend (Grafana Alloy, Datadog, Honeycomb, New Relic, etc.).
+Wingfoil adapter for OpenTelemetry export. Two independent pathways:
+
+- **Metrics** ([`push.rs`](push.rs)): `OtlpPush::otlp_push` pushes stream
+  values as OpenTelemetry gauge metrics to any OTLP-compatible backend.
+- **Traces** ([`traces.rs`](traces.rs)): `OtlpSpans::otlp_spans` emits
+  one OpenTelemetry span per hop on a `Stream<P: HasLatency>`, with
+  caller-supplied attributes (session ID, request ID, etc.) attached to
+  the parent span. Use this for high-cardinality per-request data that
+  would explode Prometheus label cardinality.
 
 ## Module Structure
 
 ```
 otlp/
   mod.rs               # Public API re-exports, module-level docs
-  push.rs              # OtlpPush trait + push_consumer async fn
+  push.rs              # OtlpPush trait + push_consumer async fn (metrics)
+  traces.rs            # OtlpSpans trait + spans_consumer async fn (traces)
   integration_tests.rs # Integration tests (testcontainers — no external setup needed)
   CLAUDE.md            # This file
 ```
@@ -17,16 +25,20 @@ otlp/
 
 - Uses the OpenTelemetry Rust SDK (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`).
   Metrics are exported via HTTP/protobuf (`http-proto` feature) to the OTLP `/v1/metrics` endpoint.
+  Traces are exported via the HTTP span exporter.
 - A `SdkMeterProvider` with a 500 ms `PeriodicReader` is created per consumer invocation so that
-  the final batch of metrics is flushed on `shutdown()` before the function returns.
-- The metric name is leaked to a `&'static str` (`Box::leak`) because the OTel SDK's
-  `f64_gauge` builder requires `Cow<'static, str>`. This is a one-time allocation per run.
+  the final batch of metrics is flushed before the function returns.
+- The metric name must be a `&'static str` (static string literal) to satisfy the OTel SDK's
+  `f64_gauge` builder requirements.
 - **Historical / backtesting mode**: the consumer checks `ctx.run_mode` via `RunParams` and
   drains the source stream without connecting to any external service. No OTel provider is
   built and no network calls are made.
 - The adapter is push-based (contrast with `prometheus` which is pull-based).
 - `OtlpPush` is implemented for `dyn Stream<T>` where `T: Display` so any numeric or string
   stream can be pushed without wrapping.
+- `OtlpSpans` is Rust-only: trace export requires `P: Element + HasLatency`, which is not
+  available for generic Python streams. Use `.otlp_spans()` from Rust; Python can use `.otlp_push()`
+  for metrics.
 
 ## Feature Flags
 

@@ -23,17 +23,17 @@ pub struct OtlpConfig {
 pub trait OtlpPush<T: Element> {
     /// Push every tick of this stream as an OTLP gauge metric.
     ///
+    /// `metric_name` must be a static string literal (e.g. `"my_metric"`).
     /// Values are converted to `f64` via `T::to_string().parse::<f64>()`. Types
     /// whose `Display` output is not a plain number (e.g. `"42 units"`) will
     /// record `0.0` and emit a `log::warn`. Use a `.map()` upstream to extract
     /// a numeric field if your type does not format as a bare number.
     #[must_use]
-    fn otlp_push(self: &Rc<Self>, metric_name: &str, config: OtlpConfig) -> Rc<dyn Node>;
+    fn otlp_push(self: &Rc<Self>, metric_name: &'static str, config: OtlpConfig) -> Rc<dyn Node>;
 }
 
 impl<T: Element + Send + std::fmt::Display + 'static> OtlpPush<T> for dyn Stream<T> {
-    fn otlp_push(self: &Rc<Self>, metric_name: &str, config: OtlpConfig) -> Rc<dyn Node> {
-        let metric_name = metric_name.to_string();
+    fn otlp_push(self: &Rc<Self>, metric_name: &'static str, config: OtlpConfig) -> Rc<dyn Node> {
         let consumer = Box::new(move |ctx: RunParams, source: Pin<Box<dyn FutStream<T>>>| {
             push_consumer(metric_name, config, ctx, source)
         });
@@ -42,7 +42,7 @@ impl<T: Element + Send + std::fmt::Display + 'static> OtlpPush<T> for dyn Stream
 }
 
 async fn push_consumer<T: Element + Send + std::fmt::Display>(
-    metric_name: String,
+    metric_name: &'static str,
     config: OtlpConfig,
     ctx: RunParams,
     mut source: Pin<Box<dyn FutStream<T>>>,

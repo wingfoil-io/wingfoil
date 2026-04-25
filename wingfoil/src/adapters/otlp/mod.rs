@@ -1,12 +1,12 @@
-//! OpenTelemetry OTLP metrics adapter.
+//! OpenTelemetry OTLP adapter: metrics and trace spans.
 //!
-//! Pushes stream values as gauge metrics to any OTLP-compatible backend
-//! (Grafana Alloy, Datadog, Honeycomb, New Relic, etc.).
+//! Exports stream values as OTLP gauge metrics and trace spans to any
+//! OTLP-compatible backend (Grafana Alloy, Datadog, Honeycomb, New Relic, etc.).
 //!
 //! # Setup
 //!
 //! ```sh
-//! docker run --rm -p 4318:4318 otel/opentelemetry-collector:latest
+//! docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 //! ```
 //!
 //! # Usage
@@ -22,7 +22,9 @@
 //! ```
 
 pub mod push;
+pub mod traces;
 pub use push::{OtlpConfig, OtlpPush};
+pub use traces::{OtlpAttributeBuffer, OtlpSpans};
 
 #[cfg(all(test, feature = "otlp-integration-test"))]
 mod integration_tests;
