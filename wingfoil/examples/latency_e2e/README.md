@@ -33,6 +33,16 @@ examples/latency_e2e/
 Two binaries, one browser tab. The order doesn't matter — the iceoryx2
 service auto-discovers.
 
+**Note on stale iceoryx2 shared memory:** If you've previously killed the examples
+with `SIGKILL` (e.g., `pkill -9`), orphaned shared memory files may persist in `/dev/shm/`.
+Run the cleanup script before starting:
+
+```bash
+bash wingfoil/examples/latency_e2e/cleanup_stale_shm.sh
+```
+
+Then:
+
 ```bash
 # Required — fix_gw opens two TLS FIX sessions to LMAX London Demo
 # (market data + order routing). The binary refuses to start without these.
