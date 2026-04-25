@@ -25,6 +25,7 @@ otlp/
 
 - Uses the OpenTelemetry Rust SDK (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`).
   Metrics are exported via HTTP/protobuf (`http-proto` feature) to the OTLP `/v1/metrics` endpoint.
+  Traces are exported via the HTTP span exporter.
 - A `SdkMeterProvider` with a 500 ms `PeriodicReader` is created per consumer invocation so that
   the final batch of metrics is flushed before the function returns.
 - The metric name must be a `&'static str` (static string literal) to satisfy the OTel SDK's
@@ -35,6 +36,9 @@ otlp/
 - The adapter is push-based (contrast with `prometheus` which is pull-based).
 - `OtlpPush` is implemented for `dyn Stream<T>` where `T: Display` so any numeric or string
   stream can be pushed without wrapping.
+- `OtlpSpans` is Rust-only: trace export requires `P: Element + HasLatency`, which is not
+  available for generic Python streams. Use `.otlp_spans()` from Rust; Python can use `.otlp_push()`
+  for metrics.
 
 ## Feature Flags
 

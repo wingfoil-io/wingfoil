@@ -26,5 +26,6 @@ pub fn py_otlp_push_inner(
                 .unwrap_or_default()
         })
     });
-    PyNode::new(str_stream.otlp_push(&metric_name, config))
+    let metric_name_static = Box::leak(metric_name.into_boxed_str());
+    PyNode::new(str_stream.otlp_push(metric_name_static, config))
 }
