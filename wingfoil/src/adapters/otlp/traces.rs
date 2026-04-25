@@ -16,18 +16,15 @@
 //! # Example
 //!
 //! ```ignore
-//! use opentelemetry::KeyValue;
 //! use wingfoil::adapters::otlp::{OtlpConfig, OtlpSpans};
 //!
 //! let config = OtlpConfig {
 //!     endpoint: "http://localhost:4318".into(),
 //!     service_name: "my-app".into(),
 //! };
-//! traced_stream.otlp_spans(config, "roundtrip", |p| {
-//!     vec![
-//!         KeyValue::new("session.id", p.session_hex()),
-//!         KeyValue::new("client_seq", p.client_seq as i64),
-//!     ]
+//! traced_stream.otlp_spans(config, "roundtrip", |p, attrs| {
+//!     attrs.add("session.id", p.session_hex());
+//!     attrs.add("client_seq", p.client_seq as i64);
 //! });
 //! ```
 //!
@@ -54,6 +51,36 @@ use crate::latency::{HasLatency, Latency};
 use crate::nodes::{FutStream, RunParams, StreamOperators};
 use crate::types::*;
 
+/// Reusable buffer for attributes in `OtlpSpans`. Avoids allocating a new
+/// `Vec<KeyValue>` on every tick by pre-allocating once and reusing.
+pub struct OtlpAttributeBuffer {
+    attrs: Vec<KeyValue>,
+}
+
+impl OtlpAttributeBuffer {
+    /// Add a key-value attribute. The buffer is pre-allocated and reused
+    /// across ticks, so this is efficient even at high tick rates.
+    pub fn add(&mut self, key: &'static str, value: impl Into<opentelemetry::Value>) {
+        self.attrs.push(KeyValue::new(key, value));
+    }
+
+    fn clear(&mut self) {
+        self.attrs.clear();
+    }
+
+    fn take(&mut self) -> Vec<KeyValue> {
+        std::mem::take(&mut self.attrs)
+    }
+}
+
+impl Default for OtlpAttributeBuffer {
+    fn default() -> Self {
+        OtlpAttributeBuffer {
+            attrs: Vec::with_capacity(8),
+        }
+    }
+}
+
 /// Fluent sink method: export stream values as OTLP trace spans.
 pub trait OtlpSpans<P>
 where
@@ -62,8 +89,8 @@ where
     /// Emit one parent span per upstream tick, plus one child span per
     /// adjacent stage pair. The parent's name is `span_name` (must be a
     /// static string literal); children are named `"<prev_stage>__<next_stage>"`.
-    /// The attribute extractor is called once per tick and its `KeyValue`s are
-    /// attached to the parent span (not duplicated on each child).
+    /// The attribute extractor is called once per tick. Use `buffer.add()` to
+    /// populate attributes; the buffer is pre-allocated and reused.
     ///
     /// Spans with incomplete or backwards timestamps are silently skipped.
     /// Use this for high-cardinality per-request data (session IDs, user IDs)
@@ -76,7 +103,7 @@ where
         attrs: F,
     ) -> Rc<dyn Node>
     where
-        F: Fn(&P) -> Vec<KeyValue> + Send + Sync + 'static;
+        F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static;
 }
 
 impl<P> OtlpSpans<P> for dyn Stream<P>
@@ -90,7 +117,7 @@ where
         attrs: F,
     ) -> Rc<dyn Node>
     where
-        F: Fn(&P) -> Vec<KeyValue> + Send + Sync + 'static,
+        F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static,
     {
         let attrs = std::sync::Arc::new(attrs);
         let consumer = Box::new(move |ctx: RunParams, source: Pin<Box<dyn FutStream<P>>>| {
@@ -109,7 +136,7 @@ async fn spans_consumer<P, F>(
 ) -> anyhow::Result<()>
 where
     P: Element + HasLatency + Send,
-    F: Fn(&P) -> Vec<KeyValue> + Send + Sync + 'static,
+    F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static,
 {
     // Historical / backtesting mode: drain and return. Matches the
     // metrics-push consumer's behaviour — no network traffic, same
@@ -143,15 +170,18 @@ where
         .map(|i| format!("{}__{}", stage_names[i - 1], stage_names[i]))
         .collect();
 
+    // Pre-allocate attribute buffer once and reuse across ticks.
+    let mut attr_buffer = OtlpAttributeBuffer::default();
+
     while let Some((_time, value)) = source.next().await {
         emit_spans(
             &tracer,
             &value,
             attrs.as_ref(),
             span_name,
-            stage_names,
             n,
             &hop_names,
+            &mut attr_buffer,
         );
     }
 
@@ -164,12 +194,12 @@ fn emit_spans<P, F>(
     value: &P,
     attrs: &F,
     span_name: &'static str,
-    stage_names: &'static [&'static str],
     n: usize,
     hop_names: &[String],
+    attr_buffer: &mut OtlpAttributeBuffer,
 ) where
     P: HasLatency,
-    F: Fn(&P) -> Vec<KeyValue>,
+    F: Fn(&P, &mut OtlpAttributeBuffer),
 {
     let stamps = value.latency().stamps();
     // A trace needs at least one real start/end pair. If neither endpoint
@@ -178,11 +208,14 @@ fn emit_spans<P, F>(
         return;
     }
 
+    attr_buffer.clear();
+    attrs(value, attr_buffer);
+
     let parent = tracer
         .span_builder(span_name)
         .with_kind(SpanKind::Server)
         .with_start_time(ns_to_system_time(stamps[0]))
-        .with_attributes(attrs(value))
+        .with_attributes(attr_buffer.take())
         .start(tracer);
     let cx = Context::current_with_span(parent);
 
@@ -196,7 +229,7 @@ fn emit_spans<P, F>(
             continue;
         }
         let mut child = tracer
-            .span_builder(&hop_names[i - 1])
+            .span_builder(hop_names[i - 1].clone())
             .with_kind(SpanKind::Internal)
             .with_start_time(ns_to_system_time(a))
             .start_with_context(tracer, &cx);
@@ -246,7 +279,9 @@ mod tests {
         let node = source.otlp_spans(
             config,
             "test_span",
-            |_p: &Traced<TestPayload, TestLatency>| vec![KeyValue::new("k", "v")],
+            |_p: &Traced<TestPayload, TestLatency>, attrs| {
+                attrs.add("k", "v");
+            },
         );
         node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
             .unwrap();

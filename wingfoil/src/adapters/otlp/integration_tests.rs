@@ -11,7 +11,6 @@
 use crate::adapters::otlp::{OtlpConfig, OtlpPush, OtlpSpans};
 use crate::latency::{Latency, Stage};
 use crate::{RunFor, RunMode, Traced, nodes::*};
-use opentelemetry::KeyValue;
 use std::time::Duration;
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
 
@@ -69,8 +68,8 @@ fn otlp_spans_sends_successfully() -> anyhow::Result<()> {
         traced
     });
 
-    let node = counter.otlp_spans(config, "integration_span", |p| {
-        vec![KeyValue::new("session_id", p.payload.session.to_string())]
+    let node = counter.otlp_spans(config, "integration_span", |p, attrs| {
+        attrs.add("session_id", p.payload.session.to_string());
     });
 
     node.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;

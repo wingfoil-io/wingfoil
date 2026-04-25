@@ -24,12 +24,7 @@
 pub mod push;
 pub mod traces;
 pub use push::{OtlpConfig, OtlpPush};
-pub use traces::OtlpSpans;
-
-/// Re-exported so callers of [`OtlpSpans::otlp_spans`] can construct
-/// attribute vectors without adding `opentelemetry` to their own
-/// dependencies.
-pub use opentelemetry::KeyValue;
+pub use traces::{OtlpAttributeBuffer, OtlpSpans};
 
 #[cfg(all(test, feature = "otlp-integration-test"))]
 mod integration_tests;
