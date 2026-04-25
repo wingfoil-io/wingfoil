@@ -138,8 +138,21 @@ where
     let stage_names = P::L::stage_names();
     let n = P::L::N;
 
+    // Precompute hop names once to avoid allocation on every tick.
+    let hop_names: Vec<String> = (1..n)
+        .map(|i| format!("{}__{}", stage_names[i - 1], stage_names[i]))
+        .collect();
+
     while let Some((_time, value)) = source.next().await {
-        emit_spans(&tracer, &value, attrs.as_ref(), span_name, stage_names, n);
+        emit_spans(
+            &tracer,
+            &value,
+            attrs.as_ref(),
+            span_name,
+            stage_names,
+            n,
+            &hop_names,
+        );
     }
 
     drop(provider);
@@ -153,6 +166,7 @@ fn emit_spans<P, F>(
     span_name: &'static str,
     stage_names: &'static [&'static str],
     n: usize,
+    hop_names: &[String],
 ) where
     P: HasLatency,
     F: Fn(&P) -> Vec<KeyValue>,
@@ -181,9 +195,8 @@ fn emit_spans<P, F>(
         if a == 0 || b == 0 || b < a {
             continue;
         }
-        let name = format!("{}__{}", stage_names[i - 1], stage_names[i]);
         let mut child = tracer
-            .span_builder(name)
+            .span_builder(&hop_names[i - 1])
             .with_kind(SpanKind::Internal)
             .with_start_time(ns_to_system_time(a))
             .start_with_context(tracer, &cx);
