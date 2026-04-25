@@ -1,0 +1,6 @@
+# iceoryx2 configuration
+# See: https://eclipse-iceoryx.github.io/iceoryx2/latest/concepts/configuration/
+
+[global]
+# Default configuration — most settings are sensible defaults
+# Customize as needed per deployment
