@@ -27,6 +27,7 @@
     .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
     .pill.live { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+    .pill.connecting { background: rgba(240, 136, 62, 0.15); color: #f0883e; }
     .pill.idle { background: rgba(139, 148, 158, 0.15); color: var(--muted); }
     .stage-bar { display: grid; grid-template-columns: 110px 1fr 90px; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
     .stage-bar .name { color: var(--muted); }
@@ -86,6 +87,14 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
-  <script src="app.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "@wingfoil/client": "https://esm.sh/@wingfoil/client@4.1.0",
+        "@wingfoil/client/tracing": "https://esm.sh/@wingfoil/client@4.1.0/tracing"
+      }
+    }
+  </script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

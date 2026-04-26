@@ -1,12 +1,15 @@
 // wingfoil latency end-to-end — browser client.
 //
-// Emits OrderFrames at the configured rate, listens for FillFrames,
-// stamps a t_client_recv and posts the round-trip back as an EchoFrame.
-// Renders a uPlot chart of the per-hop latency for THIS session.
+// Streams orders, listens for fills, and renders per-hop latency for the
+// current browser session. The session UUID, sequence counter, outbound
+// timestamps, inbound filtering, RTT/wire deltas, and the echo round-trip
+// back to the server are all delegated to `LatencyTracker`.
+
+import { WingfoilClient } from "@wingfoil/client";
+import { LatencyTracker } from "@wingfoil/client/tracing";
 
 // Each entry is either a server-clock delta (indices into stamps[]) or
-// the derived `wire_rtt` computed from the client-clock RTT minus the
-// server residence time. Every number lives inside a single clock
+// the derived `wire_rtt`. Every number lives inside a single clock
 // domain — no NTP-style sync needed.
 const STAGES = [
   ["ws_recv→ws_publish",    "server", 0, 1],
@@ -26,98 +29,54 @@ const COLOURS = [
 ];
 const MAX_POINTS = 200; // ~100 s at 2 Hz
 
-// ── session UUID as 16 raw bytes (sent verbatim as JSON array) ───────────
-function newSessionId() {
-  const u = (crypto.randomUUID ? crypto.randomUUID() : fallbackUuid()).replaceAll('-', '');
-  const out = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) out[i] = parseInt(u.slice(i*2, i*2+2), 16);
-  return out;
-}
-function fallbackUuid() {
-  const r = new Uint8Array(16); crypto.getRandomValues(r);
-  r[6] = (r[6] & 0x0f) | 0x40; r[8] = (r[8] & 0x3f) | 0x80;
-  const h = [...r].map(b => b.toString(16).padStart(2, '0')).join('');
-  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
-}
-function hex(bytes) { return [...bytes].map(b => b.toString(16).padStart(2,'0')).join(''); }
-function nowNs() { return Math.round(performance.timeOrigin * 1e6 + performance.now() * 1e6); }
+// ── wingfoil client + latency tracker ─────────────────────────────────────
+// Server uses CodecKind::Json (see ws_server.rs); the tracker drives the
+// orders → fills → latency_echo loop end-to-end.
 
-// ── WebSocket envelope plumbing ──────────────────────────────────────────
-//
-// CodecKind::Json on the server: each WS frame is JSON-encoded
-// `Envelope { topic, time_ns, payload: Vec<u8> }`. The payload is itself
-// the JSON-encoded user type as a byte array. We unwrap one level here
-// so handlers see the actual object.
+const client = new WingfoilClient({
+  url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
+  codec: 'json',
+});
 
-let ws = null;
-function connect(onMsg) {
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-  ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
-    setStatus('live');
-    // Subscribe to the topics we care about.
-    sendCtrl({ Subscribe: { topics: ['fills', 'session'] } });
-  };
-  ws.onclose = () => { setStatus('disconnected'); ws = null; };
-  ws.onerror = (e) => console.warn('ws error', e);
-  ws.onmessage = async (ev) => {
-    const buf = typeof ev.data === 'string'
-      ? new TextEncoder().encode(ev.data)
-      : new Uint8Array(ev.data);
-    let env;
-    try { env = JSON.parse(new TextDecoder().decode(buf)); }
-    catch (e) { console.warn('bad envelope', e); return; }
-    if (env.topic === '$ctrl') return;
-    let payload;
-    try { payload = JSON.parse(new TextDecoder().decode(new Uint8Array(env.payload))); }
-    catch (e) { console.warn('bad payload', env.topic, e); return; }
-    onMsg(env.topic, payload);
-  };
-}
+const tracker = new LatencyTracker({
+  client,
+  outbound: 'orders',
+  inbound:  'fills',
+  echo:     'latency_echo',
+});
 
-function sendFrame(topic, payloadObj) {
-  if (!ws || ws.readyState !== 1) return;
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(payloadObj));
-  const env = { topic, time_ns: 0, payload: Array.from(payloadBytes) };
-  ws.send(JSON.stringify(env));
-}
-function sendCtrl(ctrl) {
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(ctrl));
-  const env = { topic: '$ctrl', time_ns: 0, payload: Array.from(payloadBytes) };
-  ws.send(JSON.stringify(env));
-}
-
-// ── UI state ──────────────────────────────────────────────────────────────
-const session = newSessionId();
-const sessionArr = Array.from(session);
-let seq = 0, sent = 0, filled = 0, sumPx = 0, lastRttNs = 0;
-let nextSide = 0;
-let chart, chartData, ticker = null;
-
-document.getElementById('session').textContent = hex(session).slice(0, 8) + '…';
+document.getElementById('session').textContent = tracker.sessionHex.slice(0, 8) + '…';
 
 // Point the embedded Grafana iframe at the operator dashboard, pre-filtered
 // to this session via the `$session` template variable. Assumes Grafana is
-// on the same host on port 3000 (docker-compose default). `kiosk=tv` hides
-// Grafana chrome; `theme=dark` matches the page.
+// on the same host on port 3000 (docker-compose default).
 (function initGrafana() {
   const origin = `${location.protocol}//${location.hostname}:3000`;
   const url = `${origin}/d/wingfoil-latency-e2e/wingfoil-latency-end-to-end` +
-              `?var-session=${hex(session)}` +
+              `?var-session=${tracker.sessionHex}` +
               `&kiosk=tv&theme=dark&refresh=5s&from=now-15m&to=now`;
   document.getElementById('grafana').src = url;
 })();
 
+// ── UI state ──────────────────────────────────────────────────────────────
+let sent = 0, filled = 0, sumPx = 0;
+let nextSide = 0;
+let chart, chartData, ticker = null;
+
 function setStatus(s) {
   const el = document.getElementById('status');
   el.textContent = s;
-  el.className = 'pill ' + (s === 'live' ? 'live' : 'idle');
+  const cls = s === 'live' ? 'live' : s === 'connecting' ? 'connecting' : 'idle';
+  el.className = 'pill ' + cls;
 }
 
-// Resolve one STAGES entry to a delta in ns. Server stages read from
-// stamps[]; the wire stage reads rtt_total and server residence, both
-// derived from same-domain subtractions.
+client.onConnection((s) => {
+  if (s.kind === 'open') setStatus('live');
+  else if (s.kind === 'connecting') setStatus('connecting');
+  else setStatus('disconnected');
+});
+
+// ── Per-hop chart and bars ────────────────────────────────────────────────
 function stageNs(entry, stamps, rttTotal) {
   const [, kind, a, b] = entry;
   if (kind === 'server') return stamps[b] - stamps[a];
@@ -175,24 +134,19 @@ function initChart() {
   chart = new uPlot(opts, chartData, document.getElementById('chart'));
 }
 
+// ── Order stream control ──────────────────────────────────────────────────
 function startStream() {
   const rate = parseInt(document.getElementById('rate').value, 10);
   const qty = parseInt(document.getElementById('qty').value, 10);
   const sideSel = document.getElementById('side').value;
   if (ticker) clearInterval(ticker);
   ticker = setInterval(() => {
-    if (!ws || ws.readyState !== 1) return;
     let side;
     if (sideSel === 'alt') { side = nextSide; nextSide ^= 1; }
     else side = parseInt(sideSel, 10);
-    seq += 1; sent += 1;
+    sent += 1;
     document.getElementById('sent').textContent = sent.toLocaleString();
-    sendFrame('orders', {
-      session: sessionArr,
-      client_seq: seq,
-      side, qty,
-      t_client_send: nowNs(),
-    });
+    tracker.send({ side, qty });
   }, Math.max(50, Math.floor(1000 / rate)));
   const btn = document.getElementById('start');
   btn.textContent = 'stop'; btn.classList.add('stop');
@@ -210,39 +164,15 @@ function stopStream() {
 window.addEventListener('DOMContentLoaded', () => {
   initChart();
   document.getElementById('start').onclick = startStream;
-  connect((topic, msg) => {
-    if (topic === 'fills') {
-      // Filter: only this session's fills.
-      if (!sameId(msg.session, sessionArr)) return;
-      const tRecv = nowNs();
-      const rttTotal = Math.max(0, tRecv - msg.t_client_send);
-      filled += 1;
-      sumPx += msg.fill_price_bps;
-      lastRttNs = rttTotal;
-      document.getElementById('filled').textContent = filled.toLocaleString();
-      document.getElementById('px').textContent = (sumPx / filled / 10000).toFixed(5);
-      document.getElementById('rtt').textContent = (rttTotal / 1_000_000).toFixed(2) + ' ms';
-      renderStages(msg.stamps, rttTotal);
-      pushChartPoint(msg.stamps, rttTotal);
-      // Echo to the server with t_client_recv stamped. The server
-      // derives rtt_total and wire_rtt from the four stamps, all
-      // arithmetic within a single clock domain per delta.
-      sendFrame('latency_echo', {
-        session: sessionArr,
-        client_seq: msg.client_seq,
-        t_client_send: msg.t_client_send,
-        t_client_recv: tRecv,
-        stamps: msg.stamps,
-      });
-    } else if (topic === 'session') {
-      // Reserved — server can broadcast queue state here.
-      console.log('session', msg);
-    }
+
+  tracker.onResponse((rt) => {
+    const fill = rt.payload;
+    filled += 1;
+    sumPx += fill.fill_price_bps;
+    document.getElementById('filled').textContent = filled.toLocaleString();
+    document.getElementById('px').textContent = (sumPx / filled / 10000).toFixed(5);
+    document.getElementById('rtt').textContent = (rt.rttNs / 1_000_000).toFixed(2) + ' ms';
+    renderStages(rt.stamps, rt.rttNs);
+    pushChartPoint(rt.stamps, rt.rttNs);
   });
 });
-
-function sameId(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}

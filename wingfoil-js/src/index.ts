@@ -258,3 +258,9 @@ export class WingfoilClient {
 }
 
 export { wireVersion };
+
+// Re-export the small browser helpers from `./utils.js` so existing
+// consumers don't have to know about the split. The helpers live in
+// their own file so the tracing module — and tests — don't drag in the
+// wasm decoder.
+export { newSessionId, sessionHex, nowNs } from "./utils.js";
