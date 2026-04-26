@@ -33,8 +33,16 @@ pub const SIDE_SELL: u8 = 1;
 ///
 /// `#[repr(C)]` + `ZeroCopySend` so the whole `Traced<RoundTrip, RoundTripLatency>`
 /// can be transported by iceoryx2 without serialization.
+///
+/// `#[type_name(...)]` pins the iceoryx2 type identifier to a string that's
+/// stable across binaries. Without it, the default
+/// `core::any::type_name::<Self>()` embeds the binary-specific module path
+/// (`latency_e2e_fix_gw::shared::RoundTrip` vs
+/// `latency_e2e_ws_server::shared::RoundTrip`), and iceoryx2 reports
+/// `IncompatibleTypes` when the second binary opens the service.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend, Serialize, Deserialize)]
+#[type_name("wingfoil::latency_e2e::RoundTrip")]
 pub struct RoundTrip {
     pub session: SessionId,
     pub client_seq: u64,
@@ -54,7 +62,11 @@ pub struct RoundTrip {
 // Stage order = offset order in the on-wire [u64; 9] view of the record.
 // The first five stages are stamped on the outbound leg, the last four on
 // the inbound leg after the fill is matched.
+//
+// `#[type_name(...)]` pins the iceoryx2 type identifier to a binary-stable
+// string (see the matching note on `RoundTrip`).
 latency_stages! {
+    #[type_name("wingfoil::latency_e2e::RoundTripLatency")]
     pub RoundTripLatency {
         ws_recv,
         ws_publish,

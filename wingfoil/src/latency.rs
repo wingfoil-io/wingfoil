@@ -177,12 +177,39 @@ impl<T, L: Latency> HasLatency for Traced<T, L> {
 // SAFETY: `Traced<T, L>` is `#[repr(C)]` with two fields. When both `T` and
 // `L` are themselves `ZeroCopySend`, the composite is self-contained and has
 // a uniform memory representation, satisfying the trait's invariants.
+//
+// The default `ZeroCopySend::type_name()` returns `core::any::type_name::<Self>()`,
+// which embeds the absolute Rust paths of `T` and `L`. When the same struct is
+// declared via `#[path = "..."] mod ...;` from two different binary crates (a
+// common pattern for sharing an iceoryx2 payload between two example binaries),
+// the paths differ and iceoryx2 reports `IncompatibleTypes` even though the
+// memory layouts are identical. We compose the name from `T::type_name()` and
+// `L::type_name()` so leaf overrides via `#[type_name(...)]` propagate up.
 #[cfg(feature = "iceoryx2-beta")]
 unsafe impl<T, L> iceoryx2::prelude::ZeroCopySend for Traced<T, L>
 where
     T: iceoryx2::prelude::ZeroCopySend,
     L: iceoryx2::prelude::ZeroCopySend,
 {
+    unsafe fn type_name() -> &'static str {
+        traced_type_name(unsafe { T::type_name() }, unsafe { L::type_name() })
+    }
+}
+
+#[cfg(feature = "iceoryx2-beta")]
+fn traced_type_name(t: &'static str, l: &'static str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(&'static str, &'static str), &'static str>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(s) = guard.get(&(t, l)) {
+        return s;
+    }
+    let composed: &'static str = Box::leak(format!("wingfoil::Traced<{t}, {l}>").into_boxed_str());
+    guard.insert((t, l), composed);
+    composed
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,5 +1036,41 @@ mod tests {
         assert_eq!(l.strategy, l.ingest);
         assert_eq!(l.publish, l.ingest);
         assert_eq!(l.decode, 0);
+    }
+
+    // The Traced<T, L>::type_name() override propagates leaf overrides up so
+    // that two binaries declaring the same payload via `#[path]`-included
+    // modules can still match an iceoryx2 service. This test pins the
+    // composed-name format and confirms the macro's `#[type_name(...)]`
+    // attribute is honoured.
+    #[cfg(feature = "iceoryx2-beta")]
+    mod type_name_propagation {
+        use super::*;
+        use iceoryx2::prelude::ZeroCopySend;
+
+        #[repr(C)]
+        #[derive(Debug, Clone, Copy, Default, ZeroCopySend)]
+        #[type_name("test::Payload")]
+        struct Payload {
+            v: u64,
+        }
+
+        latency_stages! {
+            #[type_name("test::PinnedLatency")]
+            pub PinnedLatency {
+                a,
+                b,
+            }
+        }
+
+        #[test]
+        fn leaf_overrides_propagate_through_traced() {
+            assert_eq!(unsafe { Payload::type_name() }, "test::Payload");
+            assert_eq!(unsafe { PinnedLatency::type_name() }, "test::PinnedLatency");
+            assert_eq!(
+                unsafe { Traced::<Payload, PinnedLatency>::type_name() },
+                "wingfoil::Traced<test::Payload, test::PinnedLatency>",
+            );
+        }
     }
 }
