@@ -96,7 +96,6 @@ impl Sessions {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
-    pin_current_from_env("WINGFOIL_PIN_GRAPH");
     let args: Vec<String> = std::env::args().collect();
     let addr = args
         .iter()
@@ -295,6 +294,12 @@ fn main() -> anyhow::Result<()> {
     nodes.extend(register_stage_metrics(&exporter, &inbound_stats));
     nodes.extend(register_stage_stats(&exporter, "rtt_total", &rtt_stats));
     nodes.extend(register_stage_stats(&exporter, "wire_rtt", &wire_stats));
+
+    // Pin AFTER all adapter workers (web server, iceoryx2 pub/sub,
+    // Prometheus exporter, OTLP exporter) are spawned so they keep the
+    // default affinity mask. The pinned mask applies only to the graph
+    // cycle thread (this one).
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())

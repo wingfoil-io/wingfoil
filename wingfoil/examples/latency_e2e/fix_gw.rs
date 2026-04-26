@@ -91,7 +91,6 @@ enum MatcherEvent {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
-    pin_current_from_env("WINGFOIL_PIN_GRAPH");
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
@@ -282,6 +281,11 @@ fn main() -> anyhow::Result<()> {
         fix_md.data.as_node(),
         fix_ord.data.as_node(),
     ];
+
+    // Pin AFTER all adapter workers (FIX sessions, iceoryx2 pub/sub) are
+    // spawned so they keep the default affinity mask. The pinned mask
+    // applies only to the graph cycle thread (this one).
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())
