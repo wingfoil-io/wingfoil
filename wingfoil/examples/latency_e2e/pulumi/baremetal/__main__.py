@@ -314,6 +314,77 @@ eip = aws.ec2.Eip(
     tags={**tags, "Name": f"{prefix}-eip"},
 )
 
+# ── Wake-on-demand Lambda ────────────────────────────────────────────────
+# Public HTTPS function URL serving a "wake the box" page (GET /) plus a
+# small JSON API (GET /status, POST /wake). No CORS — page and API live
+# on the same origin. The lambda IAM role can only describe + start the
+# specific instance ID, so a leaked URL can't grow to anything else in
+# the account.
+
+lambda_role = aws.iam.Role(
+    f"{prefix}-wake-role",
+    assume_role_policy=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Action": "sts:AssumeRole",
+            "Effect": "Allow",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+        }],
+    }),
+    tags=tags,
+)
+
+aws.iam.RolePolicyAttachment(
+    f"{prefix}-wake-logs",
+    role=lambda_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+)
+
+aws.iam.RolePolicy(
+    f"{prefix}-wake-policy",
+    role=lambda_role.id,
+    policy=instance.id.apply(lambda iid: json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                # DescribeInstances doesn't support resource-level perms,
+                # but the lambda only ever passes one InstanceIds= value
+                # so the blast radius is purely informational.
+                "Action": ["ec2:DescribeInstances"],
+                "Resource": "*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": ["ec2:StartInstances"],
+                "Resource": f"arn:aws:ec2:*:*:instance/{iid}",
+            },
+        ],
+    })),
+)
+
+wake_lambda = aws.lambda_.Function(
+    f"{prefix}-wake",
+    role=lambda_role.arn,
+    runtime="python3.12",
+    handler="wake_lambda.handler",
+    code=pulumi.AssetArchive({
+        "wake_lambda.py": pulumi.FileAsset(str(HERE / "wake_lambda.py")),
+    }),
+    timeout=10,
+    memory_size=128,
+    environment=aws.lambda_.FunctionEnvironmentArgs(
+        variables={"INSTANCE_ID": instance.id, "WS_SERVER_PORT": "8080"},
+    ),
+    tags=tags,
+)
+
+wake_url = aws.lambda_.FunctionUrl(
+    f"{prefix}-wake-url",
+    function_name=wake_lambda.name,
+    authorization_type="NONE",
+)
+
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("instance_id",     instance.id)
 pulumi.export("public_ip",       eip.public_ip)
@@ -321,3 +392,4 @@ pulumi.export("ws_server_url",   eip.public_ip.apply(lambda ip: f"http://{ip}:80
 pulumi.export("grafana_url",     eip.public_ip.apply(lambda ip: f"http://{ip}:3000"))
 pulumi.export("prometheus_url",  eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
 pulumi.export("assets_bucket",   bucket.bucket)
+pulumi.export("wake_url",        wake_url.function_url)

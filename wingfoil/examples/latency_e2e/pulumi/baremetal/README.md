@@ -25,10 +25,14 @@ intra-process hops — actually shows up.
 
 ## Layout
 
-* `__main__.py` — VPC, EC2 bare metal, EIP, S3 bucket, secrets, IAM
+* `__main__.py` — VPC, EC2 bare metal, EIP, S3 bucket, secrets, IAM,
+  wake-on-demand Lambda
 * `user_data.sh` — first-boot bootstrap: grub `isolcpus=`, reboot, sync
   binaries from S3, write systemd units pinned to isolated cores, start
-  observability containers on housekeeping cores
+  observability containers on housekeeping cores, install idle-stop timer
+* `idle_watch.sh` — per-minute self-stop check (uptime ≥ 10 min &&
+  active sessions == 0 for ≥ 10 min)
+* `wake_lambda.py` — Lambda handler serving the wake page + JSON API
 * `Pulumi.yaml` — config schema (region, instance type, core layout)
 
 ## One-time setup
@@ -77,6 +81,34 @@ pulumi stack output ws_server_url
 
 # 4. Open the URL, click start, watch real per-hop numbers
 ```
+
+## Wake from the browser
+
+`pulumi up` exports a `wake_url` — a public HTTPS Lambda function URL
+that serves a "wake the perf box" page:
+
+```bash
+pulumi stack output wake_url
+# → https://<id>.lambda-url.eu-west-2.on.aws/
+```
+
+Anyone with that URL can:
+
+* see the current state (`stopped` / `pending` / `running` / `stopping`),
+* click a button to start the box if it's stopped,
+* follow a link to the demo once the box reports `running`.
+
+The Lambda's IAM role only permits `ec2:StartInstances` against this
+specific instance ARN, so a leaked URL can't escalate. It also can't
+*stop* the box — the auto-stop daemon on the box itself handles that.
+
+**Griefing risk:** the URL is unauthenticated. Anyone who finds it can
+loop-wake the box and burn ~$0.50 per cold-boot cycle. If you're sharing
+it publicly, consider one of:
+
+* Add a `wake_token` query-param check in `wake_lambda.py` (~10 lines)
+* Front the function URL with CloudFront + WAF rate limit
+* Just keep the URL private and hand it out via DM
 
 ## Stop without destroying
 
