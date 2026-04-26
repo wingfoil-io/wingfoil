@@ -4,6 +4,11 @@
   "description": "Browser client for the wingfoil web adapter. Thin TypeScript wrapper around the wingfoil-wasm decoder with reactive framework bindings.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/wingfoil-io/wingfoil",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wingfoil-io/wingfoil.git",
+    "directory": "wingfoil-js"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
