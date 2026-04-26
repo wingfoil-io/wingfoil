@@ -73,6 +73,8 @@ ws_server_core = config.get("ws_server_core") or "2"
 fix_gw_core = config.get("fix_gw_core") or "4"
 lmax_username = config.require_secret("lmax_username")
 lmax_password = config.require_secret("lmax_password")
+alert_email = config.get("alert_email") or ""
+monthly_budget_usd = config.get("monthly_budget_usd") or "50"
 
 tags = {"Project": project, "Stack": stack, "ManagedBy": "Pulumi"}
 
@@ -373,6 +375,10 @@ wake_lambda = aws.lambda_.Function(
     }),
     timeout=10,
     memory_size=128,
+    # Hard ceiling on concurrent containers — caps total attack
+    # throughput regardless of source IP count. Two is plenty for the
+    # demo's request volume; legitimate users will never notice.
+    reserved_concurrent_executions=2,
     environment=aws.lambda_.FunctionEnvironmentArgs(
         variables={"INSTANCE_ID": instance.id, "WS_SERVER_PORT": "8080"},
     ),
@@ -384,6 +390,68 @@ wake_url = aws.lambda_.FunctionUrl(
     function_name=wake_lambda.name,
     authorization_type="NONE",
 )
+
+# ── Cost / abuse alarms ──────────────────────────────────────────────────
+# Two-layer defence on top of the lambda concurrency cap:
+#   (a) Real-time alarm on invocation rate — catches an ongoing attack
+#       within minutes (not 24h like billing data).
+#   (b) AWS Budget — backstop monthly cap with email at 80%% and 100%%.
+# Both depend on `alert_email` being configured. Without it we skip
+# alarm creation entirely (silent rather than half-broken).
+
+if alert_email:
+    alerts = aws.sns.Topic(f"{prefix}-alerts", tags=tags)
+    aws.sns.TopicSubscription(
+        f"{prefix}-alerts-email",
+        topic=alerts.arn,
+        protocol="email",
+        endpoint=alert_email,
+    )
+
+    aws.cloudwatch.MetricAlarm(
+        f"{prefix}-wake-rate-alarm",
+        alarm_description="wingfoil baremetal — wake lambda hit >100 invocations in 5 min "
+                          "(possible abuse). The lambda is concurrency-capped so this won't "
+                          "actually drain your wallet, but worth a look.",
+        comparison_operator="GreaterThanThreshold",
+        evaluation_periods=1,
+        period=300,
+        threshold=100,
+        statistic="Sum",
+        namespace="AWS/Lambda",
+        metric_name="Invocations",
+        dimensions={"FunctionName": wake_lambda.name},
+        alarm_actions=[alerts.arn],
+        treat_missing_data="notBreaching",
+        tags=tags,
+    )
+
+    # AWS Budgets lives in the account, not a region. Threshold is the
+    # whole-account monthly forecast — for a single-stack account that's
+    # effectively this stack's spend.
+    aws.budgets.Budget(
+        f"{prefix}-monthly-budget",
+        budget_type="COST",
+        limit_amount=monthly_budget_usd,
+        limit_unit="USD",
+        time_unit="MONTHLY",
+        notifications=[
+            aws.budgets.BudgetNotificationArgs(
+                comparison_operator="GREATER_THAN",
+                threshold=80,
+                threshold_type="PERCENTAGE",
+                notification_type="FORECASTED",
+                subscriber_email_addresses=[alert_email],
+            ),
+            aws.budgets.BudgetNotificationArgs(
+                comparison_operator="GREATER_THAN",
+                threshold=100,
+                threshold_type="PERCENTAGE",
+                notification_type="ACTUAL",
+                subscriber_email_addresses=[alert_email],
+            ),
+        ],
+    )
 
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("instance_id",     instance.id)

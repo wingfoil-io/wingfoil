@@ -29,3 +29,11 @@ config:
     description: Core ID for the fix_gw graph thread (must appear in
       isolated_cores).
     default: "4"
+  alert_email:
+    description: Email for cost / abuse alarms. If unset, no alarms are
+      created — you're flying blind on a public wake URL.
+    default: ""
+  monthly_budget_usd:
+    description: AWS Budgets threshold. Sends a warning at 80%% and a
+      breach notice at 100%% of this number to alert_email.
+    default: "50"
