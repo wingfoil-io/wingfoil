@@ -3,6 +3,7 @@
 [![Crates.io Version](https://img.shields.io/crates/v/wingfoil.svg)](https://crates.io/crates/wingfoil)
 [![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
+[![npm](https://img.shields.io/npm/v/@wingfoil/client.svg)](https://www.npmjs.com/package/@wingfoil/client)
 [![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
 
 # Wingfoil
