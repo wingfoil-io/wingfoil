@@ -52,6 +52,10 @@ jobs:
         working-directory: wingfoil-js
         run: pnpm run build:ts
 
+      - name: Lint
+        working-directory: wingfoil-js
+        run: pnpm run lint
+
       - name: Publish to npm
         working-directory: wingfoil-js
         run: pnpm publish --access public --no-git-checks
