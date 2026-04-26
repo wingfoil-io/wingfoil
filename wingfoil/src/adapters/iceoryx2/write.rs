@@ -121,8 +121,6 @@ macro_rules! create_publisher_and_notifier {
 
 /// Like `create_publisher_and_notifier` but for slice publishers which need
 /// `initial_max_slice_len`.
-/// WARNING: For Ipc variant, service opening can block indefinitely if RouDi daemon is not running.
-/// Use Local variant for local testing without RouDi.
 macro_rules! create_slice_publisher_and_notifier {
     ($svc:ty, $service_name:expr, $variant:expr, $history_size:expr,
      $initial_max_slice_len:expr) => {{
@@ -389,7 +387,6 @@ where
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                super::check_roudi_availability()?;
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -513,7 +510,6 @@ impl MutableNode for Iceoryx2SlicePublisher {
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                super::check_roudi_availability()?;
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
