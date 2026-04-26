@@ -385,9 +385,6 @@ where
 
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
-                            Config::global_config(),
-                        );
                         let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
@@ -399,9 +396,6 @@ where
                         self.subscriber = Some(Iceoryx2SubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
-                            Config::global_config(),
-                        );
                         let (node, subscriber) = create_subscriber!(
                             local::Service,
                             &self.service_name,
@@ -583,9 +577,6 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 state.always_callback();
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
-                            Config::global_config(),
-                        );
                         let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
@@ -597,9 +588,6 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
-                            Config::global_config(),
-                        );
                         let (node, subscriber) = create_subscriber!(
                             local::Service,
                             &self.service_name,

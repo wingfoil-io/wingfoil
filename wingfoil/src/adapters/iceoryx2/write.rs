@@ -394,9 +394,6 @@ where
 
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
-                    Config::global_config(),
-                );
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -409,9 +406,6 @@ where
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
-                    Config::global_config(),
-                );
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,
@@ -528,9 +522,6 @@ impl MutableNode for Iceoryx2SlicePublisher {
 
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
-                    Config::global_config(),
-                );
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -543,9 +534,6 @@ impl MutableNode for Iceoryx2SlicePublisher {
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
-                    Config::global_config(),
-                );
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,

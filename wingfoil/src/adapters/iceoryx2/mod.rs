@@ -278,7 +278,7 @@ pub fn check_roudi_availability() -> Iceoryx2Result<()> {
 
     // Check if iox-roudi process is running using ps + grep filter
     let ps_output = Command::new("sh")
-        .args(&["-c", "ps aux | grep '[i]ox-roudi' | grep -v grep"])
+        .args(["-c", "ps aux | grep '[i]ox-roudi' | grep -v grep"])
         .output();
 
     match ps_output {
@@ -286,16 +286,14 @@ pub fn check_roudi_availability() -> Iceoryx2Result<()> {
             // Process found - RouDi is running
             Ok(())
         }
-        _ => {
-            Err(Iceoryx2Error::Other(anyhow::anyhow!(
-                "ERROR: RouDi daemon is not running!\n\n\
+        _ => Err(Iceoryx2Error::Other(anyhow::anyhow!(
+            "ERROR: RouDi daemon is not running!\n\n\
                  The iceoryx2 IPC adapter requires the RouDi daemon.\n\n\
                  To start RouDi, run:\n  \
                  iox-roudi &\n\n\
                  Alternative: Use Local variant for in-process testing without RouDi:\n  \
                  iceoryx2_sub_with::<T>(service_name, Iceoryx2ServiceVariant::Local)"
-            )))
-        }
+        ))),
     }
 }
 
