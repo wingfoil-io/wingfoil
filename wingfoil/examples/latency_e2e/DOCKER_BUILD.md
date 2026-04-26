@@ -8,14 +8,19 @@
 
 ## Build Images Locally
 
-From the root of the wingfoil repo:
+The fargate stack ships five containers: the two wingfoil binaries plus three
+observability containers (prometheus, tempo, grafana) with their configs baked
+in. From the root of the wingfoil repo:
 
 ```bash
-# Build ws_server image
+# Wingfoil binaries
 docker build -f wingfoil/examples/latency_e2e/Dockerfile.ws_server -t wingfoil-ws-server:latest .
+docker build -f wingfoil/examples/latency_e2e/Dockerfile.fix_gw    -t wingfoil-fix-gw:latest    .
 
-# Build fix_gw image
-docker build -f wingfoil/examples/latency_e2e/Dockerfile.fix_gw -t wingfoil-fix-gw:latest .
+# Observability — base image + COPY of the matching config dir
+docker build -f wingfoil/examples/latency_e2e/Dockerfile.prometheus -t wingfoil-prometheus:latest .
+docker build -f wingfoil/examples/latency_e2e/Dockerfile.tempo      -t wingfoil-tempo:latest      .
+docker build -f wingfoil/examples/latency_e2e/Dockerfile.grafana    -t wingfoil-grafana:latest    .
 
 # Verify images built successfully
 docker images | grep wingfoil
@@ -26,8 +31,11 @@ docker images | grep wingfoil
 ### Setup ECR repositories
 
 ```bash
-aws ecr create-repository --repository-name wingfoil/ws-server --region us-east-1
-aws ecr create-repository --repository-name wingfoil/fix-gw --region us-east-1
+aws ecr create-repository --repository-name wingfoil/ws-server  --region us-east-1
+aws ecr create-repository --repository-name wingfoil/fix-gw     --region us-east-1
+aws ecr create-repository --repository-name wingfoil/prometheus --region us-east-1
+aws ecr create-repository --repository-name wingfoil/tempo      --region us-east-1
+aws ecr create-repository --repository-name wingfoil/grafana    --region us-east-1
 ```
 
 ### Authenticate Docker with ECR
@@ -39,13 +47,11 @@ aws ecr get-login-password --region us-east-1 | docker login --username AWS --pa
 ### Tag and push images
 
 ```bash
-# ws_server
-docker tag wingfoil-ws-server:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest
-docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest
-
-# fix_gw
-docker tag wingfoil-fix-gw:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest
-docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest
+ECR=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+for name in ws-server fix-gw prometheus tempo grafana; do
+  docker tag  wingfoil-${name}:latest "${ECR}/wingfoil/${name}:latest"
+  docker push "${ECR}/wingfoil/${name}:latest"
+done
 ```
 
 ## Push to Docker Hub
@@ -59,13 +65,11 @@ docker login
 ### Tag and push images
 
 ```bash
-# ws_server
-docker tag wingfoil-ws-server:latest <YOUR_DOCKER_HUB_USERNAME>/wingfoil-ws-server:latest
-docker push <YOUR_DOCKER_HUB_USERNAME>/wingfoil-ws-server:latest
-
-# fix_gw
-docker tag wingfoil-fix-gw:latest <YOUR_DOCKER_HUB_USERNAME>/wingfoil-fix-gw:latest
-docker push <YOUR_DOCKER_HUB_USERNAME>/wingfoil-fix-gw:latest
+HUB=<YOUR_DOCKER_HUB_USERNAME>
+for name in ws-server fix-gw prometheus tempo grafana; do
+  docker tag  wingfoil-${name}:latest "${HUB}/wingfoil-${name}:latest"
+  docker push "${HUB}/wingfoil-${name}:latest"
+done
 ```
 
 ## Testing Locally with Docker Compose
@@ -84,10 +88,14 @@ docker-compose up
 Once images are pushed, use the image URIs in the Pulumi config:
 
 ```bash
-cd wingfoil/examples/latency_e2e/pulumi
+cd wingfoil/examples/latency_e2e/pulumi/fargate
 
-pulumi config set ws_server_image "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest"
-pulumi config set fix_gw_image "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest"
+ECR=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+pulumi config set ws_server_image  "${ECR}/wingfoil/ws-server:latest"
+pulumi config set fix_gw_image     "${ECR}/wingfoil/fix-gw:latest"
+pulumi config set prometheus_image "${ECR}/wingfoil/prometheus:latest"
+pulumi config set tempo_image      "${ECR}/wingfoil/tempo:latest"
+pulumi config set grafana_image    "${ECR}/wingfoil/grafana:latest"
 
 pulumi up
 ```

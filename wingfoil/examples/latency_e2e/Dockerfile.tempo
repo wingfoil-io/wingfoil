@@ -1,0 +1,8 @@
+# Tempo with the latency_e2e config baked in.
+#
+# Build from the repo root:
+#   docker build -f wingfoil/examples/latency_e2e/Dockerfile.tempo \
+#     -t wingfoil-tempo:latest .
+FROM grafana/tempo:2.6.1
+
+COPY wingfoil/examples/latency_e2e/tempo/tempo.yaml /etc/tempo/tempo.yaml

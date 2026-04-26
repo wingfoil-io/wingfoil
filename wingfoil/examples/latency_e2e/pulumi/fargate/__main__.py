@@ -9,6 +9,9 @@ environment = config.get("environment") or "demo"
 aws_region = config.require("aws:region")
 ws_server_image = config.require("ws_server_image")
 fix_gw_image = config.require("fix_gw_image")
+prometheus_image = config.require("prometheus_image")
+tempo_image = config.require("tempo_image")
+grafana_image = config.require("grafana_image")
 lmax_username = config.require_secret("lmax_username")
 lmax_password = config.require_secret("lmax_password")
 cpu = config.get_int("cpu") or 1024
@@ -119,12 +122,6 @@ log_group = aws.cloudwatch.LogGroup(f"{project_name}-ecs-logs",
     retention_in_days=7,
     tags=tags)
 
-# S3 bucket for Tempo
-get_account_id = aws.get_caller_identity()
-s3_bucket = aws.s3.Bucket(f"{project_name}-tempo-traces",
-    bucket=f"{project_name}-tempo-traces-{get_account_id.account_id}",
-    tags={"Name": f"{project_name}-tempo-traces", **tags})
-
 # Secrets Manager
 lmax_username_secret = aws.secretsmanager.Secret(f"{project_name}-lmax-username",
     description="LMAX FIX username",
@@ -153,18 +150,6 @@ ecs_task_role = aws.iam.Role(f"{project_name}-ecs-task-role",
         }]
     }),
     tags=tags)
-
-# IAM policy for S3 access
-s3_policy = aws.iam.RolePolicy(f"{project_name}-ecs-s3-policy",
-    role=ecs_task_role.id,
-    policy=s3_bucket.arn.apply(lambda arn: json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Action": ["s3:*"],
-            "Resource": [arn, f"{arn}/*"]
-        }]
-    })))
 
 # IAM policy for Secrets Manager access
 secrets_policy = aws.iam.RolePolicy(f"{project_name}-ecs-secrets-policy",
@@ -276,7 +261,6 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
         log_group.name,
         lmax_username_secret.arn,
         lmax_password_secret.arn,
-        s3_bucket.arn
     ).apply(lambda args: json.dumps([
         # ws_server container
         {
@@ -321,15 +305,12 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 }
             }
         },
-        # Prometheus container
+        # Prometheus container (config baked into the image)
         {
             "name": "prometheus",
-            "image": "prom/prometheus:v2.55.1",
+            "image": prometheus_image,
             "portMappings": [
                 {"containerPort": 9090, "hostPort": 9090, "protocol": "tcp"},
-            ],
-            "mountPoints": [
-                {"sourceVolume": "prometheus-config", "containerPath": "/etc/prometheus", "readOnly": True}
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",
@@ -340,20 +321,14 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 }
             }
         },
-        # Tempo container
+        # Tempo container (config baked into the image; local-filesystem backend
+        # — traces don't need to outlive the task for this demo).
         {
             "name": "tempo",
-            "image": "grafana/tempo:2.6.1",
+            "image": tempo_image,
             "portMappings": [
                 {"containerPort": 3200, "hostPort": 3200, "protocol": "tcp"},
                 {"containerPort": 4318, "hostPort": 4318, "protocol": "tcp"},
-            ],
-            "environment": [
-                {"name": "TEMPO_S3_BUCKET", "value": args[3].split("/")[-1]},
-                {"name": "AWS_REGION", "value": aws_region},
-            ],
-            "mountPoints": [
-                {"sourceVolume": "tempo-config", "containerPath": "/etc/tempo", "readOnly": True}
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",
@@ -364,10 +339,10 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 }
             }
         },
-        # Grafana container
+        # Grafana container (provisioning baked into the image)
         {
             "name": "grafana",
-            "image": "grafana/grafana:11.3.0",
+            "image": grafana_image,
             "portMappings": [
                 {"containerPort": 3000, "hostPort": 3000, "protocol": "tcp"},
             ],
@@ -380,9 +355,6 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 {"name": "GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH", "value": "/etc/grafana/provisioning/dashboards/latency.json"},
                 {"name": "GF_FEATURE_TOGGLES_ENABLE", "value": "traceqlEditor"},
             ],
-            "mountPoints": [
-                {"sourceVolume": "grafana-provisioning", "containerPath": "/etc/grafana/provisioning", "readOnly": True}
-            ],
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -393,11 +365,6 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
             }
         }
     ])),
-    volumes=[
-        aws.ecs.TaskDefinitionVolumeArgs(name="prometheus-config", host_path=None),
-        aws.ecs.TaskDefinitionVolumeArgs(name="tempo-config", host_path=None),
-        aws.ecs.TaskDefinitionVolumeArgs(name="grafana-provisioning", host_path=None),
-    ],
     tags=tags)
 
 # ECS Service
@@ -431,5 +398,4 @@ pulumi.export("alb_dns_name", alb.dns_name)
 pulumi.export("alb_arn", alb.arn)
 pulumi.export("ecs_cluster_name", cluster.name)
 pulumi.export("ecs_service_name", service.name)
-pulumi.export("s3_bucket_name", s3_bucket.id)
 pulumi.export("cloudwatch_log_group", log_group.name)
