@@ -1,0 +1,8 @@
+# Grafana with the latency_e2e datasources + dashboard baked in.
+#
+# Build from the repo root:
+#   docker build -f wingfoil/examples/latency_e2e/Dockerfile.grafana \
+#     -t wingfoil-grafana:latest .
+FROM grafana/grafana:11.3.0
+
+COPY wingfoil/examples/latency_e2e/grafana/provisioning /etc/grafana/provisioning

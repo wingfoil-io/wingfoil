@@ -1,0 +1,8 @@
+# Prometheus with the latency_e2e scrape config baked in.
+#
+# Build from the repo root:
+#   docker build -f wingfoil/examples/latency_e2e/Dockerfile.prometheus \
+#     -t wingfoil-prometheus:latest .
+FROM prom/prometheus:v2.55.1
+
+COPY wingfoil/examples/latency_e2e/prometheus/prometheus.yml /etc/prometheus/prometheus.yml
