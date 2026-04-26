@@ -380,9 +380,6 @@ where
 
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        // Check if RouDi is available before creating node in Spin mode
-                        // (Threaded/Signaled modes will catch errors in background thread)
-                        super::check_roudi_availability()?;
                         let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
@@ -570,9 +567,6 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 state.always_callback();
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        // Check if RouDi is available before creating node in Spin mode
-                        // (Threaded/Signaled modes will catch errors in background thread)
-                        super::check_roudi_availability()?;
                         let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
