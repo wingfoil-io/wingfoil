@@ -272,41 +272,30 @@ impl From<iceoryx2::waitset::WaitSetRunError> for Iceoryx2Error {
 }
 
 /// Check if RouDi daemon is available for IPC services.
-/// Returns an error with helpful message if RouDi is not responding.
+/// Returns an error with helpful message if RouDi is not running.
 pub fn check_roudi_availability() -> Iceoryx2Result<()> {
-    use iceoryx2::node::NodeBuilder;
-    use std::sync::mpsc;
-    use std::time::Duration;
+    use std::process::Command;
 
-    // Verify RouDi is available by trying to create a node and test service with a timeout.
-    let (tx, rx) = mpsc::channel();
-    let timeout = Duration::from_millis(500);
+    // Check if iox-roudi process is running using ps + grep filter
+    let ps_output = Command::new("sh")
+        .args(&["-c", "ps aux | grep '[i]ox-roudi' | grep -v grep"])
+        .output();
 
-    std::thread::spawn(move || match NodeBuilder::new().create::<ipc::Service>() {
-        Ok(node) => {
-            let service_name = "_roudi_test_svc".try_into().unwrap_or_else(|_| {
-                std::process::exit(1);
-            });
-            let test_result = node
-                .service_builder(&service_name)
-                .publish_subscribe::<u32>()
-                .open_or_create();
-            let _ = tx.send(test_result.is_ok());
+    match ps_output {
+        Ok(output) if output.status.success() && !output.stdout.is_empty() => {
+            // Process found - RouDi is running
+            Ok(())
         }
-        Err(_) => {
-            let _ = tx.send(false);
-        }
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(true) => Ok(()),
-        Ok(false) | Err(_) => Err(Iceoryx2Error::Other(anyhow::anyhow!(
-            "RouDi daemon is not available or not responding.\n\n\
-                 For IPC mode (default), start the iceoryx2 RouDi daemon:\n  \
+        _ => {
+            Err(Iceoryx2Error::Other(anyhow::anyhow!(
+                "ERROR: RouDi daemon is not running!\n\n\
+                 The iceoryx2 IPC adapter requires the RouDi daemon.\n\n\
+                 To start RouDi, run:\n  \
                  iox-roudi &\n\n\
-                 Or use Local variant for in-process testing (no daemon required):\n  \
+                 Alternative: Use Local variant for in-process testing without RouDi:\n  \
                  iceoryx2_sub_with::<T>(service_name, Iceoryx2ServiceVariant::Local)"
-        ))),
+            )))
+        }
     }
 }
 
