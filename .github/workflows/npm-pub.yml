@@ -11,6 +11,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +62,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: wingfoil-js
-        run: pnpm publish --access public --no-git-checks
+        run: pnpm publish --access public --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
