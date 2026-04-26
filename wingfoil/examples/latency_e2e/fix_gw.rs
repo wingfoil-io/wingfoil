@@ -38,8 +38,8 @@ use wingfoil::adapters::iceoryx2::{iceoryx2_pub, iceoryx2_sub};
 use wingfoil::*;
 
 use shared::{
-    RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, precise_stamps_enabled,
-    round_trip_latency, session_hex,
+    RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env,
+    precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
 const LMAX_HOST_MD: &str = "fix-marketdata.london-demo.lmax.com";
@@ -281,6 +281,11 @@ fn main() -> anyhow::Result<()> {
         fix_md.data.as_node(),
         fix_ord.data.as_node(),
     ];
+
+    // Pin AFTER all adapter workers (FIX sessions, iceoryx2 pub/sub) are
+    // spawned so they keep the default affinity mask. The pinned mask
+    // applies only to the graph cycle thread (this one).
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())

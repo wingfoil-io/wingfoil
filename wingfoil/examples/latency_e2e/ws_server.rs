@@ -33,8 +33,8 @@ use wingfoil::*;
 
 use shared::{
     EchoFrame, FillFrame, OrderFrame, RoundTrip, RoundTripLatency, SVC_FILLS, SVC_ORDERS,
-    SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, precise_stamps_enabled,
-    round_trip_latency, session_hex,
+    SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, pin_current_from_env,
+    precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
 // ── Session registry ──────────────────────────────────────────────────────
@@ -294,6 +294,12 @@ fn main() -> anyhow::Result<()> {
     nodes.extend(register_stage_metrics(&exporter, &inbound_stats));
     nodes.extend(register_stage_stats(&exporter, "rtt_total", &rtt_stats));
     nodes.extend(register_stage_stats(&exporter, "wire_rtt", &wire_stats));
+
+    // Pin AFTER all adapter workers (web server, iceoryx2 pub/sub,
+    // Prometheus exporter, OTLP exporter) are spawned so they keep the
+    // default affinity mask. The pinned mask applies only to the graph
+    // cycle thread (this one).
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())

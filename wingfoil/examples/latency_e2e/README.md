@@ -26,6 +26,9 @@ examples/latency_e2e/
   prometheus/        prometheus scrape config
   grafana/           provisioned datasource + dashboard
   docker-compose.yml grafana + prometheus stack
+  pulumi/
+    fargate/         always-on AWS Fargate stack (cheap public demo)
+    baremetal/       on-demand EC2 bare-metal stack (perf showcase)
 ```
 
 ## Run it
@@ -182,6 +185,26 @@ split is inbound vs outbound wire legs — they're lumped into
 | Grafana | 3000 |
 
 All overridable via the env vars documented at the top of each binary.
+
+## Pinning the graph thread to a core
+
+Both binaries run their hot graph cycle on the main thread. Set
+`WINGFOIL_PIN_GRAPH` to a comma-separated core list to pin it (Linux only;
+no-op elsewhere):
+
+```bash
+# Single core
+WINGFOIL_PIN_GRAPH=2 cargo run --release --example latency_e2e_ws_server ...
+
+# Multi-core set (kernel may schedule across any of these)
+WINGFOIL_PIN_GRAPH=2,3 cargo run --release --example latency_e2e_fix_gw ...
+```
+
+The adapter worker threads (`wingfoil-web`, FIX session, iceoryx2 sub) are
+mostly I/O-blocked, so we don't pin them individually. If you want to keep
+them off the hot core too, isolate the core at boot (`isolcpus=2`) and run
+the rest of the process on the housekeeping cores via `taskset` — the
+explicit `WINGFOIL_PIN_GRAPH` call still wins on the graph thread.
 
 ## Pre-commit
 

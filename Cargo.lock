@@ -6625,6 +6625,7 @@ dependencies = [
  "kanal",
  "kdb-plus-fixed",
  "lazy_static",
+ "libc",
  "lobster",
  "log",
  "num",

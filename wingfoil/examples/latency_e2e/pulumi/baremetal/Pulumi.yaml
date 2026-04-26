@@ -1,0 +1,39 @@
+name: wingfoil-latency-baremetal
+runtime: python
+description: On-demand bare-metal EC2 deployment of the wingfoil latency_e2e demo.
+  Spin up via `pulumi up`, tear down via `pulumi destroy` (or stop the instance to
+  pause and keep the EIP). The fargate stack is the always-on counterpart.
+
+config:
+  aws:region:
+    description: AWS region. Default eu-west-2 — LMAX London Demo lives in London,
+      so this minimises FIX RTT (~5 ms vs. ~75 ms transatlantic).
+    default: eu-west-2
+  instance_type:
+    description: EC2 bare-metal instance type. c7i.metal-24xl is the cheapest
+      current-gen bare metal in eu-west-2 (~$4.28/hr on-demand, 96 vCPU). Smaller
+      bare-metal sizes don't exist in the c7i family. m5.metal / c5n.metal are
+      previous-gen alternatives at similar price.
+    default: c7i.metal-24xl
+  isolated_cores:
+    description: Comma-separated CPU IDs to isolate via grub `isolcpus=`. The
+      systemd units pin ws_server to the first core in this list and fix_gw to
+      the third. Cores 0-1 are reserved for housekeeping (kernel, observability
+      containers).
+    default: 2,3,4,5
+  ws_server_core:
+    description: Core ID for the ws_server graph thread (must appear in
+      isolated_cores).
+    default: "2"
+  fix_gw_core:
+    description: Core ID for the fix_gw graph thread (must appear in
+      isolated_cores).
+    default: "4"
+  alert_email:
+    description: Email for cost / abuse alarms. If unset, no alarms are
+      created — you're flying blind on a public wake URL.
+    default: ""
+  monthly_budget_usd:
+    description: AWS Budgets threshold. Sends a warning at 80%% and a
+      breach notice at 100%% of this number to alert_email.
+    default: "50"

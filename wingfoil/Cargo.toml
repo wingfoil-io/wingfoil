@@ -132,6 +132,7 @@ rxrust = "1.0.0-rc.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
 
 [[example]]
 name = "dynamic-group"
