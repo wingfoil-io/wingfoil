@@ -17,28 +17,31 @@ pub(crate) struct TimeQueue<T: Hash + Eq> {
 }
 
 impl<T: Hash + Eq + std::fmt::Debug + std::clone::Clone> TimeQueue<T> {
-    pub fn next_time(&self) -> NanoTime {
-        self.queue.peek().unwrap().1.0
+    /// Time of the next item, or `None` if the queue is empty.
+    pub fn next_time(&self) -> Option<NanoTime> {
+        self.queue.peek().map(|(_, Reverse(t))| *t)
     }
     pub fn is_empty(&self) -> bool {
-        let item = self.queue.peek();
-        item.is_none()
+        self.queue.is_empty()
     }
     pub fn push(&mut self, value: T, time: NanoTime) {
         self.queue.push(ValueAt::new(value, time), Reverse(time));
     }
-    pub fn pop(&mut self) -> T {
-        self.queue.pop().unwrap().0.value
+    /// Pop the earliest item, or `None` if the queue is empty.
+    pub fn pop(&mut self) -> Option<T> {
+        self.queue.pop().map(|(va, _)| va.value)
+    }
+    /// Pop the earliest item iff its time is `<= current_time`. Designed for the
+    /// `while let Some(v) = q.pop_if_pending(now) { ... }` idiom that drains all
+    /// callbacks due at or before the current engine tick.
+    pub fn pop_if_pending(&mut self, current_time: NanoTime) -> Option<T> {
+        match self.next_time() {
+            Some(t) if t <= current_time => self.pop(),
+            _ => None,
+        }
     }
     pub fn clear(&mut self) {
         self.queue.clear();
-    }
-    pub fn pending(&self, current_time: NanoTime) -> bool {
-        let item = self.queue.peek();
-        match item {
-            Some(item) => item.1.0 <= current_time,
-            None => false,
-        }
     }
 }
 
@@ -54,7 +57,7 @@ mod tests {
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(100));
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
 
@@ -64,9 +67,9 @@ mod tests {
         queue.push(1, NanoTime::new(100));
         queue.push(1, NanoTime::new(200));
         queue.push(1, NanoTime::new(300));
-        assert_eq!(queue.pop(), 1);
-        assert_eq!(queue.pop(), 1);
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
 
@@ -77,29 +80,43 @@ mod tests {
         queue.push(2, NanoTime::new(100));
         queue.push(3, NanoTime::new(100));
         // 3 values in indeterminate order
-        queue.pop();
-        queue.pop();
-        queue.pop();
+        assert!(queue.pop().is_some());
+        assert!(queue.pop().is_some());
+        assert!(queue.pop().is_some());
         assert!(queue.is_empty());
     }
+
     #[test]
     fn sorted() {
         let mut queue: TimeQueue<u32> = TimeQueue::new();
         queue.push(1, NanoTime::new(300));
         queue.push(3, NanoTime::new(100));
         queue.push(2, NanoTime::new(200));
-        assert_eq!(queue.pop(), 3);
-        assert_eq!(queue.pop(), 2);
-        assert_eq!(queue.pop(), 1);
+        assert_eq!(queue.pop(), Some(3));
+        assert_eq!(queue.pop(), Some(2));
+        assert_eq!(queue.pop(), Some(1));
         assert!(queue.is_empty());
     }
+
     #[test]
-    fn pending() {
+    fn pop_if_pending() {
         let mut queue: TimeQueue<u32> = TimeQueue::new();
-        assert!(!queue.pending(NanoTime::MAX));
-        assert!(!queue.pending(NanoTime::new(0)));
+        assert_eq!(queue.pop_if_pending(NanoTime::MAX), None);
         queue.push(1, NanoTime::new(100));
-        assert!(queue.pending(NanoTime::new(100)));
-        assert!(!queue.pending(NanoTime::new(99)));
+        assert_eq!(queue.pop_if_pending(NanoTime::new(99)), None);
+        assert_eq!(queue.pop_if_pending(NanoTime::new(100)), Some(1));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn next_time_is_none_when_empty() {
+        let queue: TimeQueue<u32> = TimeQueue::new();
+        assert_eq!(queue.next_time(), None);
+    }
+
+    #[test]
+    fn pop_is_none_when_empty() {
+        let mut queue: TimeQueue<u32> = TimeQueue::new();
+        assert_eq!(queue.pop(), None);
     }
 }

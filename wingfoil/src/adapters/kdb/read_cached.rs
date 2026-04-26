@@ -138,7 +138,10 @@ where
                             }
                         }
                     }
-                    let sock = socket.as_mut().unwrap();
+                    // Just populated above on cache miss when None.
+                    let sock = socket
+                        .as_mut()
+                        .expect("socket initialised on cache miss above");
 
                     info!("KDB query: {query}");
                     let fetch_start = std::time::Instant::now();

@@ -179,7 +179,12 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                             }
 
                             // Validate: all timestamps must be >= current graph time
-                            let min_time = batch.iter().map(|va| va.time).min().unwrap();
+                            // (batch is non-empty per the `is_empty()` check above).
+                            let min_time = batch
+                                .iter()
+                                .map(|va| va.time)
+                                .min()
+                                .expect("batch is non-empty");
                             if min_time < state.time() {
                                 return Err(anyhow!(
                                     "received HistoricalBatch with timestamp less than graph time, {} < {}",
@@ -207,16 +212,19 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                 }
                 while let Some(value_at) = self.queue.front() {
                     if value_at.time <= state.time() {
-                        values.push(self.queue.pop_front().unwrap().value);
+                        // front() returned Some, so pop_front is guaranteed.
+                        let popped = self.queue.pop_front().expect("front() just returned Some");
+                        values.push(popped.value);
                     } else {
                         break;
                     }
                 }
-                if self.queue.is_empty() {
-                    // Clear message_time when queue is empty to avoid infinite callback loops
-                    self.message_time = None;
-                } else {
-                    state.add_callback(self.queue.front().unwrap().time);
+                match self.queue.front() {
+                    None => {
+                        // Clear message_time when queue is empty to avoid infinite callback loops.
+                        self.message_time = None;
+                    }
+                    Some(head) => state.add_callback(head.time),
                 }
             }
         }

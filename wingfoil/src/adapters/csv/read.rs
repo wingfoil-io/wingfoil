@@ -14,12 +14,16 @@ fn csv_iterator<T>(
 where
     T: Element + DeserializeOwned + 'static,
 {
+    let file = File::open(path).unwrap_or_else(|e| panic!("csv_read: failed to open {path}: {e}"));
+    let path_owned = path.to_owned();
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
-        .from_reader(File::open(path).unwrap())
+        .from_reader(file)
         .into_deserialize();
     Box::new(data.map(move |record: Result<T, csv::Error>| {
-        let rec = record.unwrap();
+        let rec = record.unwrap_or_else(|e| {
+            panic!("csv_read: failed to deserialize row from {path_owned}: {e}")
+        });
         let t = get_time_func(&rec);
         ValueAt {
             value: rec,
@@ -89,6 +93,18 @@ mod tests {
             .collect();
         assert_eq!(data_ticks.len(), 6);
         assert!(data_ticks.iter().all(|b| b.value.len() == 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "csv_read: failed to open")]
+    fn csv_read_missing_file_panics_with_context() {
+        // Verify that a missing CSV file produces a contextual panic message
+        // rather than a bare "called Option::unwrap on None".
+        let _ = csv_read::<Record>(
+            "src/adapters/csv/test_data/does_not_exist.csv",
+            get_time,
+            false,
+        );
     }
 
     #[test]

@@ -31,7 +31,13 @@ impl<T: Element> MutableNode for IteratorStream<T> {
         self.value.clear();
         while let Some(value_at) = self.peekable.peek() {
             if value_at.time == state.time() {
-                let val = self.peekable.next().unwrap().value.clone();
+                // peek() returned Some, so next() is guaranteed.
+                let val = self
+                    .peekable
+                    .next()
+                    .expect("peek() just returned Some")
+                    .value
+                    .clone();
                 self.value.push(val);
             } else {
                 break;
@@ -70,7 +76,12 @@ pub struct SimpleIteratorStream<T: Element> {
 #[node(output = value: T)]
 impl<T: Element> MutableNode for SimpleIteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        let val_at1 = self.peekable.next().unwrap();
+        // Scheduling only happens when peek() is Some, so cycle() can only be
+        // entered if the iterator has at least one item left.
+        let val_at1 = self
+            .peekable
+            .next()
+            .expect("SimpleIteratorStream cycled with no upcoming item");
         self.value = val_at1.value;
 
         if let Some(val_at2) = self.peekable.peek() {
