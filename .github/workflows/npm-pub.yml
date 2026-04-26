@@ -1,22 +1,14 @@
-name: Web Integration Tests
+name: npm pub
 
 on:
   workflow_dispatch:
-  workflow_call:
-  push:
-    paths:
-      - 'wingfoil/src/adapters/web/**'
-      - 'wingfoil-wire-types/**'
-      - 'wingfoil-wasm/**'
-      - 'wingfoil-js/**'
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
-  wingfoil-wasm-build:
-    name: wingfoil-wasm build + unit tests
+  publish:
     runs-on: ubuntu-latest
 
     steps:
@@ -30,31 +22,7 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: wasm
-
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Build wasm-pack bundle
-        working-directory: wingfoil-wasm
-        run: wasm-pack build --target web --release
-
-      - name: Rust unit tests (native target)
-        working-directory: wingfoil-wasm
-        run: cargo test
-
-  wingfoil-js-typecheck:
-    name: wingfoil-js build + typecheck
-    runs-on: ubuntu-latest
-    needs: wingfoil-wasm-build
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+          shared-key: wasm-pub
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -68,10 +36,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
           cache-dependency-path: wingfoil-js/pnpm-lock.yaml
 
-      - name: Build wasm bundle for JS
+      - name: Build wasm bundle
         working-directory: wingfoil-wasm
         run: wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg
 
@@ -79,10 +48,16 @@ jobs:
         working-directory: wingfoil-js
         run: pnpm install --frozen-lockfile
 
-      - name: Type-check
-        working-directory: wingfoil-js
-        run: pnpm run lint
-
       - name: Build TypeScript
         working-directory: wingfoil-js
         run: pnpm run build:ts
+
+      - name: Lint
+        working-directory: wingfoil-js
+        run: pnpm run lint
+
+      - name: Publish to npm
+        working-directory: wingfoil-js
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

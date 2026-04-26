@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "wasm-pkg",
     "README.md"
   ],
   "scripts": {

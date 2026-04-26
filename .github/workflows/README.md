@@ -5,6 +5,7 @@ Run these steps in this order.  Wait for each step to complete successfully befo
 * Bump version
 * crates.io pub
 * pypi pub
+* npm pub
 
 
 # Commit hooks
