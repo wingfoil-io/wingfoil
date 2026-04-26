@@ -2,7 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    Ident, ImplItem, ImplItemFn, ItemImpl, Token, Type, Visibility, braced, bracketed,
+    Attribute, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Token, Type, Visibility, braced,
+    bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -173,10 +174,36 @@ struct LatencyStagesInput {
     visibility: Visibility,
     name: Ident,
     stages: Vec<Ident>,
+    type_name_override: Option<LitStr>,
 }
 
 impl Parse for LatencyStagesInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let mut type_name_override: Option<LitStr> = None;
+        for attr in &attrs {
+            if attr.path().is_ident("type_name") {
+                if type_name_override.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "duplicate #[type_name(...)] attribute",
+                    ));
+                }
+                let lit: LitStr = attr.parse_args().map_err(|_| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "expected #[type_name(\"...\")] with a single string literal",
+                    )
+                })?;
+                type_name_override = Some(lit);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "unrecognized attribute on latency_stages!; only #[type_name(\"...\")] is supported",
+                ));
+            }
+        }
+
         let visibility: Visibility = input.parse()?;
         let name: Ident = input.parse()?;
         let content;
@@ -193,6 +220,7 @@ impl Parse for LatencyStagesInput {
             visibility,
             name,
             stages,
+            type_name_override,
         })
     }
 }
@@ -248,6 +276,7 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
         visibility,
         name,
         stages,
+        type_name_override,
     } = input;
 
     let n = stages.len();
@@ -256,6 +285,12 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
     let stage_indices: Vec<usize> = (0..n).collect();
     let field_names = &stages;
     let marker_names = &stages;
+    let zero_copy_send_body = match type_name_override {
+        Some(lit) => quote! {
+            unsafe fn type_name() -> &'static str { #lit }
+        },
+        None => quote! {},
+    };
 
     let expanded = quote! {
         #[repr(C)]
@@ -299,7 +334,9 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
         // invariants. Only emitted when the `iceoryx2-beta` feature is on
         // in the consuming crate.
         #[cfg(feature = "iceoryx2-beta")]
-        unsafe impl ::iceoryx2::prelude::ZeroCopySend for #name {}
+        unsafe impl ::iceoryx2::prelude::ZeroCopySend for #name {
+            #zero_copy_send_body
+        }
 
         #[allow(non_snake_case, non_camel_case_types)]
         #visibility mod #module_name {
