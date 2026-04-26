@@ -153,6 +153,12 @@ aws.s3.BucketObject(
     key="latency_e2e_fix_gw",
     source=pulumi.FileAsset(str(FIX_GW_BIN)),
 )
+aws.s3.BucketObject(
+    f"{prefix}-idle-watch",
+    bucket=bucket.id,
+    key="idle_watch.sh",
+    source=pulumi.FileAsset(str(HERE / "idle_watch.sh")),
+)
 
 # Static + observability configs — uploaded one object per file so cloud-init
 # can grab the lot with `aws s3 sync`. Resource names are deterministic on
@@ -226,6 +232,20 @@ aws.iam.RolePolicy(
                 "Effect": "Allow",
                 "Action": ["secretsmanager:GetSecretValue"],
                 "Resource": [a[1], a[2]],
+            },
+            # Self-stop: idle_watch.sh calls ec2:StopInstances on this
+            # instance after 10 min of inactivity. Scoped via tag so the
+            # box can't stop *other* instances in the account.
+            {
+                "Effect": "Allow",
+                "Action": ["ec2:StopInstances"],
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:ResourceTag/Project": project,
+                        "aws:ResourceTag/Stack": stack,
+                    }
+                },
             },
         ],
     })),

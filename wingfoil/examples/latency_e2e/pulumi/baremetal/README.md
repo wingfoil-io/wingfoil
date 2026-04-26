@@ -80,8 +80,8 @@ pulumi stack output ws_server_url
 
 ## Stop without destroying
 
-`pulumi destroy` tears everything down. If you want to pause but keep the
-config + EIP + S3 data so the next start is cheaper:
+The box stops itself when idle (see below). If you want to pause it
+manually instead:
 
 ```bash
 INSTANCE_ID=$(pulumi stack output instance_id)
@@ -90,9 +90,26 @@ aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 aws ec2 start-instances --instance-ids "$INSTANCE_ID"
 ```
 
-While stopped you only pay the EBS volume (~$5/month for 64 GB gp3) and
-the Elastic IP if it's detached (free while attached to a stopped
-instance).
+While stopped you pay the EBS volume (~$5/month for 64 GB gp3) plus the
+Elastic IP (~$3.60/month — AWS charges for IPv4 addresses regardless of
+attachment state). `pulumi destroy` removes everything, including those.
+
+## Auto-stop when idle
+
+A 1-minute systemd timer on the box runs `/opt/wingfoil/idle_watch.sh`,
+which self-stops the instance when **both**:
+
+* uptime ≥ 10 minutes (so a freshly-started box has time to be used), and
+* the local prometheus exporter has reported `latency_e2e_active_sessions == 0`
+  for ≥ 10 consecutive minutes.
+
+Tune the thresholds by editing the constants at the top of
+`idle_watch.sh` and re-running `pulumi up` — the script ships in S3 and
+gets re-pulled on next boot.
+
+The instance role grants `ec2:StopInstances` scoped via tag condition
+(`Project=…, Stack=…`) so the box can stop *itself* but not other
+instances in the account.
 
 ## How the perf box is wired
 

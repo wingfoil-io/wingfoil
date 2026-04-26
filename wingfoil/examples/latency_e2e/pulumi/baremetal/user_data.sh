@@ -157,5 +157,38 @@ EOF
   systemctl enable --now wingfoil-ws-server.service wingfoil-fix-gw.service
   ( cd /opt/wingfoil/observability && docker compose up -d )
 
+  # ── Idle-stop watcher ──────────────────────────────────────────────────
+  # Self-stops the instance after 10 min uptime + 10 min of zero active
+  # sessions. Prevents a forgotten visitor from leaving the $4.28/hr box
+  # awake for hours.
+  aws s3 cp "s3://${BINARIES_BUCKET}/idle_watch.sh" /opt/wingfoil/idle_watch.sh --region "${AWS_REGION}"
+  chmod 0755 /opt/wingfoil/idle_watch.sh
+
+  cat > /etc/systemd/system/wingfoil-idle-watch.service <<'EOF'
+[Unit]
+Description=wingfoil idle-stop check
+After=wingfoil-ws-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wingfoil/idle_watch.sh
+EOF
+
+  cat > /etc/systemd/system/wingfoil-idle-watch.timer <<'EOF'
+[Unit]
+Description=wingfoil idle-stop watcher (runs every minute)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now wingfoil-idle-watch.timer
+
   echo running > "$STAMP_FILE"
 fi
