@@ -38,8 +38,8 @@ use wingfoil::adapters::iceoryx2::{iceoryx2_pub, iceoryx2_sub};
 use wingfoil::*;
 
 use shared::{
-    RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, precise_stamps_enabled,
-    round_trip_latency, session_hex,
+    RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env,
+    precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
 const LMAX_HOST_MD: &str = "fix-marketdata.london-demo.lmax.com";
@@ -91,6 +91,7 @@ enum MatcherEvent {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();

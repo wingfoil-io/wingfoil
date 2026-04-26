@@ -33,8 +33,8 @@ use wingfoil::*;
 
 use shared::{
     EchoFrame, FillFrame, OrderFrame, RoundTrip, RoundTripLatency, SVC_FILLS, SVC_ORDERS,
-    SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, precise_stamps_enabled,
-    round_trip_latency, session_hex,
+    SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, pin_current_from_env,
+    precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
 // ── Session registry ──────────────────────────────────────────────────────
@@ -96,6 +96,7 @@ impl Sessions {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
+    pin_current_from_env("WINGFOIL_PIN_GRAPH");
     let args: Vec<String> = std::env::args().collect();
     let addr = args
         .iter()

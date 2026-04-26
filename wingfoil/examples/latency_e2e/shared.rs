@@ -142,6 +142,60 @@ pub fn precise_stamps_enabled() -> bool {
     env_flag("WINGFOIL_PRECISE_STAMPS") || std::env::args().any(|a| a == "--precise")
 }
 
+// ── Core pinning ──────────────────────────────────────────────────────────
+//
+// Both binaries run their hot graph cycle on the main thread (the one that
+// calls `Graph::run()`). Pinning that thread to an isolated core is the
+// dominant E2E-latency win — the adapter worker threads (web server, FIX
+// session, iceoryx2 sub) are I/O-blocked most of the time. Pin the whole
+// process with `taskset` if you also want to keep those off the hot core.
+
+/// Pin the calling thread to the given set of CPU cores. No-op on
+/// non-Linux. Empty `cores` is a no-op.
+#[cfg(target_os = "linux")]
+pub fn pin_current(cores: &[usize]) -> anyhow::Result<()> {
+    if cores.is_empty() {
+        return Ok(());
+    }
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut set);
+        for &c in cores {
+            libc::CPU_SET(c, &mut set);
+        }
+        let rc = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn pin_current(_cores: &[usize]) -> anyhow::Result<()> {
+    Ok(())
+}
+
+/// Read a comma-separated core list from `name` (e.g. `WINGFOIL_PIN_GRAPH=2`
+/// or `=2,3`) and pin the calling thread. Logs the outcome; never panics.
+pub fn pin_current_from_env(name: &str) {
+    let Ok(raw) = std::env::var(name) else {
+        return;
+    };
+    let cores: Vec<usize> = raw
+        .split(',')
+        .filter_map(|c| c.trim().parse().ok())
+        .collect();
+    if cores.is_empty() {
+        log::warn!("{name}={raw:?} parsed as empty core list; not pinning");
+        return;
+    }
+    match pin_current(&cores) {
+        Ok(()) => log::info!("pinned current thread to cores {cores:?} (via {name})"),
+        Err(e) => log::warn!("failed to pin to cores {cores:?} from {name}: {e}"),
+    }
+}
+
 /// Format a session UUID as 32 hex chars (e.g. for log lines / metric keys).
 pub fn session_hex(id: &SessionId) -> String {
     let mut s = String::with_capacity(32);
