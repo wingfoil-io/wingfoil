@@ -37,6 +37,46 @@ client.subscribe("price", (value, timeNs) => {
 client.publish("ui", { kind: "click", note: "hi" });
 ```
 
+## Latency tracing
+
+For UIs that drive a wingfoil server using the `Traced<T, L>` /
+`latency_stages!` pattern, `@wingfoil/client/tracing` provides a
+`LatencyTracker` that owns the per-tab session UUID, stamps outbound
+requests with `client_seq` + `t_client_send`, filters inbound responses
+to the current session, and (optionally) echoes the round-trip back so
+the server can compute `rtt_total` / `wire_rtt` within a single clock
+domain. The listener receives the four deltas pre-computed.
+
+```ts
+import { WingfoilClient } from "@wingfoil/client";
+import { LatencyTracker } from "@wingfoil/client/tracing";
+
+const client = new WingfoilClient({ url: "ws://localhost:8080/ws", codec: "json" });
+const tracker = new LatencyTracker({
+  client,
+  outbound: "orders",
+  inbound:  "fills",
+  echo:     "latency_echo",   // omit to disable the echo leg
+});
+
+tracker.onResponse<FillFrame>(({ payload, rttNs, serverResidentNs, wireRttNs, stamps }) => {
+  console.log(payload.client_seq, rttNs, serverResidentNs, wireRttNs);
+});
+
+// session, client_seq, and t_client_send are stamped by the tracker.
+tracker.send({ side: 0, qty: 1 });
+```
+
+The default field names match the wingfoil convention (`session`,
+`client_seq`, `t_client_send`, `t_client_recv`, `stamps`) and can be
+overridden via `LatencyTrackerOptions.fields` if your wire schema
+diverges. The end-to-end latency demo at
+`wingfoil/examples/latency_e2e/static/app.js` is the canonical example.
+
+The main package also re-exports the small browser helpers the tracker
+relies on, in case you need them directly: `newSessionId`,
+`sessionHex`, `nowNs`.
+
 ## Reactive-framework bindings
 
 ### Solid.js
