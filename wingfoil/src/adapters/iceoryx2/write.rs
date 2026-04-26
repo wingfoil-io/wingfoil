@@ -387,13 +387,9 @@ where
     }
 
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
-        // Check if RouDi is available for IPC variant before proceeding
-        if self.opts.variant == Iceoryx2ServiceVariant::Ipc {
-            super::check_roudi_availability()?;
-        }
-
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
+                super::check_roudi_availability()?;
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -515,13 +511,9 @@ impl MutableNode for Iceoryx2SlicePublisher {
     }
 
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
-        // Check if RouDi is available for IPC variant before proceeding
-        if self.opts.variant == Iceoryx2ServiceVariant::Ipc {
-            super::check_roudi_availability()?;
-        }
-
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
+                super::check_roudi_availability()?;
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
