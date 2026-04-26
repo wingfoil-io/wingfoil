@@ -33,11 +33,23 @@ jobs:
         with:
           tool: cargo-edit
 
-      - name: Bump version and extract value
+      - name: Compute new version
         id: bump_cargo
         run: |
-          cargo set-version --bump ${{ github.event.inputs['bump-type'] }}
-          NEW_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
+          CARGO_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          NPM_VERSION=$(node -p "require('./wingfoil-js/package.json').version")
+          BASE=$(printf '%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" | sort -V | tail -n 1)
+          IFS='.' read -r MAJ MIN PATCH <<< "$BASE"
+          case "$BUMP_TYPE" in
+            major) MAJ=$((MAJ + 1)); MIN=0; PATCH=0 ;;
+            minor) MIN=$((MIN + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+            *) echo "unknown bump type: $BUMP_TYPE" >&2; exit 1 ;;
+          esac
+          NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
+          echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, base: $BASE, new: $NEW_VERSION"
+          cargo set-version "$NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update conf.py with new version
