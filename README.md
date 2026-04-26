@@ -4,6 +4,7 @@
 [![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
 [![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
+[![npm](https://img.shields.io/npm/v/@wingfoil/client.svg)](https://www.npmjs.com/package/@wingfoil/client)
 
 # Wingfoil
 
@@ -17,7 +18,7 @@ Wingfoil simplifies receiving, processing and distributing streaming data across
 
 - **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
-- **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) with plans to add WASM/JavaScript/TypeScript support.
+- **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python). For browser frontends, the [`@wingfoil/client`](https://www.npmjs.com/package/@wingfoil/client) TypeScript/JavaScript [WebSocket client](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-js) connects to Rust graphs via the [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web) adapter, with optional reactive bindings for Solid, Svelte, and Vue.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
@@ -114,6 +115,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 - Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
 - Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
 - Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
+- Download the `@wingfoil/client` browser client from [npmjs.com](https://www.npmjs.com/package/@wingfoil/client)
 
 ## Get Involved!
 
