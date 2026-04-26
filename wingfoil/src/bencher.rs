@@ -66,17 +66,23 @@ impl Bencher {
     }
 
     pub fn start(&mut self) {
-        let builder = self.builder.take().unwrap();
+        let builder = self
+            .builder
+            .take()
+            .expect("Bencher::start called more than once");
         let signal = self.signal.clone();
         let run_mode = self.run_mode;
         std::thread::spawn(move || {
             let trigger = BenchTriggerNode::new(signal.clone()).into_node();
+            let signal_for_end = signal.clone();
             let node = builder(trigger).produce(move || {
-                signal.store(Signal::End.into(), Ordering::SeqCst);
+                signal_for_end.store(Signal::End.into(), Ordering::SeqCst);
             });
-            Graph::new(vec![node], run_mode, RunFor::Forever)
-                .run()
-                .unwrap();
+            if let Err(e) = Graph::new(vec![node], run_mode, RunFor::Forever).run() {
+                log::error!("bencher worker thread terminated: {e:#}");
+                // Wake the bencher loop so step() doesn't spin forever.
+                signal.store(Signal::End.into(), Ordering::SeqCst);
+            }
         });
     }
 

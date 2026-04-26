@@ -132,7 +132,7 @@ pub struct GraphState {
 impl GraphState {
     pub fn new(run_mode: RunMode, run_for: RunFor, start_time: NanoTime) -> Self {
         let (ready_notifier, ready_callbacks) = crossbeam::channel::unbounded();
-        let mut id = GRAPH_ID.lock().unwrap();
+        let mut id = GRAPH_ID.lock().expect("GRAPH_ID mutex poisoned");
         let slf = Self {
             time: NanoTime::ZERO,
             wall_time: NanoTime::ZERO,
@@ -199,7 +199,9 @@ impl GraphState {
 
     pub(crate) fn ready_notifier(&self) -> ReadyNotifier {
         ReadyNotifier {
-            node_index: self.current_node_index.unwrap(),
+            node_index: self
+                .current_node_index
+                .expect("ready_notifier called outside of a node cycle"),
             sender: self.ready_notifier.clone(),
         }
     }
@@ -219,22 +221,28 @@ impl GraphState {
                     tokio::runtime::Builder::new_multi_thread()
                         .enable_all()
                         .build()
-                        .unwrap(),
+                        .expect("failed to build tokio runtime"),
                 )
             })
             .clone()
     }
 
     pub fn add_callback(&mut self, time: NanoTime) {
-        self.add_callback_for_node(self.current_node_index.unwrap(), time);
+        let ix = self
+            .current_node_index
+            .expect("add_callback called outside of a node cycle");
+        self.add_callback_for_node(ix, time);
     }
 
     pub(crate) fn current_node_id(&self) -> usize {
-        self.current_node_index.unwrap()
+        self.current_node_index
+            .expect("current_node_id called outside of a node cycle")
     }
 
     pub fn always_callback(&mut self) {
-        let ix = self.current_node_index.unwrap();
+        let ix = self
+            .current_node_index
+            .expect("always_callback called outside of a node cycle");
         self.always_callbacks.push(ix);
     }
 
@@ -269,7 +277,9 @@ impl GraphState {
     /// `add_upstream` call without waiting for the next source tick.
     #[cfg(feature = "dynamic-graph-beta")]
     pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool) {
-        let caller_index = self.current_node_index.unwrap();
+        let caller_index = self
+            .current_node_index
+            .expect("add_upstream called outside of a node cycle");
         self.pending_additions
             .push((upstream, caller_index, is_active, recycle));
     }
@@ -298,19 +308,13 @@ impl GraphState {
     }
 
     fn next_scheduled_time(&self) -> NanoTime {
-        if self.scheduled_callbacks.is_empty() {
-            NanoTime::MAX
-        } else {
-            self.scheduled_callbacks.next_time()
-        }
+        self.scheduled_callbacks
+            .next_time()
+            .unwrap_or(NanoTime::MAX)
     }
 
     pub(crate) fn add_callback_for_node(&mut self, node_index: usize, time: NanoTime) {
         self.scheduled_callbacks.push(node_index, time);
-    }
-
-    fn has_pending_scheduled_callbacks(&self) -> bool {
-        self.scheduled_callbacks.pending(self.time)
     }
 
     fn wait_ready_callback(&mut self, end_time: NanoTime) -> Option<usize> {
@@ -323,7 +327,10 @@ impl GraphState {
             let timeout = u64::from(end_time - now);
             select! {
                 recv(self.ready_callbacks) -> msg => {
-                    Some(msg.unwrap())
+                    // Only `Err` if all senders are dropped. Senders live on
+                    // worker threads owned by the graph, so reaching this path
+                    // means a worker has gone away mid-run; treat as no event.
+                    msg.ok()
                 },
                 default(Duration::from_nanos(timeout)) => {
                     None
@@ -597,7 +604,13 @@ impl Graph {
         }
         let mut max_layer: i32 = -1;
         for i in 0..self.state.nodes.len() {
-            max_layer = max(max_layer, self.state.nodes[i].layer.try_into().unwrap());
+            max_layer = max(
+                max_layer,
+                self.state.nodes[i]
+                    .layer
+                    .try_into()
+                    .expect("graph layer count fits in i32"),
+            );
             self.state.node_dirty.push(false);
             for j in 0..self.state.nodes[i].upstreams.len() {
                 let (up_index, active) = self.state.nodes[i].upstreams[j];
@@ -634,7 +647,9 @@ impl Graph {
         // constructing NodeData wrapper for each node and pushing
         // onto self.nodes returns index of new NodeData in self.nodes
         if self.state.seen(node.clone()) {
-            self.state.node_index(node.clone()).unwrap()
+            self.state
+                .node_index(node.clone())
+                .expect("seen() returned true but node_index lookup failed")
         } else {
             let mut layer = 0;
             let mut upstream_indexes = vec![];
@@ -670,8 +685,8 @@ impl Graph {
             self.mark_dirty(ix);
             progressed = true;
         }
-        while self.state.has_pending_scheduled_callbacks() {
-            let ix = self.state.scheduled_callbacks.pop();
+        let now = self.state.time;
+        while let Some(ix) = self.state.scheduled_callbacks.pop_if_pending(now) {
             self.mark_dirty(ix);
             progressed = true;
         }
@@ -698,8 +713,9 @@ impl Graph {
 
     fn process_ready_callbacks(&mut self) -> bool {
         let mut progressed = false;
-        while !self.state.ready_callbacks.is_empty() {
-            let ix = self.state.ready_callbacks.recv().unwrap();
+        // try_recv drains whatever has arrived without blocking; if a sender
+        // has been dropped, Err breaks the loop cleanly instead of panicking.
+        while let Ok(ix) = self.state.ready_callbacks.try_recv() {
             self.mark_dirty(ix);
             progressed = true;
         }
@@ -864,7 +880,10 @@ impl Graph {
         // is called more than once with the same node in a single cycle.
         let mut wired_edges: HashSet<(usize, usize)> = HashSet::new();
         for (node, caller_index, is_active, recycle) in &additions {
-            let node_index = self.state.node_index(node.clone()).unwrap();
+            let node_index = self
+                .state
+                .node_index(node.clone())
+                .expect("node was just inserted into the graph above");
             if wired_edges.insert((*caller_index, node_index)) {
                 self.state.nodes[*caller_index]
                     .upstreams
@@ -1036,6 +1055,43 @@ mod tests {
     use itertools::Itertools;
 
     // ── RunFor::done ─────────────────────────────────────────────────────────
+
+    // ── Error-path propagation ───────────────────────────────────────────────
+
+    /// A node that errors on cycle to verify Err bubbles out of Graph::run.
+    struct ErroringNode {
+        upstream: Rc<dyn Node>,
+    }
+
+    impl MutableNode for ErroringNode {
+        fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+            anyhow::bail!("synthetic cycle failure")
+        }
+        fn upstreams(&self) -> UpStreams {
+            UpStreams::new(vec![self.upstream.clone()], vec![])
+        }
+    }
+
+    #[test]
+    fn cycle_error_propagates_from_run() {
+        let src: Rc<RefCell<CallBackStream<u64>>> = Rc::new(RefCell::new(CallBackStream::new()));
+        src.borrow_mut().push(ValueAt::new(1, NanoTime::new(10)));
+        let node = Rc::new(RefCell::new(ErroringNode {
+            upstream: src.clone().as_node(),
+        }));
+        let result = Graph::new(
+            vec![node.as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Forever,
+        )
+        .run();
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(
+            err.contains("synthetic cycle failure") || err.contains("Error in node"),
+            "expected error to mention the cycle failure, got: {err}"
+        );
+    }
 
     #[test]
     fn run_for_cycles_done_when_exceeded() {

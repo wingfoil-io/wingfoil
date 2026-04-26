@@ -121,6 +121,23 @@ See `wingfoil/examples/dynamic/dynamic-manual/main.rs` for a fully manual custom
 - Factory functions return `Rc<dyn Stream<T>>` or `Rc<dyn Node>`
 - Fluent API: `ticker(duration).map(f).filter(g).fold(init, h)`
 
+### Error Handling
+
+Production code must not call `.unwrap()`. Replacement priority:
+
+1. **`?`** — preferred. `cycle/setup/start/stop/teardown` all return
+   `anyhow::Result`, so propagate via `?` and add `.context("…")` from
+   `anyhow::Context` at I/O boundaries (file open, socket connect, codec decode).
+2. **`.expect("invariant: WHY")`** — only when a precondition makes the
+   `None`/`Err` branch unreachable. The message must explain the invariant
+   (e.g. `expect("current_node_index set during cycle")`).
+3. **`.unwrap()`** — allowed inside `#[cfg(test)]` modules and doc comments
+   showing example usage; otherwise disallowed.
+
+Mutex poisoning is not recovered: `.lock().expect("<name> mutex poisoned")` is
+the pattern. The expect documents intent — a poisoned lock means another
+thread panicked while holding it, and we propagate that panic deliberately.
+
 ### Run Modes
 
 - `RunMode::RealTime` - uses wall clock time

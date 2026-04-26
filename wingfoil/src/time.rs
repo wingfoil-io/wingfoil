@@ -97,7 +97,11 @@ impl From<Duration> for NanoTime {
 
 impl From<NaiveDateTime> for NanoTime {
     fn from(date_time: NaiveDateTime) -> Self {
-        let t = date_time.and_utc().timestamp_nanos_opt().unwrap();
+        // `timestamp_nanos_opt` only returns None for dates outside ~1677..2262.
+        let t = date_time
+            .and_utc()
+            .timestamp_nanos_opt()
+            .expect("NanoTime supports years 1677..=2262");
         NanoTime(t as RawTime)
     }
 }
@@ -116,8 +120,10 @@ impl From<NanoTime> for u64 {
 
 impl From<NanoTime> for NaiveDateTime {
     fn from(t: NanoTime) -> Self {
+        // Only fails for seconds outside chrono's representable range; NanoTime's
+        // u64 nanos can't reach those bounds.
         DateTime::from_timestamp((t.0 / 1_000_000_000) as i64, (t.0 % 1_000_000_000) as u32)
-            .unwrap()
+            .expect("NanoTime is always within chrono's representable range")
             .naive_utc()
     }
 }

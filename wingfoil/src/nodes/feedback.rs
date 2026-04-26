@@ -19,12 +19,8 @@ pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
 impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
-        loop {
-            let mut q = self.queue.borrow_mut();
-            if !q.pending(state.time()) {
-                break;
-            }
-            self.value = q.pop();
+        while let Some(value) = self.queue.borrow_mut().pop_if_pending(state.time()) {
+            self.value = value;
             ticked = true;
         }
         Ok(ticked)
@@ -59,7 +55,11 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
     pub fn send(&self, value: T, state: &mut GraphState) {
         let time = state.time() + 1;
         self.queue.borrow_mut().push(value, time);
-        state.add_callback_for_node(self.node_id.get().unwrap(), time);
+        let node_id = self
+            .node_id
+            .get()
+            .expect("FeedbackSink::send called before paired stream's setup");
+        state.add_callback_for_node(node_id, time);
     }
 }
 

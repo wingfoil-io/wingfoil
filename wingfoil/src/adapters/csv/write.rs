@@ -22,7 +22,7 @@ pub struct CsvWriterNode<T: Element> {
 impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvWriterNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if !self.headers_written {
-            write_header::<T>(&mut self.writer);
+            write_header::<T>(&mut self.writer)?;
             self.headers_written = true;
         }
         for rec in self.upstream.peek_value() {
@@ -34,12 +34,19 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> MutableNode for CsvWri
     }
 }
 
-fn write_header<T: Serialize + DeserializeOwned + 'static>(writer: &mut csv::Writer<File>) {
+fn write_header<T: Serialize + DeserializeOwned + 'static>(
+    writer: &mut csv::Writer<File>,
+) -> anyhow::Result<()> {
     let fields = serde_introspect::<T>();
     if !fields.is_empty() {
-        writer.write_field("time").unwrap();
-        writer.write_record(fields).unwrap();
+        writer
+            .write_field("time")
+            .map_err(|e| anyhow::anyhow!("Failed to write CSV time header: {e}"))?;
+        writer
+            .write_record(fields)
+            .map_err(|e| anyhow::anyhow!("Failed to write CSV header record: {e}"))?;
     }
+    Ok(())
 }
 
 /// Trait to add csv write operators to streams.
@@ -54,7 +61,7 @@ impl<T: Element + Serialize + DeserializeOwned + 'static> CsvOperators<T> for dy
         let writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("csv_write: failed to open {path} for writing: {e}"));
         CsvWriterNode::new(self.clone(), writer).into_node()
     }
 }

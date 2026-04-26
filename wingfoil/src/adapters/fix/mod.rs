@@ -1128,7 +1128,11 @@ impl MutableNode for FixThreadedSource {
 
                 // Store a clone so stop() can shut down the live socket.
                 match sock.try_clone() {
-                    Ok(clone) => *socket_arc_thread.lock().unwrap() = Some(clone),
+                    Ok(clone) => {
+                        *socket_arc_thread
+                            .lock()
+                            .expect("FIX socket_arc mutex poisoned") = Some(clone)
+                    }
                     Err(e) => {
                         if !send_status(FixSessionStatus::Error(e.to_string())) {
                             break;
@@ -1174,7 +1178,9 @@ impl MutableNode for FixThreadedSource {
                 };
 
                 // Clear the stale socket handle.
-                *socket_arc_thread.lock().unwrap() = None;
+                *socket_arc_thread
+                    .lock()
+                    .expect("FIX socket_arc mutex poisoned") = None;
 
                 if !still_open {
                     break; // channel closed — graph has stopped
@@ -1210,7 +1216,7 @@ impl MutableNode for FixThreadedSource {
         self.stop_flag.store(true, Ordering::Relaxed);
         // Shut down the live socket so the thread's blocking read() returns.
         if let Some(arc) = self.socket_arc.take()
-            && let Some(s) = arc.lock().unwrap().take()
+            && let Some(s) = arc.lock().expect("FIX socket_arc mutex poisoned").take()
         {
             let _ = s.shutdown(Shutdown::Both);
         }

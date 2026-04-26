@@ -67,8 +67,7 @@ impl MutableNode for DelayNode {
                 self.queue.push((), next_time);
             }
             let mut ticked = false;
-            while self.queue.pending(current_time) {
-                self.queue.pop();
+            while self.queue.pop_if_pending(current_time).is_some() {
                 ticked = true;
             }
             Ok(ticked)

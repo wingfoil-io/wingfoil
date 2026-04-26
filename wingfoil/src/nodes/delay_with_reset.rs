@@ -48,8 +48,8 @@ impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
                 state.add_callback(next_time);
                 self.queue.push(self.upstream.peek_value(), next_time)
             }
-            while self.queue.pending(current_time) {
-                self.value = self.queue.pop();
+            while let Some(value) = self.queue.pop_if_pending(current_time) {
+                self.value = value;
                 ticked = true;
             }
             Ok(ticked)
