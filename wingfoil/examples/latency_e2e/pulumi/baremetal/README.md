@@ -102,25 +102,16 @@ The Lambda's IAM role only permits `ec2:StartInstances` against this
 specific instance ARN, so a leaked URL can't escalate. It also can't
 *stop* the box — the auto-stop daemon on the box itself handles that.
 
-## Cost guardrails
+## Spend cap
 
-The wake URL is unauthenticated by default. Three layered defences keep
-the worst-case bill bounded if you publish it:
+The wake URL is unauthenticated by default. The real cost limiter is
+already on the box — the idle-stop daemon stops the instance ≥20 min
+after each wake, so a single attacker can't burn more than
+~$4.30/hour even with a perfect attack pattern (the EC2 state machine
+makes `POST /wake` a no-op when the instance is already running).
 
-1. **Lambda concurrency cap.** `reserved_concurrent_executions=2` limits
-   the wake lambda to two concurrent containers. Caps total request
-   throughput regardless of how many IPs an attacker uses. Free.
-
-2. **Real-time invocation alarm.** A CloudWatch alarm fires when the
-   wake lambda sees >100 invocations in 5 min and emails you via SNS.
-   You'll know within minutes — not 24h, like billing data would be.
-   Created only if you set `alert_email`.
-
-3. **Monthly budget alert.** AWS Budgets at the threshold you set in
-   `monthly_budget_usd` (default $50) emails on 80% forecast and 100%
-   actual. Backstop in case the rate alarm somehow misses something.
-
-Configure them with:
+On top of that, set an AWS Budget so you'll get an email if cost ever
+runs away anyway:
 
 ```bash
 pulumi config set alert_email you@example.com
@@ -128,31 +119,20 @@ pulumi config set monthly_budget_usd 50    # default
 pulumi up
 ```
 
-You'll get an SNS subscription confirmation email — click the link or
-the alarm won't actually deliver. The Budget notification is direct
-email, no confirmation needed.
+Two notifications: 80% forecast (warning) and 100% actual (breach), both
+emailed direct (no SNS confirmation needed). Skipped entirely if
+`alert_email` is unset.
 
-**What if you actually want zero unauthenticated access?**
+If you ever want it to *act* on a breach instead of just emailing you
+(e.g. auto-stop the instance), AWS Budgets supports Budget Actions
+natively — ~10 lines of additional Pulumi to attach an `EC2:StopInstances`
+action when the threshold hits 100%.
+
+**Want zero unauthenticated access instead?**
 
 * Add a `wake_token` query-param check in `wake_lambda.py` (~10 lines).
-  The token becomes the credential — share the URL with the token in it.
-* Or: front the function URL with CloudFront + WAF for proper per-IP
-  rate limits at the edge. Significant new infra; only worth it if the
-  layered guardrails above prove insufficient.
-
-## Worst-case math (with guardrails enabled)
-
-Per wake on `c7i.metal-24xl` in eu-west-2:
-
-* Cold boot + idle floor: ~20 min × $0.0713/min ≈ **$1.43** minimum
-* The box can't be re-woken until idle-stop (≥ 20 min cycle), so a
-  single attacker maxes out at **~3 wakes/hour ≈ $4.30/hour**
-* Lambda concurrency cap of 2 means even a botnet can't significantly
-  raise that ceiling (Lambda throttles → 429s → no extra EC2 spend)
-
-So your daily ceiling under sustained attack is roughly **$100/day**,
-which the budget + alarm combo will surface long before it adds up to
-anything embarrassing.
+  The token becomes the credential — share the URL with the token in
+  it.
 
 ## Stop without destroying
 
