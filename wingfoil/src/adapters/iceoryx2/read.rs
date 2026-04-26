@@ -18,7 +18,6 @@ use super::{
     Iceoryx2Error, Iceoryx2Mode, Iceoryx2NodeHandle, Iceoryx2Result, Iceoryx2ServiceContract,
     Iceoryx2ServiceVariant, Iceoryx2SubOpts,
 };
-use std::sync::mpsc;
 
 fn service_open_err_with_context(
     service_name: &str,
@@ -56,84 +55,23 @@ fn service_open_err_with_context(
 // ---------------------------------------------------------------------------
 
 /// Create a node, open/create a pub-sub service, and build a subscriber.
-/// Service opening is wrapped with a 5-second timeout to detect missing RouDi daemon.
 macro_rules! create_subscriber {
     ($svc:ty, $service_name:expr, $variant:expr, $history_size:expr, $payload:ty) => {{
         let node = NodeBuilder::new()
             .create::<$svc>()
             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
         let contract = Iceoryx2ServiceContract::new($history_size);
-        let service_name_str = $service_name.as_str().try_into().map_err(
-            |e: iceoryx2::service::service_name::ServiceNameError| {
-                Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
-            },
-        )?;
-
-        // Wrap service opening with timeout to detect missing RouDi daemon.
-        let (tx, rx) = mpsc::channel();
-        let service_name_owned = $service_name.to_string();
-        let variant_owned = $variant;
-        let contract_owned = contract.clone();
-        let timeout = Duration::from_secs(5);
-        let history_size_owned = $history_size;
-        let node_arc = Arc::new(node);
-        let node_clone = Arc::clone(&node_arc);
-
-        std::thread::spawn(move || {
-            let result = node_clone
-                .service_builder(&service_name_str)
-                .publish_subscribe::<$payload>()
-                .history_size(history_size_owned)
-                .subscriber_max_buffer_size(contract_owned.subscriber_max_buffer_size)
-                .open_or_create()
-                .map_err(|e| {
-                    service_open_err_with_context(
-                        &service_name_owned,
-                        variant_owned,
-                        contract_owned.clone(),
-                        e,
-                    )
-                });
-            let _ = tx.send(result);
-        });
-
-        let service = match rx.recv_timeout(timeout) {
-            Ok(Ok(svc)) => svc,
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => {
-                eprintln!("ERROR: iceoryx2 service creation timed out after 5 seconds");
-                eprintln!("This typically means the RouDi daemon is not running.");
-                eprintln!();
-                if variant_owned == Iceoryx2ServiceVariant::Ipc {
-                    eprintln!("For local testing without RouDi, use the Local variant:");
-                    eprintln!(
-                        "  iceoryx2_sub_with::<T>(service_name, Iceoryx2ServiceVariant::Local)"
-                    );
-                    eprintln!();
-                    eprintln!("Or start RouDi:");
-                    eprintln!("  iox-roudi &");
-                }
-                let mut err_msg = format!(
-                    "service open/create timed out after 5s — RouDi daemon may not be running",
-                );
-                if variant_owned == Iceoryx2ServiceVariant::Ipc {
-                    err_msg.push_str(
-                        "\n\nFor local testing, either:\n  \
-                         (1) Start RouDi: iox-roudi &\n  \
-                         (2) Use Local variant instead: Iceoryx2ServiceVariant::Local",
-                    );
-                }
-                return Err(Iceoryx2Error::ServiceOpenFailed {
-                    error: err_msg,
-                    service_name: $service_name.to_string(),
-                    variant: variant_owned,
-                    history_size: contract.history_size,
-                    subscriber_max_buffer_size: contract.subscriber_max_buffer_size,
-                }
-                .into());
-            }
-        };
-
+        let service = node
+            .service_builder(&$service_name.as_str().try_into().map_err(
+                |e: iceoryx2::service::service_name::ServiceNameError| {
+                    Iceoryx2Error::Other(anyhow::anyhow!(e.to_string()))
+                },
+            )?)
+            .publish_subscribe::<$payload>()
+            .history_size($history_size)
+            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
+            .open_or_create()
+            .map_err(|e| service_open_err_with_context($service_name, $variant, contract, e))?;
         let subscriber = service
             .subscriber_builder()
             .buffer_size($history_size.max(1))
@@ -142,10 +80,6 @@ macro_rules! create_subscriber {
         subscriber
             .update_connections()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
-
-        // Extract the node from Arc (should have single reference after thread join)
-        let node = Arc::try_unwrap(node_arc)
-            .unwrap_or_else(|_| panic!("node Arc should be unwrappable after thread completes"));
         (node, subscriber)
     }};
 }
