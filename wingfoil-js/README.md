@@ -69,9 +69,14 @@ tracker.send({ side: 0, qty: 1 });
 
 The default field names match the wingfoil convention (`session`,
 `client_seq`, `t_client_send`, `t_client_recv`, `stamps`) and can be
-overridden via `LatencyTrackerOptions.fields` if your wire schema
-diverges. The end-to-end latency demo at
-`wingfoil/examples/latency_e2e/static/app.js` is the canonical example.
+overridden via `LatencyTrackerOptions.fields` (the same map applies to
+both outbound publishes and inbound parsing). The end-to-end latency
+demo at `wingfoil/examples/latency_e2e/static/app.js` is the canonical
+example.
+
+Requires the server to use `CodecKind::Json`: the tracker sends
+`session` as a JS `number[]`, which the JSON codec round-trips as
+`[u8; 16]` but the bincode codec encodes as a length-prefixed `Vec<u8>`.
 
 The main package also re-exports the small browser helpers the tracker
 relies on, in case you need them directly: `newSessionId`,

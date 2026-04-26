@@ -66,7 +66,8 @@ let chart, chartData, ticker = null;
 function setStatus(s) {
   const el = document.getElementById('status');
   el.textContent = s;
-  el.className = 'pill ' + (s === 'live' ? 'live' : 'idle');
+  const cls = s === 'live' ? 'live' : s === 'connecting' ? 'connecting' : 'idle';
+  el.className = 'pill ' + cls;
 }
 
 client.onConnection((s) => {

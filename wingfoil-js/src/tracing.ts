@@ -13,11 +13,20 @@
 // All four deltas surface on the listener as numbers — no NTP-style
 // clock-sync required, because every subtraction lives in one domain.
 //
-// Field names default to the wingfoil convention (`session`, `client_seq`,
-// `t_client_send`, `t_client_recv`, `stamps`) but can be overridden if
-// your wire schema diverges.
+// Codec assumption: requires the server's web adapter to use
+// `CodecKind::Json`. The bincode codec serialises a JS `number[]` as a
+// length-prefixed `Vec<u8>`, which doesn't match a Rust `[u8; 16]` field.
+//
+// Field-name overrides (`LatencyTrackerOptions.fields`) apply
+// symmetrically to outbound publishes *and* inbound parsing.
+//
+// Numeric assumption: timestamps and stamps are JS Numbers (not BigInt)
+// in the safe-integer range. The wasm JSON decoder produces Numbers
+// today; if the wire ever moves to BigInt for u64 fields, this module
+// needs a coercion layer.
 
-import { nowNs, sessionHex, newSessionId, type WingfoilClient } from "./index.js";
+import type { WingfoilClient } from "./index.js";
+import { newSessionId, nowNs, sessionHex } from "./utils.js";
 
 export interface TracingFields {
   session: string;
@@ -35,6 +44,8 @@ const DEFAULT_FIELDS: TracingFields = {
   stamps: "stamps",
 };
 
+const SESSION_BYTES = 16;
+
 export interface LatencyTrackerOptions {
   /** The wingfoil client carrying the WebSocket connection. */
   client: WingfoilClient;
@@ -48,11 +59,16 @@ export interface LatencyTrackerOptions {
    */
   echo?: string;
   /**
-   * Existing session ID to use; defaults to a fresh random UUID. Useful
-   * if the host page already minted one for cross-tab correlation.
+   * Existing 16-byte session ID to use; defaults to a fresh random UUID.
+   * Useful if the host page already minted one for cross-tab correlation.
+   * Throws if length is not 16.
    */
   session?: Uint8Array;
-  /** Override individual wire field names. */
+  /**
+   * Override individual wire field names. The same map is applied to both
+   * outbound publishes (which keys are stamped onto the request) and
+   * inbound parsing (which keys the tracker reads off the response).
+   */
   fields?: Partial<TracingFields>;
 }
 
@@ -111,9 +127,15 @@ export class LatencyTracker {
   private readonly fields: TracingFields;
   private readonly sessionArr: number[];
   private seq = 0;
+  private closed = false;
   private readonly unsubscribers = new Set<() => void>();
 
   constructor(opts: LatencyTrackerOptions) {
+    if (opts.session && opts.session.length !== SESSION_BYTES) {
+      throw new Error(
+        `LatencyTracker: session must be ${SESSION_BYTES} bytes, got ${opts.session.length}`,
+      );
+    }
     this.client = opts.client;
     this.outbound = opts.outbound;
     this.inbound = opts.inbound;
@@ -126,11 +148,14 @@ export class LatencyTracker {
 
   /**
    * Publish a request on the outbound topic. `session`, `client_seq` and
-   * `t_client_send` are stamped automatically; the caller supplies the
-   * application-specific fields. Returns the `client_seq` that was used.
+   * `t_client_send` are stamped automatically and override any same-named
+   * keys in `payload`. Returns the `client_seq` that was used.
+   *
+   * No-op after `close()`; returns the seq that *would* have been used.
    */
   send(payload: Record<string, unknown> = {}): number {
     this.seq += 1;
+    if (this.closed) return this.seq;
     const f = this.fields;
     this.client.publish(this.outbound, {
       ...payload,
@@ -142,14 +167,20 @@ export class LatencyTracker {
   }
 
   /**
-   * Subscribe to inbound responses for this session only. Each match is
-   * stamped with `t_client_recv = nowNs()`, the four latency deltas are
-   * computed, and (if `echo` was configured) the round-trip is echoed
-   * back to the server before the listener fires.
+   * Subscribe to inbound responses for this session only. For each match:
    *
-   * Returns an unsubscribe function.
+   *   1. `t_client_recv = nowNs()` is stamped
+   *   2. the four latency deltas are computed
+   *   3. if `echo` was configured, the round-trip is echoed *before* the
+   *      listener fires — so a throwing listener can't starve the
+   *      latency-report leg
+   *   4. the listener is invoked
+   *
+   * Returns an unsubscribe function. After `close()`, this is a no-op
+   * that returns a no-op unsubscribe.
    */
   onResponse<T = unknown>(listener: RoundTripListener<T>): () => void {
+    if (this.closed) return () => {};
     const f = this.fields;
     const unsub = this.client.subscribe(this.inbound, (raw) => {
       const msg = raw as Record<string, unknown>;
@@ -158,6 +189,7 @@ export class LatencyTracker {
       const tClientRecv = nowNs();
       const tClientSend = numberOr(msg[f.tClientSend], 0);
       const stamps = (msg[f.stamps] as number[] | undefined) ?? [];
+      const clientSeq = numberOr(msg[f.clientSeq], 0);
       const rttNs = Math.max(0, tClientRecv - tClientSend);
       const serverResidentNs =
         stamps.length >= 2 ? stamps[stamps.length - 1] - stamps[0] : 0;
@@ -166,7 +198,7 @@ export class LatencyTracker {
       if (this.echo) {
         this.client.publish(this.echo, {
           [f.session]: this.sessionArr,
-          [f.clientSeq]: msg[f.clientSeq],
+          [f.clientSeq]: clientSeq,
           [f.tClientSend]: tClientSend,
           [f.tClientRecv]: tClientRecv,
           [f.stamps]: stamps,
@@ -175,7 +207,7 @@ export class LatencyTracker {
 
       listener({
         payload: msg as T,
-        clientSeq: numberOr(msg[f.clientSeq], 0),
+        clientSeq,
         tClientSend,
         tClientRecv,
         rttNs,
@@ -191,8 +223,9 @@ export class LatencyTracker {
     };
   }
 
-  /** Tear down all listeners registered through this tracker. */
+  /** Tear down all listeners registered through this tracker. Idempotent. */
   close(): void {
+    this.closed = true;
     for (const u of this.unsubscribers) u();
     this.unsubscribers.clear();
   }
