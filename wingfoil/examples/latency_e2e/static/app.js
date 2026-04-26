@@ -3,6 +3,12 @@
 // Emits OrderFrames at the configured rate, listens for FillFrames,
 // stamps a t_client_recv and posts the round-trip back as an EchoFrame.
 // Renders a uPlot chart of the per-hop latency for THIS session.
+//
+// Wire plumbing (envelopes, control frames, JSON codec) is delegated to
+// `@wingfoil/client`, loaded from the npm package via the import map in
+// index.html.
+
+import { WingfoilClient } from "@wingfoil/client";
 
 // Each entry is either a server-clock delta (indices into stamps[]) or
 // the derived `wire_rtt` computed from the client-clock RTT minus the
@@ -41,52 +47,6 @@ function fallbackUuid() {
 }
 function hex(bytes) { return [...bytes].map(b => b.toString(16).padStart(2,'0')).join(''); }
 function nowNs() { return Math.round(performance.timeOrigin * 1e6 + performance.now() * 1e6); }
-
-// ── WebSocket envelope plumbing ──────────────────────────────────────────
-//
-// CodecKind::Json on the server: each WS frame is JSON-encoded
-// `Envelope { topic, time_ns, payload: Vec<u8> }`. The payload is itself
-// the JSON-encoded user type as a byte array. We unwrap one level here
-// so handlers see the actual object.
-
-let ws = null;
-function connect(onMsg) {
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-  ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
-    setStatus('live');
-    // Subscribe to the topics we care about.
-    sendCtrl({ Subscribe: { topics: ['fills', 'session'] } });
-  };
-  ws.onclose = () => { setStatus('disconnected'); ws = null; };
-  ws.onerror = (e) => console.warn('ws error', e);
-  ws.onmessage = async (ev) => {
-    const buf = typeof ev.data === 'string'
-      ? new TextEncoder().encode(ev.data)
-      : new Uint8Array(ev.data);
-    let env;
-    try { env = JSON.parse(new TextDecoder().decode(buf)); }
-    catch (e) { console.warn('bad envelope', e); return; }
-    if (env.topic === '$ctrl') return;
-    let payload;
-    try { payload = JSON.parse(new TextDecoder().decode(new Uint8Array(env.payload))); }
-    catch (e) { console.warn('bad payload', env.topic, e); return; }
-    onMsg(env.topic, payload);
-  };
-}
-
-function sendFrame(topic, payloadObj) {
-  if (!ws || ws.readyState !== 1) return;
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(payloadObj));
-  const env = { topic, time_ns: 0, payload: Array.from(payloadBytes) };
-  ws.send(JSON.stringify(env));
-}
-function sendCtrl(ctrl) {
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(ctrl));
-  const env = { topic: '$ctrl', time_ns: 0, payload: Array.from(payloadBytes) };
-  ws.send(JSON.stringify(env));
-}
 
 // ── UI state ──────────────────────────────────────────────────────────────
 const session = newSessionId();
@@ -175,19 +135,35 @@ function initChart() {
   chart = new uPlot(opts, chartData, document.getElementById('chart'));
 }
 
+// ── wingfoil client ──────────────────────────────────────────────────────
+// The server runs `WebServer::bind(...).codec(CodecKind::Json)`, so the
+// client must be told to speak JSON. The WingfoilClient handles envelope
+// framing, the control-channel handshake (Hello / Subscribe / Unsubscribe),
+// and reconnect.
+
+const client = new WingfoilClient({
+  url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
+  codec: 'json',
+});
+
+client.onConnection((s) => {
+  if (s.kind === 'open') setStatus('live');
+  else if (s.kind === 'connecting') setStatus('connecting');
+  else setStatus('disconnected');
+});
+
 function startStream() {
   const rate = parseInt(document.getElementById('rate').value, 10);
   const qty = parseInt(document.getElementById('qty').value, 10);
   const sideSel = document.getElementById('side').value;
   if (ticker) clearInterval(ticker);
   ticker = setInterval(() => {
-    if (!ws || ws.readyState !== 1) return;
     let side;
     if (sideSel === 'alt') { side = nextSide; nextSide ^= 1; }
     else side = parseInt(sideSel, 10);
     seq += 1; sent += 1;
     document.getElementById('sent').textContent = sent.toLocaleString();
-    sendFrame('orders', {
+    client.publish('orders', {
       session: sessionArr,
       client_seq: seq,
       side, qty,
@@ -210,34 +186,35 @@ function stopStream() {
 window.addEventListener('DOMContentLoaded', () => {
   initChart();
   document.getElementById('start').onclick = startStream;
-  connect((topic, msg) => {
-    if (topic === 'fills') {
-      // Filter: only this session's fills.
-      if (!sameId(msg.session, sessionArr)) return;
-      const tRecv = nowNs();
-      const rttTotal = Math.max(0, tRecv - msg.t_client_send);
-      filled += 1;
-      sumPx += msg.fill_price_bps;
-      lastRttNs = rttTotal;
-      document.getElementById('filled').textContent = filled.toLocaleString();
-      document.getElementById('px').textContent = (sumPx / filled / 10000).toFixed(5);
-      document.getElementById('rtt').textContent = (rttTotal / 1_000_000).toFixed(2) + ' ms';
-      renderStages(msg.stamps, rttTotal);
-      pushChartPoint(msg.stamps, rttTotal);
-      // Echo to the server with t_client_recv stamped. The server
-      // derives rtt_total and wire_rtt from the four stamps, all
-      // arithmetic within a single clock domain per delta.
-      sendFrame('latency_echo', {
-        session: sessionArr,
-        client_seq: msg.client_seq,
-        t_client_send: msg.t_client_send,
-        t_client_recv: tRecv,
-        stamps: msg.stamps,
-      });
-    } else if (topic === 'session') {
-      // Reserved — server can broadcast queue state here.
-      console.log('session', msg);
-    }
+
+  client.subscribe('fills', (msg) => {
+    // Filter: only this session's fills.
+    if (!sameId(msg.session, sessionArr)) return;
+    const tRecv = nowNs();
+    const rttTotal = Math.max(0, tRecv - msg.t_client_send);
+    filled += 1;
+    sumPx += msg.fill_price_bps;
+    lastRttNs = rttTotal;
+    document.getElementById('filled').textContent = filled.toLocaleString();
+    document.getElementById('px').textContent = (sumPx / filled / 10000).toFixed(5);
+    document.getElementById('rtt').textContent = (rttTotal / 1_000_000).toFixed(2) + ' ms';
+    renderStages(msg.stamps, rttTotal);
+    pushChartPoint(msg.stamps, rttTotal);
+    // Echo to the server with t_client_recv stamped. The server
+    // derives rtt_total and wire_rtt from the four stamps, all
+    // arithmetic within a single clock domain per delta.
+    client.publish('latency_echo', {
+      session: sessionArr,
+      client_seq: msg.client_seq,
+      t_client_send: msg.t_client_send,
+      t_client_recv: tRecv,
+      stamps: msg.stamps,
+    });
+  });
+
+  client.subscribe('session', (msg) => {
+    // Reserved — server can broadcast queue state here.
+    console.log('session', msg);
   });
 });
 
