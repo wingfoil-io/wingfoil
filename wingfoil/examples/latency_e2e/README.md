@@ -26,6 +26,9 @@ examples/latency_e2e/
   prometheus/        prometheus scrape config
   grafana/           provisioned datasource + dashboard
   docker-compose.yml grafana + prometheus stack
+  pulumi/
+    fargate/         always-on AWS Fargate stack (cheap public demo)
+    baremetal/       on-demand EC2 bare-metal stack (perf showcase)
 ```
 
 ## Run it

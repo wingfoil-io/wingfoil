@@ -1,0 +1,9 @@
+name: wingfoil-latency-fargate
+runtime: python
+description: Always-on Fargate deployment of the wingfoil latency_e2e demo. Use the
+  baremetal stack alongside this one when you want to showcase real per-hop perf.
+
+config:
+  aws:region:
+    description: AWS region
+    default: us-east-1

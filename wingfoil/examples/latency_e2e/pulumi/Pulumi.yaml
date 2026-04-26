@@ -1,8 +1,0 @@
-name: wingfoil-latency
-runtime: python
-description: Deploy wingfoil latency_e2e demo to AWS ECS Fargate
-
-config:
-  aws:region:
-    description: AWS region
-    default: us-east-1
