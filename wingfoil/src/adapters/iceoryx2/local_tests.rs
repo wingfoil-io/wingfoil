@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! Local (in-process) tests for the iceoryx2 adapter.
 //!
 //! These exercise the `Local` service variant end-to-end — no shared memory,

@@ -15,8 +15,8 @@
 //! Payload types must implement [`ZeroCopySend`] and be `#[repr(C)]` and self-contained
 //! (no heap allocations, no pointers to external data).
 
-use iceoryx2::prelude::ZeroCopySend;
 use iceoryx2::node::Node;
+use iceoryx2::prelude::ZeroCopySend;
 use iceoryx2::service::{ipc, local};
 
 pub(crate) enum Iceoryx2NodeHandle {
@@ -268,6 +268,45 @@ impl From<iceoryx2::waitset::WaitSetCreateError> for Iceoryx2Error {
 impl From<iceoryx2::waitset::WaitSetRunError> for Iceoryx2Error {
     fn from(e: iceoryx2::waitset::WaitSetRunError) -> Self {
         Self::Other(anyhow::anyhow!(e.to_string()))
+    }
+}
+
+/// Check if RouDi daemon is available for IPC services.
+/// Returns an error with helpful message if RouDi is not responding.
+pub fn check_roudi_availability() -> Iceoryx2Result<()> {
+    use iceoryx2::node::NodeBuilder;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Verify RouDi is available by trying to create a node and test service with a timeout.
+    let (tx, rx) = mpsc::channel();
+    let timeout = Duration::from_millis(500);
+
+    std::thread::spawn(move || match NodeBuilder::new().create::<ipc::Service>() {
+        Ok(node) => {
+            let service_name = "_roudi_test_svc".try_into().unwrap_or_else(|_| {
+                std::process::exit(1);
+            });
+            let test_result = node
+                .service_builder(&service_name)
+                .publish_subscribe::<u32>()
+                .open_or_create();
+            let _ = tx.send(test_result.is_ok());
+        }
+        Err(_) => {
+            let _ = tx.send(false);
+        }
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(true) => Ok(()),
+        Ok(false) | Err(_) => Err(Iceoryx2Error::Other(anyhow::anyhow!(
+            "RouDi daemon is not available or not responding.\n\n\
+                 For IPC mode (default), start the iceoryx2 RouDi daemon:\n  \
+                 iox-roudi &\n\n\
+                 Or use Local variant for in-process testing (no daemon required):\n  \
+                 iceoryx2_sub_with::<T>(service_name, Iceoryx2ServiceVariant::Local)"
+        ))),
     }
 }
 

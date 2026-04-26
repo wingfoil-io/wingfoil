@@ -1,6 +1,7 @@
 //! iceoryx2 publisher (write) implementation
 
 use std::rc::Rc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -55,21 +56,84 @@ fn service_open_err_with_context(
 
 /// Create a node, open/create a pub-sub service, build a publisher, and create
 /// an event notifier for signaling.
+/// WARNING: For Ipc variant, service opening can block indefinitely if RouDi daemon is not running.
+/// Use Local variant for local testing without RouDi.
 macro_rules! create_publisher_and_notifier {
     ($svc:ty, $service_name:expr, $variant:expr, $history_size:expr, $payload:ty) => {{
         let node = NodeBuilder::new()
             .create::<$svc>()
             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
         let contract = Iceoryx2ServiceContract::new($history_size);
-        let service = node
-            .service_builder(&$service_name.as_str().try_into().map_err(
-                |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
-            )?)
-            .publish_subscribe::<$payload>()
-            .history_size($history_size)
-            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
-            .open_or_create()
-            .map_err(|e| service_open_err_with_context($service_name, $variant, contract, e))?;
+        let service_name_str = $service_name
+            .as_str()
+            .try_into()
+            .map_err(|e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())))?;
+
+        // Wrap service opening with timeout to detect missing RouDi daemon.
+        let (tx, rx) = mpsc::channel();
+        let service_name_owned = $service_name.to_string();
+        let variant_owned = $variant;
+        let contract_owned = contract.clone();
+        let timeout = Duration::from_secs(5);
+        let history_size_owned = $history_size;
+        let node_arc = Arc::new(node);
+        let node_clone = Arc::clone(&node_arc);
+
+        std::thread::spawn(move || {
+            let result = node_clone
+                .service_builder(&service_name_str)
+                .publish_subscribe::<$payload>()
+                .history_size(history_size_owned)
+                .subscriber_max_buffer_size(contract_owned.subscriber_max_buffer_size)
+                .open_or_create()
+                .map_err(|e| {
+                    service_open_err_with_context(
+                        &service_name_owned,
+                        variant_owned,
+                        contract_owned.clone(),
+                        e,
+                    )
+                });
+            let _ = tx.send(result);
+        });
+
+        let service = match rx.recv_timeout(timeout) {
+            Ok(Ok(svc)) => svc,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                eprintln!("ERROR: iceoryx2 service creation timed out after 5 seconds");
+                eprintln!("This typically means the RouDi daemon is not running.");
+                eprintln!();
+                if variant_owned == Iceoryx2ServiceVariant::Ipc {
+                    eprintln!("For local testing without RouDi, use the Local variant:");
+                    eprintln!(
+                        "  iceoryx2_pub_with(upstream, service_name, Iceoryx2ServiceVariant::Local)"
+                    );
+                    eprintln!();
+                    eprintln!("Or start RouDi:");
+                    eprintln!("  iox-roudi &");
+                }
+                let mut err_msg = format!(
+                    "service open/create timed out after 5s — RouDi daemon may not be running",
+                );
+                if variant_owned == Iceoryx2ServiceVariant::Ipc {
+                    err_msg.push_str(
+                        "\n\nFor local testing, either:\n  \
+                         (1) Start RouDi: iox-roudi &\n  \
+                         (2) Use Local variant instead: Iceoryx2ServiceVariant::Local",
+                    );
+                }
+                return Err(Iceoryx2Error::ServiceOpenFailed {
+                    error: err_msg,
+                    service_name: $service_name.to_string(),
+                    variant: variant_owned,
+                    history_size: contract.history_size,
+                    subscriber_max_buffer_size: contract.subscriber_max_buffer_size,
+                }
+                .into());
+            }
+        };
+
         let publisher = service
             .publisher_builder()
             .create()
@@ -77,6 +141,22 @@ macro_rules! create_publisher_and_notifier {
         publisher
             .update_connections()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+
+        // Extract the node from Arc. The thread has completed (either successfully or via timeout),
+        // so it should no longer hold a reference. However, if the thread is still running due to a
+        // hang, we'll get an error here — in that case, wait a moment and retry.
+        let node = match Arc::try_unwrap(node_arc) {
+            Ok(n) => n,
+            Err(arc) => {
+                // Thread might still be finishing. Give it a moment.
+                thread::sleep(Duration::from_millis(10));
+                Arc::try_unwrap(arc).unwrap_or_else(|arc| {
+                    // If still can't unwrap, drop the Arc and panic
+                    drop(arc);
+                    panic!("node Arc should be unwrappable after thread completes");
+                })
+            }
+        };
 
         let signal_name = format!("{}.signal", $service_name);
         let event_service = {
@@ -120,6 +200,8 @@ macro_rules! create_publisher_and_notifier {
 
 /// Like `create_publisher_and_notifier` but for slice publishers which need
 /// `initial_max_slice_len`.
+/// WARNING: For Ipc variant, service opening can block indefinitely if RouDi daemon is not running.
+/// Use Local variant for local testing without RouDi.
 macro_rules! create_slice_publisher_and_notifier {
     ($svc:ty, $service_name:expr, $variant:expr, $history_size:expr,
      $initial_max_slice_len:expr) => {{
@@ -127,15 +209,64 @@ macro_rules! create_slice_publisher_and_notifier {
             .create::<$svc>()
             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
         let contract = Iceoryx2ServiceContract::new($history_size);
-        let service = node
-            .service_builder(&$service_name.as_str().try_into().map_err(
-                |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
-            )?)
-            .publish_subscribe::<[u8]>()
-            .history_size($history_size)
-            .subscriber_max_buffer_size(contract.subscriber_max_buffer_size)
-            .open_or_create()
-            .map_err(|e| service_open_err_with_context($service_name, $variant, contract, e))?;
+        let service_name_str = $service_name.as_str().try_into().map_err(
+            |e: ServiceNameError| Iceoryx2Error::Other(anyhow::anyhow!(e.to_string())),
+        )?;
+
+        // Wrap service opening with timeout to detect missing RouDi daemon.
+        let (tx, rx) = mpsc::channel();
+        let service_name_owned = $service_name.to_string();
+        let variant_owned = $variant;
+        let contract_owned = contract.clone();
+        let timeout = Duration::from_secs(5);
+        let history_size_owned = $history_size;
+        let node_arc = Arc::new(node);
+        let node_clone = Arc::clone(&node_arc);
+
+        std::thread::spawn(move || {
+            let result = node_clone
+                .service_builder(&service_name_str)
+                .publish_subscribe::<[u8]>()
+                .history_size(history_size_owned)
+                .subscriber_max_buffer_size(contract_owned.subscriber_max_buffer_size)
+                .open_or_create()
+                .map_err(|e| service_open_err_with_context(&service_name_owned, variant_owned, contract_owned.clone(), e));
+            let _ = tx.send(result);
+        });
+
+        let service = match rx.recv_timeout(timeout) {
+            Ok(Ok(svc)) => svc,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                eprintln!("ERROR: iceoryx2 service creation timed out after 5 seconds");
+                eprintln!("This typically means the RouDi daemon is not running.");
+                eprintln!();
+                if variant_owned == Iceoryx2ServiceVariant::Ipc {
+                    eprintln!("For local testing without RouDi, use the Local variant:");
+                    eprintln!("  iceoryx2_pub_slice_with(upstream, service_name, Iceoryx2ServiceVariant::Local)");
+                    eprintln!();
+                    eprintln!("Or start RouDi:");
+                    eprintln!("  iox-roudi &");
+                }
+                let mut err_msg = format!(
+                    "service open/create timed out after 5s — RouDi daemon may not be running",
+                );
+                if variant_owned == Iceoryx2ServiceVariant::Ipc {
+                    err_msg.push_str(
+                        "\n\nFor local testing, either:\n  \
+                         (1) Start RouDi: iox-roudi &\n  \
+                         (2) Use Local variant instead: Iceoryx2ServiceVariant::Local"
+                    );
+                }
+                return Err(Iceoryx2Error::ServiceOpenFailed {
+                    error: err_msg,
+                    service_name: $service_name.to_string(),
+                    variant: variant_owned,
+                    history_size: contract.history_size,
+                    subscriber_max_buffer_size: contract.subscriber_max_buffer_size,
+                }.into());
+            }
+        };
         let publisher = service
             .publisher_builder()
             .initial_max_slice_len($initial_max_slice_len)
@@ -144,6 +275,23 @@ macro_rules! create_slice_publisher_and_notifier {
         publisher
             .update_connections()
             .map_err(|e| Iceoryx2Error::PortCreationFailed(e.to_string()))?;
+
+        // Extract the node from Arc. The thread has completed (either successfully or via timeout),
+        // so it should no longer hold a reference. However, if the thread is still running due to a
+        // hang, we'll get an error here — in that case, wait a moment and retry.
+        let node = match Arc::try_unwrap(node_arc) {
+            Ok(n) => n,
+            Err(arc) => {
+                // Thread might still be finishing. Give it a moment.
+                thread::sleep(Duration::from_millis(10));
+                Arc::try_unwrap(arc)
+                    .unwrap_or_else(|arc| {
+                        // If still can't unwrap, drop the Arc and panic
+                        drop(arc);
+                        panic!("node Arc should be unwrappable after thread completes");
+                    })
+            }
+        };
 
         let signal_name = format!("{}.signal", $service_name);
         let event_service = {
@@ -383,9 +531,16 @@ where
     }
 
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        // Check if RouDi is available for IPC variant before proceeding
+        if self.opts.variant == Iceoryx2ServiceVariant::Ipc {
+            super::check_roudi_availability()?;
+        }
+
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(Config::global_config());
+                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
+                    Config::global_config(),
+                );
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -398,7 +553,9 @@ where
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(Config::global_config());
+                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
+                    Config::global_config(),
+                );
                 let (node, publisher, notifier) = create_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,
@@ -508,9 +665,16 @@ impl MutableNode for Iceoryx2SlicePublisher {
     }
 
     fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+        // Check if RouDi is available for IPC variant before proceeding
+        if self.opts.variant == Iceoryx2ServiceVariant::Ipc {
+            super::check_roudi_availability()?;
+        }
+
         match self.opts.variant {
             Iceoryx2ServiceVariant::Ipc => {
-                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(Config::global_config());
+                let _ = iceoryx2::node::Node::<ipc::Service>::cleanup_dead_nodes(
+                    Config::global_config(),
+                );
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     ipc::Service,
                     &self.service_name,
@@ -523,7 +687,9 @@ impl MutableNode for Iceoryx2SlicePublisher {
                 self.notifier = Some(Iceoryx2NotifierPort::Ipc(notifier));
             }
             Iceoryx2ServiceVariant::Local => {
-                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(Config::global_config());
+                let _ = iceoryx2::node::Node::<local::Service>::cleanup_dead_nodes(
+                    Config::global_config(),
+                );
                 let (node, publisher, notifier) = create_slice_publisher_and_notifier!(
                     local::Service,
                     &self.service_name,
