@@ -1,0 +1,173 @@
+# GitHub Actions Workflow: Deploy latency_e2e to AWS ECS Fargate
+#
+# SETUP INSTRUCTIONS:
+#
+# 1. Create Pulumi Access Token:
+#    - Go to https://app.pulumi.com/account/tokens
+#    - Create new token, copy it
+#
+# 2. Create AWS IAM Role for OIDC (no long-lived credentials):
+#    ```bash
+#    cat > trust-policy.json <<'EOF'
+#    {
+#      "Version": "2012-10-17",
+#      "Statement": [{
+#        "Effect": "Allow",
+#        "Principal": {"Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"},
+#        "Action": "sts:AssumeRoleWithWebIdentity",
+#        "Condition": {
+#          "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+#          "StringLike": {"token.actions.githubusercontent.com:sub": "repo:wingfoil-io/wingfoil:ref:refs/heads/latency-example"}
+#        }
+#      }]
+#    }
+#    EOF
+#    sed -i "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/g" trust-policy.json
+#    aws iam create-role --role-name github-actions-latency-deploy --assume-role-policy-document file://trust-policy.json
+#    aws iam attach-role-policy --role-name github-actions-latency-deploy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+#    ```
+#
+# 3. Set GitHub Secrets (Settings → Secrets and variables → Actions):
+#    REQUIRED:
+#    - PULUMI_ACCESS_TOKEN: Your Pulumi token (from step 1)
+#    - AWS_ROLE_TO_ASSUME: arn:aws:iam::ACCOUNT_ID:role/github-actions-latency-deploy
+#    - WS_SERVER_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest)
+#    - FIX_GW_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest)
+#    - LMAX_USERNAME: Your LMAX FIX username
+#    - LMAX_PASSWORD: Your LMAX FIX password
+#
+#    OPTIONAL:
+#    - AWS_REGION: Default us-east-1
+#    - PULUMI_CPU: Default 1024 (vCPU units)
+#    - PULUMI_MEMORY: Default 2048 (MB)
+#    - PULUMI_SHM_SIZE: Default 256 (MB for iceoryx2)
+#
+# 4. Run the workflow:
+#    - Go to Actions → Deploy Latency E2E to AWS
+#    - Click "Run workflow"
+#    - Select stack (demo/staging/prod)
+#    - Outputs show ALB DNS name after ~10 minutes
+#
+# 5. Access the deployment:
+#    - WS Server: http://<ALB_DNS>/
+#    - Grafana: http://<ALB_DNS>:3000/
+#
+
+name: Deploy Latency E2E to AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: "Pulumi stack (demo/staging/prod)"
+        required: true
+        default: "demo"
+        type: choice
+        options:
+          - demo
+          - staging
+          - prod
+
+env:
+  PULUMI_SKIP_UPDATE_CHECK: true
+  PULUMI_STACK: ${{ github.event.inputs.stack || 'demo' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Install Python dependencies
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Pulumi stack select
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: pulumi stack select $PULUMI_STACK
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Set Pulumi config
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: |
+          pulumi config set aws:region ${{ secrets.AWS_REGION || 'us-east-1' }}
+          pulumi config set ws_server_image "${{ secrets.WS_SERVER_IMAGE }}"
+          pulumi config set fix_gw_image "${{ secrets.FIX_GW_IMAGE }}"
+          pulumi config set environment "$PULUMI_STACK"
+          pulumi config set cpu "${{ secrets.PULUMI_CPU || '1024' }}"
+          pulumi config set memory "${{ secrets.PULUMI_MEMORY || '2048' }}"
+          pulumi config set shm_size "${{ secrets.PULUMI_SHM_SIZE || '256' }}"
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Set Pulumi secrets
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: |
+          pulumi config set --secret lmax_username "${{ secrets.LMAX_USERNAME }}"
+          pulumi config set --secret lmax_password "${{ secrets.LMAX_PASSWORD }}"
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Pulumi preview
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: pulumi preview
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Pulumi up
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: pulumi up --yes --skip-preview
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Get outputs
+        id: outputs
+        working-directory: wingfoil/examples/latency_e2e/pulumi
+        run: |
+          ALB_DNS=$(pulumi stack output alb_dns_name)
+          echo "alb_dns_name=$ALB_DNS" >> $GITHUB_OUTPUT
+          echo "## 🚀 Deployment Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| WS Server | http://$ALB_DNS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grafana | http://$ALB_DNS:3000 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Stack:** $PULUMI_STACK" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ secrets.AWS_REGION || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Comment on PR/Issue (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚀 Latency E2E Deployment\n\nDeployed to **${{ env.PULUMI_STACK }}**\n\n- **WS Server:** http://${{ steps.outputs.outputs.alb_dns_name }}\n- **Grafana:** http://${{ steps.outputs.outputs.alb_dns_name }}:3000\n\nStack name: \`${{ env.PULUMI_STACK }}\``
+            })

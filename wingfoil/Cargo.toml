@@ -306,3 +306,13 @@ required-features = ["fluvio"]
 name = "kafka"
 path = "examples/kafka/main.rs"
 required-features = ["kafka"]
+
+[[example]]
+name = "latency_e2e_ws_server"
+path = "examples/latency_e2e/ws_server.rs"
+required-features = ["web", "iceoryx2-beta", "prometheus", "otlp"]
+
+[[example]]
+name = "latency_e2e_fix_gw"
+path = "examples/latency_e2e/fix_gw.rs"
+required-features = ["fix", "iceoryx2-beta"]

@@ -15,7 +15,16 @@
 //! Payload types must implement [`ZeroCopySend`] and be `#[repr(C)]` and self-contained
 //! (no heap allocations, no pointers to external data).
 
+use iceoryx2::node::Node;
 use iceoryx2::prelude::ZeroCopySend;
+use iceoryx2::service::{ipc, local};
+
+pub(crate) enum Iceoryx2NodeHandle {
+    #[allow(dead_code)]
+    Ipc(Node<ipc::Service>),
+    #[allow(dead_code)]
+    Local(Node<local::Service>),
+}
 
 pub const ICEORYX2_DEFAULT_HISTORY_SIZE: usize = 5;
 pub const ICEORYX2_DEFAULT_SUBSCRIBER_MAX_BUFFER_SIZE: usize = 16;
@@ -260,6 +269,39 @@ impl From<iceoryx2::waitset::WaitSetRunError> for Iceoryx2Error {
     fn from(e: iceoryx2::waitset::WaitSetRunError) -> Self {
         Self::Other(anyhow::anyhow!(e.to_string()))
     }
+}
+
+/// Check if RouDi daemon is available for IPC services.
+/// Returns an error with helpful message if RouDi is not running.
+/// (Skipped in tests, which run in controlled environments)
+pub fn check_roudi_availability() -> Iceoryx2Result<()> {
+    #[cfg(not(test))]
+    {
+        use std::process::Command;
+
+        // Check if iox-roudi process is running using ps + grep filter
+        let ps_output = Command::new("sh")
+            .args(["-c", "ps aux | grep '[i]ox-roudi' | grep -v grep"])
+            .output();
+
+        match ps_output {
+            Ok(output) if output.status.success() && !output.stdout.is_empty() => {
+                // Process found - RouDi is running
+                Ok(())
+            }
+            _ => Err(Iceoryx2Error::Other(anyhow::anyhow!(
+                "ERROR: RouDi daemon is not running!\n\n\
+                     The iceoryx2 IPC adapter requires the RouDi daemon.\n\n\
+                     To start RouDi, run:\n  \
+                     iox-roudi &\n\n\
+                     Alternative: Use Local variant for in-process testing without RouDi:\n  \
+                     iceoryx2_sub_with::<T>(service_name, Iceoryx2ServiceVariant::Local)"
+            ))),
+        }
+    }
+
+    #[cfg(test)]
+    Ok(())
 }
 
 mod read;

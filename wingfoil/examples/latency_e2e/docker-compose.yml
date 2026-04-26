@@ -1,0 +1,52 @@
+# Operator-side dashboard stack for the wingfoil end-to-end latency demo.
+#
+# Brings up Prometheus (metric scrape), Tempo (traces), and Grafana
+# (provisioned with both datasources and the latency dashboard). Expects
+# ws_server / fix_gw to be running on the host; ws_server's Prometheus
+# exporter is reached via host.docker.internal:9091 and its OTLP trace
+# push targets host.docker.internal:4318 → Tempo.
+#
+# Usage:
+#   docker compose -f examples/latency_e2e/docker-compose.yml up -d
+#   open http://localhost:3000  (admin/admin; dashboard is auto-loaded)
+#
+# ws_server:
+#   WINGFOIL_OTLP_ENDPOINT=http://localhost:4318 \
+#     cargo run --release --example latency_e2e_ws_server ...
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "3200:3200"    # Tempo HTTP API (Grafana datasource talks here)
+      - "4318:4318"    # OTLP / HTTP (ws_server push target)
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/latency.json
+      GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - tempo

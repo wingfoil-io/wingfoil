@@ -1,0 +1,29 @@
+# Builder stage
+FROM rust:latest as builder
+
+WORKDIR /workspace
+COPY . .
+
+RUN cargo build --release \
+    --example latency_e2e_ws_server \
+    --features "web,iceoryx2-beta,prometheus,otlp"
+
+# Runtime stage
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /workspace/target/release/examples/latency_e2e_ws_server /app/ws_server
+COPY wingfoil/examples/latency_e2e/static /app/static
+
+ENV WINGFOIL_STATIC_DIR=/app/static
+
+EXPOSE 8080 9091
+
+ENTRYPOINT ["/app/ws_server"]
+CMD ["--addr", "0.0.0.0:8080"]

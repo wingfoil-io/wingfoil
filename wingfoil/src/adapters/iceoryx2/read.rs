@@ -15,8 +15,8 @@ use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
 
 use super::{
-    Iceoryx2Error, Iceoryx2Mode, Iceoryx2Result, Iceoryx2ServiceContract, Iceoryx2ServiceVariant,
-    Iceoryx2SubOpts,
+    Iceoryx2Error, Iceoryx2Mode, Iceoryx2NodeHandle, Iceoryx2Result, Iceoryx2ServiceContract,
+    Iceoryx2ServiceVariant, Iceoryx2SubOpts,
 };
 
 fn service_open_err_with_context(
@@ -259,6 +259,7 @@ where
 {
     service_name: String,
     opts: Iceoryx2SubOpts,
+    node: Option<Iceoryx2NodeHandle>,
     subscriber: Option<Iceoryx2SubscriberPort<T>>,
     receiver: Option<ChannelReceiver<T>>,
     running: Arc<AtomicBool>,
@@ -275,6 +276,7 @@ where
         Self {
             service_name,
             opts,
+            node: None,
             subscriber: None,
             receiver: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -378,23 +380,28 @@ where
 
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let (_node, subscriber) = create_subscriber!(
+                        // Check if RouDi is available before creating node in Spin mode
+                        // (Threaded/Signaled modes will catch errors in background thread)
+                        super::check_roudi_availability()?;
+                        let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
                             self.opts.variant,
                             self.opts.history_size,
                             T
                         );
+                        self.node = Some(Iceoryx2NodeHandle::Ipc(node));
                         self.subscriber = Some(Iceoryx2SubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let (_node, subscriber) = create_subscriber!(
+                        let (node, subscriber) = create_subscriber!(
                             local::Service,
                             &self.service_name,
                             self.opts.variant,
                             self.opts.history_size,
                             T
                         );
+                        self.node = Some(Iceoryx2NodeHandle::Local(node));
                         self.subscriber = Some(Iceoryx2SubscriberPort::Local(subscriber));
                     }
                 }
@@ -429,6 +436,7 @@ where
         }
         self.subscriber = None;
         self.receiver = None;
+        self.node = None;
         Ok(())
     }
 
@@ -453,6 +461,7 @@ where
 struct Iceoryx2SliceReceiverStream {
     service_name: String,
     opts: Iceoryx2SubOpts,
+    node: Option<Iceoryx2NodeHandle>,
     subscriber: Option<Iceoryx2SliceSubscriberPort>,
     receiver: Option<ChannelReceiver<Vec<u8>>>,
     running: Arc<AtomicBool>,
@@ -501,6 +510,7 @@ impl Iceoryx2SliceReceiverStream {
         Self {
             service_name,
             opts,
+            node: None,
             subscriber: None,
             receiver: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -560,23 +570,28 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
                 state.always_callback();
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
-                        let (_node, subscriber) = create_subscriber!(
+                        // Check if RouDi is available before creating node in Spin mode
+                        // (Threaded/Signaled modes will catch errors in background thread)
+                        super::check_roudi_availability()?;
+                        let (node, subscriber) = create_subscriber!(
                             ipc::Service,
                             &self.service_name,
                             self.opts.variant,
                             self.opts.history_size,
                             [u8]
                         );
+                        self.node = Some(Iceoryx2NodeHandle::Ipc(node));
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Ipc(subscriber));
                     }
                     Iceoryx2ServiceVariant::Local => {
-                        let (_node, subscriber) = create_subscriber!(
+                        let (node, subscriber) = create_subscriber!(
                             local::Service,
                             &self.service_name,
                             self.opts.variant,
                             self.opts.history_size,
                             [u8]
                         );
+                        self.node = Some(Iceoryx2NodeHandle::Local(node));
                         self.subscriber = Some(Iceoryx2SliceSubscriberPort::Local(subscriber));
                     }
                 }
@@ -609,6 +624,7 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
         }
         self.subscriber = None;
         self.receiver = None;
+        self.node = None;
         Ok(())
     }
 
