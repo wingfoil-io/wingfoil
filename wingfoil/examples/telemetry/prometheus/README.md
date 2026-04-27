@@ -16,7 +16,7 @@ Starts the Docker stack (Grafana + Prometheus), then runs the example. Press `Ct
 
 To stop the stack:
 ```sh
-docker compose -f docker/grafana/docker-compose.yml down
+docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml down
 ```
 
 ## Run

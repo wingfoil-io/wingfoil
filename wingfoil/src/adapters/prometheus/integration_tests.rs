@@ -1,8 +1,8 @@
 //! Integration tests for the Prometheus adapter.
 //!
-//! Requires the Docker stack from `docker/grafana/`:
+//! Requires the Docker stack from `wingfoil/src/adapters/prometheus/docker/`:
 //! ```sh
-//! docker compose -f docker/grafana/docker-compose.yml up -d
+//! docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
 //! ```
 //!
 //! Then run:

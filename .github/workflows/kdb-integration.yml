@@ -30,7 +30,7 @@ jobs:
           shared-key: integration
 
       - name: Build KDB image
-        run: docker build -t wingfoil-kdb docker/kdb/
+        run: docker build -t wingfoil-kdb wingfoil/src/adapters/kdb/docker/
 
       - name: Start KDB container
         run: |
