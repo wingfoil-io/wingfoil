@@ -15,6 +15,7 @@
 //! Payload types must implement [`ZeroCopySend`] and be `#[repr(C)]` and self-contained
 //! (no heap allocations, no pointers to external data).
 
+use iceoryx2::config::Config;
 use iceoryx2::node::Node;
 use iceoryx2::prelude::ZeroCopySend;
 use iceoryx2::service::{ipc, local};
@@ -24,6 +25,18 @@ pub(crate) enum Iceoryx2NodeHandle {
     Ipc(Node<ipc::Service>),
     #[allow(dead_code)]
     Local(Node<local::Service>),
+}
+
+/// Built-in iceoryx2 defaults, cached for the process lifetime.
+///
+/// Passed to every `NodeBuilder::new().config(...)` so iceoryx2's global
+/// singleton is never lazily loaded from disk — that lookup emits a
+/// "No config file was loaded" warning when no `config/iceoryx2.toml`
+/// is found, which we don't want surfaced to users of the adapter.
+pub(crate) fn iceoryx2_default_config() -> &'static Config {
+    use std::sync::OnceLock;
+    static CFG: OnceLock<Config> = OnceLock::new();
+    CFG.get_or_init(Config::default)
 }
 
 pub const ICEORYX2_DEFAULT_HISTORY_SIZE: usize = 5;

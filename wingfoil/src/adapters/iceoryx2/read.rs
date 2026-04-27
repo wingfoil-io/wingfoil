@@ -16,7 +16,7 @@ use iceoryx2::prelude::*;
 
 use super::{
     Iceoryx2Error, Iceoryx2Mode, Iceoryx2NodeHandle, Iceoryx2Result, Iceoryx2ServiceContract,
-    Iceoryx2ServiceVariant, Iceoryx2SubOpts,
+    Iceoryx2ServiceVariant, Iceoryx2SubOpts, iceoryx2_default_config,
 };
 
 fn service_open_err_with_context(
@@ -58,6 +58,7 @@ fn service_open_err_with_context(
 macro_rules! create_subscriber {
     ($svc:ty, $service_name:expr, $variant:expr, $history_size:expr, $payload:ty) => {{
         let node = NodeBuilder::new()
+            .config(iceoryx2_default_config())
             .create::<$svc>()
             .map_err(|e| Iceoryx2Error::NodeCreationFailed(e.to_string()))?;
         let contract = Iceoryx2ServiceContract::new($history_size);
