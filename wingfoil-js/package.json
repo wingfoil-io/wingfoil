@@ -41,7 +41,7 @@
     "README.md"
   ],
   "scripts": {
-    "build:wasm": "cd ../wingfoil-wasm && wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg",
+    "build:wasm": "cd ../wingfoil-wasm && wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg && rm -f ../wingfoil-js/wasm-pkg/.gitignore",
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts",
     "dev": "vite examples/solid-dashboard",
