@@ -297,10 +297,13 @@ fn main() -> anyhow::Result<()> {
 
 // ── ClOrdID and NewOrderSingle ───────────────────────────────────────────
 
-/// `<sessionHex>-<seq>` is unique by construction (session UUID is
+/// `<sessionHex(last 8)>-<seq>` is unique by construction (session UUID is
 /// random per browser tab, seq is monotonic per session).
+/// LMAX ClOrdID has 20-character limit, so use last 8 hex chars only.
 fn cl_ord_id(p: &RoundTrip) -> String {
-    format!("{}-{}", session_hex(&p.session), p.client_seq)
+    let full_hex = session_hex(&p.session);
+    let short_hex = &full_hex[full_hex.len() - 8..];
+    format!("{}-{}", short_hex, p.client_seq)
 }
 
 /// Build and send a `NewOrderSingle` (MsgType `D`) to the LMAX order

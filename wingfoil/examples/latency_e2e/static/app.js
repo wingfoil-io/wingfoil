@@ -79,8 +79,16 @@ client.onConnection((s) => {
 // ── Per-hop chart and bars ────────────────────────────────────────────────
 function stageNs(entry, stamps, rttTotal) {
   const [, kind, a, b] = entry;
-  if (kind === 'server') return stamps[b] - stamps[a];
-  if (kind === 'wire')   return Math.max(0, rttTotal - (stamps[8] - stamps[0]));
+  if (kind === 'server') {
+    const aVal = stamps[a];
+    const bVal = stamps[b];
+    if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) return 0;
+    return bVal - aVal;
+  }
+  if (kind === 'wire') {
+    if (stamps[0] === null || stamps[0] === undefined || stamps[8] === null || stamps[8] === undefined) return 0;
+    return Math.max(0, rttTotal - (stamps[8] - stamps[0]));
+  }
   return 0;
 }
 
@@ -129,7 +137,7 @@ function initChart() {
         width: 1.5,
       })),
     ],
-    axes: [{ stroke: '#8b949e' }, { stroke: '#8b949e', values: (_, vs) => vs.map(v => v.toLocaleString()) }],
+    axes: [{ stroke: '#8b949e' }, { stroke: '#8b949e', values: (_, vs) => vs.map(v => (v === null || v === undefined || !isFinite(v)) ? '–' : v.toLocaleString()) }],
   };
   chart = new uPlot(opts, chartData, document.getElementById('chart'));
 }
