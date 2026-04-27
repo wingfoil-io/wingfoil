@@ -97,9 +97,10 @@ fn main() -> anyhow::Result<()> {
 
     let precise = precise_stamps_enabled();
     // LMAX London Demo updates EUR/USD only every few seconds during quiet
-    // periods, so a tight 500 ms gate rejected most orders. 5 s keeps the
+    // periods — observed gaps of 20+ seconds when the book is dormant — so
+    // even 5 s rejects most orders outside of busy windows. 60 s keeps the
     // safety check meaningful while accepting the demo feed's real cadence.
-    let max_md_age_ms = env_u64("WINGFOIL_MAX_MD_AGE_MS", 5_000);
+    let max_md_age_ms = env_u64("WINGFOIL_MAX_MD_AGE_MS", 60_000);
 
     let username = std::env::var("LMAX_USERNAME")
         .map_err(|_| anyhow::anyhow!("LMAX_USERNAME env var is required"))?;
