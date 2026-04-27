@@ -7,8 +7,8 @@ if ! command -v docker &>/dev/null; then
 fi
 
 ROOT="$(git rev-parse --show-toplevel)"
-COMPOSE="docker compose -f $ROOT/docker/grafana/docker-compose.yml"
-TOKEN_FILE="$ROOT/docker/grafana/tokens/grafana_api_key"
+COMPOSE="docker compose -f $ROOT/wingfoil/src/adapters/prometheus/docker/docker-compose.yml"
+TOKEN_FILE="$ROOT/wingfoil/src/adapters/prometheus/docker/tokens/grafana_api_key"
 
 echo "==> Starting Docker stack..."
 $COMPOSE up -d

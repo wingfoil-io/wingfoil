@@ -29,7 +29,7 @@ jobs:
 
       - name: Start Grafana + Prometheus stack
         run: docker compose up -d
-        working-directory: docker/grafana
+        working-directory: wingfoil/src/adapters/prometheus/docker
 
       - name: Wait for Prometheus to be healthy
         run: |
@@ -55,9 +55,9 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs
-        working-directory: docker/grafana
+        working-directory: wingfoil/src/adapters/prometheus/docker
 
       - name: Tear down stack
         if: always()
         run: docker compose down
-        working-directory: docker/grafana
+        working-directory: wingfoil/src/adapters/prometheus/docker

@@ -10,6 +10,7 @@ prometheus/
   mod.rs               # Public API re-exports, module-level docs
   exporter.rs          # PrometheusExporter — hand-rolled HTTP server + MutableNode sink
   integration_tests.rs # Integration tests (requires running Prometheus; see below)
+  docker/              # Docker Compose stack (Prometheus + Grafana) for integration tests
   CLAUDE.md            # This file
 ```
 
@@ -46,10 +47,10 @@ cargo clippy --workspace --all-targets --all-features
 cargo test --features prometheus -p wingfoil -- adapters::prometheus
 
 # 3. Integration tests (requires Docker stack)
-docker compose -f docker/grafana/docker-compose.yml up -d
+docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
 RUST_LOG=INFO cargo test --features prometheus-integration-test -p wingfoil \
   -- --test-threads=1 --nocapture adapters::prometheus::integration_tests
-docker compose -f docker/grafana/docker-compose.yml down
+docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml down
 ```
 
 ## Integration Test Environment Variables
@@ -61,7 +62,7 @@ docker compose -f docker/grafana/docker-compose.yml down
 
 ## Gotchas
 
-- The Prometheus scrape interval in `docker/grafana/provisioning/prometheus/prometheus.yml` is 5 s.
+- The Prometheus scrape interval in `docker/provisioning/prometheus/prometheus.yml` is 5 s.
   The integration test polls for up to 60 s to account for scrape lag.
 - All tests (unit and integration) use port `0` so the OS assigns a free port. Never hardcode a port
   number in tests.
