@@ -302,7 +302,7 @@ fn main() -> anyhow::Result<()> {
 /// LMAX ClOrdID has 20-character limit, so use last 8 hex chars only.
 fn cl_ord_id(p: &RoundTrip) -> String {
     let full_hex = session_hex(&p.session);
-    let short_hex = &full_hex[full_hex.len()-8..];
+    let short_hex = &full_hex[full_hex.len() - 8..];
     format!("{}-{}", short_hex, p.client_seq)
 }
 
