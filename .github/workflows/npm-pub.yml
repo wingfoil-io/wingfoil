@@ -44,13 +44,13 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: wingfoil-js/pnpm-lock.yaml
 
-      - name: Build wasm bundle
-        working-directory: wingfoil-wasm
-        run: wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg
-
       - name: Install JS deps
         working-directory: wingfoil-js
         run: pnpm install --frozen-lockfile
+
+      - name: Build wasm bundle
+        working-directory: wingfoil-js
+        run: pnpm run build:wasm
 
       - name: Build TypeScript
         working-directory: wingfoil-js
@@ -59,6 +59,22 @@ jobs:
       - name: Lint
         working-directory: wingfoil-js
         run: pnpm run lint
+
+      # Sanity check: pnpm/npm-packlist honors any .gitignore inside wasm-pkg/
+      # (wasm-pack writes one with `*`), which silently strips the entire
+      # directory from the publish tarball even though it's listed in `files`.
+      # `build:wasm` removes the offending file; verify the dry-run tarball
+      # actually contains the wasm before we ship it.
+      - name: Verify wasm files are packaged
+        working-directory: wingfoil-js
+        run: |
+          set -euo pipefail
+          tarball=$(pnpm pack --pack-destination /tmp 2>&1 | tail -n1)
+          if ! tar tzf "$tarball" | grep -q 'wasm-pkg/wingfoil_wasm_bg\.wasm$'; then
+            echo "::error::publish tarball is missing wasm-pkg/ — refusing to publish"
+            tar tzf "$tarball"
+            exit 1
+          fi
 
       - name: Publish to npm
         working-directory: wingfoil-js
