@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-derive"
-version = "4.3.1"
+version = "4.3.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "Proc-macro attribute for the wingfoil stream processing library"
