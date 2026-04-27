@@ -137,18 +137,12 @@ need React.
 
 ## Development
 
-Build the wasm bundle first:
-
-```sh
-cd wingfoil-wasm
-wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg
-```
-
-Then, from `wingfoil-js/`:
+From `wingfoil-js/`:
 
 ```sh
 pnpm install
-pnpm build            # tsc → ./dist
+pnpm run build:wasm   # wasm-pack → ./src/wasm
+pnpm build            # build:wasm + tsc + copy ./src/wasm to ./dist/wasm
 pnpm dev              # Vite dev server for examples/solid-dashboard
 pnpm run lint         # tsc --noEmit
 ```

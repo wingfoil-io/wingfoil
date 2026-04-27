@@ -1,5 +1,5 @@
 node_modules/
 dist/
-wasm-pkg/
+src/wasm/
 .vite/
 *.tsbuildinfo

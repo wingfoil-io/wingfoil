@@ -15,7 +15,7 @@ import init, {
   encodeUnsubscribe,
   init_panic_hook,
   wireVersion,
-} from "../wasm-pkg/wingfoil_wasm.js";
+} from "./wasm/wingfoil_wasm.js";
 
 export type CodecKind = "bincode" | "json";
 
