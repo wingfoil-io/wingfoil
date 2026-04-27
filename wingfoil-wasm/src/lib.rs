@@ -83,16 +83,30 @@ pub fn encode_unsubscribe(codec: &str, topics: Vec<String>) -> Result<Vec<u8>, J
 /// frame (ready to send on the WebSocket). Used for client → server
 /// publishes.
 ///
-/// The JS value is first converted to a `serde_json::Value` so it works
-/// for both bincode and JSON codecs without requiring the Rust payload
-/// schema here. The server's `web_sub::<T>` must be able to deserialize
-/// the result back into `T`.
+/// For the JSON codec we sidestep `serde_wasm_bindgen` and use the JS
+/// engine's own `JSON.stringify` to produce the payload bytes. The
+/// detour through `serde_json::Value` forces JS Numbers outside the
+/// safe-integer range (e.g. nanosecond timestamps ~1.78e18) through
+/// `f64`, which serde_json then writes as JSON floats — and the
+/// server's `u64` fields reject floating-point input. JS's native
+/// `JSON.stringify` writes integer-valued Numbers without a decimal
+/// regardless of magnitude, so the server decodes cleanly.
+///
+/// For bincode we still need the serde round-trip because there is no
+/// JS-native bincode encoder.
 #[wasm_bindgen(js_name = encodePayload)]
 pub fn encode_payload(codec: &str, topic: &str, value: JsValue) -> Result<Vec<u8>, JsError> {
     let codec = parse_codec(codec)?;
-    let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
-        .map_err(|e| JsError::new(&format!("encode_payload: from JS: {e}")))?;
-    let payload = codec.encode(&json).map_err(to_js_error)?;
+    let payload: Vec<u8> = match codec {
+        CodecKind::Json => js_sys::JSON::stringify(&value)
+            .map(|s| String::from(s).into_bytes())
+            .map_err(|e| JsError::new(&format!("encode_payload: JSON.stringify: {e:?}")))?,
+        CodecKind::Bincode => {
+            let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
+                .map_err(|e| JsError::new(&format!("encode_payload: from JS: {e}")))?;
+            codec.encode(&json).map_err(to_js_error)?
+        }
+    };
     let env = Envelope {
         topic: topic.to_string(),
         time_ns: 0,
@@ -102,11 +116,28 @@ pub fn encode_payload(codec: &str, topic: &str, value: JsValue) -> Result<Vec<u8
 }
 
 /// Decode the payload bytes of an envelope into a JS value.
+///
+/// JSON: parse with `JSON.parse` rather than the serde_json →
+/// `serde_wasm_bindgen` round-trip. The latter rejects u64 values past
+/// `Number.MAX_SAFE_INTEGER` outright; `JSON.parse` accepts them with
+/// the standard JS Number precision loss (still integer-valued, just
+/// approximated).
 #[wasm_bindgen(js_name = decodePayload)]
 pub fn decode_payload(codec: &str, bytes: &[u8]) -> Result<JsValue, JsError> {
-    let json: serde_json::Value = parse_codec(codec)?.decode(bytes).map_err(to_js_error)?;
-    serde_wasm_bindgen::to_value(&json)
-        .map_err(|e| JsError::new(&format!("decode_payload: to JS: {e}")))
+    let codec = parse_codec(codec)?;
+    match codec {
+        CodecKind::Json => {
+            let s = std::str::from_utf8(bytes)
+                .map_err(|e| JsError::new(&format!("decode_payload: utf8: {e}")))?;
+            js_sys::JSON::parse(s)
+                .map_err(|e| JsError::new(&format!("decode_payload: JSON.parse: {e:?}")))
+        }
+        CodecKind::Bincode => {
+            let json: serde_json::Value = codec.decode(bytes).map_err(to_js_error)?;
+            serde_wasm_bindgen::to_value(&json)
+                .map_err(|e| JsError::new(&format!("decode_payload: to JS: {e}")))
+        }
+    }
 }
 
 /// Decode a control-topic payload into a JS object.
