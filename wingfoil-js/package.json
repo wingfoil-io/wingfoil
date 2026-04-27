@@ -37,12 +37,11 @@
   },
   "files": [
     "dist",
-    "wasm-pkg",
     "README.md"
   ],
   "scripts": {
-    "build:wasm": "cd ../wingfoil-wasm && wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg && rm -f ../wingfoil-js/wasm-pkg/.gitignore",
-    "build:ts": "tsc",
+    "build:wasm": "cd ../wingfoil-wasm && wasm-pack build --target web --release --out-dir ../wingfoil-js/src/wasm && rm -f ../wingfoil-js/src/wasm/.gitignore",
+    "build:ts": "tsc && rm -rf dist/wasm && cp -r src/wasm dist/wasm && rm -f dist/wasm/.gitignore",
     "build": "npm run build:wasm && npm run build:ts",
     "dev": "vite examples/solid-dashboard",
     "lint": "tsc --noEmit",

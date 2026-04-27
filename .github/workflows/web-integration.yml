@@ -71,13 +71,13 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: wingfoil-js/pnpm-lock.yaml
 
-      - name: Build wasm bundle for JS
-        working-directory: wingfoil-wasm
-        run: wasm-pack build --target web --release --out-dir ../wingfoil-js/wasm-pkg
-
       - name: Install JS deps
         working-directory: wingfoil-js
         run: pnpm install --frozen-lockfile
+
+      - name: Build wasm bundle for JS
+        working-directory: wingfoil-js
+        run: pnpm run build:wasm
 
       - name: Type-check
         working-directory: wingfoil-js
