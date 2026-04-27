@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-wire-types"
-version = "4.3.2"
+version = "4.3.3"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 license = "Apache-2.0"
