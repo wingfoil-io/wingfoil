@@ -102,10 +102,8 @@ fn main() -> anyhow::Result<()> {
     // safety check meaningful while accepting the demo feed's real cadence.
     let max_md_age_ms = env_u64("WINGFOIL_MAX_MD_AGE_MS", 60_000);
 
-    let username = std::env::var("LMAX_USERNAME")
-        .map_err(|_| anyhow::anyhow!("LMAX_USERNAME env var is required"))?;
-    let password = std::env::var("LMAX_PASSWORD")
-        .map_err(|_| anyhow::anyhow!("LMAX_PASSWORD env var is required"))?;
+    let username = required_env("LMAX_USERNAME")?;
+    let password = required_env("LMAX_PASSWORD")?;
 
     log::info!("fix_gw starting — precise={precise} max_md_age_ms={max_md_age_ms} as {username}");
 
@@ -202,6 +200,14 @@ fn main() -> anyhow::Result<()> {
     // orders or matching ExecReports. The output value is the last
     // matched fill this cycle (or None); downstream `MapFilterStream`
     // drops the Nones.
+    //
+    // Invariant: each upstream emits at most one event per cycle
+    // (`order_events` and `exec_events` are both single-tick streams via
+    // `collapse`), so a burst contains at most one Order and at most one
+    // Exec — and thus at most one match. If that invariant is ever broken
+    // by a wiring change upstream, two Execs in the same burst would
+    // silently overwrite each other (only the last reaches downstream).
+    // We log loud in that case so the regression is visible.
 
     let matched = {
         let park: RefCell<HashMap<String, Traced<RoundTrip, RoundTripLatency>>> =
@@ -251,6 +257,14 @@ fn main() -> anyhow::Result<()> {
                                     parked.payload.fill_price_bps = 0;
                                 }
                             }
+                            if let Some(prev) = last.as_ref() {
+                                log::error!(
+                                    "matcher invariant broken: dropping previously matched fill \
+                                     cl_ord={} for newer cl_ord={cl_ord} in same burst — \
+                                     upstream `collapse` should make this unreachable",
+                                    cl_ord_id(&prev.payload),
+                                );
+                            }
                             *last = Some(parked);
                         }
                         MatcherEvent::None => {}
@@ -293,6 +307,16 @@ fn main() -> anyhow::Result<()> {
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())
+}
+
+/// Read an env var that must be set to a non-empty value. `std::env::var`
+/// returns `Ok("")` when the var is set but empty, which would otherwise
+/// slip past a plain `?` check and produce confusing FIX login failures.
+fn required_env(name: &str) -> anyhow::Result<String> {
+    match std::env::var(name) {
+        Ok(v) if !v.trim().is_empty() => Ok(v),
+        _ => anyhow::bail!("{name} env var is required (and must be non-empty)"),
+    }
 }
 
 // ── ClOrdID and NewOrderSingle ───────────────────────────────────────────

@@ -173,12 +173,19 @@ window.addEventListener('DOMContentLoaded', () => {
   initChart();
   document.getElementById('start').onclick = startStream;
 
+  let pricedFills = 0;
   tracker.onResponse((rt) => {
     const fill = rt.payload;
     filled += 1;
-    sumPx += fill.fill_price_bps;
     document.getElementById('filled').textContent = filled.toLocaleString();
-    document.getElementById('px').textContent = (sumPx / filled / 10000).toFixed(5);
+    // Skip cancels/rejects (fix_gw emits them as zero-priced zero-qty fills
+    // so the round-trip counter still closes) — including them would drag
+    // the displayed average toward zero.
+    if (fill.fill_price_bps > 0 && fill.filled_qty > 0) {
+      sumPx += fill.fill_price_bps;
+      pricedFills += 1;
+      document.getElementById('px').textContent = (sumPx / pricedFills / 10000).toFixed(5);
+    }
     document.getElementById('rtt').textContent = (rt.rttNs / 1_000_000).toFixed(2) + ' ms';
     renderStages(rt.stamps, rt.rttNs);
     pushChartPoint(rt.stamps, rt.rttNs);
