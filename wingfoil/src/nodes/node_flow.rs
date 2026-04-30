@@ -63,12 +63,12 @@ impl MutableNode for DelayNode {
             let current_time = state.time();
             if state.ticked(self.upstream.clone()) {
                 let next_time = current_time + self.delay;
-                state.add_callback(next_time);
+                state.add_callback(next_time)?;
                 self.queue.push((), next_time);
             }
             let mut ticked = false;
             while self.queue.pending(current_time) {
-                self.queue.pop();
+                let _ = self.queue.pop();
                 ticked = true;
             }
             Ok(ticked)

@@ -108,9 +108,15 @@ impl<K, T: Element, S: StreamStore<K, T>> DynamicGroup<K, T, S> {
     /// subgraph (nodes that connect directly to the pre-existing graph) at `t+1ns`,
     /// so filter-based subgraphs correctly evaluate the shared source's current value
     /// rather than reading stale defaults from intermediate nodes.
-    pub fn insert(&mut self, state: &mut GraphState, key: K, stream: Rc<dyn Stream<T>>) {
-        state.add_upstream(stream.clone().as_node(), true, true);
+    pub fn insert(
+        &mut self,
+        state: &mut GraphState,
+        key: K,
+        stream: Rc<dyn Stream<T>>,
+    ) -> anyhow::Result<()> {
+        state.add_upstream(stream.clone().as_node(), true, true)?;
         self.store.store_insert(key, stream);
+        Ok(())
     }
 
     /// Remove the stream registered under `key` and unwire it from the graph.
@@ -164,7 +170,7 @@ where
         if state.ticked(self.add.clone().as_node()) {
             let key = self.add.peek_value();
             let stream = (self.factory)(key.clone());
-            self.group.insert(state, key, stream);
+            self.group.insert(state, key, stream)?;
         }
         if state.ticked(self.del.clone().as_node()) {
             let key = self.del.peek_value();

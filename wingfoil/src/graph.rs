@@ -8,7 +8,6 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 #[cfg(feature = "dynamic-graph-beta")]
 use std::collections::HashSet;
-use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Error, Write};
 use std::path::Path;
@@ -16,8 +15,6 @@ use std::rc::Rc;
 #[cfg(feature = "async")]
 use std::sync::Arc;
 use std::sync::Mutex;
-#[cfg(feature = "async")]
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::vec;
 
@@ -113,7 +110,7 @@ pub struct GraphState {
     node_to_index: HashMap<HashByRef<dyn Node>, usize>,
     node_ticked: Vec<bool>,
     #[cfg(feature = "async")]
-    run_time: OnceLock<Arc<tokio::runtime::Runtime>>,
+    run_time: Option<Arc<tokio::runtime::Runtime>>,
     run_mode: RunMode,
     run_for: RunFor,
     ready_notifier: Sender<usize>,
@@ -132,7 +129,9 @@ pub struct GraphState {
 impl GraphState {
     pub fn new(run_mode: RunMode, run_for: RunFor, start_time: NanoTime) -> Self {
         let (ready_notifier, ready_callbacks) = crossbeam::channel::unbounded();
-        let mut id = GRAPH_ID.lock().unwrap();
+        let mut id = GRAPH_ID
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let slf = Self {
             time: NanoTime::ZERO,
             wall_time: NanoTime::ZERO,
@@ -145,7 +144,7 @@ impl GraphState {
             node_to_index: HashMap::new(),
             node_ticked: Vec::new(),
             #[cfg(feature = "async")]
-            run_time: OnceLock::new(),
+            run_time: None,
             ready_notifier,
             run_mode,
             run_for,
@@ -197,45 +196,57 @@ impl GraphState {
         self.start_time
     }
 
-    pub(crate) fn ready_notifier(&self) -> ReadyNotifier {
-        ReadyNotifier {
-            node_index: self.current_node_index.unwrap(),
+    pub(crate) fn ready_notifier(&self) -> anyhow::Result<ReadyNotifier> {
+        let node_index = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("ready_notifier called outside node processing"))?;
+        Ok(ReadyNotifier {
+            node_index,
             sender: self.ready_notifier.clone(),
-        }
+        })
     }
 
     #[cfg(feature = "async")]
-    pub fn tokio_runtime(&self) -> Arc<tokio::runtime::Runtime> {
-        self.run_time
-            .get_or_init(|| {
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    panic!(
-                        "wingfoil cannot be run from an async context (e.g. `#[tokio::main]`). \
-                     Call graph.run() from a synchronous thread instead. \
-                     Tip: std::thread::spawn(|| graph.run(...)).join().unwrap()"
-                    );
-                }
-                Arc::new(
-                    tokio::runtime::Builder::new_multi_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap(),
-                )
-            })
-            .clone()
+    pub fn tokio_runtime(&mut self) -> anyhow::Result<Arc<tokio::runtime::Runtime>> {
+        if let Some(rt) = &self.run_time {
+            return Ok(rt.clone());
+        }
+        if tokio::runtime::Handle::try_current().is_ok() {
+            anyhow::bail!(
+                "wingfoil cannot be run from an async context (e.g. `#[tokio::main]`). \
+                 Call graph.run() from a synchronous thread instead. \
+                 Tip: std::thread::spawn(|| graph.run(...)).join().map_err(..)"
+            );
+        }
+        let rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("failed to build tokio runtime: {e}"))?,
+        );
+        self.run_time = Some(rt.clone());
+        Ok(rt)
     }
 
-    pub fn add_callback(&mut self, time: NanoTime) {
-        self.add_callback_for_node(self.current_node_index.unwrap(), time);
+    pub fn add_callback(&mut self, time: NanoTime) -> anyhow::Result<()> {
+        let ix = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("add_callback called outside node processing"))?;
+        self.add_callback_for_node(ix, time);
+        Ok(())
     }
 
-    pub(crate) fn current_node_id(&self) -> usize {
-        self.current_node_index.unwrap()
+    pub(crate) fn current_node_id(&self) -> anyhow::Result<usize> {
+        self.current_node_index
+            .ok_or_else(|| anyhow::anyhow!("current_node_id called outside node processing"))
     }
 
-    pub fn always_callback(&mut self) {
-        let ix = self.current_node_index.unwrap();
+    pub fn always_callback(&mut self) -> anyhow::Result<()> {
+        let ix = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("always_callback called outside node processing"))?;
         self.always_callbacks.push(ix);
+        Ok(())
     }
 
     pub fn is_last_cycle(&self) -> bool {
@@ -268,10 +279,18 @@ impl GraphState {
     /// This lets the calling node catch the value that triggered the
     /// `add_upstream` call without waiting for the next source tick.
     #[cfg(feature = "dynamic-graph-beta")]
-    pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool) {
-        let caller_index = self.current_node_index.unwrap();
+    pub fn add_upstream(
+        &mut self,
+        upstream: Rc<dyn Node>,
+        is_active: bool,
+        recycle: bool,
+    ) -> anyhow::Result<()> {
+        let caller_index = self
+            .current_node_index
+            .ok_or_else(|| anyhow::anyhow!("add_upstream called outside node processing"))?;
         self.pending_additions
             .push((upstream, caller_index, is_active, recycle));
+        Ok(())
     }
 
     /// Deregister `node` at the end of the current cycle:
@@ -298,11 +317,9 @@ impl GraphState {
     }
 
     fn next_scheduled_time(&self) -> NanoTime {
-        if self.scheduled_callbacks.is_empty() {
-            NanoTime::MAX
-        } else {
-            self.scheduled_callbacks.next_time()
-        }
+        self.scheduled_callbacks
+            .next_time()
+            .unwrap_or(NanoTime::MAX)
     }
 
     pub(crate) fn add_callback_for_node(&mut self, node_index: usize, time: NanoTime) {
@@ -323,7 +340,7 @@ impl GraphState {
             let timeout = u64::from(end_time - now);
             select! {
                 recv(self.ready_callbacks) -> msg => {
-                    Some(msg.unwrap())
+                    msg.ok()
                 },
                 default(Duration::from_nanos(timeout)) => {
                     None
@@ -415,8 +432,8 @@ impl Graph {
         run_for: RunFor,
         start_time: NanoTime,
     ) -> Graph {
-        let state = GraphState::new(run_mode, run_for, start_time);
-        state.run_time.set(tokio_runtime).ok();
+        let mut state = GraphState::new(run_mode, run_for, start_time);
+        state.run_time = Some(tokio_runtime);
         let mut graph = Graph { state };
         graph.initialise(root_nodes);
         graph
@@ -595,17 +612,18 @@ impl Graph {
                 self.initialise_node(&node);
             }
         }
-        let mut max_layer: i32 = -1;
+        let max_layer = self.state.nodes.iter().map(|n| n.layer).max();
         for i in 0..self.state.nodes.len() {
-            max_layer = max(max_layer, self.state.nodes[i].layer.try_into().unwrap());
             self.state.node_dirty.push(false);
             for j in 0..self.state.nodes[i].upstreams.len() {
                 let (up_index, active) = self.state.nodes[i].upstreams[j];
                 self.state.nodes[up_index].downstreams.push((i, active));
             }
         }
-        for _ in 0..max_layer + 1 {
-            self.state.dirty_nodes_by_layer.push(vec![]);
+        if let Some(max_layer) = max_layer {
+            for _ in 0..=max_layer {
+                self.state.dirty_nodes_by_layer.push(vec![]);
+            }
         }
         debug!(
             "{:} nodes wired in {:?}",
@@ -633,8 +651,8 @@ impl Graph {
         // recursively crawl through graph defined by node
         // constructing NodeData wrapper for each node and pushing
         // onto self.nodes returns index of new NodeData in self.nodes
-        if self.state.seen(node.clone()) {
-            self.state.node_index(node.clone()).unwrap()
+        if let Some(ix) = self.state.node_index(node.clone()) {
+            ix
         } else {
             let mut layer = 0;
             let mut upstream_indexes = vec![];
@@ -671,7 +689,9 @@ impl Graph {
             progressed = true;
         }
         while self.state.has_pending_scheduled_callbacks() {
-            let ix = self.state.scheduled_callbacks.pop();
+            let Some(ix) = self.state.scheduled_callbacks.pop() else {
+                break;
+            };
             self.mark_dirty(ix);
             progressed = true;
         }
@@ -698,8 +718,7 @@ impl Graph {
 
     fn process_ready_callbacks(&mut self) -> bool {
         let mut progressed = false;
-        while !self.state.ready_callbacks.is_empty() {
-            let ix = self.state.ready_callbacks.recv().unwrap();
+        while let Ok(ix) = self.state.ready_callbacks.try_recv() {
             self.mark_dirty(ix);
             progressed = true;
         }
@@ -864,7 +883,9 @@ impl Graph {
         // is called more than once with the same node in a single cycle.
         let mut wired_edges: HashSet<(usize, usize)> = HashSet::new();
         for (node, caller_index, is_active, recycle) in &additions {
-            let node_index = self.state.node_index(node.clone()).unwrap();
+            let node_index = self.state.node_index(node.clone()).ok_or_else(|| {
+                anyhow::anyhow!("node not found in graph after dynamic initialization")
+            })?;
             if wired_edges.insert((*caller_index, node_index)) {
                 self.state.nodes[*caller_index]
                     .upstreams
@@ -1315,13 +1336,13 @@ Caused by:
             let t = state.time();
             self.times.push(t);
             if self.times.len() == 1 {
-                state.add_callback(self.resched_time);
+                state.add_callback(self.resched_time)?;
             }
             Ok(true)
         }
 
         fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-            state.add_callback(NanoTime::new(100));
+            state.add_callback(NanoTime::new(100))?;
             Ok(())
         }
     }
@@ -1415,7 +1436,7 @@ Caused by:
             fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                 self.cycle_count += 1;
                 if self.cycle_count == self.add_after {
-                    state.add_upstream(self.extra.clone(), true, false);
+                    state.add_upstream(self.extra.clone(), true, false)?;
                 }
                 if state.ticked(self.extra.clone()) {
                     *self.extra_ticks.borrow_mut() += 1;
@@ -1670,7 +1691,7 @@ Caused by:
 
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
-                        state.add_upstream(self.extra.clone().as_node(), true, true);
+                        state.add_upstream(self.extra.clone().as_node(), true, true)?;
                         self.added = true;
                     }
                     if state.ticked(self.extra.clone().as_node()) {
@@ -1734,7 +1755,7 @@ Caused by:
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
                         // passive upstream: is_active = false
-                        state.add_upstream(self.extra.clone().as_node(), false, false);
+                        state.add_upstream(self.extra.clone().as_node(), false, false)?;
                         self.added = true;
                     }
                     // We are only triggered by `trigger`, not by `extra`.
@@ -1823,7 +1844,7 @@ Caused by:
 
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if self.add_count < 2 {
-                        state.add_upstream(self.counted.clone(), true, false);
+                        state.add_upstream(self.counted.clone(), true, false)?;
                         self.add_count += 1;
                     }
                     Ok(true)
@@ -1885,7 +1906,7 @@ Caused by:
 
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.added {
-                        state.add_upstream(self.deep.clone().as_node(), true, false);
+                        state.add_upstream(self.deep.clone().as_node(), true, false)?;
                         self.added = true;
                     }
                     if state.ticked(self.deep.clone().as_node()) {
@@ -1944,7 +1965,7 @@ Caused by:
 
                 fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
                     if !self.done {
-                        state.add_upstream(self.extra.clone(), true, false);
+                        state.add_upstream(self.extra.clone(), true, false)?;
                         state.remove_node(self.extra.clone());
                         self.done = true;
                     }

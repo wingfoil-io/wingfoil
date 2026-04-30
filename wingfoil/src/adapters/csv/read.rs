@@ -10,38 +10,42 @@ fn csv_iterator<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Box<dyn Iterator<Item = ValueAt<T>>>
+) -> anyhow::Result<Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
+    let file =
+        File::open(path).map_err(|e| anyhow::anyhow!("failed to open CSV file '{path}': {e}"))?;
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
-        .from_reader(File::open(path).unwrap())
+        .from_reader(file)
         .into_deserialize();
-    Box::new(data.map(move |record: Result<T, csv::Error>| {
-        let rec = record.unwrap();
+    Ok(Box::new(data.map(move |record: Result<T, csv::Error>| {
+        let rec = record.map_err(|e| anyhow::anyhow!("CSV deserialize error: {e}"))?;
         let t = get_time_func(&rec);
-        ValueAt {
+        Ok(ValueAt {
             value: rec,
             time: t,
-        }
-    }))
+        })
+    })))
 }
 
 /// Returns a stream that emits records from a CSV file as a [`Burst<T>`] per tick.
 /// Multiple rows sharing the same timestamp are grouped into a single burst.
 /// Use [`.collapse()`](crate::StreamOperators::collapse) when the source is
 /// strictly ascending and you need a plain `T` per tick.
-#[must_use]
+///
+/// Errors from opening the file are returned eagerly; per-record deserialize
+/// errors are propagated lazily through the resulting stream.
 pub fn csv_read<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<Burst<T>>>
+) -> anyhow::Result<Rc<dyn Stream<Burst<T>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    IteratorStream::new(csv_iterator(path, get_time_func, has_headers)).into_stream()
+    Ok(IteratorStream::new(csv_iterator(path, get_time_func, has_headers)?).into_stream())
 }
 
 #[cfg(test)]
@@ -60,7 +64,7 @@ mod tests {
     fn csv_read_emits_all_rows() {
         // read_test.csv has 6 data rows + a sentinel row (9999,0) so all 6 emit.
         // IteratorStream needs at least one item after the last real item to trigger emission.
-        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false);
+        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false).unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -77,7 +81,7 @@ mod tests {
     #[test]
     fn csv_read_each_row_is_single_burst() {
         // read_test.csv: 6 data rows, each unique timestamp → 6 single-element bursts
-        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false);
+        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false).unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -99,7 +103,8 @@ mod tests {
             "src/adapters/csv/test_data/read_test_multi.csv",
             get_time,
             false,
-        );
+        )
+        .unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)

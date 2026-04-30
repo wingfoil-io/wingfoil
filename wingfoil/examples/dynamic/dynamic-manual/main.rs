@@ -69,7 +69,7 @@ impl MutableNode for PriceAggregator {
                 self.inst_price
                     .filter_value(move |(inst, _)| inst == &inst_key),
             );
-            state.add_upstream(processed.clone().as_node(), true, true);
+            state.add_upstream(processed.clone().as_node(), true, true)?;
             self.per_instrument.insert(instrument, processed);
         }
         if state.ticked(self.del_instrument.clone().as_node()) {

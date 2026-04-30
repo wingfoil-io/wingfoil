@@ -24,14 +24,16 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
             if !q.pending(state.time()) {
                 break;
             }
-            self.value = q.pop();
+            if let Some(v) = q.pop() {
+                self.value = v;
+            }
             ticked = true;
         }
         Ok(ticked)
     }
 
     fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        self.node_id.set(Some(state.current_node_id()));
+        self.node_id.set(Some(state.current_node_id()?));
         Ok(())
     }
 }
@@ -59,7 +61,11 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
     pub fn send(&self, value: T, state: &mut GraphState) {
         let time = state.time() + 1;
         self.queue.borrow_mut().push(value, time);
-        state.add_callback_for_node(self.node_id.get().unwrap(), time);
+        let node_id = self
+            .node_id
+            .get()
+            .expect("FeedbackSink::send called before setup");
+        state.add_callback_for_node(node_id, time);
     }
 }
 

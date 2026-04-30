@@ -73,7 +73,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
             .take()
             .ok_or_else(|| anyhow::anyhow!("missing sender"))?;
         if state.run_mode() == RunMode::RealTime {
-            sender.set_notifier(state.ready_notifier());
+            sender.set_notifier(state.ready_notifier()?);
         }
         self.state.start(sender, self.stop.clone());
         self.inner.setup(state)

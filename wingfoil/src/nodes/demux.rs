@@ -104,7 +104,7 @@ where
             },
             None => match self.peek_available() {
                 Some(index) => {
-                    self.available.take(&index).unwrap();
+                    self.available.remove(&index);
                     self.in_use.insert(key, Some(index));
                     DemuxEntry::Some(index)
                 }
@@ -126,15 +126,15 @@ where
 /// [StreamOperators::demux_it].
 pub struct Overflow<T: Element>(Rc<RefCell<Option<Rc<dyn Stream<T>>>>>);
 impl<T: Element> Overflow<T> {
-    #[must_use]
-    pub fn stream(&self) -> Rc<dyn Stream<T>> {
-        self.0.borrow().clone().unwrap()
-    }
-    #[must_use]
-    pub fn panic(&self) -> Rc<dyn Node> {
-        self.stream().for_each(move |itm, _| {
-            panic!("overflow!\n{itm:?}");
+    pub fn stream(&self) -> anyhow::Result<Rc<dyn Stream<T>>> {
+        self.0.borrow().clone().ok_or_else(|| {
+            anyhow::anyhow!("overflow stream not initialized (called before graph setup?)")
         })
+    }
+    pub fn panic(&self) -> anyhow::Result<Rc<dyn Node>> {
+        Ok(self.stream()?.for_each(move |itm, _| {
+            panic!("overflow!\n{itm:?}");
+        }))
     }
 }
 
@@ -218,7 +218,12 @@ where
             DemuxEvent::None => self.map.get_or_insert(key),
         };
         let graph_index = match entry {
-            DemuxEntry::Overflow => self.overflow_graph_index.unwrap(),
+            DemuxEntry::Overflow => {
+                let Some(ix) = self.overflow_graph_index else {
+                    return Err(anyhow::anyhow!("overflow graph index not set during setup"));
+                };
+                ix
+            }
             DemuxEntry::Some(index) => self.index_map[index],
         };
         // mark dirty directly instead of ticking
@@ -381,7 +386,9 @@ where
             let (index, graph_index) = match entry {
                 DemuxEntry::Overflow => {
                     let index = self.map.size();
-                    let graph_index = self.overflow_graph_index.unwrap();
+                    let graph_index = self.overflow_graph_index.ok_or_else(|| {
+                        anyhow::anyhow!("overflow graph index not set during setup")
+                    })?;
                     (index, graph_index)
                 }
                 DemuxEntry::Some(index) => {
@@ -410,7 +417,10 @@ where
         node_indexes
             .drain(..)
             .for_each(|node_index| self.index_map.push(node_index));
-        let overflow = self.overflow_child.take().unwrap();
+        let overflow = self
+            .overflow_child
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("overflow child already taken"))?;
         self.overflow_graph_index = graph_state.node_index(overflow.as_node());
         anyhow::ensure!(
             self.overflow_graph_index.is_some(),
@@ -445,7 +455,12 @@ where
     }
 
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = self.source.peek_ref_cell().get(self.index).unwrap().clone();
+        self.value = self
+            .source
+            .peek_ref_cell()
+            .get(self.index)
+            .ok_or_else(|| anyhow::anyhow!("demux child index {} out of bounds", self.index))?
+            .clone();
         Ok(true)
     }
 }
@@ -525,10 +540,10 @@ mod tests {
         demuxed: Vec<Rc<dyn Stream<T>>>,
         overflow: Overflow<T>,
         with_overflow: bool,
-    ) -> (Vec<Rc<dyn Stream<Vec<T>>>>, Vec<Rc<dyn Node>>) {
+    ) -> anyhow::Result<(Vec<Rc<dyn Stream<Vec<T>>>>, Vec<Rc<dyn Node>>)> {
         let mut dmxd = demuxed;
         if with_overflow {
-            dmxd.push(overflow.stream());
+            dmxd.push(overflow.stream()?);
         }
         let results = dmxd
             .iter()
@@ -544,12 +559,9 @@ mod tests {
             .map(|strm| strm.clone().as_node())
             .collect::<Vec<_>>();
         if !with_overflow {
-            let overflow = overflow.stream().for_each(|_, _| {
-                panic!("overflow!");
-            });
-            nodes.push(overflow);
+            nodes.push(overflow.panic()?);
         }
-        (results, nodes)
+        Ok((results, nodes))
     }
 
     fn validate_results<T>(results: Vec<Rc<dyn Stream<Vec<T>>>>, func: impl Fn(&T) -> Topic) {
@@ -616,7 +628,7 @@ mod tests {
             let map = DemuxMap::new(capacity);
             let muxed = combine(streams);
             let (demuxed, overflow) = muxed.demux_it_with_map(map, parse_message);
-            let (results, nodes) = build_results(demuxed, overflow, with_overflow);
+            let (results, nodes) = build_results(demuxed, overflow, with_overflow).unwrap();
             Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
             let parse_topic = |msgs: &Burst<Message>| {
                 assert!(msgs.len() == 1);
@@ -635,7 +647,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let muxed = merge(streams);
             let (demuxed, overflow) = muxed.demux(capacity, parse_message);
-            let (results, nodes) = build_results(demuxed, overflow, with_overflow);
+            let (results, nodes) = build_results(demuxed, overflow, with_overflow).unwrap();
             Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
             validate_results(results, |msg| msg.topic);
         }

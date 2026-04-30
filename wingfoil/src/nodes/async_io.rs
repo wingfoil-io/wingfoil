@@ -97,7 +97,7 @@ where
         if self.handle.as_ref().is_some_and(|h| h.is_finished()) {
             // The consumer task has exited unexpectedly. Try to get the actual error.
             let handle = self.handle.take().expect("handle is Some");
-            match state.tokio_runtime().block_on(handle) {
+            match state.tokio_runtime()?.block_on(handle) {
                 Ok(Ok(())) => {
                     // Task completed successfully, but that's unexpected here
                     anyhow::bail!("consumer task exited early without error");
@@ -142,8 +142,7 @@ where
             let fut = func(ctx, Box::pin(src));
             fut.await
         };
-
-        let handle = state.tokio_runtime().spawn(f);
+        let handle = state.tokio_runtime()?.spawn(f);
         self.handle = Some(handle);
 
         Ok(())
@@ -156,7 +155,7 @@ where
 
     fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         if let Some(handle) = self.handle.take() {
-            state.tokio_runtime().block_on(handle)??;
+            state.tokio_runtime()?.block_on(handle)??;
         }
         Ok(())
     }
@@ -218,9 +217,9 @@ where
 
         match run_mode {
             RunMode::HistoricalFrom(_) => {}
-            RunMode::RealTime => sender.set_notifier(state.ready_notifier()),
+            RunMode::RealTime => sender.set_notifier(state.ready_notifier()?),
         };
-        let mut sender = sender.into_async();
+        let mut sender = sender.into_async()?;
         let func = self
             .func
             .take()
@@ -235,20 +234,20 @@ where
                 Err(e) => {
                     sender
                         .send_message(Message::Error(std::sync::Arc::new(e)))
-                        .await;
+                        .await?;
                 }
                 Ok(stream) => {
                     let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
                     let mut source = Box::pin(source);
                     while let Some(message) = source.next().await {
-                        sender.send_message(message).await;
+                        sender.send_message(message).await?;
                     }
                 }
             }
-            sender.close().await;
+            sender.close().await?;
             Ok(())
         };
-        let handle = state.tokio_runtime().spawn(fut);
+        let handle = state.tokio_runtime()?.spawn(fut);
         self.handle = Some(handle);
         self.receiver_stream.setup(state)?;
         Ok(())
@@ -259,7 +258,7 @@ where
             // Abort first so the sender inside the task is dropped, then await completion
             // so receiver_stream.teardown() can drain the channel without blocking.
             handle.abort();
-            let result = state.tokio_runtime().block_on(handle);
+            let result = state.tokio_runtime()?.block_on(handle);
             self.receiver_stream.teardown(state)?;
             match result {
                 Ok(inner) => inner?,

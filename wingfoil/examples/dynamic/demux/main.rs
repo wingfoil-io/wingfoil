@@ -42,7 +42,8 @@ fn inst_key(event: &InstEvent) -> Instrument {
 
 type PriceBook = BTreeMap<Instrument, Price>;
 
-pub fn build(period: Duration) -> (Rc<dyn Stream<PriceBook>>, Rc<dyn Node>) {
+#[allow(clippy::type_complexity)]
+pub fn build(period: Duration) -> anyhow::Result<(Rc<dyn Stream<PriceBook>>, Rc<dyn Node>)> {
     let src = self::source::market_data(period);
     let price_events = src.inst_price.map(|(i, p)| InstEvent::Price(i, p));
     let del_events = src.del_instrument.map(InstEvent::Delete);
@@ -55,7 +56,7 @@ pub fn build(period: Duration) -> (Rc<dyn Stream<PriceBook>>, Rc<dyn Node>) {
         };
         (key, de)
     });
-    let overflow_node = overflow.panic();
+    let overflow_node = overflow.panic()?;
     let processed: Vec<Rc<dyn Stream<Burst<InstEvent>>>> = slots
         .into_iter()
         .map(|slot| {
@@ -90,7 +91,7 @@ pub fn build(period: Duration) -> (Rc<dyn Stream<PriceBook>>, Rc<dyn Node>) {
             },
         );
 
-    (price_book, overflow_node)
+    Ok((price_book, overflow_node))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -99,7 +100,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 pub fn run(period: Duration, cycles: u32) -> anyhow::Result<()> {
-    let (price_book, overflow_node) = build(period);
+    let (price_book, overflow_node) = build(period)?;
     Graph::new(
         vec![
             price_book.logged("price book (demux)", Info).as_node(),
@@ -156,9 +157,9 @@ mod tests {
 
     /// Demux has no recycle cycles, so RunFor::Cycles(20) maps cleanly to n=1..20.
     #[test]
-    fn price_book_accumulation() {
+    fn price_book_accumulation() -> anyhow::Result<()> {
         let period = std::time::Duration::from_secs(1);
-        let (price_book, overflow_node) = build(period);
+        let (price_book, overflow_node) = build(period)?;
         let assertion = price_book.accumulate().finally(|states, _| {
             assert_eq!(states, expected_book_states());
             Ok(())
@@ -169,6 +170,5 @@ mod tests {
             RunFor::Cycles(20),
         )
         .run()
-        .unwrap();
     }
 }

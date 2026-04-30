@@ -14,7 +14,7 @@ impl<T: Element> MutableNode for ConstantStream<T> {
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
-        state.add_callback(state.start_time());
+        state.add_callback(state.start_time())?;
         Ok(())
     }
 }
