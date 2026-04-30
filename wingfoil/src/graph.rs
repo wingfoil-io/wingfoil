@@ -203,9 +203,14 @@ impl GraphState {
         NanoTime::now()
     }
 
-    /// The current engine time
+    /// Engine time elapsed since the run started.
+    ///
+    /// Saturates at zero: `state.time` is initialised to `NanoTime::ZERO` and
+    /// only catches up to `start_time` after the first scheduled callback
+    /// fires, so a passive read in that early window would otherwise wrap to
+    /// a near-`u64::MAX` value via `Sub`'s default panicking/wrapping.
     pub fn elapsed(&self) -> NanoTime {
-        self.time - self.start_time
+        NanoTime::from(u64::from(self.time).saturating_sub(u64::from(self.start_time)))
     }
 
     pub fn start_time(&self) -> NanoTime {
@@ -1130,6 +1135,19 @@ mod tests {
             average_duration(Duration::from_nanos(100), 4),
             Duration::from_nanos(25)
         );
+    }
+
+    #[test]
+    fn elapsed_saturates_when_time_below_start_time() {
+        // Constructed-but-not-run state has time = ZERO and start_time = the
+        // historical anchor. Reading elapsed() in this window must saturate
+        // at zero rather than wrapping via u64 underflow.
+        let state = GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::new(1_000)),
+            RunFor::Cycles(1),
+            NanoTime::new(1_000),
+        );
+        assert_eq!(state.elapsed(), NanoTime::ZERO);
     }
 
     // ── GraphState::node_index_ticked (pub(crate)) ────────────────────────────

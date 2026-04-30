@@ -128,66 +128,59 @@ impl From<NanoTime> for Duration {
     }
 }
 
-// Arithmetic on NanoTime saturates at the u64 boundaries instead of panicking
-// (debug) or wrapping (release). Engine time is logically a non-negative
-// timeline; saturating means `state.time + delay` never wraps past
-// NanoTime::MAX and `time - earlier` never wraps to a huge value if the
-// inputs are out of order.
-
 impl Add<NanoTime> for NanoTime {
     type Output = Self;
     fn add(self, other: Self) -> Self::Output {
-        Self(self.0.saturating_add(other.0))
+        Self(self.0 + other.0)
     }
 }
 
 impl Add<RawTime> for NanoTime {
     type Output = Self;
     fn add(self, other: RawTime) -> Self::Output {
-        Self(self.0.saturating_add(other))
+        Self(self.0 + other)
     }
 }
 
 impl Add<Duration> for NanoTime {
     type Output = Self;
     fn add(self, other: Duration) -> Self::Output {
-        let nanos = u64::try_from(other.as_nanos()).unwrap_or(RawTime::MAX);
-        Self(self.0.saturating_add(nanos))
+        Self(self.0 + other.as_nanos() as RawTime)
     }
 }
 
 impl Sub<NanoTime> for NanoTime {
     type Output = Self;
     fn sub(self, other: Self) -> Self::Output {
-        Self(self.0.saturating_sub(other.0))
+        Self(self.0 - other.0)
     }
 }
 
 impl Mul<u32> for NanoTime {
     type Output = Self;
     fn mul(self, other: u32) -> Self::Output {
-        Self(self.0.saturating_mul(other as RawTime))
+        Self(self.0 * other as RawTime)
     }
 }
 
 impl Mul<i32> for NanoTime {
     type Output = Self;
     fn mul(self, other: i32) -> Self::Output {
-        Self(self.0.saturating_mul(other.max(0) as RawTime))
+        Self(self.0 * other as RawTime)
     }
 }
 
 impl Mul<u64> for NanoTime {
     type Output = Self;
     fn mul(self, other: u64) -> Self::Output {
-        Self(self.0.saturating_mul(other))
+        Self(self.0 * other as RawTime)
     }
 }
 
 impl Mul<i64> for NanoTime {
     type Output = Self;
     fn mul(self, other: i64) -> Self::Output {
-        Self(self.0.saturating_mul(other.max(0) as RawTime))
+        Self(self.0 * other as RawTime)
     }
 }
 
@@ -300,30 +293,5 @@ mod tests {
         let s = t.pretty();
         // 1_500_000_000 ns * 1e-9 = 1.5 seconds
         assert!(s.contains("1.500"), "expected 1.500 in '{s}'");
-    }
-
-    #[test]
-    fn add_saturates_at_max() {
-        assert_eq!(NanoTime::MAX + NanoTime::new(1), NanoTime::MAX);
-        assert_eq!(NanoTime::MAX + 1u64, NanoTime::MAX);
-        assert_eq!(NanoTime::MAX + Duration::from_secs(1), NanoTime::MAX);
-    }
-
-    #[test]
-    fn sub_saturates_at_zero() {
-        assert_eq!(NanoTime::ZERO - NanoTime::new(1), NanoTime::ZERO);
-        assert_eq!(NanoTime::new(5) - NanoTime::new(10), NanoTime::ZERO);
-    }
-
-    #[test]
-    fn mul_saturates_at_max() {
-        assert_eq!(NanoTime::MAX * 2u32, NanoTime::MAX);
-        assert_eq!(NanoTime::MAX * 2u64, NanoTime::MAX);
-    }
-
-    #[test]
-    fn mul_negative_clamps_to_zero() {
-        assert_eq!(NanoTime::new(100) * -3i32, NanoTime::ZERO);
-        assert_eq!(NanoTime::new(100) * -3i64, NanoTime::ZERO);
     }
 }
