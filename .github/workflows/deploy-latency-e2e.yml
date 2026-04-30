@@ -57,6 +57,11 @@
 
 name: Deploy Latency E2E to AWS
 
+# TEMPORARILY DISABLED: AWS OIDC role / secrets not configured yet.
+# The configure-aws-credentials step fails with "Could not load credentials
+# from any providers". Re-enable by removing the `if: false` guard on the
+# deploy job once AWS_ROLE_TO_ASSUME is set and the OIDC trust policy is
+# in place.
 on:
   workflow_dispatch:
     inputs:
@@ -76,6 +81,7 @@ env:
 
 jobs:
   deploy:
+    if: false
     runs-on: ubuntu-latest
     permissions:
       id-token: write
