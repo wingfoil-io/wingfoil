@@ -76,11 +76,10 @@ pulumi up
 ```
 
 This will create:
-- VPC with public/private subnets
+- VPC with two public subnets across `<region>a` and `<region>b` (no NAT — tasks egress directly through the IGW)
 - ALB with listeners on :80 (ws_server) and :3000 (grafana)
-- ECS Cluster and Service
-- S3 bucket for Tempo traces
-- CloudWatch log group
+- ECS Cluster and Service running on **Fargate Spot** (~70% cheaper; 2-minute interrupt warning)
+- CloudWatch log group (1-day retention)
 - Secrets Manager secrets for LMAX credentials
 - IAM roles and policies
 
