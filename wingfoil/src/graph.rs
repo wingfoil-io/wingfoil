@@ -3,7 +3,6 @@ use crate::queue::TimeQueue;
 use crate::types::{NanoTime, Node};
 
 use crossbeam::channel::{Receiver, SendError, Sender, select};
-use lazy_static::lazy_static;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 #[cfg(feature = "dynamic-graph-beta")]
@@ -15,20 +14,38 @@ use std::path::Path;
 use std::rc::Rc;
 #[cfg(feature = "async")]
 use std::sync::Arc;
-use std::sync::Mutex;
 #[cfg(feature = "async")]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::vec;
 
-lazy_static! {
-    static ref GRAPH_ID: Mutex<usize> = Mutex::new(0);
+static GRAPH_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// A directed edge between two nodes in the graph.
+///
+/// `active = true` edges propagate ticks: when the upstream node ticks,
+/// the downstream node is marked dirty for the current cycle. `active = false`
+/// edges are passive — the downstream can read the upstream's value but is
+/// not triggered by it.
+#[derive(Clone, Copy, Debug)]
+struct Edge {
+    node_index: usize,
+    active: bool,
+}
+
+#[cfg(feature = "dynamic-graph-beta")]
+struct PendingAddition {
+    node: Rc<dyn Node>,
+    caller_index: usize,
+    is_active: bool,
+    recycle: bool,
 }
 
 struct NodeData {
     node: Rc<dyn Node>,
-    upstreams: Vec<(usize, bool)>,
-    downstreams: Vec<(usize, bool)>,
+    upstreams: Vec<Edge>,
+    downstreams: Vec<Edge>,
     layer: usize,
     active: bool,
 }
@@ -124,7 +141,7 @@ pub struct GraphState {
     dirty_nodes_by_layer: Vec<Vec<usize>>,
     node_dirty: Vec<bool>,
     #[cfg(feature = "dynamic-graph-beta")]
-    pending_additions: Vec<(Rc<dyn Node>, usize, bool, bool)>,
+    pending_additions: Vec<PendingAddition>,
     #[cfg(feature = "dynamic-graph-beta")]
     pending_removals: Vec<Rc<dyn Node>>,
 }
@@ -132,8 +149,8 @@ pub struct GraphState {
 impl GraphState {
     pub fn new(run_mode: RunMode, run_for: RunFor, start_time: NanoTime) -> Self {
         let (ready_notifier, ready_callbacks) = crossbeam::channel::unbounded();
-        let mut id = GRAPH_ID.lock().unwrap();
-        let slf = Self {
+        let id = GRAPH_ID.fetch_add(1, Ordering::Relaxed);
+        Self {
             time: NanoTime::ZERO,
             wall_time: NanoTime::ZERO,
             first_cycle: true,
@@ -151,7 +168,7 @@ impl GraphState {
             run_for,
             ready_callbacks,
             start_time,
-            id: *id,
+            id,
             nodes: Vec::new(),
             dirty_nodes_by_layer: Vec::new(),
             node_dirty: Vec::new(),
@@ -159,9 +176,7 @@ impl GraphState {
             pending_additions: Vec::new(),
             #[cfg(feature = "dynamic-graph-beta")]
             pending_removals: Vec::new(),
-        };
-        *id += 1;
-        slf
+        }
     }
 
     /// The current engine time
@@ -188,9 +203,14 @@ impl GraphState {
         NanoTime::now()
     }
 
-    /// The current engine time
+    /// Engine time elapsed since the run started.
+    ///
+    /// Saturates at zero: `state.time` is initialised to `NanoTime::ZERO` and
+    /// only catches up to `start_time` after the first scheduled callback
+    /// fires, so a passive read in that early window would otherwise wrap to
+    /// a near-`u64::MAX` value via `Sub`'s default panicking/wrapping.
     pub fn elapsed(&self) -> NanoTime {
-        self.time - self.start_time
+        NanoTime::from(u64::from(self.time).saturating_sub(u64::from(self.start_time)))
     }
 
     pub fn start_time(&self) -> NanoTime {
@@ -270,8 +290,12 @@ impl GraphState {
     #[cfg(feature = "dynamic-graph-beta")]
     pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool) {
         let caller_index = self.current_node_index.unwrap();
-        self.pending_additions
-            .push((upstream, caller_index, is_active, recycle));
+        self.pending_additions.push(PendingAddition {
+            node: upstream,
+            caller_index,
+            is_active,
+            recycle,
+        });
     }
 
     /// Deregister `node` at the end of the current cycle:
@@ -492,7 +516,7 @@ impl Graph {
         };
         match self.state.run_for {
             RunFor::Duration(duration) => {
-                *end_time = *start_time + duration.as_nanos() as u64;
+                *end_time = *start_time + duration;
                 debug!("end_time = {end_time}",);
             }
             RunFor::Cycles(cycle) => {
@@ -600,8 +624,11 @@ impl Graph {
             max_layer = max(max_layer, self.state.nodes[i].layer.try_into().unwrap());
             self.state.node_dirty.push(false);
             for j in 0..self.state.nodes[i].upstreams.len() {
-                let (up_index, active) = self.state.nodes[i].upstreams[j];
-                self.state.nodes[up_index].downstreams.push((i, active));
+                let edge = self.state.nodes[i].upstreams[j];
+                self.state.nodes[edge.node_index].downstreams.push(Edge {
+                    node_index: i,
+                    active: edge.active,
+                });
             }
         }
         for _ in 0..max_layer + 1 {
@@ -620,11 +647,14 @@ impl Graph {
         upstreams: &[Rc<dyn Node>],
         is_active: bool,
         layer: &mut usize,
-        upstream_indexes: &mut Vec<(usize, bool)>,
+        upstream_edges: &mut Vec<Edge>,
     ) {
         for upstream_node in upstreams {
             let upstream_index = self.initialise_node(upstream_node);
-            upstream_indexes.push((upstream_index, is_active));
+            upstream_edges.push(Edge {
+                node_index: upstream_index,
+                active: is_active,
+            });
             *layer = max(*layer, self.state.nodes[upstream_index].layer + 1);
         }
     }
@@ -637,13 +667,13 @@ impl Graph {
             self.state.node_index(node.clone()).unwrap()
         } else {
             let mut layer = 0;
-            let mut upstream_indexes = vec![];
+            let mut upstream_edges = vec![];
             let upstreams = node.upstreams();
-            self.initialise_upstreams(&upstreams.active, true, &mut layer, &mut upstream_indexes);
-            self.initialise_upstreams(&upstreams.passive, false, &mut layer, &mut upstream_indexes);
+            self.initialise_upstreams(&upstreams.active, true, &mut layer, &mut upstream_edges);
+            self.initialise_upstreams(&upstreams.passive, false, &mut layer, &mut upstream_edges);
             let node_data = NodeData {
                 node: node.clone(),
-                upstreams: upstream_indexes,
+                upstreams: upstream_edges,
                 downstreams: vec![],
                 layer,
                 active: true,
@@ -765,9 +795,9 @@ impl Graph {
         if ticked {
             self.state.set_ticked(index);
             for i in 0..self.state.nodes[index].downstreams.len() {
-                let (downstream_index, active) = self.state.nodes[index].downstreams[i];
-                if active {
-                    self.mark_dirty(downstream_index)
+                let edge = self.state.nodes[index].downstreams[i];
+                if edge.active {
+                    self.mark_dirty(edge.node_index)
                 }
             }
         }
@@ -797,18 +827,18 @@ impl Graph {
                 continue;
             }
             // Unlink from upstreams' downstreams
-            let upstreams: Vec<(usize, bool)> = self.state.nodes[index].upstreams.clone();
-            for (up_idx, _) in &upstreams {
-                self.state.nodes[*up_idx]
+            let upstreams: Vec<Edge> = self.state.nodes[index].upstreams.clone();
+            for edge in &upstreams {
+                self.state.nodes[edge.node_index]
                     .downstreams
-                    .retain(|(di, _)| *di != index);
+                    .retain(|e| e.node_index != index);
             }
             // Unlink from downstreams' upstreams
-            let downstreams: Vec<(usize, bool)> = self.state.nodes[index].downstreams.clone();
-            for (dn_idx, _) in &downstreams {
-                self.state.nodes[*dn_idx]
+            let downstreams: Vec<Edge> = self.state.nodes[index].downstreams.clone();
+            for edge in &downstreams {
+                self.state.nodes[edge.node_index]
                     .upstreams
-                    .retain(|(ui, _)| *ui != index);
+                    .retain(|e| e.node_index != index);
             }
             // stop + teardown
             self.state.current_node_index = Some(index);
@@ -837,9 +867,9 @@ impl Graph {
         let start_index = self.state.nodes.len();
 
         // Recurse through each new subgraph; seen() prevents re-registering existing nodes.
-        for (node, _caller_index, _is_active, _recycle) in &additions {
-            if !self.state.seen(node.clone()) {
-                self.initialise_node(node);
+        for addition in &additions {
+            if !self.state.seen(addition.node.clone()) {
+                self.initialise_node(&addition.node);
             }
         }
 
@@ -854,8 +884,11 @@ impl Graph {
         // Wire declared upstreams' downstreams for new nodes
         for &ix in &new_indices {
             let upstreams = self.state.nodes[ix].upstreams.clone();
-            for (up_idx, active) in upstreams {
-                self.state.nodes[up_idx].downstreams.push((ix, active));
+            for edge in upstreams {
+                self.state.nodes[edge.node_index].downstreams.push(Edge {
+                    node_index: ix,
+                    active: edge.active,
+                });
             }
         }
 
@@ -863,18 +896,22 @@ impl Graph {
         // Track wired (caller, node) pairs to skip duplicates if add_upstream
         // is called more than once with the same node in a single cycle.
         let mut wired_edges: HashSet<(usize, usize)> = HashSet::new();
-        for (node, caller_index, is_active, recycle) in &additions {
-            let node_index = self.state.node_index(node.clone()).unwrap();
-            if wired_edges.insert((*caller_index, node_index)) {
-                self.state.nodes[*caller_index]
+        for addition in &additions {
+            let node_index = self.state.node_index(addition.node.clone()).unwrap();
+            if wired_edges.insert((addition.caller_index, node_index)) {
+                self.state.nodes[addition.caller_index]
                     .upstreams
-                    .push((node_index, *is_active));
-                self.state.nodes[node_index]
-                    .downstreams
-                    .push((*caller_index, *is_active));
+                    .push(Edge {
+                        node_index,
+                        active: addition.is_active,
+                    });
+                self.state.nodes[node_index].downstreams.push(Edge {
+                    node_index: addition.caller_index,
+                    active: addition.is_active,
+                });
             }
-            self.fix_layers(*caller_index);
-            if *recycle {
+            self.fix_layers(addition.caller_index);
+            if addition.recycle {
                 let time = self.state.time + NanoTime::new(1);
                 let new_set: HashSet<usize> = new_indices.iter().cloned().collect();
                 // Walk upward from the leaf through the newly-added subgraph to find
@@ -889,15 +926,16 @@ impl Graph {
                     if !visited.insert(ix) {
                         continue;
                     }
-                    let upstreams: Vec<(usize, bool)> = self.state.nodes[ix].upstreams.clone();
-                    let has_preexisting = upstreams.iter().any(|(up, _)| !new_set.contains(up));
+                    let upstreams: Vec<Edge> = self.state.nodes[ix].upstreams.clone();
+                    let has_preexisting =
+                        upstreams.iter().any(|e| !new_set.contains(&e.node_index));
                     let is_source = upstreams.is_empty();
                     if has_preexisting || is_source {
                         self.state.add_callback_for_node(ix, time);
                     }
-                    for &(up_idx, _) in &upstreams {
-                        if new_set.contains(&up_idx) {
-                            stack.push(up_idx);
+                    for edge in &upstreams {
+                        if new_set.contains(&edge.node_index) {
+                            stack.push(edge.node_index);
                         }
                     }
                 }
@@ -941,7 +979,7 @@ impl Graph {
             let required = self.state.nodes[node_index]
                 .upstreams
                 .iter()
-                .map(|(up_idx, _)| self.state.nodes[*up_idx].layer)
+                .map(|e| self.state.nodes[e.node_index].layer)
                 .max()
                 .map_or(0, |m| m + 1);
             if required > self.state.nodes[node_index].layer {
@@ -949,7 +987,7 @@ impl Graph {
                 let downstreams: Vec<usize> = self.state.nodes[node_index]
                     .downstreams
                     .iter()
-                    .map(|(di, _)| *di)
+                    .map(|e| e.node_index)
                     .collect();
                 for dn_idx in downstreams {
                     queue.push_back(dn_idx);
@@ -1012,11 +1050,10 @@ impl Graph {
             writeln!(output, "    ]")?;
         }
         for (i, node) in self.state.nodes.iter().enumerate() {
-            for downstream in node.downstreams.iter() {
-                let downstream_index = downstream.0;
+            for edge in node.downstreams.iter() {
                 writeln!(output, "    edge [")?;
                 writeln!(output, "        source {i}")?;
-                writeln!(output, "        target {downstream_index}")?;
+                writeln!(output, "        target {}", edge.node_index)?;
                 writeln!(output, "    ]")?;
             }
         }
@@ -1098,6 +1135,19 @@ mod tests {
             average_duration(Duration::from_nanos(100), 4),
             Duration::from_nanos(25)
         );
+    }
+
+    #[test]
+    fn elapsed_saturates_when_time_below_start_time() {
+        // Constructed-but-not-run state has time = ZERO and start_time = the
+        // historical anchor. Reading elapsed() in this window must saturate
+        // at zero rather than wrapping via u64 underflow.
+        let state = GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::new(1_000)),
+            RunFor::Cycles(1),
+            NanoTime::new(1_000),
+        );
+        assert_eq!(state.elapsed(), NanoTime::ZERO);
     }
 
     // ── GraphState::node_index_ticked (pub(crate)) ────────────────────────────
@@ -1644,7 +1694,7 @@ Caused by:
             if let Some(extra_idx) = extra_idx {
                 let adder_upstreams = &graph.state.nodes[adder_idx].upstreams;
                 assert!(
-                    !adder_upstreams.iter().any(|(ui, _)| *ui == extra_idx),
+                    !adder_upstreams.iter().any(|e| e.node_index == extra_idx),
                     "removed node should not remain in caller's upstreams"
                 );
             }

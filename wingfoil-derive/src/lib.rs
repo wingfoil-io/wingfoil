@@ -136,13 +136,17 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         let active_fields = &args.active;
         let passive_fields = &args.passive;
 
+        // All wingfoil paths are fully qualified so the generated code is
+        // hygienic against user-defined traits/types of the same name.
+        // Inside the wingfoil crate itself, `::wingfoil` resolves via
+        // `extern crate self as wingfoil;` in lib.rs.
         let upstreams_fn: ImplItemFn = syn::parse_quote! {
-            fn upstreams(&self) -> UpStreams {
-                let mut active: ::std::vec::Vec<::std::rc::Rc<dyn Node>> = ::std::vec::Vec::new();
-                let mut passive: ::std::vec::Vec<::std::rc::Rc<dyn Node>> = ::std::vec::Vec::new();
-                #(active.extend(AsUpstreamNodes::as_upstream_nodes(&self.#active_fields));)*
-                #(passive.extend(AsUpstreamNodes::as_upstream_nodes(&self.#passive_fields));)*
-                UpStreams::new(active, passive)
+            fn upstreams(&self) -> ::wingfoil::UpStreams {
+                let mut active: ::std::vec::Vec<::std::rc::Rc<dyn ::wingfoil::Node>> = ::std::vec::Vec::new();
+                let mut passive: ::std::vec::Vec<::std::rc::Rc<dyn ::wingfoil::Node>> = ::std::vec::Vec::new();
+                #(active.extend(::wingfoil::AsUpstreamNodes::as_upstream_nodes(&self.#active_fields));)*
+                #(passive.extend(::wingfoil::AsUpstreamNodes::as_upstream_nodes(&self.#passive_fields));)*
+                ::wingfoil::UpStreams::new(active, passive)
             }
         };
         impl_block.items.push(ImplItem::Fn(upstreams_fn));
@@ -151,7 +155,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Emit a StreamPeekRef impl if output is specified.
     let peek_ref_impl = args.output.map(|(field, ty)| {
         quote! {
-            impl #impl_generics StreamPeekRef<#ty> for #self_ty #where_clause {
+            impl #impl_generics ::wingfoil::StreamPeekRef<#ty> for #self_ty #where_clause {
                 fn peek_ref(&self) -> &#ty {
                     &self.#field
                 }

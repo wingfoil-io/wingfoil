@@ -1,5 +1,6 @@
+use std::sync::LazyLock;
+
 use derive_more::Display;
-use lazy_static::lazy_static;
 use pyo3::prelude::*;
 
 use crate::py_element::PyElement;
@@ -61,9 +62,7 @@ impl MutableNode for PyProxyStream {
     }
 }
 
-lazy_static! {
-    pub static ref DUMMY_PY_ELEMENT: PyElement = PyElement::none();
-}
+pub static DUMMY_PY_ELEMENT: LazyLock<PyElement> = LazyLock::new(PyElement::none);
 
 impl StreamPeekRef<PyElement> for PyProxyStream {
     // This is a bit hacky - we supply dummy value for peek ref

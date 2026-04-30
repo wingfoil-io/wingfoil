@@ -3,16 +3,16 @@ use chrono::naive::NaiveDateTime;
 use derive_more::Display;
 use derive_new::new;
 use formato::Formato;
-use once_cell::sync::Lazy;
 use quanta::Clock;
 use serde::{Deserialize, Serialize};
 use std::convert::From;
 use std::ops::{Add, Mul, Sub};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 type RawTime = u64;
 
-static CLOCK: Lazy<Clock> = Lazy::new(Clock::new);
+static CLOCK: LazyLock<Clock> = LazyLock::new(Clock::new);
 
 /// A time in nanoseconds since the unix epoch.
 #[derive(
