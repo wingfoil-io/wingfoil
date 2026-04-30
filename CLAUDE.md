@@ -46,10 +46,15 @@ cd wingfoil-python && maturin develop && pytest
 # Benchmarks
 cargo bench
 
-# Lint
-cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
+# Lint (these aliases live in .cargo/config.toml and mirror CI exactly)
+cargo lint        # default features
+cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2-beta`, etc.
 cargo fmt --all -- --check
 ```
+
+`cargo lint-all` requires `protoc` on the build machine (one of its
+transitive dependencies builds proto files). On Debian/Ubuntu:
+`sudo apt-get install -y protobuf-compiler`.
 
 ## Development Workflow Rules
 
@@ -67,10 +72,11 @@ cargo fmt --all -- --check
 Before committing any changes, ALWAYS run:
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
+cargo lint        # default features
+cargo lint-all    # all features — CI runs this and feature-gated code is easy to miss
 ```
 
-These commands must pass without errors before creating a commit.
+All three must pass without errors before creating a commit.
 
 ## Key Architecture Concepts
 

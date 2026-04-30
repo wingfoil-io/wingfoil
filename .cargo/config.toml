@@ -1,0 +1,10 @@
+# Cargo aliases that mirror what CI runs in `.github/workflows/rust.yml`.
+# Run these before pushing to catch failures locally.
+#
+# Note: `lint-all` (and `cargo build --features full` / `cargo test --features
+# full`) pull in dependencies that need `protoc` on the build machine. Install
+# with `apt-get install -y protobuf-compiler` on Debian/Ubuntu, `brew install
+# protobuf` on macOS.
+[alias]
+lint     = "clippy --workspace --all-targets -- -D warnings"
+lint-all = "clippy --workspace --all-targets --all-features -- -D warnings"
