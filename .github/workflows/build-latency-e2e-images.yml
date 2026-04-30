@@ -1,0 +1,96 @@
+# Build and push the five latency_e2e container images to ECR.
+#
+# Runs on pushes to main that touch the wingfoil crate or the latency_e2e
+# example, and on manual dispatch. ECR repositories (wingfoil/<name>) are
+# created idempotently on first run, so no separate bootstrap step is needed.
+#
+# Required GitHub secrets (already used by deploy-latency-e2e.yml):
+#   - AWS_ROLE_TO_ASSUME  IAM role with ecr:* on wingfoil/* repositories
+#   - AWS_REGION          (optional, defaults to us-east-1)
+#
+# After this workflow runs, deploy-latency-e2e.yml can pull <registry>/wingfoil/<name>:latest.
+
+name: Build & Push latency_e2e Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wingfoil/Cargo.toml"
+      - "wingfoil/src/**"
+      - "wingfoil/examples/latency_e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-latency-e2e-images.yml"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ws-server
+            dockerfile: wingfoil/examples/latency_e2e/Dockerfile.ws_server
+          - name: fix-gw
+            dockerfile: wingfoil/examples/latency_e2e/Dockerfile.fix_gw
+          - name: prometheus
+            dockerfile: wingfoil/examples/latency_e2e/Dockerfile.prometheus
+          - name: tempo
+            dockerfile: wingfoil/examples/latency_e2e/Dockerfile.tempo
+          - name: grafana
+            dockerfile: wingfoil/examples/latency_e2e/Dockerfile.grafana
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "wingfoil/${{ matrix.name }}" \
+            --region "$AWS_REGION" >/dev/null 2>&1 \
+          || aws ecr create-repository \
+            --repository-name "wingfoil/${{ matrix.name }}" \
+            --region "$AWS_REGION" \
+            --image-scanning-configuration scanOnPush=true
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/wingfoil/${{ matrix.name }}:latest
+            ${{ steps.ecr-login.outputs.registry }}/wingfoil/${{ matrix.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## Image pushed: \`wingfoil/${{ matrix.name }}\`"
+            echo ""
+            echo "- \`${{ steps.ecr-login.outputs.registry }}/wingfoil/${{ matrix.name }}:latest\`"
+            echo "- \`${{ steps.ecr-login.outputs.registry }}/wingfoil/${{ matrix.name }}:${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
