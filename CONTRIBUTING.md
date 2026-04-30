@@ -38,14 +38,31 @@ These tools are required for building, testing, and packaging the core **wingfoi
 
 * **The Rust toolchain:** `rustup`, `cargo`, `rustc`, etc. We aim for compatibility with the latest stable version.
 * **`rustfmt` and `clippy`:** We use `rustfmt` for consistent code style and `clippy` for linting across the whole code base.
+* **`protoc` (Protocol Buffers compiler):** required when building with `--all-features` (used transitively by `etcd-client` and a few other adapters).
+  * Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`
+  * macOS: `brew install protobuf`
 
 For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
 
 ### Building
 
 ```bash
-cargo build
+cargo build                    # default features
+cargo build --features full    # everything CI builds (needs protoc)
 ```
+
+### Pre-PR check (matches CI)
+
+CI is configured in [`.github/workflows/rust.yml`](.github/workflows/rust.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
+
+```bash
+cargo fmt --all -- --check     # formatting
+cargo lint                     # clippy, default features
+cargo lint-all                 # clippy, all features  ← most-missed step
+cargo test -p wingfoil --features full
+```
+
+`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2-beta`, `kdb`, etc.) that the default build skips. Please run it before pushing.
 
 
 
