@@ -464,9 +464,9 @@ mod tests {
 
     // export RUST_LOG=INFO; cargo test --lib demux -- --no-capture 2>&1 | grep source | sort | more
 
-    use once_cell::sync::Lazy;
     use std::collections::HashSet;
     use std::fmt::Debug;
+    use std::sync::LazyLock;
     use std::time::Duration;
 
     use super::DemuxMap;
@@ -595,11 +595,12 @@ mod tests {
     const N_STREAMS: usize = 3;
     const MESSAGES_PER_TOPIC: u32 = 5;
     const DELAY: Duration = Duration::from_micros(1);
-    static PERIOD: Lazy<Duration> = Lazy::new(|| DELAY * MESSAGES_PER_TOPIC * 2);
-    static RUN_FOR: Lazy<RunFor> = Lazy::new(|| RunFor::Duration(*PERIOD * MESSAGES_PER_TOPIC * 3));
+    static PERIOD: LazyLock<Duration> = LazyLock::new(|| DELAY * MESSAGES_PER_TOPIC * 2);
+    static RUN_FOR: LazyLock<RunFor> =
+        LazyLock::new(|| RunFor::Duration(*PERIOD * MESSAGES_PER_TOPIC * 3));
     const EXPECTED_DISTINCT_TOPICS_PER_STREAM: usize = 4;
     const EXPECTED_MIN_MSGS_PER_STREAM: usize = 15;
-    static RUN_MODES: Lazy<Vec<RunMode>> = Lazy::new(|| {
+    static RUN_MODES: LazyLock<Vec<RunMode>> = LazyLock::new(|| {
         vec![
             RunMode::HistoricalFrom(NanoTime::ZERO),
             //RunMode::RealTime,

@@ -1,6 +1,3 @@
-#![warn(clippy::perf)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::needless_doctest_main)]
 #![doc = include_str!("../README.md")]
 
 //! ## Graph Execution
@@ -175,6 +172,11 @@
 #[macro_use]
 extern crate log;
 extern crate derive_new;
+
+// Allow the `#[node]` proc macro's generated code to use `::wingfoil::...`
+// paths (for hygiene against user-defined traits/types of the same name)
+// when it expands inside this crate.
+extern crate self as wingfoil;
 
 // Dispatch a `log::Level` runtime value to the matching `tracing` event macro.
 //

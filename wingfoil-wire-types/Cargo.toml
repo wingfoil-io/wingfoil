@@ -3,6 +3,7 @@ name = "wingfoil-wire-types"
 version = "4.3.3"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Wire format types shared between the wingfoil server and the wingfoil-wasm browser client."
 repository = "https://github.com/wingfoil-io/wingfoil/"
@@ -10,6 +11,9 @@ keywords = ["wingfoil", "websocket", "wasm"]
 
 [lib]
 name = "wingfoil_wire_types"
+
+[lints]
+workspace = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

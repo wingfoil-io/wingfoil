@@ -40,6 +40,7 @@ name = "wingfoil"
 version = "4.3.3"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
+rust-version.workspace = true
 publish = ["wingfoil", "crates-io"]
 license = "Apache-2.0"
 keywords = ["graph", "stream", "dag", "hft", "trading"]
@@ -49,6 +50,9 @@ description = "graph based stream processing framework"
 
 [lib]
 name="wingfoil"
+
+[lints]
+workspace = true
 
 [package.metadata.docs.rs]
 scrape-examples = true
@@ -63,7 +67,6 @@ chrono = {workspace=true}
 derive_more = {workspace=true}
 env_logger = {workspace=true}
 log = {workspace=true}
-lazy_static = {workspace=true}
 
 
 # project
@@ -85,7 +88,6 @@ scopeguard = "1.2.0"
 strum = {version = "0.27.2", features = ["derive"]}
 strum_macros = "0.27.2"
 formato = "0.3.0"
-once_cell = "1.21.3"
 anyhow = "1.0.100"
 thiserror = "2.0.11"
 tinyvec = { version = "1.10.0", features = ["alloc"] }

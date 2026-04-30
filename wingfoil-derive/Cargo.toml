@@ -2,6 +2,7 @@
 name = "wingfoil-derive"
 version = "4.3.3"
 edition = "2024"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Proc-macro attribute for the wingfoil stream processing library"
 repository = "https://github.com/wingfoil-io/wingfoil"
@@ -11,6 +12,9 @@ publish = ["wingfoil", "crates-io"]
 
 [lib]
 proc-macro = true
+
+[lints]
+workspace = true
 
 [dependencies]
 syn  = { version = "2", features = ["full"] }
