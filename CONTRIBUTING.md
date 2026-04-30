@@ -38,9 +38,13 @@ These tools are required for building, testing, and packaging the core **wingfoi
 
 * **The Rust toolchain:** `rustup`, `cargo`, `rustc`, etc. We aim for compatibility with the latest stable version.
 * **`rustfmt` and `clippy`:** We use `rustfmt` for consistent code style and `clippy` for linting across the whole code base.
-* **`protoc` (Protocol Buffers compiler):** required when building with `--all-features` (used transitively by `etcd-client` and a few other adapters).
-  * Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`
-  * macOS: `brew install protobuf`
+* **`protoc` (Protocol Buffers compiler):** required when building with `--all-features` (used transitively by `etcd-client` and a few other adapters). The easiest way to get it (Linux/macOS) is:
+
+  ```bash
+  ./scripts/setup-dev.sh
+  ```
+
+  Or install manually — Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`; macOS: `brew install protobuf`.
 
 For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
 
