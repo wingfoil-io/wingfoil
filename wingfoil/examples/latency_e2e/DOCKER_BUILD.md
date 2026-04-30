@@ -1,5 +1,11 @@
 # Building and Pushing Docker Images
 
+> **CI alternative:** the `Build & Push latency_e2e Images` workflow
+> (`.github/workflows/build-latency-e2e-images.yml`) builds and pushes all
+> five images to ECR on pushes to `main` (and via manual dispatch). It uses
+> `AWS_ROLE_TO_ASSUME` via OIDC and creates the `wingfoil/<name>` ECR repos
+> on first run, so the steps below are only needed for local builds.
+
 ## Prerequisites
 
 1. Docker installed and running
