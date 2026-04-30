@@ -16,7 +16,6 @@ lmax_username = config.require_secret("lmax_username")
 lmax_password = config.require_secret("lmax_password")
 cpu = config.get_int("cpu") or 1024
 memory = config.get_int("memory") or 2048
-shm_size = config.get_int("shm_size") or 256
 
 tags = {
     "Project": project_name,
@@ -139,7 +138,8 @@ lmax_password_version = aws.secretsmanager.SecretVersion(f"{project_name}-lmax-p
     secret_id=lmax_password_secret.id,
     secret_string=lmax_password)
 
-# IAM role for ECS task
+# IAM role for ECS task (granted to the running container; not used by the agent
+# to fetch secrets — that's the execution role's job)
 ecs_task_role = aws.iam.Role(f"{project_name}-ecs-task-role",
     assume_role_policy=json.dumps({
         "Version": "2012-10-17",
@@ -151,24 +151,11 @@ ecs_task_role = aws.iam.Role(f"{project_name}-ecs-task-role",
     }),
     tags=tags)
 
-# IAM policy for Secrets Manager access
-secrets_policy = aws.iam.RolePolicy(f"{project_name}-ecs-secrets-policy",
-    role=ecs_task_role.id,
-    policy=pulumi.Output.all(lmax_username_secret.arn, lmax_password_secret.arn).apply(
-        lambda arns: json.dumps({
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Effect": "Allow",
-                "Action": ["secretsmanager:GetSecretValue"],
-                "Resource": arns
-            }]
-        })))
-
 # ECS Cluster
 cluster = aws.ecs.Cluster(f"{project_name}-cluster",
     tags=tags)
 
-# ECS Task Execution Role (for logging, pulling images, etc.)
+# ECS Task Execution Role (for logging, pulling images, fetching secrets)
 ecs_task_execution_role = aws.iam.Role(f"{project_name}-ecs-task-execution-role",
     assume_role_policy=json.dumps({
         "Version": "2012-10-17",
@@ -183,6 +170,20 @@ ecs_task_execution_role = aws.iam.Role(f"{project_name}-ecs-task-execution-role"
 ecs_task_execution_policy = aws.iam.RolePolicyAttachment(f"{project_name}-ecs-task-execution-policy",
     role=ecs_task_execution_role.name,
     policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy")
+
+# Secrets Manager access for the execution role — ECS injects task-definition
+# `secrets` using this role, not the task role.
+secrets_policy = aws.iam.RolePolicy(f"{project_name}-ecs-secrets-policy",
+    role=ecs_task_execution_role.id,
+    policy=pulumi.Output.all(lmax_username_secret.arn, lmax_password_secret.arn).apply(
+        lambda arns: json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": ["secretsmanager:GetSecretValue"],
+                "Resource": arns
+            }]
+        })))
 
 # ALB
 alb = aws.lb.LoadBalancer(f"{project_name}-alb",
@@ -293,8 +294,8 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 {"name": "RUST_LOG", "value": "info"},
             ],
             "secrets": [
-                {"name": "LMAX_USERNAME", "valueFrom": f"{args[1]}:LMAX_USERNAME::"},
-                {"name": "LMAX_PASSWORD", "valueFrom": f"{args[2]}:LMAX_PASSWORD::"},
+                {"name": "LMAX_USERNAME", "valueFrom": args[1]},
+                {"name": "LMAX_PASSWORD", "valueFrom": args[2]},
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",
