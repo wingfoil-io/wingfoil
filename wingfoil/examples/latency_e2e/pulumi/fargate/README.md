@@ -9,6 +9,9 @@ Deploy the complete latency_e2e demo (5 containers: fix_gw, ws_server, prometheu
 3. **Docker images** — Built and pushed to ECR or Docker Hub:
    - `wingfoil/ws-server` (from `Dockerfile.ws_server`)
    - `wingfoil/fix-gw` (from `Dockerfile.fix_gw`)
+   - `wingfoil/prometheus` (from `Dockerfile.prometheus` — bakes in `prometheus.yml`)
+   - `wingfoil/tempo` (from `Dockerfile.tempo` — bakes in `tempo.yaml`)
+   - `wingfoil/grafana` (from `Dockerfile.grafana` — bakes in dashboards/datasources)
 4. **LMAX credentials** — FIX username and password for the demo environment
 
 ## Setup
@@ -33,6 +36,9 @@ pulumi config set aws:region us-east-1
 pulumi config set environment demo
 pulumi config set ws_server_image <ECR_URI_or_DOCKER_HUB_IMAGE>
 pulumi config set fix_gw_image <ECR_URI_or_DOCKER_HUB_IMAGE>
+pulumi config set prometheus_image <ECR_URI_or_DOCKER_HUB_IMAGE>
+pulumi config set tempo_image <ECR_URI_or_DOCKER_HUB_IMAGE>
+pulumi config set grafana_image <ECR_URI_or_DOCKER_HUB_IMAGE>
 
 # Set secrets (LMAX credentials)
 pulumi config set --secret lmax_username <YOUR_LMAX_USERNAME>
@@ -43,12 +49,18 @@ pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
 ```bash
 pulumi config set ws_server_image "yourusername/wingfoil-ws-server:latest"
 pulumi config set fix_gw_image "yourusername/wingfoil-fix-gw:latest"
+pulumi config set prometheus_image "yourusername/wingfoil-prometheus:latest"
+pulumi config set tempo_image "yourusername/wingfoil-tempo:latest"
+pulumi config set grafana_image "yourusername/wingfoil-grafana:latest"
 ```
 
 **Example with ECR images:**
 ```bash
 pulumi config set ws_server_image "123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest"
 pulumi config set fix_gw_image "123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest"
+pulumi config set prometheus_image "123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/prometheus:latest"
+pulumi config set tempo_image "123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/tempo:latest"
+pulumi config set grafana_image "123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/grafana:latest"
 ```
 
 ### 3. Review the deployment plan
@@ -97,9 +109,11 @@ Modify `Pulumi.demo.yaml` or use `pulumi config set` to customize:
 | `environment` | `demo` | Environment tag |
 | `cpu` | `1024` | ECS task CPU units (0.25, 0.5, 1, 2, 4 vCPU equivalent) |
 | `memory` | `2048` | ECS task memory (MB) |
-| `shm_size` | `256` | Shared memory for iceoryx2 (MB) |
 | `ws_server_image` | — | ws_server container image (required) |
 | `fix_gw_image` | — | fix_gw container image (required) |
+| `prometheus_image` | — | Prometheus image with config baked in (required) |
+| `tempo_image` | — | Tempo image with config baked in (required) |
+| `grafana_image` | — | Grafana image with provisioning baked in (required) |
 | `lmax_username` | — | LMAX FIX username (secret, required) |
 | `lmax_password` | — | LMAX FIX password (secret, required) |
 
