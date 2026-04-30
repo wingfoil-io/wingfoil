@@ -24,7 +24,7 @@ pub fn main() -> anyhow::Result<()> {
     let book = RefCell::new(lobster::OrderBook::default());
     // map from seconds from midnight to NanoTime time
     let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
-    let (fills, prices) = csv_read("aapl.csv", get_time, true)
+    let (fills, prices) = csv_read("aapl.csv", get_time, true)?
         .map(move |chunk| process_orders(chunk, &book))
         .split();
     let prices_export = prices

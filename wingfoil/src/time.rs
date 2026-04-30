@@ -120,7 +120,7 @@ impl From<NanoTime> for u64 {
 impl From<NanoTime> for NaiveDateTime {
     fn from(t: NanoTime) -> Self {
         DateTime::from_timestamp((t.0 / 1_000_000_000) as i64, (t.0 % 1_000_000_000) as u32)
-            .unwrap_or(DateTime::UNIX_EPOCH)
+            .expect("BUG: NanoTime contains invalid timestamp")
             .naive_utc()
     }
 }

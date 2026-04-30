@@ -6,7 +6,7 @@ use anyhow::anyhow;
 
 use std::cmp::Ordering;
 
-type Peeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = ValueAt<T>>>>;
+type Peeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>>;
 
 /// Wraps an Iterator and exposes it as a [`Stream`] of [`Burst<T>`].
 /// Multiple items with the same timestamp are grouped into a single [`Burst`] per tick.
@@ -16,7 +16,13 @@ pub struct IteratorStream<T: Element> {
 }
 
 fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::Result<bool> {
-    match peekable.peek() {
+    if peekable.peek().is_some_and(|r| r.is_err()) {
+        return peekable
+            .next()
+            .expect("BUG: peek returned Some but next returned None")
+            .map(|_| false);
+    }
+    match peekable.peek().and_then(|r| r.as_ref().ok()) {
         Some(value_at) => {
             state.add_callback(value_at.time)?;
             Ok(true)
@@ -29,18 +35,19 @@ fn add_callback<T>(peekable: &mut Peeker<T>, state: &mut GraphState) -> anyhow::
 impl<T: Element> MutableNode for IteratorStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
-        while let Some(value_at) = self.peekable.peek() {
-            if value_at.time == state.time() {
-                let val = self
-                    .peekable
-                    .next()
-                    .expect("BUG: peek returned Some but next returned None")
-                    .value
-                    .clone();
-                self.value.push(val);
-            } else {
-                break;
-            }
+        while self
+            .peekable
+            .peek()
+            .and_then(|r| r.as_ref().ok())
+            .is_some_and(|v| v.time == state.time())
+        {
+            let val = self
+                .peekable
+                .next()
+                .expect("BUG: peek returned Some but next returned None")?
+                .value
+                .clone();
+            self.value.push(val);
         }
         add_callback(&mut self.peekable, state)
     }
@@ -55,7 +62,7 @@ impl<T> IteratorStream<T>
 where
     T: Element + 'static,
 {
-    pub fn new(it: Box<dyn Iterator<Item = ValueAt<T>>>) -> Self {
+    pub fn new(it: Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>) -> Self {
         Self {
             peekable: it.peekable(),
             value: Burst::new(),
@@ -78,10 +85,10 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
         let val_at1 = self
             .peekable
             .next()
-            .expect("BUG: cycle called but iterator exhausted");
+            .expect("BUG: cycle called but iterator exhausted")?;
         self.value = val_at1.value;
 
-        if let Some(val_at2) = self.peekable.peek() {
+        if let Some(val_at2) = self.peekable.peek().and_then(|r| r.as_ref().ok()) {
             match val_at1.time.cmp(&val_at2.time) {
                 Ordering::Greater => {
                     return Err(anyhow!("source time was descending!"));
@@ -107,7 +114,9 @@ impl<T> SimpleIteratorStream<T>
 where
     T: Element + 'static,
 {
-    pub fn new(it: Box<dyn Iterator<Item = ValueAt<T>>>) -> SimpleIteratorStream<T> {
+    pub fn new(
+        it: Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>,
+    ) -> SimpleIteratorStream<T> {
         Self {
             peekable: it.peekable(),
             value: T::default(),
@@ -122,12 +131,14 @@ mod tests {
     use crate::nodes::*;
     use crate::types::IntoStream;
 
-    fn value_ats(pairs: &[(u64, u64)]) -> Vec<ValueAt<u64>> {
+    fn value_ats(pairs: &[(u64, u64)]) -> Vec<anyhow::Result<ValueAt<u64>>> {
         pairs
             .iter()
-            .map(|&(v, t)| ValueAt {
-                value: v,
-                time: NanoTime::new(t),
+            .map(|&(v, t)| {
+                Ok(ValueAt {
+                    value: v,
+                    time: NanoTime::new(t),
+                })
             })
             .collect()
     }
@@ -176,6 +187,27 @@ mod tests {
     fn simple_iterator_errors_on_descending_timestamps() {
         let items = value_ats(&[(1, 100), (2, 50)]); // descending — illegal
         let result = SimpleIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn iterator_stream_propagates_per_record_error() {
+        // Insert a deserialize-style error mid-stream.  The stream should
+        // surface it when the engine drains that timestamp, not before.
+        let items: Vec<anyhow::Result<ValueAt<u64>>> = vec![
+            Ok(ValueAt {
+                value: 1,
+                time: NanoTime::new(0),
+            }),
+            Err(anyhow!("CSV deserialize error: bad row")),
+            Ok(ValueAt {
+                value: 3,
+                time: NanoTime::new(200),
+            }),
+        ];
+        let result = IteratorStream::new(Box::new(items.into_iter()))
             .into_stream()
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
         assert!(result.is_err());

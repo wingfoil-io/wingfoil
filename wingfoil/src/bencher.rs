@@ -70,9 +70,11 @@ impl Bencher {
         let signal = self.signal.clone();
         let run_mode = self.run_mode;
         std::thread::spawn(move || {
+            let _end_guard = SignalEndOnDrop(signal.clone());
+            let produce_signal = signal.clone();
             let trigger = BenchTriggerNode::new(signal.clone()).into_node();
             let node = builder(trigger).produce(move || {
-                signal.store(Signal::End.into(), Ordering::SeqCst);
+                produce_signal.store(Signal::End.into(), Ordering::SeqCst);
             });
             if let Err(e) = Graph::new(vec![node], run_mode, RunFor::Forever).run() {
                 error!("bench graph failed: {e}");
@@ -84,6 +86,14 @@ impl Bencher {
         self.signal
             .clone()
             .store(Signal::Kill.into(), Ordering::SeqCst);
+    }
+}
+
+struct SignalEndOnDrop(Arc<AtomicU8>);
+
+impl Drop for SignalEndOnDrop {
+    fn drop(&mut self) {
+        self.0.store(Signal::End.into(), Ordering::SeqCst);
     }
 }
 
