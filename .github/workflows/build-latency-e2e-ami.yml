@@ -1,0 +1,141 @@
+# Build the baked AMI used by the wingfoil latency_e2e ec2-spot Pulumi stack.
+#
+# The Packer template at
+# `wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer/wingfoil-latency.pkr.hcl`
+# bakes Docker, the demo's docker-compose.yml, and pre-pulled copies of the
+# five service images into an Amazon Linux 2023 AMI. Result: a Spot reclaim
+# recovers in ~60-90s instead of ~5min (no apt install, no image pulls).
+#
+# Triggers:
+#   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags).
+#   - A push trigger for ec2-spot stack files / Dockerfile changes is intended
+#     but not yet wired up — see the DISABLED note below.
+#
+# After the build, the resulting AMI ID is published to:
+#   - SSM Parameter Store at /wingfoil/latency-e2e/ec2-spot/ami_id (so
+#     `pulumi config set ami_id $(aws ssm get-parameter ...)` works)
+#   - The workflow run summary (for humans)
+#   - An uploaded artifact (`packer-manifest.json`)
+#
+# Required GitHub secrets (shared with build-latency-e2e-images.yml):
+#   - AWS_ROLE_TO_ASSUME  IAM role allowed to:
+#       - Build AMIs (ec2:* on AMI/snapshot/instance lifecycle)
+#       - Pull from ECR (ecr:GetAuthorizationToken, ecr:BatchGetImage etc.)
+#       - Write SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id
+#   - AWS_REGION          (optional, defaults to eu-west-2)
+
+name: Build latency_e2e AMI (ec2-spot)
+
+# DISABLED until AWS OIDC role + ECR images are wired up. Mirrors
+# build-latency-e2e-images.yml: re-enable by adding the push trigger and
+# removing `if: false` once secrets exist.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to bake into the AMI (default: latest)"
+        required: false
+        default: "latest"
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  SSM_AMI_PARAM: /wingfoil/latency-e2e/ec2-spot/ami_id
+
+jobs:
+  build:
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECR registry
+        id: ecr
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          {
+            echo "registry=${REGISTRY}"
+            echo "ws_server=${REGISTRY}/wingfoil/ws-server:${{ inputs.image_tag }}"
+            echo "fix_gw=${REGISTRY}/wingfoil/fix-gw:${{ inputs.image_tag }}"
+            echo "prometheus=${REGISTRY}/wingfoil/prometheus:${{ inputs.image_tag }}"
+            echo "tempo=${REGISTRY}/wingfoil/tempo:${{ inputs.image_tag }}"
+            echo "grafana=${REGISTRY}/wingfoil/grafana:${{ inputs.image_tag }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@v3.1.0
+        with:
+          version: 1.11.2
+
+      - name: Packer init
+        run: packer init wingfoil-latency.pkr.hcl
+
+      - name: Packer build
+        run: |
+          packer build \
+            -var "region=${AWS_REGION}" \
+            -var "image_tag=${{ inputs.image_tag }}" \
+            -var "ecr_registry=${{ steps.ecr.outputs.registry }}" \
+            -var "ws_server_image=${{ steps.ecr.outputs.ws_server }}" \
+            -var "fix_gw_image=${{ steps.ecr.outputs.fix_gw }}" \
+            -var "prometheus_image=${{ steps.ecr.outputs.prometheus }}" \
+            -var "tempo_image=${{ steps.ecr.outputs.tempo }}" \
+            -var "grafana_image=${{ steps.ecr.outputs.grafana }}" \
+            wingfoil-latency.pkr.hcl
+
+      - name: Extract AMI ID
+        id: ami
+        run: |
+          AMI_ID=$(jq -r '.builds[-1].artifact_id' packer-manifest.json | cut -d: -f2)
+          if [ -z "${AMI_ID}" ] || [ "${AMI_ID}" = "null" ]; then
+            echo "Failed to extract AMI ID from packer-manifest.json" >&2
+            exit 1
+          fi
+          echo "ami_id=${AMI_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish AMI ID to SSM Parameter Store
+        run: |
+          aws ssm put-parameter \
+            --name "${SSM_AMI_PARAM}" \
+            --value "${{ steps.ami.outputs.ami_id }}" \
+            --type String \
+            --overwrite \
+            --region "${AWS_REGION}"
+
+      - name: Upload Packer manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-manifest
+          path: wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer/packer-manifest.json
+
+      - name: Summary
+        run: |
+          {
+            echo "## Baked AMI"
+            echo ""
+            echo "- **AMI ID**: \`${{ steps.ami.outputs.ami_id }}\`"
+            echo "- **Region**: \`${AWS_REGION}\`"
+            echo "- **Image tag**: \`${{ inputs.image_tag }}\`"
+            echo "- **SSM parameter**: \`${SSM_AMI_PARAM}\`"
+            echo ""
+            echo "Wire it into the Pulumi stack:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "cd wingfoil/examples/latency_e2e/pulumi/ec2-spot"
+            echo "pulumi config set ami_id ${{ steps.ami.outputs.ami_id }}"
+            echo "pulumi up"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
