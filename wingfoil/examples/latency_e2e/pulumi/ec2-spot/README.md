@@ -123,7 +123,8 @@ After ~3–5 min the outputs print:
 ```
 ws_server_url   http://<eip>:8080
 grafana_url     http://<eip>:3000
-prometheus_url  http://<eip>:9091/metrics
+prometheus_url  http://<eip>:9090          # Prometheus UI
+ws_metrics_url  http://<eip>:9091/metrics  # ws_server raw metrics
 public_ip       <eip>
 ```
 

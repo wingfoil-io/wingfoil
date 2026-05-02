@@ -9,7 +9,10 @@ set -euxo pipefail
 sudo cloud-init status --wait
 
 sudo dnf update -y
-sudo dnf install -y docker python3-pip
+# unzip — needed for the AWS CLI installer below.
+# python3-prometheus_client — used by spot_watcher.py; installing via dnf
+# avoids AL2023's externally-managed-environment block on `pip3 install`.
+sudo dnf install -y docker unzip python3-prometheus_client
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
 
@@ -47,13 +50,19 @@ sudo install -m 0644 /tmp/docker-compose.yml /opt/wingfoil/docker-compose.yml
 sudo install -m 0755 /tmp/spot_watcher.py     /opt/wingfoil/spot_watcher.py
 
 # Bake the image references into compose.yml so `compose up` doesn't pull a
-# floating tag on every boot. (`sed` over `envsubst` to avoid pulling extra
-# packages just for variable expansion.)
-sudo sed -i \
-  -e "s|prom/prometheus:v2.55.1|${PROMETHEUS_IMAGE}|g" \
-  -e "s|grafana/tempo:2.6.1|${TEMPO_IMAGE}|g" \
-  -e "s|grafana/grafana:11.3.0|${GRAFANA_IMAGE}|g" \
-  /opt/wingfoil/docker-compose.yml
+# floating tag on every boot. Fail the build if the upstream compose ever
+# bumps a tag — a silent no-op here would mean booting on stale images.
+replace_image() {
+  local pattern="$1" replacement="$2" file="$3"
+  if ! grep -qF "${pattern}" "${file}"; then
+    echo "ERROR: pattern '${pattern}' not found in ${file}; bump install.sh to match." >&2
+    exit 1
+  fi
+  sudo sed -i "s|${pattern}|${replacement}|g" "${file}"
+}
+replace_image "prom/prometheus:v2.55.1" "${PROMETHEUS_IMAGE}" /opt/wingfoil/docker-compose.yml
+replace_image "grafana/tempo:2.6.1"     "${TEMPO_IMAGE}"      /opt/wingfoil/docker-compose.yml
+replace_image "grafana/grafana:11.3.0"  "${GRAFANA_IMAGE}"    /opt/wingfoil/docker-compose.yml
 
 # Append ws_server + fix_gw services — the source compose.yml is operator-side
 # (assumes binaries on the host); on EC2 Spot we run everything in containers.
@@ -78,9 +87,10 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     restart: unless-stopped
 EOF
 
-# Spot watcher — installed as a systemd unit by user_data on first boot, but
-# the script itself ships in the AMI.
-sudo pip3 install --quiet "prometheus-client>=0.20"
+# Spot watcher dependency installed via dnf above (python3-prometheus_client).
+# Verify it's importable from /usr/bin/python3 — the systemd unit invokes that
+# interpreter, and a silent missing-package would only surface at first boot.
+/usr/bin/python3 -c "import prometheus_client"
 
 # Sanity check — fail the build if any image is missing locally.
 for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do

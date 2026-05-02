@@ -102,7 +102,10 @@ sg = aws.ec2.SecurityGroup(
     vpc_id=vpc.id,
     description="wingfoil ec2-spot demo — WS, prometheus, grafana",
     ingress=[
+        # 8080: ws_server HTTP/WS;  9090: Prometheus UI;
+        # 9091: ws_server's /metrics (raw scrape target);  3000: Grafana.
         aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
+        aws.ec2.SecurityGroupIngressArgs(from_port=9090, to_port=9090, protocol="tcp", cidr_blocks=[ingress_cidr]),
         aws.ec2.SecurityGroupIngressArgs(from_port=9091, to_port=9091, protocol="tcp", cidr_blocks=[ingress_cidr]),
         aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
     ],
@@ -278,6 +281,7 @@ asg = aws.autoscaling.Group(
 pulumi.export("public_ip",      eip.public_ip)
 pulumi.export("ws_server_url",  eip.public_ip.apply(lambda ip: f"http://{ip}:8080"))
 pulumi.export("grafana_url",    eip.public_ip.apply(lambda ip: f"http://{ip}:3000"))
-pulumi.export("prometheus_url", eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
+pulumi.export("prometheus_url", eip.public_ip.apply(lambda ip: f"http://{ip}:9090"))
+pulumi.export("ws_metrics_url", eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
 pulumi.export("asg_name",       asg.name)
 pulumi.export("availability_zone", availability_zone)

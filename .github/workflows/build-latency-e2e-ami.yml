@@ -6,10 +6,10 @@
 # five service images into an Amazon Linux 2023 AMI. Result: a Spot reclaim
 # recovers in ~60-90s instead of ~5min (no apt install, no image pulls).
 #
-# This workflow runs on:
-#   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags)
-#   - Pushes to main that touch the ec2-spot stack files or any of the five
-#     Dockerfiles (so an image change rebuilds the AMI)
+# Triggers:
+#   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags).
+#   - A push trigger for ec2-spot stack files / Dockerfile changes is intended
+#     but not yet wired up — see the DISABLED note below.
 #
 # After the build, the resulting AMI ID is published to:
 #   - SSM Parameter Store at /wingfoil/latency-e2e/ec2-spot/ami_id (so
