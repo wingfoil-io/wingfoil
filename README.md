@@ -1,4 +1,4 @@
-[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust-test.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
 [![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
 [![Crates.io Version](https://img.shields.io/crates/v/wingfoil.svg)](https://crates.io/crates/wingfoil)
 [![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
