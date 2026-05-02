@@ -32,16 +32,26 @@ sudo /tmp/aws/install
 rm -rf /tmp/aws /tmp/awscliv2.zip
 
 # Authenticate to ECR if we're pulling private images. ECR_REGISTRY is the
-# host portion only (e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com).
+# host portion only (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com).
+# ECR_PASSWORD is the auth token CI fetched via `aws ecr get-login-password`
+# — the build instance has no IAM role, so it can't fetch the token itself.
 if [ -n "${ECR_REGISTRY:-}" ]; then
-  aws ecr get-login-password --region "${AWS_REGION}" \
-    | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  if [ -z "${ECR_PASSWORD:-}" ]; then
+    echo "ERROR: ECR_REGISTRY is set but ECR_PASSWORD is empty; CI must forward PKR_VAR_ecr_password." >&2
+    exit 1
+  fi
+  echo "${ECR_PASSWORD}" | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 fi
 
 # Pre-pull every image so reclaim recovery doesn't wait on the registry.
 for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
   sudo docker pull "${img}"
 done
+
+# Drop the docker login state so the AMI doesn't ship with an ECR token
+# baked into /root/.docker/config.json. The token expires in ~12h anyway,
+# but cleaning up keeps the AMI free of credential artifacts.
+sudo rm -rf /root/.docker /home/ec2-user/.docker
 
 # Stage the runtime files in /opt/wingfoil. user_data writes the .env file
 # alongside compose.yml on first boot, then runs `docker compose up -d`.
