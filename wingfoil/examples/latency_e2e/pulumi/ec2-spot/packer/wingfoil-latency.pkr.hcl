@@ -55,6 +55,16 @@ variable "ecr_registry" {
   default = ""
 }
 
+# Pre-fetched ECR auth token, forwarded from CI via PKR_VAR_ecr_password.
+# The build instance has no IAM role attached, so it can't run
+# `aws ecr get-login-password` itself — CI fetches the token (which is valid
+# for ~12h) and we use it directly in `docker login`.
+variable "ecr_password" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
 locals {
   ami_name = "wingfoil-latency-ec2-spot-${var.image_tag}-${formatdate("YYYYMMDD-hhmmss", timestamp())}"
 }
@@ -115,6 +125,7 @@ build {
       "TEMPO_IMAGE=${var.tempo_image}",
       "GRAFANA_IMAGE=${var.grafana_image}",
       "ECR_REGISTRY=${var.ecr_registry}",
+      "ECR_PASSWORD=${var.ecr_password}",
       "AWS_REGION=${var.region}",
     ]
     script = "${path.root}/install.sh"
