@@ -12,20 +12,20 @@
 
 name: Build & Push latency_e2e Images
 
-# TEMPORARILY DISABLED: AWS OIDC role / secrets not configured yet.
-# The configure-aws-credentials step fails with "Could not load credentials
-# from any providers". Re-enable by restoring the `push` trigger and
-# removing the `if: false` guard on the build job once
-# AWS_ROLE_TO_ASSUME is set and the OIDC trust policy is in place.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'wingfoil/**'
+      - 'wingfoil/examples/latency_e2e/**'
+      - '.github/workflows/build-latency-e2e-images.yml'
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
 jobs:
   build:
-    if: false
     runs-on: ubuntu-latest
     permissions:
       id-token: write
