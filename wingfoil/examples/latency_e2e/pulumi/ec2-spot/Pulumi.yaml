@@ -1,0 +1,10 @@
+name: wingfoil-latency-ec2-spot
+runtime: python
+description: Always-on EC2 Spot deployment of the wingfoil latency_e2e demo. Uses
+  a Packer-baked AMI (Docker + pre-pulled images) so a Spot reclaim recovers in
+  ~60-90s. Single-AZ ASG of size 1 in eu-west-2a (London, near LMAX LD4).
+
+config:
+  aws:region:
+    description: AWS region
+    default: eu-west-2

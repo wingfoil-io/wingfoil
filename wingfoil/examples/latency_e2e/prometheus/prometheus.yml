@@ -8,3 +8,15 @@ scrape_configs:
       - targets: ['host.docker.internal:9091']
         labels:
           service: ws_server
+
+  # Optional: only present on the ec2-spot stack, where a host-side
+  # spot_watcher.py exposes the Spot interruption countdown gauge. On
+  # other stacks the target is unreachable and Prometheus reports it
+  # as down — Grafana renders the panel as "no data", which is the
+  # banner's hidden state.
+  - job_name: latency_e2e_spot_watcher
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['host.docker.internal:9092']
+        labels:
+          service: spot_watcher
