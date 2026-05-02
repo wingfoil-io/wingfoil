@@ -26,9 +26,6 @@
 
 name: Build latency_e2e AMI (ec2-spot)
 
-# DISABLED until AWS OIDC role + ECR images are wired up. Mirrors
-# build-latency-e2e-images.yml: re-enable by adding the push trigger and
-# removing `if: false` once secrets exist.
 on:
   workflow_dispatch:
     inputs:
@@ -36,6 +33,13 @@ on:
         description: "Image tag to bake into the AMI (default: latest)"
         required: false
         default: "latest"
+  push:
+    branches: [main]
+    paths:
+      - 'wingfoil/examples/latency_e2e/pulumi/ec2-spot/**'
+      - 'wingfoil/examples/latency_e2e/Dockerfile.*'
+      - 'wingfoil/examples/latency_e2e/docker-compose.yml'
+      - '.github/workflows/build-latency-e2e-ami.yml'
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
@@ -43,7 +47,6 @@ env:
 
 jobs:
   build:
-    if: false
     runs-on: ubuntu-latest
     permissions:
       id-token: write
