@@ -73,6 +73,9 @@ def main() -> None:
     while True:
         # Catch broadly: a malformed payload or unexpected IMDS schema must not
         # kill the loop — we'd lose the metric until systemd restarts us.
+        # On transient errors we deliberately leave the gauge at its previous
+        # value: if a reclaim notice is already active, resetting to -1 would
+        # flip the Grafana banner back to "Stable" during the 2-minute window.
         try:
             token = _imds_token()
             payload = _imds_get("meta-data/spot/instance-action", token)
@@ -81,11 +84,9 @@ def main() -> None:
             else:
                 seconds_remaining.set(max(0.0, _parse_remaining(payload)))
         except (urllib.error.URLError, TimeoutError) as e:
-            logger.warning("IMDS unreachable: %s", e)
-            seconds_remaining.set(-1)
+            logger.warning("IMDS unreachable, retaining last gauge value: %s", e)
         except Exception:  # noqa: BLE001 — keep the loop alive on parse errors
-            logger.exception("failed to parse spot interruption notice")
-            seconds_remaining.set(-1)
+            logger.exception("failed to parse spot interruption notice; retaining last gauge value")
 
         time.sleep(POLL_INTERVAL_SECONDS)
 
