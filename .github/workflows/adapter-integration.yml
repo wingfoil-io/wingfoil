@@ -1,0 +1,66 @@
+name: Adapter Integration Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/aeron/**'
+      - 'wingfoil/src/adapters/fix/**'
+      - 'wingfoil/src/adapters/fluvio/**'
+      - 'wingfoil/src/adapters/kafka/**'
+      - 'wingfoil/src/adapters/zmq/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  integration:
+    name: ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: aeron
+            feature: aeron-integration-test
+            test-filter: 'aeron::integration_tests'
+            extra-deps: 'cmake clang libclang-dev uuid-dev libbsd-dev'
+          - adapter: fix
+            feature: fix-integration-test
+            test-filter: 'fix::integration_tests'
+          - adapter: fluvio
+            feature: fluvio-integration-test
+            test-filter: 'fluvio::integration_tests'
+          - adapter: kafka
+            feature: kafka-integration-test
+            test-filter: ''
+          - adapter: zmq
+            feature: zmq-integration-test
+            test-filter: 'zmq::integration_tests'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install system dependencies
+        if: matrix.extra-deps != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.extra-deps }}
+
+      - name: Run ${{ matrix.adapter }} integration tests
+        run: |
+          cargo test --features ${{ matrix.feature }} -p wingfoil \
+            -- --test-threads=1 --nocapture ${{ matrix.test-filter }}
+        env:
+          RUST_LOG: INFO
+          LMAX_USERNAME: ${{ secrets.LMAX_USERNAME }}
+          LMAX_PASSWORD: ${{ secrets.LMAX_PASSWORD }}
