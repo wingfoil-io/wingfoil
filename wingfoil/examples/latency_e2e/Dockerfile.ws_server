@@ -1,6 +1,9 @@
 # Builder stage
 FROM rust:latest as builder
 
+RUN apt-get update && apt-get install -y protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 COPY . .
 
