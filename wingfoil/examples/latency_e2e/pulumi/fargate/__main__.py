@@ -30,7 +30,8 @@ vpc = aws.ec2.Vpc(f"{project_name}-vpc",
     enable_dns_support=True,
     tags={"Name": f"{project_name}-vpc", **tags})
 
-# Public subnet
+# Public subnets — ALB requires ≥2 AZs. Tasks run in these subnets with public
+# IPs (egress goes straight through the IGW), so no NAT Gateway is needed.
 public_subnet = aws.ec2.Subnet(f"{project_name}-public-subnet",
     vpc_id=vpc.id,
     cidr_block="10.0.1.0/24",
@@ -38,28 +39,17 @@ public_subnet = aws.ec2.Subnet(f"{project_name}-public-subnet",
     map_public_ip_on_launch=True,
     tags={"Name": f"{project_name}-public-subnet", **tags})
 
-# Private subnet
-private_subnet = aws.ec2.Subnet(f"{project_name}-private-subnet",
+public_subnet_b = aws.ec2.Subnet(f"{project_name}-public-subnet-b",
     vpc_id=vpc.id,
     cidr_block="10.0.2.0/24",
-    availability_zone=f"{aws_region}a",
-    tags={"Name": f"{project_name}-private-subnet", **tags})
+    availability_zone=f"{aws_region}b",
+    map_public_ip_on_launch=True,
+    tags={"Name": f"{project_name}-public-subnet-b", **tags})
 
 # Internet Gateway
 igw = aws.ec2.InternetGateway(f"{project_name}-igw",
     vpc_id=vpc.id,
     tags={"Name": f"{project_name}-igw", **tags})
-
-# NAT Gateway
-eip = aws.ec2.Eip(f"{project_name}-nat-eip",
-    domain="vpc",
-    tags={"Name": f"{project_name}-nat-eip", **tags},
-    depends_on=[igw])
-
-nat = aws.ec2.NatGateway(f"{project_name}-nat",
-    subnet_id=public_subnet.id,
-    allocation_id=eip.id,
-    tags={"Name": f"{project_name}-nat", **tags})
 
 # Public route table
 public_rt = aws.ec2.RouteTable(f"{project_name}-public-rt",
@@ -76,20 +66,9 @@ public_rt_assoc = aws.ec2.RouteTableAssociation(f"{project_name}-public-rt-assoc
     subnet_id=public_subnet.id,
     route_table_id=public_rt.id)
 
-# Private route table
-private_rt = aws.ec2.RouteTable(f"{project_name}-private-rt",
-    vpc_id=vpc.id,
-    routes=[
-        aws.ec2.RouteTableRouteArgs(
-            cidr_block="0.0.0.0/0",
-            nat_gateway_id=nat.id,
-        )
-    ],
-    tags={"Name": f"{project_name}-private-rt", **tags})
-
-private_rt_assoc = aws.ec2.RouteTableAssociation(f"{project_name}-private-rt-assoc",
-    subnet_id=private_subnet.id,
-    route_table_id=private_rt.id)
+public_rt_assoc_b = aws.ec2.RouteTableAssociation(f"{project_name}-public-rt-assoc-b",
+    subnet_id=public_subnet_b.id,
+    route_table_id=public_rt.id)
 
 # Security groups
 alb_sg = aws.ec2.SecurityGroup(f"{project_name}-alb-sg",
@@ -118,7 +97,7 @@ ecs_sg = aws.ec2.SecurityGroup(f"{project_name}-ecs-tasks-sg",
 # CloudWatch log group
 log_group = aws.cloudwatch.LogGroup(f"{project_name}-ecs-logs",
     name=f"/ecs/{project_name}-{environment}",
-    retention_in_days=7,
+    retention_in_days=1,
     tags=tags)
 
 # Secrets Manager
@@ -155,6 +134,13 @@ ecs_task_role = aws.iam.Role(f"{project_name}-ecs-task-role",
 cluster = aws.ecs.Cluster(f"{project_name}-cluster",
     tags=tags)
 
+# Attach FARGATE + FARGATE_SPOT capacity providers to the cluster so the
+# service can run tasks on Spot.
+cluster_capacity_providers = aws.ecs.ClusterCapacityProviders(
+    f"{project_name}-cluster-cps",
+    cluster_name=cluster.name,
+    capacity_providers=["FARGATE", "FARGATE_SPOT"])
+
 # ECS Task Execution Role (for logging, pulling images, fetching secrets)
 ecs_task_execution_role = aws.iam.Role(f"{project_name}-ecs-task-execution-role",
     assume_role_policy=json.dumps({
@@ -190,7 +176,7 @@ alb = aws.lb.LoadBalancer(f"{project_name}-alb",
     internal=False,
     load_balancer_type="application",
     security_groups=[alb_sg.id],
-    subnets=[public_subnet.id, private_subnet.id],
+    subnets=[public_subnet.id, public_subnet_b.id],
     enable_deletion_protection=False,
     tags={"Name": f"{project_name}-alb", **tags})
 
@@ -368,16 +354,23 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
     ])),
     tags=tags)
 
-# ECS Service
+# ECS Service — runs on Fargate Spot (~70% cheaper than on-demand; tasks may be
+# interrupted with a 2-minute warning, which is fine for a demo). Tasks land in
+# the public subnets with public IPs so egress goes through the IGW (no NAT).
 service = aws.ecs.Service(f"{project_name}-service",
     cluster=cluster.arn,
     task_definition=task_definition.arn,
     desired_count=1,
-    launch_type="FARGATE",
+    capacity_provider_strategies=[
+        aws.ecs.ServiceCapacityProviderStrategyArgs(
+            capacity_provider="FARGATE_SPOT",
+            weight=1,
+        ),
+    ],
     network_configuration=aws.ecs.ServiceNetworkConfigurationArgs(
-        subnets=[private_subnet.id],
+        subnets=[public_subnet.id, public_subnet_b.id],
         security_groups=[ecs_sg.id],
-        assign_public_ip=False,
+        assign_public_ip=True,
     ),
     load_balancers=[
         aws.ecs.ServiceLoadBalancerArgs(
@@ -392,7 +385,9 @@ service = aws.ecs.Service(f"{project_name}-service",
         ),
     ],
     tags=tags,
-    opts=pulumi.ResourceOptions(depends_on=[ws_listener, grafana_listener]))
+    opts=pulumi.ResourceOptions(depends_on=[
+        ws_listener, grafana_listener, cluster_capacity_providers,
+    ]))
 
 # Outputs
 pulumi.export("alb_dns_name", alb.dns_name)
