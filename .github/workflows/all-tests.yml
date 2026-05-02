@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  rust-ci:
-    name: Rust CI
-    uses: ./.github/workflows/rust.yml
+  rust-test:
+    name: Rust
+    uses: ./.github/workflows/rust-test.yml
 
-  python-tests:
-    name: Python Tests
-    uses: ./.github/workflows/py-test.yml
+  python-test:
+    name: Python
+    uses: ./.github/workflows/python-test.yml
 
   integration-tests:
     name: Integration Tests
