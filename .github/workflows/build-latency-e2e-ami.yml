@@ -22,7 +22,14 @@
 #       - Build AMIs (ec2:* on AMI/snapshot/instance lifecycle)
 #       - Pull from ECR (ecr:GetAuthorizationToken, ecr:BatchGetImage etc.)
 #       - Write SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id
-#   - AWS_REGION          (optional, defaults to eu-west-2)
+#   - AWS_REGION  (optional, default eu-west-2) — region the AMI is built in
+#                 and where the ec2-spot stack launches it (LMAX LD4 in London).
+#                 Must match `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default,
+#                 since AMIs are region-scoped.
+#   - ECR_REGION  (optional, default us-east-1) — region the wingfoil/* images
+#                 live in, set by `build-latency-e2e-images.yml`. The build
+#                 instance pulls cross-region from here over ECR's public
+#                 endpoint.
 
 name: Build latency_e2e AMI (ec2-spot)
 
@@ -42,7 +49,16 @@ on:
       - '.github/workflows/build-latency-e2e-ami.yml'
 
 env:
+  # AMI build region — must match the ec2-spot Pulumi stack (eu-west-2,
+  # London) since AMIs are region-scoped and the stack launches there.
   AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  # ECR registry region — where build-latency-e2e-images.yml pushes to.
+  # Decoupled from AWS_REGION because the AMI build instance pulls from
+  # us-east-1 cross-region.
+  ECR_REGION: ${{ secrets.ECR_REGION || 'us-east-1' }}
+  # Push-triggered runs don't get workflow_dispatch inputs, so fall back to
+  # `latest` (matches the tag pushed by build-latency-e2e-images.yml).
+  IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
   SSM_AMI_PARAM: /wingfoil/latency-e2e/ec2-spot/ami_id
 
 jobs:
@@ -68,14 +84,14 @@ jobs:
         id: ecr
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com"
           {
             echo "registry=${REGISTRY}"
-            echo "ws_server=${REGISTRY}/wingfoil/ws-server:${{ inputs.image_tag }}"
-            echo "fix_gw=${REGISTRY}/wingfoil/fix-gw:${{ inputs.image_tag }}"
-            echo "prometheus=${REGISTRY}/wingfoil/prometheus:${{ inputs.image_tag }}"
-            echo "tempo=${REGISTRY}/wingfoil/tempo:${{ inputs.image_tag }}"
-            echo "grafana=${REGISTRY}/wingfoil/grafana:${{ inputs.image_tag }}"
+            echo "ws_server=${REGISTRY}/wingfoil/ws-server:${IMAGE_TAG}"
+            echo "fix_gw=${REGISTRY}/wingfoil/fix-gw:${IMAGE_TAG}"
+            echo "prometheus=${REGISTRY}/wingfoil/prometheus:${IMAGE_TAG}"
+            echo "tempo=${REGISTRY}/wingfoil/tempo:${IMAGE_TAG}"
+            echo "grafana=${REGISTRY}/wingfoil/grafana:${IMAGE_TAG}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Packer
@@ -86,18 +102,25 @@ jobs:
       - name: Packer init
         run: packer init wingfoil-latency.pkr.hcl
 
+      # Fetch the ECR auth token on the runner (which has AWS creds via OIDC)
+      # and forward it to Packer. The provisioner uses this to `docker login`
+      # on the build instance — the instance has no IAM role, so calling
+      # `aws ecr get-login-password` from inside install.sh would fail with
+      # "Unable to locate credentials".
       - name: Packer build
+        env:
+          PKR_VAR_region: ${{ env.AWS_REGION }}
+          PKR_VAR_image_tag: ${{ env.IMAGE_TAG }}
+          PKR_VAR_ecr_registry: ${{ steps.ecr.outputs.registry }}
+          PKR_VAR_ws_server_image: ${{ steps.ecr.outputs.ws_server }}
+          PKR_VAR_fix_gw_image: ${{ steps.ecr.outputs.fix_gw }}
+          PKR_VAR_prometheus_image: ${{ steps.ecr.outputs.prometheus }}
+          PKR_VAR_tempo_image: ${{ steps.ecr.outputs.tempo }}
+          PKR_VAR_grafana_image: ${{ steps.ecr.outputs.grafana }}
         run: |
-          packer build \
-            -var "region=${AWS_REGION}" \
-            -var "image_tag=${{ inputs.image_tag }}" \
-            -var "ecr_registry=${{ steps.ecr.outputs.registry }}" \
-            -var "ws_server_image=${{ steps.ecr.outputs.ws_server }}" \
-            -var "fix_gw_image=${{ steps.ecr.outputs.fix_gw }}" \
-            -var "prometheus_image=${{ steps.ecr.outputs.prometheus }}" \
-            -var "tempo_image=${{ steps.ecr.outputs.tempo }}" \
-            -var "grafana_image=${{ steps.ecr.outputs.grafana }}" \
-            wingfoil-latency.pkr.hcl
+          ECR_PASSWORD=$(aws ecr get-login-password --region "$ECR_REGION")
+          echo "::add-mask::$ECR_PASSWORD"
+          PKR_VAR_ecr_password="$ECR_PASSWORD" packer build wingfoil-latency.pkr.hcl
 
       - name: Extract AMI ID
         id: ami
@@ -131,7 +154,7 @@ jobs:
             echo ""
             echo "- **AMI ID**: \`${{ steps.ami.outputs.ami_id }}\`"
             echo "- **Region**: \`${AWS_REGION}\`"
-            echo "- **Image tag**: \`${{ inputs.image_tag }}\`"
+            echo "- **Image tag**: \`${IMAGE_TAG}\`"
             echo "- **SSM parameter**: \`${SSM_AMI_PARAM}\`"
             echo ""
             echo "Wire it into the Pulumi stack:"
