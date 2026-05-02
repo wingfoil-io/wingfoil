@@ -1,3 +1,8 @@
+---
+description: Implement a wingfoil I/O adapter end-to-end (TDD branch + tests + CI). Use after /adapter-new-issue has scoped it.
+argument-hint: <adapter-name>
+---
+
 Implement a new I/O adapter for wingfoil named `$ARGUMENTS`. Follow these steps in order. Work test-driven: write each test before its implementation.
 
 ## Invariants
