@@ -31,6 +31,7 @@ jobs:
           - adapter: fix
             feature: fix-integration-test
             test-filter: 'fix::integration_tests'
+            needs-lmax: true
           - adapter: fluvio
             feature: fluvio-integration-test
             test-filter: 'fluvio::integration_tests'
@@ -53,7 +54,7 @@ jobs:
           shared-key: integration
 
       - name: Install system dependencies
-        if: matrix.extra-deps != ''
+        if: matrix.extra-deps
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.extra-deps }}
 
       - name: Run ${{ matrix.adapter }} integration tests
@@ -62,5 +63,5 @@ jobs:
             -- --test-threads=1 --nocapture ${{ matrix.test-filter }}
         env:
           RUST_LOG: INFO
-          LMAX_USERNAME: ${{ secrets.LMAX_USERNAME }}
-          LMAX_PASSWORD: ${{ secrets.LMAX_PASSWORD }}
+          LMAX_USERNAME: ${{ matrix.needs-lmax && secrets.LMAX_USERNAME || '' }}
+          LMAX_PASSWORD: ${{ matrix.needs-lmax && secrets.LMAX_PASSWORD || '' }}
