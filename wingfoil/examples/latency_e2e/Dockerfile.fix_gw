@@ -13,12 +13,14 @@ RUN cargo build --release \
     --example latency_e2e_fix_gw \
     --features "fix,iceoryx2-beta"
 
-# Runtime stage
-FROM ubuntu:22.04
+# Runtime stage — bookworm-slim matches the builder's glibc (2.36); pairing
+# it with ubuntu:22.04 (glibc 2.35) risks a runtime ABI break.
+FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y \
-    libssl3 \
-    ca-certificates \
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+        libssl3 \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 wingfoil \
     && useradd --system --uid 10001 --gid wingfoil --no-create-home --home /app wingfoil
