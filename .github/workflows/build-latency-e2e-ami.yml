@@ -31,7 +31,7 @@
 #                 instance pulls cross-region from here over ECR's public
 #                 endpoint.
 
-name: Build latency_e2e AMI (ec2-spot)
+name: latency-e2e.build.ami
 
 on:
   workflow_dispatch:

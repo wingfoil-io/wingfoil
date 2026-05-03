@@ -1,4 +1,4 @@
-name: ZMQ etcd Integration Tests
+name: test.integration.zmq-etcd
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: Python
+name: test.python
 
 on:
   workflow_call:

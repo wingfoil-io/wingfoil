@@ -45,7 +45,7 @@
 #    - PULUMI_MEMORY: Default 2048 (MB)
 #
 # 4. Run the workflow:
-#    - Go to Actions → Deploy Latency E2E to AWS
+#    - Go to Actions → latency-e2e.deploy
 #    - Click "Run workflow"
 #    - Select stack (demo/staging/prod)
 #    - Outputs show ALB DNS name after ~10 minutes
@@ -55,7 +55,7 @@
 #    - Grafana: http://<ALB_DNS>:3000/
 #
 
-name: Deploy Latency E2E to AWS
+name: latency-e2e.deploy
 
 # TEMPORARILY DISABLED: AWS OIDC role / secrets not configured yet.
 # The configure-aws-credentials step fails with "Could not load credentials

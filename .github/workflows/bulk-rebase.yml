@@ -1,4 +1,4 @@
-name: Bulk Rebase
+name: maintenance.bulk-rebase
 on:
   workflow_dispatch:
 jobs:

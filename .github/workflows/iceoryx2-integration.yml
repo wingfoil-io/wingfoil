@@ -1,4 +1,4 @@
-name: iceoryx2 Integration Tests
+name: test.integration.iceoryx2
 
 on:
   workflow_call:

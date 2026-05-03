@@ -1,4 +1,4 @@
-name: Rust
+name: test.rust
 
 on:
   workflow_call:

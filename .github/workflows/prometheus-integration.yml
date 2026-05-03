@@ -1,4 +1,4 @@
-name: Prometheus Integration Tests
+name: test.integration.prometheus
 
 on:
   workflow_dispatch:

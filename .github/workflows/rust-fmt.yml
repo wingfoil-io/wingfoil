@@ -1,4 +1,4 @@
-name: Rust Format
+name: maintenance.fmt
 
 on:
   workflow_dispatch:

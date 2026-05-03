@@ -1,4 +1,4 @@
-name: KDB Integration Tests
+name: test.integration.kdb
 
 on:
   workflow_call:

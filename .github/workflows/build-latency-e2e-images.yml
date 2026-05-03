@@ -10,7 +10,7 @@
 #
 # After this workflow runs, deploy-latency-e2e.yml can pull <registry>/wingfoil/<name>:latest.
 
-name: Build & Push latency_e2e Images
+name: latency-e2e.build.images
 
 on:
   workflow_dispatch:

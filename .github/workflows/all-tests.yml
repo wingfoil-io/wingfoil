@@ -1,4 +1,4 @@
-name: All Tests
+name: test.all
 
 on:
   workflow_call:

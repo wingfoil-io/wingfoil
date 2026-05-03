@@ -1,4 +1,4 @@
-name: Adapter Integration Tests
+name: test.integration.adapter
 
 on:
   workflow_call:
