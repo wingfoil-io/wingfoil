@@ -144,13 +144,11 @@ aws.vpc.SecurityGroupIngressRule(
     cidr_ipv4=ingress_cidr,
     tags=tags,
 )
-aws.vpc.SecurityGroupEgressRule(
-    f"{prefix}-sg-egress-all",
-    security_group_id=sg.id,
-    ip_protocol="-1",
-    cidr_ipv4="0.0.0.0/0",
-    tags=tags,
-)
+# No explicit egress rule: AWS auto-creates a "0.0.0.0/0 allow all" egress
+# rule on every new SG, and the pulumi-aws SecurityGroup resource leaves it
+# alone unless an inline `egress` block is specified. Re-declaring it via
+# aws.vpc.SecurityGroupEgressRule fails with InvalidPermission.Duplicate
+# (CI run 25286544998).
 
 # ── Elastic IP ───────────────────────────────────────────────────────────
 # Pre-allocated and *not* attached to a specific instance. user_data on the
