@@ -8,7 +8,7 @@ config:
   aws:region:
     description: AWS region. Default eu-west-2 — LMAX London Demo lives in London,
       so this minimises FIX RTT (~5 ms vs. ~75 ms transatlantic).
-    default: eu-west-2
+    value: eu-west-2
   instance_type:
     description: EC2 bare-metal instance type. c7i.metal-24xl is the cheapest
       current-gen bare metal in eu-west-2 (~$4.28/hr on-demand, 96 vCPU). Smaller

@@ -6,4 +6,4 @@ description: Always-on Fargate deployment of the wingfoil latency_e2e demo. Use 
 config:
   aws:region:
     description: AWS region
-    default: eu-west-2
+    value: eu-west-2
