@@ -149,10 +149,22 @@ jobs:
           pulumi config set grafana_image   "${{ secrets.GRAFANA_IMAGE }}"
           pulumi config set environment     "$PULUMI_STACK"
 
+      # `--refresh` re-reads each managed resource from AWS before computing
+      # the diff. This unwinds two stale-state failure modes from earlier
+      # deploys of the ec2-spot stack:
+      #   1. A pending-replace marker left over from CI run 25286033743 (the
+      #      SG description change that pre-dated the ignore_changes in
+      #      PR #308). Without refresh, every subsequent `pulumi up` keeps
+      #      retrying the OLD SG delete and hangs for 15 min on
+      #      DependencyViolation while the spot instance's ENI is still
+      #      attached (CI run 25287037911).
+      #   2. Resources that were partially created/deleted by a previous
+      #      failed deploy and no longer exist in AWS — refresh purges them
+      #      from state so `up` doesn't try to update phantoms.
       - name: Pulumi up
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-        run: pulumi up --yes --skip-preview
+        run: pulumi up --yes --skip-preview --refresh
 
       - name: Summary
         env:
