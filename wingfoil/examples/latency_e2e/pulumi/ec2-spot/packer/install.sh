@@ -10,9 +10,12 @@ sudo cloud-init status --wait
 
 sudo dnf update -y
 # unzip — needed for the AWS CLI installer below.
-# python3-prometheus_client — used by spot_watcher.py; installing via dnf
-# avoids AL2023's externally-managed-environment block on `pip3 install`.
-sudo dnf install -y docker unzip python3-prometheus_client
+# prometheus_client (used by spot_watcher.py) isn't packaged for AL2023, so
+# install it via pip. AL2023's system python is externally-managed, so pass
+# --break-system-packages to land it in /usr/lib/python3.x/site-packages where
+# /usr/bin/python3 (the interpreter the systemd unit invokes) can import it.
+sudo dnf install -y docker unzip python3-pip
+sudo pip3 install --break-system-packages prometheus_client
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
 
@@ -103,9 +106,9 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     restart: unless-stopped
 EOF
 
-# Spot watcher dependency installed via dnf above (python3-prometheus_client).
-# Verify it's importable from /usr/bin/python3 — the systemd unit invokes that
-# interpreter, and a silent missing-package would only surface at first boot.
+# Verify prometheus_client is importable from /usr/bin/python3 — the systemd
+# unit invokes that interpreter, and a silent missing-package would only
+# surface at first boot.
 /usr/bin/python3 -c "import prometheus_client"
 
 # Sanity check — fail the build if any image is missing locally.
