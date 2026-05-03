@@ -21,6 +21,59 @@ use crate::{RunFor, RunMode};
 
 type TungsteniteStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// Generate a self-signed cert covering `localhost` + `127.0.0.1` for use
+/// in TLS integration tests. Returns `(cert_pem, key_pem, cert_der)` —
+/// the DER form is convenient for installing into a client trust store.
+fn make_self_signed() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let cert =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .expect("rcgen self-signed");
+    let cert_pem = cert.cert.pem().into_bytes();
+    let key_pem = cert.key_pair.serialize_pem().into_bytes();
+    let cert_der = cert.cert.der().to_vec();
+    (cert_pem, key_pem, cert_der)
+}
+
+/// Connect to `wss://127.0.0.1:port/ws`, trusting `cert_der` only.
+async fn connect_tls(port: u16, cert_der: Vec<u8>) -> anyhow::Result<TungsteniteStream> {
+    use rustls::pki_types::CertificateDer;
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(cert_der))
+        .map_err(|e| anyhow::anyhow!("trust store add: {e}"))?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let client_config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| anyhow::anyhow!("rustls protocol versions: {e}"))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = tokio_tungstenite::Connector::Rustls(Arc::new(client_config));
+
+    let url = format!("wss://localhost:{port}/ws");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio_tungstenite::connect_async_tls_with_config(
+            &url,
+            None,
+            false,
+            Some(connector.clone()),
+        )
+        .await
+        {
+            Ok((mut socket, _)) => {
+                let _ = socket.next().await;
+                return Ok(socket);
+            }
+            Err(e) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                let _ = e;
+            }
+            Err(e) => return Err(anyhow::anyhow!("wss connect: {e}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct UiClick {
     button: String,
@@ -381,5 +434,72 @@ fn test_bad_envelope_is_ignored_not_fatal() -> anyhow::Result<()> {
     let got = received.lock().unwrap().clone();
     assert!(!got.is_empty(), "expected at least one safe frame");
     assert_eq!(got[0].topic, "safe");
+    Ok(())
+}
+
+#[test]
+fn test_pub_round_trip_tls() -> anyhow::Result<()> {
+    let (cert_pem, key_pem, cert_der) = make_self_signed();
+    let server = WebServer::bind("127.0.0.1:0")
+        .tls(cert_pem, key_pem)
+        .start()?;
+    assert!(server.is_tls());
+    let port = server.port();
+    let codec = server.codec();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let cert_der_clone = cert_der.clone();
+    let topic = "tick";
+    let topic_owned = topic.to_string();
+    let client = std::thread::spawn(move || -> anyhow::Result<Vec<Envelope>> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect_tls(port, cert_der_clone).await?;
+            send_control(
+                &mut socket,
+                codec,
+                ControlMessage::Subscribe {
+                    topics: vec![topic_owned.clone()],
+                },
+            )
+            .await?;
+            ready_tx.send(()).ok();
+
+            let mut out = Vec::with_capacity(5);
+            let overall_deadline = Instant::now() + Duration::from_secs(10);
+            while out.len() < 5 && Instant::now() < overall_deadline {
+                match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    recv_envelope(&mut socket, codec),
+                )
+                .await
+                {
+                    Ok(Ok(env)) if env.topic == topic_owned => out.push(env),
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(_)) | Err(_) => break,
+                }
+            }
+            Ok(out)
+        })
+    });
+    ready_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("client failed to subscribe over TLS");
+
+    ticker(Duration::from_millis(10))
+        .count()
+        .web_pub(&server, topic)
+        .run(
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_millis(500)),
+        )?;
+
+    let envs = client.join().expect("client thread panic")?;
+    assert!(!envs.is_empty(), "no envelopes received over TLS");
+    for env in &envs {
+        assert_eq!(env.topic, topic);
+        let value: u64 = codec.decode(&env.payload)?;
+        assert!(value >= 1);
+    }
     Ok(())
 }

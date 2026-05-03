@@ -55,6 +55,21 @@
 //!     .unwrap();
 //! ```
 //!
+//! # HTTPS / WSS
+//!
+//! Pass PEM-encoded cert chain + key bytes to
+//! [`WebServerBuilder::tls`](crate::adapters::web::WebServerBuilder::tls)
+//! to terminate TLS in-process. Browser clients then connect to
+//! `wss://HOST:PORT/ws`.
+//!
+//! ```ignore
+//! let cert_pem = std::fs::read("server.crt")?;
+//! let key_pem  = std::fs::read("server.key")?;
+//! let server = WebServer::bind("0.0.0.0:8443")
+//!     .tls(cert_pem, key_pem)
+//!     .start()?;
+//! ```
+//!
 //! # Historical mode
 //!
 //! The server exposes [`WebServerBuilder::start_historical`] for use in

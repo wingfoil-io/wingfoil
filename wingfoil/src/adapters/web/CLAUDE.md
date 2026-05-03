@@ -46,6 +46,11 @@ web/
   a no-op server. Both `web_pub` and `web_sub` become no-ops so the same
   graph can run in `RunMode::HistoricalFrom(...)` without touching the
   network — mirrors `PrometheusMetricNode`'s `historical` flag.
+- **Optional TLS (HTTPS / WSS)**: `WebServerBuilder::tls(cert_pem, key_pem)`
+  parses a PEM cert chain + key, builds a rustls `ServerConfig` (ring
+  provider), and switches the runtime path from `axum::serve` to
+  `axum_server::from_tcp_rustls`. Plain HTTP path is unchanged when `tls()`
+  is not called. Clients must use `wss://HOST:PORT/ws`.
 
 ## Threading Model
 

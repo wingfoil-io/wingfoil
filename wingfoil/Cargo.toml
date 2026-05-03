@@ -33,7 +33,7 @@ otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", 
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
 fix-integration-test = ["fix"]
-web = ["async", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "tokio/net", "tokio/sync"]
+web = ["async", "dep:axum", "dep:axum-server", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "dep:rustls", "dep:rustls-pemfile", "tokio/net", "tokio/sync"]
 
 [package]
 name = "wingfoil"
@@ -124,10 +124,11 @@ webpki-roots = { version = "0.26", optional = true }
 
 # web adapter
 axum = { version = "0.8", features = ["ws"], optional = true }
+axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
-tokio-tungstenite = { version = "0.24", optional = true }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
 wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "4.3.3", optional = true }
-
 
 [dev-dependencies]
 rxrust = "1.0.0-rc.3"
@@ -135,6 +136,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+rcgen = "0.13"
 
 [[example]]
 name = "dynamic-group"
