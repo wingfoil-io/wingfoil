@@ -57,6 +57,28 @@ ingress_cidr = config.get("ingress_cidr") or "0.0.0.0/0"
 # guarantee visible in the Pulumi diff.
 max_spot_price = config.get("max_spot_price") or "0.0228"
 
+# Optional Let's Encrypt support. When `dns_hostname` is set, user_data runs
+# certbot in --standalone mode against the public IP, persists the resulting
+# cert to S3 so a Spot reclaim doesn't burn an LE issuance, and a daily
+# systemd timer handles renewal. When unset, the stack falls back to the
+# self-signed cert path (current default behaviour).
+#
+# `letsencrypt_email` becomes required as soon as `dns_hostname` is set —
+# certbot uses it for expiry notifications and ACME account registration.
+#
+# `route53_zone_id` is optional even when `dns_hostname` is set: if the user
+# manages DNS outside Route53, they create the A record themselves after
+# `pulumi up` outputs the EIP. If set, Pulumi creates the A record so the
+# instance can fetch a cert on first boot without manual intervention.
+dns_hostname = config.get("dns_hostname")
+letsencrypt_email = config.get("letsencrypt_email")
+route53_zone_id = config.get("route53_zone_id")
+if dns_hostname and not letsencrypt_email:
+    raise pulumi.RunError(
+        "letsencrypt_email is required when dns_hostname is set "
+        "(certbot needs an account email)."
+    )
+
 tags = {"Project": project, "Stack": stack, "ManagedBy": "Pulumi"}
 
 # ── Networking ───────────────────────────────────────────────────────────
@@ -140,18 +162,29 @@ aws.ec2.RouteTableAssociation(
 # `d.Timeout(schema.TimeoutDelete)`, so bumping it doesn't help. The deploy
 # workflow handles this by draining the ASG to 0 *before* `pulumi up`, which
 # guarantees no ENI references the old SG when Pulumi deletes it.
+sg_ingress = [
+    aws.ec2.SecurityGroupIngressArgs(
+        from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]
+    ),
+    aws.ec2.SecurityGroupIngressArgs(
+        from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]
+    ),
+]
+if dns_hostname:
+    # certbot --standalone binds :80 for the HTTP-01 challenge. Open it to
+    # the world (not `ingress_cidr`) because Let's Encrypt's validation
+    # servers connect from rotating, undocumented IPs.
+    sg_ingress.append(
+        aws.ec2.SecurityGroupIngressArgs(
+            from_port=80, to_port=80, protocol="tcp", cidr_blocks=["0.0.0.0/0"]
+        )
+    )
+
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
     description="wingfoil ec2-spot demo",
-    ingress=[
-        aws.ec2.SecurityGroupIngressArgs(
-            from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]
-        ),
-        aws.ec2.SecurityGroupIngressArgs(
-            from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]
-        ),
-    ],
+    ingress=sg_ingress,
     tags={**tags, "Name": f"{prefix}-sg"},
     opts=pulumi.ResourceOptions(ignore_changes=["description"]),
 )
@@ -164,6 +197,54 @@ eip = aws.ec2.Eip(
     domain="vpc",
     tags={**tags, "Name": f"{prefix}-eip"},
 )
+
+# ── DNS + Let's Encrypt cert cache (optional) ────────────────────────────
+# When `dns_hostname` is set:
+#  * If `route53_zone_id` is also set, point the hostname's A record at the
+#    EIP automatically. Otherwise the operator creates the record themselves
+#    in whichever DNS provider they use.
+#  * Provision an S3 bucket so cert state survives Spot reclaims. Without
+#    this every reclaim would issue a new cert; LE allows 50/week/domain so
+#    a busy reclaim day could trip the limit.
+cert_bucket = None
+if dns_hostname:
+    if route53_zone_id:
+        aws.route53.Record(
+            f"{prefix}-dns",
+            zone_id=route53_zone_id,
+            name=dns_hostname,
+            type="A",
+            ttl=60,
+            records=[eip.public_ip],
+        )
+
+    # Bucket name must be globally unique; let Pulumi append a random suffix
+    # rather than relying on `prefix` alone.
+    cert_bucket = aws.s3.BucketV2(
+        f"{prefix}-tls-cache",
+        force_destroy=True,
+        tags={**tags, "Name": f"{prefix}-tls-cache"},
+    )
+    aws.s3.BucketServerSideEncryptionConfigurationV2(
+        f"{prefix}-tls-cache-sse",
+        bucket=cert_bucket.id,
+        rules=[
+            aws.s3.BucketServerSideEncryptionConfigurationV2RuleArgs(
+                apply_server_side_encryption_by_default=aws.s3.
+                BucketServerSideEncryptionConfigurationV2RuleApplyServerSideEncryptionByDefaultArgs(
+                    sse_algorithm="AES256",
+                ),
+            )
+        ],
+    )
+    aws.s3.BucketPublicAccessBlock(
+        f"{prefix}-tls-cache-pab",
+        bucket=cert_bucket.id,
+        block_public_acls=True,
+        block_public_policy=True,
+        ignore_public_acls=True,
+        restrict_public_buckets=True,
+    )
 
 # ── Secrets ──────────────────────────────────────────────────────────────
 lmax_username_secret = aws.secretsmanager.Secret(f"{prefix}-lmax-username", tags=tags)
@@ -195,51 +276,74 @@ instance_role = aws.iam.Role(
 
 account_id = aws.get_caller_identity().account_id
 
+def _instance_policy(args):
+    user_arn, pw_arn, eip_alloc, bucket_arn = args
+    statements = [
+        {
+            "Effect": "Allow",
+            "Action": ["secretsmanager:GetSecretValue"],
+            "Resource": [user_arn, pw_arn],
+        },
+        # DescribeAddresses doesn't support resource-level permissions
+        # at all (the previous tag condition was silently a no-op), so
+        # split it out as `Resource: "*"` and accept the breadth — it's
+        # a read-only API.
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeAddresses"],
+            "Resource": "*",
+        },
+        # AssociateAddress: scope to *this* EIP allocation ARN plus any
+        # instance/network-interface tagged with our Project/Stack. The
+        # resource-tag condition is enforced per-resource — both the
+        # EIP and the instance must satisfy it for the call to succeed.
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:AssociateAddress"],
+            "Resource": [
+                f"arn:aws:ec2:*:{account_id}:elastic-ip/{eip_alloc}",
+                f"arn:aws:ec2:*:{account_id}:instance/*",
+                f"arn:aws:ec2:*:{account_id}:network-interface/*",
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Project": project,
+                    "aws:ResourceTag/Stack": stack,
+                }
+            },
+        },
+    ]
+    if bucket_arn is not None:
+        # Scoped to this stack's cert cache only. Get/Put on objects, List
+        # on the bucket so user_data can detect a missing cert without
+        # eating an HTTP 403 -> 404 distinction.
+        statements.append(
+            {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject"],
+                "Resource": [f"{bucket_arn}/*"],
+            }
+        )
+        statements.append(
+            {
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": [bucket_arn],
+            }
+        )
+    return json.dumps({"Version": "2012-10-17", "Statement": statements})
+
+
+_policy_inputs = [
+    lmax_username_secret.arn,
+    lmax_password_secret.arn,
+    eip.allocation_id,
+    cert_bucket.arn if cert_bucket is not None else pulumi.Output.from_input(None),
+]
 aws.iam.RolePolicy(
     f"{prefix}-instance-policy",
     role=instance_role.id,
-    policy=pulumi.Output.all(
-        lmax_username_secret.arn,
-        lmax_password_secret.arn,
-        eip.allocation_id,
-    ).apply(lambda a: json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Action": ["secretsmanager:GetSecretValue"],
-                "Resource": [a[0], a[1]],
-            },
-            # DescribeAddresses doesn't support resource-level permissions
-            # at all (the previous tag condition was silently a no-op), so
-            # split it out as `Resource: "*"` and accept the breadth — it's
-            # a read-only API.
-            {
-                "Effect": "Allow",
-                "Action": ["ec2:DescribeAddresses"],
-                "Resource": "*",
-            },
-            # AssociateAddress: scope to *this* EIP allocation ARN plus any
-            # instance/network-interface tagged with our Project/Stack. The
-            # resource-tag condition is enforced per-resource — both the
-            # EIP and the instance must satisfy it for the call to succeed.
-            {
-                "Effect": "Allow",
-                "Action": ["ec2:AssociateAddress"],
-                "Resource": [
-                    f"arn:aws:ec2:*:{account_id}:elastic-ip/{a[2]}",
-                    f"arn:aws:ec2:*:{account_id}:instance/*",
-                    f"arn:aws:ec2:*:{account_id}:network-interface/*",
-                ],
-                "Condition": {
-                    "StringEquals": {
-                        "aws:ResourceTag/Project": project,
-                        "aws:ResourceTag/Stack": stack,
-                    }
-                },
-            },
-        ],
-    })),
+    policy=pulumi.Output.all(*_policy_inputs).apply(_instance_policy),
 )
 
 instance_profile = aws.iam.InstanceProfile(
@@ -252,13 +356,16 @@ user_data_template = (HERE / "user_data.sh").read_text()
 
 
 def render_user_data(args):
-    eip_alloc, user_arn, pw_arn = args
+    eip_alloc, user_arn, pw_arn, cert_bucket_name = args
     rendered = (
         user_data_template
         .replace("__EIP_ALLOCATION_ID__",     eip_alloc)
         .replace("__LMAX_USERNAME_SECRET__",  user_arn)
         .replace("__LMAX_PASSWORD_SECRET__",  pw_arn)
         .replace("__AWS_REGION__",            aws_region)
+        .replace("__DNS_HOSTNAME__",          dns_hostname or "")
+        .replace("__LETSENCRYPT_EMAIL__",     letsencrypt_email or "")
+        .replace("__CERT_BUCKET__",           cert_bucket_name or "")
     )
     # cloud-init needs base64 user_data when passed via launch templates.
     import base64
@@ -266,7 +373,10 @@ def render_user_data(args):
 
 
 user_data_b64 = pulumi.Output.all(
-    eip.allocation_id, lmax_username_secret.arn, lmax_password_secret.arn
+    eip.allocation_id,
+    lmax_username_secret.arn,
+    lmax_password_secret.arn,
+    cert_bucket.bucket if cert_bucket is not None else pulumi.Output.from_input(None),
 ).apply(render_user_data)
 
 launch_template = aws.ec2.LaunchTemplate(
@@ -340,11 +450,18 @@ asg = aws.autoscaling.Group(
 
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("public_ip",      eip.public_ip)
-# Both endpoints terminate TLS with a self-signed cert regenerated on
-# every boot (see user_data.sh). Browsers will show a one-time warning
-# until you accept the cert; the `wingfoil-js` client respects
-# `location.protocol`, so the UI auto-upgrades to `wss://`.
-pulumi.export("ws_server_url",  eip.public_ip.apply(lambda ip: f"https://{ip}:8080"))
-pulumi.export("grafana_url",    eip.public_ip.apply(lambda ip: f"https://{ip}:3000"))
+# When `dns_hostname` is set, both endpoints serve a Let's Encrypt cert
+# (cached in S3 across Spot reclaims). Browsers won't warn. When unset,
+# the stack falls back to a self-signed cert regenerated on every boot,
+# and browsers will show a one-time warning until the cert is accepted.
+# In either case `wingfoil-js` respects `location.protocol` so the UI
+# auto-upgrades to `wss://`.
+endpoint_host = (
+    pulumi.Output.from_input(dns_hostname) if dns_hostname else eip.public_ip
+)
+pulumi.export("ws_server_url",  endpoint_host.apply(lambda h: f"https://{h}:8080"))
+pulumi.export("grafana_url",    endpoint_host.apply(lambda h: f"https://{h}:3000"))
 pulumi.export("asg_name",       asg.name)
 pulumi.export("availability_zone", availability_zone)
+if cert_bucket is not None:
+    pulumi.export("cert_bucket", cert_bucket.bucket)

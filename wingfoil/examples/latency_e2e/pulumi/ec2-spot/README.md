@@ -115,20 +115,41 @@ pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
 # pulumi config set ingress_cidr      203.0.113.0/24    # lock to your office IP
 # pulumi config set max_spot_price    0.0228            # cap (default = on-demand price)
 
+# ── Optional: Let's Encrypt cert (no browser trust warning) ──────────────
+# Set a hostname you control and the browser will see a real cert chain.
+# Without these, the stack falls back to a self-signed cert and browsers
+# warn on first access.
+# pulumi config set dns_hostname       e2e.example.com
+# pulumi config set letsencrypt_email  ops@example.com    # required when dns_hostname is set
+# pulumi config set route53_zone_id    Z0123456ABCDEF      # optional — Pulumi creates the A record for you
+#                                                          # omit if you'll manage DNS yourself
+
 pulumi up
 ```
 
 After ~3–5 min the outputs print:
 
 ```
-ws_server_url   https://<eip>:8080
-grafana_url     https://<eip>:3000
+ws_server_url   https://<host>:8080      # <host> = dns_hostname if set, else <eip>
+grafana_url     https://<host>:3000
 public_ip       <eip>
+cert_bucket     <bucket>                 # only when dns_hostname is set
 ```
 
 Both endpoints are served over TLS, terminated **in-process** by ws_server
 (via the `web-tls` cargo feature, rustls + ring) and by Grafana
-(`GF_SERVER_PROTOCOL=https`). The cert is a **self-signed** RSA-2048
+(`GF_SERVER_PROTOCOL=https`).
+
+**With `dns_hostname` set** — `user_data.sh` runs certbot in `--standalone`
+mode against your hostname, persists `/etc/letsencrypt` to the
+`cert_bucket` S3 bucket so a Spot reclaim doesn't burn a fresh issuance,
+and a daily systemd timer (`wingfoil-le-renew.timer`) renews the cert and
+bounces the ws_server / grafana containers when it actually rotates. If
+you didn't set `route53_zone_id`, you must create the `A` record yourself
+**before** the instance boots — `pulumi up` shows the EIP in its preview,
+so add the record there, then let `pulumi up` finish creating the ASG.
+
+**Without `dns_hostname`** — the cert is a **self-signed** RSA-2048
 generated on every boot by `user_data.sh`, with `subjectAltName=IP:<eip>`
 so it matches the URL the browser uses. Browsers will show a one-time
 warning until you accept the cert.
