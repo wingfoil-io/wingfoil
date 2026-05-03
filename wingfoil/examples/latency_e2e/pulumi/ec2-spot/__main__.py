@@ -102,11 +102,22 @@ aws.ec2.RouteTableAssociation(
 # triggers an ASG instance refresh — a 10-minute round-trip. Defining each
 # rule as its own aws.vpc.SecurityGroup{Ingress,Egress}Rule resource keeps
 # the SG itself stable, so rule changes update in place.
+#
+# `description` is immutable in the AWS API — any change forces the SG to
+# be replaced. Replacement here is *catastrophic*: pulumi creates a new SG,
+# updates the launch template to reference it, then tries to delete the
+# old SG while the live spot instance's ENI is still attached to it. AWS
+# returns DependencyViolation until the ASG instance refresh completes,
+# which pulumi doesn't wait for, so the deploy hangs for ~15 minutes and
+# then fails (see CI run 25286033743). Ignore description drift so the SG
+# is never replaced over a cosmetic field; the value below is the "as-of"
+# description AWS will hold forever.
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
     description="wingfoil ec2-spot demo",
     tags={**tags, "Name": f"{prefix}-sg"},
+    opts=pulumi.ResourceOptions(ignore_changes=["description"]),
 )
 
 # 8080: ws_server HTTPS/WSS (terminated in-process via the `web-tls`
