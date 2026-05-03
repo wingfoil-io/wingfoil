@@ -80,6 +80,16 @@ sudo rm -rf /root/.docker /home/ec2-user/.docker
 sudo install -m 0644 /tmp/docker-compose.yml /opt/wingfoil/docker-compose.yml
 sudo install -m 0755 /tmp/spot_watcher.py     /opt/wingfoil/spot_watcher.py
 
+# Bind-mount sources for the three containers. compose.yml uses paths relative
+# to its own directory (./prometheus/prometheus.yml etc.), so these must live
+# directly under /opt/wingfoil/. Without them docker silently creates each
+# missing path as an empty directory and the container fails to start with
+# "not a directory: ... Are you trying to mount a directory onto a file".
+sudo cp -r /tmp/prometheus /opt/wingfoil/prometheus
+sudo cp -r /tmp/tempo      /opt/wingfoil/tempo
+sudo cp -r /tmp/grafana    /opt/wingfoil/grafana
+sudo chown -R root:root /opt/wingfoil/prometheus /opt/wingfoil/tempo /opt/wingfoil/grafana
+
 # Bake the image references into compose.yml so `compose up` doesn't pull a
 # floating tag on every boot. Fail the build if the upstream compose ever
 # bumps a tag — a silent no-op here would mean booting on stale images.

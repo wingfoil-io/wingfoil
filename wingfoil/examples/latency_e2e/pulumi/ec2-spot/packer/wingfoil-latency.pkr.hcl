@@ -117,6 +117,24 @@ build {
     destination = "/tmp/docker-compose.yml"
   }
 
+  # Bind-mount sources for prometheus, tempo, and grafana. Compose paths are
+  # relative to /opt/wingfoil/docker-compose.yml, so install.sh moves these
+  # under /opt/wingfoil/{prometheus,tempo,grafana}.
+  provisioner "file" {
+    source      = "${path.root}/../../../prometheus"
+    destination = "/tmp/prometheus"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../../../tempo"
+    destination = "/tmp/tempo"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../../../grafana"
+    destination = "/tmp/grafana"
+  }
+
   provisioner "shell" {
     environment_vars = [
       "WS_SERVER_IMAGE=${var.ws_server_image}",
