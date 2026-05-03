@@ -8,8 +8,10 @@
 #
 # Triggers:
 #   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags).
-#   - A push trigger for ec2-spot stack files / Dockerfile changes is intended
-#     but not yet wired up — see the DISABLED note below.
+#   - Automatic, after `Build & Push latency_e2e Images` completes successfully
+#     on main. The AMI is baked with the commit-SHA-tagged images that run
+#     just pushed, so the AMI never picks up a stale `:latest` racing against
+#     a concurrent image build.
 #
 # After the build, the resulting AMI ID is published to:
 #   - SSM Parameter Store at /wingfoil/latency-e2e/ec2-spot/ami_id (so
@@ -22,14 +24,10 @@
 #       - Build AMIs (ec2:* on AMI/snapshot/instance lifecycle)
 #       - Pull from ECR (ecr:GetAuthorizationToken, ecr:BatchGetImage etc.)
 #       - Write SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id
-#   - AWS_REGION  (optional, default eu-west-2) — region the AMI is built in
-#                 and where the ec2-spot stack launches it (LMAX LD4 in London).
-#                 Must match `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default,
-#                 since AMIs are region-scoped.
-#   - ECR_REGION  (optional, default us-east-1) — region the wingfoil/* images
-#                 live in, set by `build-latency-e2e-images.yml`. The build
-#                 instance pulls cross-region from here over ECR's public
-#                 endpoint.
+#   - AWS_REGION  (optional, default eu-west-2) — single region for the AMI
+#                 build, ECR images, and the ec2-spot stack (LMAX LD4 in
+#                 London). AMIs are region-scoped, so this must match
+#                 `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default.
 
 name: Build latency_e2e AMI (ec2-spot)
 
@@ -40,29 +38,28 @@ on:
         description: "Image tag to bake into the AMI (default: latest)"
         required: false
         default: "latest"
-  push:
+  # Chain off the images workflow rather than triggering on `push:` directly.
+  # That way the AMI build sees a finished image push and can pin to the
+  # commit SHA that workflow built — no race against a concurrent image push.
+  workflow_run:
+    workflows: ["Build & Push latency_e2e Images"]
+    types: [completed]
     branches: [main]
-    paths:
-      - 'wingfoil/examples/latency_e2e/pulumi/ec2-spot/**'
-      - 'wingfoil/examples/latency_e2e/Dockerfile.*'
-      - 'wingfoil/examples/latency_e2e/docker-compose.yml'
-      - '.github/workflows/build-latency-e2e-ami.yml'
 
 env:
-  # AMI build region — must match the ec2-spot Pulumi stack (eu-west-2,
-  # London) since AMIs are region-scoped and the stack launches there.
+  # Single region for AMI build + ECR pulls + ec2-spot stack launch (London,
+  # near LMAX LD4). AMIs are region-scoped, so this must match
+  # `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default.
   AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
-  # ECR registry region — where build-latency-e2e-images.yml pushes to.
-  # Decoupled from AWS_REGION because the AMI build instance pulls from
-  # us-east-1 cross-region.
-  ECR_REGION: ${{ secrets.ECR_REGION || 'us-east-1' }}
-  # Push-triggered runs don't get workflow_dispatch inputs, so fall back to
-  # `latest` (matches the tag pushed by build-latency-e2e-images.yml).
-  IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
+  # Pin to the SHA the images workflow just pushed (immutable). On manual
+  # dispatch, honour the user's tag, defaulting to `latest`.
+  IMAGE_TAG: ${{ inputs.image_tag || github.event.workflow_run.head_sha || 'latest' }}
   SSM_AMI_PARAM: /wingfoil/latency-e2e/ec2-spot/ami_id
 
 jobs:
   build:
+    # `workflow_run` fires on completion regardless of result; skip failures.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -73,6 +70,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # `workflow_run` defaults to checking out the default branch HEAD,
+          # which can drift from the images workflow's head_sha if main moved
+          # in between. Pin to the SHA whose images we're baking.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -84,7 +86,7 @@ jobs:
         id: ecr
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com"
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           {
             echo "registry=${REGISTRY}"
             echo "ws_server=${REGISTRY}/wingfoil/ws-server:${IMAGE_TAG}"
@@ -118,7 +120,7 @@ jobs:
           PKR_VAR_tempo_image: ${{ steps.ecr.outputs.tempo }}
           PKR_VAR_grafana_image: ${{ steps.ecr.outputs.grafana }}
         run: |
-          ECR_PASSWORD=$(aws ecr get-login-password --region "$ECR_REGION")
+          ECR_PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
           echo "::add-mask::$ECR_PASSWORD"
           PKR_VAR_ecr_password="$ECR_PASSWORD" packer build wingfoil-latency.pkr.hcl
 

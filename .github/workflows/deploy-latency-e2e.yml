@@ -31,8 +31,8 @@
 #    REQUIRED:
 #    - PULUMI_ACCESS_TOKEN: Your Pulumi token (from step 1)
 #    - AWS_ROLE_TO_ASSUME: arn:aws:iam::ACCOUNT_ID:role/github-actions-latency-deploy
-#    - WS_SERVER_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/ws-server:latest)
-#    - FIX_GW_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/wingfoil/fix-gw:latest)
+#    - WS_SERVER_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.eu-west-2.amazonaws.com/wingfoil/ws-server:latest)
+#    - FIX_GW_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.eu-west-2.amazonaws.com/wingfoil/fix-gw:latest)
 #    - PROMETHEUS_IMAGE: image with prometheus.yml baked in (built from Dockerfile.prometheus)
 #    - TEMPO_IMAGE: image with tempo.yaml baked in (built from Dockerfile.tempo)
 #    - GRAFANA_IMAGE: image with provisioning baked in (built from Dockerfile.grafana)
@@ -40,7 +40,7 @@
 #    - LMAX_PASSWORD: Your LMAX FIX password
 #
 #    OPTIONAL:
-#    - AWS_REGION: Default us-east-1
+#    - AWS_REGION: Default eu-west-2
 #    - PULUMI_CPU: Default 1024 (vCPU units)
 #    - PULUMI_MEMORY: Default 2048 (MB)
 #
@@ -103,7 +103,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-west-2' }}
 
       - name: Install Python dependencies
         working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
@@ -120,7 +120,7 @@ jobs:
       - name: Set Pulumi config
         working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
         run: |
-          pulumi config set aws:region ${{ secrets.AWS_REGION || 'us-east-1' }}
+          pulumi config set aws:region ${{ secrets.AWS_REGION || 'eu-west-2' }}
           pulumi config set ws_server_image "${{ secrets.WS_SERVER_IMAGE }}"
           pulumi config set fix_gw_image "${{ secrets.FIX_GW_IMAGE }}"
           pulumi config set prometheus_image "${{ secrets.PROMETHEUS_IMAGE }}"
@@ -166,7 +166,7 @@ jobs:
           echo "| Grafana | http://$ALB_DNS:3000 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Stack:** $PULUMI_STACK" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ secrets.AWS_REGION || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ secrets.AWS_REGION || 'eu-west-2' }}" >> $GITHUB_STEP_SUMMARY
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
 
