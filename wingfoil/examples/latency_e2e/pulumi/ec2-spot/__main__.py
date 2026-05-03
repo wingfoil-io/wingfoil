@@ -130,14 +130,16 @@ aws.ec2.RouteTableAssociation(
 # Prometheus scrapes via localhost on the host network. Operators who want
 # the Prometheus UI can still reach it via an SSM session manager
 # port-forward.
-# `delete` timeout: 30 min. If the SG is ever replaced (only via fields not
-# already neutralised above — i.e. nothing we'd plausibly edit), the launch
-# template flips to the new SG and the ASG instance refresh has to terminate
-# the running spot instance before its ENI releases the OLD SG. The default
-# 15 min isn't enough headroom when spot capacity is slow to fulfil the
-# replacement instance — CI run 25287037911 hung for 900s on
-# DependencyViolation and gave up. 30 min covers the worst case (spot
-# request → fulfilment → cloud-init → health-check-grace).
+# If the SG is ever replaced (only via fields not already neutralised above —
+# i.e. nothing we'd plausibly edit), the launch template flips to the new SG
+# and the OLD SG can't be deleted until the running spot instance's ENI
+# releases it. The terraform-aws-provider hardcodes a 15-min retry on
+# DependencyViolation for SG delete (CI runs 25287037911 and 25288417368 both
+# hung for 900s and gave up), and Pulumi's `custom_timeouts.delete` is
+# engine-level only — it does not propagate to the bridged provider's
+# `d.Timeout(schema.TimeoutDelete)`, so bumping it doesn't help. The deploy
+# workflow handles this by draining the ASG to 0 *before* `pulumi up`, which
+# guarantees no ENI references the old SG when Pulumi deletes it.
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
@@ -151,10 +153,7 @@ sg = aws.ec2.SecurityGroup(
         ),
     ],
     tags={**tags, "Name": f"{prefix}-sg"},
-    opts=pulumi.ResourceOptions(
-        ignore_changes=["description"],
-        custom_timeouts=pulumi.CustomTimeouts(delete="30m"),
-    ),
+    opts=pulumi.ResourceOptions(ignore_changes=["description"]),
 )
 
 # ── Elastic IP ───────────────────────────────────────────────────────────
