@@ -106,6 +106,44 @@ unset GRAFANA_ADMIN_PASSWORD
 set -x
 chmod 0600 /opt/wingfoil/.env
 
+# Bind-mount sanity. The AMI's install.sh stages prometheus.yml / tempo.yaml
+# / grafana/provisioning under /opt/wingfoil so docker-compose's relative
+# bind sources resolve. A previous boot whose compose lacked
+# create_host_path: false would have made docker auto-create any missing
+# source as an empty directory and cached that mistake on disk; on the next
+# boot the bind mount still fails with the misleading "not a directory: Are
+# you trying to mount a directory onto a file" because the leaf is now a
+# directory where compose expects a file. Detect and remove empty
+# auto-created directories at the file paths so a single re-run recovers,
+# then assert the final layout matches what compose expects — a stale or
+# pre-#298 AMI fails fast here with a clear message instead of as an opaque
+# OCI runtime error during `compose up`.
+for stale in \
+    /opt/wingfoil/prometheus/prometheus.yml \
+    /opt/wingfoil/tempo/tempo.yaml; do
+  if [ -d "${stale}" ] && [ -z "$(ls -A "${stale}")" ]; then
+    rmdir "${stale}"
+  fi
+done
+layout_ok=true
+for f in \
+    /opt/wingfoil/prometheus/prometheus.yml \
+    /opt/wingfoil/tempo/tempo.yaml; do
+  if [ ! -f "${f}" ]; then
+    echo "ERROR: expected bind-mount source '${f}' is missing or not a regular file." >&2
+    layout_ok=false
+  fi
+done
+if [ ! -d /opt/wingfoil/grafana/provisioning ]; then
+  echo "ERROR: expected bind-mount source '/opt/wingfoil/grafana/provisioning' is missing or not a directory." >&2
+  layout_ok=false
+fi
+if ! ${layout_ok}; then
+  echo "ERROR: AMI does not have the latency_e2e configs baked in correctly." >&2
+  echo "       Rebuild the AMI from a commit at or after #298 and update ami_id." >&2
+  exit 1
+fi
+
 # Bring up the demo stack — images already cached in the AMI, so this is a
 # fast `docker run` per service rather than a registry pull.
 ( cd /opt/wingfoil && docker compose up -d )
