@@ -142,11 +142,17 @@ replace_image "grafana/grafana:11.3.0"  "${GRAFANA_IMAGE}"    /opt/wingfoil/dock
 # self-signed cert there on every boot. The container's built-in `web-tls`
 # feature picks the cert up via the env-var pair and serves HTTPS + WSS on
 # port 8080. Grafana mounts the same cert for HTTPS on 3000.
+# `ipc: host` is load-bearing: iceoryx2 stores its segments under
+# /dev/shm/iox2_*, and Docker's default per-container IPC namespace gives each
+# container a private /dev/shm tmpfs. `network_mode: host` only shares the
+# network namespace — without `ipc: host` ws_server and fix_gw can't see each
+# other's iceoryx2 segments, orders never reach fix_gw, and no fills come back.
 sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
 
   ws_server:
     image: ${WS_SERVER_IMAGE}
     network_mode: host
+    ipc: host
     volumes:
       - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
     environment:
@@ -161,6 +167,7 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
   fix_gw:
     image: ${FIX_GW_IMAGE}
     network_mode: host
+    ipc: host
     env_file: /etc/wingfoil/lmax.env
     environment:
       RUST_LOG: info
