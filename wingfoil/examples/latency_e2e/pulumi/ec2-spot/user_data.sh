@@ -166,6 +166,50 @@ if ! ${layout_ok}; then
   exit 1
 fi
 
+# ── docker-compose override (boot-time, AMI-agnostic) ────────────────────
+# Two things need to be true for the round trip to work:
+#
+#  1. ws_server and fix_gw must share an IPC namespace. iceoryx2 stores its
+#     segments under /dev/shm/iox2_*; Docker's default per-container IPC
+#     namespace gives each container a private /dev/shm tmpfs, so without
+#     `ipc: host` the two containers can't see each other's iceoryx2
+#     segments — orders never reach fix_gw, and no fills come back.
+#     `network_mode: host` is *not* sufficient; that only shares the
+#     network namespace.
+#
+#  2. Stale iox2_* segments from a previous boot (e.g. Spot reclaim killed
+#     the containers before they cleaned up) must be removed first, or the
+#     fresh containers fail with IncompatibleTypes when they try to open
+#     services that already exist with mismatched generation IDs.
+#
+# Doing this in user_data.sh (rather than only in the Packer install.sh)
+# means the fix applies on every boot, including instances launched from an
+# AMI baked before #313 — the fix doesn't depend on which AMI is in use.
+# install.sh also sets `ipc: host` directly in docker-compose.yml on newer
+# AMIs; the override below is idempotent in that case.
+#
+# The override also re-declares Grafana's HTTPS config, which install.sh
+# previously wrote to docker-compose.override.yml. Re-declaring it here
+# keeps a single source of truth — the override on disk after this section
+# is the one written below, regardless of AMI version.
+rm -f /dev/shm/iox2_* || true
+
+cat > /opt/wingfoil/docker-compose.override.yml <<'EOF'
+services:
+  ws_server:
+    ipc: host
+  fix_gw:
+    ipc: host
+  grafana:
+    environment:
+      GF_SERVER_PROTOCOL: "https"
+      GF_SERVER_CERT_FILE: "/etc/wingfoil/tls/cert.pem"
+      GF_SERVER_CERT_KEY: "/etc/wingfoil/tls/key.pem"
+    volumes:
+      - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
+EOF
+chmod 0644 /opt/wingfoil/docker-compose.override.yml
+
 # Bring up the demo stack — images already cached in the AMI, so this is a
 # fast `docker run` per service rather than a registry pull.
 ( cd /opt/wingfoil && docker compose up -d )
