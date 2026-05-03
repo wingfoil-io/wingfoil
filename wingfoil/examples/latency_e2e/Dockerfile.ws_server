@@ -1,5 +1,7 @@
-# Builder stage
-FROM rust:latest as builder
+# Builder stage — pinned to match the workspace `rust-version` in
+# /Cargo.toml. Bumping the toolchain is an intentional change, not a
+# silent `:latest` drift.
+FROM rust:1.87-bookworm AS builder
 
 RUN apt-get update && apt-get install -y protobuf-compiler libclang-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -17,14 +19,18 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 wingfoil \
+    && useradd --system --uid 10001 --gid wingfoil --no-create-home --home /app wingfoil
 
 WORKDIR /app
 
-COPY --from=builder /workspace/target/release/examples/latency_e2e_ws_server /app/ws_server
-COPY wingfoil/examples/latency_e2e/static /app/static
+COPY --from=builder --chown=wingfoil:wingfoil /workspace/target/release/examples/latency_e2e_ws_server /app/ws_server
+COPY --chown=wingfoil:wingfoil wingfoil/examples/latency_e2e/static /app/static
 
 ENV WINGFOIL_STATIC_DIR=/app/static
+
+USER wingfoil:wingfoil
 
 EXPOSE 8080 9091
 

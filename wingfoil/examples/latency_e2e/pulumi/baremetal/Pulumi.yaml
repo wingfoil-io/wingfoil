@@ -29,6 +29,11 @@ config:
     description: Core ID for the fix_gw graph thread (must appear in
       isolated_cores).
     default: "4"
+  ssh_ingress_cidr:
+    description: CIDR allowed to reach :22. Empty (default) means SSH is
+      not exposed at all. The Instance has no `key_name` by default, so
+      enabling this is only useful if you also add one.
+    default: ""
   alert_email:
     description: Email for cost / abuse alarms. If unset, no alarms are
       created — you're flying blind on a public wake URL.
@@ -37,3 +42,9 @@ config:
     description: AWS Budgets threshold. Sends a warning at 80%% and a
       breach notice at 100%% of this number to alert_email.
     default: "50"
+  wake_token:
+    description: Optional shared secret on the wake URL. When set, the page
+      and JSON API require ?token=<value>. Recommended for any public
+      deployment. Set with `pulumi config set --secret wake_token <...>`.
+    secret: true
+    default: ""

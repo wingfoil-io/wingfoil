@@ -14,6 +14,10 @@ tempo_image = config.require("tempo_image")
 grafana_image = config.require("grafana_image")
 lmax_username = config.require_secret("lmax_username")
 lmax_password = config.require_secret("lmax_password")
+# Grafana admin password — required so a stack never silently boots with
+# the historical `admin/admin` default. Set with:
+#   pulumi config set --secret grafana_admin_password "$(openssl rand -hex 16)"
+grafana_admin_password = config.require_secret("grafana_admin_password")
 cpu = config.get_int("cpu") or 1024
 memory = config.get_int("memory") or 2048
 
@@ -74,9 +78,10 @@ public_rt_assoc_b = aws.ec2.RouteTableAssociation(f"{project_name}-public-rt-ass
 alb_sg = aws.ec2.SecurityGroup(f"{project_name}-alb-sg",
     vpc_id=vpc.id,
     description="Security group for ALB",
+    # Only the ports the ALB actually listens on. If you front this with
+    # ACM + an HTTPS listener, add 443 back.
     ingress=[
         aws.ec2.SecurityGroupIngressArgs(from_port=80, to_port=80, protocol="tcp", cidr_blocks=["0.0.0.0/0"]),
-        aws.ec2.SecurityGroupIngressArgs(from_port=443, to_port=443, protocol="tcp", cidr_blocks=["0.0.0.0/0"]),
         aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=["0.0.0.0/0"]),
     ],
     egress=[aws.ec2.SecurityGroupEgressArgs(from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"])],
@@ -116,6 +121,14 @@ lmax_password_secret = aws.secretsmanager.Secret(f"{project_name}-lmax-password"
 lmax_password_version = aws.secretsmanager.SecretVersion(f"{project_name}-lmax-password-version",
     secret_id=lmax_password_secret.id,
     secret_string=lmax_password)
+
+grafana_admin_secret = aws.secretsmanager.Secret(f"{project_name}-grafana-admin",
+    description="Grafana admin password",
+    tags=tags)
+
+grafana_admin_version = aws.secretsmanager.SecretVersion(f"{project_name}-grafana-admin-version",
+    secret_id=grafana_admin_secret.id,
+    secret_string=grafana_admin_password)
 
 # IAM role for ECS task (granted to the running container; not used by the agent
 # to fetch secrets — that's the execution role's job)
@@ -161,7 +174,11 @@ ecs_task_execution_policy = aws.iam.RolePolicyAttachment(f"{project_name}-ecs-ta
 # `secrets` using this role, not the task role.
 secrets_policy = aws.iam.RolePolicy(f"{project_name}-ecs-secrets-policy",
     role=ecs_task_execution_role.id,
-    policy=pulumi.Output.all(lmax_username_secret.arn, lmax_password_secret.arn).apply(
+    policy=pulumi.Output.all(
+        lmax_username_secret.arn,
+        lmax_password_secret.arn,
+        grafana_admin_secret.arn,
+    ).apply(
         lambda arns: json.dumps({
             "Version": "2012-10-17",
             "Statement": [{
@@ -248,6 +265,7 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
         log_group.name,
         lmax_username_secret.arn,
         lmax_password_secret.arn,
+        grafana_admin_secret.arn,
     ).apply(lambda args: json.dumps([
         # ws_server container
         {
@@ -334,13 +352,15 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 {"containerPort": 3000, "hostPort": 3000, "protocol": "tcp"},
             ],
             "environment": [
-                {"name": "GF_SECURITY_ADMIN_PASSWORD", "value": "admin"},
                 {"name": "GF_AUTH_ANONYMOUS_ENABLED", "value": "true"},
                 {"name": "GF_AUTH_ANONYMOUS_ORG_ROLE", "value": "Viewer"},
                 {"name": "GF_AUTH_DISABLE_LOGIN_FORM", "value": "true"},
                 {"name": "GF_SECURITY_ALLOW_EMBEDDING", "value": "true"},
                 {"name": "GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH", "value": "/etc/grafana/provisioning/dashboards/latency.json"},
                 {"name": "GF_FEATURE_TOGGLES_ENABLE", "value": "traceqlEditor"},
+            ],
+            "secrets": [
+                {"name": "GF_SECURITY_ADMIN_PASSWORD", "valueFrom": args[3]},
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",

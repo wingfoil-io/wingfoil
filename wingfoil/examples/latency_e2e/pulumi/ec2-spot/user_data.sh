@@ -91,6 +91,21 @@ EOF
 systemctl daemon-reload
 systemctl enable --now wingfoil-spot-watcher.service
 
+# Generate a fresh Grafana admin password on every boot. Anonymous Viewer
+# is on and the login form is disabled, so nobody logs in interactively
+# — this just prevents the historical `admin/admin` default that the
+# Grafana API otherwise accepts. Written to `/opt/wingfoil/.env` so
+# `docker compose` substitutes `${GF_SECURITY_ADMIN_PASSWORD}`.
+set +x
+GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)
+( umask 077 && cat > /opt/wingfoil/.env <<EOF
+GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+EOF
+)
+unset GRAFANA_ADMIN_PASSWORD
+set -x
+chmod 0600 /opt/wingfoil/.env
+
 # Bring up the demo stack — images already cached in the AMI, so this is a
 # fast `docker run` per service rather than a registry pull.
 ( cd /opt/wingfoil && docker compose up -d )

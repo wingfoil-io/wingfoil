@@ -40,9 +40,10 @@ pulumi config set prometheus_image <ECR_URI_or_DOCKER_HUB_IMAGE>
 pulumi config set tempo_image <ECR_URI_or_DOCKER_HUB_IMAGE>
 pulumi config set grafana_image <ECR_URI_or_DOCKER_HUB_IMAGE>
 
-# Set secrets (LMAX credentials)
+# Set secrets (LMAX credentials + Grafana admin password)
 pulumi config set --secret lmax_username <YOUR_LMAX_USERNAME>
 pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
+pulumi config set --secret grafana_admin_password "$(openssl rand -hex 16)"
 ```
 
 **Example with Docker Hub images:**
@@ -115,6 +116,7 @@ Modify `Pulumi.demo.yaml` or use `pulumi config set` to customize:
 | `grafana_image` | — | Grafana image with provisioning baked in (required) |
 | `lmax_username` | — | LMAX FIX username (secret, required) |
 | `lmax_password` | — | LMAX FIX password (secret, required) |
+| `grafana_admin_password` | — | Grafana admin password (secret, required) |
 
 ## Monitoring
 

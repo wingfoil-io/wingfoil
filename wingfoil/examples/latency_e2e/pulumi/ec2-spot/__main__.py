@@ -150,11 +150,15 @@ instance_role = aws.iam.Role(
     tags=tags,
 )
 
+account_id = aws.get_caller_identity().account_id
+
 aws.iam.RolePolicy(
     f"{prefix}-instance-policy",
     role=instance_role.id,
     policy=pulumi.Output.all(
-        lmax_username_secret.arn, lmax_password_secret.arn, eip.allocation_id
+        lmax_username_secret.arn,
+        lmax_password_secret.arn,
+        eip.allocation_id,
     ).apply(lambda a: json.dumps({
         "Version": "2012-10-17",
         "Statement": [
@@ -163,13 +167,27 @@ aws.iam.RolePolicy(
                 "Action": ["secretsmanager:GetSecretValue"],
                 "Resource": [a[0], a[1]],
             },
-            # AssociateAddress doesn't accept resource-level conditions on
-            # the EIP itself; scope by tag on the instance instead so the
-            # role can only re-associate to instances we own.
+            # DescribeAddresses doesn't support resource-level permissions
+            # at all (the previous tag condition was silently a no-op), so
+            # split it out as `Resource: "*"` and accept the breadth — it's
+            # a read-only API.
             {
                 "Effect": "Allow",
-                "Action": ["ec2:AssociateAddress", "ec2:DescribeAddresses"],
+                "Action": ["ec2:DescribeAddresses"],
                 "Resource": "*",
+            },
+            # AssociateAddress: scope to *this* EIP allocation ARN plus any
+            # instance/network-interface tagged with our Project/Stack. The
+            # resource-tag condition is enforced per-resource — both the
+            # EIP and the instance must satisfy it for the call to succeed.
+            {
+                "Effect": "Allow",
+                "Action": ["ec2:AssociateAddress"],
+                "Resource": [
+                    f"arn:aws:ec2:*:{account_id}:elastic-ip/{a[2]}",
+                    f"arn:aws:ec2:*:{account_id}:instance/*",
+                    f"arn:aws:ec2:*:{account_id}:network-interface/*",
+                ],
                 "Condition": {
                     "StringEquals": {
                         "aws:ResourceTag/Project": project,

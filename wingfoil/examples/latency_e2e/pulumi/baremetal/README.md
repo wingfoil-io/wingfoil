@@ -130,9 +130,16 @@ action when the threshold hits 100%.
 
 **Want zero unauthenticated access instead?**
 
-* Add a `wake_token` query-param check in `wake_lambda.py` (~10 lines).
-  The token becomes the credential — share the URL with the token in
-  it.
+```bash
+pulumi config set --secret wake_token "$(openssl rand -hex 16)"
+pulumi up
+```
+
+When `wake_token` is set, the lambda rejects any request without
+`?token=<value>` (or `X-Wake-Token: <value>` header) — including the GET
+that serves the HTML page. The exported `wake_url` already includes the
+token, so share it as-is. Constant-time compare on the server side keeps
+the secret out of timing side-channels.
 
 ## Stop without destroying
 

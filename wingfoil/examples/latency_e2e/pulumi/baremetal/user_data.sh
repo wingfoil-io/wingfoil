@@ -10,7 +10,8 @@
 #
 # Idempotent: gated on /var/lib/wingfoil-bootstrapped so a manual re-run is safe.
 
-set -euxo pipefail
+set -euo pipefail
+set -x
 
 ISOLATED_CORES="__ISOLATED_CORES__"
 WS_SERVER_CORE="__WS_SERVER_CORE__"
@@ -57,16 +58,22 @@ if [ "$stage" = "installed" ]; then
   aws s3 sync "s3://${BINARIES_BUCKET}/observability/"        /opt/wingfoil/observability/        --region "${AWS_REGION}"
   chmod 0755 /opt/wingfoil/latency_e2e_ws_server /opt/wingfoil/latency_e2e_fix_gw
 
+  # Write LMAX creds to a root-only env file rather than embedding in the
+  # systemd unit (which would expose them via `systemctl show`). Disable -x
+  # for the fetch + heredoc — bash xtrace echoes commands after parameter
+  # expansion, so the secret values would otherwise land in
+  # /var/log/cloud-init-output.log and `aws ec2 get-console-output`.
+  install -d -m 0700 /etc/wingfoil
+  set +x
   LMAX_USERNAME=$(aws secretsmanager get-secret-value --secret-id "${LMAX_USERNAME_SECRET}" --region "${AWS_REGION}" --query SecretString --output text)
   LMAX_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "${LMAX_PASSWORD_SECRET}" --region "${AWS_REGION}" --query SecretString --output text)
-
-  # Write LMAX creds to a root-only env file rather than embedding in the
-  # systemd unit (which would expose them via `systemctl show`).
-  install -d -m 0700 /etc/wingfoil
-  cat > /etc/wingfoil/lmax.env <<EOF
+  ( umask 077 && cat > /etc/wingfoil/lmax.env <<EOF
 LMAX_USERNAME=${LMAX_USERNAME}
 LMAX_PASSWORD=${LMAX_PASSWORD}
 EOF
+  )
+  unset LMAX_USERNAME LMAX_PASSWORD
+  set -x
   chmod 0600 /etc/wingfoil/lmax.env
 
   cat > /etc/systemd/system/wingfoil-ws-server.service <<EOF
@@ -120,6 +127,22 @@ EOF
   # Observability stack — kept on housekeeping cores 0-1 via cpuset so it
   # never competes with the hot-path threads. Configs were synced from S3
   # into /opt/wingfoil/observability/{prometheus,grafana,tempo} above.
+  #
+  # Generate a fresh Grafana admin password on every boot. Anonymous Viewer
+  # is on and the login form is disabled, so nobody logs in interactively
+  # — this just prevents the historical `admin/admin` default that the
+  # Grafana API otherwise accepts. Written to a `.env` file alongside the
+  # compose so `docker compose` substitutes `${GF_SECURITY_ADMIN_PASSWORD}`.
+  set +x
+  GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)
+  ( umask 077 && cat > /opt/wingfoil/observability/.env <<EOF
+GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+EOF
+  )
+  unset GRAFANA_ADMIN_PASSWORD
+  set -x
+  chmod 0600 /opt/wingfoil/observability/.env
+
   cat > /opt/wingfoil/observability/docker-compose.yml <<'EOF'
 services:
   prometheus:
@@ -145,6 +168,7 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "true"

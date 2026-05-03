@@ -38,7 +38,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Override locally if you want to log in as admin:
+      #   GF_SECURITY_ADMIN_PASSWORD=$(openssl rand -hex 16) docker compose up -d
+      # Default to a long random value so a left-running compose stack
+      # doesn't sit on `admin/admin`.
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:-changeme-set-via-env}"
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "true"

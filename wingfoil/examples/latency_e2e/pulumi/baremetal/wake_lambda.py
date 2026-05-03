@@ -14,6 +14,7 @@ has booted; ws_server itself takes another ~30s after that to come up,
 so the link will 502 briefly. The page handles that by retrying.
 """
 
+import hmac
 import json
 import os
 
@@ -22,6 +23,11 @@ import boto3
 ec2 = boto3.client("ec2")
 INSTANCE_ID = os.environ["INSTANCE_ID"]
 WS_SERVER_PORT = int(os.environ.get("WS_SERVER_PORT", "8080"))
+# Optional shared secret. When set, every HTTP request must carry
+# `?token=<value>` (or matching `X-Wake-Token` header) — including the GET
+# that serves the HTML page. Empty disables the check (back-compat with
+# stacks that haven't set it yet).
+WAKE_TOKEN = os.environ.get("WAKE_TOKEN", "")
 
 
 HTML = """<!doctype html>
@@ -53,8 +59,13 @@ HTML = """<!doctype html>
     const out = document.getElementById("status");
     let pollHandle = null;
 
+    // Forward the token (if any) from the page URL onto every API call so
+    // /status and /wake see the same shared secret the user used to load
+    // this page.
+    const pageToken = new URLSearchParams(window.location.search).get("token") || "";
     async function call(path, method = "GET") {
-      const r = await fetch(path, { method });
+      const url = pageToken ? path + "?token=" + encodeURIComponent(pageToken) : path;
+      const r = await fetch(url, { method });
       return await r.json();
     }
 
@@ -123,10 +134,24 @@ def _json(status, body):
     }
 
 
+def _token_ok(event) -> bool:
+    if not WAKE_TOKEN:
+        return True
+    qs = event.get("queryStringParameters") or {}
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+    presented = qs.get("token") or headers.get("x-wake-token") or ""
+    # Constant-time compare so the function URL doesn't leak the secret one
+    # byte at a time via response timing.
+    return hmac.compare_digest(presented, WAKE_TOKEN)
+
+
 def handler(event, _context):
     http = event.get("requestContext", {}).get("http", {})
     method = http.get("method", "GET")
     path = event.get("rawPath", "/")
+
+    if not _token_ok(event):
+        return _json(401, {"error": "missing or invalid token"})
 
     if method == "GET" and path in ("/", "/index.html"):
         return {
