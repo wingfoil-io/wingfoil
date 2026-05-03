@@ -100,7 +100,7 @@ aws.ec2.RouteTableAssociation(
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
-    description="wingfoil ec2-spot demo — WS, prometheus, grafana",
+    description="wingfoil ec2-spot demo - WS, prometheus, grafana",
     ingress=[
         # 8080: ws_server HTTP/WS;  9090: Prometheus UI;
         # 9091: ws_server's /metrics (raw scrape target);  3000: Grafana.

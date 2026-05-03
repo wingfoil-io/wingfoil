@@ -144,7 +144,7 @@ if ssh_ingress_cidr:
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
-    description="wingfoil baremetal demo — WS, prometheus, grafana",
+    description="wingfoil baremetal demo - WS, prometheus, grafana",
     ingress=ingress_rules,
     egress=[aws.ec2.SecurityGroupEgressArgs(from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"])],
     tags={**tags, "Name": f"{prefix}-sg"},
