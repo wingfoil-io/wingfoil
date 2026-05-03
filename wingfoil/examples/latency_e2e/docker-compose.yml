@@ -19,8 +19,18 @@ services:
     image: prom/prometheus:v2.55.1
     ports:
       - "9090:9090"
+    # Long-form bind with `create_host_path: false` so a missing source on
+    # the host fails fast with "source path does not exist" instead of
+    # docker silently auto-creating an empty directory there and then
+    # failing the mount with the misleading "not a directory: Are you
+    # trying to mount a directory onto a file" error.
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - type: bind
+        source: ./prometheus/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+        bind:
+          create_host_path: false
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -31,7 +41,12 @@ services:
       - "3200:3200"    # Tempo HTTP API (Grafana datasource talks here)
       - "4318:4318"    # OTLP / HTTP (ws_server push target)
     volumes:
-      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - type: bind
+        source: ./tempo/tempo.yaml
+        target: /etc/tempo/tempo.yaml
+        read_only: true
+        bind:
+          create_host_path: false
 
   grafana:
     image: grafana/grafana:11.3.0
@@ -50,7 +65,12 @@ services:
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/latency.json
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - type: bind
+        source: ./grafana/provisioning
+        target: /etc/grafana/provisioning
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       - prometheus
       - tempo
