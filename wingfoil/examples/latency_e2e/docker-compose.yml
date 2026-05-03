@@ -64,6 +64,14 @@ services:
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/latency.json
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
+      # HTTPS opt-in: defaults to HTTP for local dev. The Pulumi stacks
+      # set GF_SERVER_PROTOCOL=https in the on-host .env and bind-mount
+      # /etc/wingfoil/tls into the container. Cert/key must be readable
+      # by the grafana process (UID 472) — the user_data scripts chmod
+      # 0644 the key for that reason.
+      GF_SERVER_PROTOCOL: "${GF_SERVER_PROTOCOL:-http}"
+      GF_SERVER_CERT_FILE: "${GF_SERVER_CERT_FILE:-}"
+      GF_SERVER_CERT_KEY: "${GF_SERVER_CERT_KEY:-}"
     volumes:
       - type: bind
         source: ./grafana/provisioning
@@ -71,6 +79,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # The Pulumi stacks (ec2-spot, baremetal) append a second volume
+      # binding /etc/wingfoil/tls -> /etc/wingfoil/tls so Grafana can
+      # serve HTTPS using the same cert as ws_server. Local dev keeps
+      # GF_SERVER_PROTOCOL unset (defaults to http) so no cert mount is
+      # needed.
     depends_on:
       - prometheus
       - tempo

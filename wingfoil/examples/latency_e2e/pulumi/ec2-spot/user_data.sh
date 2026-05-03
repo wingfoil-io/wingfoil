@@ -70,6 +70,28 @@ unset LMAX_USERNAME LMAX_PASSWORD
 set -x
 chmod 0600 /etc/wingfoil/lmax.env
 
+# ── TLS material for ws_server + Grafana ──────────────────────────────────
+# Self-signed cert regenerated on every boot. Browsers will warn (no public
+# CA chain), but the WS / iframe traffic is then encrypted on the wire,
+# which matters whenever the demo is reachable from a public network. The
+# subjectAltName carries the EIP so `https://<eip>:8080` matches the cert
+# enough for `openssl s_client`-style verification — browsers still
+# require a manual click-through for the unknown root.
+PUBLIC_IPV4=$(curl -fsSL \
+  -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
+  http://169.254.169.254/latest/meta-data/public-ipv4)
+
+install -d -m 0755 /etc/wingfoil/tls
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/wingfoil/tls/key.pem \
+  -out    /etc/wingfoil/tls/cert.pem \
+  -subj "/CN=${PUBLIC_IPV4}" \
+  -addext "subjectAltName=IP:${PUBLIC_IPV4}"
+# Both files must be world-readable: the ws_server container runs as
+# UID 10001 and the grafana container as UID 472. The key is regenerated
+# on every boot, so file-system leakage of a stale key buys nothing.
+chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+
 # Spot watcher — polls IMDS for reclaim notice, exposes a Prometheus gauge
 # on :9092 that the Grafana banner panel reads.
 cat > /etc/systemd/system/wingfoil-spot-watcher.service <<'EOF'

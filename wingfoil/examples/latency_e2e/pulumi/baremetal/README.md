@@ -67,7 +67,7 @@ pulumi config set ingress_cidr 203.0.113.4/32
 ```bash
 # 1. Build release binaries (Pulumi reads them from target/release/examples)
 cargo build --release -p wingfoil --example latency_e2e_ws_server \
-    --features "web,iceoryx2-beta,prometheus,otlp"
+    --features "web-tls,iceoryx2-beta,prometheus,otlp"
 cargo build --release -p wingfoil --example latency_e2e_fix_gw \
     --features "fix,iceoryx2-beta"
 
@@ -77,7 +77,7 @@ pulumi up
 # 3. Wait ~5–8 min for the box to bootstrap
 #    (cold boot + grub rewrite + reboot + service start + LMAX FIX logon)
 pulumi stack output ws_server_url
-# → http://<eip>:8080
+# → https://<eip>:8080  (self-signed cert; click through the browser warning)
 
 # 4. Open the URL, click start, watch real per-hop numbers
 ```

@@ -91,6 +91,14 @@ impl WebServerInner {
     }
 }
 
+/// Optional TLS material for the [`WebServer`]. Loaded once on
+/// [`WebServerBuilder::start`] from PEM files on disk.
+#[cfg(feature = "web-tls")]
+struct TlsPaths {
+    cert_path: PathBuf,
+    key_path: PathBuf,
+}
+
 /// Handle to a running HTTP + WebSocket server.
 ///
 /// Dropping or calling [`WebServer::stop`] shuts down the axum server and
@@ -101,6 +109,7 @@ pub struct WebServer {
     shutdown_tx: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
     historical_noop: bool,
+    tls: bool,
 }
 
 impl WebServer {
@@ -113,6 +122,8 @@ impl WebServer {
             addr: addr.into(),
             codec: CodecKind::Bincode,
             static_dir: None,
+            #[cfg(feature = "web-tls")]
+            tls: None,
         }
     }
 
@@ -129,6 +140,12 @@ impl WebServer {
     /// True when the server was created as a historical-mode no-op.
     pub fn is_historical_noop(&self) -> bool {
         self.historical_noop
+    }
+
+    /// True when the server is terminating TLS (i.e. clients should
+    /// connect via `https://` / `wss://`).
+    pub fn is_tls(&self) -> bool {
+        self.tls
     }
 
     /// Stop the HTTP server and join the server thread. Called
@@ -154,6 +171,8 @@ pub struct WebServerBuilder {
     addr: String,
     codec: CodecKind,
     static_dir: Option<PathBuf>,
+    #[cfg(feature = "web-tls")]
+    tls: Option<TlsPaths>,
 }
 
 impl WebServerBuilder {
@@ -171,14 +190,58 @@ impl WebServerBuilder {
         self
     }
 
+    /// Terminate TLS using the PEM-encoded certificate chain at
+    /// `cert_path` and the private key at `key_path`. Clients must
+    /// connect via `https://` / `wss://`.
+    ///
+    /// Available behind the `web-tls` cargo feature. Files are read at
+    /// [`WebServerBuilder::start`] time; an unreadable or malformed
+    /// cert/key surfaces synchronously as an error before the graph
+    /// starts (same property as the bind step). The active rustls
+    /// crypto provider is `ring`, matching the FIX adapter — install
+    /// it ahead of time via `rustls::crypto::CryptoProvider` only if
+    /// you're sharing a process-wide default with other crates.
+    ///
+    /// ```ignore
+    /// let server = WebServer::bind("0.0.0.0:8080")
+    ///     .serve_static("./dist")
+    ///     .tls("/etc/wingfoil/tls/cert.pem", "/etc/wingfoil/tls/key.pem")
+    ///     .start()?;
+    /// ```
+    #[cfg(feature = "web-tls")]
+    pub fn tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
+        self.tls = Some(TlsPaths {
+            cert_path: cert_path.into(),
+            key_path: key_path.into(),
+        });
+        self
+    }
+
     /// Bind the TCP listener and spawn the HTTP + WS server.
     ///
     /// Binding is synchronous so a port conflict is reported
-    /// immediately, before the graph starts.
+    /// immediately, before the graph starts. When TLS is configured
+    /// via [`WebServerBuilder::tls`] the cert and key are loaded
+    /// synchronously here too — so a missing or malformed PEM also
+    /// surfaces before the graph starts.
     pub fn start(self) -> anyhow::Result<WebServer> {
         let listener =
             TcpListener::bind(&self.addr).with_context(|| format!("web: bind to {}", self.addr))?;
         let port = listener.local_addr().context("web: local_addr")?.port();
+
+        // Load TLS material before spawning the server thread so any
+        // error (file missing, bad PEM, no key/cert pair) surfaces here
+        // alongside bind errors instead of inside the spawned task.
+        #[cfg(feature = "web-tls")]
+        let tls_config = match self.tls {
+            Some(paths) => Some(load_tls_config(&paths)?),
+            None => None,
+        };
+        #[cfg(feature = "web-tls")]
+        let is_tls = tls_config.is_some();
+        #[cfg(not(feature = "web-tls"))]
+        let is_tls = false;
+
         let inner = Arc::new(WebServerInner::new(self.codec));
         let inner_clone = inner.clone();
         let static_dir = self.static_dir.clone();
@@ -198,12 +261,19 @@ impl WebServerBuilder {
                     }
                 };
                 rt.block_on(async move {
+                    let app = build_router(inner_clone, static_dir);
+
+                    #[cfg(feature = "web-tls")]
+                    if let Some(cfg) = tls_config {
+                        serve_tls(listener, app, cfg, shutdown_rx).await;
+                        return;
+                    }
+
                     listener
                         .set_nonblocking(true)
                         .expect("listener set_nonblocking");
                     let tokio_listener =
                         tokio::net::TcpListener::from_std(listener).expect("web: from_std");
-                    let app = build_router(inner_clone, static_dir);
                     if let Err(e) = axum::serve(tokio_listener, app)
                         .with_graceful_shutdown(async move {
                             let _ = shutdown_rx.await;
@@ -222,6 +292,7 @@ impl WebServerBuilder {
             shutdown_tx: Some(shutdown_tx),
             thread: Some(handle),
             historical_noop: false,
+            tls: is_tls,
         })
     }
 
@@ -234,6 +305,7 @@ impl WebServerBuilder {
             shutdown_tx: None,
             thread: None,
             historical_noop: true,
+            tls: false,
         })
     }
 }
@@ -394,4 +466,91 @@ fn encode_control_frame(codec: CodecKind, ctrl: &ControlMessage) -> anyhow::Resu
         payload,
     };
     Ok(Bytes::from(codec.encode(&env)?))
+}
+
+// ── TLS support (web-tls feature) ────────────────────────────────────────
+//
+// The plain-HTTP path uses `axum::serve` directly. For TLS we delegate to
+// `axum-server`, which wraps each accepted connection with a tokio-rustls
+// `TlsAcceptor` and then drives the same axum `Router` via hyper-util's
+// `auto::Builder` — that builder supports HTTP/1.1 upgrades, so the
+// existing `/ws` WebSocket handler works unchanged over `wss://`.
+//
+// We build the rustls `ServerConfig` ourselves (rather than
+// `RustlsConfig::from_pem_file`) so we can pin the `ring` provider
+// explicitly, matching the FIX adapter and avoiding any reliance on a
+// process-wide installed default. Cert + key are read synchronously in
+// [`WebServerBuilder::start`] so a misconfiguration shows up before the
+// graph runs.
+
+#[cfg(feature = "web-tls")]
+fn load_tls_config(paths: &TlsPaths) -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    use rustls::ServerConfig;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+    let cert_file = File::open(&paths.cert_path)
+        .with_context(|| format!("web-tls: open cert {}", paths.cert_path.display()))?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("web-tls: parse cert {}", paths.cert_path.display()))?;
+    if certs.is_empty() {
+        anyhow::bail!(
+            "web-tls: no certificates found in {}",
+            paths.cert_path.display()
+        );
+    }
+
+    let key_file = File::open(&paths.key_path)
+        .with_context(|| format!("web-tls: open key {}", paths.key_path.display()))?;
+    let mut key_reader = BufReader::new(key_file);
+    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
+        .with_context(|| format!("web-tls: parse key {}", paths.key_path.display()))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "web-tls: no private key found in {}",
+                paths.key_path.display()
+            )
+        })?;
+
+    let server_config =
+        ServerConfig::builder_with_provider(rustls::crypto::ring::default_provider().into())
+            .with_safe_default_protocol_versions()
+            .context("web-tls: rustls protocol versions")?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .context("web-tls: build rustls ServerConfig")?;
+
+    Ok(axum_server::tls_rustls::RustlsConfig::from_config(
+        Arc::new(server_config),
+    ))
+}
+
+#[cfg(feature = "web-tls")]
+async fn serve_tls(
+    listener: TcpListener,
+    app: Router,
+    config: axum_server::tls_rustls::RustlsConfig,
+    shutdown_rx: oneshot::Receiver<()>,
+) {
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        let _ = shutdown_rx.await;
+        // 5 s mirrors what most browsers wait before reconnecting; long
+        // enough for in-flight WS frames to drain, short enough that
+        // graph teardown isn't gated on a wedged client.
+        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+    });
+
+    if let Err(e) = axum_server::from_tcp_rustls(listener, config)
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await
+    {
+        log::warn!("web: axum-server (TLS) exited with error: {e}");
+    }
 }

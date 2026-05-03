@@ -9,8 +9,10 @@ iceoryx2, isolated CPU cores, no hypervisor jitter); tear down (or just
 What this stack provisions:
 
   * VPC + public subnet (one AZ — perf, not redundancy)
-  * Security group: 8080 (WS server), 9091 (prometheus exporter),
-    3000 (grafana), 22 (SSH) — all 0.0.0.0/0 by default for demo simplicity
+  * Security group: 8080 (ws_server, HTTPS+WSS), 3000 (grafana, HTTPS),
+    22 (SSH, opt-in) — all 0.0.0.0/0 by default for demo simplicity.
+    Port 9091 (ws_server's /metrics) is no longer publicly exposed —
+    Prometheus scrapes it via localhost.
   * One bare-metal EC2 instance (default c7i.metal-24xl)
   * Elastic IP — survives stop/start so the URL doesn't change
   * S3 bucket for binaries + observability configs + static web assets
@@ -25,7 +27,7 @@ isolated cores.
 Prerequisites:
 
   cargo build --release -p wingfoil --example latency_e2e_ws_server \\
-      --features "web,iceoryx2-beta,prometheus,otlp"
+      --features "web-tls,iceoryx2-beta,prometheus,otlp"
   cargo build --release -p wingfoil --example latency_e2e_fix_gw \\
       --features "fix,iceoryx2-beta"
   pulumi config set --secret lmax_username <...>
@@ -132,8 +134,11 @@ ingress_cidr = config.get("ingress_cidr") or "0.0.0.0/0"
 ssh_ingress_cidr = config.get("ssh_ingress_cidr") or ""
 
 ingress_rules = [
+    # 8080: ws_server HTTPS / WSS (TLS terminated in-process via the
+    # `web-tls` cargo feature). 3000: Grafana HTTPS. 9091 (Prometheus
+    # /metrics) used to be public for ad-hoc curling; Prometheus now
+    # scrapes it via localhost so the public surface stays HTTPS-only.
     aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
-    aws.ec2.SecurityGroupIngressArgs(from_port=9091, to_port=9091, protocol="tcp", cidr_blocks=[ingress_cidr]),
     aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
 ]
 if ssh_ingress_cidr:
@@ -473,9 +478,11 @@ if alert_email:
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("instance_id",     instance.id)
 pulumi.export("public_ip",       eip.public_ip)
-pulumi.export("ws_server_url",   eip.public_ip.apply(lambda ip: f"http://{ip}:8080"))
-pulumi.export("grafana_url",     eip.public_ip.apply(lambda ip: f"http://{ip}:3000"))
-pulumi.export("prometheus_url",  eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
+# TLS terminated in-process by ws_server / grafana with a self-signed
+# cert regenerated on every boot. Browsers show a one-time warning
+# until the cert is accepted.
+pulumi.export("ws_server_url",   eip.public_ip.apply(lambda ip: f"https://{ip}:8080"))
+pulumi.export("grafana_url",     eip.public_ip.apply(lambda ip: f"https://{ip}:3000"))
 pulumi.export("assets_bucket",   bucket.bucket)
 pulumi.export(
     "wake_url",

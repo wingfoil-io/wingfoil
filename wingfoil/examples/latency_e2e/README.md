@@ -56,9 +56,11 @@ export LMAX_PASSWORD=...
 cargo run --release --example latency_e2e_fix_gw \
   --features "fix,iceoryx2-beta" -- --precise
 
-# Terminal 2
+# Terminal 2 — local dev: plain HTTP (skip --tls-cert/--tls-key).
+# For HTTPS / WSS, pass --tls-cert / --tls-key (or set
+# WINGFOIL_TLS_CERT / WINGFOIL_TLS_KEY); the cargo feature is the same.
 cargo run --release --example latency_e2e_ws_server \
-  --features "web,iceoryx2-beta,prometheus,otlp" -- --addr 0.0.0.0:8080 --precise
+  --features "web-tls,iceoryx2-beta,prometheus,otlp" -- --addr 0.0.0.0:8080 --precise
 
 # Terminal 3 (operator stack — Prometheus + Tempo + Grafana, auto-provisioned)
 docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d

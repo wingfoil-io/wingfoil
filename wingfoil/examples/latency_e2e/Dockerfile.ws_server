@@ -11,7 +11,7 @@ COPY . .
 
 RUN cargo build --release \
     --example latency_e2e_ws_server \
-    --features "web,iceoryx2-beta,prometheus,otlp"
+    --features "web-tls,iceoryx2-beta,prometheus,otlp"
 
 # Runtime stage
 FROM ubuntu:22.04
