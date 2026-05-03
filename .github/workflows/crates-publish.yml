@@ -1,4 +1,4 @@
-name: crates.io pub
+name: Publish to crates.io
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: fmt
+name: Rust Format
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-# Cargo aliases that mirror what CI runs in `.github/workflows/rust.yml`.
+# Cargo aliases that mirror what CI runs in `.github/workflows/rust-test.yml`.
 # Run these before pushing to catch failures locally.
 #
 # Note: `lint-all` (and `cargo build --features full` / `cargo test --features

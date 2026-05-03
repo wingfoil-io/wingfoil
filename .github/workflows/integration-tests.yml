@@ -5,6 +5,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  adapter-integration:
+    name: Adapter Integration Tests
+    uses: ./.github/workflows/adapter-integration.yml
+    secrets: inherit
+
   kdb-integration:
     name: KDB Integration Tests
     uses: ./.github/workflows/kdb-integration.yml
@@ -25,19 +30,9 @@ jobs:
     uses: ./.github/workflows/otlp-integration.yml
     secrets: inherit
 
-  zmq-integration:
-    name: ZMQ Integration Tests
-    uses: ./.github/workflows/zmq-integration.yml
-    secrets: inherit
-
   zmq-etcd-integration:
     name: ZMQ etcd Integration Tests
     uses: ./.github/workflows/zmq-etcd-integration.yml
-    secrets: inherit
-
-  fix-integration:
-    name: FIX Integration Tests
-    uses: ./.github/workflows/fix-integration.yml
     secrets: inherit
 
   iceoryx2-integration:
@@ -48,16 +43,6 @@ jobs:
   web-integration:
     name: Web Integration Tests
     uses: ./.github/workflows/web-integration.yml
-    secrets: inherit
-
-  fluvio-integration:
-    name: Fluvio Integration Tests
-    uses: ./.github/workflows/fluvio-integration.yml
-    secrets: inherit
-
-  kafka-integration:
-    name: Kafka Integration Tests
-    uses: ./.github/workflows/kafka-integration.yml
     secrets: inherit
 
   kafka-python-integration:

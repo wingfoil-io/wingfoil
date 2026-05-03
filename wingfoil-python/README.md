@@ -2,7 +2,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
 [![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
-[![CI](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml/badge.svg)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml)
+[![CI](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml/badge.svg)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
 
 Wingfoil is a **blazingly fast**, highly scalable
 [stream processing framework](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
