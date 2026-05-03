@@ -37,23 +37,23 @@ docker images | grep wingfoil
 ### Setup ECR repositories
 
 ```bash
-aws ecr create-repository --repository-name wingfoil/ws-server  --region us-east-1
-aws ecr create-repository --repository-name wingfoil/fix-gw     --region us-east-1
-aws ecr create-repository --repository-name wingfoil/prometheus --region us-east-1
-aws ecr create-repository --repository-name wingfoil/tempo      --region us-east-1
-aws ecr create-repository --repository-name wingfoil/grafana    --region us-east-1
+aws ecr create-repository --repository-name wingfoil/ws-server  --region eu-west-2
+aws ecr create-repository --repository-name wingfoil/fix-gw     --region eu-west-2
+aws ecr create-repository --repository-name wingfoil/prometheus --region eu-west-2
+aws ecr create-repository --repository-name wingfoil/tempo      --region eu-west-2
+aws ecr create-repository --repository-name wingfoil/grafana    --region eu-west-2
 ```
 
 ### Authenticate Docker with ECR
 
 ```bash
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region eu-west-2 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com
 ```
 
 ### Tag and push images
 
 ```bash
-ECR=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+ECR=<ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com
 for name in ws-server fix-gw prometheus tempo grafana; do
   docker tag  wingfoil-${name}:latest "${ECR}/wingfoil/${name}:latest"
   docker push "${ECR}/wingfoil/${name}:latest"
@@ -96,7 +96,7 @@ Once images are pushed, use the image URIs in the Pulumi config:
 ```bash
 cd wingfoil/examples/latency_e2e/pulumi/fargate
 
-ECR=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+ECR=<ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com
 pulumi config set ws_server_image  "${ECR}/wingfoil/ws-server:latest"
 pulumi config set fix_gw_image     "${ECR}/wingfoil/fix-gw:latest"
 pulumi config set prometheus_image "${ECR}/wingfoil/prometheus:latest"

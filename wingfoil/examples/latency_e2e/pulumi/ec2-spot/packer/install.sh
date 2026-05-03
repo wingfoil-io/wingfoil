@@ -32,7 +32,7 @@ sudo /tmp/aws/install
 rm -rf /tmp/aws /tmp/awscliv2.zip
 
 # Authenticate to ECR if we're pulling private images. ECR_REGISTRY is the
-# host portion only (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com).
+# host portion only (e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com).
 # ECR_PASSWORD is the auth token CI fetched via `aws ecr get-login-password`
 # — the build instance has no IAM role, so it can't fetch the token itself.
 if [ -n "${ECR_REGISTRY:-}" ]; then
@@ -40,7 +40,13 @@ if [ -n "${ECR_REGISTRY:-}" ]; then
     echo "ERROR: ECR_REGISTRY is set but ECR_PASSWORD is empty; CI must forward PKR_VAR_ecr_password." >&2
     exit 1
   fi
-  echo "${ECR_PASSWORD}" | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  # Disable xtrace just for the login — `set -x` echoes commands after
+  # parameter expansion, which would print the ECR token into the Packer log.
+  # Packer's `sensitive = true` on ecr_password also redacts it, but belt-and-
+  # braces here keeps the secret out of the trace stream entirely.
+  set +x
+  printf '%s' "${ECR_PASSWORD}" | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  set -x
 fi
 
 # Pre-pull every image so reclaim recovery doesn't wait on the registry.
