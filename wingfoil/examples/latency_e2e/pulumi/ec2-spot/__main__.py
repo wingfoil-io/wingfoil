@@ -97,58 +97,54 @@ aws.ec2.RouteTableAssociation(
     route_table_id=rt.id,
 )
 
-# Inline ingress/egress on aws.ec2.SecurityGroup would force the SG to be
-# replaced on every rule edit, which in turn bumps the launch template and
-# triggers an ASG instance refresh — a 10-minute round-trip. Defining each
-# rule as its own aws.vpc.SecurityGroup{Ingress,Egress}Rule resource keeps
-# the SG itself stable, so rule changes update in place.
+# Inline ingress (rather than standalone aws.vpc.SecurityGroupIngressRule
+# resources) for two reasons:
 #
-# `description` is immutable in the AWS API — any change forces the SG to
-# be replaced. Replacement here is *catastrophic*: pulumi creates a new SG,
-# updates the launch template to reference it, then tries to delete the
-# old SG while the live spot instance's ENI is still attached to it. AWS
-# returns DependencyViolation until the ASG instance refresh completes,
-# which pulumi doesn't wait for, so the deploy hangs for ~15 minutes and
-# then fails (see CI run 25286033743). Ignore description drift so the SG
-# is never replaced over a cosmetic field; the value below is the "as-of"
-# description AWS will hold forever.
-sg = aws.ec2.SecurityGroup(
-    f"{prefix}-sg",
-    vpc_id=vpc.id,
-    description="wingfoil ec2-spot demo",
-    tags={**tags, "Name": f"{prefix}-sg"},
-    opts=pulumi.ResourceOptions(ignore_changes=["description"]),
-)
-
+#   1. The original SG was deployed with these exact inline rules, so the
+#      live AWS state already contains them. Splitting them out into
+#      standalone resources (PR #307) without first setting `ingress=[]`
+#      to revoke the inline ones is a no-op as far as pulumi-aws is
+#      concerned — the SG resource simply stops managing inline rules
+#      and leaves the existing AWS rules in place — but the new
+#      standalone SecurityGroupIngressRule resources then fail to
+#      authorize with InvalidPermission.Duplicate (CI runs 25286544998,
+#      25286756055).
+#   2. The original concern behind the split — that inline rule edits
+#      would replace the SG and cascade-replace the launch template — is
+#      not actually how the AWS provider behaves. `ingress`/`egress` are
+#      in-place updates via Authorize/RevokeSecurityGroupIngress; only
+#      `description`, `name`, `name_prefix`, and `vpc_id` force
+#      replacement. The catastrophic SG replacement seen in CI run
+#      25286033743 was a description change, now neutralised by the
+#      `ignore_changes=["description"]` below.
+#
+# Egress is intentionally not declared: AWS auto-creates a "0.0.0.0/0 allow
+# all" egress rule on every new SG, and pulumi-aws leaves it alone unless
+# an inline `egress` block is specified. Re-declaring it (inline or via
+# aws.vpc.SecurityGroupEgressRule) fails with InvalidPermission.Duplicate
+# (CI run 25286544998).
+#
 # 8080: ws_server HTTPS/WSS (terminated in-process via the `web-tls`
 # feature); 3000: Grafana HTTPS. 9090 (Prometheus UI) and 9091
 # (ws_server /metrics) stay plain-HTTP and are no longer exposed publicly —
 # Prometheus scrapes via localhost on the host network. Operators who want
 # the Prometheus UI can still reach it via an SSM session manager
 # port-forward.
-aws.vpc.SecurityGroupIngressRule(
-    f"{prefix}-sg-wss",
-    security_group_id=sg.id,
-    from_port=8080,
-    to_port=8080,
-    ip_protocol="tcp",
-    cidr_ipv4=ingress_cidr,
-    tags=tags,
+sg = aws.ec2.SecurityGroup(
+    f"{prefix}-sg",
+    vpc_id=vpc.id,
+    description="wingfoil ec2-spot demo",
+    ingress=[
+        aws.ec2.SecurityGroupIngressArgs(
+            from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]
+        ),
+        aws.ec2.SecurityGroupIngressArgs(
+            from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]
+        ),
+    ],
+    tags={**tags, "Name": f"{prefix}-sg"},
+    opts=pulumi.ResourceOptions(ignore_changes=["description"]),
 )
-aws.vpc.SecurityGroupIngressRule(
-    f"{prefix}-sg-grafana",
-    security_group_id=sg.id,
-    from_port=3000,
-    to_port=3000,
-    ip_protocol="tcp",
-    cidr_ipv4=ingress_cidr,
-    tags=tags,
-)
-# No explicit egress rule: AWS auto-creates a "0.0.0.0/0 allow all" egress
-# rule on every new SG, and the pulumi-aws SecurityGroup resource leaves it
-# alone unless an inline `egress` block is specified. Re-declaring it via
-# aws.vpc.SecurityGroupEgressRule fails with InvalidPermission.Duplicate
-# (CI run 25286544998).
 
 # ── Elastic IP ───────────────────────────────────────────────────────────
 # Pre-allocated and *not* attached to a specific instance. user_data on the
