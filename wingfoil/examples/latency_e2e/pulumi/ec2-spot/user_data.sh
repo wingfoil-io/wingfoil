@@ -80,7 +80,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/wingfoil/spot_watcher.py
+ExecStart=/opt/wingfoil/venv/bin/python3 /opt/wingfoil/spot_watcher.py
 Restart=always
 RestartSec=2
 

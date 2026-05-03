@@ -11,11 +11,15 @@ sudo cloud-init status --wait
 sudo dnf update -y
 # unzip — needed for the AWS CLI installer below.
 # prometheus_client (used by spot_watcher.py) isn't packaged for AL2023, so
-# install it via pip. AL2023's system python is externally-managed, so pass
-# --break-system-packages to land it in /usr/lib/python3.x/site-packages where
-# /usr/bin/python3 (the interpreter the systemd unit invokes) can import it.
+# install it into a dedicated venv at /opt/wingfoil/venv. A venv side-steps
+# AL2023's externally-managed-environment marker without depending on the
+# system pip being new enough to recognise --break-system-packages (the flag
+# was only added in pip 23.0.1, and AL2023's bundled pip can lag behind).
+# The systemd unit (see user_data.sh) invokes the venv's python3 directly.
 sudo dnf install -y docker unzip python3-pip
-sudo pip3 install --break-system-packages prometheus_client
+sudo install -d -m 0755 /opt/wingfoil
+sudo python3 -m venv /opt/wingfoil/venv
+sudo /opt/wingfoil/venv/bin/pip install --no-cache-dir prometheus_client
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
 
@@ -64,7 +68,7 @@ sudo rm -rf /root/.docker /home/ec2-user/.docker
 
 # Stage the runtime files in /opt/wingfoil. user_data writes the .env file
 # alongside compose.yml on first boot, then runs `docker compose up -d`.
-sudo install -d -m 0755 /opt/wingfoil
+# (/opt/wingfoil already exists from the venv step above.)
 sudo install -m 0644 /tmp/docker-compose.yml /opt/wingfoil/docker-compose.yml
 sudo install -m 0755 /tmp/spot_watcher.py     /opt/wingfoil/spot_watcher.py
 
@@ -106,10 +110,10 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     restart: unless-stopped
 EOF
 
-# Verify prometheus_client is importable from /usr/bin/python3 — the systemd
-# unit invokes that interpreter, and a silent missing-package would only
-# surface at first boot.
-/usr/bin/python3 -c "import prometheus_client"
+# Verify prometheus_client is importable from the venv interpreter — the
+# systemd unit invokes /opt/wingfoil/venv/bin/python3, and a silent missing
+# package would only surface at first boot.
+/opt/wingfoil/venv/bin/python3 -c "import prometheus_client"
 
 # Sanity check — fail the build if any image is missing locally.
 for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
