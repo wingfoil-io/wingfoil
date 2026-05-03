@@ -6,7 +6,15 @@
 set -euxo pipefail
 
 # Wait for cloud-init to finish so dnf isn't racing against base setup.
-sudo cloud-init status --wait
+# AL2023's cloud-init returns exit 2 for "degraded done" — cloud-init
+# completed but emitted non-fatal warnings (e.g. NetworkManager noise).
+# Treat that as success; only exit 1 (genuine error) should fail the build.
+cloud_init_rc=0
+sudo cloud-init status --wait || cloud_init_rc=$?
+if [ "${cloud_init_rc}" -ne 0 ] && [ "${cloud_init_rc}" -ne 2 ]; then
+  echo "ERROR: cloud-init failed with exit code ${cloud_init_rc}" >&2
+  exit "${cloud_init_rc}"
+fi
 
 sudo dnf update -y
 # unzip — needed for the AWS CLI installer below.
