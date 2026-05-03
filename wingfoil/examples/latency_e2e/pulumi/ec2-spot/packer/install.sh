@@ -85,10 +85,40 @@ sudo install -m 0755 /tmp/spot_watcher.py     /opt/wingfoil/spot_watcher.py
 # directly under /opt/wingfoil/. Without them docker silently creates each
 # missing path as an empty directory and the container fails to start with
 # "not a directory: ... Are you trying to mount a directory onto a file".
+#
+# Verify the bind-mount targets *before* copying — a wrong upload layout (e.g.
+# Packer's file provisioner appending the source basename twice) would silently
+# leave the expected paths missing, which only surfaces at first boot when
+# docker auto-creates them as empty directories and the bind-mount fails.
+for staged in \
+    /tmp/prometheus/prometheus.yml \
+    /tmp/tempo/tempo.yaml \
+    /tmp/grafana/provisioning; do
+  if [ ! -e "${staged}" ]; then
+    echo "ERROR: expected staged path '${staged}' is missing — Packer file" >&2
+    echo "       provisioner produced an unexpected layout. Listing /tmp:" >&2
+    ls -lR /tmp/prometheus /tmp/tempo /tmp/grafana >&2 || true
+    exit 1
+  fi
+done
+
 sudo cp -r /tmp/prometheus /opt/wingfoil/prometheus
 sudo cp -r /tmp/tempo      /opt/wingfoil/tempo
 sudo cp -r /tmp/grafana    /opt/wingfoil/grafana
 sudo chown -R root:root /opt/wingfoil/prometheus /opt/wingfoil/tempo /opt/wingfoil/grafana
+
+# Sanity check the final layout on disk: docker compose mounts these exact
+# paths, and a missing file at boot triggers the silent-empty-directory
+# behaviour that this section exists to prevent.
+for mount_src in \
+    /opt/wingfoil/prometheus/prometheus.yml \
+    /opt/wingfoil/tempo/tempo.yaml \
+    /opt/wingfoil/grafana/provisioning; do
+  if [ ! -e "${mount_src}" ]; then
+    echo "ERROR: bind-mount source '${mount_src}' is missing after copy." >&2
+    exit 1
+  fi
+done
 
 # Bake the image references into compose.yml so `compose up` doesn't pull a
 # floating tag on every boot. Fail the build if the upstream compose ever

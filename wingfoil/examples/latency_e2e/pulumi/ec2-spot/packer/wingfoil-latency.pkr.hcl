@@ -120,19 +120,27 @@ build {
   # Bind-mount sources for prometheus, tempo, and grafana. Compose paths are
   # relative to /opt/wingfoil/docker-compose.yml, so install.sh moves these
   # under /opt/wingfoil/{prometheus,tempo,grafana}.
+  #
+  # Destination is `/tmp` (which exists) — Packer's file provisioner appends
+  # the source's basename to the destination when there's no trailing slash on
+  # the source path, so e.g. `.../prometheus` -> `/tmp/prometheus/`. Uploading
+  # to a non-existent `/tmp/prometheus` instead produces `/tmp/prometheus/
+  # prometheus/` (basename appended a second time), and the docs explicitly
+  # warn that "if the destination directory does not exist, the file
+  # provisioner may succeed, but it will have undefined results".
   provisioner "file" {
     source      = "${path.root}/../../../prometheus"
-    destination = "/tmp/prometheus"
+    destination = "/tmp"
   }
 
   provisioner "file" {
     source      = "${path.root}/../../../tempo"
-    destination = "/tmp/tempo"
+    destination = "/tmp"
   }
 
   provisioner "file" {
     source      = "${path.root}/../../../grafana"
-    destination = "/tmp/grafana"
+    destination = "/tmp"
   }
 
   provisioner "shell" {
