@@ -149,18 +149,55 @@ jobs:
           pulumi config set grafana_image   "${{ secrets.GRAFANA_IMAGE }}"
           pulumi config set environment     "$PULUMI_STACK"
 
+      # Drain the ASG to 0 before `pulumi up` so the old security group has
+      # no dependent ENI when Pulumi tries to delete it. Solves the
+      # DependencyViolation that hung CI runs 25287037911 and 25288417368
+      # for 15 min and then failed: when the SG is replaced (e.g. after a
+      # leftover pending-replace marker from PR #307/#308 churn), Pulumi
+      # creates the new SG, points the launch template at it, and then
+      # races to delete the old SG while the spot instance's ENI is still
+      # attached. The terraform-aws-provider hardcodes a 15-min retry on
+      # DependencyViolation for SG delete, and Pulumi's `custom_timeouts`
+      # is engine-level only — it doesn't propagate to the bridged
+      # provider's `d.Timeout(schema.TimeoutDelete)`. Draining first makes
+      # the SG delete succeed on the first attempt; `pulumi up` then
+      # scales the ASG back to its declared size of 1.
+      #
+      # No-op on the first deploy when the stack has no `asg_name` output
+      # yet, and no-op when the ASG is already at 0.
+      - name: Drain ASG to release ENIs from old security group (ec2-spot only)
+        if: matrix.target == 'ec2-spot'
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          ASG_NAME=$(pulumi stack output asg_name 2>/dev/null || true)
+          if [ -z "$ASG_NAME" ] || [ "$ASG_NAME" = "null" ]; then
+            echo "No asg_name stack output (first deploy?); skipping drain."
+            exit 0
+          fi
+          echo "Draining ASG $ASG_NAME to 0 to free ENIs before pulumi up."
+          aws autoscaling update-auto-scaling-group \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --min-size 0 --desired-capacity 0
+          # Wait up to 5 min for instances to fully terminate (ENI release
+          # follows the EC2 instance shutdown lifecycle).
+          for _ in $(seq 1 60); do
+            count=$(aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "$ASG_NAME" \
+              --query 'AutoScalingGroups[0].Instances | length(@)' \
+              --output text)
+            if [ "$count" = "0" ]; then
+              echo "ASG drained."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::ASG $ASG_NAME still has instances after 5 min; proceeding anyway."
+
       # `--refresh` re-reads each managed resource from AWS before computing
-      # the diff. This unwinds two stale-state failure modes from earlier
-      # deploys of the ec2-spot stack:
-      #   1. A pending-replace marker left over from CI run 25286033743 (the
-      #      SG description change that pre-dated the ignore_changes in
-      #      PR #308). Without refresh, every subsequent `pulumi up` keeps
-      #      retrying the OLD SG delete and hangs for 15 min on
-      #      DependencyViolation while the spot instance's ENI is still
-      #      attached (CI run 25287037911).
-      #   2. Resources that were partially created/deleted by a previous
-      #      failed deploy and no longer exist in AWS — refresh purges them
-      #      from state so `up` doesn't try to update phantoms.
+      # the diff so `up` doesn't try to update resources that were
+      # partially created/deleted by a previous failed deploy and no
+      # longer exist in AWS.
       - name: Pulumi up
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
