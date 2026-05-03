@@ -97,23 +97,48 @@ aws.ec2.RouteTableAssociation(
     route_table_id=rt.id,
 )
 
+# Inline ingress/egress on aws.ec2.SecurityGroup would force the SG to be
+# replaced on every rule edit, which in turn bumps the launch template and
+# triggers an ASG instance refresh — a 10-minute round-trip. Defining each
+# rule as its own aws.vpc.SecurityGroup{Ingress,Egress}Rule resource keeps
+# the SG itself stable, so rule changes update in place.
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
-    description="wingfoil ec2-spot demo - WSS (ws_server), HTTPS (grafana)",
-    ingress=[
-        # 8080: ws_server HTTPS/WSS (terminated in-process via the
-        # `web-tls` feature); 3000: Grafana HTTPS.
-        # 9090 (Prometheus UI) and 9091 (ws_server /metrics) stay
-        # plain-HTTP and are no longer exposed publicly — Prometheus
-        # scrapes via localhost on the host network. Operators who
-        # want the Prometheus UI can still reach it via an SSM
-        # session manager port-forward.
-        aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
-        aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
-    ],
-    egress=[aws.ec2.SecurityGroupEgressArgs(from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"])],
+    description="wingfoil ec2-spot demo",
     tags={**tags, "Name": f"{prefix}-sg"},
+)
+
+# 8080: ws_server HTTPS/WSS (terminated in-process via the `web-tls`
+# feature); 3000: Grafana HTTPS. 9090 (Prometheus UI) and 9091
+# (ws_server /metrics) stay plain-HTTP and are no longer exposed publicly —
+# Prometheus scrapes via localhost on the host network. Operators who want
+# the Prometheus UI can still reach it via an SSM session manager
+# port-forward.
+aws.vpc.SecurityGroupIngressRule(
+    f"{prefix}-sg-wss",
+    security_group_id=sg.id,
+    from_port=8080,
+    to_port=8080,
+    ip_protocol="tcp",
+    cidr_ipv4=ingress_cidr,
+    tags=tags,
+)
+aws.vpc.SecurityGroupIngressRule(
+    f"{prefix}-sg-grafana",
+    security_group_id=sg.id,
+    from_port=3000,
+    to_port=3000,
+    ip_protocol="tcp",
+    cidr_ipv4=ingress_cidr,
+    tags=tags,
+)
+aws.vpc.SecurityGroupEgressRule(
+    f"{prefix}-sg-egress-all",
+    security_group_id=sg.id,
+    ip_protocol="-1",
+    cidr_ipv4="0.0.0.0/0",
+    tags=tags,
 )
 
 # ── Elastic IP ───────────────────────────────────────────────────────────
