@@ -9,7 +9,12 @@ RUN apt-get update && apt-get install -y protobuf-compiler libclang-dev \
 WORKDIR /workspace
 COPY . .
 
+# `-p wingfoil` is essential. Without it, cargo unifies features across
+# the whole workspace, and `wingfoil-python` pulls in `etcd, kafka, zmq,
+# fluvio, kdb` — dragging in system deps (protoc, cmake, libsasl2,
+# libzmq) and ~hundreds of crates we don't ship in this image.
 RUN cargo build --release \
+    -p wingfoil \
     --example latency_e2e_fix_gw \
     --features "fix,iceoryx2-beta"
 
