@@ -1,74 +1,52 @@
-# GitHub Actions Workflow: Deploy latency_e2e to AWS ECS Fargate
+# Deploy the latency_e2e demo to one (or all) of the Pulumi targets:
+#   - ec2-spot   — Spot EC2 instance running docker-compose, baked AMI from
+#                  build-latency-e2e-ami.yml, AMI ID read from SSM.
+#   - fargate    — ECS Fargate, image URIs supplied via repo secrets.
+#   - baremetal  — c7i.metal-24xl with cpu-pinned ws_server / fix_gw.
 #
-# SETUP INSTRUCTIONS:
+# Manual dispatch only. Pick the target with the `target` input; `all` runs
+# every stack sequentially (max-parallel: 1) to avoid LMAX FIX session
+# conflicts — most LMAX accounts allow exactly one logged-in session per
+# credential, so concurrent stacks would log each other out.
 #
-# 1. Create Pulumi Access Token:
-#    - Go to https://app.pulumi.com/account/tokens
-#    - Create new token, copy it
+# Prerequisites by target:
+#   - ec2-spot:  build-latency-e2e-images.yml then build-latency-e2e-ami.yml
+#                must have run; the AMI ID is read from SSM
+#                (/wingfoil/latency-e2e/ec2-spot/ami_id).
+#   - fargate:   build-latency-e2e-images.yml must have run; image URIs are
+#                supplied via the *_IMAGE secrets below.
+#   - baremetal: no prerequisite workflow.
 #
-# 2. Create AWS IAM Role for OIDC (no long-lived credentials):
-#    ```bash
-#    cat > trust-policy.json <<'EOF'
-#    {
-#      "Version": "2012-10-17",
-#      "Statement": [{
-#        "Effect": "Allow",
-#        "Principal": {"Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"},
-#        "Action": "sts:AssumeRoleWithWebIdentity",
-#        "Condition": {
-#          "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
-#          "StringLike": {"token.actions.githubusercontent.com:sub": "repo:wingfoil-io/wingfoil:ref:refs/heads/claude/fargate-e2e-deployment-7xP2F"}
-#        }
-#      }]
-#    }
-#    EOF
-#    sed -i "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/g" trust-policy.json
-#    aws iam create-role --role-name github-actions-latency-deploy --assume-role-policy-document file://trust-policy.json
-#    aws iam attach-role-policy --role-name github-actions-latency-deploy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
-#    ```
+# Required GitHub secrets:
+#   - AWS_ROLE_TO_ASSUME    IAM role with EC2/ECS/SSM/ECR perms for the stacks
+#                           you intend to deploy.
+#   - PULUMI_ACCESS_TOKEN   Pulumi Cloud token.
+#   - LMAX_USERNAME         FIX session username.
+#   - LMAX_PASSWORD         FIX session password.
+#   - AWS_REGION            (optional, default eu-west-2)
 #
-# 3. Set GitHub Secrets (Settings → Secrets and variables → Actions):
-#    REQUIRED:
-#    - PULUMI_ACCESS_TOKEN: Your Pulumi token (from step 1)
-#    - AWS_ROLE_TO_ASSUME: arn:aws:iam::ACCOUNT_ID:role/github-actions-latency-deploy
-#    - WS_SERVER_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.eu-west-2.amazonaws.com/wingfoil/ws-server:latest)
-#    - FIX_GW_IMAGE: ECR or Docker Hub URI (e.g., 123456789012.dkr.ecr.eu-west-2.amazonaws.com/wingfoil/fix-gw:latest)
-#    - PROMETHEUS_IMAGE: image with prometheus.yml baked in (built from Dockerfile.prometheus)
-#    - TEMPO_IMAGE: image with tempo.yaml baked in (built from Dockerfile.tempo)
-#    - GRAFANA_IMAGE: image with provisioning baked in (built from Dockerfile.grafana)
-#    - LMAX_USERNAME: Your LMAX FIX username
-#    - LMAX_PASSWORD: Your LMAX FIX password
-#
-#    OPTIONAL:
-#    - AWS_REGION: Default eu-west-2
-#    - PULUMI_CPU: Default 1024 (vCPU units)
-#    - PULUMI_MEMORY: Default 2048 (MB)
-#
-# 4. Run the workflow:
-#    - Go to Actions → latency-e2e.deploy
-#    - Click "Run workflow"
-#    - Select stack (demo/staging/prod)
-#    - Outputs show ALB DNS name after ~10 minutes
-#
-# 5. Access the deployment:
-#    - WS Server: http://<ALB_DNS>/
-#    - Grafana: http://<ALB_DNS>:3000/
-#
+# Fargate-only secrets (image URIs to deploy):
+#   - WS_SERVER_IMAGE, FIX_GW_IMAGE, PROMETHEUS_IMAGE, TEMPO_IMAGE, GRAFANA_IMAGE
 
 name: latency-e2e.deploy
 
-# TEMPORARILY DISABLED: AWS OIDC role / secrets not configured yet.
-# The configure-aws-credentials step fails with "Could not load credentials
-# from any providers". Re-enable by removing the `if: false` guard on the
-# deploy job once AWS_ROLE_TO_ASSUME is set and the OIDC trust policy is
-# in place.
 on:
   workflow_dispatch:
     inputs:
-      stack:
-        description: "Pulumi stack (demo/staging/prod)"
+      target:
+        description: "Which Pulumi stack(s) to deploy"
         required: true
-        default: "demo"
+        type: choice
+        default: ec2-spot
+        options:
+          - ec2-spot
+          - fargate
+          - baremetal
+          - all
+      stack:
+        description: "Pulumi stack name (demo/staging/prod)"
+        required: true
+        default: demo
         type: choice
         options:
           - demo
@@ -76,20 +54,41 @@ on:
           - prod
 
 env:
-  PULUMI_SKIP_UPDATE_CHECK: true
-  PULUMI_STACK: ${{ github.event.inputs.stack || 'demo' }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  PULUMI_SKIP_UPDATE_CHECK: "true"
+  PULUMI_STACK: ${{ inputs.stack }}
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - id: pick
+        run: |
+          case "${{ inputs.target }}" in
+            all) echo 'targets=["ec2-spot","fargate","baremetal"]' >> "$GITHUB_OUTPUT" ;;
+            *)   echo 'targets=["${{ inputs.target }}"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
   deploy:
-    if: false
+    needs: plan
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
-
+    strategy:
+      fail-fast: false
+      # Sequential: LMAX FIX allows one logged-in session per credential, so
+      # concurrent stacks fight for the session.
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    defaults:
+      run:
+        working-directory: wingfoil/examples/latency_e2e/pulumi/${{ matrix.target }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -103,81 +102,67 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Python dependencies
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Pulumi stack select
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
         run: pulumi stack select --create $PULUMI_STACK
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
 
-      - name: Set Pulumi config
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
-        run: |
-          pulumi config set aws:region ${{ secrets.AWS_REGION || 'eu-west-2' }}
-          pulumi config set ws_server_image "${{ secrets.WS_SERVER_IMAGE }}"
-          pulumi config set fix_gw_image "${{ secrets.FIX_GW_IMAGE }}"
-          pulumi config set prometheus_image "${{ secrets.PROMETHEUS_IMAGE }}"
-          pulumi config set tempo_image "${{ secrets.TEMPO_IMAGE }}"
-          pulumi config set grafana_image "${{ secrets.GRAFANA_IMAGE }}"
-          pulumi config set environment "$PULUMI_STACK"
-          pulumi config set cpu "${{ secrets.PULUMI_CPU || '1024' }}"
-          pulumi config set memory "${{ secrets.PULUMI_MEMORY || '2048' }}"
+      - name: Common Pulumi config
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-
-      - name: Set Pulumi secrets
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
         run: |
+          pulumi config set aws:region "$AWS_REGION"
           pulumi config set --secret lmax_username "${{ secrets.LMAX_USERNAME }}"
           pulumi config set --secret lmax_password "${{ secrets.LMAX_PASSWORD }}"
-        env:
-          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
 
-      - name: Pulumi preview
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
-        run: pulumi preview
+      - name: ec2-spot config (read AMI ID from SSM)
+        if: matrix.target == 'ec2-spot'
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          AMI_ID=$(aws ssm get-parameter \
+            --name /wingfoil/latency-e2e/ec2-spot/ami_id \
+            --region "$AWS_REGION" \
+            --query 'Parameter.Value' --output text)
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "::error::SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id is empty. Run latency-e2e.build.ami first." >&2
+            exit 1
+          fi
+          pulumi config set ami_id "$AMI_ID"
+
+      - name: fargate config (image URIs from secrets)
+        if: matrix.target == 'fargate'
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          pulumi config set ws_server_image "${{ secrets.WS_SERVER_IMAGE }}"
+          pulumi config set fix_gw_image    "${{ secrets.FIX_GW_IMAGE }}"
+          pulumi config set prometheus_image "${{ secrets.PROMETHEUS_IMAGE }}"
+          pulumi config set tempo_image     "${{ secrets.TEMPO_IMAGE }}"
+          pulumi config set grafana_image   "${{ secrets.GRAFANA_IMAGE }}"
+          pulumi config set environment     "$PULUMI_STACK"
 
       - name: Pulumi up
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
         run: pulumi up --yes --skip-preview
+
+      - name: Summary
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-
-      - name: Get outputs
-        id: outputs
-        working-directory: wingfoil/examples/latency_e2e/pulumi/fargate
         run: |
-          ALB_DNS=$(pulumi stack output alb_dns_name)
-          echo "alb_dns_name=$ALB_DNS" >> $GITHUB_OUTPUT
-          echo "## 🚀 Deployment Success" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Component | URL |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|-----|" >> $GITHUB_STEP_SUMMARY
-          echo "| WS Server | http://$ALB_DNS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Grafana | http://$ALB_DNS:3000 |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Stack:** $PULUMI_STACK" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ secrets.AWS_REGION || 'eu-west-2' }}" >> $GITHUB_STEP_SUMMARY
-        env:
-          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
-
-      - name: Comment on PR/Issue (if applicable)
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 🚀 Latency E2E Deployment\n\nDeployed to **${{ env.PULUMI_STACK }}**\n\n- **WS Server:** http://${{ steps.outputs.outputs.alb_dns_name }}\n- **Grafana:** http://${{ steps.outputs.outputs.alb_dns_name }}:3000\n\nStack name: \`${{ env.PULUMI_STACK }}\``
-            })
+          {
+            echo "## Deployed: \`${{ matrix.target }}\` → stack \`$PULUMI_STACK\`"
+            echo ""
+            echo "### Stack outputs"
+            echo '```'
+            pulumi stack output --json || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

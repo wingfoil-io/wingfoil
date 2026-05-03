@@ -6,12 +6,8 @@
 # five service images into an Amazon Linux 2023 AMI. Result: a Spot reclaim
 # recovers in ~60-90s instead of ~5min (no apt install, no image pulls).
 #
-# Triggers:
-#   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags).
-#   - Automatic, after `Build & Push latency_e2e Images` completes successfully
-#     on main. The AMI is baked with the commit-SHA-tagged images that run
-#     just pushed, so the AMI never picks up a stale `:latest` racing against
-#     a concurrent image build.
+# Triggers: manual dispatch only. Run `latency-e2e.build.images` first so the
+# image tag you bake into the AMI actually exists in ECR.
 #
 # After the build, the resulting AMI ID is published to:
 #   - SSM Parameter Store at /wingfoil/latency-e2e/ec2-spot/ami_id (so
@@ -38,28 +34,17 @@ on:
         description: "Image tag to bake into the AMI (default: latest)"
         required: false
         default: "latest"
-  # Chain off the images workflow rather than triggering on `push:` directly.
-  # That way the AMI build sees a finished image push and can pin to the
-  # commit SHA that workflow built — no race against a concurrent image push.
-  workflow_run:
-    workflows: ["Build & Push latency_e2e Images"]
-    types: [completed]
-    branches: [main]
 
 env:
   # Single region for AMI build + ECR pulls + ec2-spot stack launch (London,
   # near LMAX LD4). AMIs are region-scoped, so this must match
   # `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default.
   AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
-  # Pin to the SHA the images workflow just pushed (immutable). On manual
-  # dispatch, honour the user's tag, defaulting to `latest`.
-  IMAGE_TAG: ${{ inputs.image_tag || github.event.workflow_run.head_sha || 'latest' }}
+  IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
   SSM_AMI_PARAM: /wingfoil/latency-e2e/ec2-spot/ami_id
 
 jobs:
   build:
-    # `workflow_run` fires on completion regardless of result; skip failures.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -70,11 +55,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          # `workflow_run` defaults to checking out the default branch HEAD,
-          # which can drift from the images workflow's head_sha if main moved
-          # in between. Pin to the SHA whose images we're baking.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
