@@ -46,6 +46,14 @@ web/
   a no-op server. Both `web_pub` and `web_sub` become no-ops so the same
   graph can run in `RunMode::HistoricalFrom(...)` without touching the
   network — mirrors `PrometheusMetricNode`'s `historical` flag.
+- **Optional TLS via the `web-tls` feature**. Adds a `.tls(cert, key)`
+  builder method that loads PEM files synchronously at `start()` time
+  (so a missing/malformed cert surfaces alongside bind errors, before
+  the graph starts) and serves over HTTPS / WSS. Implementation
+  delegates the per-connection TLS handshake to `axum-server`'s
+  rustls integration; the same axum `Router` (and therefore the
+  existing `/ws` upgrade handler) is reused. The crypto provider is
+  pinned to `ring` to match the FIX adapter.
 
 ## Threading Model
 
@@ -91,6 +99,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # 2. Unit + integration tests (no external service required)
 cargo test --features web -p wingfoil \
   -- --test-threads=1 adapters::web
+
+# 3. TLS round-trip (rcgen-generated self-signed cert + rustls client)
+cargo test --features web-tls-integration-test -p wingfoil \
+  -- --test-threads=1 adapters::web::integration_tests::test_pub_round_trip_tls
 ```
 
 Integration tests run entirely in-process — there is no Docker container

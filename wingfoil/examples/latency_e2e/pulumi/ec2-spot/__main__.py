@@ -100,13 +100,16 @@ aws.ec2.RouteTableAssociation(
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
-    description="wingfoil ec2-spot demo - WS, prometheus, grafana",
+    description="wingfoil ec2-spot demo - WSS (ws_server), HTTPS (grafana)",
     ingress=[
-        # 8080: ws_server HTTP/WS;  9090: Prometheus UI;
-        # 9091: ws_server's /metrics (raw scrape target);  3000: Grafana.
+        # 8080: ws_server HTTPS/WSS (terminated in-process via the
+        # `web-tls` feature); 3000: Grafana HTTPS.
+        # 9090 (Prometheus UI) and 9091 (ws_server /metrics) stay
+        # plain-HTTP and are no longer exposed publicly — Prometheus
+        # scrapes via localhost on the host network. Operators who
+        # want the Prometheus UI can still reach it via an SSM
+        # session manager port-forward.
         aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
-        aws.ec2.SecurityGroupIngressArgs(from_port=9090, to_port=9090, protocol="tcp", cidr_blocks=[ingress_cidr]),
-        aws.ec2.SecurityGroupIngressArgs(from_port=9091, to_port=9091, protocol="tcp", cidr_blocks=[ingress_cidr]),
         aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
     ],
     egress=[aws.ec2.SecurityGroupEgressArgs(from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"])],
@@ -297,9 +300,11 @@ asg = aws.autoscaling.Group(
 
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("public_ip",      eip.public_ip)
-pulumi.export("ws_server_url",  eip.public_ip.apply(lambda ip: f"http://{ip}:8080"))
-pulumi.export("grafana_url",    eip.public_ip.apply(lambda ip: f"http://{ip}:3000"))
-pulumi.export("prometheus_url", eip.public_ip.apply(lambda ip: f"http://{ip}:9090"))
-pulumi.export("ws_metrics_url", eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
+# Both endpoints terminate TLS with a self-signed cert regenerated on
+# every boot (see user_data.sh). Browsers will show a one-time warning
+# until you accept the cert; the `wingfoil-js` client respects
+# `location.protocol`, so the UI auto-upgrades to `wss://`.
+pulumi.export("ws_server_url",  eip.public_ip.apply(lambda ip: f"https://{ip}:8080"))
+pulumi.export("grafana_url",    eip.public_ip.apply(lambda ip: f"https://{ip}:3000"))
 pulumi.export("asg_name",       asg.name)
 pulumi.export("availability_zone", availability_zone)

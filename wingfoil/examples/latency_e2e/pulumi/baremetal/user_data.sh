@@ -76,6 +76,28 @@ EOF
   set -x
   chmod 0600 /etc/wingfoil/lmax.env
 
+  # ── TLS material for ws_server + Grafana ────────────────────────────
+  # Self-signed cert regenerated on every boot. Browsers warn (no public
+  # CA chain) but the WS / iframe traffic is encrypted on the wire.
+  # SAN includes the public IP so `openssl s_client`-style verification
+  # against the host succeeds. Both files are world-readable because
+  # the grafana container runs as UID 472 and the cert is rotated on
+  # every boot anyway.
+  IMDS_TOKEN=$(curl -fsSL -X PUT \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 300" \
+    http://169.254.169.254/latest/api/token)
+  PUBLIC_IPV4=$(curl -fsSL \
+    -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
+    http://169.254.169.254/latest/meta-data/public-ipv4)
+
+  install -d -m 0755 /etc/wingfoil/tls
+  openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    -keyout /etc/wingfoil/tls/key.pem \
+    -out    /etc/wingfoil/tls/cert.pem \
+    -subj "/CN=${PUBLIC_IPV4}" \
+    -addext "subjectAltName=IP:${PUBLIC_IPV4}"
+  chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+
   cat > /etc/systemd/system/wingfoil-ws-server.service <<EOF
 [Unit]
 Description=wingfoil latency_e2e ws_server (graph thread pinned to core ${WS_SERVER_CORE})
@@ -89,6 +111,8 @@ Environment=RUST_LOG=info
 Environment=WINGFOIL_PRECISE_STAMPS=1
 Environment=WINGFOIL_PIN_GRAPH=${WS_SERVER_CORE}
 Environment=WINGFOIL_STATIC_DIR=/opt/wingfoil/static
+Environment=WINGFOIL_TLS_CERT=/etc/wingfoil/tls/cert.pem
+Environment=WINGFOIL_TLS_KEY=/etc/wingfoil/tls/key.pem
 ExecStart=/opt/wingfoil/latency_e2e_ws_server --addr 0.0.0.0:8080 --precise
 Restart=on-failure
 RestartSec=2
@@ -167,6 +191,7 @@ services:
     network_mode: host
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
@@ -174,6 +199,9 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+      GF_SERVER_PROTOCOL: https
+      GF_SERVER_CERT_FILE: /etc/wingfoil/tls/cert.pem
+      GF_SERVER_CERT_KEY: /etc/wingfoil/tls/key.pem
     restart: unless-stopped
 EOF
 

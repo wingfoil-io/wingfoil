@@ -137,15 +137,24 @@ replace_image "grafana/grafana:11.3.0"  "${GRAFANA_IMAGE}"    /opt/wingfoil/dock
 
 # Append ws_server + fix_gw services — the source compose.yml is operator-side
 # (assumes binaries on the host); on EC2 Spot we run everything in containers.
+#
+# ws_server mounts /etc/wingfoil/tls/ read-only; user_data generates a fresh
+# self-signed cert there on every boot. The container's built-in `web-tls`
+# feature picks the cert up via the env-var pair and serves HTTPS + WSS on
+# port 8080. Grafana mounts the same cert for HTTPS on 3000.
 sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
 
   ws_server:
     image: ${WS_SERVER_IMAGE}
     network_mode: host
+    volumes:
+      - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
     environment:
       WINGFOIL_WEB_ADDR: "0.0.0.0:8080"
       WINGFOIL_METRICS_ADDR: "0.0.0.0:9091"
       WINGFOIL_OTLP_ENDPOINT: "http://localhost:4318"
+      WINGFOIL_TLS_CERT: "/etc/wingfoil/tls/cert.pem"
+      WINGFOIL_TLS_KEY: "/etc/wingfoil/tls/key.pem"
       RUST_LOG: info
     restart: unless-stopped
 
@@ -156,6 +165,21 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     environment:
       RUST_LOG: info
     restart: unless-stopped
+EOF
+
+# Drop a docker-compose.override.yml that switches Grafana to HTTPS using
+# the same self-signed cert ws_server uses. `docker compose` auto-merges
+# overrides; this keeps the upstream compose readable for local dev
+# while letting the deployment opt into HTTPS.
+sudo tee /opt/wingfoil/docker-compose.override.yml > /dev/null <<'EOF'
+services:
+  grafana:
+    environment:
+      GF_SERVER_PROTOCOL: "https"
+      GF_SERVER_CERT_FILE: "/etc/wingfoil/tls/cert.pem"
+      GF_SERVER_CERT_KEY: "/etc/wingfoil/tls/key.pem"
+    volumes:
+      - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
 EOF
 
 # Verify prometheus_client is importable from the venv interpreter — the

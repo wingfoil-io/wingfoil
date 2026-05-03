@@ -22,14 +22,14 @@ on cached images).
                    ┌──────────────────────────┐
    public IP ──── EIP ───── ASG (size=1, single AZ) ─── Spot t3.small
                                                             │
-                                                  ┌─────────┴─────────┐
-                                                  │  Docker Compose    │
-                                                  │  ws_server  :8080  │
-                                                  │  fix_gw     ─→ LMAX│
-                                                  │  prometheus :9090  │
-                                                  │  tempo      :4318  │
-                                                  │  grafana    :3000  │
-                                                  └─────────┬──────────┘
+                                                  ┌─────────┴─────────────┐
+                                                  │  Docker Compose        │
+                                                  │  ws_server  :8080 HTTPS│
+                                                  │  fix_gw     ─→ LMAX    │
+                                                  │  prometheus :9090 (lo) │
+                                                  │  tempo      :4318      │
+                                                  │  grafana    :3000 HTTPS│
+                                                  └─────────┬──────────────┘
                                                             │
                                                 spot_watcher (host process) :9092
                                                             │
@@ -121,22 +121,39 @@ pulumi up
 After ~3–5 min the outputs print:
 
 ```
-ws_server_url   http://<eip>:8080
-grafana_url     http://<eip>:3000
-prometheus_url  http://<eip>:9090          # Prometheus UI
-ws_metrics_url  http://<eip>:9091/metrics  # ws_server raw metrics
+ws_server_url   https://<eip>:8080
+grafana_url     https://<eip>:3000
 public_ip       <eip>
+```
+
+Both endpoints are served over TLS, terminated **in-process** by ws_server
+(via the `web-tls` cargo feature, rustls + ring) and by Grafana
+(`GF_SERVER_PROTOCOL=https`). The cert is a **self-signed** RSA-2048
+generated on every boot by `user_data.sh`, with `subjectAltName=IP:<eip>`
+so it matches the URL the browser uses. Browsers will show a one-time
+warning until you accept the cert.
+
+The Prometheus UI (`:9090`) and the ws_server `/metrics` endpoint (`:9091`)
+are no longer publicly exposed — they remain plain HTTP and are reachable
+only via localhost on the host (which is what Prometheus uses to scrape).
+For ad-hoc operator access, use SSM Session Manager port-forwarding:
+
+```bash
+aws ssm start-session --target <instance-id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["9090"],"localPortNumber":["9090"]}'
 ```
 
 ## 3. Verify
 
 ```bash
-# WS server
-curl -fsS http://<eip>:8080/healthz
+# WS server — `-k` because the cert is self-signed.
+curl -fsSk https://<eip>:8080/
 
 # Grafana — load the dashboard, the "Spot interruption status" banner should
-# read green ("Stable — no Spot interruption notice").
-open http://<eip>:3000
+# read green ("Stable — no Spot interruption notice"). Click through the
+# browser's "Your connection is not private" warning the first time.
+open https://<eip>:3000
 ```
 
 ## What happens during a Spot reclaim

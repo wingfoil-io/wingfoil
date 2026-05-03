@@ -55,6 +55,23 @@
 //!     .unwrap();
 //! ```
 //!
+//! # HTTPS / WSS (rustls)
+//!
+//! Enable the `web-tls` cargo feature and chain `.tls(cert, key)` onto
+//! the builder. Cert and key are PEM files on disk; the rustls crypto
+//! provider is `ring`, matching the FIX adapter. Clients must connect
+//! via `https://` / `wss://`. The `wingfoil-js` browser client honours
+//! `location.protocol`, so the only client-side change is loading the
+//! page over HTTPS.
+//!
+//! ```ignore
+//! let server = WebServer::bind("0.0.0.0:8080")
+//!     .serve_static("./dist")
+//!     .tls("/etc/wingfoil/tls/cert.pem", "/etc/wingfoil/tls/key.pem")
+//!     .start()
+//!     .unwrap();
+//! ```
+//!
 //! # Historical mode
 //!
 //! The server exposes [`WebServerBuilder::start_historical`] for use in

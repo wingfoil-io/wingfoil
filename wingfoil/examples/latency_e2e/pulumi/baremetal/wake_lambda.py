@@ -122,7 +122,7 @@ def _describe():
     return {
         "state": state,
         "public_ip": public_ip,
-        "ws_server_url": f"http://{public_ip}:{WS_SERVER_PORT}" if public_ip and state == "running" else None,
+        "ws_server_url": f"https://{public_ip}:{WS_SERVER_PORT}" if public_ip and state == "running" else None,
     }
 
 
