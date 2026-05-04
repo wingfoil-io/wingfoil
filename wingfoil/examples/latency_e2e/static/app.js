@@ -310,7 +310,31 @@ window.addEventListener('DOMContentLoaded', () => {
     const rttMs = (rt.rttNs / 1_000_000).toFixed(2);
     document.getElementById('rtt').textContent = rttMs + ' ms';
     document.getElementById('rtt-meta').textContent = `last fill ${rttMs} ms · ${filled} fills`;
+    updateBreakdown(rt.stamps, rt.rttNs);
     pushChartPoint(rt.stamps, rt.rttNs);
     pushFlame(rt.stamps, rt.rttNs);
   });
 });
+
+// ── Breakdown (rtt / resident / wire) ─────────────────────────────────────
+// Three rolling means so the headline numbers don't jitter on every fill.
+const BD_WINDOW = 32;
+const bdTotal = [], bdResident = [], bdWire = [];
+function pushAvg(buf, v) {
+  buf.push(v);
+  if (buf.length > BD_WINDOW) buf.shift();
+  let s = 0; for (const x of buf) s += x;
+  return s / buf.length;
+}
+function fmtUs(ns) {
+  if (!isFinite(ns) || ns <= 0) return '—';
+  if (ns >= 1_000_000) return (ns / 1_000_000).toFixed(2) + ' ms';
+  return (ns / 1000).toFixed(1) + ' µs';
+}
+function updateBreakdown(stamps, rttNs) {
+  const resident = (stamps[0] != null && stamps[8] != null) ? (stamps[8] - stamps[0]) : 0;
+  const wire = Math.max(0, rttNs - resident);
+  document.getElementById('bd-total').textContent    = fmtUs(pushAvg(bdTotal, rttNs));
+  document.getElementById('bd-resident').textContent = fmtUs(pushAvg(bdResident, resident));
+  document.getElementById('bd-wire').textContent     = fmtUs(pushAvg(bdWire, wire));
+}
