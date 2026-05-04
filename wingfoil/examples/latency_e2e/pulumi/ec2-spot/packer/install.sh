@@ -64,21 +64,29 @@ if [ -n "${ECR_REGISTRY:-}" ]; then
 fi
 
 # Pre-pull every image so reclaim recovery doesn't wait on the registry.
-# Pulls run concurrently — t3.small/c6in.large can saturate the network with
-# parallel layer downloads, and serial pulls were the dominant slice of the
-# AMI build's ~10 min wall time.
-pids=()
-for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
-  sudo docker pull "${img}" &
-  pids+=("$!")
-done
-pull_failed=0
-for pid in "${pids[@]}"; do
-  wait "${pid}" || pull_failed=1
-done
-if [ "${pull_failed}" -ne 0 ]; then
-  echo "ERROR: one or more docker pulls failed" >&2
-  exit 1
+# Parallelism is gated by the builder size: anything bigger than t*.micro can
+# saturate the network with concurrent layer downloads, but burstable micro
+# instances exhaust their network credits (and 1 GiB RAM) under five parallel
+# pulls and end up slower than serial. The Packer template computes
+# PARALLEL_PULLS from var.instance_type.
+if [ "${PARALLEL_PULLS:-false}" = "true" ]; then
+  pids=()
+  for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
+    sudo docker pull "${img}" &
+    pids+=("$!")
+  done
+  pull_failed=0
+  for pid in "${pids[@]}"; do
+    wait "${pid}" || pull_failed=1
+  done
+  if [ "${pull_failed}" -ne 0 ]; then
+    echo "ERROR: one or more docker pulls failed" >&2
+    exit 1
+  fi
+else
+  for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
+    sudo docker pull "${img}"
+  done
 fi
 
 # certbot is fetched as a Docker image rather than a system package so the
