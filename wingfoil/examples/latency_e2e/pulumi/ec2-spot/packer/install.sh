@@ -160,10 +160,19 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     image: ${WS_SERVER_IMAGE}
     network_mode: host
     ipc: host
+    # NET_BIND_SERVICE lets the non-root container user bind :443.
+    # Required because the Dockerfile drops to UID 10001 and a privileged
+    # port would otherwise be denied even with `network_mode: host`.
+    cap_add:
+      - NET_BIND_SERVICE
     volumes:
       - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
+    # Override the Dockerfile CMD (which hardcodes --addr 0.0.0.0:8080
+    # for local dev convenience). --addr beats WINGFOIL_WEB_ADDR in
+    # ws_server's arg parsing, so setting only the env var here would
+    # be silently ignored.
+    command: ["--addr", "0.0.0.0:443"]
     environment:
-      WINGFOIL_WEB_ADDR: "0.0.0.0:8080"
       WINGFOIL_METRICS_ADDR: "0.0.0.0:9091"
       WINGFOIL_OTLP_ENDPOINT: "http://localhost:4318"
       WINGFOIL_TLS_CERT: "/etc/wingfoil/tls/cert.pem"

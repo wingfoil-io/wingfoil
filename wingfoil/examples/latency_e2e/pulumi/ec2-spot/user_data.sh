@@ -80,7 +80,7 @@ chmod 0600 /etc/wingfoil/lmax.env
 #  1. DNS_HOSTNAME unset → self-signed cert regenerated on every boot.
 #     Browsers warn (no public CA chain), but the WS / iframe traffic is
 #     still encrypted on the wire. The subjectAltName carries the EIP so
-#     `https://<eip>:8080` matches the cert enough for
+#     `https://<eip>` matches the cert enough for
 #     `openssl s_client`-style verification.
 #
 #  2. DNS_HOSTNAME set → Let's Encrypt cert fetched via certbot in

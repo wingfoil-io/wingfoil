@@ -12,7 +12,7 @@ What this stack provisions:
 
   * VPC + one public subnet per AZ (a/b/c) so the ASG can launch in
     whichever AZ has t3.small spot capacity
-  * Security group: 8080 (WS server), 9091 (prometheus), 3000 (grafana)
+  * Security group: 443 (WS server), 9091 (prometheus), 3000 (grafana)
   * Pre-allocated Elastic IP — re-attached on every boot via user_data
   * Launch template + ASG (min/max/desired = 1) requesting Spot capacity,
     capped at on-demand price so we never pay more than the on-demand rate
@@ -172,12 +172,13 @@ for i, suffix in enumerate(_az_suffixes):
 # aws.vpc.SecurityGroupEgressRule) fails with InvalidPermission.Duplicate
 # (CI run 25286544998).
 #
-# 8080: ws_server HTTPS/WSS (terminated in-process via the `web-tls`
-# feature); 3000: Grafana HTTPS. 9090 (Prometheus UI) and 9091
-# (ws_server /metrics) stay plain-HTTP and are no longer exposed publicly —
-# Prometheus scrapes via localhost on the host network. Operators who want
-# the Prometheus UI can still reach it via an SSM session manager
-# port-forward.
+# 443: ws_server HTTPS/WSS (terminated in-process via the `web-tls`
+# feature) — using the standard HTTPS port lets users reach the demo at
+# `https://demo.wingfoil.io/` without an explicit port. 3000: Grafana
+# HTTPS. 9090 (Prometheus UI) and 9091 (ws_server /metrics) stay
+# plain-HTTP and are no longer exposed publicly — Prometheus scrapes via
+# localhost on the host network. Operators who want the Prometheus UI
+# can still reach it via an SSM session manager port-forward.
 # If the SG is ever replaced (only via fields not already neutralised above —
 # i.e. nothing we'd plausibly edit), the launch template flips to the new SG
 # and the OLD SG can't be deleted until the running spot instance's ENI
@@ -190,7 +191,7 @@ for i, suffix in enumerate(_az_suffixes):
 # guarantees no ENI references the old SG when Pulumi deletes it.
 sg_ingress = [
     aws.ec2.SecurityGroupIngressArgs(
-        from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]
+        from_port=443, to_port=443, protocol="tcp", cidr_blocks=[ingress_cidr]
     ),
     aws.ec2.SecurityGroupIngressArgs(
         from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]
@@ -512,7 +513,7 @@ pulumi.export("public_ip",      eip.public_ip)
 endpoint_host = (
     pulumi.Output.from_input(dns_hostname) if dns_hostname else eip.public_ip
 )
-pulumi.export("ws_server_url",  endpoint_host.apply(lambda h: f"https://{h}:8080"))
+pulumi.export("ws_server_url",  endpoint_host.apply(lambda h: f"https://{h}"))
 pulumi.export("grafana_url",    endpoint_host.apply(lambda h: f"https://{h}:3000"))
 pulumi.export("asg_name",       asg.name)
 pulumi.export("availability_zones", [s.availability_zone for s in subnets])

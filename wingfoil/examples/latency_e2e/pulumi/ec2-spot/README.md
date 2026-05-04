@@ -24,7 +24,7 @@ on cached images).
                                                             │
                                                   ┌─────────┴─────────────┐
                                                   │  Docker Compose        │
-                                                  │  ws_server  :8080 HTTPS│
+                                                  │  ws_server   :443 HTTPS│
                                                   │  fix_gw     ─→ LMAX    │
                                                   │  prometheus :9090 (lo) │
                                                   │  tempo      :4318      │
@@ -128,7 +128,7 @@ pulumi up
 After ~3–5 min the outputs print:
 
 ```
-ws_server_url   https://<host>:8080      # <host> = dns_hostname if set, else <eip>
+ws_server_url   https://<host>            # <host> = dns_hostname if set, else <eip>
 grafana_url     https://<host>:3000
 public_ip       <eip>
 cert_bucket     <bucket>                 # only when dns_hostname is set
@@ -170,7 +170,7 @@ aws ssm start-session --target <instance-id> \
 
 ```bash
 # WS server — `-k` because the cert is self-signed.
-curl -fsSk https://<eip>:8080/
+curl -fsSk https://<eip>/
 
 # Grafana — load the dashboard, the "Spot interruption status" banner should
 # read green ("Stable — no Spot interruption notice"). Click through the
