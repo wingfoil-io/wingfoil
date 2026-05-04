@@ -242,6 +242,24 @@ aws.iam.RolePolicy(
     })),
 )
 
+# Attach AWS-managed `AmazonSSMManagedInstanceCore` so the SSM agent (baked
+# into AL2023 AMIs by default) can register with Systems Manager. Without
+# this, `aws ssm start-session` and the EC2 console "Connect → Session
+# Manager" button both fail with AccessDeniedException — visible in the
+# system log as
+#     "SSM Agent unable to acquire credentials: ... AccessDeniedException:
+#      Systems Manager's instance management role is not configured for
+#      account: <id>"
+# That makes runtime debugging impossible (no SSH port open either), so
+# every container-runtime failure has to be diagnosed from boot logs alone.
+# This managed policy is the standard SSM bootstrap and grants only what
+# the agent needs (ssmmessages:*, ec2messages:*, ssm:Update*/Get*/Put*).
+aws.iam.RolePolicyAttachment(
+    f"{prefix}-instance-ssm-attach",
+    role=instance_role.name,
+    policy_arn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+)
+
 instance_profile = aws.iam.InstanceProfile(
     f"{prefix}-instance-profile",
     role=instance_role.name,
