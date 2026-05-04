@@ -218,10 +218,19 @@ sg = aws.ec2.SecurityGroup(
 # ── Elastic IP ───────────────────────────────────────────────────────────
 # Pre-allocated and *not* attached to a specific instance. user_data on the
 # Spot instance associates it on every boot via the IAM permission below.
+#
+# `protect=True`: the public IP is hand-mirrored into a GoDaddy A record for
+# `dns_hostname` (Pulumi doesn't manage the record because the zone isn't in
+# Route53 — see `route53_zone_id` above). If Pulumi ever replaced the EIP,
+# the record would silently go stale and the demo would be unreachable
+# until the operator noticed and updated GoDaddy. Protecting the resource
+# turns "pulumi destroy" / accidental replacement into a hard error so the
+# IP stays pinned for the lifetime of the stack.
 eip = aws.ec2.Eip(
     f"{prefix}-eip",
     domain="vpc",
     tags={**tags, "Name": f"{prefix}-eip"},
+    opts=pulumi.ResourceOptions(protect=True),
 )
 
 # ── DNS + Let's Encrypt cert cache (optional) ────────────────────────────
