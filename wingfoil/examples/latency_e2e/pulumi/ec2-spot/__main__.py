@@ -420,9 +420,14 @@ def render_user_data(args):
         .replace("__DNS_HOSTNAME__",          dns_hostname or "")
         .replace("__CERT_BUCKET__",           cert_bucket_name or "")
     )
-    # cloud-init needs base64 user_data when passed via launch templates.
+    # gzip before base64 — cloud-init auto-detects and decompresses gzip
+    # user_data, and EC2's 16 KiB user_data limit applies to the raw
+    # (pre-base64) bytes, so compressing keeps us comfortably under the cap
+    # as the script grows.
     import base64
-    return base64.b64encode(rendered.encode("utf-8")).decode("ascii")
+    import gzip
+    compressed = gzip.compress(rendered.encode("utf-8"))
+    return base64.b64encode(compressed).decode("ascii")
 
 
 user_data_b64 = pulumi.Output.all(
