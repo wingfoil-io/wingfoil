@@ -409,4 +409,17 @@ chmod 0644 /opt/wingfoil/docker-compose.override.yml
 # fast `docker run` per service rather than a registry pull.
 ( cd /opt/wingfoil && docker compose up -d )
 
+# ws_server and grafana both load /etc/wingfoil/tls/cert.pem at process
+# startup — neither watches the file. `compose up -d` above won't recreate
+# a container whose config hasn't changed, so any earlier boot that
+# started grafana while the cert file held the self-signed fallback (e.g.
+# wait_for_dns / run_certbot transiently failed, or an operator hand-
+# rotated the cert and only restarted ws_server) leaves grafana serving
+# stale TLS material — visible to browsers as :443 with a valid LE cert
+# but :3000 with an EIP-only self-signed cert. Restart both unconditionally
+# so the running processes always reflect the cert that's on disk now.
+# Mirrors what the renewal deploy-hook already does on rotation; ~2s of
+# no-op on a clean fresh-instance boot is cheap insurance.
+( cd /opt/wingfoil && docker compose restart ws_server grafana )
+
 echo "user_data complete: $(date -u +%FT%TZ)"
