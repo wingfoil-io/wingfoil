@@ -45,7 +45,11 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # The GH runner mostly orchestrates Packer (the heavy lifting happens on
+    # the remote EC2 build instance), but `packer init`, ECR auth, and SSM
+    # publishing still benefit from more cores. Requires the runner label
+    # `ubuntu-latest-4-cores` to be enabled at the org/repo level.
+    runs-on: ubuntu-latest-4-cores
     permissions:
       id-token: write
       contents: read

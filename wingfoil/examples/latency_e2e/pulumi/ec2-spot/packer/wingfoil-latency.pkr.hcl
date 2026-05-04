@@ -33,7 +33,9 @@ variable "region" {
 
 variable "instance_type" {
   type    = string
-  default = "t3.small"
+  # c6in.large gives 25 Gbps networking + 2 vCPU — the build is dominated by
+  # ECR image pulls, and t3.small's burstable network throttles them.
+  default = "c6in.large"
 }
 
 variable "ws_server_image"  { type = string }

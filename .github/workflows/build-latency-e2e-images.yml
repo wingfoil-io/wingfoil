@@ -21,7 +21,10 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Larger GitHub-hosted runner — the Rust image builds (ws_server, fix_gw)
+    # are CPU-bound and benefit from more cores. Requires the runner label
+    # `ubuntu-latest-4-cores` to be enabled at the org/repo level.
+    runs-on: ubuntu-latest-4-cores
     permissions:
       id-token: write
       contents: read

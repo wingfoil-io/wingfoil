@@ -16,7 +16,6 @@ if [ "${cloud_init_rc}" -ne 0 ] && [ "${cloud_init_rc}" -ne 2 ]; then
   exit "${cloud_init_rc}"
 fi
 
-sudo dnf update -y
 # unzip — needed for the AWS CLI installer below.
 # prometheus_client (used by spot_watcher.py) isn't packaged for AL2023, so
 # install it into a dedicated venv at /opt/wingfoil/venv. A venv side-steps
@@ -65,9 +64,22 @@ if [ -n "${ECR_REGISTRY:-}" ]; then
 fi
 
 # Pre-pull every image so reclaim recovery doesn't wait on the registry.
+# Pulls run concurrently — t3.small/c6in.large can saturate the network with
+# parallel layer downloads, and serial pulls were the dominant slice of the
+# AMI build's ~10 min wall time.
+pids=()
 for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO_IMAGE}" "${GRAFANA_IMAGE}"; do
-  sudo docker pull "${img}"
+  sudo docker pull "${img}" &
+  pids+=("$!")
 done
+pull_failed=0
+for pid in "${pids[@]}"; do
+  wait "${pid}" || pull_failed=1
+done
+if [ "${pull_failed}" -ne 0 ]; then
+  echo "ERROR: one or more docker pulls failed" >&2
+  exit 1
+fi
 
 # certbot is fetched as a Docker image rather than a system package so the
 # AMI doesn't carry an EPEL/snap dependency. Pre-pulling here means
