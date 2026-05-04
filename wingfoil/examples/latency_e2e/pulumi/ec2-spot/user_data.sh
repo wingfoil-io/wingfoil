@@ -23,7 +23,6 @@ AWS_REGION="__AWS_REGION__"
 # Let's Encrypt opt-in. Empty when the operator hasn't set `dns_hostname` in
 # Pulumi config, in which case we keep the self-signed-cert path below.
 DNS_HOSTNAME="__DNS_HOSTNAME__"
-LETSENCRYPT_EMAIL="__LETSENCRYPT_EMAIL__"
 CERT_BUCKET="__CERT_BUCKET__"
 
 # IMDSv2 — fetch our instance ID for the EIP association call.
@@ -143,15 +142,19 @@ restore_le_cert_from_s3() {
 run_certbot() {
   # certonly --standalone --keep-until-expiring is a no-op when the cached
   # cert has >30d left, and a fresh issuance otherwise. --non-interactive +
-  # --agree-tos is required for unattended runs. Bind /etc/letsencrypt for
-  # state, publish :80 for the HTTP-01 challenge.
+  # --agree-tos is required for unattended runs.
+  # --register-unsafely-without-email skips the LE expiry-warning email
+  # prompt: this stack's daily renewal timer (wingfoil-le-renew.timer)
+  # makes that warning a safety net we don't actually use, so we don't
+  # hold an operator email in config for it.
+  # Bind /etc/letsencrypt for state, publish :80 for the HTTP-01 challenge.
   docker run --rm \
     -v /etc/letsencrypt:/etc/letsencrypt \
     -v /var/lib/letsencrypt:/var/lib/letsencrypt \
     -p 80:80 \
     certbot/certbot:latest \
     certonly --standalone --non-interactive --agree-tos --keep-until-expiring \
-    --email "${LETSENCRYPT_EMAIL}" \
+    --register-unsafely-without-email \
     -d "${DNS_HOSTNAME}"
 }
 

@@ -136,6 +136,10 @@ jobs:
             exit 1
           fi
           pulumi config set ami_id "$AMI_ID"
+          # Pin the demo to a real hostname so user_data fetches a Let's
+          # Encrypt cert (no browser trust warning). DNS for this name lives
+          # in GoDaddy and points at the EIP — see ec2-spot/README.md.
+          pulumi config set dns_hostname demo.wingfoil.io
 
       - name: fargate config (image URIs from secrets)
         if: matrix.target == 'fargate'
