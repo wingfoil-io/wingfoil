@@ -3,14 +3,15 @@ Always-on EC2 Spot deployment of the wingfoil latency_e2e demo.
 
 Sibling stack to `fargate/` and `baremetal/`. Trades Fargate's auto-restart
 convenience for ~3-4x cheaper compute by running on a single t3.small Spot
-instance with a Packer-baked AMI. Single-AZ ASG of size 1 in eu-west-2a
-(London, near LMAX LD4); reclaims trigger an automatic relaunch and a
-~60-90s downtime gap during which the Grafana banner shows the spot
-interruption countdown.
+instance with a Packer-baked AMI. Multi-AZ ASG of size 1 across all three
+AZs in the region (London, near LMAX LD4); reclaims trigger an automatic
+relaunch in whichever AZ has spot capacity, with a ~60-90s downtime gap
+during which the Grafana banner shows the spot interruption countdown.
 
 What this stack provisions:
 
-  * VPC + single public subnet pinned to one AZ (default eu-west-2a)
+  * VPC + one public subnet per AZ (a/b/c) so the ASG can launch in
+    whichever AZ has t3.small spot capacity
   * Security group: 8080 (WS server), 9091 (prometheus), 3000 (grafana)
   * Pre-allocated Elastic IP — re-attached on every boot via user_data
   * Launch template + ASG (min/max/desired = 1) requesting Spot capacity,
@@ -46,7 +47,18 @@ stack = pulumi.get_stack()
 prefix = f"{project}-{stack}"
 
 aws_region = aws.config.region or "eu-west-2"
-availability_zone = config.get("availability_zone") or f"{aws_region}a"
+# `availability_zone` is now ignored — kept here only so a `pulumi up`
+# against a stack that still has the config set doesn't fail with
+# "unknown config key". The ASG spans all three AZs in the region (see
+# the multi-AZ subnet block below); pinning to one AZ caused routine
+# deploy failures with InsufficientInstanceCapacity for t3.small.
+_legacy_az = config.get("availability_zone")
+if _legacy_az:
+    pulumi.warn(
+        f"availability_zone={_legacy_az!r} is set in this stack but ignored; "
+        "the ASG now spans all three AZs in the region. "
+        "Run `pulumi config rm availability_zone` to clear the warning."
+    )
 instance_type = config.get("instance_type") or "t3.small"
 ami_id = config.require("ami_id")
 lmax_username = config.require_secret("lmax_username")
@@ -82,23 +94,21 @@ if dns_hostname and not letsencrypt_email:
 tags = {"Project": project, "Stack": stack, "ManagedBy": "Pulumi"}
 
 # ── Networking ───────────────────────────────────────────────────────────
-# Single AZ: keeps EIP/EBS reattach simple, and a one-task demo doesn't
-# benefit from multi-AZ failover (the ASG will relaunch in the same AZ).
+# Multi-AZ subnets so the ASG can launch the spot instance in whichever AZ
+# has capacity. Pinning to a single AZ caused routine deploy failures with
+# InsufficientInstanceCapacity for t3.small — eu-west-2a in particular
+# fluctuates. Spreading across all three AZs in the region makes the
+# launch resilient at zero ongoing cost (no NAT, no per-AZ data transfer).
+#
+# The EIP is region-scoped (not AZ-scoped), and the AMI's root volume is
+# created fresh per instance (no EBS reattach across reclaims), so neither
+# constrains the AZ choice.
 vpc = aws.ec2.Vpc(
     f"{prefix}-vpc",
     cidr_block="10.0.0.0/16",
     enable_dns_hostnames=True,
     enable_dns_support=True,
     tags={**tags, "Name": f"{prefix}-vpc"},
-)
-
-subnet = aws.ec2.Subnet(
-    f"{prefix}-subnet",
-    vpc_id=vpc.id,
-    cidr_block="10.0.1.0/24",
-    availability_zone=availability_zone,
-    map_public_ip_on_launch=True,
-    tags={**tags, "Name": f"{prefix}-subnet"},
 )
 
 igw = aws.ec2.InternetGateway(
@@ -113,11 +123,32 @@ rt = aws.ec2.RouteTable(
     routes=[aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", gateway_id=igw.id)],
     tags={**tags, "Name": f"{prefix}-rt"},
 )
-aws.ec2.RouteTableAssociation(
-    f"{prefix}-rt-assoc",
-    subnet_id=subnet.id,
-    route_table_id=rt.id,
-)
+
+# One subnet per AZ. The first subnet keeps the original Pulumi resource
+# name (`{prefix}-subnet`) and CIDR (10.0.1.0/24) so existing stacks don't
+# replace it on the next `pulumi up` — only the two new subnets are
+# additions. The original subnet was pinned via the `availability_zone`
+# config; for stacks that left that at the default (`eu-west-2a`), the
+# AZ also stays put and Pulumi sees no diff. Stacks that had it set to
+# something else will see a one-time replacement of the subnet.
+_az_suffixes = ("a", "b", "c")
+subnets = []
+for i, suffix in enumerate(_az_suffixes):
+    name = f"{prefix}-subnet" if i == 0 else f"{prefix}-subnet-{suffix}"
+    s = aws.ec2.Subnet(
+        name,
+        vpc_id=vpc.id,
+        cidr_block=f"10.0.{i + 1}.0/24",
+        availability_zone=f"{aws_region}{suffix}",
+        map_public_ip_on_launch=True,
+        tags={**tags, "Name": name},
+    )
+    subnets.append(s)
+    aws.ec2.RouteTableAssociation(
+        f"{prefix}-rt-assoc" if i == 0 else f"{prefix}-rt-assoc-{suffix}",
+        subnet_id=s.id,
+        route_table_id=rt.id,
+    )
 
 # Inline ingress (rather than standalone aws.vpc.SecurityGroupIngressRule
 # resources) for two reasons:
@@ -436,12 +467,13 @@ launch_template = aws.ec2.LaunchTemplate(
     tags=tags,
 )
 
-# Single-AZ ASG of exactly one instance. ASG handles the relaunch when Spot
-# reclaims the box (~2 min warning then terminate); the new instance runs
-# user_data which reassociates the EIP.
+# Multi-AZ ASG of exactly one instance. ASG picks whichever subnet
+# (= AZ) has spot capacity on launch. On reclaim it relaunches into
+# any AZ in the list; the new instance runs user_data which reassociates
+# the (region-scoped) EIP.
 asg = aws.autoscaling.Group(
     f"{prefix}-asg",
-    vpc_zone_identifiers=[subnet.id],
+    vpc_zone_identifiers=[s.id for s in subnets],
     min_size=1,
     max_size=1,
     desired_capacity=1,
@@ -480,6 +512,6 @@ endpoint_host = (
 pulumi.export("ws_server_url",  endpoint_host.apply(lambda h: f"https://{h}:8080"))
 pulumi.export("grafana_url",    endpoint_host.apply(lambda h: f"https://{h}:3000"))
 pulumi.export("asg_name",       asg.name)
-pulumi.export("availability_zone", availability_zone)
+pulumi.export("availability_zones", [s.availability_zone for s in subnets])
 if cert_bucket is not None:
     pulumi.export("cert_bucket", cert_bucket.bucket)
