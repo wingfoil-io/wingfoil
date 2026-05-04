@@ -73,6 +73,12 @@ variable "ecr_password" {
 
 locals {
   ami_name = "wingfoil-latency-ec2-spot-${var.image_tag}-${formatdate("YYYYMMDD-hhmmss", timestamp())}"
+
+  # Five concurrent docker pulls drain a t*.micro/nano's network burst credits
+  # faster than they save by overlapping, and 1 GiB RAM also makes parallel
+  # layer extraction painful. Anything larger (t3.small upward, m5/c6in/etc.)
+  # has enough headroom to actually win from parallelism.
+  parallel_pulls = !can(regex("^t[0-9]+a?\\.(nano|micro)$", var.instance_type))
 }
 
 source "amazon-ebs" "wingfoil" {
@@ -169,6 +175,7 @@ build {
       "ECR_REGISTRY=${var.ecr_registry}",
       "ECR_PASSWORD=${var.ecr_password}",
       "AWS_REGION=${var.region}",
+      "PARALLEL_PULLS=${local.parallel_pulls}",
     ]
     script = "${path.root}/install.sh"
   }
