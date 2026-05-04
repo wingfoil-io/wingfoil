@@ -90,18 +90,35 @@ chmod 0600 /etc/wingfoil/lmax.env
 #     cert was actually rotated. If the LE flow fails for any reason
 #     (DNS hasn't propagated yet, certbot pull error, etc.) we fall back
 #     to the self-signed path so the demo still comes up.
-PUBLIC_IPV4=$(curl -fsSL \
-  -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
-  http://169.254.169.254/latest/meta-data/public-ipv4)
+# Read the EIP from the allocation we just associated rather than IMDS's
+# `public-ipv4`. IMDS reflects the EIP only after the association
+# propagates, and reading it too early returns the *ephemeral* public IP
+# the instance launched with. That stale value then makes `wait_for_dns`
+# loop forever (DNS correctly points at the EIP) and burns the boot
+# into the self-signed fallback with the wrong IP in the SAN — the
+# WSS handshake from the browser then fails silently and the demo
+# looks "connected" but no frames flow.
+PUBLIC_IPV4=$(aws ec2 describe-addresses \
+  --region "${AWS_REGION}" \
+  --allocation-ids "${EIP_ALLOCATION_ID}" \
+  --query 'Addresses[0].PublicIp' --output text)
 
 install -d -m 0755 /etc/wingfoil/tls
 
 write_self_signed_cert() {
+  # Include DNS_HOSTNAME in the SAN when set, so a self-signed fallback
+  # still lets browsers complete the WSS handshake against the hostname.
+  local san="IP:${PUBLIC_IPV4}"
+  local subj="/CN=${PUBLIC_IPV4}"
+  if [ -n "${DNS_HOSTNAME}" ]; then
+    san="DNS:${DNS_HOSTNAME},${san}"
+    subj="/CN=${DNS_HOSTNAME}"
+  fi
   openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
     -keyout /etc/wingfoil/tls/key.pem \
     -out    /etc/wingfoil/tls/cert.pem \
-    -subj "/CN=${PUBLIC_IPV4}" \
-    -addext "subjectAltName=IP:${PUBLIC_IPV4}"
+    -subj "${subj}" \
+    -addext "subjectAltName=${san}"
   # Both files must be world-readable: the ws_server container runs as
   # UID 10001 and the grafana container as UID 472. The key is regenerated
   # on every boot, so file-system leakage of a stale key buys nothing.
