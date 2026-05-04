@@ -32,10 +32,14 @@ variable "region" {
 }
 
 variable "instance_type" {
-  type    = string
-  # c6in.large gives 25 Gbps networking + 2 vCPU — the build is dominated by
-  # ECR image pulls, and t3.small's burstable network throttles them.
-  default = "c6in.large"
+  type = string
+  # `t3.micro` is free-tier-eligible — required when the AWS account is on the
+  # AWS Free plan, which rejects launches of non-free-tier instance types with
+  # `InvalidParameterCombination: ... not eligible for Free Tier`. Builds take
+  # longer than on a c6in.large (the bottleneck is ECR image pulls, throttled
+  # on t3.micro's burstable network), but they complete. Override via the
+  # workflow input or `PKR_VAR_instance_type` once the account is upgraded.
+  default = "t3.micro"
 }
 
 variable "ws_server_image"  { type = string }
