@@ -118,10 +118,9 @@ pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
 # Set a hostname you control and the browser will see a real cert chain.
 # Without these, the stack falls back to a self-signed cert and browsers
 # warn on first access.
-# pulumi config set dns_hostname       e2e.example.com
-# pulumi config set letsencrypt_email  ops@example.com    # required when dns_hostname is set
-# pulumi config set route53_zone_id    Z0123456ABCDEF      # optional — Pulumi creates the A record for you
-#                                                          # omit if you'll manage DNS yourself
+# pulumi config set dns_hostname    e2e.example.com
+# pulumi config set route53_zone_id Z0123456ABCDEF      # optional — Pulumi creates the A record for you
+#                                                       # omit if you'll manage DNS yourself
 
 pulumi up
 ```
@@ -140,13 +139,16 @@ Both endpoints are served over TLS, terminated **in-process** by ws_server
 (`GF_SERVER_PROTOCOL=https`).
 
 **With `dns_hostname` set** — `user_data.sh` runs certbot in `--standalone`
-mode against your hostname, persists `/etc/letsencrypt` to the
-`cert_bucket` S3 bucket so a Spot reclaim doesn't burn a fresh issuance,
-and a daily systemd timer (`wingfoil-le-renew.timer`) renews the cert and
-bounces the ws_server / grafana containers when it actually rotates. If
-you didn't set `route53_zone_id`, you must create the `A` record yourself
-**before** the instance boots — `pulumi up` shows the EIP in its preview,
-so add the record there, then let `pulumi up` finish creating the ASG.
+mode against your hostname (registered with
+`--register-unsafely-without-email` since this stack's daily renewal
+timer makes LE's expiry-warning email a safety net we don't actually
+use), persists `/etc/letsencrypt` to the `cert_bucket` S3 bucket so a
+Spot reclaim doesn't burn a fresh issuance, and a daily systemd timer
+(`wingfoil-le-renew.timer`) renews the cert and bounces the ws_server /
+grafana containers when it actually rotates. If you didn't set
+`route53_zone_id`, you must create the `A` record yourself **before**
+the instance boots — `pulumi up` shows the EIP in its preview, so add
+the record there, then let `pulumi up` finish creating the ASG.
 
 **Without `dns_hostname`** — the cert is a **self-signed** RSA-2048
 generated on every boot by `user_data.sh`, with `subjectAltName=IP:<eip>`

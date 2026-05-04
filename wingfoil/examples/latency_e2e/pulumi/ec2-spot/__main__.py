@@ -75,21 +75,16 @@ max_spot_price = config.get("max_spot_price") or "0.0228"
 # systemd timer handles renewal. When unset, the stack falls back to the
 # self-signed cert path (current default behaviour).
 #
-# `letsencrypt_email` becomes required as soon as `dns_hostname` is set —
-# certbot uses it for expiry notifications and ACME account registration.
+# certbot is invoked with `--register-unsafely-without-email` so this stack
+# carries no operator email config: renewal is automated by a systemd timer,
+# making the LE expiry-warning email a safety net we don't actually use.
 #
 # `route53_zone_id` is optional even when `dns_hostname` is set: if the user
 # manages DNS outside Route53, they create the A record themselves after
 # `pulumi up` outputs the EIP. If set, Pulumi creates the A record so the
 # instance can fetch a cert on first boot without manual intervention.
 dns_hostname = config.get("dns_hostname")
-letsencrypt_email = config.get("letsencrypt_email")
 route53_zone_id = config.get("route53_zone_id")
-if dns_hostname and not letsencrypt_email:
-    raise pulumi.RunError(
-        "letsencrypt_email is required when dns_hostname is set "
-        "(certbot needs an account email)."
-    )
 
 tags = {"Project": project, "Stack": stack, "ManagedBy": "Pulumi"}
 
@@ -413,7 +408,6 @@ def render_user_data(args):
         .replace("__LMAX_PASSWORD_SECRET__",  pw_arn)
         .replace("__AWS_REGION__",            aws_region)
         .replace("__DNS_HOSTNAME__",          dns_hostname or "")
-        .replace("__LETSENCRYPT_EMAIL__",     letsencrypt_email or "")
         .replace("__CERT_BUCKET__",           cert_bucket_name or "")
     )
     # cloud-init needs base64 user_data when passed via launch templates.
