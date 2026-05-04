@@ -322,6 +322,14 @@ chmod 0600 /opt/wingfoil/.env
 # then assert the final layout matches what compose expects — a stale or
 # pre-#298 AMI fails fast here with a clear message instead of as an opaque
 # OCI runtime error during `compose up`.
+#
+# The static/ bind mount was only added in #324, so its source path
+# (/opt/wingfoil/static) is checked conditionally — gated on whether the
+# baked compose.yml actually references it. An older AMI (pre-#324) whose
+# compose.yml has no static bind mount must still boot cleanly and serve
+# the in-image /app/static; failing fast on a missing source path that
+# compose doesn't even use would brick the demo on stale AMIs (no listener
+# on :443 -> ERR_CONNECTION_REFUSED on https://demo.wingfoil.io/).
 for stale in \
     /opt/wingfoil/prometheus/prometheus.yml \
     /opt/wingfoil/tempo/tempo.yaml; do
@@ -329,11 +337,15 @@ for stale in \
     rmdir "${stale}"
   fi
 done
+required_files=(
+  /opt/wingfoil/prometheus/prometheus.yml
+  /opt/wingfoil/tempo/tempo.yaml
+)
+if grep -qF '/opt/wingfoil/static' /opt/wingfoil/docker-compose.yml; then
+  required_files+=(/opt/wingfoil/static/index.html)
+fi
 layout_ok=true
-for f in \
-    /opt/wingfoil/prometheus/prometheus.yml \
-    /opt/wingfoil/tempo/tempo.yaml \
-    /opt/wingfoil/static/index.html; do
+for f in "${required_files[@]}"; do
   if [ ! -f "${f}" ]; then
     echo "ERROR: expected bind-mount source '${f}' is missing or not a regular file." >&2
     layout_ok=false
