@@ -166,6 +166,35 @@ aws ssm start-session --target <instance-id> \
   --parameters '{"portNumber":["9090"],"localPortNumber":["9090"]}'
 ```
 
+## Iterating on the UI
+
+The `static/` directory is bind-mounted into the ws_server container at
+`/app/static`, so the UI can be updated without rebuilding the image or
+re-baking the AMI. Sync new files to `/opt/wingfoil/static` on the
+instance and bounce ws_server:
+
+```bash
+INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names $(pulumi stack output asg_name) \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+
+# Open an SSH session via SSM (requires the AWS SSM Session Manager
+# plugin and an SSH config that proxies through `aws ssm start-session`).
+rsync -av --delete \
+  wingfoil/examples/latency_e2e/static/ \
+  "${INSTANCE_ID}:/opt/wingfoil/static/"
+
+aws ssm send-command \
+  --instance-ids "${INSTANCE_ID}" \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["cd /opt/wingfoil && docker compose restart ws_server"]'
+```
+
+Edits survive container restarts and Spot reclaims of the *running*
+instance — but a fresh ASG launch reverts to the AMI's baked copy, so
+once a UI change has stabilised, bake a new AMI to make it the new
+baseline.
+
 ## 3. Verify
 
 ```bash

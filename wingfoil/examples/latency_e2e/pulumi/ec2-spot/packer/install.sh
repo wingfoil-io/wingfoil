@@ -100,11 +100,12 @@ sudo install -m 0755 /tmp/spot_watcher.py     /opt/wingfoil/spot_watcher.py
 for staged in \
     /tmp/prometheus/prometheus.yml \
     /tmp/tempo/tempo.yaml \
-    /tmp/grafana/provisioning; do
+    /tmp/grafana/provisioning \
+    /tmp/static/index.html; do
   if [ ! -e "${staged}" ]; then
     echo "ERROR: expected staged path '${staged}' is missing — Packer file" >&2
     echo "       provisioner produced an unexpected layout. Listing /tmp:" >&2
-    ls -lR /tmp/prometheus /tmp/tempo /tmp/grafana >&2 || true
+    ls -lR /tmp/prometheus /tmp/tempo /tmp/grafana /tmp/static >&2 || true
     exit 1
   fi
 done
@@ -112,7 +113,11 @@ done
 sudo cp -r /tmp/prometheus /opt/wingfoil/prometheus
 sudo cp -r /tmp/tempo      /opt/wingfoil/tempo
 sudo cp -r /tmp/grafana    /opt/wingfoil/grafana
-sudo chown -R root:root /opt/wingfoil/prometheus /opt/wingfoil/tempo /opt/wingfoil/grafana
+# static/ is bind-mounted into ws_server at /app/static (read-only) so the
+# UI can be iterated on without rebuilding the image: rsync new files into
+# /opt/wingfoil/static and `docker compose restart ws_server`.
+sudo cp -r /tmp/static     /opt/wingfoil/static
+sudo chown -R root:root /opt/wingfoil/prometheus /opt/wingfoil/tempo /opt/wingfoil/grafana /opt/wingfoil/static
 
 # Sanity check the final layout on disk: docker compose mounts these exact
 # paths, and a missing file at boot triggers the silent-empty-directory
@@ -120,7 +125,8 @@ sudo chown -R root:root /opt/wingfoil/prometheus /opt/wingfoil/tempo /opt/wingfo
 for mount_src in \
     /opt/wingfoil/prometheus/prometheus.yml \
     /opt/wingfoil/tempo/tempo.yaml \
-    /opt/wingfoil/grafana/provisioning; do
+    /opt/wingfoil/grafana/provisioning \
+    /opt/wingfoil/static/index.html; do
   if [ ! -e "${mount_src}" ]; then
     echo "ERROR: bind-mount source '${mount_src}' is missing after copy." >&2
     exit 1
@@ -170,6 +176,10 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
       - NET_BIND_SERVICE
     volumes:
       - /etc/wingfoil/tls:/etc/wingfoil/tls:ro
+      # /app/static is shadowed by the host directory so UI iteration
+      # doesn't require rebuilding the image. Files in /opt/wingfoil/static
+      # are served directly; restart the container after rsync'ing changes.
+      - /opt/wingfoil/static:/app/static:ro
     # Override the Dockerfile CMD (which hardcodes --addr 0.0.0.0:8080
     # for local dev convenience). --addr beats WINGFOIL_WEB_ADDR in
     # ws_server's arg parsing, so setting only the env var here would

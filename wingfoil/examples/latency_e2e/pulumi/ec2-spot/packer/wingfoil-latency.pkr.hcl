@@ -143,6 +143,16 @@ build {
     destination = "/tmp"
   }
 
+  # ws_server's static UI assets, bind-mounted into the container at
+  # /app/static (overlaying the in-image copy). Staging them outside the
+  # image is what lets the operator iterate on the UI by syncing files
+  # into /opt/wingfoil/static and bouncing the container — no AMI bake,
+  # no image rebuild.
+  provisioner "file" {
+    source      = "${path.root}/../../../static"
+    destination = "/tmp"
+  }
+
   provisioner "shell" {
     environment_vars = [
       "WS_SERVER_IMAGE=${var.ws_server_image}",

@@ -332,7 +332,8 @@ done
 layout_ok=true
 for f in \
     /opt/wingfoil/prometheus/prometheus.yml \
-    /opt/wingfoil/tempo/tempo.yaml; do
+    /opt/wingfoil/tempo/tempo.yaml \
+    /opt/wingfoil/static/index.html; do
   if [ ! -f "${f}" ]; then
     echo "ERROR: expected bind-mount source '${f}' is missing or not a regular file." >&2
     layout_ok=false
