@@ -26,6 +26,7 @@ RUN apt-get -o Acquire::Retries=3 update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
         libssl3 \
         ca-certificates \
+        libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 wingfoil \
     && useradd --system --uid 10001 --gid wingfoil --no-create-home --home /app wingfoil
@@ -34,6 +35,13 @@ WORKDIR /app
 
 COPY --from=builder --chown=wingfoil:wingfoil /workspace/target/release/examples/latency_e2e_ws_server /app/ws_server
 COPY --chown=wingfoil:wingfoil wingfoil/examples/latency_e2e/static /app/static
+
+# File caps so the non-root user (UID 10001) can bind privileged ports
+# like :443 in deployments that pass `--addr 0.0.0.0:443` (ec2-spot).
+# `cap_add: NET_BIND_SERVICE` in compose is also required — it puts the
+# cap in the container's bounding set; this `setcap` is what actually
+# grants it to the non-root process at exec time.
+RUN setcap cap_net_bind_service=+ep /app/ws_server
 
 ENV WINGFOIL_STATIC_DIR=/app/static
 

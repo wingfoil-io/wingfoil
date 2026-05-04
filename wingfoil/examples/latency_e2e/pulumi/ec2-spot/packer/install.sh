@@ -160,9 +160,12 @@ sudo tee -a /opt/wingfoil/docker-compose.yml > /dev/null <<EOF
     image: ${WS_SERVER_IMAGE}
     network_mode: host
     ipc: host
-    # NET_BIND_SERVICE lets the non-root container user bind :443.
-    # Required because the Dockerfile drops to UID 10001 and a privileged
-    # port would otherwise be denied even with `network_mode: host`.
+    # cap_add puts NET_BIND_SERVICE in the container's bounding set so
+    # the file capability baked onto /app/ws_server (`setcap
+    # cap_net_bind_service=+ep` in Dockerfile.ws_server) actually
+    # resolves to an effective cap on exec — without it the bounding
+    # set masks the file cap and the non-root UID 10001 still gets
+    # EACCES on bind(443).
     cap_add:
       - NET_BIND_SERVICE
     volumes:
