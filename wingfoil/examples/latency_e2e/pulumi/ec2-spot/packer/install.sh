@@ -69,6 +69,13 @@ for img in "${WS_SERVER_IMAGE}" "${FIX_GW_IMAGE}" "${PROMETHEUS_IMAGE}" "${TEMPO
   sudo docker pull "${img}"
 done
 
+# certbot is fetched as a Docker image rather than a system package so the
+# AMI doesn't carry an EPEL/snap dependency. Pre-pulling here means
+# user_data's --standalone run on the first post-reclaim boot starts
+# instantly instead of stalling on a registry pull while the public IP
+# is uncertified.
+sudo docker pull certbot/certbot:latest
+
 # Drop the docker login state so the AMI doesn't ship with an ECR token
 # baked into /root/.docker/config.json. The token expires in ~12h anyway,
 # but cleaning up keeps the AMI free of credential artifacts.

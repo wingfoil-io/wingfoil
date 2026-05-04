@@ -20,6 +20,11 @@ EIP_ALLOCATION_ID="__EIP_ALLOCATION_ID__"
 LMAX_USERNAME_SECRET="__LMAX_USERNAME_SECRET__"
 LMAX_PASSWORD_SECRET="__LMAX_PASSWORD_SECRET__"
 AWS_REGION="__AWS_REGION__"
+# Let's Encrypt opt-in. Empty when the operator hasn't set `dns_hostname` in
+# Pulumi config, in which case we keep the self-signed-cert path below.
+DNS_HOSTNAME="__DNS_HOSTNAME__"
+LETSENCRYPT_EMAIL="__LETSENCRYPT_EMAIL__"
+CERT_BUCKET="__CERT_BUCKET__"
 
 # IMDSv2 — fetch our instance ID for the EIP association call.
 IMDS_TOKEN=$(curl -fsSL -X PUT \
@@ -71,26 +76,183 @@ set -x
 chmod 0600 /etc/wingfoil/lmax.env
 
 # ── TLS material for ws_server + Grafana ──────────────────────────────────
-# Self-signed cert regenerated on every boot. Browsers will warn (no public
-# CA chain), but the WS / iframe traffic is then encrypted on the wire,
-# which matters whenever the demo is reachable from a public network. The
-# subjectAltName carries the EIP so `https://<eip>:8080` matches the cert
-# enough for `openssl s_client`-style verification — browsers still
-# require a manual click-through for the unknown root.
+# Two modes, selected by whether DNS_HOSTNAME was set in Pulumi config:
+#
+#  1. DNS_HOSTNAME unset → self-signed cert regenerated on every boot.
+#     Browsers warn (no public CA chain), but the WS / iframe traffic is
+#     still encrypted on the wire. The subjectAltName carries the EIP so
+#     `https://<eip>:8080` matches the cert enough for
+#     `openssl s_client`-style verification.
+#
+#  2. DNS_HOSTNAME set → Let's Encrypt cert fetched via certbot in
+#     --standalone mode (HTTP-01 on :80). Cert state is cached in S3 so a
+#     Spot reclaim doesn't burn a fresh issuance against LE's 50/week/domain
+#     limit. A daily systemd timer renews and bounces the containers if the
+#     cert was actually rotated. If the LE flow fails for any reason
+#     (DNS hasn't propagated yet, certbot pull error, etc.) we fall back
+#     to the self-signed path so the demo still comes up.
 PUBLIC_IPV4=$(curl -fsSL \
   -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
   http://169.254.169.254/latest/meta-data/public-ipv4)
 
 install -d -m 0755 /etc/wingfoil/tls
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout /etc/wingfoil/tls/key.pem \
-  -out    /etc/wingfoil/tls/cert.pem \
-  -subj "/CN=${PUBLIC_IPV4}" \
-  -addext "subjectAltName=IP:${PUBLIC_IPV4}"
-# Both files must be world-readable: the ws_server container runs as
-# UID 10001 and the grafana container as UID 472. The key is regenerated
-# on every boot, so file-system leakage of a stale key buys nothing.
-chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+
+write_self_signed_cert() {
+  openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    -keyout /etc/wingfoil/tls/key.pem \
+    -out    /etc/wingfoil/tls/cert.pem \
+    -subj "/CN=${PUBLIC_IPV4}" \
+    -addext "subjectAltName=IP:${PUBLIC_IPV4}"
+  # Both files must be world-readable: the ws_server container runs as
+  # UID 10001 and the grafana container as UID 472. The key is regenerated
+  # on every boot, so file-system leakage of a stale key buys nothing.
+  chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+}
+
+publish_le_cert() {
+  # Copy the LE-issued material out of /etc/letsencrypt (root-only) into
+  # /etc/wingfoil/tls (world-readable, mounted by ws_server + grafana).
+  cp -L "/etc/letsencrypt/live/${DNS_HOSTNAME}/fullchain.pem" /etc/wingfoil/tls/cert.pem
+  cp -L "/etc/letsencrypt/live/${DNS_HOSTNAME}/privkey.pem"   /etc/wingfoil/tls/key.pem
+  chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+}
+
+push_le_cert_to_s3() {
+  # Tar /etc/letsencrypt as the unit of state — certbot's `live/`
+  # symlinks reference `archive/` and `renewal/` config, so all three
+  # need to ride together.
+  tar -C / -czf /tmp/letsencrypt.tar.gz etc/letsencrypt
+  aws s3 cp /tmp/letsencrypt.tar.gz \
+    "s3://${CERT_BUCKET}/${DNS_HOSTNAME}/letsencrypt.tar.gz" \
+    --region "${AWS_REGION}"
+  rm -f /tmp/letsencrypt.tar.gz
+}
+
+restore_le_cert_from_s3() {
+  if aws s3 cp \
+      "s3://${CERT_BUCKET}/${DNS_HOSTNAME}/letsencrypt.tar.gz" \
+      /tmp/letsencrypt.tar.gz \
+      --region "${AWS_REGION}" 2>/dev/null; then
+    tar -C / -xzf /tmp/letsencrypt.tar.gz
+    rm -f /tmp/letsencrypt.tar.gz
+    return 0
+  fi
+  return 1
+}
+
+run_certbot() {
+  # certonly --standalone --keep-until-expiring is a no-op when the cached
+  # cert has >30d left, and a fresh issuance otherwise. --non-interactive +
+  # --agree-tos is required for unattended runs. Bind /etc/letsencrypt for
+  # state, publish :80 for the HTTP-01 challenge.
+  docker run --rm \
+    -v /etc/letsencrypt:/etc/letsencrypt \
+    -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+    -p 80:80 \
+    certbot/certbot:latest \
+    certonly --standalone --non-interactive --agree-tos --keep-until-expiring \
+    --email "${LETSENCRYPT_EMAIL}" \
+    -d "${DNS_HOSTNAME}"
+}
+
+wait_for_dns() {
+  # Up to ~5 min — Route53 propagates in seconds, third-party DNS providers
+  # can take a couple of minutes after `pulumi up`. Uses the system resolver
+  # (Amazon's VPC resolver on AL2023) which doesn't cache negative results
+  # for long, so a freshly created record shows up promptly.
+  local attempt resolved
+  for attempt in $(seq 1 30); do
+    resolved=$(getent hosts "${DNS_HOSTNAME}" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+    if [ "${resolved}" = "${PUBLIC_IPV4}" ]; then
+      return 0
+    fi
+    echo "waiting for ${DNS_HOSTNAME} to resolve to ${PUBLIC_IPV4} (got '${resolved}', attempt ${attempt}/30)"
+    sleep 10
+  done
+  return 1
+}
+
+if [ -n "${DNS_HOSTNAME}" ]; then
+  install -d -m 0700 /etc/letsencrypt
+  install -d -m 0700 /var/lib/letsencrypt
+  # Best-effort restore from S3 — first deploy will 404, that's fine.
+  restore_le_cert_from_s3 || echo "no cached cert in s3://${CERT_BUCKET}, will issue a fresh one"
+
+  if wait_for_dns && run_certbot; then
+    publish_le_cert
+    push_le_cert_to_s3
+    LE_OK=1
+  else
+    echo "WARNING: Let's Encrypt flow failed; falling back to self-signed cert" >&2
+    write_self_signed_cert
+    LE_OK=0
+  fi
+else
+  write_self_signed_cert
+  LE_OK=0
+fi
+
+# Daily renewal timer — only set up when LE is actually live. The renew
+# subcommand is idempotent: it skips certs with >30d remaining, so the
+# common-case run is a no-op. The deploy-hook fires only on actual
+# rotation, where we re-publish to /etc/wingfoil/tls, push the new state
+# to S3, and bounce the two containers that read the cert at startup.
+if [ "${LE_OK}" = "1" ]; then
+  cat > /opt/wingfoil/le-renew.sh <<EOF
+#!/bin/bash
+set -euo pipefail
+docker run --rm \\
+  -v /etc/letsencrypt:/etc/letsencrypt \\
+  -v /var/lib/letsencrypt:/var/lib/letsencrypt \\
+  -p 80:80 \\
+  certbot/certbot:latest \\
+  renew --non-interactive \\
+  --deploy-hook "echo rotated" >/var/log/wingfoil-le-renew.log 2>&1
+
+# certbot --deploy-hook only runs when at least one cert was actually
+# renewed. Detect that by comparing the on-disk fingerprint before/after.
+NEW_FP=\$(openssl x509 -in /etc/letsencrypt/live/${DNS_HOSTNAME}/cert.pem -noout -fingerprint -sha256)
+OLD_FP=\$(openssl x509 -in /etc/wingfoil/tls/cert.pem -noout -fingerprint -sha256 2>/dev/null || echo "")
+if [ "\${NEW_FP}" != "\${OLD_FP}" ]; then
+  cp -L /etc/letsencrypt/live/${DNS_HOSTNAME}/fullchain.pem /etc/wingfoil/tls/cert.pem
+  cp -L /etc/letsencrypt/live/${DNS_HOSTNAME}/privkey.pem   /etc/wingfoil/tls/key.pem
+  chmod 0644 /etc/wingfoil/tls/cert.pem /etc/wingfoil/tls/key.pem
+  tar -C / -czf /tmp/letsencrypt.tar.gz etc/letsencrypt
+  aws s3 cp /tmp/letsencrypt.tar.gz \\
+    s3://${CERT_BUCKET}/${DNS_HOSTNAME}/letsencrypt.tar.gz \\
+    --region ${AWS_REGION}
+  rm -f /tmp/letsencrypt.tar.gz
+  ( cd /opt/wingfoil && docker compose restart ws_server grafana )
+fi
+EOF
+  chmod 0755 /opt/wingfoil/le-renew.sh
+
+  cat > /etc/systemd/system/wingfoil-le-renew.service <<'EOF'
+[Unit]
+Description=wingfoil Let's Encrypt cert renewal
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wingfoil/le-renew.sh
+EOF
+
+  cat > /etc/systemd/system/wingfoil-le-renew.timer <<'EOF'
+[Unit]
+Description=wingfoil Let's Encrypt cert renewal (daily)
+
+[Timer]
+OnBootSec=1h
+OnUnitActiveSec=24h
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now wingfoil-le-renew.timer
+fi
 
 # Spot watcher — polls IMDS for reclaim notice, exposes a Prometheus gauge
 # on :9092 that the Grafana banner panel reads.
