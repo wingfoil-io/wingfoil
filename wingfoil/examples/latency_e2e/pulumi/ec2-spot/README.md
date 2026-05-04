@@ -110,7 +110,6 @@ pulumi config set --secret lmax_username <YOUR_LMAX_USERNAME>
 pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
 
 # Optional overrides
-# pulumi config set availability_zone eu-west-2b        # default eu-west-2a
 # pulumi config set instance_type     t3a.small         # AMD-flavoured Spot, slightly cheaper
 # pulumi config set ingress_cidr      203.0.113.0/24    # lock to your office IP
 # pulumi config set max_spot_price    0.0228            # cap (default = on-demand price)
@@ -225,8 +224,10 @@ aws ec2 deregister-image --image-id <ami-id> --region eu-west-2
 
 ## Troubleshooting
 
-**Spot capacity unavailable**: try a different AZ (`pulumi config set availability_zone eu-west-2c && pulumi up`) or a different instance type
-(`t3a.small`).
+**Spot capacity unavailable**: the ASG already spans all three AZs in the
+region, so a single-AZ outage no longer fails the deploy. If every AZ is
+out of t3.small capacity at once, try a different instance type
+(`pulumi config set instance_type t3a.small && pulumi up`).
 
 **EIP didn't reattach**: check the IAM policy in `__main__.py` — the
 `AssociateAddress` permission is conditioned on `Project` and `Stack` tags
