@@ -242,7 +242,11 @@ if [ "\${NEW_FP}" != "\${OLD_FP}" ]; then
     s3://${CERT_BUCKET}/${DNS_HOSTNAME}/letsencrypt.tar.gz \\
     --region ${AWS_REGION}
   rm -f /tmp/letsencrypt.tar.gz
-  ( cd /opt/wingfoil && docker compose restart ws_server grafana )
+  # fix_gw is restarted alongside ws_server even though it doesn't read the
+  # cert — restarting ws_server in isolation flips the iceoryx2 service
+  # generation under fix_gw's still-attached pub/sub endpoints and the two
+  # stop talking. See the matching comment in user_data.sh.
+  ( cd /opt/wingfoil && docker compose restart ws_server grafana fix_gw )
 fi
 EOF
   chmod 0755 /opt/wingfoil/le-renew.sh
@@ -420,6 +424,14 @@ chmod 0644 /opt/wingfoil/docker-compose.override.yml
 # so the running processes always reflect the cert that's on disk now.
 # Mirrors what the renewal deploy-hook already does on rotation; ~2s of
 # no-op on a clean fresh-instance boot is cheap insurance.
-( cd /opt/wingfoil && docker compose restart ws_server grafana )
+#
+# fix_gw is restarted alongside even though it doesn't read the cert: it
+# subscribes to ws_server's iceoryx2 publishers (orders) and publishes to
+# ws_server's subscribers (fills). Restarting ws_server in isolation flips
+# the iceoryx2 service generation under fix_gw's still-attached endpoints
+# and the two stop talking — orders flow into ws_server, never reach
+# fix_gw, no fills ever come back. Restarting both rebuilds both ends of
+# the pub/sub against a fresh shared-memory generation.
+( cd /opt/wingfoil && docker compose restart ws_server grafana fix_gw )
 
 echo "user_data complete: $(date -u +%FT%TZ)"
