@@ -28,7 +28,20 @@ const COLOURS = [
   "#e3b341",
 ];
 const MAX_POINTS = 200;       // chart history (~100 s at 2 Hz)
-const FLAME_ROWS  = 40;       // flame chart depth
+const FLAME_WINDOW = 32;      // rolling-mean window for the flamegraph
+
+// Flamegraph layers, bottom (widest, outermost) to top (narrowest, deepest).
+// Each layer is a strict sub-interval of the layer below it — that nesting
+// is what makes this a flamegraph rather than a waterfall. Server-clock
+// indices refer to `stamps[]`; the bottom layer uses the browser clock
+// (rttNs) and is centered around the server window.
+const FLAME_LAYERS = [
+  { name: 'browser',   detail: 'browser → ws_server → browser (full RTT)',     color: '#58a6ff' },
+  { name: 'ws_server', detail: 'ws_recv → ws_send (this server, end-to-end)',  color: '#3fb950', from: 0, to: 8 },
+  { name: 'iceoryx2',  detail: 'ws_publish → ws_sub_recv (shm + fix_gw)',      color: '#bc8cff', from: 1, to: 7 },
+  { name: 'fix_gw',    detail: 'gw_recv → gw_publish (this process)',          color: '#f0883e', from: 2, to: 6 },
+  { name: 'lmax',      detail: 'fix_send → fix_recv (FIX/TLS to LMAX + match)', color: '#f85149', from: 4, to: 5 },
+];
 
 // ── wingfoil client + latency tracker ─────────────────────────────────────
 const client = new WingfoilClient({
@@ -59,8 +72,11 @@ document.getElementById('session').textContent = tracker.sessionHex.slice(0, 8) 
 let sent = 0, filled = 0, sumPx = 0;
 let nextSide = 0;
 let chart, chartData, ticker = null;
-const flameFills = []; // {stamps, rttTotal, t}
-let baselineIdx = null; // pinned row in flame chart
+// Rolling means for the flamegraph: one buffer per layer, plus rttTotal.
+// Each buffer holds the last FLAME_WINDOW values; we render the means.
+const flameBuffers = FLAME_LAYERS.map(() => []);
+const flameRttBuffer = [];
+let flameHover = null; // index into FLAME_LAYERS
 
 function setStatus(s) {
   const el = document.getElementById('status');
@@ -89,12 +105,6 @@ function stageNs(entry, stamps, rttTotal) {
     return Math.max(0, rttTotal - (stamps[8] - stamps[0]));
   }
   return 0;
-}
-
-function totalNs(stamps, rttTotal) {
-  let s = 0;
-  for (const stage of STAGES) s += stageNs(stage, stamps, rttTotal);
-  return s;
 }
 
 // ── uPlot chart ───────────────────────────────────────────────────────────
@@ -148,19 +158,63 @@ function initChart() {
   ro.observe(document.getElementById('chart'));
 }
 
-// ── Flame chart (linear pipeline) ─────────────────────────────────────────
-function initFlameLegend() {
-  const root = document.getElementById('flame-legend');
-  root.innerHTML = STAGES.map(([name], i) =>
-    `<span><span class="sw" style="background:${COLOURS[i]}"></span>${name}</span>`
-  ).join('');
+// ── Flamegraph (nested call stack) ────────────────────────────────────────
+// Bottom row = full browser RTT. Each row above is a strict sub-interval
+// of the row below it — same shape as a CPU flamegraph, but with wall-clock
+// fills as the "samples". Layer durations are rolling means over the last
+// FLAME_WINDOW fills so the picture is stable.
+
+function layerNs(layer, stamps) {
+  if (layer.from === undefined) return 0;
+  const a = stamps[layer.from], b = stamps[layer.to];
+  if (a == null || b == null) return 0;
+  return Math.max(0, b - a);
 }
 
-function flameCanvas() {
-  const c = document.getElementById('flame');
+function pushFlame(stamps, rttNs) {
+  for (let i = 0; i < FLAME_LAYERS.length; i++) {
+    const ns = i === 0 ? rttNs : layerNs(FLAME_LAYERS[i], stamps);
+    const buf = flameBuffers[i];
+    buf.push(ns);
+    if (buf.length > FLAME_WINDOW) buf.shift();
+  }
+  flameRttBuffer.push(rttNs);
+  if (flameRttBuffer.length > FLAME_WINDOW) flameRttBuffer.shift();
+  drawFlamegraph();
+  document.getElementById('flamegraph-meta').textContent = `n=${flameRttBuffer.length}`;
+}
+
+function mean(buf) {
+  if (buf.length === 0) return 0;
+  let s = 0; for (const v of buf) s += v;
+  return s / buf.length;
+}
+
+// Layout: each layer is a horizontal box centered within its parent, so the
+// padding either side equals (parent − child) / 2. For L1 (ws_server inside
+// browser RTT) the offset isn't measured (different clocks), so we center —
+// same convention every flamegraph viewer uses when child offsets are unknown.
+function flamegraphBoxes() {
+  const totals = FLAME_LAYERS.map((_, i) => mean(flameBuffers[i]));
+  const root = totals[0] || 1;
+  const boxes = [];
+  let prevStart = 0, prevWidth = root;
+  for (let i = 0; i < FLAME_LAYERS.length; i++) {
+    const dur = Math.min(totals[i], prevWidth);
+    const offset = (prevWidth - dur) / 2;
+    const start = prevStart + offset;
+    boxes.push({ layer: FLAME_LAYERS[i], ns: totals[i], start, width: dur });
+    prevStart = start;
+    prevWidth = dur;
+  }
+  return { boxes, root };
+}
+
+function flamegraphCanvas() {
+  const c = document.getElementById('flamegraph');
   const dpr = window.devicePixelRatio || 1;
   const cssW = c.clientWidth;
-  const cssH = parseInt(c.getAttribute('height'), 10) || 320;
+  const cssH = parseInt(c.getAttribute('height'), 10) || 200;
   if (c.width !== cssW * dpr || c.height !== cssH * dpr) {
     c.width = cssW * dpr; c.height = cssH * dpr;
     c.style.height = cssH + 'px';
@@ -170,93 +224,125 @@ function flameCanvas() {
   return { ctx, w: cssW, h: cssH };
 }
 
-function drawFlame() {
-  const { ctx, w, h } = flameCanvas();
+function fmtNs(ns) {
+  if (!isFinite(ns) || ns <= 0) return '–';
+  if (ns >= 1_000_000) return (ns / 1_000_000).toFixed(2) + ' ms';
+  if (ns >= 1_000) return (ns / 1000).toFixed(1) + ' µs';
+  return ns.toFixed(0) + ' ns';
+}
+
+function drawFlamegraph() {
+  const { ctx, w, h } = flamegraphCanvas();
   ctx.clearRect(0, 0, w, h);
 
-  if (flameFills.length === 0) {
+  if (flameRttBuffer.length === 0) {
     ctx.fillStyle = '#8b949e';
     ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('waiting for fills…', 10, 20);
+    ctx.textBaseline = 'top';
+    ctx.fillText('waiting for fills…', 10, 10);
     return;
   }
 
-  const baseline = baselineIdx != null && flameFills[baselineIdx]
-    ? totalNs(flameFills[baselineIdx].stamps, flameFills[baselineIdx].rttTotal)
-    : null;
+  const { boxes, root } = flamegraphBoxes();
+  const pad = 4;
+  const rowH = Math.floor((h - pad * 2) / FLAME_LAYERS.length);
+  const px = (ns) => (ns / root) * (w - pad * 2);
 
-  const widest = baseline ?? Math.max(
-    1,
-    ...flameFills.map(f => totalNs(f.stamps, f.rttTotal)),
-  );
+  // Bottom layer is row 0 visually; canvas y grows downward, so layer i sits
+  // at y = h - pad - (i+1) * rowH.
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    const x = pad + px(b.start);
+    const y = h - pad - (i + 1) * rowH;
+    const bw = Math.max(1, px(b.width));
+    const bh = rowH - 1;
 
-  const rowH = Math.max(6, Math.min(14, Math.floor((h - 4) / Math.min(FLAME_ROWS, flameFills.length))));
-  const labelW = 0; // labels live in the chart legend; flame is pure visual.
+    ctx.fillStyle = b.layer.color;
+    ctx.globalAlpha = (flameHover === null || flameHover === i) ? 1.0 : 0.55;
+    ctx.fillRect(x, y, bw, bh);
+    ctx.globalAlpha = 1.0;
 
-  // Newest on top.
-  const fills = flameFills.slice(-FLAME_ROWS).reverse();
-  for (let r = 0; r < fills.length; r++) {
-    const f = fills[r];
-    const y = 2 + r * rowH;
-    let x = labelW;
-    const total = totalNs(f.stamps, f.rttTotal);
-    const scale = (w - labelW - 4) / widest;
-
-    for (let i = 0; i < STAGES.length; i++) {
-      const ns = stageNs(STAGES[i], f.stamps, f.rttTotal);
-      const segW = ns * scale;
-      ctx.fillStyle = COLOURS[i];
-      ctx.fillRect(x, y, Math.max(0, segW), rowH - 1);
-      x += segW;
-    }
-
-    // Pinned baseline row gets an outline.
-    const fillsAdded = flameFills.length;
-    const originalIdx = fillsAdded - 1 - r;
-    if (originalIdx === baselineIdx) {
-      ctx.strokeStyle = '#e6edf3';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(labelW + 0.5, y + 0.5, w - labelW - 4, rowH - 2);
-    }
-
-    // Total ns at the right edge if there's room.
-    if (rowH >= 10) {
-      ctx.fillStyle = 'rgba(13,17,23,0.7)';
-      ctx.fillRect(w - 64, y, 60, rowH - 1);
-      ctx.fillStyle = '#e6edf3';
-      ctx.font = '10px ui-monospace, monospace';
+    // Label inside the box if it fits.
+    const label = `${b.layer.name} · ${fmtNs(b.ns)}`;
+    ctx.font = '11px ui-monospace, monospace';
+    const tw = ctx.measureText(label).width;
+    if (tw + 8 < bw) {
+      ctx.fillStyle = '#0d1117';
       ctx.textBaseline = 'middle';
-      ctx.fillText((total / 1000).toFixed(1) + ' µs', w - 60, y + (rowH - 1) / 2);
+      ctx.fillText(label, x + 4, y + bh / 2);
+    } else if (bw > 36) {
+      // Just the name if duration won't fit.
+      const short = b.layer.name;
+      const stw = ctx.measureText(short).width;
+      if (stw + 6 < bw) {
+        ctx.fillStyle = '#0d1117';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(short, x + 3, y + bh / 2);
+      }
     }
   }
 }
 
-function flameClickHandler(ev) {
-  if (flameFills.length === 0) return;
-  const c = document.getElementById('flame');
+function flamegraphHitTest(ev) {
+  const c = document.getElementById('flamegraph');
   const rect = c.getBoundingClientRect();
-  const y = ev.clientY - rect.top - 2;
-  const visible = Math.min(FLAME_ROWS, flameFills.length);
-  const rowH = Math.max(6, Math.min(14, Math.floor((parseInt(c.getAttribute('height'), 10) - 4) / visible)));
-  const r = Math.floor(y / rowH);
-  if (r < 0 || r >= visible) return;
-  const idx = flameFills.length - 1 - r;
-  baselineIdx = baselineIdx === idx ? null : idx;
-  drawFlame();
+  const x = ev.clientX - rect.left;
+  const y = ev.clientY - rect.top;
+  const h = parseInt(c.getAttribute('height'), 10) || 200;
+  const pad = 4;
+  const rowH = Math.floor((h - pad * 2) / FLAME_LAYERS.length);
+  const { boxes, root } = flamegraphBoxes();
+  const w = c.clientWidth;
+  const px = (ns) => (ns / root) * (w - pad * 2);
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    const bx = pad + px(b.start);
+    const by = h - pad - (i + 1) * rowH;
+    const bw = Math.max(1, px(b.width));
+    const bh = rowH - 1;
+    if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) return { idx: i, box: b };
+  }
+  return null;
 }
 
-function pushFlame(stamps, rttTotal) {
-  flameFills.push({ stamps: stamps.slice(), rttTotal });
-  // Keep memory bounded.
-  if (flameFills.length > FLAME_ROWS * 4) {
-    const drop = flameFills.length - FLAME_ROWS * 4;
-    flameFills.splice(0, drop);
-    if (baselineIdx != null) {
-      baselineIdx -= drop;
-      if (baselineIdx < 0) baselineIdx = null;
-    }
+function flamegraphMove(ev) {
+  const hit = flamegraphHitTest(ev);
+  const tip = document.getElementById('flamegraph-tip');
+  if (!hit) {
+    if (flameHover !== null) { flameHover = null; drawFlamegraph(); }
+    tip.style.display = 'none';
+    return;
   }
-  drawFlame();
+  if (flameHover !== hit.idx) { flameHover = hit.idx; drawFlamegraph(); }
+  const { boxes, root } = flamegraphBoxes();
+  const parentNs = hit.idx === 0 ? root : (boxes[hit.idx - 1].ns || 1);
+  const pctParent = (hit.box.ns / parentNs) * 100;
+  const pctRoot = (hit.box.ns / (root || 1)) * 100;
+  tip.innerHTML =
+    `<strong>${hit.box.layer.name}</strong> — ${fmtNs(hit.box.ns)}<br>` +
+    `${hit.box.layer.detail}<br>` +
+    `${pctParent.toFixed(1)}% of parent · ${pctRoot.toFixed(1)}% of total`;
+  const wrap = document.getElementById('flamegraph').parentElement;
+  const wrapRect = wrap.getBoundingClientRect();
+  const x = ev.clientX - wrapRect.left + 12;
+  const y = ev.clientY - wrapRect.top + 12;
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+  tip.style.display = 'block';
+}
+
+function flamegraphLeave() {
+  flameHover = null;
+  document.getElementById('flamegraph-tip').style.display = 'none';
+  drawFlamegraph();
+}
+
+function initFlameLegend() {
+  const root = document.getElementById('flame-legend');
+  root.innerHTML = FLAME_LAYERS.map(l =>
+    `<div class="row"><span class="sw" style="background:${l.color}"></span>` +
+    `<span class="name">${l.name}</span><span>${l.detail}</span></div>`
+  ).join('');
 }
 
 // ── Order stream control ──────────────────────────────────────────────────
@@ -289,13 +375,15 @@ function stopStream() {
 window.addEventListener('DOMContentLoaded', () => {
   initChart();
   initFlameLegend();
-  drawFlame();
+  drawFlamegraph();
 
   document.getElementById('start').onclick = startStream;
-  document.getElementById('flame').addEventListener('click', flameClickHandler);
+  const flameEl = document.getElementById('flamegraph');
+  flameEl.addEventListener('mousemove', flamegraphMove);
+  flameEl.addEventListener('mouseleave', flamegraphLeave);
 
-  const flameRO = new ResizeObserver(() => drawFlame());
-  flameRO.observe(document.getElementById('flame'));
+  const flameRO = new ResizeObserver(() => drawFlamegraph());
+  flameRO.observe(flameEl);
 
   let pricedFills = 0;
   tracker.onResponse((rt) => {

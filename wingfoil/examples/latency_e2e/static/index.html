@@ -69,10 +69,19 @@
 
     #chart { width: 100%; }
 
-    /* Flame chart: each row is one fill, segments stacked horizontally per hop. */
-    #flame { width: 100%; }
-    .flame-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; font-size: 11px; color: var(--muted); }
-    .flame-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+    /* Flamegraph: nested rectangles, browser RTT at the bottom, FIX→LMAX at the top. */
+    .flamegraph-wrap { position: relative; }
+    #flamegraph { width: 100%; display: block; }
+    #flamegraph-tip {
+      position: absolute; pointer-events: none; display: none;
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 4px; padding: 6px 8px; font-size: 11px; line-height: 1.4;
+      font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5;
+    }
+    .flame-legend { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .flame-legend .row { display: flex; align-items: baseline; gap: 6px; }
+    .flame-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; flex-shrink: 0; }
+    .flame-legend .name { color: var(--fg); font-weight: 600; min-width: 88px; }
 
     .grafana-wrap { position: relative; }
     #grafana { width: 100%; height: 280px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
@@ -138,7 +147,7 @@
         <summary>how to read this</summary>
         <p>
           Each fill traverses nine wingfoil stamp points: <code>ws_recv → ws_publish → gw_recv → gw_price → fix_send → fix_recv → gw_publish → ws_sub_recv → ws_send</code>.
-          The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flame chart below is one bar per fill, segments coloured by hop.
+          The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flamegraph below shows the nested call stack: browser at the bottom (full round-trip), each layer above is a strict sub-interval of the layer below — exactly like a CPU flamegraph, but the samples are wall-clock fills.
         </p>
         <p>
           <strong>Resident</strong> is everything inside this server (two processes connected by iceoryx2 shared memory). <strong>Wire</strong> is the FIX-over-TLS round-trip to LMAX plus the WebSocket legs to your browser — derived as <code>rtt_total − resident</code>, both measured in a single clock domain so no NTP sync is needed.
@@ -146,12 +155,13 @@
       </details>
     </section>
 
-    <section class="panel">
+    <section class="panel flamegraph-wrap">
       <div class="panel-head">
-        <h2>flame — last fills</h2>
-        <span class="meta">click a row to pin baseline · click again to clear</span>
+        <h2>flamegraph — nested call stack (rolling mean)</h2>
+        <span class="meta" id="flamegraph-meta">n=0</span>
       </div>
-      <canvas id="flame" height="320"></canvas>
+      <canvas id="flamegraph" height="200"></canvas>
+      <div id="flamegraph-tip"></div>
       <div class="flame-legend" id="flame-legend"></div>
     </section>
 
