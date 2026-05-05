@@ -90,6 +90,12 @@ jobs:
           version: 1.11.2
 
       - name: Packer init
+        env:
+          # Authenticate plugin downloads against the GitHub API. Anonymous
+          # requests share a low IP-pool quota and intermittently hit 403
+          # ("API rate limit exceeded"); the workflow's GITHUB_TOKEN bumps
+          # the limit to 5000 req/h and is available on every run.
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init wingfoil-latency.pkr.hcl
 
       # Fetch the ECR auth token on the runner (which has AWS creds via OIDC)
