@@ -146,7 +146,11 @@ function initChart() {
     ],
     axes: [
       { stroke: '#8b949e' },
-      { stroke: '#8b949e', values: (_, vs) => vs.map(v => (v === null || v === undefined || !isFinite(v)) ? '–' : v.toLocaleString()) },
+      {
+        stroke: '#8b949e',
+        size: 64,
+        values: (_, vs) => vs.map(fmtAxisNs),
+      },
     ],
   };
   chart = new uPlot(opts, chartData, document.getElementById('chart'));
@@ -229,6 +233,15 @@ function fmtNs(ns) {
   if (ns >= 1_000_000) return (ns / 1_000_000).toFixed(2) + ' ms';
   if (ns >= 1_000) return (ns / 1000).toFixed(1) + ' µs';
   return ns.toFixed(0) + ' ns';
+}
+
+// Compact axis labels — uPlot picks log-10 gridlines (1, 10, 100, …), so we
+// round-trip through unit suffixes and drop trailing zeros to keep them short.
+function fmtAxisNs(ns) {
+  if (ns === null || ns === undefined || !isFinite(ns) || ns <= 0) return '–';
+  if (ns >= 1_000_000) return (ns / 1_000_000) + 'ms';
+  if (ns >= 1_000)     return (ns / 1_000)     + 'µs';
+  return ns + 'ns';
 }
 
 function drawFlamegraph() {
