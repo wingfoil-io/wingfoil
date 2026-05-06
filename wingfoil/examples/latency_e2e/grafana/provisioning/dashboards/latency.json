@@ -9,34 +9,36 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Spot interruption status",
-      "description": "Shows a red banner with the seconds remaining when the EC2 Spot watcher detects an interruption notice. Stays green ('Stable') when no notice is active and on stacks where the watcher isn't running.",
+      "title": "",
+      "description": "EC2 Spot interruption status. '.' when stable; countdown (s) when AWS has scheduled a reclaim.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "transparent": true,
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
+              { "color": "text", "value": null },
               { "color": "red", "value": 0 }
             ]
           },
           "mappings": [
             {
               "type": "range",
-              "options": { "from": -1e9, "to": -0.5, "result": { "text": "Stable — no Spot interruption notice", "color": "green" } }
+              "options": { "from": -1e9, "to": -0.5, "result": { "text": ".", "color": "text" } }
             }
           ],
-          "noValue": "Stable — no Spot interruption notice"
+          "noValue": "."
         }
       },
       "options": {
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "textMode": "value",
+        "text": { "valueSize": 12 },
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
       "targets": [
@@ -47,7 +49,7 @@
       "type": "timeseries",
       "title": "per-hop p99 latency (ns) — aggregate across all sessions",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 3 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 2 },
       "fieldConfig": {
         "defaults": {
           "unit": "ns",
@@ -64,7 +66,7 @@
       "type": "timeseries",
       "title": "per-hop p50 latency (ns)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 12 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 11 },
       "fieldConfig": { "defaults": { "unit": "ns" } },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean"] } },
       "targets": [
@@ -75,7 +77,7 @@
       "type": "stat",
       "title": "active sessions",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 21 },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
       "targets": [{ "expr": "latency_e2e_active_sessions", "refId": "A" }]
     },
@@ -83,7 +85,7 @@
       "type": "stat",
       "title": "orders rate (per s)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 21 },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
       "targets": [{ "expr": "rate(latency_e2e_admitted_total[1m])", "refId": "A" }]
     },
@@ -91,7 +93,7 @@
       "type": "stat",
       "title": "rejected orders (cap reached)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 21 },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
       "targets": [{ "expr": "increase(latency_e2e_rejected_total[5m])", "refId": "A" }]
     },
@@ -99,7 +101,7 @@
       "type": "traces",
       "title": "your session traces — $session",
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 25 },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 24 },
       "targets": [
         {
           "queryType": "traceql",
