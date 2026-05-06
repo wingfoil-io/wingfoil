@@ -35,7 +35,7 @@ on cached images).
                                                             │
                                                   Prometheus scrapes :9092
                                                             │
-                                                Grafana banner shows countdown
+                                                Grafana status strip shows countdown
 ```
 
 - **EIP is reattached on every boot** by `user_data.sh` via
@@ -43,7 +43,7 @@ on cached images).
 - **`spot_watcher.py`** runs as a systemd unit, polling
   `http://169.254.169.254/latest/meta-data/spot/instance-action` every 5 s and
   exposing `wingfoil_spot_termination_seconds_remaining` on `:9092`. Prometheus
-  scrapes it; the Grafana dashboard shows a red banner with the countdown.
+  scrapes it; the Grafana dashboard shows a red countdown in the slim status strip.
 - **Single AZ** (default `eu-west-2a`) — keeps EIP/EBS reattach simple. London
   region is chosen for proximity to LMAX LD4 (Slough).
 
@@ -201,9 +201,10 @@ baseline.
 # WS server — `-k` because the cert is self-signed.
 curl -fsSk https://<eip>/
 
-# Grafana — load the dashboard, the "Spot interruption status" banner should
-# read green ("Stable — no Spot interruption notice"). Click through the
-# browser's "Your connection is not private" warning the first time.
+# Grafana — load the dashboard. The slim Spot status strip at the top reads
+# "." when stable and switches to a red countdown (seconds remaining) on
+# reclaim. Click through the browser's "Your connection is not private"
+# warning the first time.
 open https://<eip>:3000
 ```
 
@@ -211,7 +212,7 @@ open https://<eip>:3000
 
 1. **T-120s** — AWS sets the IMDS `spot/instance-action` flag.
 2. **T-115s** — `spot_watcher.py` picks it up on its next 5 s poll. The
-   Grafana banner switches red and counts down (`wingfoil_spot_termination_seconds_remaining`).
+   Grafana status strip switches red and counts down (`wingfoil_spot_termination_seconds_remaining`).
 3. **T-0s** — instance terminates.
 4. **T+~30s** — the ASG launches a replacement in the same AZ.
 5. **T+~60–90s** — `user_data.sh` finishes: EIP reattached, secrets fetched,
@@ -266,11 +267,11 @@ matching this stack. The launch template's `tag_specifications` must apply
 those tags at instance creation; verify with
 `aws ec2 describe-instances --filters Name=tag:Stack,Values=demo`.
 
-**Grafana banner stays "Stable" during a real reclaim**: check that
+**Grafana status strip stays "." during a real reclaim**: check that
 `spot_watcher.service` is running (`systemctl status wingfoil-spot-watcher`)
 and that Prometheus is reaching `localhost:9092` (the
 `latency_e2e_spot_watcher` job in `prometheus.yml`). On non-EC2-Spot stacks
-the metric is unscraped — that's expected, and the banner stays green.
+the metric is unscraped — that's expected, and the strip stays at ".".
 
 **`fix_gw` can't log in**: secrets fetch happens in `user_data.sh`. Inspect
 `/var/log/cloud-init-output.log` on the instance for `aws secretsmanager`
