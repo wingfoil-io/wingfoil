@@ -29,6 +29,7 @@ const COLOURS = [
 ];
 const MAX_POINTS = 200;       // chart history (~100 s at 2 Hz)
 const FLAME_WINDOW = 32;      // rolling-mean window for the flamegraph
+const FLAME_CSS_HEIGHT = 200; // design CSS height (px); bitmap is dpr-scaled
 
 // Flamegraph layers, bottom (widest, outermost) to top (narrowest, deepest).
 // Each layer is a strict sub-interval of the layer below it — that nesting
@@ -218,7 +219,11 @@ function flamegraphCanvas() {
   const c = document.getElementById('flamegraph');
   const dpr = window.devicePixelRatio || 1;
   const cssW = c.clientWidth;
-  const cssH = parseInt(c.getAttribute('height'), 10) || 200;
+  // Don't read the `height` attribute back: setting `c.height` reflects into
+  // it, so on the second render cssH would be the previous bitmap height
+  // (e.g. 400 at dpr=2), then 800, then 1600 — the canvas grows every frame
+  // and the panel flickers. Keep the CSS height as a constant.
+  const cssH = FLAME_CSS_HEIGHT;
   if (c.width !== cssW * dpr || c.height !== cssH * dpr) {
     c.width = cssW * dpr; c.height = cssH * dpr;
     c.style.height = cssH + 'px';
@@ -301,7 +306,7 @@ function flamegraphHitTest(ev) {
   const rect = c.getBoundingClientRect();
   const x = ev.clientX - rect.left;
   const y = ev.clientY - rect.top;
-  const h = parseInt(c.getAttribute('height'), 10) || 200;
+  const h = FLAME_CSS_HEIGHT;
   const pad = 4;
   const rowH = Math.floor((h - pad * 2) / FLAME_LAYERS.length);
   const { boxes, root } = flamegraphBoxes();
