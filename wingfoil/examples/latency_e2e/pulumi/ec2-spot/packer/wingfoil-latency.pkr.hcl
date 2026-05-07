@@ -33,14 +33,15 @@ variable "region" {
 
 variable "instance_type" {
   type = string
-  # `t3.medium` gives 4 GiB RAM and a non-burstable-floor network allocation
-  # large enough that the five concurrent ECR pulls don't drain credits, which
-  # is what dominates build time on smaller instances. Requires a Paid AWS
-  # account — the AWS Free plan rejects non-free-tier launches with
-  # `InvalidParameterCombination: ... not eligible for Free Tier`; fall back
-  # to `t3.micro` (free-tier-eligible, ~3-4× slower) by overriding via the
-  # workflow input or `PKR_VAR_instance_type` if the account is on Free.
-  default = "t3.medium"
+  # `c6in.large` is network-optimised (up to 25 Gbps) — purpose-built for the
+  # ECR-pull-bound work that dominates this build. Wall-clock floor is ~3-4
+  # min (cloud-init + AMI snapshot/register), and c6in.large gets close to it
+  # without paying for unused CPU/RAM. Requires a Paid AWS account — the AWS
+  # Free plan rejects non-free-tier launches with `InvalidParameterCombination:
+  # ... not eligible for Free Tier`; fall back to `t3.micro` (free-tier-
+  # eligible, ~4-5× slower) by overriding via the workflow input or
+  # `PKR_VAR_instance_type` if the account is on Free.
+  default = "c6in.large"
 }
 
 variable "ws_server_image"  { type = string }
