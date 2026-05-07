@@ -33,15 +33,13 @@ variable "region" {
 
 variable "instance_type" {
   type = string
-  # `c6in.large` is network-optimised (up to 25 Gbps) — purpose-built for the
-  # ECR-pull-bound work that dominates this build. Wall-clock floor is ~3-4
-  # min (cloud-init + AMI snapshot/register), and c6in.large gets close to it
-  # without paying for unused CPU/RAM. Requires a Paid AWS account — the AWS
-  # Free plan rejects non-free-tier launches with `InvalidParameterCombination:
-  # ... not eligible for Free Tier`; fall back to `t3.micro` (free-tier-
-  # eligible, ~4-5× slower) by overriding via the workflow input or
-  # `PKR_VAR_instance_type` if the account is on Free.
-  default = "c6in.large"
+  # `t3.micro` is free-tier-eligible and works on every AWS account, at the
+  # cost of being ~4-5× slower than network-optimised types on the ECR-pull-
+  # bound work that dominates this build. On a Paid account, override to
+  # `c6in.large` (network-optimised, up to 25 Gbps) via the workflow input or
+  # `PKR_VAR_instance_type` to get close to the ~3-4 min wall-clock floor
+  # (cloud-init + AMI snapshot/register).
+  default = "t3.micro"
 }
 
 variable "ws_server_image"  { type = string }
