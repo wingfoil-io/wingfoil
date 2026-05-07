@@ -150,9 +150,6 @@
           The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flamegraph below shows the nested call stack: browser at the bottom (full round-trip), each layer above is a strict sub-interval of the layer below — exactly like a CPU flamegraph, but the samples are wall-clock fills.
         </p>
         <p>
-          By default the server snaps <code>wall_time</code> once per engine cycle, so any two hops that fire in the same cycle measure 0 ns and pin to the chart's 1 ns floor. Run <code>fix_gw</code> / <code>ws_server</code> with <code>--precise</code> (or <code>WINGFOIL_PRECISE_STAMPS=1</code>) to stamp from the TSC on every hop — a ~5–10 ns cost per stamp that lifts intra-cycle hops above the floor.
-        </p>
-        <p>
           <strong>Resident</strong> is everything inside this server (two processes connected by iceoryx2 shared memory). <strong>Wire</strong> is the FIX-over-TLS round-trip to LMAX plus the WebSocket legs to your browser — derived as <code>rtt_total − resident</code>, both measured in a single clock domain so no NTP sync is needed.
         </p>
       </details>

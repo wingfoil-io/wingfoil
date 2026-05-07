@@ -93,34 +93,19 @@ client.onConnection((s) => {
 });
 
 // ── Per-hop helpers ───────────────────────────────────────────────────────
-// Floor returned values at 1 ns so the log-scale chart always renders every
-// series. Without precise stamps (--precise / WINGFOIL_PRECISE_STAMPS=1) the
-// server snaps wall_time once per engine cycle, so any two hops that fire in
-// the same cycle (e.g. ws_recv → ws_publish, gw_recv → gw_price, gw_price →
-// fix_send, fix_recv → gw_publish, ws_sub_recv → ws_send) measure exactly
-// 0 ns. Cross-process hops can also momentarily go zero or slightly negative
-// when one side's cycle-start snap jitters ahead of the other's. uPlot
-// treats ≤0 as gaps on log axes, which is what was making those series
-// "drop out" of the chart — the floor keeps the line visible at the axis
-// minimum so the reader can see the hop is being reported, just below
-// cycle-clock resolution.
-const FLOOR_NS = 1;
-function floorNs(v) {
-  return v > 0 ? v : FLOOR_NS;
-}
 function stageNs(entry, stamps, rttTotal) {
   const [, kind, a, b] = entry;
   if (kind === 'server') {
     const aVal = stamps[a];
     const bVal = stamps[b];
-    if (aVal == null || bVal == null) return FLOOR_NS;
-    return floorNs(bVal - aVal);
+    if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) return 0;
+    return bVal - aVal;
   }
   if (kind === 'wire') {
-    if (stamps[0] == null || stamps[8] == null) return FLOOR_NS;
-    return floorNs(rttTotal - (stamps[8] - stamps[0]));
+    if (stamps[0] === null || stamps[0] === undefined || stamps[8] === null || stamps[8] === undefined) return 0;
+    return Math.max(0, rttTotal - (stamps[8] - stamps[0]));
   }
-  return FLOOR_NS;
+  return 0;
 }
 
 // ── uPlot chart ───────────────────────────────────────────────────────────
