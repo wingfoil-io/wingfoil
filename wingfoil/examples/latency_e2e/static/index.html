@@ -115,7 +115,7 @@
         </select>
       </label>
       <label>qty <input id="qty" type="number" min="1" value="1" style="width:50px"/></label>
-      <label>Hz <input id="rate" type="number" min="1" max="20" value="2" style="width:42px"/></label>
+      <label>Hz <input id="rate" type="number" min="1" max="100" value="2" style="width:50px"/></label>
       <button id="start">start</button>
     </div>
     <div class="links">
@@ -132,25 +132,20 @@
         <span class="meta" id="rtt-meta">—</span>
       </div>
       <div class="stats">
-        <div class="stat"><div class="k">sent</div><div class="v" id="sent">0</div></div>
         <div class="stat"><div class="k">filled</div><div class="v" id="filled">0</div></div>
         <div class="stat"><div class="k">avg fill px</div><div class="v" id="px">—</div></div>
-        <div class="stat"><div class="k">round-trip</div><div class="v" id="rtt">—</div></div>
-      </div>
-      <div class="breakdown">
-        <div class="seg total"><div class="k">rtt mean <span class="hint">last 32 fills</span></div><div class="v" id="bd-total">—</div></div>
-        <div class="seg resident"><div class="k">resident <span class="hint">ws_recv → ws_send (in-process)</span></div><div class="v" id="bd-resident">—</div></div>
-        <div class="seg wire"><div class="k">wire <span class="hint">FIX/TLS to LMAX + WS legs</span></div><div class="v" id="bd-wire">—</div></div>
+        <div class="stat"><div class="k">last resident</div><div class="v" id="rtt">—</div></div>
+        <div class="stat"><div class="k">resident mean <span class="hint">last 32</span></div><div class="v" id="bd-resident">—</div></div>
       </div>
       <div id="chart" style="margin-top:10px"></div>
       <details class="legend">
         <summary>how to read this</summary>
         <p>
-          Each fill traverses nine wingfoil stamp points: <code>ws_recv → ws_publish → gw_recv → gw_price → fix_send → fix_recv → gw_publish → ws_sub_recv → ws_send</code>.
-          The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flamegraph below shows the nested call stack: browser at the bottom (full round-trip), each layer above is a strict sub-interval of the layer below — exactly like a CPU flamegraph, but the samples are wall-clock fills.
+          Click <strong>start</strong> to enable a server-side order generator bound to this browser session. Changing <em>side</em>, <em>qty</em>, or <em>Hz</em> while running re-sends the control frame and updates the rate live — no stop/restart needed.
         </p>
         <p>
-          <strong>Resident</strong> is everything inside this server (two processes connected by iceoryx2 shared memory). <strong>Wire</strong> is the FIX-over-TLS round-trip to LMAX plus the WebSocket legs to your browser — derived as <code>rtt_total − resident</code>, both measured in a single clock domain so no NTP sync is needed.
+          Each fill traverses nine wingfoil stamp points: <code>ws_recv → ws_publish → gw_recv → gw_price → fix_send → fix_recv → gw_publish → ws_sub_recv → ws_send</code>.
+          The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flamegraph below shows the nested call stack: <strong>resident</strong> (ws_recv → ws_send, the whole server pipeline) at the bottom, each layer above is a strict sub-interval of the layer below — exactly like a CPU flamegraph, but the samples are wall-clock fills.
         </p>
       </details>
     </section>
@@ -185,7 +180,6 @@
     {
       "imports": {
         "@wingfoil/client": "https://esm.sh/@wingfoil/client@4.3.3",
-        "@wingfoil/client/tracing": "https://esm.sh/@wingfoil/client@4.3.3/tracing",
         "@wingfoil/telemetry": "https://esm.sh/@wingfoil/telemetry@0.1.0"
       }
     }
