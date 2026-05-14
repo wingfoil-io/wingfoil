@@ -18,15 +18,18 @@ pub const SVC_ORDERS: &str = "wingfoil/latency_e2e/orders";
 pub const SVC_FILLS: &str = "wingfoil/latency_e2e/fills";
 
 // ── WebSocket topics (ws_server ↔ browser) ────────────────────────────────
-pub const TOPIC_ORDERS: &str = "orders";
+pub const TOPIC_CONTROL: &str = "control";
 pub const TOPIC_FILLS: &str = "fills";
-pub const TOPIC_ECHO: &str = "latency_echo";
-pub const TOPIC_SESSION: &str = "session";
 
 pub type SessionId = [u8; 16];
 
 pub const SIDE_BUY: u8 = 0;
 pub const SIDE_SELL: u8 = 1;
+/// Sentinel: alternate buy/sell on each generated order.
+pub const SIDE_ALT: u8 = 255;
+
+pub const CONTROL_STOP: u8 = 0;
+pub const CONTROL_START: u8 = 1;
 
 /// Shared-memory payload that traverses ws_server → iceoryx2 → fix_gw
 /// and then, after fill matching, fix_gw → iceoryx2 → ws_server.
@@ -50,9 +53,6 @@ pub struct RoundTrip {
     pub filled_qty: u64,
     /// Fill price × 10 000 (four decimal places). Zero until filled.
     pub fill_price_bps: i64,
-    /// Browser `performance.now()` in nanoseconds at order submit.
-    /// This is in the client clock domain, not the server's.
-    pub t_client_send: u64,
     pub side: u8,
     /// Explicit padding to keep the struct layout and `[u64; N]` alignment
     /// stable across compilers and make the `ZeroCopySend` contract obvious.
@@ -82,14 +82,19 @@ latency_stages! {
 
 // ── WebSocket wire types (JSON by default for easy browser devtools) ──────
 
-/// Browser → ws_server on TOPIC_ORDERS.
+/// Browser → ws_server on TOPIC_CONTROL. Starts/stops a server-side order
+/// generator bound to this `session`. Re-sending `CONTROL_START` while a
+/// session is already active updates `side`/`qty`/`rate_hz` live — no
+/// stop/restart needed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OrderFrame {
+pub struct ControlFrame {
     pub session: SessionId,
-    pub client_seq: u64,
+    /// `CONTROL_STOP` or `CONTROL_START`.
+    pub action: u8,
+    /// `SIDE_BUY`, `SIDE_SELL`, or `SIDE_ALT` (toggle each emission).
     pub side: u8,
     pub qty: u64,
-    pub t_client_send: u64,
+    pub rate_hz: u32,
 }
 
 /// ws_server → browser on TOPIC_FILLS. Carries the full set of server-side
@@ -101,30 +106,7 @@ pub struct FillFrame {
     pub side: u8,
     pub filled_qty: u64,
     pub fill_price_bps: i64,
-    pub t_client_send: u64,
     pub stamps: [u64; 9],
-}
-
-/// Browser → ws_server on TOPIC_ECHO, carrying `t_client_recv` stamped in
-/// the browser plus the full server-side stamps vector. Used for
-/// round-trip aggregation (LatencyReport on the server).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EchoFrame {
-    pub session: SessionId,
-    pub client_seq: u64,
-    pub t_client_send: u64,
-    pub t_client_recv: u64,
-    pub stamps: [u64; 9],
-}
-
-/// ws_server → browser on TOPIC_SESSION. Lets the browser render queue
-/// position / remaining time.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SessionStatus {
-    pub session: SessionId,
-    pub state: String,
-    pub remaining_secs: u32,
-    pub queue_pos: u32,
 }
 
 // ── Env var helpers ───────────────────────────────────────────────────────

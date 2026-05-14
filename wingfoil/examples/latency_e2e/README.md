@@ -4,12 +4,19 @@ A multi-process wingfoil pipeline that stamps wall-clock timestamps at every
 hop on the way out and back, accumulates per-hop histograms, and renders a
 live per-session dashboard in the browser.
 
+The browser is a pure observer + control plane: it tells `ws_server` to
+**start** (or **stop**) issuing orders on its session UUID, and subscribes
+to the resulting fills. All order generation happens server-side in the
+wingfoil graph — the on-graph generator picks up rate/side/qty changes
+live, so tweaking `Hz` in the UI updates the rate without a restart.
+
 ```
-browser ── WebSocket ──► ws_server ── iceoryx2 ──► fix_gw ── FIX/TLS ──► LMAX
-   ▲                          ▲                       │                      │
-   │                          │                       ▼                      │
-   │                          └──── iceoryx2 ◄──── fix_gw ◄──── FIX/TLS ◄───┘
-   └────────── WebSocket ─────┘
+browser ──── WebSocket ────► ws_server                                       (control: start/stop)
+                                │
+                                ├─ on-graph generator ─ iceoryx2 ─► fix_gw ─ FIX/TLS ─► LMAX
+                                │                                  ▲                       │
+                                │                                  │                       ▼
+browser ◄─── WebSocket ──── ws_server ◄─ iceoryx2 ◄──── fix_gw ◄──── FIX/TLS ◄─────────────┘
 ```
 
 Nine stamp stages, in order: `ws_recv → ws_publish → gw_recv → gw_price →
@@ -66,11 +73,16 @@ cargo run --release --example latency_e2e_ws_server \
 docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d
 ```
 
-Then open `http://localhost:8080` and click **start**. The page shows
-three panels simultaneously: a live in-page chart (this session's
-per-hop latency in real time), an embedded Grafana iframe showing
-aggregate p50/p99 across all sessions (Prometheus), and below that
-the per-session trace waterfall (Tempo), pre-filtered to this
+Then open `http://localhost:8080`, pick `side`/`qty`/`Hz`, and click
+**start**. That publishes a single `ControlFrame` to the server, which
+spins up an on-graph generator bound to your session UUID. Changing
+`side`/`qty`/`Hz` while running re-publishes the control frame and the
+server updates the active generator in place — no stop/restart needed.
+
+The page shows three panels simultaneously: a live in-page chart (this
+session's per-hop latency in real time), an embedded Grafana iframe
+showing aggregate p50/p99 across all sessions (Prometheus), and below
+that the per-session trace waterfall (Tempo), pre-filtered to this
 browser's UUID via `?var-session=…`.
 
 ## Intra-cycle vs cycle-start stamps
@@ -100,9 +112,21 @@ operators compile to a no-op when disabled — zero runtime cost when off.
 ## Session cap and auto-expiry
 
 `ws_server` admits up to `WINGFOIL_SESSION_CAP` (default 8) concurrent
-sessions, each living `WINGFOIL_SESSION_SECS` (default 60). Orders past
-the cap are dropped server-side and a warning is logged. This caps load
-on the LMAX session and bounds Prometheus cardinality.
+sessions, each living `WINGFOIL_SESSION_SECS` (default 60). `start`
+control frames past the cap are rejected server-side and a warning is
+logged. This caps load on the LMAX session and bounds Prometheus
+cardinality.
+
+## Generator tick rate
+
+The graph runs a `WINGFOIL_TICK_US` ticker (default 1000 µs = 1 kHz)
+that polls the active-session registry and emits at most one order per
+cycle. With the default `SESSION_CAP=8` × per-session `rate_hz ≤ 100`,
+the upper bound is 800 Hz — well under the tick rate. Sessions whose
+`next_emit_ns` is past due are picked earliest-first; if multiple are
+due in the same cycle, only one fires and the rest emit on subsequent
+ticks (sub-millisecond jitter). Lowering `WINGFOIL_TICK_US` tightens
+that bound at the cost of more idle cycles.
 
 ## Three observability views, one browser tab
 
@@ -157,28 +181,12 @@ touch, so every order produces a terminal ExecutionReport (Fill,
 partial-fill-then-cancel, or reject) within milliseconds. No timeouts
 needed.
 
-## Cross-clock RTT — single-clock arithmetic, no NTP
+## Single-clock arithmetic
 
-`performance.now()` (browser) and `NanoTime::now()` (server) use
-different epochs, but we never compare across them. Every delta we
-care about is a subtraction within *one* clock frame:
-
-```
-rtt_total   = T4 - T1                    (client clock)
-resident    = stamps[8] - stamps[0]      (server clock)
-wire_rtt    = rtt_total - resident       (same units; just minus)
-```
-
-The browser records `T1 = nowNs()` at order submit and `T4 = nowNs()`
-at fill receipt; the server stamps `stamps[0] = ws_recv` and
-`stamps[8] = ws_send`. The browser posts all four back on
-`TOPIC_ECHO`; the server aggregates `rtt_total` and `wire_rtt` into
-two `StageStats` histograms exposed via Prometheus
-(`latency_e2e_rtt_total_{p50,p99,count}_ns` and
-`latency_e2e_wire_rtt_…`). No offset estimation, no convergence
-heuristic, no symmetric-path assumption. The only thing we don't
-split is inbound vs outbound wire legs — they're lumped into
-`wire_rtt` together.
+All nine stamps are taken on the server clock (`NanoTime::now()`), so
+every per-hop delta and the end-to-end `resident = stamps[8] - stamps[0]`
+are subtractions within one clock frame — no NTP-style offset estimation
+needed.
 
 ## Ports
 

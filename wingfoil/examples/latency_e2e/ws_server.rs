@@ -1,14 +1,21 @@
 // End-to-end latency demo — WebSocket server edge.
 //
 // Pipeline (this binary):
-//   browser ── WS ──► ws_server ── iceoryx2 ──► fix_gw            (outbound)
+//   browser ── WS ──► ws_server                                    (control: start/stop)
+//                        │
+//                        └── server-side generator ── iceoryx2 ──► fix_gw   (outbound)
 //   browser ◄── WS ── ws_server ◄── iceoryx2 ── fix_gw            (inbound)
-//   browser ── WS ──► ws_server                                    (echo)
 //
-// Stamps `ws_recv` and `ws_publish` on the way out, `ws_sub_recv` and
-// `ws_send` on the way back. Enforces a global cap on concurrent sessions
-// and auto-expires each session after 60 s — protects the single LMAX
-// session living in fix_gw and keeps a public deployment bounded.
+// The browser no longer publishes individual orders. It sends one
+// `ControlFrame { action: START, side, qty, rate_hz }` to enable a
+// server-side generator bound to its session UUID, then a matching
+// `STOP` (or session TTL) to disable it. Re-sending `START` while
+// already active updates side/qty/rate_hz live — no stop/restart cycle.
+//
+// Stamps `ws_recv` (when the generator produces the order) and
+// `ws_publish` (just before the iceoryx2 publish) on the way out;
+// `ws_sub_recv` and `ws_send` on the way back. The cap + auto-expiry
+// protect the single LMAX session living in fix_gw.
 //
 // Run (after starting fix_gw):
 //   cargo run --example latency_e2e_ws_server \
@@ -38,31 +45,38 @@ use wingfoil::adapters::web::{CodecKind, WebPubOperators, WebServer, web_sub};
 use wingfoil::*;
 
 use shared::{
-    EchoFrame, FillFrame, OrderFrame, RoundTrip, RoundTripLatency, SVC_FILLS, SVC_ORDERS,
-    SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, pin_current_from_env,
-    precise_stamps_enabled, round_trip_latency, session_hex,
+    CONTROL_START, CONTROL_STOP, ControlFrame, FillFrame, RoundTrip, RoundTripLatency, SIDE_ALT,
+    SVC_FILLS, SVC_ORDERS, SessionId, TOPIC_CONTROL, TOPIC_FILLS, env_string, env_u64,
+    pin_current_from_env, precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
 // ── Session registry ──────────────────────────────────────────────────────
 //
 // Lives in an `Arc<Mutex<…>>` because the Prometheus gauges read it from
-// the graph thread while the order pipeline writes to it from the web_sub
-// async consumer thread. Every order frame touches this once; contention
-// is negligible.
+// the graph thread, the control web_sub writes to it from its async
+// consumer thread, and the generator ticker reads it from the graph
+// thread. Every operation is O(active_sessions ≤ cap = 8) and is well
+// off the FIX-RTT critical path; contention is negligible.
 
-#[derive(Debug, Clone, Copy)]
-struct SessionEntry {
-    admitted_at_ns: u64,
-    orders: u64,
+#[derive(Debug)]
+struct ActiveSession {
+    side: u8,     // SIDE_BUY, SIDE_SELL, or SIDE_ALT
+    alt_next: u8, // next concrete side when `side == SIDE_ALT`
+    qty: u64,
+    period_ns: u64,    // 1e9 / rate_hz; 0 disables emission
+    next_emit_ns: u64, // next due time on the wall clock
+    client_seq: u64,
+    admitted_at_ns: u64, // for TTL-based eviction
 }
 
 #[derive(Default)]
 struct Sessions {
-    active: HashMap<SessionId, SessionEntry>,
+    active: HashMap<SessionId, ActiveSession>,
     cap: usize,
     ttl_ns: u64,
     admitted_total: u64,
     rejected_total: u64,
+    emitted_total: u64,
 }
 
 impl Sessions {
@@ -74,27 +88,112 @@ impl Sessions {
         }
     }
 
-    /// Returns `true` if the order should be forwarded.
-    fn admit(&mut self, id: &SessionId, now_ns: u64) -> bool {
+    fn gc(&mut self, now_ns: u64) {
         self.active
             .retain(|_, e| now_ns.saturating_sub(e.admitted_at_ns) < self.ttl_ns);
-        if let Some(e) = self.active.get_mut(id) {
-            e.orders += 1;
-            return true;
+    }
+
+    /// Apply a control message. `START` admits a new session or updates an
+    /// existing one in-place (so the browser can change `rate_hz` without
+    /// stop/restart). `STOP` removes it.
+    fn apply(&mut self, frame: &ControlFrame, now_ns: u64) {
+        self.gc(now_ns);
+        match frame.action {
+            CONTROL_STOP => {
+                self.active.remove(&frame.session);
+            }
+            CONTROL_START => {
+                let period_ns = if frame.rate_hz == 0 {
+                    0
+                } else {
+                    1_000_000_000 / frame.rate_hz as u64
+                };
+                if let Some(s) = self.active.get_mut(&frame.session) {
+                    s.side = frame.side;
+                    s.qty = frame.qty;
+                    s.period_ns = period_ns;
+                    // Re-anchor the schedule. Without this, raising rate_hz
+                    // from 1 to 100 would still wait ~1 s for the next emit;
+                    // lowering rate_hz to 1 mid-burst would let it catch up
+                    // by firing many back-to-back orders.
+                    s.next_emit_ns = now_ns.saturating_add(period_ns);
+                    return;
+                }
+                if self.active.len() >= self.cap {
+                    self.rejected_total += 1;
+                    log::warn!(
+                        "rejected start session={} (cap {} reached)",
+                        session_hex(&frame.session),
+                        self.cap,
+                    );
+                    return;
+                }
+                self.active.insert(
+                    frame.session,
+                    ActiveSession {
+                        side: frame.side,
+                        alt_next: 0,
+                        qty: frame.qty,
+                        period_ns,
+                        next_emit_ns: now_ns,
+                        client_seq: 0,
+                        admitted_at_ns: now_ns,
+                    },
+                );
+                self.admitted_total += 1;
+                log::info!(
+                    "admitted session={} rate={}Hz qty={} side={}",
+                    session_hex(&frame.session),
+                    frame.rate_hz,
+                    frame.qty,
+                    frame.side,
+                );
+            }
+            other => log::warn!(
+                "unknown control action={other} session={}",
+                session_hex(&frame.session),
+            ),
         }
-        if self.active.len() >= self.cap {
-            self.rejected_total += 1;
-            return false;
+    }
+
+    /// Emit at most one order this cycle. Picks the session whose
+    /// `next_emit_ns` is smallest among those past due; ties broken by
+    /// HashMap iteration order. Advances that session's schedule and
+    /// returns the order — None if no session is due.
+    fn poll(&mut self, now_ns: u64) -> Option<RoundTrip> {
+        self.gc(now_ns);
+        let mut chosen: Option<(SessionId, u64)> = None;
+        for (id, s) in self.active.iter() {
+            if s.period_ns == 0 || s.next_emit_ns > now_ns {
+                continue;
+            }
+            if chosen.is_none_or(|(_, t)| s.next_emit_ns < t) {
+                chosen = Some((*id, s.next_emit_ns));
+            }
         }
-        self.active.insert(
-            *id,
-            SessionEntry {
-                admitted_at_ns: now_ns,
-                orders: 1,
-            },
-        );
-        self.admitted_total += 1;
-        true
+        let (id, _) = chosen?;
+        let s = self.active.get_mut(&id).expect("just chosen above");
+        let side = if s.side == SIDE_ALT {
+            let v = s.alt_next;
+            s.alt_next ^= 1;
+            v
+        } else {
+            s.side
+        };
+        s.client_seq += 1;
+        s.next_emit_ns = s.next_emit_ns.saturating_add(s.period_ns);
+        // Cap catch-up: don't backlog if the graph stalled or rate_hz spiked.
+        if s.next_emit_ns < now_ns {
+            s.next_emit_ns = now_ns.saturating_add(s.period_ns);
+        }
+        self.emitted_total += 1;
+        Some(RoundTrip {
+            session: id,
+            client_seq: s.client_seq,
+            qty: s.qty,
+            side,
+            ..Default::default()
+        })
     }
 }
 
@@ -111,6 +210,7 @@ fn main() -> anyhow::Result<()> {
     let metrics_addr = env_string("WINGFOIL_METRICS_ADDR", "0.0.0.0:9091");
     let session_cap = env_u64("WINGFOIL_SESSION_CAP", 8) as usize;
     let session_ttl = env_u64("WINGFOIL_SESSION_SECS", 60);
+    let tick_us = env_u64("WINGFOIL_TICK_US", 1_000);
     let precise = precise_stamps_enabled();
 
     let static_dir: PathBuf = std::env::var("WINGFOIL_STATIC_DIR")
@@ -149,43 +249,43 @@ fn main() -> anyhow::Result<()> {
         server.port(),
         static_dir.display(),
     );
-    log::info!("session_cap={session_cap} ttl={session_ttl}s precise={precise}");
+    log::info!("session_cap={session_cap} ttl={session_ttl}s tick={tick_us}us precise={precise}",);
 
     let sessions = Arc::new(Mutex::new(Sessions::new(session_cap, session_ttl)));
 
-    // ── Outbound leg ─────────────────────────────────────────────────────
-    let orders_in = web_sub::<OrderFrame>(&server, TOPIC_ORDERS).collapse::<OrderFrame>();
-    let admitted = {
+    // ── Control ingest ───────────────────────────────────────────────────
+    // Drives the live state. Browser publishes one `ControlFrame` per
+    // start/stop click (and again to update side/qty/rate without
+    // stopping); the for_each just mutates the shared session map.
+    let control_in = web_sub::<ControlFrame>(&server, TOPIC_CONTROL).collapse::<ControlFrame>();
+    let control_sink = {
         let s = sessions.clone();
-        MapFilterStream::new(
-            orders_in,
-            Box::new(move |frame: OrderFrame| {
-                let now_ns: u64 = NanoTime::now().into();
-                let admit = s.lock().unwrap().admit(&frame.session, now_ns);
-                if !admit {
-                    log::warn!(
-                        "rejected order session={} seq={} (cap reached)",
-                        session_hex(&frame.session),
-                        frame.client_seq,
-                    );
-                }
-                (frame, admit)
-            }),
-        )
-        .into_stream()
+        control_in.for_each(move |frame, _t| {
+            let now_ns: u64 = NanoTime::now().into();
+            s.lock().unwrap().apply(&frame, now_ns);
+        })
     };
 
-    let traced_orders = admitted
-        .map(|o: OrderFrame| {
-            Traced::<RoundTrip, RoundTripLatency>::new(RoundTrip {
-                session: o.session,
-                client_seq: o.client_seq,
-                qty: o.qty,
-                side: o.side,
-                t_client_send: o.t_client_send,
-                ..Default::default()
-            })
-        })
+    // ── Outbound leg (server-side generator) ─────────────────────────────
+    // Single fast ticker; on each cycle, ask the registry for the next
+    // due order (or None). MapFilterStream drops the Nones, then we wrap
+    // in Traced<…>, stamp, and publish to iceoryx2 exactly as before.
+    let gen_tick = ticker(Duration::from_micros(tick_us));
+    let raw_orders = {
+        let s = sessions.clone();
+        gen_tick.produce(move || s.lock().unwrap().poll(NanoTime::now().into()))
+    };
+    let due_orders = MapFilterStream::new(
+        raw_orders,
+        Box::new(|opt: Option<RoundTrip>| match opt {
+            Some(rt) => (rt, true),
+            None => (RoundTrip::default(), false),
+        }),
+    )
+    .into_stream();
+
+    let traced_orders = due_orders
+        .map(Traced::<RoundTrip, RoundTripLatency>::new)
         .stamp_if::<round_trip_latency::ws_recv>(!precise)
         .stamp_precise_if::<round_trip_latency::ws_recv>(precise)
         .stamp_if::<round_trip_latency::ws_publish>(!precise)
@@ -231,7 +331,6 @@ fn main() -> anyhow::Result<()> {
             side: t.payload.side,
             filled_qty: t.payload.filled_qty,
             fill_price_bps: t.payload.fill_price_bps,
-            t_client_send: t.payload.t_client_send,
             stamps: [
                 l.ws_recv,
                 l.ws_publish,
@@ -246,46 +345,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
     let pub_fills = fill_frames.web_pub(&server, TOPIC_FILLS);
-
-    // ── Echo leg (round-trip from browser) ───────────────────────────────
-    //
-    // The echo carries four stamps: T1 (client send), T2/T3 (server
-    // ws_recv / ws_send), T4 (client recv). Every delta we care about
-    // lives inside a single clock domain:
-    //     rtt_total         = T4 - T1            (client clock)
-    //     server_resident   = T3 - T2            (server clock)
-    //     wire_rtt          = rtt_total - server_resident
-    // All three are subtractions within one clock — no NTP-style offset
-    // estimation needed.
-
-    let echoes = web_sub::<EchoFrame>(&server, TOPIC_ECHO).collapse::<EchoFrame>();
-
-    let rtt_stats: Rc<std::cell::RefCell<StageStats>> =
-        Rc::new(std::cell::RefCell::new(StageStats::default()));
-    let wire_stats: Rc<std::cell::RefCell<StageStats>> =
-        Rc::new(std::cell::RefCell::new(StageStats::default()));
-
-    let rtt_sink = {
-        let rtt = rtt_stats.clone();
-        let wire = wire_stats.clone();
-        echoes.clone().for_each(move |e, _t| {
-            let Some(rtt_total) = e.t_client_recv.checked_sub(e.t_client_send) else {
-                return;
-            };
-            let resident = e.stamps[8].saturating_sub(e.stamps[0]);
-            rtt.borrow_mut().record(rtt_total);
-            wire.borrow_mut().record(rtt_total.saturating_sub(resident));
-            log::debug!(
-                "echo session={} seq={} rtt={} resident={} wire={}",
-                session_hex(&e.session),
-                e.client_seq,
-                rtt_total,
-                resident,
-                rtt_total.saturating_sub(resident),
-            );
-        })
-    };
-    let echo_counter = echoes.count();
 
     // ── Prometheus metrics ───────────────────────────────────────────────
     let exporter = PrometheusExporter::new(&metrics_addr);
@@ -305,21 +364,23 @@ fn main() -> anyhow::Result<()> {
         let s = sessions.clone();
         tick_1s.produce(move || s.lock().unwrap().rejected_total)
     };
+    let emitted_gauge = {
+        let s = sessions.clone();
+        tick_1s.produce(move || s.lock().unwrap().emitted_total)
+    };
 
     let mut nodes: Vec<Rc<dyn Node>> = vec![
+        control_sink,
         pub_orders,
         pub_fills,
         inbound_report,
         span_sink,
-        rtt_sink,
         exporter.register("latency_e2e_active_sessions", active_gauge),
         exporter.register("latency_e2e_admitted_total", admitted_gauge),
         exporter.register("latency_e2e_rejected_total", rejected_gauge),
-        exporter.register("latency_e2e_echoes_total", echo_counter),
+        exporter.register("latency_e2e_emitted_total", emitted_gauge),
     ];
     nodes.extend(register_stage_metrics(&exporter, &inbound_stats));
-    nodes.extend(register_stage_stats(&exporter, "rtt_total", &rtt_stats));
-    nodes.extend(register_stage_stats(&exporter, "wire_rtt", &wire_stats));
 
     // Pin AFTER all adapter workers (web server, iceoryx2 pub/sub,
     // Prometheus exporter, OTLP exporter) are spawned so they keep the
@@ -363,33 +424,6 @@ fn register_stage_metrics<L: Latency>(
         out.push(exporter.register(format!("latency_e2e_{stage}_count_total"), count));
     }
     out
-}
-
-/// Register p50 / p99 / count gauges for a single `StageStats` handle
-/// (used for the cross-domain `rtt_total` and `wire_rtt` histograms).
-fn register_stage_stats(
-    exporter: &PrometheusExporter,
-    prefix: &str,
-    stats: &Rc<std::cell::RefCell<StageStats>>,
-) -> Vec<Rc<dyn Node>> {
-    let tick = ticker(Duration::from_secs(1));
-    let p50 = {
-        let s = stats.clone();
-        tick.produce(move || s.borrow().quantile_ns(0.5))
-    };
-    let p99 = {
-        let s = stats.clone();
-        tick.produce(move || s.borrow().quantile_ns(0.99))
-    };
-    let count = {
-        let s = stats.clone();
-        tick.produce(move || s.borrow().count)
-    };
-    vec![
-        exporter.register(format!("latency_e2e_{prefix}_p50_ns"), p50),
-        exporter.register(format!("latency_e2e_{prefix}_p99_ns"), p99),
-        exporter.register(format!("latency_e2e_{prefix}_count_total"), count),
-    ]
 }
 
 // Compile-time sanity: the iceoryx2 payload type is zero-copy sendable.
