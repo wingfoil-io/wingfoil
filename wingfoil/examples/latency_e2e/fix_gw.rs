@@ -96,6 +96,11 @@ fn main() -> anyhow::Result<()> {
         .ok();
 
     let precise = precise_stamps_enabled();
+    let stamp_mode = constant(if precise {
+        StampMode::OnPrecise
+    } else {
+        StampMode::On
+    });
     // LMAX London Demo updates EUR/USD only every few seconds during quiet
     // periods — observed gaps of 20+ seconds when the book is dormant — so
     // even 5 s rejects most orders outside of busy windows. 60 s keeps the
@@ -141,8 +146,7 @@ fn main() -> anyhow::Result<()> {
                 t.payload.side,
             );
         })
-        .stamp_if::<round_trip_latency::gw_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::gw_recv>(precise);
+        .stamp::<round_trip_latency::gw_recv>(&stamp_mode);
 
     let priced = bimap(
         Dep::Active(orders),
@@ -167,10 +171,8 @@ fn main() -> anyhow::Result<()> {
             order
         },
     )
-    .stamp_if::<round_trip_latency::gw_price>(!precise)
-    .stamp_precise_if::<round_trip_latency::gw_price>(precise)
-    .stamp_if::<round_trip_latency::fix_send>(!precise)
-    .stamp_precise_if::<round_trip_latency::fix_send>(precise);
+    .stamp::<round_trip_latency::gw_price>(&stamp_mode)
+    .stamp::<round_trip_latency::fix_send>(&stamp_mode);
 
     // Side branch: send NewOrderSingle to the FIX order session via the
     // lock-free kanal channel (see wingfoil FIX adapter PR #225).
@@ -305,10 +307,8 @@ fn main() -> anyhow::Result<()> {
         }),
     )
     .into_stream()
-    .stamp_if::<round_trip_latency::fix_recv>(!precise)
-    .stamp_precise_if::<round_trip_latency::fix_recv>(precise)
-    .stamp_if::<round_trip_latency::gw_publish>(!precise)
-    .stamp_precise_if::<round_trip_latency::gw_publish>(precise);
+    .stamp::<round_trip_latency::fix_recv>(&stamp_mode)
+    .stamp::<round_trip_latency::gw_publish>(&stamp_mode);
 
     let pub_fills = iceoryx2_pub(
         fills

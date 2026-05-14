@@ -30,6 +30,7 @@ fn main() {
     // produce → publish:
     //   `produce` is stamped immediately after the message is constructed,
     //   `publish` is stamped just before it crosses the iceoryx2 boundary.
+    let mode = constant(StampMode::On);
     let stream = ticker(period)
         .count()
         .map(|seq: u64| {
@@ -38,8 +39,8 @@ fn main() {
                 price: 100.0 + (seq as f64) * 0.01,
             })
         })
-        .stamp::<quote_latency::produce>()
-        .stamp::<quote_latency::publish>();
+        .stamp::<quote_latency::produce>(&mode)
+        .stamp::<quote_latency::publish>(&mode);
 
     // iceoryx2_pub takes a `Burst<T>`; wrap each sample.
     let burst_stream = stream.map(|t| {

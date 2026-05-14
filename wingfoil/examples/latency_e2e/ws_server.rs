@@ -150,6 +150,11 @@ fn main() -> anyhow::Result<()> {
         static_dir.display(),
     );
     log::info!("session_cap={session_cap} ttl={session_ttl}s precise={precise}");
+    let stamp_mode = constant(if precise {
+        StampMode::OnPrecise
+    } else {
+        StampMode::On
+    });
 
     let sessions = Arc::new(Mutex::new(Sessions::new(session_cap, session_ttl)));
 
@@ -186,20 +191,16 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             })
         })
-        .stamp_if::<round_trip_latency::ws_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_recv>(precise)
-        .stamp_if::<round_trip_latency::ws_publish>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_publish>(precise);
+        .stamp::<round_trip_latency::ws_recv>(&stamp_mode)
+        .stamp::<round_trip_latency::ws_publish>(&stamp_mode);
 
     let pub_orders = iceoryx2_pub(traced_orders.map(|t| burst![t]), SVC_ORDERS);
 
     // ── Inbound leg ──────────────────────────────────────────────────────
     let fills_in = iceoryx2_sub::<Traced<RoundTrip, RoundTripLatency>>(SVC_FILLS)
         .collapse::<Traced<RoundTrip, RoundTripLatency>>()
-        .stamp_if::<round_trip_latency::ws_sub_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_sub_recv>(precise)
-        .stamp_if::<round_trip_latency::ws_send>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_send>(precise);
+        .stamp::<round_trip_latency::ws_sub_recv>(&stamp_mode)
+        .stamp::<round_trip_latency::ws_send>(&stamp_mode);
 
     let (inbound_report, inbound_stats) = fills_in.latency_report(true);
 

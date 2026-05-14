@@ -11,7 +11,7 @@ Run:
   cd wingfoil-python && maturin develop --features iceoryx2-beta && python examples/latency.py
 """
 
-from wingfoil import ticker, Latency, TracedBytes, Graph
+from wingfoil import ticker, Latency, TracedBytes, Graph, StampMode, StampModeHandle
 
 STAGES = ["produce", "encode", "decode", "strategy", "ack"]
 
@@ -22,22 +22,24 @@ def make_payload(seq):
 
 
 def main():
-    stamp = True  # flip to False to disable all stamping (zero cost)
+    # Share one handle across every stamp call; flip stamping on/off (or
+    # toggle to precise) at runtime via handle.set(...).
+    mode = StampModeHandle(StampMode.On)
 
     pipeline = (
         ticker(0.01)
         .count()
         .map(make_payload)
-        .stamp_if("produce", stamp)
-        .stamp_if("encode", stamp)
+        .stamp("produce", mode)
+        .stamp("encode", mode)
         # ── pretend strategy work happens here ──
         .map(lambda t: t)  # identity (placeholder for real logic)
-        .stamp_if("decode", stamp)
-        .stamp_precise_if("strategy", stamp)
-        .stamp_if("ack", stamp)
+        .stamp("decode", mode)
+        .stamp("strategy", StampMode.OnPrecise)
+        .stamp("ack", mode)
     )
 
-    report = pipeline.latency_report_if(STAGES, stamp, print_on_teardown=True)
+    report = pipeline.latency_report_if(STAGES, True, print_on_teardown=True)
 
     print("Running latency pipeline for 0.5 seconds...")
     Graph([report]).run(realtime=True, duration=0.5)

@@ -2,7 +2,14 @@
 
 import unittest
 
-from wingfoil import Graph, Latency, TracedBytes, ticker
+from wingfoil import (
+    Graph,
+    Latency,
+    StampMode,
+    StampModeHandle,
+    TracedBytes,
+    ticker,
+)
 
 
 class TestLatency(unittest.TestCase):
@@ -90,9 +97,9 @@ class TestStamp(unittest.TestCase):
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp("start")
-            .stamp("mid")
-            .stamp("end")
+            .stamp("start", StampMode.On)
+            .stamp("mid", StampMode.On)
+            .stamp("end", StampMode.On)
         )
         node = stream.for_each(lambda tb, _t: received.append(tb.latency.stamps[:]))
         node.run(realtime=False, cycles=3)
@@ -111,9 +118,9 @@ class TestStamp(unittest.TestCase):
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp_precise("start")
-            .stamp_precise("mid")
-            .stamp_precise("end")
+            .stamp("start", StampMode.OnPrecise)
+            .stamp("mid", StampMode.OnPrecise)
+            .stamp("end", StampMode.OnPrecise)
         )
         node = stream.for_each(lambda tb, _t: received.append(tb.latency.stamps[:]))
         node.run(realtime=False, cycles=2)
@@ -121,30 +128,28 @@ class TestStamp(unittest.TestCase):
         for stamps in received:
             self.assertTrue(all(s > 0 for s in stamps))
 
-    def test_stamp_if_enabled_false_is_noop(self):
-        # When disabled, stamp_if / stamp_precise_if pass the stream through
-        # unchanged (no stamping happens).
+    def test_stamp_mode_off_is_noop(self):
+        # StampMode.Off forwards the payload without writing any stamp.
         stream = (
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp_if("start", False)
-            .stamp_precise_if("mid", False)
+            .stamp("start", StampMode.Off)
+            .stamp("mid", StampMode.Off)
         )
         received = []
         node = stream.for_each(lambda tb, _t: received.append(tb.latency.stamps[:]))
         node.run(realtime=False, cycles=2)
-        # No stage was stamped, so all zero.
         for stamps in received:
             self.assertEqual(stamps, [0, 0, 0])
 
-    def test_stamp_if_enabled_true_stamps(self):
+    def test_stamp_mode_mix(self):
         stream = (
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp_if("start", True)
-            .stamp_precise_if("end", True)
+            .stamp("start", StampMode.On)
+            .stamp("end", StampMode.OnPrecise)
         )
         received = []
         node = stream.for_each(lambda tb, _t: received.append(tb.latency.stamps[:]))
@@ -154,9 +159,35 @@ class TestStamp(unittest.TestCase):
             self.assertEqual(stamps[1], 0)  # mid untouched
             self.assertGreater(stamps[2], 0)  # end stamped
 
+    def test_stamp_mode_handle_flips_at_runtime(self):
+        # A StampModeHandle shared across stamps lets us flip them all from
+        # within the graph. Start Off, then turn On after first tick.
+        handle = StampModeHandle(StampMode.Off)
+        received = []
+
+        def observe(tb, _t):
+            received.append(tb.latency.stamps[:])
+            if len(received) == 1:
+                handle.set(StampMode.On)
+            return tb
+
+        stream = (
+            ticker(0.01)
+            .count()
+            .map(self._traced)
+            .stamp("start", handle)
+            .map(observe)
+        )
+        node = stream.for_each(lambda _tb, _t: None)
+        node.run(realtime=False, cycles=3)
+
+        self.assertGreaterEqual(len(received), 2)
+        self.assertEqual(received[0][0], 0)  # first tick: Off
+        self.assertGreater(received[1][0], 0)  # later tick: On
+
     def test_stamp_on_non_traced_raises(self):
         # stamp() on a non-TracedBytes stream should fail at runtime.
-        stream = ticker(0.01).count().stamp("stage")
+        stream = ticker(0.01).count().stamp("stage", StampMode.On)
         node = stream.for_each(lambda _v, _t: None)
         with self.assertRaises(Exception):
             node.run(realtime=False, cycles=1)
@@ -171,9 +202,9 @@ class TestLatencyReport(unittest.TestCase):
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp("a")
-            .stamp("b")
-            .stamp("c")
+            .stamp("a", StampMode.On)
+            .stamp("b", StampMode.On)
+            .stamp("c", StampMode.On)
         )
         node = stream.latency_report(["a", "b", "c"], print_on_teardown=False)
         node.run(realtime=False, cycles=5)  # no exception => pass
@@ -183,9 +214,9 @@ class TestLatencyReport(unittest.TestCase):
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp("a")
-            .stamp("b")
-            .stamp("c")
+            .stamp("a", StampMode.On)
+            .stamp("b", StampMode.On)
+            .stamp("c", StampMode.On)
         )
         node = stream.latency_report(["a", "b", "c"], print_on_teardown=True)
         node.run(realtime=False, cycles=3)  # prints report, no exception
@@ -201,9 +232,9 @@ class TestLatencyReport(unittest.TestCase):
             ticker(0.01)
             .count()
             .map(self._traced)
-            .stamp("a")
-            .stamp("b")
-            .stamp("c")
+            .stamp("a", StampMode.On)
+            .stamp("b", StampMode.On)
+            .stamp("c", StampMode.On)
         )
         node = stream.latency_report_if(
             ["a", "b", "c"], enabled=True, print_on_teardown=False

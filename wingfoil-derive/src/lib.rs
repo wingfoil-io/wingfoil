@@ -271,7 +271,8 @@ fn pascal_to_snake(s: &str) -> String {
 ///
 /// // Markers live in a snake_case sub-module named after the struct:
 /// use trade_latency::strategy;
-/// let stamped = upstream.stamp::<strategy>();
+/// let mode = wingfoil::constant(wingfoil::StampMode::On);
+/// let stamped = upstream.stamp::<strategy>(&mode);
 /// ```
 #[proc_macro]
 pub fn latency_stages(item: TokenStream) -> TokenStream {

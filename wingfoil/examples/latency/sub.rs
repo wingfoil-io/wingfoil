@@ -27,18 +27,19 @@ fn main() {
     // The subscriber yields a `Burst<Traced<Quote, QuoteLatency>>` per tick.
     // collapse() drops empty bursts and unwraps single-message bursts to the
     // inner Traced value.
+    let mode = constant(StampMode::On);
     let pipeline = iceoryx2_sub::<Traced<Quote, QuoteLatency>>(SERVICE_NAME)
         .collapse::<Traced<Quote, QuoteLatency>>()
-        .stamp::<quote_latency::receive>()
+        .stamp::<quote_latency::receive>(&mode)
         // ── pretend strategy work happens here ─────────────────────
         .map(|mut t: Traced<Quote, QuoteLatency>| {
             // Touch the payload so the compiler can't fold the work away.
             t.payload.price *= 1.0001;
             t
         })
-        .stamp::<quote_latency::strategy>()
+        .stamp::<quote_latency::strategy>(&mode)
         // ── pretend reply construction happens here ────────────────
-        .stamp::<quote_latency::ack>();
+        .stamp::<quote_latency::ack>(&mode);
 
     // LatencyReport sink prints the per-stage delta histogram on shutdown.
     let (sink, _stats) = pipeline.latency_report(true);

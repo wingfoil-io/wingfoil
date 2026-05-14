@@ -19,28 +19,30 @@
 //!
 //! Stamps always read the wall clock (never [`GraphState::time`], which is
 //! source-driven in historical mode and would be useless for latency).
-//! Two variants:
+//! Each stamp node is driven by a `Stream<`[`StampMode`]`>` peeked passively
+//! on every data tick:
 //!
-//! - [`LatencyStreamOps::stamp`] reads [`GraphState::wall_time`] — a
-//!   cycle-start wall-clock snap, one `u64` load, cheap. Stages sharing an
-//!   engine cycle get the same stamp.
-//! - [`LatencyStreamOps::stamp_precise`] reads
-//!   [`GraphState::wall_time_precise`] — a fresh TSC read (~5-10 ns), giving
-//!   distinct stamps to stages that run in the same engine cycle.
+//! - [`StampMode::Off`] — forward the upstream unchanged, write nothing.
+//! - [`StampMode::On`] — write [`GraphState::wall_time`] (cycle-start
+//!   wall-clock snap, one `u64` load). Stages sharing an engine cycle get
+//!   the same stamp.
+//! - [`StampMode::OnPrecise`] — write [`GraphState::wall_time_precise`]
+//!   (fresh TSC read, ~5-10 ns), giving distinct stamps to stages running
+//!   in the same engine cycle.
 //!
-//! Both variants behave identically in realtime and historical mode — the
-//! graph wiring stays the same across environments and the numbers mean
+//! Mode behaves identically in realtime and historical mode — the graph
+//! wiring stays the same across environments and the numbers mean
 //! "wall-clock time spent between stages". In historical mode this
 //! measures backtest replay performance; in realtime it measures production
 //! latency.
 //!
-//! # Toggling
+//! # Toggling on the fly
 //!
-//! Each stamping and reporting method has an `_if` variant that takes a
-//! boolean and returns the upstream unchanged when disabled — zero runtime
-//! cost, no node inserted into the graph. Thread a single config flag
-//! through your pipeline builder to disable stamping for ultra-hot paths or
-//! backtests.
+//! Because the mode is itself a stream, every stamp node re-reads it on
+//! every tick. Wire a fixed mode with [`constant`](crate::nodes::constant),
+//! a runtime-toggleable handle with [`stamp_mode_control`], or compute the
+//! mode from any other on-graph signal. Switching to [`StampMode::Off`]
+//! at runtime suppresses stamping with no graph rewiring.
 //!
 //! # Example
 //!
@@ -56,19 +58,33 @@
 //!     }
 //! }
 //!
-//! // Markers live in a snake_case sub-module named after the struct.
-//! fn build(stream: std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>>)
-//!     -> std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>>
-//! {
+//! // Static mode: always cycle-start stamping.
+//! fn build_static(
+//!     stream: std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>>,
+//! ) -> std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>> {
+//!     let mode = constant(StampMode::On);
 //!     stream
-//!         .stamp::<trade_latency::ingest>()
-//!         .stamp::<trade_latency::strategy>()
+//!         .stamp::<trade_latency::ingest>(&mode)
+//!         .stamp::<trade_latency::strategy>(&mode)
+//! }
+//!
+//! // Dynamic mode: flip from Off → OnPrecise → On at runtime via a handle.
+//! fn build_dynamic(
+//!     stream: std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>>,
+//! ) -> (std::rc::Rc<dyn Stream<Traced<u64, TradeLatency>>>, StampModeHandle) {
+//!     let (mode, handle) = stamp_mode_control(StampMode::On);
+//!     let stamped = stream
+//!         .stamp::<trade_latency::ingest>(&mode)
+//!         .stamp::<trade_latency::strategy>(&mode);
+//!     (stamped, handle)
 //! }
 //! ```
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::graph::GraphState;
 use crate::types::*;
 
 /// Declarative macro that generates a `#[repr(C)]` named-field latency record
@@ -213,22 +229,42 @@ fn traced_type_name(t: &'static str, l: &'static str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// StampStream / StampPreciseStream — wrapper nodes that stamp one stage
+// StampMode + StampStream — single wrapper node that consults a mode stream
 // ---------------------------------------------------------------------------
 
-/// A node that forwards its upstream value while stamping
-/// [`GraphState::wall_time`] (cycle-start wall-clock snap) into a single
+/// Selects how a [`StampStream`] writes its stage timestamp on each tick.
+///
+/// Threaded through the graph as a `Stream<StampMode>` so the choice can be
+/// flipped at runtime without rewiring.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum StampMode {
+    /// Don't write anything. Forward the upstream value unchanged.
+    #[default]
+    Off,
+    /// Stamp [`GraphState::wall_time`] — one `u64` load, cycle-start snap.
+    /// Stages sharing an engine cycle get the same value.
+    On,
+    /// Stamp [`GraphState::wall_time_precise`] — a fresh TSC read (~5-10 ns)
+    /// giving intra-cycle resolution between stages that run together.
+    OnPrecise,
+}
+
+/// A node that forwards its upstream value while optionally stamping a single
 /// named stage of the embedded [`Latency`] record.
 ///
-/// One `u64` store per tick, no allocation. Stages that tick in the same
-/// engine cycle share the same timestamp — use [`StampPreciseStream`] for
-/// intra-cycle resolution.
+/// The behaviour on each tick is driven by a passive `Stream<`[`StampMode`]`>`
+/// peeked at the start of [`cycle`](Self::cycle). [`StampMode::Off`] forwards
+/// without writing; [`StampMode::On`] writes the cycle-start wall-clock snap;
+/// [`StampMode::OnPrecise`] writes a fresh TSC read.
 pub struct StampStream<P, S>
 where
     P: Element + HasLatency,
     S: Stage<P::L> + 'static,
 {
     upstream: Rc<dyn Stream<P>>,
+    mode: Rc<dyn Stream<StampMode>>,
     value: P,
     _stage: PhantomData<fn() -> S>,
 }
@@ -238,16 +274,17 @@ where
     P: Element + HasLatency,
     S: Stage<P::L> + 'static,
 {
-    pub fn new(upstream: Rc<dyn Stream<P>>) -> Self {
+    pub fn new(upstream: Rc<dyn Stream<P>>, mode: Rc<dyn Stream<StampMode>>) -> Self {
         Self {
             upstream,
+            mode,
             value: P::default(),
             _stage: PhantomData,
         }
     }
 }
 
-#[node(active = [upstream], output = value: P)]
+#[node(output = value: P)]
 impl<P, S> MutableNode for StampStream<P, S>
 where
     P: Element + HasLatency,
@@ -255,89 +292,111 @@ where
 {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
-        S::stamp(self.value.latency_mut(), state.wall_time().into());
-        Ok(true)
-    }
-}
-
-/// Like [`StampStream`] but reads [`GraphState::wall_time_precise`] — a fresh
-/// TSC snap on every tick. Costs ~5-10 ns per stamp on x86 but gives
-/// intra-cycle resolution, so stages running in the same engine cycle get
-/// distinct timestamps.
-pub struct StampPreciseStream<P, S>
-where
-    P: Element + HasLatency,
-    S: Stage<P::L> + 'static,
-{
-    upstream: Rc<dyn Stream<P>>,
-    value: P,
-    _stage: PhantomData<fn() -> S>,
-}
-
-impl<P, S> StampPreciseStream<P, S>
-where
-    P: Element + HasLatency,
-    S: Stage<P::L> + 'static,
-{
-    pub fn new(upstream: Rc<dyn Stream<P>>) -> Self {
-        Self {
-            upstream,
-            value: P::default(),
-            _stage: PhantomData,
+        match self.mode.peek_value() {
+            StampMode::Off => {}
+            StampMode::On => S::stamp(self.value.latency_mut(), state.wall_time().into()),
+            StampMode::OnPrecise => {
+                S::stamp(self.value.latency_mut(), state.wall_time_precise().into())
+            }
         }
-    }
-}
-
-#[node(active = [upstream], output = value: P)]
-impl<P, S> MutableNode for StampPreciseStream<P, S>
-where
-    P: Element + HasLatency,
-    S: Stage<P::L> + 'static,
-{
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        self.value = self.upstream.peek_value();
-        S::stamp(self.value.latency_mut(), state.wall_time_precise().into());
         Ok(true)
     }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(
+            vec![self.upstream.clone().as_node()],
+            vec![self.mode.clone().as_node()],
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Public ergonomics: .stamp::<Stage>() on Stream<P> where P: HasLatency
+// StampModeControl — externally-mutable Stream<StampMode> source
 // ---------------------------------------------------------------------------
 
-/// Extension trait adding `.stamp::<Stage>()` and friends to streams whose
-/// values carry a [`Latency`] record.
+/// Handle to a [`StampModeControl`] source that flips its emitted mode at
+/// runtime. Cheap to clone (one [`Rc`] bump); changes are observed by every
+/// stamp node sharing the underlying stream on its next tick.
+#[derive(Clone, Debug)]
+pub struct StampModeHandle {
+    cell: Rc<Cell<StampMode>>,
+}
+
+impl StampModeHandle {
+    pub fn set(&self, mode: StampMode) {
+        self.cell.set(mode);
+    }
+
+    pub fn get(&self) -> StampMode {
+        self.cell.get()
+    }
+}
+
+/// Source node for [`stamp_mode_control`]. `peek_value` reads the shared
+/// cell directly, so external mutations are visible without the node having
+/// to re-tick.
+pub struct StampModeControl {
+    cell: Rc<Cell<StampMode>>,
+    snapshot: StampMode,
+}
+
+impl MutableNode for StampModeControl {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        self.snapshot = self.cell.get();
+        Ok(true)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::none()
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        state.add_callback(state.start_time());
+        Ok(())
+    }
+}
+
+impl StreamPeekRef<StampMode> for StampModeControl {
+    fn peek_ref(&self) -> &StampMode {
+        &self.snapshot
+    }
+
+    // Bypass the snapshot field so external mutations on the handle are
+    // visible to downstream peeks even though this source only cycles once.
+    fn clone_from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, StampMode>) -> StampMode {
+        self.cell.get()
+    }
+}
+
+/// Build a [`Stream<StampMode>`] plus a handle that mutates the emitted mode
+/// at runtime. The stream can be passed to any number of [`stamp`] calls; a
+/// single `handle.set(...)` then drives them all on their next tick.
+#[must_use]
+pub fn stamp_mode_control(initial: StampMode) -> (Rc<dyn Stream<StampMode>>, StampModeHandle) {
+    let cell = Rc::new(Cell::new(initial));
+    let stream = StampModeControl {
+        cell: cell.clone(),
+        snapshot: initial,
+    }
+    .into_stream();
+    (stream, StampModeHandle { cell })
+}
+
+// ---------------------------------------------------------------------------
+// Public ergonomics: .stamp::<Stage>(&mode) on Stream<P> where P: HasLatency
+// ---------------------------------------------------------------------------
+
+/// Extension trait adding `.stamp::<Stage>(&mode)` to streams whose values
+/// carry a [`Latency`] record.
 pub trait LatencyStreamOps<P>
 where
     P: Element + HasLatency,
 {
-    /// Wrap this stream in a [`StampStream`] for stage `S`. Each tick writes
-    /// [`GraphState::wall_time`] (cycle-start snap, one `u64` store) into the
-    /// stage's slot before forwarding.
+    /// Wrap this stream in a [`StampStream`] for stage `S`. Each tick peeks
+    /// `mode` and acts per [`StampMode`]. Pass [`constant`](crate::nodes::constant)
+    /// for a fixed mode or [`stamp_mode_control`] for a runtime-toggleable one.
     #[must_use]
-    fn stamp<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static;
-
-    /// Conditional variant of [`stamp`](Self::stamp). When `enabled` is false,
-    /// returns `self` unchanged — no node is inserted into the graph and
-    /// there is zero runtime cost. Useful for flipping stamping on/off at
-    /// graph-construction time via a config flag.
-    #[must_use]
-    fn stamp_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static;
-
-    /// Like [`stamp`](Self::stamp) but uses [`GraphState::wall_time_precise`]
-    /// (fresh TSC read, ~5-10ns) for intra-cycle resolution.
-    #[must_use]
-    fn stamp_precise<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static;
-
-    /// Conditional variant of [`stamp_precise`](Self::stamp_precise).
-    #[must_use]
-    fn stamp_precise_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
+    fn stamp<S>(self: &Rc<Self>, mode: &Rc<dyn Stream<StampMode>>) -> Rc<dyn Stream<P>>
     where
         S: Stage<P::L> + 'static;
 }
@@ -346,40 +405,11 @@ impl<P> LatencyStreamOps<P> for dyn Stream<P>
 where
     P: Element + HasLatency + 'static,
 {
-    fn stamp<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
+    fn stamp<S>(self: &Rc<Self>, mode: &Rc<dyn Stream<StampMode>>) -> Rc<dyn Stream<P>>
     where
         S: Stage<P::L> + 'static,
     {
-        StampStream::<P, S>::new(self.clone()).into_stream()
-    }
-
-    fn stamp_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static,
-    {
-        if enabled {
-            self.stamp::<S>()
-        } else {
-            self.clone()
-        }
-    }
-
-    fn stamp_precise<S>(self: &Rc<Self>) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static,
-    {
-        StampPreciseStream::<P, S>::new(self.clone()).into_stream()
-    }
-
-    fn stamp_precise_if<S>(self: &Rc<Self>, enabled: bool) -> Rc<dyn Stream<P>>
-    where
-        S: Stage<P::L> + 'static,
-    {
-        if enabled {
-            self.stamp_precise::<S>()
-        } else {
-            self.clone()
-        }
+        StampStream::<P, S>::new(self.clone(), mode.clone()).into_stream()
     }
 }
 
@@ -648,7 +678,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::{CallBackStream, NodeOperators, StreamOperators};
+    use crate::nodes::{CallBackStream, NodeOperators, StreamOperators, constant};
     use crate::queue::ValueAt;
     use std::cell::RefCell;
     use std::mem::{align_of, offset_of, size_of};
@@ -770,10 +800,11 @@ mod tests {
             crate::time::NanoTime::new(250),
         ));
 
+        let mode = constant(StampMode::On);
         let stamped = cb
             .clone()
             .as_stream()
-            .stamp::<trade_latency::strategy>()
+            .stamp::<trade_latency::strategy>(&mode)
             .collect();
 
         stamped
@@ -802,11 +833,13 @@ mod tests {
         // regardless of RunMode.
         use std::time::Duration;
         fn run_one(mode: crate::graph::RunMode) -> crate::time::NanoTime {
+            let on = constant(StampMode::On);
+            let precise = constant(StampMode::OnPrecise);
             let stream = crate::nodes::ticker(Duration::from_millis(1))
                 .count()
                 .map(|seq: u64| Traced::<u64, TradeLatency>::new(seq))
-                .stamp::<trade_latency::ingest>()
-                .stamp_precise::<trade_latency::publish>()
+                .stamp::<trade_latency::ingest>(&on)
+                .stamp::<trade_latency::publish>(&precise)
                 .collect();
             stream.run(mode, crate::graph::RunFor::Cycles(3)).unwrap();
             let values = stream.peek_value();
@@ -846,23 +879,42 @@ mod tests {
     }
 
     #[test]
-    fn stamp_if_disabled_inserts_no_node() {
-        // stamp_if(false) must return the upstream unchanged.
+    fn stamp_off_writes_nothing() {
+        // mode=Off forwards the upstream without writing any stamp.
         let cb = Rc::new(RefCell::new(
             CallBackStream::<Traced<u64, TradeLatency>>::new(),
         ));
-        let upstream = cb.clone().as_stream();
-        let stamped = upstream.stamp_if::<trade_latency::strategy>(false);
-        assert!(
-            Rc::ptr_eq(&upstream, &stamped),
-            "stamp_if(false) should be identity"
-        );
+        cb.borrow_mut().push(ValueAt::new(
+            Traced::new(7u64),
+            crate::time::NanoTime::new(100),
+        ));
+
+        let mode = constant(StampMode::Off);
+        let stamped = cb
+            .clone()
+            .as_stream()
+            .stamp::<trade_latency::strategy>(&mode)
+            .collect();
+
+        stamped
+            .run(
+                crate::graph::RunMode::HistoricalFrom(crate::time::NanoTime::ZERO),
+                crate::graph::RunFor::Forever,
+            )
+            .unwrap();
+
+        let collected = stamped.peek_value();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].value.payload, 7);
+        // No stage was written.
+        assert_eq!(collected[0].value.latency.strategy, 0);
+        assert_eq!(collected[0].value.latency.ingest, 0);
     }
 
     #[test]
     fn stamp_precise_writes_fresh_timestamps() {
-        // Two stamp_precise wrappers in series should give different stamps
-        // even in the same engine cycle — that is the whole point of _precise.
+        // Two precise stamps in series should give different stamps even in
+        // the same engine cycle — that is the whole point of OnPrecise.
         let cb = Rc::new(RefCell::new(
             CallBackStream::<Traced<u64, TradeLatency>>::new(),
         ));
@@ -871,11 +923,12 @@ mod tests {
             crate::time::NanoTime::new(100),
         ));
 
+        let precise = constant(StampMode::OnPrecise);
         let stamped = cb
             .clone()
             .as_stream()
-            .stamp_precise::<trade_latency::ingest>()
-            .stamp_precise::<trade_latency::publish>()
+            .stamp::<trade_latency::ingest>(&precise)
+            .stamp::<trade_latency::publish>(&precise)
             .collect();
 
         stamped
@@ -890,6 +943,48 @@ mod tests {
         let l = collected[0].value.latency;
         assert!(l.ingest > 0);
         assert!(l.publish >= l.ingest);
+    }
+
+    #[test]
+    fn stamp_mode_handle_flips_at_runtime() {
+        // Driving the same stamp node with a control source: the first
+        // cycle sees Off (no stamp), then we flip to On and the next cycle
+        // writes a real wall-clock value.
+        use crate::nodes::ticker;
+        use std::time::Duration;
+
+        let (mode_stream, handle) = stamp_mode_control(StampMode::Off);
+        let snapshots = Rc::new(RefCell::new(Vec::<TradeLatency>::new()));
+        let snapshots_inner = snapshots.clone();
+        let handle_inner = handle.clone();
+
+        let stream = ticker(Duration::from_millis(1))
+            .count()
+            .map(|seq: u64| Traced::<u64, TradeLatency>::new(seq))
+            .stamp::<trade_latency::ingest>(&mode_stream)
+            .map(move |t: Traced<u64, TradeLatency>| {
+                snapshots_inner.borrow_mut().push(t.latency);
+                // Flip mode once we've captured the first (Off) observation.
+                if snapshots_inner.borrow().len() == 1 {
+                    handle_inner.set(StampMode::On);
+                }
+                t
+            })
+            .collect();
+
+        stream
+            .run(
+                crate::graph::RunMode::HistoricalFrom(crate::time::NanoTime::ZERO),
+                crate::graph::RunFor::Cycles(3),
+            )
+            .unwrap();
+
+        let snaps = snapshots.borrow();
+        assert!(snaps.len() >= 2, "expected at least 2 ticks");
+        // First tick saw Off → no stamp.
+        assert_eq!(snaps[0].ingest, 0);
+        // Subsequent ticks saw On → real wall-clock stamp.
+        assert!(snaps[1].ingest > 0);
     }
 
     // ── LatencyStats / LatencyReport ────────────────────────────────────────
@@ -1012,12 +1107,13 @@ mod tests {
             crate::time::NanoTime::new(50),
         ));
 
+        let mode = constant(StampMode::On);
         let stamped = cb
             .clone()
             .as_stream()
-            .stamp::<trade_latency::ingest>()
-            .stamp::<trade_latency::strategy>()
-            .stamp::<trade_latency::publish>()
+            .stamp::<trade_latency::ingest>(&mode)
+            .stamp::<trade_latency::strategy>(&mode)
+            .stamp::<trade_latency::publish>(&mode)
             .collect();
 
         stamped

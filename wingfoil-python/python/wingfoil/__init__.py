@@ -16,7 +16,9 @@ __all__ = list(getattr(_ext, "__all__", [])) + ["to_dataframe", "build_dataframe
 # Latency measurement classes
 Latency = _ext.Latency
 TracedBytes = _ext.TracedBytes
-__all__.extend(["Latency", "TracedBytes"])
+StampMode = _ext.StampMode
+StampModeHandle = _ext.StampModeHandle
+__all__.extend(["Latency", "TracedBytes", "StampMode", "StampModeHandle"])
 
 # User-friendly aliases for CSV functions
 csv_read = _ext.py_csv_read

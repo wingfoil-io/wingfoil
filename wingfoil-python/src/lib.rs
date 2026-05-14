@@ -213,6 +213,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add_class::<py_latency::PyLatency>()?;
     module.add_class::<py_latency::PyTracedBytes>()?;
+    module.add_class::<py_latency::PyStampMode>()?;
+    module.add_class::<py_latency::PyStampModeHandle>()?;
     module.add_class::<py_web::PyWebServer>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

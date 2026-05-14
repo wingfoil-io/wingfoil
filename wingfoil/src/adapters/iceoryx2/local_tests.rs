@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::latency::*;
-use crate::nodes::{NodeOperators, StreamOperators};
+use crate::nodes::{NodeOperators, StreamOperators, constant};
 use crate::types::Burst;
 use crate::{Graph, RunFor, RunMode, latency_stages, ticker};
 use iceoryx2::prelude::ZeroCopySend;
@@ -350,18 +350,19 @@ fn test_local_latency_round_trip() -> anyhow::Result<()> {
         &service_name,
         Iceoryx2ServiceVariant::Local,
     );
+    let mode = constant(StampMode::On);
     let collected = sub
         .collapse::<Traced<TestQuote, TestLatency>>()
-        .stamp::<test_latency::receive>()
-        .stamp::<test_latency::ack>()
+        .stamp::<test_latency::receive>(&mode)
+        .stamp::<test_latency::ack>(&mode)
         .collect();
 
     // Publisher side: build payload, stamp produce and publish.
     let upstream = ticker(Duration::from_millis(5))
         .count()
         .map(|seq: u64| Traced::<TestQuote, TestLatency>::new(TestQuote { seq }))
-        .stamp::<test_latency::produce>()
-        .stamp::<test_latency::publish>()
+        .stamp::<test_latency::produce>(&mode)
+        .stamp::<test_latency::publish>(&mode)
         .map(|t| {
             let mut b: Burst<Traced<TestQuote, TestLatency>> = Burst::default();
             b.push(t);

@@ -430,44 +430,21 @@ impl PyStream {
 
     // ── Latency stamping ─────────────────────────────────────────────────
 
-    /// Stamp a named latency stage on each tick using the cycle-start
-    /// wall-clock time. The stream must carry `TracedBytes` values.
+    /// Stamp a named latency stage on each tick. Behaviour is selected by
+    /// `mode`, which may be a fixed `StampMode` or a `StampModeHandle` that
+    /// flips at runtime. The stream must carry `TracedBytes` values.
     ///
     /// Args:
     ///     stage: Stage name (must match one of the names in the `Latency`).
+    ///     mode: `StampMode.OFF` | `StampMode.ON` | `StampMode.ON_PRECISE`,
+    ///         or a `StampModeHandle` shared with other stamp nodes.
     ///
     /// Returns:
-    ///     A new Stream with the stage stamped.
-    fn stamp(&self, stage: String) -> PyStream {
-        PyStream(crate::py_latency::py_stamp_inner(&self.0, stage, false))
-    }
-
-    /// Like `stamp`, but only inserts the stamp node when `enabled` is True.
-    /// When False, returns the stream unchanged — zero runtime cost.
-    #[pyo3(signature = (stage, enabled))]
-    fn stamp_if(&self, stage: String, enabled: bool) -> PyStream {
-        if enabled {
-            self.stamp(stage)
-        } else {
-            self.clone()
-        }
-    }
-
-    /// Stamp a named latency stage with a precise wall-clock read (~5-10ns
-    /// TSC read per tick). Gives intra-cycle resolution.
-    fn stamp_precise(&self, stage: String) -> PyStream {
-        PyStream(crate::py_latency::py_stamp_inner(&self.0, stage, true))
-    }
-
-    /// Like `stamp_precise`, but only inserts the stamp node when `enabled`
-    /// is True. When False, returns the stream unchanged.
-    #[pyo3(signature = (stage, enabled))]
-    fn stamp_precise_if(&self, stage: String, enabled: bool) -> PyStream {
-        if enabled {
-            self.stamp_precise(stage)
-        } else {
-            self.clone()
-        }
+    ///     A new Stream with the stage stamped according to the current mode.
+    fn stamp(&self, stage: String, mode: &Bound<'_, PyAny>) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_latency::py_stamp_inner(
+            &self.0, stage, mode,
+        )?))
     }
 
     /// Install a latency report sink. The stream must carry `TracedBytes`

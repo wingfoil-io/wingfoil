@@ -3,10 +3,11 @@
 //! Provides `Latency` and `TracedBytes` pyclasses, plus Rust-side stamp and
 //! report nodes that operate on `PyElement`-wrapped `TracedBytes` values.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use pyo3::exceptions::PyKeyError;
+use pyo3::exceptions::{PyKeyError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -233,7 +234,50 @@ impl PyTracedBytes {
 }
 
 // ---------------------------------------------------------------------------
-// PyStampNode — stamps one named stage on each upstream tick
+// PyStampMode + PyStampModeHandle — runtime-toggleable stamp mode
+// ---------------------------------------------------------------------------
+
+#[pyclass(eq, eq_int, name = "StampMode")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyStampMode {
+    /// Don't write anything. Forward the upstream unchanged.
+    Off,
+    /// Stamp with the cycle-start wall-clock snap (one u64 load).
+    On,
+    /// Stamp with a fresh TSC read (~5-10 ns) for intra-cycle resolution.
+    OnPrecise,
+}
+
+/// Mutable handle to a stamp-mode setting shared with one or more
+/// `stamp(...)` nodes. Construct with `StampModeHandle(initial)` and pass
+/// the same handle into multiple `stamp` calls to flip them together.
+#[pyclass(unsendable, name = "StampModeHandle")]
+#[derive(Clone)]
+pub struct PyStampModeHandle {
+    cell: Rc<Cell<PyStampMode>>,
+}
+
+#[pymethods]
+impl PyStampModeHandle {
+    #[new]
+    #[pyo3(signature = (initial = PyStampMode::On))]
+    fn new(initial: PyStampMode) -> Self {
+        Self {
+            cell: Rc::new(Cell::new(initial)),
+        }
+    }
+
+    fn set(&self, mode: PyStampMode) {
+        self.cell.set(mode);
+    }
+
+    fn get(&self) -> PyStampMode {
+        self.cell.get()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyStampNode — stamps one named stage on each upstream tick, mode-driven
 // ---------------------------------------------------------------------------
 
 pub struct PyStampNode {
@@ -241,17 +285,21 @@ pub struct PyStampNode {
     value: PyElement,
     stage_name: String,
     stage_idx: Option<usize>,
-    precise: bool,
+    mode: Rc<Cell<PyStampMode>>,
 }
 
 impl PyStampNode {
-    pub fn new(upstream: Rc<dyn Stream<PyElement>>, stage_name: String, precise: bool) -> Self {
+    pub fn new(
+        upstream: Rc<dyn Stream<PyElement>>,
+        stage_name: String,
+        mode: Rc<Cell<PyStampMode>>,
+    ) -> Self {
         Self {
             upstream,
             value: PyElement::default(),
             stage_name,
             stage_idx: None,
-            precise,
+            mode,
         }
     }
 }
@@ -263,42 +311,44 @@ impl MutableNode for PyStampNode {
 
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let elem = self.upstream.peek_value();
-        let wall_ns: u64 = if self.precise {
-            state.wall_time_precise().into()
-        } else {
-            state.wall_time().into()
+        let wall_ns: Option<u64> = match self.mode.get() {
+            PyStampMode::Off => None,
+            PyStampMode::On => Some(state.wall_time().into()),
+            PyStampMode::OnPrecise => Some(state.wall_time_precise().into()),
         };
 
-        Python::attach(|py| -> anyhow::Result<()> {
-            let obj = elem.as_ref().bind(py);
-            let traced: PyRef<PyTracedBytes> = obj.extract().map_err(|_| {
-                anyhow::anyhow!(
-                    "stamp('{}'): expected TracedBytes, got {}",
-                    self.stage_name,
-                    obj.get_type()
-                        .qualname()
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|_| "?".to_string())
-                )
+        if let Some(wall_ns) = wall_ns {
+            Python::attach(|py| -> anyhow::Result<()> {
+                let obj = elem.as_ref().bind(py);
+                let traced: PyRef<PyTracedBytes> = obj.extract().map_err(|_| {
+                    anyhow::anyhow!(
+                        "stamp('{}'): expected TracedBytes, got {}",
+                        self.stage_name,
+                        obj.get_type()
+                            .qualname()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|_| "?".to_string())
+                    )
+                })?;
+                let mut lat = traced.latency.borrow_mut(py);
+                let idx = match self.stage_idx {
+                    Some(i) => i,
+                    None => {
+                        let i = lat.stage_index(&self.stage_name).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "stamp: unknown stage '{}' (known: {:?})",
+                                self.stage_name,
+                                lat.stages
+                            )
+                        })?;
+                        self.stage_idx = Some(i);
+                        i
+                    }
+                };
+                lat.stamp_by_index(idx, wall_ns);
+                Ok(())
             })?;
-            let mut lat = traced.latency.borrow_mut(py);
-            let idx = match self.stage_idx {
-                Some(i) => i,
-                None => {
-                    let i = lat.stage_index(&self.stage_name).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "stamp: unknown stage '{}' (known: {:?})",
-                            self.stage_name,
-                            lat.stages
-                        )
-                    })?;
-                    self.stage_idx = Some(i);
-                    i
-                }
-            };
-            lat.stamp_by_index(idx, wall_ns);
-            Ok(())
-        })?;
+        }
 
         self.value = elem;
         Ok(true)
@@ -403,9 +453,18 @@ impl MutableNode for PyLatencyReportNode {
 pub fn py_stamp_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     stage: String,
-    precise: bool,
-) -> Rc<dyn Stream<PyElement>> {
-    PyStampNode::new(stream.clone(), stage, precise).into_stream()
+    mode: &Bound<'_, PyAny>,
+) -> PyResult<Rc<dyn Stream<PyElement>>> {
+    let cell = if let Ok(handle) = mode.extract::<PyStampModeHandle>() {
+        handle.cell.clone()
+    } else if let Ok(m) = mode.extract::<PyStampMode>() {
+        Rc::new(Cell::new(m))
+    } else {
+        return Err(PyTypeError::new_err(
+            "stamp(stage, mode): mode must be StampMode or StampModeHandle",
+        ));
+    };
+    Ok(PyStampNode::new(stream.clone(), stage, cell).into_stream())
 }
 
 pub fn py_latency_report_inner(
