@@ -165,7 +165,7 @@ class TestStamp(unittest.TestCase):
         handle = StampModeHandle(StampMode.Off)
         received = []
 
-        def observe(tb, _t):
+        def observe(tb):
             received.append(tb.latency.stamps[:])
             if len(received) == 1:
                 handle.set(StampMode.On)
