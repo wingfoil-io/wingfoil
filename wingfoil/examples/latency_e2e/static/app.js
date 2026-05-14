@@ -1,10 +1,10 @@
 // wingfoil latency end-to-end — example-specific browser glue.
 //
 // Everything pipeline-agnostic (chart, flamegraph, breakdown tiles,
-// status pill, formatters) lives in ./telemetry/ — the carved-out
-// surface that will ship as `@wingfoil/telemetry` on npm. This file
-// holds only the bits unique to this demo: order entry, fill stats,
-// the FIX/LMAX-flavored stage and layer labels, and the Grafana iframe.
+// status pill, formatters) lives in `@wingfoil/telemetry` on npm.
+// This file holds only the bits unique to this demo: order entry,
+// fill stats, the FIX/LMAX-flavored stage and layer labels, and
+// the Grafana iframe.
 
 import { WingfoilClient } from "@wingfoil/client";
 import { LatencyTracker } from "@wingfoil/client/tracing";
@@ -13,7 +13,7 @@ import {
   FlameGraph,
   BreakdownPanel,
   StatusPill,
-} from "./telemetry/index.js";
+} from "@wingfoil/telemetry";
 
 // ── Pipeline-specific stage and layer labels ──────────────────────────────
 // Server-clock indices into the nine wingfoil stamp points:
