@@ -32,6 +32,7 @@ Prerequisites:
 """
 
 import json
+import mimetypes
 from pathlib import Path
 
 import pulumi
@@ -39,6 +40,7 @@ import pulumi_aws as aws
 
 # ── Paths ────────────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent
+EXAMPLE_DIR = HERE.parent.parent  # wingfoil/examples/latency_e2e
 
 # ── Config ───────────────────────────────────────────────────────────────
 config = pulumi.Config()
@@ -282,6 +284,71 @@ if dns_hostname:
         restrict_public_buckets=True,
     )
 
+# ── Static assets bucket ────────────────────────────────────────────────
+# Browser-side `static/` (index.html, app.js, deps) lives in S3 so JS-only
+# changes deploy by `aws s3 sync` + an ASG cycle — no AMI rebake, no image
+# rebuild. The AMI still bakes a baseline copy under /opt/wingfoil/static
+# (packer/install.sh), so a first boot before any S3 sync still serves
+# something; subsequent boots overwrite with whatever's in the bucket.
+
+static_bucket = aws.s3.BucketV2(
+    f"{prefix}-static-assets",
+    force_destroy=True,
+    tags={**tags, "Name": f"{prefix}-static-assets"},
+)
+aws.s3.BucketPublicAccessBlock(
+    f"{prefix}-static-assets-pab",
+    bucket=static_bucket.id,
+    block_public_acls=True,
+    block_public_policy=True,
+    ignore_public_acls=True,
+    restrict_public_buckets=True,
+)
+aws.s3.BucketServerSideEncryptionConfigurationV2(
+    f"{prefix}-static-assets-sse",
+    bucket=static_bucket.id,
+    rules=[aws.s3.BucketServerSideEncryptionConfigurationV2RuleArgs(
+        apply_server_side_encryption_by_default=aws.s3.BucketServerSideEncryptionConfigurationV2RuleApplyServerSideEncryptionByDefaultArgs(
+            sse_algorithm="AES256",
+        ),
+    )],
+)
+
+# Upload one object per file so cloud-init can grab the lot with
+# `aws s3 sync`. Resource names are deterministic on the file path so
+# Pulumi diffs cleanly when a static asset changes. Mirrors baremetal.
+def upload_static_tree(local_dir: Path, key_prefix: str) -> None:
+    if not local_dir.is_dir():
+        return
+    for path in sorted(local_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(local_dir).as_posix()
+        key = f"{key_prefix}/{rel}"
+        resource_name = f"{prefix}-static-{key}".replace("/", "-").replace(".", "-")
+        content_type, _ = mimetypes.guess_type(path.name)
+        aws.s3.BucketObject(
+            resource_name,
+            bucket=static_bucket.id,
+            key=key,
+            source=pulumi.FileAsset(str(path)),
+            content_type=content_type or "application/octet-stream",
+        )
+
+upload_static_tree(EXAMPLE_DIR / "static", "static")
+
+# SSM parameter so `latency-e2e.sync.static` can resolve the bucket name
+# without a Pulumi token — mirrors the `ami_id` parameter pattern used by
+# `latency-e2e.deploy` for the AMI.
+aws.ssm.Parameter(
+    f"{prefix}-static-bucket-ssm",
+    name="/wingfoil/latency-e2e/ec2-spot/static_bucket",
+    type="String",
+    value=static_bucket.bucket,
+    overwrite=True,
+    tags=tags,
+)
+
 # ── Secrets ──────────────────────────────────────────────────────────────
 lmax_username_secret = aws.secretsmanager.Secret(f"{prefix}-lmax-username", tags=tags)
 aws.secretsmanager.SecretVersion(
@@ -313,7 +380,7 @@ instance_role = aws.iam.Role(
 account_id = aws.get_caller_identity().account_id
 
 def _instance_policy(args):
-    user_arn, pw_arn, eip_alloc, bucket_arn = args
+    user_arn, pw_arn, eip_alloc, bucket_arn, static_bucket_arn = args
     statements = [
         {
             "Effect": "Allow",
@@ -367,6 +434,23 @@ def _instance_policy(args):
                 "Resource": [bucket_arn],
             }
         )
+    # Static assets bucket — read-only. user_data syncs s3://<bucket>/static/
+    # to /opt/wingfoil/static on every boot so JS-only changes ride along
+    # without an AMI rebake.
+    statements.append(
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"],
+            "Resource": [f"{static_bucket_arn}/*"],
+        }
+    )
+    statements.append(
+        {
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": [static_bucket_arn],
+        }
+    )
     return json.dumps({"Version": "2012-10-17", "Statement": statements})
 
 
@@ -375,6 +459,7 @@ _policy_inputs = [
     lmax_password_secret.arn,
     eip.allocation_id,
     cert_bucket.arn if cert_bucket is not None else pulumi.Output.from_input(None),
+    static_bucket.arn,
 ]
 aws.iam.RolePolicy(
     f"{prefix}-instance-policy",
@@ -410,7 +495,7 @@ user_data_template = (HERE / "user_data.sh").read_text()
 
 
 def render_user_data(args):
-    eip_alloc, user_arn, pw_arn, cert_bucket_name = args
+    eip_alloc, user_arn, pw_arn, cert_bucket_name, static_bucket_name = args
     rendered = (
         user_data_template
         .replace("__EIP_ALLOCATION_ID__",     eip_alloc)
@@ -419,6 +504,7 @@ def render_user_data(args):
         .replace("__AWS_REGION__",            aws_region)
         .replace("__DNS_HOSTNAME__",          dns_hostname or "")
         .replace("__CERT_BUCKET__",           cert_bucket_name or "")
+        .replace("__STATIC_BUCKET__",         static_bucket_name)
     )
     # gzip before base64 — cloud-init auto-detects and decompresses gzip
     # user_data, and EC2's 16 KiB user_data limit applies to the raw
@@ -435,6 +521,7 @@ user_data_b64 = pulumi.Output.all(
     lmax_username_secret.arn,
     lmax_password_secret.arn,
     cert_bucket.bucket if cert_bucket is not None else pulumi.Output.from_input(None),
+    static_bucket.bucket,
 ).apply(render_user_data)
 
 launch_template = aws.ec2.LaunchTemplate(
@@ -524,3 +611,4 @@ pulumi.export("asg_name",       asg.name)
 pulumi.export("availability_zones", [s.availability_zone for s in subnets])
 if cert_bucket is not None:
     pulumi.export("cert_bucket", cert_bucket.bucket)
+pulumi.export("static_bucket", static_bucket.bucket)

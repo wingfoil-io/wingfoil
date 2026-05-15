@@ -24,6 +24,11 @@ AWS_REGION="__AWS_REGION__"
 # Pulumi config, in which case we keep the self-signed-cert path below.
 DNS_HOSTNAME="__DNS_HOSTNAME__"
 CERT_BUCKET="__CERT_BUCKET__"
+# S3 bucket holding the latest browser-side static/ assets. The AMI bakes a
+# baseline copy under /opt/wingfoil/static (packer/install.sh), and this
+# sync overlays whatever's newer in S3 — so JS-only deploys push to the
+# bucket and cycle the ASG, no AMI rebake.
+STATIC_BUCKET="__STATIC_BUCKET__"
 
 # IMDSv2 — fetch our instance ID for the EIP association call.
 IMDS_TOKEN=$(curl -fsSL -X PUT \
@@ -327,6 +332,22 @@ chmod 0600 /opt/wingfoil/.env
 # pre-#298 AMI fails fast here with a clear message instead of as an opaque
 # OCI runtime error during `compose up`.
 #
+# Refresh /opt/wingfoil/static from S3 if the bucket name was templated in
+# (post-#345 stacks). Best-effort: a failed sync is non-fatal, the AMI's
+# baked copy of /opt/wingfoil/static stays in place and the bind-mount
+# check below still passes against it. `--delete` so files removed from the
+# source tree disappear here too. Older AMIs that don't bind-mount
+# /opt/wingfoil/static will simply ignore the refresh.
+if [ -n "${STATIC_BUCKET}" ] && [ -d /opt/wingfoil/static ]; then
+  if aws s3 sync "s3://${STATIC_BUCKET}/static/" /opt/wingfoil/static/ \
+      --region "${AWS_REGION}" --delete --no-progress; then
+    chown -R root:root /opt/wingfoil/static
+    chmod -R u+rwX,go+rX /opt/wingfoil/static
+  else
+    echo "WARN: s3 sync of static/ from ${STATIC_BUCKET} failed; using AMI-baked copy." >&2
+  fi
+fi
+
 # The static/ bind mount was only added in #324, so its source path
 # (/opt/wingfoil/static) is checked conditionally — gated on whether the
 # baked compose.yml actually references it. An older AMI (pre-#324) whose

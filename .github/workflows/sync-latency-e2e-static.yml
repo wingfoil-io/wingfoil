@@ -1,0 +1,117 @@
+# Sync the latency_e2e browser-side static/ tree to the ec2-spot stack's
+# S3 assets bucket. Lets pure-JS changes (index.html, app.js, vendored deps)
+# reach demo.wingfoil.io without rebuilding the ws_server image or rebaking
+# the AMI — the bucket overlays the AMI's baked copy at /opt/wingfoil/static
+# on every spot boot, via user_data.sh.
+#
+# Triggers:
+#   - workflow_dispatch (manual)
+#   - push to main when wingfoil/examples/latency_e2e/static/** changes
+#
+# Deploy flow:
+#   JS push -> this workflow syncs to S3 -> (optionally) cycle the ASG so
+#   a fresh instance boots and pulls the new static. Live instances keep
+#   serving the previous static from the AMI's baked /opt/wingfoil/static
+#   (bind-mounted into ws_server) until they're cycled.
+#
+# Required GitHub secrets:
+#   - AWS_ROLE_TO_ASSUME  IAM role with ssm:GetParameter on
+#                         /wingfoil/latency-e2e/ec2-spot/* and s3:* on the
+#                         static-assets bucket.
+#   - AWS_REGION          (optional, default eu-west-2)
+#
+# Prerequisite: the ec2-spot Pulumi stack has been deployed at least once,
+# so the S3 bucket exists and its name is written to SSM.
+
+name: latency-e2e.sync.static
+
+on:
+  workflow_dispatch:
+    inputs:
+      cycle_asg:
+        description: "Terminate the spot instance after sync so the new static is picked up immediately"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  push:
+    branches: [main]
+    paths:
+      - "wingfoil/examples/latency_e2e/static/**"
+      - ".github/workflows/sync-latency-e2e-static.yml"
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve static-assets bucket from SSM
+        id: bucket
+        run: |
+          BUCKET=$(aws ssm get-parameter \
+            --name /wingfoil/latency-e2e/ec2-spot/static_bucket \
+            --region "$AWS_REGION" \
+            --query 'Parameter.Value' --output text)
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+            echo "::error::SSM parameter /wingfoil/latency-e2e/ec2-spot/static_bucket is empty. Run latency-e2e.deploy (target=ec2-spot) first." >&2
+            exit 1
+          fi
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+
+      - name: aws s3 sync
+        run: |
+          aws s3 sync \
+            wingfoil/examples/latency_e2e/static/ \
+            "s3://${{ steps.bucket.outputs.bucket }}/static/" \
+            --delete --no-progress
+
+      # Optional. Without this the new static is dormant in S3 until the
+      # next spot reclaim (auto) or operator action. With it, the running
+      # instance is terminated and the ASG launches a fresh one whose
+      # user_data syncs from S3 before docker-compose comes up.
+      - name: Cycle ASG to pick up new static (optional)
+        if: github.event_name == 'workflow_dispatch' && inputs.cycle_asg == 'true'
+        run: |
+          # Find the single managed instance via tags (matches the launch
+          # template's TagSpecifications). ASG name isn't required.
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --filters \
+              "Name=tag:Project,Values=wingfoil-latency-ec2-spot" \
+              "Name=instance-state-name,Values=running,pending" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "::warning::No running ec2-spot instance found; nothing to cycle."
+            exit 0
+          fi
+          echo "Terminating $INSTANCE_ID; ASG will relaunch."
+          aws ec2 terminate-instances \
+            --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" >/dev/null
+
+      - name: Summary
+        run: |
+          {
+            echo "## Synced static/ -> \`s3://${{ steps.bucket.outputs.bucket }}/static/\`"
+            echo ""
+            if [ "${{ inputs.cycle_asg }}" = "true" ]; then
+              echo "- ASG cycled: new spot instance will pull the new static on boot."
+            else
+              echo "- ASG not cycled: live instance keeps serving the previous static from its AMI-baked copy until the next reclaim, or trigger this workflow again with \`cycle_asg=true\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
