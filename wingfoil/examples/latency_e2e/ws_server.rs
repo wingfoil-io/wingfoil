@@ -3,30 +3,24 @@
 // Pipeline (this binary):
 //   browser ── WS ──► ws_server                                    (control: start/stop)
 //                        │
-//                        └── server-side generator ── iceoryx2 ──► fix_gw   (outbound)
+//                        └── per-session ticker subgraphs ── iceoryx2 ──► fix_gw   (outbound)
 //   browser ◄── WS ── ws_server ◄── iceoryx2 ── fix_gw            (inbound)
 //
-// The browser no longer publishes individual orders. It sends one
-// `ControlFrame { action: START, side, qty, rate_hz }` to enable a
-// server-side generator bound to its session UUID, then a matching
-// `STOP` (or session TTL) to disable it. Re-sending `START` while
-// already active updates side/qty/rate_hz live — no stop/restart cycle.
+// On `CONTROL_START`, `OrderGenerator` calls `state.add_upstream` to wire
+// in a `ticker(period)` subgraph keyed by the session UUID — that ticker
+// IS the rate. On `STOP`, `state.remove_node` tears it down. A "live
+// rate update" (browser tweaks Hz while running) is just del-then-add:
+// the user sees a smooth rate change with no stop/restart.
 //
-// Stamps `ws_recv` (when the generator produces the order) and
-// `ws_publish` (just before the iceoryx2 publish) on the way out;
-// `ws_sub_recv` and `ws_send` on the way back. The cap + auto-expiry
-// protect the single LMAX session living in fix_gw.
+// Stamps `ws_recv` and `ws_publish` inline in the generator, `ws_sub_recv`
+// and `ws_send` on the inbound stamp ops. Session cap + TTL backstop
+// browser disconnects so the LMAX session in fix_gw stays bounded.
 //
 // Run (after starting fix_gw):
 //   cargo run --example latency_e2e_ws_server \
-//     --features "web-tls,iceoryx2-beta,prometheus,otlp" -- \
+//     --features "web-tls,iceoryx2-beta,prometheus,otlp,dynamic-graph-beta" -- \
 //     --addr 0.0.0.0:8080 [--no-precise] \
 //     [--tls-cert /etc/wingfoil/tls/cert.pem --tls-key /etc/wingfoil/tls/key.pem]
-//
-// Passing --tls-cert/--tls-key (or setting WINGFOIL_TLS_CERT/WINGFOIL_TLS_KEY)
-// switches the server to HTTPS + WSS on the same port. The browser
-// client (static/app.js) auto-detects scheme from `location.protocol`,
-// so no client-side config flips are needed.
 
 #[path = "shared.rs"]
 mod shared;
@@ -34,7 +28,6 @@ mod shared;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iceoryx2::prelude::ZeroCopySend;
@@ -50,150 +43,156 @@ use shared::{
     pin_current_from_env, precise_stamps_enabled, round_trip_latency, session_hex,
 };
 
-// ── Session registry ──────────────────────────────────────────────────────
+// ── OrderGenerator ────────────────────────────────────────────────────────
 //
-// Lives in an `Arc<Mutex<…>>` because the Prometheus gauges read it from
-// the graph thread, the control web_sub writes to it from its async
-// consumer thread, and the generator ticker reads it from the graph
-// thread. Every operation is O(active_sessions ≤ cap = 8) and is well
-// off the FIX-RTT critical path; contention is negligible.
+// Custom MutableNode that owns one ticker subgraph per active session.
+// Adding/removing a session is `state.add_upstream` / `state.remove_node`,
+// so each session's ticker IS the source of truth for its rate — no
+// per-cycle poll, no shared mutex.
 
-#[derive(Debug)]
 struct ActiveSession {
-    side: u8,     // SIDE_BUY, SIDE_SELL, or SIDE_ALT
-    alt_next: u8, // next concrete side when `side == SIDE_ALT`
+    ticker: Rc<dyn Node>,
+    side: u8,
+    alt_next: u8,
     qty: u64,
-    period_ns: u64,    // 1e9 / rate_hz; 0 disables emission
-    next_emit_ns: u64, // next due time on the wall clock
     client_seq: u64,
-    admitted_at_ns: u64, // for TTL-based eviction
+    admitted_at: NanoTime,
 }
 
-#[derive(Default)]
-struct Sessions {
+struct OrderGenerator {
+    control: Rc<dyn Stream<ControlFrame>>,
+    gc: Rc<dyn Node>,
     active: HashMap<SessionId, ActiveSession>,
     cap: usize,
-    ttl_ns: u64,
-    admitted_total: u64,
-    rejected_total: u64,
-    emitted_total: u64,
+    ttl: Duration,
+    precise: bool,
+    value: Burst<Traced<RoundTrip, RoundTripLatency>>,
 }
 
-impl Sessions {
-    fn new(cap: usize, ttl_secs: u64) -> Self {
+impl OrderGenerator {
+    fn new(
+        control: Rc<dyn Stream<ControlFrame>>,
+        gc: Rc<dyn Node>,
+        cap: usize,
+        ttl: Duration,
+        precise: bool,
+    ) -> Self {
         Self {
+            control,
+            gc,
+            active: HashMap::new(),
             cap,
-            ttl_ns: ttl_secs * 1_000_000_000,
-            ..Default::default()
+            ttl,
+            precise,
+            value: burst![],
         }
     }
 
-    fn gc(&mut self, now_ns: u64) {
-        self.active
-            .retain(|_, e| now_ns.saturating_sub(e.admitted_at_ns) < self.ttl_ns);
+    fn evict(&mut self, state: &mut GraphState, id: &SessionId) {
+        if let Some(s) = self.active.remove(id) {
+            state.remove_node(s.ticker);
+        }
     }
 
-    /// Apply a control message. `START` admits a new session or updates an
-    /// existing one in-place (so the browser can change `rate_hz` without
-    /// stop/restart). `STOP` removes it.
-    fn apply(&mut self, frame: &ControlFrame, now_ns: u64) {
-        self.gc(now_ns);
-        match frame.action {
-            CONTROL_STOP => {
-                self.active.remove(&frame.session);
-            }
-            CONTROL_START => {
-                let period_ns = if frame.rate_hz == 0 {
-                    0
-                } else {
-                    1_000_000_000 / frame.rate_hz as u64
-                };
-                if let Some(s) = self.active.get_mut(&frame.session) {
-                    s.side = frame.side;
-                    s.qty = frame.qty;
-                    s.period_ns = period_ns;
-                    // Re-anchor the schedule. Without this, raising rate_hz
-                    // from 1 to 100 would still wait ~1 s for the next emit;
-                    // lowering rate_hz to 1 mid-burst would let it catch up
-                    // by firing many back-to-back orders.
-                    s.next_emit_ns = now_ns.saturating_add(period_ns);
-                    return;
-                }
-                if self.active.len() >= self.cap {
-                    self.rejected_total += 1;
+    fn now(&self, state: &mut GraphState) -> NanoTime {
+        if self.precise {
+            state.wall_time_precise()
+        } else {
+            state.wall_time()
+        }
+    }
+}
+
+#[node(output = value: Burst<Traced<RoundTrip, RoundTripLatency>>)]
+impl MutableNode for OrderGenerator {
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(
+            vec![self.control.clone().as_node(), self.gc.clone()],
+            vec![],
+        )
+    }
+
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value.clear();
+
+        if state.ticked(self.control.clone().as_node()) {
+            let frame = self.control.peek_value();
+            // START on an existing session = rate update via del+add.
+            self.evict(state, &frame.session);
+            match frame.action {
+                CONTROL_START if self.active.len() >= self.cap => {
                     log::warn!(
                         "rejected start session={} (cap {} reached)",
                         session_hex(&frame.session),
                         self.cap,
                     );
-                    return;
                 }
-                self.active.insert(
-                    frame.session,
-                    ActiveSession {
-                        side: frame.side,
-                        alt_next: 0,
-                        qty: frame.qty,
-                        period_ns,
-                        next_emit_ns: now_ns,
-                        client_seq: 0,
-                        admitted_at_ns: now_ns,
-                    },
-                );
-                self.admitted_total += 1;
-                log::info!(
-                    "admitted session={} rate={}Hz qty={} side={}",
-                    session_hex(&frame.session),
-                    frame.rate_hz,
-                    frame.qty,
-                    frame.side,
-                );
+                CONTROL_START => {
+                    let period = Duration::from_nanos(1_000_000_000 / frame.rate_hz.max(1) as u64);
+                    let tick = ticker(period);
+                    state.add_upstream(tick.clone(), true, true);
+                    self.active.insert(
+                        frame.session,
+                        ActiveSession {
+                            ticker: tick,
+                            side: frame.side,
+                            alt_next: 0,
+                            qty: frame.qty,
+                            client_seq: 0,
+                            admitted_at: state.wall_time(),
+                        },
+                    );
+                }
+                CONTROL_STOP => {} // already evicted
+                _ => {}
             }
-            other => log::warn!(
-                "unknown control action={other} session={}",
-                session_hex(&frame.session),
-            ),
         }
-    }
 
-    /// Emit at most one order this cycle. Picks the session whose
-    /// `next_emit_ns` is smallest among those past due; ties broken by
-    /// HashMap iteration order. Advances that session's schedule and
-    /// returns the order — None if no session is due.
-    fn poll(&mut self, now_ns: u64) -> Option<RoundTrip> {
-        self.gc(now_ns);
-        let mut chosen: Option<(SessionId, u64)> = None;
-        for (id, s) in self.active.iter() {
-            if s.period_ns == 0 || s.next_emit_ns > now_ns {
+        if state.ticked(self.gc.clone()) {
+            let cutoff = state.wall_time() - NanoTime::from(self.ttl);
+            let expired: Vec<SessionId> = self
+                .active
+                .iter()
+                .filter(|(_, s)| s.admitted_at < cutoff)
+                .map(|(id, _)| *id)
+                .collect();
+            for id in &expired {
+                self.evict(state, id);
+            }
+        }
+
+        // Active sessions whose ticker fired this cycle each emit one order.
+        // Two tickers can coincide; iceoryx2_pub iterates the Burst.
+        let ids: Vec<SessionId> = self.active.keys().copied().collect();
+        for id in ids {
+            let ticker_node = self.active[&id].ticker.clone();
+            if !state.ticked(ticker_node) {
                 continue;
             }
-            if chosen.is_none_or(|(_, t)| s.next_emit_ns < t) {
-                chosen = Some((*id, s.next_emit_ns));
-            }
+            let s = self.active.get_mut(&id).unwrap();
+            let side = if s.side == SIDE_ALT {
+                let v = s.alt_next;
+                s.alt_next ^= 1;
+                v
+            } else {
+                s.side
+            };
+            s.client_seq += 1;
+            let mut t = Traced::<RoundTrip, RoundTripLatency>::new(RoundTrip {
+                session: id,
+                client_seq: s.client_seq,
+                qty: s.qty,
+                side,
+                ..Default::default()
+            });
+            let recv: u64 = self.now(state).into();
+            round_trip_latency::ws_recv::stamp(&mut t.latency, recv);
+            let publish: u64 = self.now(state).into();
+            round_trip_latency::ws_publish::stamp(&mut t.latency, publish);
+            self.value.push(t);
         }
-        let (id, _) = chosen?;
-        let s = self.active.get_mut(&id).expect("just chosen above");
-        let side = if s.side == SIDE_ALT {
-            let v = s.alt_next;
-            s.alt_next ^= 1;
-            v
-        } else {
-            s.side
-        };
-        s.client_seq += 1;
-        s.next_emit_ns = s.next_emit_ns.saturating_add(s.period_ns);
-        // Cap catch-up: don't backlog if the graph stalled or rate_hz spiked.
-        if s.next_emit_ns < now_ns {
-            s.next_emit_ns = now_ns.saturating_add(s.period_ns);
-        }
-        self.emitted_total += 1;
-        Some(RoundTrip {
-            session: id,
-            client_seq: s.client_seq,
-            qty: s.qty,
-            side,
-            ..Default::default()
-        })
+
+        Ok(!self.value.is_empty())
     }
 }
 
@@ -209,8 +208,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| env_string("WINGFOIL_WEB_ADDR", "0.0.0.0:8080"));
     let metrics_addr = env_string("WINGFOIL_METRICS_ADDR", "0.0.0.0:9091");
     let session_cap = env_u64("WINGFOIL_SESSION_CAP", 8) as usize;
-    let session_ttl = env_u64("WINGFOIL_SESSION_SECS", 60);
-    let tick_us = env_u64("WINGFOIL_TICK_US", 1_000);
+    let session_ttl = Duration::from_secs(env_u64("WINGFOIL_SESSION_SECS", 60));
     let precise = precise_stamps_enabled();
 
     let static_dir: PathBuf = std::env::var("WINGFOIL_STATIC_DIR")
@@ -220,8 +218,7 @@ fn main() -> anyhow::Result<()> {
         });
 
     // TLS material is opt-in: missing cert/key keeps the server on plain
-    // HTTP/WS, matching the existing local-dev workflow. Pulumi user_data
-    // wires both args so the deployed boxes serve HTTPS by default.
+    // HTTP/WS. Pulumi user_data wires both args so deployed boxes serve HTTPS.
     let arg_or_env = |flag: &str, var: &str| -> Option<PathBuf> {
         args.iter()
             .position(|a| a == flag)
@@ -249,49 +246,16 @@ fn main() -> anyhow::Result<()> {
         server.port(),
         static_dir.display(),
     );
-    log::info!("session_cap={session_cap} ttl={session_ttl}s tick={tick_us}us precise={precise}",);
+    log::info!(
+        "session_cap={session_cap} ttl={:?} precise={precise}",
+        session_ttl,
+    );
 
-    let sessions = Arc::new(Mutex::new(Sessions::new(session_cap, session_ttl)));
-
-    // ── Control ingest ───────────────────────────────────────────────────
-    // Drives the live state. Browser publishes one `ControlFrame` per
-    // start/stop click (and again to update side/qty/rate without
-    // stopping); the for_each just mutates the shared session map.
-    let control_in = web_sub::<ControlFrame>(&server, TOPIC_CONTROL).collapse::<ControlFrame>();
-    let control_sink = {
-        let s = sessions.clone();
-        control_in.for_each(move |frame, _t| {
-            let now_ns: u64 = NanoTime::now().into();
-            s.lock().unwrap().apply(&frame, now_ns);
-        })
-    };
-
-    // ── Outbound leg (server-side generator) ─────────────────────────────
-    // Single fast ticker; on each cycle, ask the registry for the next
-    // due order (or None). MapFilterStream drops the Nones, then we wrap
-    // in Traced<…>, stamp, and publish to iceoryx2 exactly as before.
-    let gen_tick = ticker(Duration::from_micros(tick_us));
-    let raw_orders = {
-        let s = sessions.clone();
-        gen_tick.produce(move || s.lock().unwrap().poll(NanoTime::now().into()))
-    };
-    let due_orders = MapFilterStream::new(
-        raw_orders,
-        Box::new(|opt: Option<RoundTrip>| match opt {
-            Some(rt) => (rt, true),
-            None => (RoundTrip::default(), false),
-        }),
-    )
-    .into_stream();
-
-    let traced_orders = due_orders
-        .map(Traced::<RoundTrip, RoundTripLatency>::new)
-        .stamp_if::<round_trip_latency::ws_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_recv>(precise)
-        .stamp_if::<round_trip_latency::ws_publish>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_publish>(precise);
-
-    let pub_orders = iceoryx2_pub(traced_orders.map(|t| burst![t]), SVC_ORDERS);
+    let control = web_sub::<ControlFrame>(&server, TOPIC_CONTROL).collapse::<ControlFrame>();
+    let gc_tick = ticker(Duration::from_secs(1));
+    let orders =
+        OrderGenerator::new(control, gc_tick, session_cap, session_ttl, precise).into_stream();
+    let pub_orders = iceoryx2_pub(orders, SVC_ORDERS);
 
     // ── Inbound leg ──────────────────────────────────────────────────────
     let fills_in = iceoryx2_sub::<Traced<RoundTrip, RoundTripLatency>>(SVC_FILLS)
@@ -303,10 +267,6 @@ fn main() -> anyhow::Result<()> {
 
     let (inbound_report, inbound_stats) = fills_in.latency_report(true);
 
-    // OTLP trace export — one parent span + one child per hop, per fill.
-    // The attribute extractor pushes session.id and client_seq onto the
-    // parent span so the Grafana dashboard can filter by session (which
-    // Prometheus can't do without blowing up cardinality).
     let otlp_endpoint = env_string("WINGFOIL_OTLP_ENDPOINT", "http://localhost:4318");
     log::info!("otlp trace export → {otlp_endpoint}");
     let span_sink = fills_in.clone().otlp_spans(
@@ -346,57 +306,19 @@ fn main() -> anyhow::Result<()> {
     });
     let pub_fills = fill_frames.web_pub(&server, TOPIC_FILLS);
 
-    // ── Prometheus metrics ───────────────────────────────────────────────
     let exporter = PrometheusExporter::new(&metrics_addr);
     let metrics_port = exporter.serve()?;
     log::info!("prometheus on http://{metrics_addr}/metrics (bound :{metrics_port})");
 
-    let tick_1s = ticker(Duration::from_secs(1));
-    let active_gauge = {
-        let s = sessions.clone();
-        tick_1s.produce(move || s.lock().unwrap().active.len() as u64)
-    };
-    let admitted_gauge = {
-        let s = sessions.clone();
-        tick_1s.produce(move || s.lock().unwrap().admitted_total)
-    };
-    let rejected_gauge = {
-        let s = sessions.clone();
-        tick_1s.produce(move || s.lock().unwrap().rejected_total)
-    };
-    let emitted_gauge = {
-        let s = sessions.clone();
-        tick_1s.produce(move || s.lock().unwrap().emitted_total)
-    };
-
-    let mut nodes: Vec<Rc<dyn Node>> = vec![
-        control_sink,
-        pub_orders,
-        pub_fills,
-        inbound_report,
-        span_sink,
-        exporter.register("latency_e2e_active_sessions", active_gauge),
-        exporter.register("latency_e2e_admitted_total", admitted_gauge),
-        exporter.register("latency_e2e_rejected_total", rejected_gauge),
-        exporter.register("latency_e2e_emitted_total", emitted_gauge),
-    ];
+    let mut nodes: Vec<Rc<dyn Node>> = vec![pub_orders, pub_fills, inbound_report, span_sink];
     nodes.extend(register_stage_metrics(&exporter, &inbound_stats));
 
-    // Pin AFTER all adapter workers (web server, iceoryx2 pub/sub,
-    // Prometheus exporter, OTLP exporter) are spawned so they keep the
-    // default affinity mask. The pinned mask applies only to the graph
-    // cycle thread (this one).
+    // Pin AFTER adapter workers spawn so only the graph thread is pinned.
     pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
     Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
     Ok(())
 }
-
-// ── Per-stage Prometheus gauges ──────────────────────────────────────────
-//
-// The Prometheus adapter has no native label support, so we register one
-// gauge per (stage × statistic) tuple. The Grafana dashboard groups them
-// back together via metric-name regex.
 
 fn register_stage_metrics<L: Latency>(
     exporter: &PrometheusExporter,
@@ -426,7 +348,6 @@ fn register_stage_metrics<L: Latency>(
     out
 }
 
-// Compile-time sanity: the iceoryx2 payload type is zero-copy sendable.
 const _: fn() = || {
     fn assert_zc<T: ZeroCopySend>() {}
     assert_zc::<Traced<RoundTrip, RoundTripLatency>>();
