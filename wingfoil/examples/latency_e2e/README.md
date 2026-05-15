@@ -67,7 +67,7 @@ cargo run --release --example latency_e2e_fix_gw \
 # For HTTPS / WSS, pass --tls-cert / --tls-key (or set
 # WINGFOIL_TLS_CERT / WINGFOIL_TLS_KEY); the cargo feature is the same.
 cargo run --release --example latency_e2e_ws_server \
-  --features "web-tls,iceoryx2,prometheus,otlp" -- --addr 0.0.0.0:8080
+  --features "web-tls,iceoryx2,prometheus,otlp,dynamic-graph-beta" -- --addr 0.0.0.0:8080
 
 # Terminal 3 (operator stack — Prometheus + Tempo + Grafana, auto-provisioned)
 docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d
@@ -117,16 +117,21 @@ control frames past the cap are rejected server-side and a warning is
 logged. This caps load on the LMAX session and bounds Prometheus
 cardinality.
 
-## Generator tick rate
+## Per-session ticker subgraphs
 
-The graph runs a `WINGFOIL_TICK_US` ticker (default 1000 µs = 1 kHz)
-that polls the active-session registry and emits at most one order per
-cycle. With the default `SESSION_CAP=8` × per-session `rate_hz ≤ 100`,
-the upper bound is 800 Hz — well under the tick rate. Sessions whose
-`next_emit_ns` is past due are picked earliest-first; if multiple are
-due in the same cycle, only one fires and the rest emit on subsequent
-ticks (sub-millisecond jitter). Lowering `WINGFOIL_TICK_US` tightens
-that bound at the cost of more idle cycles.
+There is no global "poll" ticker. `OrderGenerator` is a custom
+`MutableNode`; on `CONTROL_START` it calls `state.add_upstream(ticker(period), …)`,
+wiring a per-session ticker into the live graph. On `CONTROL_STOP` (or
+TTL expiry) it calls `state.remove_node` and the subgraph tears down.
+A live rate change is just del-then-add against the same session id —
+the browser sees no break.
+
+Each session's ticker IS the rate: the graph engine wakes the cycle at
+the next callback among all active tickers, so idle sessions cost
+nothing and a 100 Hz session doesn't sample-and-discard against any
+faster clock. Multiple sessions ticking the same cycle is supported:
+the generator emits a `Burst<Traced<…>>` and `iceoryx2_pub` iterates
+it. Requires the `dynamic-graph-beta` feature.
 
 ## Three observability views, one browser tab
 

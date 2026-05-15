@@ -16,7 +16,7 @@ COPY . .
 RUN cargo build --release \
     -p wingfoil \
     --example latency_e2e_ws_server \
-    --features "web-tls,iceoryx2,prometheus,otlp"
+    --features "web-tls,iceoryx2,prometheus,otlp,dynamic-graph-beta"
 
 # Runtime stage — bookworm-slim matches the builder's glibc (2.36); pairing
 # it with ubuntu:22.04 (glibc 2.35) risks a runtime ABI break.

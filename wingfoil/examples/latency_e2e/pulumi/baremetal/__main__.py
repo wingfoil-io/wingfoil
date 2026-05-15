@@ -27,7 +27,7 @@ isolated cores.
 Prerequisites:
 
   cargo build --release -p wingfoil --example latency_e2e_ws_server \\
-      --features "web-tls,iceoryx2,prometheus,otlp"
+      --features "web-tls,iceoryx2,prometheus,otlp,dynamic-graph-beta"
   cargo build --release -p wingfoil --example latency_e2e_fix_gw \\
       --features "fix,iceoryx2"
   pulumi config set --secret lmax_username <...>
@@ -54,7 +54,7 @@ WS_SERVER_BIN = TARGET_RELEASE / "latency_e2e_ws_server"
 FIX_GW_BIN = TARGET_RELEASE / "latency_e2e_fix_gw"
 
 for path, hint in [
-    (WS_SERVER_BIN, "cargo build --release -p wingfoil --example latency_e2e_ws_server --features 'web,iceoryx2,prometheus,otlp'"),
+    (WS_SERVER_BIN, "cargo build --release -p wingfoil --example latency_e2e_ws_server --features 'web,iceoryx2,prometheus,otlp,dynamic-graph-beta'"),
     (FIX_GW_BIN, "cargo build --release -p wingfoil --example latency_e2e_fix_gw --features 'fix,iceoryx2'"),
 ]:
     if not path.exists():

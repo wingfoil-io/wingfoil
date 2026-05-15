@@ -67,7 +67,7 @@ pulumi config set ingress_cidr 203.0.113.4/32
 ```bash
 # 1. Build release binaries (Pulumi reads them from target/release/examples)
 cargo build --release -p wingfoil --example latency_e2e_ws_server \
-    --features "web-tls,iceoryx2,prometheus,otlp"
+    --features "web-tls,iceoryx2,prometheus,otlp,dynamic-graph-beta"
 cargo build --release -p wingfoil --example latency_e2e_fix_gw \
     --features "fix,iceoryx2"
 

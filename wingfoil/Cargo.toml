@@ -348,7 +348,7 @@ required-features = ["kafka"]
 [[example]]
 name = "latency_e2e_ws_server"
 path = "examples/latency_e2e/ws_server.rs"
-required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp", "dynamic-graph-beta"]
 
 [[example]]
 name = "latency_e2e_fix_gw"
