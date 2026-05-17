@@ -3,8 +3,8 @@
 //! `FragmentBuffer` exposes the borrowed `&[u8]` from a polled Aeron fragment,
 //! tagged with a [`FragmentHeader`] (position, session, stream).
 //! `ClaimBuffer` is a `&mut [u8]` view into a claimed slot in the publication
-//! term buffer, with an explicit commit-or-abort lifecycle. The real
-//! `try_claim` wiring that produces these claims lands in a follow-up commit.
+//! term buffer, with an explicit commit-or-abort lifecycle, produced by
+//! `RusteronPublisher::try_claim`.
 
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -81,11 +81,8 @@ impl<'a> std::fmt::Debug for ClaimBuffer<'a> {
 impl<'a> ClaimBuffer<'a> {
     /// Constructs a `ClaimBuffer` from a successful rusteron `try_claim` result.
     ///
-    /// Crate-private — the only legitimate caller lives behind a future
-    /// `RusteronPublisher::try_claim` impl. Until that lands, this
-    /// constructor is exercised only from `#[cfg(test)]` code, hence the
-    /// dead-code allow.
-    #[allow(dead_code)]
+    /// Crate-private — the only legitimate caller is
+    /// `RusteronPublisher::try_claim`.
     pub(crate) fn from_aeron(claim: AeronBufferClaim, position: i64) -> Self {
         ClaimBuffer {
             claim,

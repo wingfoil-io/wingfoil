@@ -307,6 +307,110 @@ fn test_invalid_fragments_are_discarded() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `try_claim` zero-copy round-trip: claim a 64-byte slot, fill with `0xAB`,
+/// commit, and assert the subscriber receives exactly those bytes.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2005i32;
+
+    let mut sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let mut claim = pub_.try_claim(64).expect("try_claim succeeds");
+    assert_eq!(claim.len(), 64);
+    for b in claim.data().iter_mut() {
+        *b = 0xAB;
+    }
+    claim.commit().expect("commit succeeds");
+
+    let mut received: Option<Vec<u8>> = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && received.is_none() {
+        let _ = sub.poll(&mut |bytes: &[u8]| {
+            received = Some(bytes.to_vec());
+        });
+        if received.is_none() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let bytes = received.expect("subscription observes committed claim within 2s");
+    assert_eq!(bytes.len(), 64);
+    assert!(
+        bytes.iter().all(|b| *b == 0xAB),
+        "all 64 bytes equal 0xAB: {bytes:?}"
+    );
+    Ok(())
+}
+
+/// `try_claim` returns `TransportError::BackPressure` once the term buffer
+/// saturates with no subscriber polling.
+///
+/// Uses a small term length (`term-length=65536`, the minimum supported) so the
+/// buffer fills within a bounded iteration count.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::AeronPublisherBackend;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2006i32;
+    let channel = "aeron:ipc?term-length=65536";
+
+    let mut pub_ = handle.publication(channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let mut back_pressure_seen = false;
+    for _ in 0..200 {
+        match pub_.try_claim(1024) {
+            Ok(claim) => {
+                claim.commit().expect("commit succeeds");
+            }
+            Err(TransportError::BackPressure) => {
+                back_pressure_seen = true;
+                break;
+            }
+            Err(other) => panic!("unexpected error from try_claim: {other:?}"),
+        }
+    }
+
+    assert!(
+        back_pressure_seen,
+        "back-pressure never observed within 200 iterations on term-length=65536"
+    );
+    Ok(())
+}
+
+/// Dropping an un-committed `ClaimBuffer` releases the term-buffer slot via the
+/// `Drop` backstop, so the next `try_claim` succeeds immediately rather than
+/// waiting 15 s for the publication-unblock timeout.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::AeronPublisherBackend;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2007i32;
+
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let claim = pub_.try_claim(64).expect("first try_claim succeeds");
+    drop(claim);
+
+    let claim2 = pub_.try_claim(64).expect("second try_claim succeeds");
+    claim2.commit().expect("commit succeeds");
+    Ok(())
+}
+
 /// aeron-rs (pure-Rust) backend: ticker-driven round-trip.
 #[cfg(feature = "aeron-rs")]
 #[test]

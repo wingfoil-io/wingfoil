@@ -10,11 +10,42 @@
 //! derived from it.  Build one with [`AeronHandle::connect`] before
 //! constructing subscribers or publishers.
 
+use crate::adapters::aeron::buffer::ClaimBuffer;
+use crate::adapters::aeron::error::TransportError;
 use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
 use rusteron_client::{
-    Aeron, AeronContext, AeronPublication, AeronSubscription, Handlers, IntoCString,
+    Aeron, AeronBufferClaim, AeronContext, AeronPublication, AeronSubscription, Handlers,
+    IntoCString,
 };
 use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Rusteron i64 → TransportError mapping
+// ---------------------------------------------------------------------------
+
+// Negative-code mapping table verbatim from
+// aerofoil/src/transport/rusteron/error.rs.
+//
+// Rusteron's `AeronPublication::try_claim` / `offer` return an `i64`:
+//   - Positive values are a stream position (success).
+//   - Negative values are wire-level Aeron error codes:
+//       -1: Not connected
+//       -2: Back pressure
+//       -4: Publication closed
+//   - Any other negative code is surfaced as a `Backend` error with the code
+//     embedded for diagnostics.
+fn result_to_transport_error(result: i64) -> Result<i64, TransportError> {
+    match result {
+        pos if pos >= 0 => Ok(pos),
+        -2 => Err(TransportError::BackPressure),
+        -1 => Err(TransportError::Connection("Not connected".to_string())),
+        -4 => Err(TransportError::Connection("Publication closed".to_string())),
+        code => Err(TransportError::Backend(format!(
+            "Rusteron error code: {}",
+            code
+        ))),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Connection handle
@@ -141,7 +172,66 @@ impl AeronPublisherBackend for RusteronPublisher {
         self.publication.is_closed()
     }
 
-    // `try_claim` is intentionally left as the trait default here — the real
-    // `AeronBufferClaim`-backed implementation and its embedded-driver
-    // integration tests land in a follow-up commit.
+    fn try_claim<'a>(&'a mut self, length: usize) -> Result<ClaimBuffer<'a>, TransportError> {
+        let claim = AeronBufferClaim::default();
+        let position = self.publication.try_claim(length, &claim);
+        let position = result_to_transport_error(position)?;
+        Ok(ClaimBuffer::from_aeron(claim, position))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_positive_result_when_mapped_then_returns_ok_position() {
+        assert!(matches!(result_to_transport_error(12345), Ok(12345)));
+        assert!(matches!(result_to_transport_error(0), Ok(0)));
+    }
+
+    #[test]
+    fn given_minus_two_when_mapped_then_returns_back_pressure() {
+        let err = result_to_transport_error(-2).expect_err("-2 maps to Err");
+        assert!(matches!(err, TransportError::BackPressure));
+    }
+
+    #[test]
+    fn given_minus_one_when_mapped_then_returns_connection_not_connected() {
+        let err = result_to_transport_error(-1).expect_err("-1 maps to Err");
+        match err {
+            TransportError::Connection(msg) => assert!(
+                msg.contains("Not connected"),
+                "expected 'Not connected', got: {msg}"
+            ),
+            other => panic!("expected Connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_minus_four_when_mapped_then_returns_connection_publication_closed() {
+        let err = result_to_transport_error(-4).expect_err("-4 maps to Err");
+        match err {
+            TransportError::Connection(msg) => assert!(
+                msg.contains("Publication closed"),
+                "expected 'Publication closed', got: {msg}"
+            ),
+            other => panic!("expected Connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_unknown_negative_code_when_mapped_then_returns_backend_with_code() {
+        let err = result_to_transport_error(-99).expect_err("-99 maps to Err");
+        match err {
+            TransportError::Backend(msg) => {
+                assert!(msg.contains("-99"), "expected code in message, got: {msg}")
+            }
+            other => panic!("expected Backend, got {other:?}"),
+        }
+    }
 }
