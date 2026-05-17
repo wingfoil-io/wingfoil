@@ -26,8 +26,8 @@ use testcontainers::{
 const DRIVER_IMAGE: &str = "neomantra/aeron-cpp-debian";
 const DRIVER_TAG: &str = "latest";
 /// IPC channel: communicates via the shared CNC file in /dev/shm — no UDP needed.
-const AERON_CHANNEL: &str = "aeron:ipc";
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const AERON_CHANNEL: &str = "aeron:ipc";
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Shared Aeron directory used by both the container's aeronmd and the host client.
 /// Setting the same `AERON_DIR` on both sides ensures the CNC file path matches
@@ -36,7 +36,7 @@ const AERON_DIR: &str = "/dev/shm/aeron-integration-test";
 
 /// Start an Aeron media driver container and return a guard that stops it on drop.
 /// Binds `/dev/shm` into the container so the host process shares the CNC file.
-fn start_media_driver() -> anyhow::Result<impl Drop> {
+pub(crate) fn start_media_driver() -> anyhow::Result<impl Drop> {
     // Tell the host Aeron client where to find the CNC file.
     // SAFETY: tests run with --test-threads=1, so no concurrent env access.
     unsafe { std::env::set_var("AERON_DIR", AERON_DIR) };
@@ -456,6 +456,71 @@ fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
     assert!(
         values.contains(&77i64),
         "expected 77 via aeron-rs backend, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// `fragment_limit` is a per-`poll()` cap, not a target.
+///
+/// Publish 1000 small messages, then poll with `fragment_limit = 32` and assert
+/// that every non-zero `poll()` returns at most 32 fragments while all 1000 are
+/// delivered in total. At Aeron IPC throughput the publisher fills the term
+/// buffer faster than the capped subscriber drains, guaranteeing at least one
+/// non-zero poll within the cap — a buggy `fragment_limit` wiring would deliver
+/// all 1000 in a single poll.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_fragment_limit_caps_burst_size() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2008i32;
+
+    let mut sub = handle
+        .subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?
+        .with_fragment_limit(32);
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    // Publish 1000 8-byte payloads with bounded back-pressure retry.
+    let mut published = 0usize;
+    let pub_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while published < 1000 {
+        anyhow::ensure!(
+            std::time::Instant::now() < pub_deadline,
+            "timed out publishing at {published} of 1000"
+        );
+        let bytes = (published as i64).to_le_bytes();
+        match pub_.offer(&bytes) {
+            Ok(()) => published += 1,
+            Err(_) => std::thread::sleep(Duration::from_micros(100)),
+        }
+    }
+
+    // Poll until all 1000 received, asserting the cap on every non-zero poll.
+    let mut total = 0usize;
+    let mut saw_capped_burst = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while total < 1000 {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out at {total} of 1000"
+        );
+        let count = sub.poll(&mut |_fragment: &[u8]| ())?;
+        assert!(
+            count <= 32,
+            "fragment_limit=32 cap violated: poll returned {count}"
+        );
+        if count > 0 {
+            saw_capped_burst = true;
+        }
+        total += count;
+    }
+    assert_eq!(total, 1000, "expected exactly 1000 fragments");
+    assert!(
+        saw_capped_burst,
+        "expected at least one non-zero poll within the 32-fragment cap"
     );
     Ok(())
 }

@@ -26,6 +26,20 @@ pub trait AeronSubscriberBackend: Send + 'static {
     fn is_closed(&self) -> bool {
         false
     }
+
+    /// Override the per-`poll()` fragment cap for this subscriber.
+    ///
+    /// Default impl is the identity move — backends without a tunable cap
+    /// (mocks, future no-op backends) inherit it. Backends that wrap Aeron's
+    /// `poll`/`poll_once` call MUST override this to update their internal
+    /// cap field.
+    #[must_use]
+    fn with_fragment_limit(self, _fragment_limit: usize) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 /// Publishes bytes to an Aeron channel.
