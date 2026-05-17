@@ -68,6 +68,9 @@
 //!     .unwrap();
 //! ```
 
+pub mod buffer;
+pub mod error;
+pub mod status;
 pub(crate) mod transport;
 
 mod pub_node;
@@ -80,7 +83,10 @@ pub mod rusteron_backend;
 #[cfg(feature = "aeron-rs")]
 pub mod aeron_rs_backend;
 
+pub use buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
+pub use error::TransportError;
 pub use pub_node::AeronPub;
+pub use status::AeronStatus;
 
 #[cfg(feature = "aeron-rusteron")]
 pub use rusteron_backend::AeronHandle;

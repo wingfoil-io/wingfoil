@@ -88,6 +88,9 @@ pub struct RusteronSubscriber {
     sub: AeronSubscription,
 }
 
+/// `RusteronSubscriber` mirrors `AeronSubscription`'s connection state to the
+/// trait surface — rusteron exposes both `is_connected()` and `is_closed()`
+/// on the subscription handle (per aerofoil 11.4's adoption pattern).
 impl AeronSubscriberBackend for RusteronSubscriber {
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
         let mut count = 0usize;
@@ -100,6 +103,14 @@ impl AeronSubscriberBackend for RusteronSubscriber {
             256, // fragment limit per poll
         )?;
         Ok(count)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.sub.is_connected()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.sub.is_closed()
     }
 }
 
@@ -121,4 +132,16 @@ impl AeronPublisherBackend for RusteronPublisher {
         }
         Ok(())
     }
+
+    fn is_connected(&self) -> bool {
+        self.publication.is_connected()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.publication.is_closed()
+    }
+
+    // `try_claim` is intentionally left as the trait default here — the real
+    // `AeronBufferClaim`-backed implementation and its embedded-driver
+    // integration tests land in a follow-up commit.
 }
