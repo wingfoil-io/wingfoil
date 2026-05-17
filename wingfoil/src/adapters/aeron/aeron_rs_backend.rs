@@ -11,6 +11,8 @@
 //! subscribers and publishers from it.
 
 use crate::adapters::aeron::DEFAULT_FRAGMENT_LIMIT;
+use crate::adapters::aeron::buffer::{FragmentBuffer, FragmentHeader};
+use crate::adapters::aeron::error::TransportError;
 use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
 use aeron_rs::aeron::Aeron;
 use aeron_rs::concurrent::atomic_buffer::{AlignedBuffer, AtomicBuffer};
@@ -141,6 +143,32 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
         sub.poll(
             &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {
                 handler(buffer.as_sub_slice(offset, length));
+                count += 1;
+            },
+            self.fragment_limit as Index,
+        );
+        Ok(count)
+    }
+
+    fn poll_fragments(
+        &mut self,
+        handler: &mut dyn FnMut(&FragmentBuffer<'_>),
+    ) -> Result<usize, TransportError> {
+        let mut count = 0usize;
+        let mut sub = self
+            .sub
+            .lock()
+            .map_err(|e| TransportError::Backend(format!("aeron-rs subscription mutex: {e}")))?;
+        sub.poll(
+            &mut |buffer: &AtomicBuffer, offset: Index, length: Index, header: &Header| {
+                let frag_header = FragmentHeader {
+                    position: header.position(),
+                    session_id: header.session_id(),
+                    stream_id: header.stream_id(),
+                };
+                let bytes = buffer.as_sub_slice(offset, length);
+                let frag = FragmentBuffer::new(bytes, frag_header);
+                handler(&frag);
                 count += 1;
             },
             self.fragment_limit as Index,

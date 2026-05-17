@@ -11,7 +11,7 @@
 //! constructing subscribers or publishers.
 
 use crate::adapters::aeron::DEFAULT_FRAGMENT_LIMIT;
-use crate::adapters::aeron::buffer::ClaimBuffer;
+use crate::adapters::aeron::buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
 use crate::adapters::aeron::error::TransportError;
 use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
 use rusteron_client::{
@@ -164,6 +164,41 @@ impl AeronSubscriberBackend for RusteronSubscriber {
             },
             self.fragment_limit,
         )?;
+        Ok(count)
+    }
+
+    fn poll_fragments(
+        &mut self,
+        handler: &mut dyn FnMut(&FragmentBuffer<'_>),
+    ) -> Result<usize, TransportError> {
+        let mut count = 0usize;
+        self.sub
+            .poll_once(
+                |buffer, header| {
+                    // `position()` is a direct method; session_id / stream_id
+                    // live on the values-frame.  An FFI failure on values
+                    // lookup degrades silently to zeros — preserves the
+                    // "never panic in the fast path" rule (NFR5).
+                    let (session_id, stream_id) = header
+                        .get_values()
+                        .ok()
+                        .map(|v| {
+                            let frame = v.frame();
+                            (frame.session_id(), frame.stream_id())
+                        })
+                        .unwrap_or((0, 0));
+                    let frag_header = FragmentHeader {
+                        position: header.position(),
+                        session_id,
+                        stream_id,
+                    };
+                    let frag = FragmentBuffer::new(buffer, frag_header);
+                    handler(&frag);
+                    count += 1;
+                },
+                self.fragment_limit,
+            )
+            .map_err(|e| TransportError::Backend(format!("{e:#}")))?;
         Ok(count)
     }
 

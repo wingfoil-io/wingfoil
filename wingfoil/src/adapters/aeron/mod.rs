@@ -74,6 +74,7 @@ pub mod status;
 pub(crate) mod transport;
 
 mod pub_node;
+mod sub_burst_node;
 mod sub_spin;
 mod sub_threaded;
 
@@ -221,6 +222,71 @@ where
     match opts.mode {
         AeronMode::Spin => sub_spin::AeronSpinSubNode::new(subscriber, parser).into_stream(),
         AeronMode::Threaded => sub_threaded::build(subscriber, parser),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// aeron_sub_burst — typed-parser surface (parallel-additive)
+// ---------------------------------------------------------------------------
+
+/// Create an Aeron subscriber stream with a typed-parser surface.
+///
+/// Parallel-additive sibling of [`aeron_sub`]. Differs only in the parser
+/// signature — both factories return `Rc<dyn Stream<Burst<T>>>`.
+///
+/// | Surface       | `aeron_sub` (bytes parser)                | `aeron_sub_burst` (typed parser)                                    |
+/// |---------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Parser sig    | `FnMut(&[u8]) -> Option<T>`               | `FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError>`   |
+/// | Header access | No                                        | Yes — `position`, `session_id`, `stream_id`                         |
+/// | Parser error  | No (only `None` to skip)                  | Yes — `Err(TransportError::*)` is logged and the fragment dropped   |
+///
+/// `Ok(Some(v))` pushes `v` onto the burst, `Ok(None)` silently skips the
+/// fragment, and `Err(_)` is logged at WARN and skipped — a malformed
+/// fragment never aborts the cycle.
+///
+/// # Migration from `aeron_sub`
+///
+/// Wrap the existing parser body in `Ok(...)` and read bytes via
+/// `frag.as_ref()`:
+///
+/// ```ignore
+/// // before
+/// aeron_sub(sub, |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes), Spin);
+/// // after
+/// aeron_sub_burst(
+///     sub,
+///     |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+///         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+///     },
+///     AeronSubOptions::default(),
+/// );
+/// ```
+///
+/// # The `Send` parser bound
+///
+/// The factory is mode-polymorphic (chooses spin or threaded at runtime from
+/// `opts.mode`); the threaded variant moves the parser onto a background
+/// thread, so the parser bound MUST be `Send` for the factory even though
+/// the spin variant alone would not require it.
+#[must_use]
+pub fn aeron_sub_burst<T, F, B>(
+    subscriber: B,
+    parser: F,
+    opts: AeronSubOptions,
+) -> Rc<dyn Stream<Burst<T>>>
+where
+    T: Element + Send,
+    F: FnMut(&buffer::FragmentBuffer<'_>) -> Result<Option<T>, error::TransportError>
+        + Send
+        + 'static,
+    B: transport::AeronSubscriberBackend,
+{
+    let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
+    match opts.mode {
+        AeronMode::Spin => {
+            sub_burst_node::AeronSpinSubBurstNode::new(subscriber, parser).into_stream()
+        }
+        AeronMode::Threaded => sub_burst_node::build_threaded(subscriber, parser),
     }
 }
 

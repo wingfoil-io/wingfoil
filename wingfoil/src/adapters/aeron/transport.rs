@@ -1,6 +1,6 @@
 //! Backend-agnostic transport traits for Aeron, plus a mock for unit tests.
 
-use crate::adapters::aeron::buffer::ClaimBuffer;
+use crate::adapters::aeron::buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
 use crate::adapters::aeron::error::TransportError;
 
 /// Subscribes to an Aeron channel, polling fragments non-blocking.
@@ -8,6 +8,28 @@ pub trait AeronSubscriberBackend: Send + 'static {
     /// Poll for available fragments, calling `handler` for each one.
     /// Non-blocking.  Returns the number of fragments processed.
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize>;
+
+    /// Poll for available fragments with full [`FragmentHeader`] metadata.
+    ///
+    /// Default impl delegates to [`poll`](Self::poll) and synthesises a
+    /// zero-filled `FragmentHeader`. Backends that surface real per-fragment
+    /// headers from Aeron (position, session_id, stream_id) MUST override
+    /// this method — otherwise consumers see synthesised zeros.
+    fn poll_fragments(
+        &mut self,
+        handler: &mut dyn FnMut(&FragmentBuffer<'_>),
+    ) -> Result<usize, TransportError> {
+        let synth_header = FragmentHeader {
+            position: 0,
+            session_id: 0,
+            stream_id: 0,
+        };
+        self.poll(&mut |bytes: &[u8]| {
+            let frag = FragmentBuffer::new(bytes, synth_header);
+            handler(&frag);
+        })
+        .map_err(|e| TransportError::Backend(format!("{e:#}")))
+    }
 
     /// Returns whether this subscription is currently connected to at least
     /// one publication.
