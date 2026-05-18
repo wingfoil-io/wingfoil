@@ -1142,3 +1142,221 @@ fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Story 12.6: ChannelUri + named-discovery integration tests
+//   (stream IDs 2020-2024)
+// ---------------------------------------------------------------------------
+
+/// `ChannelUri::ipc()` produces a usable IPC URI: round-trip a single i64
+/// from a publisher to a subscriber both constructed via the builder.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2020i32;
+    let channel = ChannelUri::ipc();
+
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&7i64),
+        "ChannelUri::ipc() round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// `ChannelUri::mdc_publication` + `ChannelUri::mdc_subscription` compose a
+/// usable MDC channel pair: round-trip a single i64 across them.
+///
+/// MDC depends on UDP loopback being functional; on environments where this
+/// is flaky, gate this test additionally behind `aeron-integration-test`.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2021i32;
+    let pub_channel = ChannelUri::mdc_publication("127.0.0.1:40456")?;
+    let sub_channel = ChannelUri::mdc_subscription("127.0.0.1:40457", "127.0.0.1:40456")?;
+
+    let sub = handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(99i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&99i64),
+        "ChannelUri::mdc_* round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// Full registry round-trip: register pub + sub, wrap the rusteron backends
+/// via `aeron_pub_named` / `aeron_sub_burst_named`, round-trip a single i64.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2022i32;
+    let channel = ChannelUri::ipc();
+
+    register_pub("test-zero-egress-roundtrip", channel.clone(), stream_id)?;
+    register_sub("test-zero-egress-roundtrip", channel.clone(), stream_id)?;
+
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let sub_stream = aeron_sub_burst_named(
+        "test-zero-egress-roundtrip",
+        sub,
+        parser,
+        AeronSubOptions::default(),
+    )?;
+    let collected = sub_stream.collect();
+
+    let named_pub = aeron_pub_named("test-zero-egress-roundtrip", pub_)?;
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(123i64);
+            b
+        });
+    let pub_node = source.aeron_pub(named_pub, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    assert!(
+        values.contains(&123i64),
+        "named-discovery round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// `aeron_sub_burst_named` returns `Err(DiscoveryError::Unknown)` for a name
+/// that has not been registered — the error short-circuits before any Aeron
+/// call so the test does not actually need the driver for behaviour, but we
+/// start one for symmetry with the rest of the integration suite.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_named_discovery_unknown_returns_error() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2023i32;
+    let channel = ChannelUri::ipc();
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |_frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+    let err = aeron_sub_burst_named(
+        "test-never-registered-2023",
+        sub,
+        parser,
+        AeronSubOptions::default(),
+    )
+    .expect_err("unregistered name returns DiscoveryError::Unknown");
+    assert!(matches!(err, DiscoveryError::Unknown(_)));
+    Ok(())
+}
+
+/// The deprecated alias `aeron_sub_discover` still compiles and routes to
+/// `aeron_sub_named` — guards against accidental removal of the alias.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_aeron_sub_discover_alias_still_compiles() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2024i32;
+    let channel = ChannelUri::ipc();
+
+    register_sub("test-alias-2024", channel.clone(), stream_id)?;
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    #[allow(deprecated)]
+    let result = aeron_sub_discover("test-alias-2024", sub);
+    assert!(
+        result.is_ok(),
+        "deprecated aeron_sub_discover alias should delegate to aeron_sub_named"
+    );
+    Ok(())
+}

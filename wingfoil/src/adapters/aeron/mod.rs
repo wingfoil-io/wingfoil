@@ -73,6 +73,8 @@ pub mod error;
 pub mod status;
 pub(crate) mod transport;
 
+mod channel;
+mod discovery;
 mod pub_node;
 mod status_stream;
 mod sub_burst_node;
@@ -86,6 +88,13 @@ pub mod rusteron_backend;
 pub mod aeron_rs_backend;
 
 pub use buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
+pub use channel::ChannelUri;
+#[allow(deprecated)]
+pub use discovery::aeron_sub_discover;
+pub use discovery::{
+    DiscoveryError, aeron_pub_named, aeron_sub_named, lookup_pub, lookup_sub, register_pub,
+    register_sub,
+};
 pub use error::TransportError;
 pub use pub_node::AeronPub;
 pub use status::AeronStatus;
@@ -368,6 +377,81 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// aeron_sub_burst_named — name-checked factory wrapper around aeron_sub_burst
+// (Story 12.6)
+// ---------------------------------------------------------------------------
+
+/// Create an Aeron subscriber stream after verifying `name` is registered in
+/// the discovery layer.
+///
+/// Wraps [`aeron_sub_burst`] with a [`discovery::aeron_sub_named`] guard: the
+/// name is validated and looked up before any stream construction happens.
+/// On unknown / empty / invalid names, returns `Err(DiscoveryError::*)`
+/// before constructing the underlying node.
+///
+/// See [`aeron_sub_burst`] for the data-stream contract (parser signature,
+/// `Burst<T>` shape, fragment limit) and [`discovery::aeron_sub_named`] for
+/// the validation contract.
+///
+/// # Errors
+///
+/// Returns [`discovery::DiscoveryError`] if the name fails validation or has
+/// not been registered via [`discovery::register_sub`].
+#[must_use = "the returned subscriber stream must be wired into a graph or its fragments are silently dropped"]
+pub fn aeron_sub_burst_named<T, F, B>(
+    name: &str,
+    subscriber: B,
+    parser: F,
+    opts: AeronSubOptions,
+) -> Result<Rc<dyn Stream<Burst<T>>>, discovery::DiscoveryError>
+where
+    T: Element + Send,
+    F: FnMut(&buffer::FragmentBuffer<'_>) -> Result<Option<T>, error::TransportError>
+        + Send
+        + 'static,
+    B: transport::AeronSubscriberBackend,
+{
+    let subscriber = discovery::aeron_sub_named(name, subscriber)?;
+    Ok(aeron_sub_burst(subscriber, parser, opts))
+}
+
+// ---------------------------------------------------------------------------
+// aeron_sub_burst_with_status_named — name-checked factory wrapper around
+// aeron_sub_burst_with_status (Story 12.6)
+// ---------------------------------------------------------------------------
+
+/// Create an Aeron subscriber stream paired with a reactive
+/// [`AeronStatusStream`], after verifying `name` is registered.
+///
+/// Wraps [`aeron_sub_burst_with_status`] with a [`discovery::aeron_sub_named`]
+/// guard. See [`aeron_sub_burst_with_status`] for the data + status-stream
+/// contract (including the threaded-mode caveat that the status stream stays
+/// in its `Default` state) and [`discovery::aeron_sub_named`] for the
+/// validation contract.
+///
+/// # Errors
+///
+/// Returns [`discovery::DiscoveryError`] if the name fails validation or has
+/// not been registered via [`discovery::register_sub`].
+#[must_use = "the returned (data, status) stream pair must be wired into a graph or its fragments are silently dropped"]
+pub fn aeron_sub_burst_with_status_named<T, F, B>(
+    name: &str,
+    subscriber: B,
+    parser: F,
+    opts: AeronSubOptions,
+) -> Result<(Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<Burst<AeronStatus>>>), discovery::DiscoveryError>
+where
+    T: Element + Send,
+    F: FnMut(&buffer::FragmentBuffer<'_>) -> Result<Option<T>, error::TransportError>
+        + Send
+        + 'static,
+    B: transport::AeronSubscriberBackend,
+{
+    let subscriber = discovery::aeron_sub_named(name, subscriber)?;
+    Ok(aeron_sub_burst_with_status(subscriber, parser, opts))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +495,126 @@ mod tests {
         // default-state placeholder. We can inspect it without running the
         // graph — no transition has been recorded.
         assert!(status_stream.peek_value().is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Story 12.6: factory wrapper tests (aeron_sub_burst_named +
+    // aeron_sub_burst_with_status_named).
+    //
+    // Each test uses a unique registry name to avoid cross-test
+    // contamination of the process-global registry (PUB_REGISTRY /
+    // SUB_REGISTRY in discovery.rs).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn given_aeron_sub_burst_named_when_registered_then_returns_stream() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::register_sub;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        register_sub("test-named-sub-1", "aeron:ipc".to_string(), 1001).unwrap();
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let stream = aeron_sub_burst_named(
+            "test-named-sub-1",
+            backend,
+            parser,
+            AeronSubOptions::default(),
+        )
+        .expect("registered name resolves to a stream");
+        assert!(stream.peek_value().is_empty());
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_named_when_unregistered_then_returns_unknown_error() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::DiscoveryError;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let err = aeron_sub_burst_named(
+            "test-never-registered-2",
+            backend,
+            parser,
+            AeronSubOptions::default(),
+        )
+        .expect_err("unregistered name returns Unknown");
+        assert!(matches!(err, DiscoveryError::Unknown(_)));
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_named_when_empty_name_then_returns_empty_name_error() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::DiscoveryError;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let err = aeron_sub_burst_named("", backend, parser, AeronSubOptions::default())
+            .expect_err("empty name returns EmptyName before stream construction");
+        assert_eq!(err, DiscoveryError::EmptyName);
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_named_when_invalid_name_then_returns_invalid_name_error() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::DiscoveryError;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let err = aeron_sub_burst_named(
+            "contains space",
+            backend,
+            parser,
+            AeronSubOptions::default(),
+        )
+        .expect_err("invalid name returns InvalidName");
+        assert!(matches!(err, DiscoveryError::InvalidName(_)));
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_with_status_named_when_registered_then_returns_pair() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::register_sub;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        register_sub("test-named-sub-5", "aeron:ipc".to_string(), 1005).unwrap();
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let (data_stream, status_stream) = aeron_sub_burst_with_status_named(
+            "test-named-sub-5",
+            backend,
+            parser,
+            AeronSubOptions::default(),
+        )
+        .expect("registered name resolves to a stream pair");
+        assert!(data_stream.peek_value().is_empty());
+        assert!(status_stream.peek_value().is_empty());
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_with_status_named_when_unregistered_then_returns_unknown_error() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::discovery::DiscoveryError;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+        let err = aeron_sub_burst_with_status_named(
+            "test-never-registered-6",
+            backend,
+            parser,
+            AeronSubOptions::default(),
+        )
+        .expect_err("unregistered name returns Unknown");
+        assert!(matches!(err, DiscoveryError::Unknown(_)));
     }
 }
