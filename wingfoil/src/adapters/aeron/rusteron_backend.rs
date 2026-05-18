@@ -133,6 +133,18 @@ pub struct RusteronSubscriber {
 }
 
 impl RusteronSubscriber {
+    /// Wrap an existing rusteron [`AeronSubscription`] in a wingfoil-typed
+    /// subscriber. Useful for advanced setups (custom driver lifecycle,
+    /// benchmarks) where the subscription is acquired outside
+    /// [`AeronHandle::subscription`].
+    #[must_use]
+    pub fn new(sub: AeronSubscription) -> Self {
+        Self {
+            sub,
+            fragment_limit: DEFAULT_FRAGMENT_LIMIT,
+        }
+    }
+
     /// Override the per-`poll()` fragment cap.
     ///
     /// Chain after [`AeronHandle::subscription`]:
@@ -221,6 +233,17 @@ impl AeronSubscriberBackend for RusteronSubscriber {
 
 pub struct RusteronPublisher {
     publication: AeronPublication,
+}
+
+impl RusteronPublisher {
+    /// Wrap an existing rusteron [`AeronPublication`] in a wingfoil-typed
+    /// publisher. Useful for advanced setups (custom driver lifecycle,
+    /// benchmarks) where the publication is acquired outside
+    /// [`AeronHandle::publication`].
+    #[must_use]
+    pub fn new(publication: AeronPublication) -> Self {
+        Self { publication }
+    }
 }
 
 impl AeronPublisherBackend for RusteronPublisher {

@@ -75,6 +75,7 @@ pub(crate) mod transport;
 
 mod channel;
 mod discovery;
+mod external;
 mod pub_node;
 mod status_stream;
 mod sub_burst_node;
@@ -96,9 +97,11 @@ pub use discovery::{
     register_sub,
 };
 pub use error::TransportError;
+pub use external::ExternalSource;
 pub use pub_node::AeronPub;
 pub use status::AeronStatus;
 pub use status_stream::AeronStatusStream;
+pub use transport::{AeronPublisherBackend, AeronSubscriberBackend};
 
 #[cfg(feature = "aeron-rusteron")]
 pub use rusteron_backend::AeronHandle;
