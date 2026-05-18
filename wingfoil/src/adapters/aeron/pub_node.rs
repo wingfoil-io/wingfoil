@@ -512,17 +512,28 @@ mod tests {
         .into_stream()
     }
 
-    /// Source stream whose burst can be mutated between graph runs. The
-    /// underlying burst lives in `Rc<RefCell<...>>` so the test driver can
-    /// swap the value out between graphs.
-    struct ExposedMutableBurst {
-        burst_ref: Rc<RefCell<Burst<i64>>>,
+    /// Source stream that emits a different `Burst<i64>` on each cycle from
+    /// an internal schedule. The first `schedule[i]` value is emitted on the
+    /// `i`-th cycle; once exhausted, the last value is held.
+    ///
+    /// Used by the dedup tests that need the upstream to advance *within a
+    /// single graph run* so the AeronPubNode's `last_published` state persists
+    /// across the value transition.
+    struct ScheduledBurstSource {
+        schedule: Vec<i64>,
+        cycle_idx: usize,
         current: Burst<i64>,
     }
 
-    impl MutableNode for ExposedMutableBurst {
+    impl MutableNode for ScheduledBurstSource {
         fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-            self.current = self.burst_ref.borrow().clone();
+            let value = self
+                .schedule
+                .get(self.cycle_idx)
+                .copied()
+                .unwrap_or_else(|| *self.schedule.last().unwrap_or(&0));
+            self.current = crate::burst![value];
+            self.cycle_idx += 1;
             Ok(true)
         }
 
@@ -536,20 +547,20 @@ mod tests {
         }
     }
 
-    impl crate::StreamPeekRef<Burst<i64>> for ExposedMutableBurst {
+    impl crate::StreamPeekRef<Burst<i64>> for ScheduledBurstSource {
         fn peek_ref(&self) -> &Burst<i64> {
             &self.current
         }
     }
 
-    fn mutable_burst_stream(initial: i64) -> (Rc<dyn Stream<Burst<i64>>>, Rc<RefCell<Burst<i64>>>) {
-        let burst_ref = Rc::new(RefCell::new(crate::burst![initial]));
-        let stream = ExposedMutableBurst {
-            burst_ref: Rc::clone(&burst_ref),
-            current: crate::burst![initial],
+    fn scheduled_burst_stream(schedule: Vec<i64>) -> Rc<dyn Stream<Burst<i64>>> {
+        let first = *schedule.first().unwrap_or(&0);
+        ScheduledBurstSource {
+            schedule,
+            cycle_idx: 0,
+            current: crate::burst![first],
         }
-        .into_stream();
-        (stream, burst_ref)
+        .into_stream()
     }
 
     // ---------------------------------------------------------------------
@@ -662,49 +673,25 @@ mod tests {
 
     #[test]
     fn given_aeron_pub_dedup_when_upstream_value_changes_then_offers_new_value() {
+        // Single AeronPubNode (i.e. single `last_published` state) across two
+        // cycles whose upstream advances 42 → 100. Cycle 1 publishes 42
+        // (last_published: None → Some(42)). Cycle 2's upstream is 100; the
+        // dedup comparator sees 100 != 42 and publishes. Combined: [42, 100].
         let shared = Rc::new(RefCell::new(RichMockPublisher::new()));
-        let (upstream, burst_ref) = mutable_burst_stream(42);
+        let upstream = scheduled_burst_stream(vec![42, 100]);
         let pub_node = upstream.aeron_pub_dedup(SharedRichPublisher(shared.clone()), |v: &i64| {
             v.to_le_bytes().to_vec()
         });
-        // Run one cycle, then mutate upstream value, then run another cycle.
         Graph::new(
             vec![upstream.as_node(), pub_node],
             RunMode::RealTime,
-            RunFor::Cycles(1),
+            RunFor::Cycles(2),
         )
         .run()
         .unwrap();
-        *burst_ref.borrow_mut() = crate::burst![100i64];
-        // Re-run separately for cycle 2 — the test fixture flips the value
-        // between graph executions which is functionally equivalent to
-        // mutating between cycles in a single run.
-        let shared2 = shared.clone();
-        let (upstream2, _burst_ref2) = {
-            let value = 100i64;
-            let burst_ref = Rc::clone(&burst_ref);
-            let stream = ExposedMutableBurst {
-                burst_ref: Rc::clone(&burst_ref),
-                current: crate::burst![value],
-            }
-            .into_stream();
-            (stream, burst_ref)
-        };
-        let pub_node2 = upstream2
-            .aeron_pub_dedup(SharedRichPublisher(shared2.clone()), |v: &i64| {
-                v.to_le_bytes().to_vec()
-            });
-        Graph::new(
-            vec![upstream2.as_node(), pub_node2],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
-        let offered = &shared.borrow().offered;
-        // First graph offered 42 once. Second graph started with a fresh
-        // dedup state and offered 100 once. Combined: [42, 100].
-        let values: Vec<i64> = offered
+        let values: Vec<i64> = shared
+            .borrow()
+            .offered
             .iter()
             .map(|b| i64::from_le_bytes(b.as_slice().try_into().unwrap()))
             .collect();
@@ -782,41 +769,22 @@ mod tests {
 
     #[test]
     fn given_aeron_pub_dedup_when_back_pressure_and_upstream_advances_then_newer_value_wins() {
-        // Cycle 1: upstream = 42, publisher back-pressures.
-        // Between cycles: upstream advances to 100.
-        // Cycle 2: publisher accepts — 100 published (latest-wins; 42 dropped).
+        // Single AeronPubNode across 2 cycles with a single publisher's dedup
+        // state preserved. Cycle 1: upstream = 42, FlakeyPublisher(1) returns
+        // BackPressure (count 1→0). The back-pressure branch records the
+        // BackPressured status and does NOT advance `last_published`. Cycle 2:
+        // upstream advances to 100, should_publish (last=None) = true, offer
+        // succeeds → offered == [100] (42 was dropped — latest-wins).
         let shared = Rc::new(RefCell::new(FlakeyPublisher::new(1)));
-        let (upstream, burst_ref) = mutable_burst_stream(42);
+        let upstream = scheduled_burst_stream(vec![42, 100]);
         let pub_node = upstream
             .aeron_pub_dedup(SharedFlakeyPublisher(shared.clone()), |v: &i64| {
                 v.to_le_bytes().to_vec()
             });
         Graph::new(
-            vec![upstream.clone().as_node(), pub_node],
+            vec![upstream.as_node(), pub_node],
             RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
-        // Nothing published yet — first cycle back-pressured.
-        assert!(shared.borrow().offered.is_empty());
-        *burst_ref.borrow_mut() = crate::burst![100i64];
-        // Run another graph using the same shared publisher; the new value
-        // advances and goes through.
-        let burst_ref2 = Rc::clone(&burst_ref);
-        let upstream2 = ExposedMutableBurst {
-            burst_ref: Rc::clone(&burst_ref2),
-            current: crate::burst![100i64],
-        }
-        .into_stream();
-        let pub_node2 = upstream2
-            .aeron_pub_dedup(SharedFlakeyPublisher(shared.clone()), |v: &i64| {
-                v.to_le_bytes().to_vec()
-            });
-        Graph::new(
-            vec![upstream2.as_node(), pub_node2],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
+            RunFor::Cycles(2),
         )
         .run()
         .unwrap();
@@ -892,6 +860,42 @@ mod tests {
         );
         // Closed path short-circuits BEFORE the offer loop — no offer made.
         assert!(shared.borrow().offered.is_empty());
+    }
+
+    #[test]
+    fn given_aeron_pub_dedup_with_status_when_offer_succeeds_then_offers_and_records_connected() {
+        // Direct unit coverage for the combo method (dedup + status). Single
+        // cycle: offer succeeds, dedup state advances, status burst records
+        // the Disconnected → Connected transition. The combo method wires both
+        // disciplines onto the same AeronPubNode.
+        let shared = Rc::new(RefCell::new(RichMockPublisher::new()));
+        let upstream = constant_burst_stream(42);
+        let (pub_node, status_stream) = upstream
+            .aeron_pub_dedup_with_status(SharedRichPublisher(shared.clone()), |v: &i64| {
+                v.to_le_bytes().to_vec()
+            });
+        Graph::new(
+            vec![upstream.as_node(), pub_node],
+            RunMode::RealTime,
+            RunFor::Cycles(1),
+        )
+        .run()
+        .unwrap();
+        assert_eq!(
+            shared.borrow().offered.len(),
+            1,
+            "combo: dedup path must offer the first value",
+        );
+        assert_eq!(
+            shared.borrow().offered[0],
+            42i64.to_le_bytes().to_vec(),
+            "combo: serialised payload must match upstream",
+        );
+        assert_eq!(
+            status_stream.peek_value().last(),
+            Some(&AeronStatus::Connected),
+            "combo: status side-channel must record the Connected transition",
+        );
     }
 
     #[test]
