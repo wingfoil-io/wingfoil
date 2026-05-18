@@ -74,6 +74,7 @@ pub mod status;
 pub(crate) mod transport;
 
 mod pub_node;
+mod status_stream;
 mod sub_burst_node;
 mod sub_spin;
 mod sub_threaded;
@@ -88,6 +89,7 @@ pub use buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
 pub use error::TransportError;
 pub use pub_node::AeronPub;
 pub use status::AeronStatus;
+pub use status_stream::AeronStatusStream;
 
 #[cfg(feature = "aeron-rusteron")]
 pub use rusteron_backend::AeronHandle;
@@ -96,6 +98,7 @@ pub use rusteron_backend::AeronHandle;
 pub use aeron_rs_backend::AeronRsHandle;
 
 use crate::{Burst, Element, IntoStream, Stream};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[cfg(all(test, feature = "aeron-integration-test"))]
@@ -290,6 +293,81 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// aeron_sub_burst_with_status — typed-parser surface with reactive status
+// side-channel (Story 12.5)
+// ---------------------------------------------------------------------------
+
+/// Create an Aeron subscriber stream paired with a reactive
+/// [`AeronStatusStream`].
+///
+/// Parallel-additive sibling of [`aeron_sub_burst`]. Returns a tuple
+/// `(data_stream, status_stream)`:
+/// - `data_stream` is identical in shape to [`aeron_sub_burst`]'s output.
+/// - `status_stream` emits a `Burst<AeronStatus>` **only on transition
+///   cycles** (no re-emission on steady state). Wire it as a `Dep::Active`
+///   upstream and iterate `peek_ref()` for transitions, or call
+///   `peek_value().last()` for a one-shot read.
+///
+/// # Status derivation order
+///
+/// After each successful `poll_fragments`, the new status is derived from
+/// the backend in this order:
+///
+/// 1. `is_closed()` → [`AeronStatus::Closed`] (terminal — checked first)
+/// 2. `is_connected()` → [`AeronStatus::Connected`]
+/// 3. Otherwise → [`AeronStatus::Disconnected`]
+///
+/// A `poll_fragments` error short-circuits the cycle before the status is
+/// recorded, so a transient I/O failure does not register a phantom
+/// `Disconnected` transition.
+///
+/// # Threaded mode caveat
+///
+/// `opts.mode == AeronMode::Threaded` is accepted for shape symmetry but
+/// the returned status stream stays in its `Default` (`Disconnected`)
+/// state and never records a transition — cross-thread status propagation
+/// requires either an `Arc<Mutex<...>>` wrap or a status channel, both of
+/// which add scope and are deferred to a follow-up. Use `AeronMode::Spin`
+/// for live status.
+#[must_use]
+pub fn aeron_sub_burst_with_status<T, F, B>(
+    subscriber: B,
+    parser: F,
+    opts: AeronSubOptions,
+) -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<Burst<AeronStatus>>>)
+where
+    T: Element + Send,
+    F: FnMut(&buffer::FragmentBuffer<'_>) -> Result<Option<T>, error::TransportError>
+        + Send
+        + 'static,
+    B: transport::AeronSubscriberBackend,
+{
+    let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
+    let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
+    let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
+    match opts.mode {
+        AeronMode::Spin => {
+            let data = sub_burst_node::AeronSpinSubBurstNode::with_status(
+                subscriber,
+                parser,
+                Rc::clone(&status),
+            )
+            .into_stream();
+            (data, status_stream)
+        }
+        AeronMode::Threaded => {
+            // Threaded variant: status is not wired across the channel
+            // boundary in this story. The returned status stream is the
+            // default-state AeronStatusStream that never records a
+            // transition — `peek_ref()` always observes `Burst::new()`
+            // (empty), `current()` returns `Disconnected`.
+            let data = sub_burst_node::build_threaded(subscriber, parser);
+            (data, status_stream)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +387,29 @@ mod tests {
     #[test]
     fn given_aeron_sub_options_when_default_then_mode_is_spin() {
         assert!(matches!(AeronSubOptions::default().mode, AeronMode::Spin));
+    }
+
+    #[test]
+    fn given_aeron_sub_burst_with_status_when_threaded_mode_then_status_stream_stays_default() {
+        use crate::adapters::aeron::buffer::FragmentBuffer;
+        use crate::adapters::aeron::error::TransportError;
+        use crate::adapters::aeron::transport::MockSubscriber;
+
+        let backend = MockSubscriber::from_messages(vec![]);
+        let parser = |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+            Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+        };
+        let (_data, status_stream) = aeron_sub_burst_with_status(
+            backend,
+            parser,
+            AeronSubOptions {
+                mode: AeronMode::Threaded,
+                fragment_limit: DEFAULT_FRAGMENT_LIMIT,
+            },
+        );
+        // Documented limitation per AC #5: threaded-mode status is a
+        // default-state placeholder. We can inspect it without running the
+        // graph — no transition has been recorded.
+        assert!(status_stream.peek_value().is_empty());
     }
 }

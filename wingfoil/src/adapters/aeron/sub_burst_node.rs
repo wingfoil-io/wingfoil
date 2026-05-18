@@ -27,12 +27,15 @@
 
 use crate::adapters::aeron::buffer::FragmentBuffer;
 use crate::adapters::aeron::error::TransportError;
+use crate::adapters::aeron::status::AeronStatus;
+use crate::adapters::aeron::status_stream::AeronStatusStream;
 use crate::adapters::aeron::transport::AeronSubscriberBackend;
 use crate::channel::{ChannelSender, Message};
 use crate::nodes::receiver::ReceiverStream;
 use crate::{
     Burst, Element, GraphState, IntoStream, MutableNode, Stream, StreamPeekRef, UpStreams,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{
     Arc, Mutex,
@@ -59,6 +62,7 @@ where
     backend: B,
     parser: F,
     value: Burst<T>,
+    status: Option<Rc<RefCell<AeronStatusStream>>>,
 }
 
 impl<T, F, B> AeronSpinSubBurstNode<T, F, B>
@@ -73,6 +77,29 @@ where
             backend,
             parser,
             value: Burst::new(),
+            status: None,
+        }
+    }
+
+    /// Construct a spin subscriber node that records lifecycle transitions
+    /// onto the supplied reactive [`AeronStatusStream`].
+    ///
+    /// The status is derived after each successful poll from the backend's
+    /// `is_closed` / `is_connected` flags. `Closed` is checked first
+    /// (terminal); otherwise `Connected` iff the subscription has at least
+    /// one publication, else `Disconnected`. A poll error short-circuits the
+    /// cycle before the status is recorded.
+    #[must_use]
+    pub(crate) fn with_status(
+        backend: B,
+        parser: F,
+        status: Rc<RefCell<AeronStatusStream>>,
+    ) -> Self {
+        Self {
+            backend,
+            parser,
+            value: Burst::new(),
+            status: Some(status),
         }
     }
 }
@@ -85,6 +112,9 @@ where
 {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value.clear();
+        if let Some(status) = &self.status {
+            status.borrow_mut().clear();
+        }
         let parser = &mut self.parser;
         let value = &mut self.value;
         self.backend.poll_fragments(&mut |frag| match parser(frag) {
@@ -97,6 +127,16 @@ where
                 );
             }
         })?;
+        if let Some(status) = &self.status {
+            let new_status = if self.backend.is_closed() {
+                AeronStatus::Closed
+            } else if self.backend.is_connected() {
+                AeronStatus::Connected
+            } else {
+                AeronStatus::Disconnected
+            };
+            status.borrow_mut().record(new_status);
+        }
         Ok(!self.value.is_empty())
     }
 
@@ -232,10 +272,56 @@ mod tests {
     use super::*;
     use crate::adapters::aeron::transport::MockSubscriber;
     use crate::{IntoStream, NanoTime, NodeOperators, RunFor, RunMode};
+    use std::cell::RefCell;
 
     /// Typed-parser sibling of `transport::i64_parser` for the burst surface.
     fn i64_parser_typed(f: &FragmentBuffer<'_>) -> Result<Option<i64>, TransportError> {
         Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+    }
+
+    /// Test helper subscriber with controllable `is_connected` / `is_closed`
+    /// flags. Mirrors aerofoil's `ConnectedMockSubscriber`.
+    struct ConnectedMockSubscriber {
+        batches: std::collections::VecDeque<Vec<Vec<u8>>>,
+        connected: bool,
+        closed: bool,
+    }
+
+    impl ConnectedMockSubscriber {
+        fn new(messages: Vec<Vec<u8>>, connected: bool) -> Self {
+            Self {
+                batches: std::collections::VecDeque::from(vec![messages]),
+                connected,
+                closed: false,
+            }
+        }
+
+        fn with_batches(batches: Vec<Vec<Vec<u8>>>, connected: bool) -> Self {
+            Self {
+                batches: batches.into(),
+                connected,
+                closed: false,
+            }
+        }
+    }
+
+    impl AeronSubscriberBackend for ConnectedMockSubscriber {
+        fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
+            let batch = self.batches.pop_front().unwrap_or_default();
+            let count = batch.len();
+            for msg in &batch {
+                handler(msg);
+            }
+            Ok(count)
+        }
+
+        fn is_connected(&self) -> bool {
+            self.connected
+        }
+
+        fn is_closed(&self) -> bool {
+            self.closed
+        }
     }
 
     #[test]
@@ -361,5 +447,103 @@ mod tests {
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
             .unwrap();
         assert_eq!(stream.peek_value().as_slice(), &[7i64]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Status-stream wiring tests (Story 12.5 AC #10).
+    // ---------------------------------------------------------------------
+
+    fn make_graph_state() -> GraphState {
+        GraphState::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+            NanoTime::ZERO,
+        )
+    }
+
+    #[test]
+    fn given_burst_spin_node_with_status_when_connected_subscriber_polled_then_status_transitions_to_connected()
+     {
+        let backend = ConnectedMockSubscriber::new(vec![], true);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let mut node =
+            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().current(), AeronStatus::Connected);
+        assert_eq!(status.borrow().peek_ref().len(), 1);
+    }
+
+    #[test]
+    fn given_burst_spin_node_with_status_when_disconnected_subscriber_polled_then_status_stays_disconnected()
+     {
+        let backend = ConnectedMockSubscriber::new(vec![], false);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let mut node =
+            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().current(), AeronStatus::Disconnected);
+        // No transition recorded — default `last` is already Disconnected.
+        assert!(status.borrow().peek_ref().is_empty());
+    }
+
+    #[test]
+    fn given_burst_spin_node_with_status_when_subscriber_closes_then_status_transitions_to_closed()
+    {
+        let backend = ConnectedMockSubscriber::with_batches(vec![vec![], vec![]], true);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let mut node =
+            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().current(), AeronStatus::Connected);
+        // Flip the subscriber state between cycles.
+        node.backend.closed = true;
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().current(), AeronStatus::Closed);
+    }
+
+    #[test]
+    fn given_burst_spin_node_with_status_when_steady_then_no_re_emission() {
+        let backend = ConnectedMockSubscriber::with_batches(vec![vec![], vec![]], true);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let mut node =
+            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().peek_ref().len(), 1);
+        node.cycle(&mut state).unwrap();
+        assert!(
+            status.borrow().peek_ref().is_empty(),
+            "steady state must not re-emit the same status"
+        );
+        assert_eq!(status.borrow().current(), AeronStatus::Connected);
+    }
+
+    #[test]
+    fn given_burst_spin_node_with_status_when_burst_clears_then_status_burst_also_clears() {
+        let backend = ConnectedMockSubscriber::new(vec![], true);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let mut node =
+            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert_eq!(status.borrow().peek_ref().len(), 1);
+        node.cycle(&mut state).unwrap();
+        // The per-cycle clear at the start of cycle() resets the burst; the
+        // re-recorded Connected is suppressed by record's transition check.
+        assert!(status.borrow().peek_ref().is_empty());
+    }
+
+    #[test]
+    fn given_burst_spin_node_new_constructor_when_polled_then_no_status_observed() {
+        // Regression guard: the no-status `new()` constructor leaves `status`
+        // as None, so no clear / record side-effect runs at all.
+        let backend = MockSubscriber::from_messages(vec![]);
+        let mut node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let mut state = make_graph_state();
+        node.cycle(&mut state).unwrap();
+        assert!(node.status.is_none());
     }
 }

@@ -805,3 +805,340 @@ fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Story 12.5 — status stream + opt-in publisher dedup integration tests.
+// Stream IDs 2014–2019 (next free after Story 12.4's 2009-2013).
+// ---------------------------------------------------------------------------
+
+/// Status stream emits a `Connected` transition once the subscriber observes
+/// the publication. The exact cycle on which the transition lands depends on
+/// the media driver, but it MUST appear somewhere during the run.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2014i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let (_data, status_stream) =
+        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let observed = observed.borrow();
+    assert!(
+        observed.contains(&AeronStatus::Connected),
+        "expected status stream to record AeronStatus::Connected, got: {observed:?}"
+    );
+    Ok(())
+}
+
+/// Steady-state run produces at most one transition. The producer node clears
+/// the status burst at the start of each cycle, and `record()` is a no-op when
+/// the new status equals the previous — so we should only ever see the
+/// initial `Disconnected → Connected` transition, never a re-emit.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2015i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let (_data, status_stream) =
+        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    let source = crate::nodes::ticker(Duration::from_millis(20))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    // Expect at most one transition during the entire run (the initial
+    // Disconnected → Connected). Re-emission would manifest as ≥2 entries.
+    let observed = observed.borrow();
+    assert!(
+        observed.len() <= 1,
+        "expected ≤1 transition under steady state, observed: {observed:?}"
+    );
+    Ok(())
+}
+
+/// Saturate the publication term buffer until back-pressure surfaces and
+/// assert the publisher status stream records `BackPressured` at least once.
+///
+/// The saturation harness depends on media-driver buffer sizes and is
+/// environmental — gated on `aeron-integration-test` rather than the
+/// compile-only `aeron-rusteron` feature.
+#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+#[test]
+fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2016i32;
+
+    let _sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    // 256 KiB payload — enough to saturate the publication term buffer
+    // quickly. The exact threshold depends on media-driver config; this
+    // mirrors the saturation harness used by Story 12.2 try_claim tests.
+    let payload: Vec<u8> = vec![0xABu8; 256 * 1024];
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(move |_| {
+            let mut b = Burst::new();
+            b.push(payload.clone());
+            b
+        });
+    let (pub_node, status_stream) = source.aeron_pub_with_status(pub_, |v: &Vec<u8>| v.clone());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(3)),
+    )
+    .run()
+    .ok();
+
+    let observed = observed.borrow();
+    assert!(
+        observed.contains(&AeronStatus::BackPressured),
+        "expected publisher status to record BackPressured under saturation, got: {observed:?}"
+    );
+    Ok(())
+}
+
+/// `aeron_pub_dedup` collapses N identical upstream items into a single
+/// `offer()` over the lifetime of a steady publisher. The subscriber receives
+/// at most a handful of messages even though the producer ticks at 1ms.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_publisher_dedup_suppresses_consecutive_equal_values() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2017i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(42i64);
+            b
+        });
+    let pub_node = source.aeron_pub_dedup(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(1)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    // Allow a small slack for startup-race duplicates; the steady-state count
+    // should be one — N times-larger ticks must NOT translate to N offers.
+    assert!(
+        values.len() <= 2,
+        "expected ≤2 messages under dedup with constant upstream, got {} values: {values:?}",
+        values.len()
+    );
+    assert!(
+        values.contains(&42i64),
+        "expected at least one 42 received, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// Back-pressure → drain → latest-wins: the dedup retry contract preserves
+/// the latest upstream value across back-pressure cycles.
+///
+/// Environmental — saturation depends on media-driver state. Gated on
+/// `aeron-integration-test`.
+#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+#[test]
+fn test_publisher_dedup_back_pressure_retries_latest() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2018i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    // Source: monotonically advancing 64-bit counter. With dedup off, every
+    // tick offers a new value; under saturation many of those offers
+    // back-pressure. The latest-wins contract guarantees that whatever value
+    // is current when the publisher recovers is the value that lands on the
+    // wire — so the subscriber MUST see the late counter values.
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(|n| {
+            let mut b = Burst::new();
+            b.push(n as i64);
+            b
+        });
+    let pub_node = source.aeron_pub_dedup(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    let max = values.iter().copied().max().unwrap_or(0);
+    assert!(
+        max > 100,
+        "expected a late counter value after back-pressure recovery, max observed: {max}"
+    );
+    Ok(())
+}
+
+/// Plain `aeron_pub` (no dedup) publishes every distinct value when none
+/// repeat. The subscriber receives all of them.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2019i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|n| {
+            let mut b = Burst::new();
+            b.push(n as i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    let unique: std::collections::HashSet<i64> = values.iter().copied().collect();
+    assert!(
+        unique.len() >= 5,
+        "expected at least 5 distinct values via plain aeron_pub, got {} unique: {values:?}",
+        unique.len()
+    );
+    Ok(())
+}
