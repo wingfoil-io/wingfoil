@@ -10,6 +10,9 @@
 //! Build an [`AeronRsHandle`] with [`AeronRsHandle::connect`], then derive
 //! subscribers and publishers from it.
 
+use crate::adapters::aeron::DEFAULT_FRAGMENT_LIMIT;
+use crate::adapters::aeron::buffer::{FragmentBuffer, FragmentHeader};
+use crate::adapters::aeron::error::TransportError;
 use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
 use aeron_rs::aeron::Aeron;
 use aeron_rs::concurrent::atomic_buffer::{AlignedBuffer, AtomicBuffer};
@@ -77,7 +80,10 @@ impl AeronRsHandle {
             timeout,
             &format!("subscription on {channel}:{stream_id}"),
         )?;
-        Ok(AeronRsSubscriber { sub })
+        Ok(AeronRsSubscriber {
+            sub,
+            fragment_limit: DEFAULT_FRAGMENT_LIMIT,
+        })
     }
 
     pub fn publication(
@@ -103,6 +109,31 @@ impl AeronRsHandle {
 
 pub struct AeronRsSubscriber {
     sub: Arc<Mutex<Subscription>>,
+    /// Cap on fragments delivered per [`AeronSubscriberBackend::poll`] call.
+    ///
+    /// Aeron's `poll` treats this as a **cap, not a target**: the call returns
+    /// control after at most `fragment_limit` fragments OR when no more are
+    /// immediately available. Defaults to `256` (Aeron sample harness
+    /// convention). Lower values reduce per-cycle latency tail but add
+    /// per-fragment loop overhead; higher values amortise loop overhead but
+    /// lengthen worst-case `poll()` cycles. Stored as `usize` for API parity
+    /// with rusteron; cast to `Index`/`i32` at the FFI call site.
+    fragment_limit: usize,
+}
+
+impl AeronRsSubscriber {
+    /// Override the per-`poll()` fragment cap.
+    #[must_use]
+    pub fn with_fragment_limit(mut self, fragment_limit: usize) -> Self {
+        self.fragment_limit = fragment_limit;
+        self
+    }
+
+    /// Returns the current per-`poll()` fragment cap.
+    #[must_use]
+    pub fn fragment_limit(&self) -> usize {
+        self.fragment_limit
+    }
 }
 
 impl AeronSubscriberBackend for AeronRsSubscriber {
@@ -114,9 +145,77 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
                 handler(buffer.as_sub_slice(offset, length));
                 count += 1;
             },
-            256,
+            self.fragment_limit as Index,
         );
         Ok(count)
+    }
+
+    fn poll_fragments(
+        &mut self,
+        handler: &mut dyn FnMut(&FragmentBuffer<'_>),
+    ) -> Result<usize, TransportError> {
+        let mut count = 0usize;
+        let mut sub = self
+            .sub
+            .lock()
+            .map_err(|e| TransportError::Backend(format!("aeron-rs subscription mutex: {e}")))?;
+        sub.poll(
+            &mut |buffer: &AtomicBuffer, offset: Index, length: Index, header: &Header| {
+                let frag_header = FragmentHeader {
+                    position: header.position(),
+                    session_id: header.session_id(),
+                    stream_id: header.stream_id(),
+                };
+                let bytes = buffer.as_sub_slice(offset, length);
+                let frag = FragmentBuffer::new(bytes, frag_header);
+                handler(&frag);
+                count += 1;
+            },
+            self.fragment_limit as Index,
+        );
+        Ok(count)
+    }
+
+    fn with_fragment_limit(self, fragment_limit: usize) -> Self {
+        AeronRsSubscriber::with_fragment_limit(self, fragment_limit)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// Field-round-trip tests for `fragment_limit` require a live aeron-rs
+// `Subscription` (an FFI handle that cannot be zero-initialised), so they
+// are gated behind `aeron-integration-test` and rely on the shared
+// `start_media_driver()` helper.
+#[cfg(all(test, feature = "aeron-integration-test"))]
+mod tests {
+    use super::*;
+    use crate::adapters::aeron::integration_tests::{
+        AERON_CHANNEL, CONNECT_TIMEOUT, start_media_driver,
+    };
+
+    #[test]
+    fn given_aeron_rs_subscriber_when_built_default_then_fragment_limit_is_256()
+    -> anyhow::Result<()> {
+        let _container = start_media_driver()?;
+        let handle = AeronRsHandle::connect()?;
+        let sub = handle.subscription(AERON_CHANNEL, 3101, CONNECT_TIMEOUT)?;
+        assert_eq!(sub.fragment_limit(), 256);
+        Ok(())
+    }
+
+    #[test]
+    fn given_aeron_rs_subscriber_when_with_fragment_limit_then_field_matches() -> anyhow::Result<()>
+    {
+        let _container = start_media_driver()?;
+        let handle = AeronRsHandle::connect()?;
+        let sub = handle
+            .subscription(AERON_CHANNEL, 3102, CONNECT_TIMEOUT)?
+            .with_fragment_limit(64);
+        assert_eq!(sub.fragment_limit(), 64);
+        Ok(())
     }
 }
 

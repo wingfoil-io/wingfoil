@@ -16,11 +16,13 @@ zmq-cross-lang-test = ["zmq-integration-test"]
 zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "zmq-etcd-integration-test"]
 aeron-rusteron = ["dep:rusteron-client"]
 aeron-rs = ["dep:aeron-rs"]
+embedded-driver = ["dep:rusteron-media-driver"]
+dhat-heap = []
 etcd = ["dep:etcd-client", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 kafka = ["dep:rdkafka", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
-tracing = ["dep:tracing"]
+tracing = []
 instrument-run = ["tracing"]
 instrument-cycle = ["tracing"]
 instrument-apply-nodes = ["tracing"]
@@ -117,7 +119,7 @@ zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 rdkafka = { version = "0.37", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
-tracing = { workspace = true, features = ["log", "attributes"], optional = true }
+tracing = { workspace = true, features = ["log", "attributes"] }
 fluvio = { version = "0.50.1", optional = true }
 fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 iceoryx2 = { version = "0.8", optional = true }
@@ -130,6 +132,7 @@ fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rusteron-client = { version = "0.1", optional = true }
+rusteron-media-driver = { version = "0.1", optional = true }
 aeron-rs = { version = "0.1", optional = true }
 
 # web adapter
@@ -164,6 +167,7 @@ scopeguard = "1.2.0"
 # cert at test-time. Cheaper and more deterministic than shipping a static
 # fixture that would need rotating before its 1-year expiry.
 rcgen = "0.13"
+dhat = "0.3"
 
 [[example]]
 name = "dynamic-group"
@@ -354,4 +358,43 @@ required-features = ["fix", "iceoryx2"]
 [[example]]
 name = "aeron"
 path = "examples/aeron/main.rs"
+required-features = ["aeron-rusteron"]
+
+[[example]]
+name = "aeron_status_circuit_breaker"
+path = "examples/aeron_status_circuit_breaker.rs"
+required-features = ["aeron-rusteron"]
+
+[[example]]
+name = "aeron_mdc_discovery"
+path = "examples/aeron_mdc_discovery.rs"
+required-features = ["aeron-rusteron"]
+
+[[example]]
+name = "aeron_external_source"
+path = "examples/aeron_external_source.rs"
+required-features = ["aeron-rusteron"]
+
+[[bench]]
+name = "aeron_publication_latency"
+path = "benches/aeron/publication_latency.rs"
+harness = false
+required-features = ["aeron-rusteron"]
+
+[[bench]]
+name = "aeron_subscription_throughput"
+path = "benches/aeron/subscription_throughput.rs"
+harness = false
+required-features = ["aeron-rusteron"]
+
+[[bench]]
+name = "aeron_transceiver"
+path = "benches/aeron/transceiver.rs"
+harness = false
+required-features = ["aeron-rusteron"]
+
+[[bench]]
+name = "aeron_allocation_tracking"
+path = "benches/aeron/allocation_tracking.rs"
+harness = false
 required-features = ["aeron-rusteron"]
