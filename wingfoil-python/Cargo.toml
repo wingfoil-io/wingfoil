@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-python"
-version = "4.3.3"
+version = "5.0.0"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 rust-version.workspace = true
