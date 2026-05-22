@@ -8,7 +8,7 @@ Demonstrates:
   - Printing per-stage delta stats with .latency_report()
 
 Run:
-  cd wingfoil-python && maturin develop --features iceoryx2-beta && python examples/latency.py
+  cd wingfoil-python && maturin develop --features iceoryx2 && python examples/latency.py
 """
 
 from wingfoil import ticker, Latency, TracedBytes, Graph

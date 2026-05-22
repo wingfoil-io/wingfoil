@@ -1,11 +1,9 @@
-// NOTE: iceoryx2 support is beta. Enable with the `iceoryx2-beta` feature flag.
-//
 // Subscribes to the counter published by `iceoryx2_pub` and demonstrates all
 // three polling modes.  Pass the mode as a CLI argument:
 //
-//   cargo run --example iceoryx2_sub --features iceoryx2-beta -- spin
-//   cargo run --example iceoryx2_sub --features iceoryx2-beta -- threaded
-//   cargo run --example iceoryx2_sub --features iceoryx2-beta -- signaled
+//   cargo run --example iceoryx2_sub --features iceoryx2 -- spin
+//   cargo run --example iceoryx2_sub --features iceoryx2 -- threaded
+//   cargo run --example iceoryx2_sub --features iceoryx2 -- signaled
 //
 // Defaults to `spin` if no argument is given.
 //

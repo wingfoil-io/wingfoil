@@ -6,12 +6,10 @@
 // statistics on shutdown.
 //
 // Run with:
-//   cargo run --example latency_pub --features iceoryx2-beta
+//   cargo run --example latency_pub --features iceoryx2
 //
 // Then in another terminal:
-//   cargo run --example latency_sub --features iceoryx2-beta
-//
-// NOTE: iceoryx2 support is beta. Enable with the `iceoryx2-beta` feature flag.
+//   cargo run --example latency_sub --features iceoryx2
 
 #[path = "shared.rs"]
 mod shared;

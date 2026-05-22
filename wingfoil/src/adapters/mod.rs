@@ -11,7 +11,7 @@ pub mod etcd;
 pub mod fix;
 #[cfg(feature = "fluvio")]
 pub mod fluvio;
-#[cfg(feature = "iceoryx2-beta")]
+#[cfg(feature = "iceoryx2")]
 #[doc(hidden)]
 pub mod iceoryx2;
 #[cfg(feature = "kafka")]

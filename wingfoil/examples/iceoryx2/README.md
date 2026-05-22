@@ -21,9 +21,9 @@ The wingfoil adapter supports three subscriber polling modes, selected via `Iceo
 The subscriber example lets you try all three:
 
 ```bash
-cargo run --example iceoryx2_sub --features iceoryx2-beta -- spin
-cargo run --example iceoryx2_sub --features iceoryx2-beta -- threaded
-cargo run --example iceoryx2_sub --features iceoryx2-beta -- signaled
+cargo run --example iceoryx2_sub --features iceoryx2 -- spin
+cargo run --example iceoryx2_sub --features iceoryx2 -- threaded
+cargo run --example iceoryx2_sub --features iceoryx2 -- signaled
 ```
 
 ## Service Variants
@@ -39,10 +39,10 @@ Start the publisher in one terminal, then the subscriber in another:
 
 ```bash
 # Terminal 1: publisher
-RUST_LOG=info cargo run --example iceoryx2_pub --features iceoryx2-beta
+RUST_LOG=info cargo run --example iceoryx2_pub --features iceoryx2
 
 # Terminal 2: subscriber (pick a mode)
-RUST_LOG=info cargo run --example iceoryx2_sub --features iceoryx2-beta -- spin
+RUST_LOG=info cargo run --example iceoryx2_sub --features iceoryx2 -- spin
 ```
 
 ## Publisher

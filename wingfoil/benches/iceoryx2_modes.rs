@@ -1,6 +1,6 @@
 //! Benchmarks for iceoryx2 adapter modes (Spin vs Threaded vs Signaled)
 //!
-//! Run with: cargo bench --features iceoryx2-beta -- iceoryx2_modes
+//! Run with: cargo bench --features iceoryx2 -- iceoryx2_modes
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -66,7 +66,7 @@ cargo lint-all                 # clippy, all features  ← most-missed step
 cargo test -p wingfoil --features full
 ```
 
-`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2-beta`, `kdb`, etc.) that the default build skips. Please run it before pushing.
+`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2`, `kdb`, etc.) that the default build skips. Please run it before pushing.
 
 
 
