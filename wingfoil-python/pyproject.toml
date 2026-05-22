@@ -25,7 +25,7 @@ classifiers = [
 dev = ["maturin>=1.4,<2.0", "pytest>=7", "pyzmq>=25"]
 
 [tool.maturin]
-# Keep `iceoryx2-beta` opt-in for Python builds. Enabling it by default can
+# Keep `iceoryx2` opt-in for Python builds. Enabling it by default can
 # make wheels Linux/POSIX-only due to iceoryx2 dependencies.
 features = ["pyo3/extension-module"]
 python-source = "python"
@@ -48,7 +48,7 @@ markers = [
     "requires_etcd: needs etcd on localhost:2379",
     "requires_kdb: needs KDB+ on localhost:5000",
     "requires_otel: needs an OTel collector on localhost:4318",
-    "requires_iceoryx2: needs wingfoil built with --features iceoryx2-beta",
+    "requires_iceoryx2: needs wingfoil built with --features iceoryx2",
     "requires_web: needs a wingfoil web server (runs in-process)",
     "requires_kafka: needs a Kafka-compatible broker on localhost:9092",
 ]

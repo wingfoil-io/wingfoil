@@ -539,7 +539,7 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the publish operation.
-    #[cfg(feature = "iceoryx2-beta")]
+    #[cfg(feature = "iceoryx2")]
     #[pyo3(signature = (service_name, variant=crate::py_iceoryx2::PyIceoryx2ServiceVariant::Ipc, history_size=5, initial_max_slice_len=128*1024, stages=None))]
     fn iceoryx2_pub(
         &self,

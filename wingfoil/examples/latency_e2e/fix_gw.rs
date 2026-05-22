@@ -19,7 +19,7 @@
 // Run:
 //   LMAX_USERNAME=xxx LMAX_PASSWORD=yyy \
 //     cargo run --release --example latency_e2e_fix_gw \
-//     --features "fix,iceoryx2-beta" -- [--no-precise]
+//     --features "fix,iceoryx2" -- [--no-precise]
 //
 // Without LMAX_USERNAME / LMAX_PASSWORD the binary refuses to start —
 // real order routing requires real creds. (We deliberately removed the

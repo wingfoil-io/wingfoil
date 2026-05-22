@@ -2,7 +2,7 @@
 //!
 //! These exercise the `Local` service variant end-to-end — no shared memory,
 //! no subprocesses. They run as part of the standard
-//! `cargo test -p wingfoil --features iceoryx2-beta` suite.
+//! `cargo test -p wingfoil --features iceoryx2` suite.
 //!
 //! The cross-process IPC tests live in `integration_tests.rs` and are gated by
 //! the `iceoryx2-integration-test` feature.

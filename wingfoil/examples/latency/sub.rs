@@ -6,7 +6,7 @@
 // shutdown.
 //
 // Run with:
-//   cargo run --example latency_sub --features iceoryx2-beta
+//   cargo run --example latency_sub --features iceoryx2
 
 #[path = "shared.rs"]
 mod shared;

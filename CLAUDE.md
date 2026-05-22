@@ -48,7 +48,7 @@ cargo bench
 
 # Lint (these aliases live in .cargo/config.toml and mirror CI exactly)
 cargo lint        # default features
-cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2-beta`, etc.
+cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2`, etc.
 cargo fmt --all -- --check
 ```
 

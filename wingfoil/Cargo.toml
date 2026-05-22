@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2-beta", "prometheus", "otlp", "fix", "web", "web-tls", "kafka"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka"]
 dynamic-graph-beta = []
 kdb-integration-test = ["kdb"]
 async = ["dep:tokio", "dep:futures", "dep:async-stream", "dep:futures-util", "tokio/time"]
@@ -25,8 +25,8 @@ instrument-default = ["instrument-run", "instrument-cycle", "instrument-apply-no
 instrument-all = ["instrument-default", "instrument-cycle-node"]
 fluvio = ["dep:fluvio", "async"]
 fluvio-integration-test = ["fluvio", "dep:testcontainers", "dep:fluvio-controlplane-metadata"]
-iceoryx2-integration-test = ["iceoryx2-beta", "dep:testcontainers"]
-iceoryx2-beta = ["dep:iceoryx2"]
+iceoryx2-integration-test = ["iceoryx2", "dep:testcontainers"]
+iceoryx2 = ["dep:iceoryx2"]
 prometheus = ["dep:arc-swap"]
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
@@ -219,12 +219,12 @@ required-features = ["async"]
 [[bench]]
 name = "iceoryx2"
 harness = false
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[bench]]
 name = "iceoryx2_modes"
 harness = false
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[example]]
 name = "prometheus"
@@ -239,22 +239,22 @@ required-features = ["otlp", "prometheus"]
 [[example]]
 name = "iceoryx2_pub"
 path = "examples/iceoryx2/pub.rs"
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[example]]
 name = "iceoryx2_sub"
 path = "examples/iceoryx2/sub.rs"
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[example]]
 name = "latency_pub"
 path = "examples/latency/pub.rs"
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[example]]
 name = "latency_sub"
 path = "examples/latency/sub.rs"
-required-features = ["iceoryx2-beta"]
+required-features = ["iceoryx2"]
 
 [[example]]
 name = "tracing"
@@ -328,9 +328,9 @@ required-features = ["kafka"]
 [[example]]
 name = "latency_e2e_ws_server"
 path = "examples/latency_e2e/ws_server.rs"
-required-features = ["web-tls", "iceoryx2-beta", "prometheus", "otlp"]
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
 
 [[example]]
 name = "latency_e2e_fix_gw"
 path = "examples/latency_e2e/fix_gw.rs"
-required-features = ["fix", "iceoryx2-beta"]
+required-features = ["fix", "iceoryx2"]

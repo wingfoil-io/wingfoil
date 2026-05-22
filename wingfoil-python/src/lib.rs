@@ -5,7 +5,7 @@ mod py_element;
 mod py_etcd;
 mod py_fix;
 mod py_fluvio;
-#[cfg(feature = "iceoryx2-beta")]
+#[cfg(feature = "iceoryx2")]
 mod py_iceoryx2;
 mod py_kafka;
 mod py_kdb;
@@ -196,7 +196,7 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
-    #[cfg(feature = "iceoryx2-beta")]
+    #[cfg(feature = "iceoryx2")]
     module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub_etcd, module)?)?;
@@ -206,9 +206,9 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyNode>()?;
     module.add_class::<PyStream>()?;
     module.add_class::<PyGraph>()?;
-    #[cfg(feature = "iceoryx2-beta")]
+    #[cfg(feature = "iceoryx2")]
     module.add_class::<py_iceoryx2::PyIceoryx2ServiceVariant>()?;
-    #[cfg(feature = "iceoryx2-beta")]
+    #[cfg(feature = "iceoryx2")]
     module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add_class::<py_latency::PyLatency>()?;

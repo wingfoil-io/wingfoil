@@ -50,7 +50,7 @@ jobs:
         run: |
           python -m venv wingfoil-python/.venv
           wingfoil-python/.venv/bin/pip install maturin pytest
-          cd wingfoil-python && .venv/bin/maturin develop --features iceoryx2-beta
+          cd wingfoil-python && .venv/bin/maturin develop --features iceoryx2
 
       - name: Run Python iceoryx2 integration tests
         run: |

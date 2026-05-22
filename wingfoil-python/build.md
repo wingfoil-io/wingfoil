@@ -22,7 +22,7 @@ uv sync --extra dev --locked
 uv run maturin develop --release
 
 # build with the optional iceoryx2 bindings enabled
-uv run maturin develop --release --features iceoryx2-beta
+uv run maturin develop --release --features iceoryx2
 
 # run tests
 uv run pytest
