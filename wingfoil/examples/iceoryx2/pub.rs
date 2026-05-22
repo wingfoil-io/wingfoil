@@ -1,4 +1,3 @@
-// NOTE: iceoryx2 support is beta. Enable with the `iceoryx2` feature flag.
 // Run with: RUST_LOG=info cargo run --example iceoryx2_pub --features iceoryx2
 //
 // This publishes a simple counter over iceoryx2 shared memory.

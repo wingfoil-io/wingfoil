@@ -10,8 +10,6 @@
 //
 // Then in another terminal:
 //   cargo run --example latency_sub --features iceoryx2
-//
-// NOTE: iceoryx2 support is beta. Enable with the `iceoryx2` feature flag.
 
 #[path = "shared.rs"]
 mod shared;
