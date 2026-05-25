@@ -15,6 +15,7 @@ jobs:
   test:
     name: Python Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -45,14 +46,15 @@ jobs:
       - name: Create virtualenv and install dependencies
         run: |
           python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov
+          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov pytest-timeout
 
       - name: Build and test Python bindings with Rust coverage
         run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cd wingfoil-python
           .venv/bin/maturin develop --features iceoryx2
-          .venv/bin/pytest tests/ \
+          .venv/bin/pytest tests/ -v \
+            --timeout=120 \
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
           cd ..
