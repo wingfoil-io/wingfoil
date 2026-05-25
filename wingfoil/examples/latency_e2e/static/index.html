@@ -8,185 +8,90 @@
   <style>
     :root {
       --bg: #0d1117; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
-      --green: #3fb950; --red: #f85149; --accent: #58a6ff; --border: #21262d;
+      --green: #3fb950; --red: #f85149; --accent: #58a6ff;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-    a { color: var(--accent); }
-    code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
-
-    header {
-      padding: 8px 14px; border-bottom: 1px solid var(--border);
-      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
-    }
-    header h1 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; }
-    header .byline { font-size: 11px; color: var(--muted); white-space: nowrap; }
-    header .byline code { background: transparent; padding: 0; }
-    header .spacer { flex: 1; }
-    header .ctl { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
-    header .ctl select, header .ctl input { background: var(--bg); color: var(--fg); border: 1px solid #30363d; border-radius: 4px; padding: 3px 6px; font-size: 12px; }
-    header button { background: var(--accent); color: white; border: 0; padding: 5px 14px; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 12px; }
-    header button:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
-    header button.stop { background: var(--red); }
-    header .links { display: flex; gap: 10px; align-items: center; font-size: 11px; }
-
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    header { padding: 12px 20px; border-bottom: 1px solid #21262d; display: flex; gap: 16px; align-items: center; }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    main { padding: 20px; display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
+    .panel { background: var(--panel); border: 1px solid #21262d; border-radius: 6px; padding: 14px; }
+    .panel h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+    .row .k { color: var(--muted); }
+    .row .v { font-variant-numeric: tabular-nums; }
+    button { background: var(--accent); color: white; border: 0; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; }
+    button:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
+    button.stop { background: var(--red); }
+    select, input[type=number] { background: #0d1117; color: var(--fg); border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
     .pill.live { background: rgba(63, 185, 80, 0.15); color: var(--green); }
     .pill.connecting { background: rgba(240, 136, 62, 0.15); color: #f0883e; }
     .pill.idle { background: rgba(139, 148, 158, 0.15); color: var(--muted); }
-
-    main { padding: 12px 14px; display: grid; gap: 12px; grid-template-columns: 1fr; }
-
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
-    .panel-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
-    .panel-head h2 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-    .panel-head .meta { font-size: 11px; color: var(--muted); }
-
-    .stats {
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-    }
-    .stats .stat { background: var(--bg); border-radius: 4px; padding: 6px 10px; }
-    .stats .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-    .stats .v { font-size: 16px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-
-    .breakdown {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px;
-    }
-    .breakdown .seg { background: var(--bg); border-radius: 4px; padding: 6px 10px; border-left: 3px solid var(--accent); }
-    .breakdown .seg.resident { border-left-color: var(--green); }
-    .breakdown .seg.wire { border-left-color: #f0883e; }
-    .breakdown .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-    .breakdown .k .hint { text-transform: none; letter-spacing: 0; color: var(--muted); opacity: 0.8; margin-left: 4px; }
-    .breakdown .v { font-size: 14px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-
-    .legend {
-      margin-top: 10px; padding: 8px 10px; background: var(--bg); border-radius: 4px;
-      font-size: 11px; color: var(--muted); line-height: 1.5;
-    }
-    .legend summary { cursor: pointer; color: var(--fg); font-weight: 600; }
-    .legend p { margin: 6px 0 0; }
-    .legend code { background: var(--panel); }
-
-    #chart { width: 100%; }
-
-    /* Flamegraph: nested rectangles, browser RTT at the bottom, FIX→LMAX at the top. */
-    .flamegraph-wrap { position: relative; }
-    #flamegraph { width: 100%; display: block; }
-    #flamegraph-tip {
-      position: absolute; pointer-events: none; display: none;
-      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
-      border-radius: 4px; padding: 6px 8px; font-size: 11px; line-height: 1.4;
-      font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5;
-    }
-    .flame-legend { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 8px; font-size: 11px; color: var(--muted); }
-    .flame-legend .row { display: flex; align-items: baseline; gap: 6px; }
-    .flame-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; flex-shrink: 0; }
-    .flame-legend .name { color: var(--fg); font-weight: 600; min-width: 88px; }
-
-    .grafana-wrap { position: relative; }
-    #grafana { width: 100%; height: 280px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
-    .grafana-note { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
-
-    @media (min-width: 980px) {
-      main { grid-template-columns: 1fr 1fr; }
-      .chart-panel { grid-column: 1 / -1; }
-    }
-    @media (max-width: 560px) {
-      .stats { grid-template-columns: repeat(2, 1fr); }
-      header h1 { font-size: 13px; }
-      header .grafana-link { display: none; }
-      #grafana { height: 220px; }
-    }
+    .stage-bar { display: grid; grid-template-columns: 110px 1fr 90px; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+    .stage-bar .name { color: var(--muted); }
+    .stage-bar .bar { background: #0d1117; height: 14px; border-radius: 3px; overflow: hidden; }
+    .stage-bar .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #1f6feb); transition: width 0.15s; }
+    .stage-bar .v { text-align: right; font-variant-numeric: tabular-nums; }
+    #chart { background: var(--panel); border-radius: 6px; padding: 8px; }
+    a { color: var(--accent); }
+    code { background: #0d1117; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
-    <h1>wingfoil latency e2e</h1>
-    <span class="byline">Rust DAG stream processor · live FIX round-trip to LMAX London</span>
+    <h1>wingfoil latency end-to-end</h1>
     <span id="status" class="pill idle">disconnected</span>
-    <span style="color:var(--muted);font-size:11px">session <code id="session">—</code></span>
-    <div class="spacer"></div>
-    <div class="ctl">
-      <label>side
-        <select id="side">
-          <option value="alt">alt</option>
-          <option value="0">buy</option>
-          <option value="1">sell</option>
-        </select>
-      </label>
-      <label>qty <input id="qty" type="number" min="1" value="1" style="width:50px"/></label>
-      <label>Hz <input id="rate" type="number" min="1" max="20" value="2" style="width:42px"/></label>
-      <button id="start">start</button>
-    </div>
-    <div class="links">
-      <a href="https://github.com/wingfoil-io/wingfoil" target="_blank" rel="noopener">github</a>
-      <a href="https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency_e2e" target="_blank" rel="noopener">source</a>
-      <a href="/metrics" target="_blank">prometheus</a>
-    </div>
+    <span style="color:var(--muted)">session <code id="session">—</code></span>
+    <span style="margin-left:auto"><a href="/metrics">prometheus</a> · operator dashboard typically lives in Grafana</span>
   </header>
-
   <main>
-    <section class="panel chart-panel">
-      <div class="panel-head">
-        <h2>per-hop latency — this session</h2>
-        <span class="meta" id="rtt-meta">—</span>
+    <section class="panel">
+      <h2>controls</h2>
+      <div class="controls">
+        <label>side
+          <select id="side">
+            <option value="alt">alternate</option>
+            <option value="0">buy</option>
+            <option value="1">sell</option>
+          </select>
+        </label>
+        <label>qty <input id="qty" type="number" min="1" value="1" style="width:70px"/></label>
+        <label>rate Hz <input id="rate" type="number" min="1" max="20" value="2" style="width:60px"/></label>
+        <button id="start">start</button>
       </div>
-      <div class="stats">
-        <div class="stat"><div class="k">sent</div><div class="v" id="sent">0</div></div>
-        <div class="stat"><div class="k">filled</div><div class="v" id="filled">0</div></div>
-        <div class="stat"><div class="k">avg fill px</div><div class="v" id="px">—</div></div>
-        <div class="stat"><div class="k">round-trip</div><div class="v" id="rtt">—</div></div>
-      </div>
-      <div class="breakdown">
-        <div class="seg total"><div class="k">rtt mean <span class="hint">last 32 fills</span></div><div class="v" id="bd-total">—</div></div>
-        <div class="seg resident"><div class="k">resident <span class="hint">ws_recv → ws_send (in-process)</span></div><div class="v" id="bd-resident">—</div></div>
-        <div class="seg wire"><div class="k">wire <span class="hint">FIX/TLS to LMAX + WS legs</span></div><div class="v" id="bd-wire">—</div></div>
-      </div>
-      <div id="chart" style="margin-top:10px"></div>
-      <details class="legend">
-        <summary>how to read this</summary>
-        <p>
-          Each fill traverses nine wingfoil stamp points: <code>ws_recv → ws_publish → gw_recv → gw_price → fix_send → fix_recv → gw_publish → ws_sub_recv → ws_send</code>.
-          The chart plots the per-hop delta on a log Y-axis (nanoseconds). The flamegraph below shows the nested call stack: browser at the bottom (full round-trip), each layer above is a strict sub-interval of the layer below — exactly like a CPU flamegraph, but the samples are wall-clock fills.
-        </p>
-        <p>
-          <strong>Resident</strong> is everything inside this server (two processes connected by iceoryx2 shared memory). <strong>Wire</strong> is the FIX-over-TLS round-trip to LMAX plus the WebSocket legs to your browser — derived as <code>rtt_total − resident</code>, both measured in a single clock domain so no NTP sync is needed.
-        </p>
-      </details>
+      <h2>session stats</h2>
+      <div class="row"><span class="k">orders sent</span><span class="v" id="sent">0</span></div>
+      <div class="row"><span class="k">fills received</span><span class="v" id="filled">0</span></div>
+      <div class="row"><span class="k">avg fill price</span><span class="v" id="px">—</span></div>
+      <div class="row"><span class="k">total round-trip (click → fill)</span><span class="v" id="rtt">—</span></div>
+      <h2 style="margin-top:14px">last fill — per-hop ns</h2>
+      <div id="stages"></div>
     </section>
-
-    <section class="panel flamegraph-wrap">
-      <div class="panel-head">
-        <h2>flamegraph — nested call stack (rolling mean)</h2>
-        <span class="meta" id="flamegraph-meta">n=0</span>
-      </div>
-      <canvas id="flamegraph" height="200"></canvas>
-      <div id="flamegraph-tip"></div>
-      <div class="flame-legend" id="flame-legend"></div>
-    </section>
-
-    <section class="panel grafana-wrap">
-      <div class="panel-head">
-        <h2>grafana — session traces</h2>
-        <a id="grafana-pop" href="#" target="_blank" rel="noopener" style="font-size:11px">↗ open in new window</a>
-      </div>
-      <iframe id="grafana" title="Grafana — session traces"></iframe>
-      <p class="grafana-note">
-        Aggregate p50/p99 across all sessions are in Prometheus at
-        <a href="/metrics" target="_blank"><code>:9091/metrics</code></a>.
-        Per-session traces are pushed to Tempo via OTLP and pre-filtered to this session above.
-        Not loading? <code>docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d</code>
+    <section>
+      <div id="chart"></div>
+      <p style="color:var(--muted);font-size:12px">
+        Each line is one hop's latency for orders submitted by <em>this
+        browser session</em> only. Aggregate per-hop p50/p99 across all
+        sessions are in Prometheus at <a href="/metrics" target="_blank"><code>:9091/metrics</code></a>.
+        Per-session traces — indexed by high-cardinality <code>session.id</code>,
+        which Prometheus can't handle — are pushed to Tempo via OTLP and
+        surfaced in the Grafana dashboard below, pre-filtered to this session.
+      </p>
+      <iframe id="grafana" title="Grafana — session traces" style="width:100%;height:640px;border:1px solid #21262d;border-radius:6px;background:#0d1117"></iframe>
+      <p style="color:var(--muted);font-size:12px">
+        Grafana not loading? Start the operator stack:
+        <code>docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d</code>
       </p>
     </section>
   </main>
-
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
   <script type="importmap">
     {
       "imports": {
-        "@wingfoil/client": "https://esm.sh/@wingfoil/client@5.0.0",
-        "@wingfoil/client/tracing": "https://esm.sh/@wingfoil/client@5.0.0/tracing",
-        "@wingfoil/telemetry": "https://esm.sh/@wingfoil/telemetry@0.1.0"
+        "@wingfoil/client": "https://esm.sh/@wingfoil/client@4.3.3",
+        "@wingfoil/client/tracing": "https://esm.sh/@wingfoil/client@4.3.3/tracing"
       }
     }
   </script>

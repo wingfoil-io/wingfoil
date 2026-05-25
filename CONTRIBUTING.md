@@ -48,6 +48,18 @@ These tools are required for building, testing, and packaging the core **wingfoi
 
 For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
 
+#### Aeron adapter
+
+The Aeron adapter requires clang, libuuid, and a recent CMake (the version in apt is often too old):
+
+```bash
+sudo apt update
+sudo apt install clang libclang-dev uuid-dev
+
+wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
+```
+
 ### Building
 
 ```bash
@@ -57,7 +69,7 @@ cargo build --features full    # everything CI builds (needs protoc)
 
 ### Pre-PR check (matches CI)
 
-CI is configured in [`.github/workflows/rust-test.yml`](.github/workflows/rust-test.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
+CI is configured in [`.github/workflows/rust.yml`](.github/workflows/rust.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
 
 ```bash
 cargo fmt --all -- --check     # formatting
@@ -66,7 +78,7 @@ cargo lint-all                 # clippy, all features  ← most-missed step
 cargo test -p wingfoil --features full
 ```
 
-`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2`, `kdb`, etc.) that the default build skips. Please run it before pushing.
+`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2-beta`, `kdb`, etc.) that the default build skips. Please run it before pushing.
 
 
 

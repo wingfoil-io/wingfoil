@@ -9,10 +9,8 @@ iceoryx2, isolated CPU cores, no hypervisor jitter); tear down (or just
 What this stack provisions:
 
   * VPC + public subnet (one AZ — perf, not redundancy)
-  * Security group: 8080 (ws_server, HTTPS+WSS), 3000 (grafana, HTTPS),
-    22 (SSH, opt-in) — all 0.0.0.0/0 by default for demo simplicity.
-    Port 9091 (ws_server's /metrics) is no longer publicly exposed —
-    Prometheus scrapes it via localhost.
+  * Security group: 8080 (WS server), 9091 (prometheus exporter),
+    3000 (grafana), 22 (SSH) — all 0.0.0.0/0 by default for demo simplicity
   * One bare-metal EC2 instance (default c7i.metal-24xl)
   * Elastic IP — survives stop/start so the URL doesn't change
   * S3 bucket for binaries + observability configs + static web assets
@@ -27,9 +25,9 @@ isolated cores.
 Prerequisites:
 
   cargo build --release -p wingfoil --example latency_e2e_ws_server \\
-      --features "web-tls,iceoryx2,prometheus,otlp"
+      --features "web,iceoryx2-beta,prometheus,otlp"
   cargo build --release -p wingfoil --example latency_e2e_fix_gw \\
-      --features "fix,iceoryx2"
+      --features "fix,iceoryx2-beta"
   pulumi config set --secret lmax_username <...>
   pulumi config set --secret lmax_password <...>
 """
@@ -54,8 +52,8 @@ WS_SERVER_BIN = TARGET_RELEASE / "latency_e2e_ws_server"
 FIX_GW_BIN = TARGET_RELEASE / "latency_e2e_fix_gw"
 
 for path, hint in [
-    (WS_SERVER_BIN, "cargo build --release -p wingfoil --example latency_e2e_ws_server --features 'web,iceoryx2,prometheus,otlp'"),
-    (FIX_GW_BIN, "cargo build --release -p wingfoil --example latency_e2e_fix_gw --features 'fix,iceoryx2'"),
+    (WS_SERVER_BIN, "cargo build --release -p wingfoil --example latency_e2e_ws_server --features 'web,iceoryx2-beta,prometheus,otlp'"),
+    (FIX_GW_BIN, "cargo build --release -p wingfoil --example latency_e2e_fix_gw --features 'fix,iceoryx2-beta'"),
 ]:
     if not path.exists():
         raise pulumi.RunError(
@@ -77,10 +75,6 @@ lmax_username = config.require_secret("lmax_username")
 lmax_password = config.require_secret("lmax_password")
 alert_email = config.get("alert_email") or ""
 monthly_budget_usd = config.get("monthly_budget_usd") or "50"
-# Optional shared secret on the wake URL. When set, GET / and the JSON API
-# require ?token=<value>. Recommended for any public deployment — without
-# it, anyone with the URL can wake the $4.28/hr instance.
-wake_token = config.get_secret("wake_token")
 
 tags = {"Project": project, "Stack": stack, "ManagedBy": "Pulumi"}
 
@@ -126,31 +120,16 @@ aws.ec2.RouteTableAssociation(f"{prefix}-rt-assoc", subnet_id=subnet.id, route_t
 # if you don't want it open to the internet.
 ingress_cidr = config.get("ingress_cidr") or "0.0.0.0/0"
 
-# SSH ingress is opt-in. The instance has no `key_name`, so the default
-# (off) means SSH is unreachable — which is what you want for a public
-# perf demo. Enable for break-glass debugging via:
-#   pulumi config set ssh_ingress_cidr 203.0.113.4/32
-# and add `key_name` to the Instance resource below.
-ssh_ingress_cidr = config.get("ssh_ingress_cidr") or ""
-
-ingress_rules = [
-    # 8080: ws_server HTTPS / WSS (TLS terminated in-process via the
-    # `web-tls` cargo feature). 3000: Grafana HTTPS. 9091 (Prometheus
-    # /metrics) used to be public for ad-hoc curling; Prometheus now
-    # scrapes it via localhost so the public surface stays HTTPS-only.
-    aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
-    aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
-]
-if ssh_ingress_cidr:
-    ingress_rules.append(
-        aws.ec2.SecurityGroupIngressArgs(from_port=22, to_port=22, protocol="tcp", cidr_blocks=[ssh_ingress_cidr]),
-    )
-
 sg = aws.ec2.SecurityGroup(
     f"{prefix}-sg",
     vpc_id=vpc.id,
-    description="wingfoil baremetal demo - WS, prometheus, grafana",
-    ingress=ingress_rules,
+    description="wingfoil baremetal demo — WS, prometheus, grafana, SSH",
+    ingress=[
+        aws.ec2.SecurityGroupIngressArgs(from_port=22,   to_port=22,   protocol="tcp", cidr_blocks=[ingress_cidr]),
+        aws.ec2.SecurityGroupIngressArgs(from_port=8080, to_port=8080, protocol="tcp", cidr_blocks=[ingress_cidr]),
+        aws.ec2.SecurityGroupIngressArgs(from_port=9091, to_port=9091, protocol="tcp", cidr_blocks=[ingress_cidr]),
+        aws.ec2.SecurityGroupIngressArgs(from_port=3000, to_port=3000, protocol="tcp", cidr_blocks=[ingress_cidr]),
+    ],
     egress=[aws.ec2.SecurityGroupEgressArgs(from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"])],
     tags={**tags, "Name": f"{prefix}-sg"},
 )
@@ -162,27 +141,6 @@ bucket = aws.s3.BucketV2(
     f"{prefix}-assets",
     force_destroy=True,  # demo stack — let `pulumi destroy` actually destroy
     tags=tags,
-)
-
-# Belt-and-braces: AWS now defaults new buckets to "block public access" on,
-# but we set it explicitly so a future console click can't loosen it.
-aws.s3.BucketPublicAccessBlock(
-    f"{prefix}-assets-pab",
-    bucket=bucket.id,
-    block_public_acls=True,
-    block_public_policy=True,
-    ignore_public_acls=True,
-    restrict_public_buckets=True,
-)
-
-aws.s3.BucketServerSideEncryptionConfigurationV2(
-    f"{prefix}-assets-sse",
-    bucket=bucket.id,
-    rules=[aws.s3.BucketServerSideEncryptionConfigurationV2RuleArgs(
-        apply_server_side_encryption_by_default=aws.s3.BucketServerSideEncryptionConfigurationV2RuleApplyServerSideEncryptionByDefaultArgs(
-            sse_algorithm="AES256",
-        ),
-    )],
 )
 
 aws.s3.BucketObject(
@@ -343,18 +301,10 @@ instance = aws.ec2.Instance(
     # Replace the box if user_data changes — otherwise edits to the script
     # silently never run on the existing instance.
     user_data_replace_on_change=True,
-    # Force IMDSv2 — defends against SSRF on anything that ever runs here
-    # being able to fetch instance credentials via the IMDSv1 GET path.
-    metadata_options=aws.ec2.InstanceMetadataOptionsArgs(
-        http_tokens="required",
-        http_endpoint="enabled",
-        http_put_response_hop_limit=1,
-    ),
     root_block_device=aws.ec2.InstanceRootBlockDeviceArgs(
         volume_size=64,
         volume_type="gp3",
         delete_on_termination=True,
-        encrypted=True,
     ),
     tags={**tags, "Name": f"{prefix}-host"},
 )
@@ -426,11 +376,7 @@ wake_lambda = aws.lambda_.Function(
     timeout=10,
     memory_size=128,
     environment=aws.lambda_.FunctionEnvironmentArgs(
-        variables={
-            "INSTANCE_ID": instance.id,
-            "WS_SERVER_PORT": "8080",
-            "WAKE_TOKEN": wake_token if wake_token is not None else "",
-        },
+        variables={"INSTANCE_ID": instance.id, "WS_SERVER_PORT": "8080"},
     ),
     tags=tags,
 )
@@ -478,15 +424,8 @@ if alert_email:
 # ── Outputs ──────────────────────────────────────────────────────────────
 pulumi.export("instance_id",     instance.id)
 pulumi.export("public_ip",       eip.public_ip)
-# TLS terminated in-process by ws_server / grafana with a self-signed
-# cert regenerated on every boot. Browsers show a one-time warning
-# until the cert is accepted.
-pulumi.export("ws_server_url",   eip.public_ip.apply(lambda ip: f"https://{ip}:8080"))
-pulumi.export("grafana_url",     eip.public_ip.apply(lambda ip: f"https://{ip}:3000"))
+pulumi.export("ws_server_url",   eip.public_ip.apply(lambda ip: f"http://{ip}:8080"))
+pulumi.export("grafana_url",     eip.public_ip.apply(lambda ip: f"http://{ip}:3000"))
+pulumi.export("prometheus_url",  eip.public_ip.apply(lambda ip: f"http://{ip}:9091/metrics"))
 pulumi.export("assets_bucket",   bucket.bucket)
-pulumi.export(
-    "wake_url",
-    pulumi.Output.all(wake_url.function_url, wake_token).apply(
-        lambda a: f"{a[0]}?token={a[1]}" if a[1] else a[0]
-    ),
-)
+pulumi.export("wake_url",        wake_url.function_url)

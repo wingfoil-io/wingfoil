@@ -1,0 +1,60 @@
+name: crates.io pub
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # Build to generate Cargo.lock
+      - name: Build wingfoil
+        working-directory: wingfoil
+        run: cargo build
+
+      # Publish wingfoil-derive first — wingfoil depends on it
+      - name: Publish wingfoil-derive
+        working-directory: wingfoil-derive
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
+
+      # Wait for crates.io to index wingfoil-derive
+      - name: Wait for wingfoil-derive index
+        run: sleep 15
+
+      # Publish wingfoil
+      - name: Publish wingfoil
+        working-directory: wingfoil
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
+
+      # Wait for crates.io to index wingfoil
+      - name: Wait for wingfoil index
+        run: sleep 15
+
+      # Set wingfoil version in wingfoil-python
+      - name: Set wingfoil version in wingfoil-python
+        working-directory: wingfoil-python
+        run: |
+          WINGFOIL_VERSION=$(grep '^version' ../wingfoil/Cargo.toml | head -n1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Replacing path dependency with version $WINGFOIL_VERSION"
+          sed -i "s|path = \"../wingfoil\"|version = \"$WINGFOIL_VERSION\"|" Cargo.toml
+
+      # Publish wingfoil-python
+      - name: Publish wingfoil-python
+        working-directory: wingfoil-python
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io --allow-dirty

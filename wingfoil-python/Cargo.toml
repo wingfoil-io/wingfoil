@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-python"
-version = "5.0.0"
+version = "4.3.3"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 rust-version.workspace = true
@@ -21,7 +21,7 @@ workspace = true
 [features]
 default = ["etcd"]
 etcd = ["wingfoil/etcd"]
-iceoryx2 = ["wingfoil/iceoryx2"]
+iceoryx2-beta = ["wingfoil/iceoryx2-beta"]
 
 [dependencies]
 

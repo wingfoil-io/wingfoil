@@ -12,14 +12,8 @@
 //
 // Run (after starting fix_gw):
 //   cargo run --example latency_e2e_ws_server \
-//     --features "web-tls,iceoryx2,prometheus,otlp" -- \
-//     --addr 0.0.0.0:8080 [--no-precise] \
-//     [--tls-cert /etc/wingfoil/tls/cert.pem --tls-key /etc/wingfoil/tls/key.pem]
-//
-// Passing --tls-cert/--tls-key (or setting WINGFOIL_TLS_CERT/WINGFOIL_TLS_KEY)
-// switches the server to HTTPS + WSS on the same port. The browser
-// client (static/app.js) auto-detects scheme from `location.protocol`,
-// so no client-side config flips are needed.
+//     --features "web,iceoryx2-beta,prometheus" -- \
+//     --addr 0.0.0.0:8080 [--precise]
 
 #[path = "shared.rs"]
 mod shared;
@@ -119,32 +113,12 @@ fn main() -> anyhow::Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/latency_e2e/static")
         });
 
-    // TLS material is opt-in: missing cert/key keeps the server on plain
-    // HTTP/WS, matching the existing local-dev workflow. Pulumi user_data
-    // wires both args so the deployed boxes serve HTTPS by default.
-    let arg_or_env = |flag: &str, var: &str| -> Option<PathBuf> {
-        args.iter()
-            .position(|a| a == flag)
-            .and_then(|i| args.get(i + 1).cloned())
-            .or_else(|| std::env::var(var).ok())
-            .map(PathBuf::from)
-    };
-    let tls_cert = arg_or_env("--tls-cert", "WINGFOIL_TLS_CERT");
-    let tls_key = arg_or_env("--tls-key", "WINGFOIL_TLS_KEY");
-    if tls_cert.is_some() != tls_key.is_some() {
-        anyhow::bail!("--tls-cert and --tls-key must be set together");
-    }
-
-    let mut builder = WebServer::bind(&addr)
+    let server = WebServer::bind(&addr)
         .codec(CodecKind::Json)
-        .serve_static(&static_dir);
-    if let (Some(cert), Some(key)) = (tls_cert.as_ref(), tls_key.as_ref()) {
-        builder = builder.tls(cert, key);
-    }
-    let server = builder.start()?;
-    let scheme = if server.is_tls() { "https" } else { "http" };
+        .serve_static(&static_dir)
+        .start()?;
     log::info!(
-        "ws_server listening on {scheme}://{} (port {}) — static dir {}",
+        "ws_server listening on http://{} (port {}) — static dir {}",
         addr,
         server.port(),
         static_dir.display(),

@@ -147,25 +147,11 @@ pub fn env_string(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
-/// Are intra-cycle precise TSC reads enabled? Defaults to **on** so every
-/// hop on the latency chart has its own timestamp (otherwise stages that
-/// fire in the same engine cycle share `wall_time` and the chart series
-/// flatten to 0 ns, which the log-scale Y-axis can't render). The
-/// per-stamp cost is ~5–10 ns on x86 — negligible against the ms-scale
-/// FIX round-trip.
-///
-/// Disable with `--no-precise` or `WINGFOIL_PRECISE_STAMPS=0` (also
-/// accepts `false`/`no`/`off`) to fall back to cycle-coarse `wall_time`.
-/// `--precise` and `WINGFOIL_PRECISE_STAMPS=1` are still accepted as
-/// no-ops so existing systemd units / docs keep working.
+/// Are intra-cycle precise TSC reads enabled? Flip via `--precise` CLI
+/// flag or `WINGFOIL_PRECISE_STAMPS=1`. The `.stamp_precise_if` /
+/// `.stamp_if` ops compile to zero cost when disabled.
 pub fn precise_stamps_enabled() -> bool {
-    if std::env::args().any(|a| a == "--no-precise") {
-        return false;
-    }
-    if let Ok(v) = std::env::var("WINGFOIL_PRECISE_STAMPS") {
-        return matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on");
-    }
-    true
+    env_flag("WINGFOIL_PRECISE_STAMPS") || std::env::args().any(|a| a == "--precise")
 }
 
 // ── Core pinning ──────────────────────────────────────────────────────────

@@ -1,0 +1,96 @@
+name: PyPI Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      pypi-target:
+        description: 'Choose PyPI target'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - prod
+
+jobs:
+  build-wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+
+    steps:
+      - name: Debug matrix
+        run: |
+          echo "OS: ${{ matrix.os }}"
+          echo "Python version: ${{ matrix.python-version }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          check-latest: true
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel and sdist
+        run: |
+          cd wingfoil-python
+          maturin build --verbose --release --strip -o wheelhouse
+
+      - name: Upload wheels as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheelhouse-${{ matrix.os }}-${{ matrix.python-version }}
+          path: wingfoil-python/wheelhouse
+
+  upload-pypi:
+    runs-on: ubuntu-latest
+    needs: build-wheels
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set PyPI target
+        id: pypi
+        run: |
+          if [ "${{ github.event.inputs.pypi-target }}" = "prod" ]; then
+            echo "REPO_URL=https://upload.pypi.org/legacy/" >> $GITHUB_ENV
+            echo "TOKEN_NAME=PROD_PYPI_API_TOKEN" >> $GITHUB_ENV
+          else
+            echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
+            echo "TOKEN_NAME=TEST_PYPI_API_TOKEN" >> $GITHUB_ENV
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: wingfoil-python/artifacts
+
+      - name: Prepare artifacts
+        run: |
+          cd wingfoil-python
+          ls -al artifacts
+          mkdir wheelhouse
+          find artifacts -name "*.whl" -exec cp {} wheelhouse/ \;
+          ls -al wheelhouse
+
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          packages-dir: wingfoil-python/wheelhouse
+          repository-url: ${{ env.REPO_URL }}
+          verbose: true
+          user: __token__
+          password: ${{ secrets[env.TOKEN_NAME] }}

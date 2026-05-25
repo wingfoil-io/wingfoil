@@ -8,7 +8,7 @@
 //! - The `iceoryx2-integration-test` feature flag.
 //!
 //! In-process `Local`-variant tests live in `local_tests.rs` and run as part
-//! of the standard `cargo test --features iceoryx2` suite.
+//! of the standard `cargo test --features iceoryx2-beta` suite.
 //!
 //! Run locally with:
 //! ```sh

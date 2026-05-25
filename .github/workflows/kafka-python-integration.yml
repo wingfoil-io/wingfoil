@@ -1,4 +1,4 @@
-name: test.integration.kafka-python
+name: Kafka Python Integration Tests
 
 on:
   workflow_call:

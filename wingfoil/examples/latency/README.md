@@ -44,10 +44,10 @@ publisher:
 
 ```bash
 # Terminal 1: subscriber
-cargo run --example latency_sub --features iceoryx2
+cargo run --example latency_sub --features iceoryx2-beta
 
 # Terminal 2: publisher
-cargo run --example latency_pub --features iceoryx2
+cargo run --example latency_pub --features iceoryx2-beta
 ```
 
 Stop both with Ctrl-C. The subscriber prints a report like:

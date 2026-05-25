@@ -19,18 +19,8 @@ services:
     image: prom/prometheus:v2.55.1
     ports:
       - "9090:9090"
-    # Long-form bind with `create_host_path: false` so a missing source on
-    # the host fails fast with "source path does not exist" instead of
-    # docker silently auto-creating an empty directory there and then
-    # failing the mount with the misleading "not a directory: Are you
-    # trying to mount a directory onto a file" error.
     volumes:
-      - type: bind
-        source: ./prometheus/prometheus.yml
-        target: /etc/prometheus/prometheus.yml
-        read_only: true
-        bind:
-          create_host_path: false
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -41,49 +31,22 @@ services:
       - "3200:3200"    # Tempo HTTP API (Grafana datasource talks here)
       - "4318:4318"    # OTLP / HTTP (ws_server push target)
     volumes:
-      - type: bind
-        source: ./tempo/tempo.yaml
-        target: /etc/tempo/tempo.yaml
-        read_only: true
-        bind:
-          create_host_path: false
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
 
   grafana:
     image: grafana/grafana:11.3.0
     ports:
       - "3000:3000"
     environment:
-      # Override locally if you want to log in as admin:
-      #   GF_SECURITY_ADMIN_PASSWORD=$(openssl rand -hex 16) docker compose up -d
-      # Default to a long random value so a left-running compose stack
-      # doesn't sit on `admin/admin`.
-      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:-changeme-set-via-env}"
+      GF_SECURITY_ADMIN_PASSWORD: admin
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/latency.json
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
-      # HTTPS opt-in: defaults to HTTP for local dev. The Pulumi stacks
-      # set GF_SERVER_PROTOCOL=https in the on-host .env and bind-mount
-      # /etc/wingfoil/tls into the container. Cert/key must be readable
-      # by the grafana process (UID 472) — the user_data scripts chmod
-      # 0644 the key for that reason.
-      GF_SERVER_PROTOCOL: "${GF_SERVER_PROTOCOL:-http}"
-      GF_SERVER_CERT_FILE: "${GF_SERVER_CERT_FILE:-}"
-      GF_SERVER_CERT_KEY: "${GF_SERVER_CERT_KEY:-}"
     volumes:
-      - type: bind
-        source: ./grafana/provisioning
-        target: /etc/grafana/provisioning
-        read_only: true
-        bind:
-          create_host_path: false
-      # The Pulumi stacks (ec2-spot, baremetal) append a second volume
-      # binding /etc/wingfoil/tls -> /etc/wingfoil/tls so Grafana can
-      # serve HTTPS using the same cert as ws_server. Local dev keeps
-      # GF_SERVER_PROTOCOL unset (defaults to http) so no cert mount is
-      # needed.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
       - tempo

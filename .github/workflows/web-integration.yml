@@ -1,4 +1,4 @@
-name: test.integration.web
+name: Web Integration Tests
 
 on:
   workflow_dispatch:

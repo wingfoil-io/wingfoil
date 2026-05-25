@@ -28,6 +28,21 @@ wingfoil-python/    # PyO3 Python bindings
   tests/            # pytest tests
 ```
 
+## System Dependencies
+
+### Aeron adapter
+
+The Aeron adapter requires clang, libuuid, and a recent CMake (>=3.20):
+
+```bash
+sudo apt update
+sudo apt install clang libclang-dev uuid-dev
+
+# CMake 3.31 (apt version is too old on many distros)
+wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
+```
+
 ## Build Commands
 
 ```bash
@@ -48,7 +63,7 @@ cargo bench
 
 # Lint (these aliases live in .cargo/config.toml and mirror CI exactly)
 cargo lint        # default features
-cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2`, etc.
+cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2-beta`, etc.
 cargo fmt --all -- --check
 ```
 

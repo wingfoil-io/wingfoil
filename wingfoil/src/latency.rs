@@ -185,7 +185,7 @@ impl<T, L: Latency> HasLatency for Traced<T, L> {
 // the paths differ and iceoryx2 reports `IncompatibleTypes` even though the
 // memory layouts are identical. We compose the name from `T::type_name()` and
 // `L::type_name()` so leaf overrides via `#[type_name(...)]` propagate up.
-#[cfg(feature = "iceoryx2")]
+#[cfg(feature = "iceoryx2-beta")]
 unsafe impl<T, L> iceoryx2::prelude::ZeroCopySend for Traced<T, L>
 where
     T: iceoryx2::prelude::ZeroCopySend,
@@ -196,7 +196,7 @@ where
     }
 }
 
-#[cfg(feature = "iceoryx2")]
+#[cfg(feature = "iceoryx2-beta")]
 fn traced_type_name(t: &'static str, l: &'static str) -> &'static str {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -1043,7 +1043,7 @@ mod tests {
     // modules can still match an iceoryx2 service. This test pins the
     // composed-name format and confirms the macro's `#[type_name(...)]`
     // attribute is honoured.
-    #[cfg(feature = "iceoryx2")]
+    #[cfg(feature = "iceoryx2-beta")]
     mod type_name_propagation {
         use super::*;
         use iceoryx2::prelude::ZeroCopySend;

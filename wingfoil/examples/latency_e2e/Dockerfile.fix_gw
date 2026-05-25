@@ -1,7 +1,5 @@
-# Builder stage — pinned to match the workspace `rust-version` in
-# /Cargo.toml. Bumping the toolchain is an intentional change, not a
-# silent `:latest` drift.
-FROM rust:1.88-bookworm AS builder
+# Builder stage
+FROM rust:latest as builder
 
 RUN apt-get update && apt-get install -y protobuf-compiler libclang-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -9,31 +7,20 @@ RUN apt-get update && apt-get install -y protobuf-compiler libclang-dev \
 WORKDIR /workspace
 COPY . .
 
-# `-p wingfoil` is essential. Without it, cargo unifies features across
-# the whole workspace, and `wingfoil-python` pulls in `etcd, kafka, zmq,
-# fluvio, kdb` — dragging in system deps (protoc, cmake, libsasl2,
-# libzmq) and ~hundreds of crates we don't ship in this image.
 RUN cargo build --release \
-    -p wingfoil \
     --example latency_e2e_fix_gw \
-    --features "fix,iceoryx2"
+    --features "fix,iceoryx2-beta"
 
-# Runtime stage — bookworm-slim matches the builder's glibc (2.36); pairing
-# it with ubuntu:22.04 (glibc 2.35) risks a runtime ABI break.
-FROM debian:bookworm-slim
+# Runtime stage
+FROM ubuntu:22.04
 
-RUN apt-get -o Acquire::Retries=3 update \
-    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-        libssl3 \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 10001 wingfoil \
-    && useradd --system --uid 10001 --gid wingfoil --no-create-home --home /app wingfoil
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder --chown=wingfoil:wingfoil /workspace/target/release/examples/latency_e2e_fix_gw /app/fix_gw
-
-USER wingfoil:wingfoil
+COPY --from=builder /workspace/target/release/examples/latency_e2e_fix_gw /app/fix_gw
 
 ENTRYPOINT ["/app/fix_gw"]

@@ -1,0 +1,85 @@
+name: npm pub
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-pub
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+
+      - name: Install JS deps
+        working-directory: wingfoil-js
+        run: pnpm install --frozen-lockfile
+
+      - name: Build wasm bundle
+        working-directory: wingfoil-js
+        run: pnpm run build:wasm
+
+      - name: Build TypeScript
+        working-directory: wingfoil-js
+        run: pnpm run build:ts
+
+      - name: Lint
+        working-directory: wingfoil-js
+        run: pnpm run lint
+
+      # Sanity check: dist/wasm/ is the only path that survives both
+      # npm-packlist's nested-.gitignore quirk *and* esm.sh's relative-import
+      # canonicalisation (a `../` import out of `dist/` gets rewritten to
+      # `https://esm.sh/<dir>/...` as if it were a top-level package). Verify
+      # the packlist tarball actually contains the wasm bindings before we
+      # publish — a missing wasm here means a broken release on npm.
+      - name: Verify wasm files are packaged
+        working-directory: wingfoil-js
+        run: |
+          set -euo pipefail
+          tarball=$(pnpm pack --pack-destination /tmp 2>&1 | tail -n1)
+          if ! tar tzf "$tarball" | grep -q 'dist/wasm/wingfoil_wasm_bg\.wasm$'; then
+            echo "::error::publish tarball is missing dist/wasm/ — refusing to publish"
+            tar tzf "$tarball"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: wingfoil-js
+        run: pnpm publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

@@ -22,20 +22,20 @@ on cached images).
                    ┌──────────────────────────┐
    public IP ──── EIP ───── ASG (size=1, single AZ) ─── Spot t3.small
                                                             │
-                                                  ┌─────────┴─────────────┐
-                                                  │  Docker Compose        │
-                                                  │  ws_server   :443 HTTPS│
-                                                  │  fix_gw     ─→ LMAX    │
-                                                  │  prometheus :9090 (lo) │
-                                                  │  tempo      :4318      │
-                                                  │  grafana    :3000 HTTPS│
-                                                  └─────────┬──────────────┘
+                                                  ┌─────────┴─────────┐
+                                                  │  Docker Compose    │
+                                                  │  ws_server  :8080  │
+                                                  │  fix_gw     ─→ LMAX│
+                                                  │  prometheus :9090  │
+                                                  │  tempo      :4318  │
+                                                  │  grafana    :3000  │
+                                                  └─────────┬──────────┘
                                                             │
                                                 spot_watcher (host process) :9092
                                                             │
                                                   Prometheus scrapes :9092
                                                             │
-                                                Grafana status strip shows countdown
+                                                Grafana banner shows countdown
 ```
 
 - **EIP is reattached on every boot** by `user_data.sh` via
@@ -43,7 +43,7 @@ on cached images).
 - **`spot_watcher.py`** runs as a systemd unit, polling
   `http://169.254.169.254/latest/meta-data/spot/instance-action` every 5 s and
   exposing `wingfoil_spot_termination_seconds_remaining` on `:9092`. Prometheus
-  scrapes it; the Grafana dashboard shows a red countdown in the slim status strip.
+  scrapes it; the Grafana dashboard shows a red banner with the countdown.
 - **Single AZ** (default `eu-west-2a`) — keeps EIP/EBS reattach simple. London
   region is chosen for proximity to LMAX LD4 (Slough).
 
@@ -110,17 +110,10 @@ pulumi config set --secret lmax_username <YOUR_LMAX_USERNAME>
 pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
 
 # Optional overrides
+# pulumi config set availability_zone eu-west-2b        # default eu-west-2a
 # pulumi config set instance_type     t3a.small         # AMD-flavoured Spot, slightly cheaper
 # pulumi config set ingress_cidr      203.0.113.0/24    # lock to your office IP
 # pulumi config set max_spot_price    0.0228            # cap (default = on-demand price)
-
-# ── Optional: Let's Encrypt cert (no browser trust warning) ──────────────
-# Set a hostname you control and the browser will see a real cert chain.
-# Without these, the stack falls back to a self-signed cert and browsers
-# warn on first access.
-# pulumi config set dns_hostname    e2e.example.com
-# pulumi config set route53_zone_id Z0123456ABCDEF      # optional — Pulumi creates the A record for you
-#                                                       # omit if you'll manage DNS yourself
 
 pulumi up
 ```
@@ -128,91 +121,29 @@ pulumi up
 After ~3–5 min the outputs print:
 
 ```
-ws_server_url   https://<host>            # <host> = dns_hostname if set, else <eip>
-grafana_url     https://<host>:3000
+ws_server_url   http://<eip>:8080
+grafana_url     http://<eip>:3000
+prometheus_url  http://<eip>:9090          # Prometheus UI
+ws_metrics_url  http://<eip>:9091/metrics  # ws_server raw metrics
 public_ip       <eip>
-cert_bucket     <bucket>                 # only when dns_hostname is set
 ```
-
-Both endpoints are served over TLS, terminated **in-process** by ws_server
-(via the `web-tls` cargo feature, rustls + ring) and by Grafana
-(`GF_SERVER_PROTOCOL=https`).
-
-**With `dns_hostname` set** — `user_data.sh` runs certbot in `--standalone`
-mode against your hostname (registered with
-`--register-unsafely-without-email` since this stack's daily renewal
-timer makes LE's expiry-warning email a safety net we don't actually
-use), persists `/etc/letsencrypt` to the `cert_bucket` S3 bucket so a
-Spot reclaim doesn't burn a fresh issuance, and a daily systemd timer
-(`wingfoil-le-renew.timer`) renews the cert and bounces the ws_server /
-grafana containers when it actually rotates. If you didn't set
-`route53_zone_id`, you must create the `A` record yourself **before**
-the instance boots — `pulumi up` shows the EIP in its preview, so add
-the record there, then let `pulumi up` finish creating the ASG.
-
-**Without `dns_hostname`** — the cert is a **self-signed** RSA-2048
-generated on every boot by `user_data.sh`, with `subjectAltName=IP:<eip>`
-so it matches the URL the browser uses. Browsers will show a one-time
-warning until you accept the cert.
-
-The Prometheus UI (`:9090`) and the ws_server `/metrics` endpoint (`:9091`)
-are no longer publicly exposed — they remain plain HTTP and are reachable
-only via localhost on the host (which is what Prometheus uses to scrape).
-For ad-hoc operator access, use SSM Session Manager port-forwarding:
-
-```bash
-aws ssm start-session --target <instance-id> \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters '{"portNumber":["9090"],"localPortNumber":["9090"]}'
-```
-
-## Iterating on the UI
-
-The `static/` directory is bind-mounted into the ws_server container at
-`/app/static`, so the UI can be updated without rebuilding the image or
-re-baking the AMI. Sync new files to `/opt/wingfoil/static` on the
-instance and bounce ws_server:
-
-```bash
-INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names $(pulumi stack output asg_name) \
-  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-
-# Open an SSH session via SSM (requires the AWS SSM Session Manager
-# plugin and an SSH config that proxies through `aws ssm start-session`).
-rsync -av --delete \
-  wingfoil/examples/latency_e2e/static/ \
-  "${INSTANCE_ID}:/opt/wingfoil/static/"
-
-aws ssm send-command \
-  --instance-ids "${INSTANCE_ID}" \
-  --document-name AWS-RunShellScript \
-  --parameters 'commands=["cd /opt/wingfoil && docker compose restart ws_server"]'
-```
-
-Edits survive container restarts and Spot reclaims of the *running*
-instance — but a fresh ASG launch reverts to the AMI's baked copy, so
-once a UI change has stabilised, bake a new AMI to make it the new
-baseline.
 
 ## 3. Verify
 
 ```bash
-# WS server — `-k` because the cert is self-signed.
-curl -fsSk https://<eip>/
+# WS server
+curl -fsS http://<eip>:8080/healthz
 
-# Grafana — load the dashboard. The slim Spot status strip at the top reads
-# "." when stable and switches to a red countdown (seconds remaining) on
-# reclaim. Click through the browser's "Your connection is not private"
-# warning the first time.
-open https://<eip>:3000
+# Grafana — load the dashboard, the "Spot interruption status" banner should
+# read green ("Stable — no Spot interruption notice").
+open http://<eip>:3000
 ```
 
 ## What happens during a Spot reclaim
 
 1. **T-120s** — AWS sets the IMDS `spot/instance-action` flag.
 2. **T-115s** — `spot_watcher.py` picks it up on its next 5 s poll. The
-   Grafana status strip switches red and counts down (`wingfoil_spot_termination_seconds_remaining`).
+   Grafana banner switches red and counts down (`wingfoil_spot_termination_seconds_remaining`).
 3. **T-0s** — instance terminates.
 4. **T+~30s** — the ASG launches a replacement in the same AZ.
 5. **T+~60–90s** — `user_data.sh` finishes: EIP reattached, secrets fetched,
@@ -256,10 +187,8 @@ aws ec2 deregister-image --image-id <ami-id> --region eu-west-2
 
 ## Troubleshooting
 
-**Spot capacity unavailable**: the ASG already spans all three AZs in the
-region, so a single-AZ outage no longer fails the deploy. If every AZ is
-out of t3.small capacity at once, try a different instance type
-(`pulumi config set instance_type t3a.small && pulumi up`).
+**Spot capacity unavailable**: try a different AZ (`pulumi config set availability_zone eu-west-2c && pulumi up`) or a different instance type
+(`t3a.small`).
 
 **EIP didn't reattach**: check the IAM policy in `__main__.py` — the
 `AssociateAddress` permission is conditioned on `Project` and `Stack` tags
@@ -267,11 +196,11 @@ matching this stack. The launch template's `tag_specifications` must apply
 those tags at instance creation; verify with
 `aws ec2 describe-instances --filters Name=tag:Stack,Values=demo`.
 
-**Grafana status strip stays "." during a real reclaim**: check that
+**Grafana banner stays "Stable" during a real reclaim**: check that
 `spot_watcher.service` is running (`systemctl status wingfoil-spot-watcher`)
 and that Prometheus is reaching `localhost:9092` (the
 `latency_e2e_spot_watcher` job in `prometheus.yml`). On non-EC2-Spot stacks
-the metric is unscraped — that's expected, and the strip stays at ".".
+the metric is unscraped — that's expected, and the banner stays green.
 
 **`fix_gw` can't log in**: secrets fetch happens in `user_data.sh`. Inspect
 `/var/log/cloud-init-output.log` on the instance for `aws secretsmanager`

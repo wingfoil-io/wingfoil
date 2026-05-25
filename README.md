@@ -1,4 +1,4 @@
-[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust-test.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml)
 [![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
 [![Crates.io Version](https://img.shields.io/crates/v/wingfoil.svg)](https://crates.io/crates/wingfoil)
 [![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
@@ -12,22 +12,17 @@ Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
-It ships with a growing library of production-ready I/O adapters covering tick stores, message buses, market protocols, and observability backends — so you can plug graphs into real data sources and sinks with a single line.
-
-Wingfoil simplifies receiving, processing, distributing and monitoring streaming data across your entire stack.
-
+Wingfoil simplifies receiving, processing and distributing streaming data across your entire stack.
 
 ## Features
 
-- **Fast**: [Ultra low latency](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
-- **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
+- **Fast**: Ultra-low latency and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
-- **I/O Adapters**: production-ready integrations for [iceoryx2](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2), [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip), [Kafka](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka), [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio), [FIX](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus), [OpenTelemetry](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp), [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), and more.
-- **Multi-language**: currently available as a [Rust crate](https://crates.io/crates/wingfoil/), [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) and a [TypeScript/JavaScript client](https://www.npmjs.com/package/@wingfoil/client).
-- **Graph dynamism**: [rewire your graph](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic) in response to incoming data.
+- **Multi-language**: currently available as a Rust crate and as a beta release, [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python). For browser frontends, the [`@wingfoil/client`](https://www.npmjs.com/package/@wingfoil/client) TypeScript/JavaScript [WebSocket client](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-js) connects to Rust graphs via the [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web) adapter, with optional reactive bindings for Solid, Svelte, and Vue.
+- **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
 - **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
-
+- **I/O Adapters**: production-ready [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip) integration for tick data, [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd) key-value store, [Kafka](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka) (via `rdkafka`), [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio) distributed streaming, [FIX protocol](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix) (FIX 4.4 with TLS), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/messaging) pub/sub messaging (beta), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus) metrics exporter, [OpenTelemetry OTLP](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp) push, etc.
 
 ## Quick Start
 
@@ -55,7 +50,7 @@ hello, world 3
 
 ## Order Book Example
 
-Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and modulating the frequency of data. I/O adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and altering the frequency of data. I/O adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
 let book = RefCell::new(lobster::OrderBook::default());

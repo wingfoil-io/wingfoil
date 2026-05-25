@@ -1,17 +1,17 @@
-name: test.all
+name: All Tests
 
 on:
   workflow_call:
   workflow_dispatch:
 
 jobs:
-  rust-test:
-    name: Rust
-    uses: ./.github/workflows/rust-test.yml
+  rust-ci:
+    name: Rust CI
+    uses: ./.github/workflows/rust.yml
 
-  python-test:
-    name: Python
-    uses: ./.github/workflows/python-test.yml
+  python-tests:
+    name: Python Tests
+    uses: ./.github/workflows/py-test.yml
 
   integration-tests:
     name: Integration Tests

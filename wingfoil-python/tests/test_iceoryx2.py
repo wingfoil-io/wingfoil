@@ -1,7 +1,7 @@
 """iceoryx2 integration tests.
 
 Selected via `-m requires_iceoryx2`. These tests require wingfoil-python to
-be built with `--features iceoryx2`; if the bindings are absent, the
+be built with `--features iceoryx2-beta`; if the bindings are absent, the
 `wf.iceoryx2_sub` / `wf.Iceoryx2Mode` references below fail loudly on the
 first access rather than silently skipping the module.
 """

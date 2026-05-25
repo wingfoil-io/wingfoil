@@ -2,7 +2,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
 [![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
-[![CI](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml/badge.svg)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
+[![CI](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml/badge.svg)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust.yml)
 
 Wingfoil is a **blazingly fast**, highly scalable
 [stream processing framework](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
@@ -475,7 +475,7 @@ For multi-host deployments where `127.0.0.1` isn't routable, use
 ### iceoryx2 (shared memory)
 
 Zero-copy pub/sub over shared memory. Requires building wingfoil with the
-`iceoryx2` feature (opt-in; see [Build from Source](#-build-from-source)).
+`iceoryx2-beta` feature (opt-in; see [Build from Source](#-build-from-source)).
 
 ```python
 from wingfoil import ticker, iceoryx2_sub, Iceoryx2ServiceVariant, Iceoryx2Mode, Graph
@@ -602,14 +602,14 @@ from wingfoil import ticker
 ## 🛠️ Build from Source
 
 Most users should `pip install wingfoil`. To build locally (e.g. to enable the
-`iceoryx2` feature or develop against the bindings), see
+`iceoryx2-beta` feature or develop against the bindings), see
 [`build.md`](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md).
 
 ```bash
 git clone https://github.com/wingfoil-io/wingfoil
 cd wingfoil/wingfoil-python
 pip install maturin
-maturin develop                               # or: maturin develop --features iceoryx2
+maturin develop                               # or: maturin develop --features iceoryx2-beta
 pytest
 ```
 

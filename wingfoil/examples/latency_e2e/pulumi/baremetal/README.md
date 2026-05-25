@@ -67,9 +67,9 @@ pulumi config set ingress_cidr 203.0.113.4/32
 ```bash
 # 1. Build release binaries (Pulumi reads them from target/release/examples)
 cargo build --release -p wingfoil --example latency_e2e_ws_server \
-    --features "web-tls,iceoryx2,prometheus,otlp"
+    --features "web,iceoryx2-beta,prometheus,otlp"
 cargo build --release -p wingfoil --example latency_e2e_fix_gw \
-    --features "fix,iceoryx2"
+    --features "fix,iceoryx2-beta"
 
 # 2. Bring the stack up — uploads binaries to S3, provisions infra
 pulumi up
@@ -77,7 +77,7 @@ pulumi up
 # 3. Wait ~5–8 min for the box to bootstrap
 #    (cold boot + grub rewrite + reboot + service start + LMAX FIX logon)
 pulumi stack output ws_server_url
-# → https://<eip>:8080  (self-signed cert; click through the browser warning)
+# → http://<eip>:8080
 
 # 4. Open the URL, click start, watch real per-hop numbers
 ```
@@ -130,16 +130,9 @@ action when the threshold hits 100%.
 
 **Want zero unauthenticated access instead?**
 
-```bash
-pulumi config set --secret wake_token "$(openssl rand -hex 16)"
-pulumi up
-```
-
-When `wake_token` is set, the lambda rejects any request without
-`?token=<value>` (or `X-Wake-Token: <value>` header) — including the GET
-that serves the HTML page. The exported `wake_url` already includes the
-token, so share it as-is. Constant-time compare on the server side keeps
-the secret out of timing side-channels.
+* Add a `wake_token` query-param check in `wake_lambda.py` (~10 lines).
+  The token becomes the credential — share the URL with the token in
+  it.
 
 ## Stop without destroying
 

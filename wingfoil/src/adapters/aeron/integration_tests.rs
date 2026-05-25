@@ -1,0 +1,1362 @@
+//! Integration tests for the Aeron adapter.
+//!
+//! Requires a running Aeron media driver via Docker.
+//! Run with:
+//! ```sh
+//! cargo test --features aeron-integration-test -p wingfoil \
+//!   -- --test-threads=1 aeron::integration_tests
+//! ```
+//!
+//! Image: `neomantra/aeron-cpp-debian` — ships `/usr/local/bin/aeronmd` as entrypoint.
+//! The driver writes its CNC file to `/dev/shm/aeron-default/`; we bind-mount `/dev/shm`
+//! so the host Rust process connects to the same driver via `aeron:ipc`.
+
+use super::*;
+use crate::nodes::{NodeOperators, StreamOperators};
+use crate::{Burst, Graph, RunFor, RunMode};
+use std::time::Duration;
+use testcontainers::{
+    GenericImage, ImageExt,
+    core::{Mount, WaitFor},
+    runners::SyncRunner,
+};
+
+/// `neomantra/aeron-cpp-debian` ships `aeronmd` as its entrypoint and logs nothing
+/// to stdout/stderr, so we use a fixed-time WaitFor.
+const DRIVER_IMAGE: &str = "neomantra/aeron-cpp-debian";
+const DRIVER_TAG: &str = "latest";
+/// IPC channel: communicates via the shared CNC file in /dev/shm — no UDP needed.
+pub(crate) const AERON_CHANNEL: &str = "aeron:ipc";
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shared Aeron directory used by both the container's aeronmd and the host client.
+/// Setting the same `AERON_DIR` on both sides ensures the CNC file path matches
+/// regardless of which user aeronmd runs as inside the container.
+const AERON_DIR: &str = "/dev/shm/aeron-integration-test";
+
+/// Start an Aeron media driver container and return a guard that stops it on drop.
+/// Binds `/dev/shm` into the container so the host process shares the CNC file.
+pub(crate) fn start_media_driver() -> anyhow::Result<impl Drop> {
+    // Tell the host Aeron client where to find the CNC file.
+    // SAFETY: tests run with --test-threads=1, so no concurrent env access.
+    unsafe { std::env::set_var("AERON_DIR", AERON_DIR) };
+
+    // Remove any stale CNC files left by a previous test run so the new
+    // aeronmd creates a fresh one with a valid heartbeat.
+    let _ = std::fs::remove_dir_all(AERON_DIR);
+
+    // Run as the current user so the CNC file is writable by the test process.
+    // Aeron clients open the CNC file with O_RDWR; a root-owned 0644 file
+    // would cause EACCES for non-root users.
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    let container = GenericImage::new(DRIVER_IMAGE, DRIVER_TAG)
+        // Minimal structural wait — we poll for the CNC file below.
+        .with_wait_for(WaitFor::seconds(1))
+        // Bind-mount the host's /dev/shm so aeronmd's CNC file is visible to
+        // the host process.  Do NOT call with_shm_size — that creates a
+        // separate tmpfs which overrides the bind mount.
+        .with_mount(Mount::bind_mount("/dev/shm", "/dev/shm"))
+        .with_env_var("AERON_DIR", AERON_DIR)
+        .with_user(format!("{uid}:{gid}"))
+        .start()?;
+
+    // Poll until aeronmd creates the CNC file (max 10 s).
+    let cnc = std::path::Path::new(AERON_DIR).join("cnc.dat");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !cnc.exists() {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for aeronmd CNC file: {}",
+            cnc.display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Give aeronmd a moment to finish initialising the CNC file contents
+    // after it first appears on disk.
+    std::thread::sleep(Duration::from_millis(500));
+
+    Ok(container)
+}
+
+// ---- Tests ----
+
+/// Without a running media driver, `AeronHandle::connect()` must return an error.
+///
+/// We point `AERON_DIR` at an empty temp directory so that a CNC file left by
+/// an earlier test in this suite does not cause a spurious success.
+#[test]
+fn test_no_driver_connection_fails() {
+    const NO_DRIVER_DIR: &str = "/tmp/aeron-no-driver-test";
+    let _ = std::fs::remove_dir_all(NO_DRIVER_DIR);
+    // SAFETY: tests run with --test-threads=1, no concurrent env access.
+    unsafe { std::env::set_var("AERON_DIR", NO_DRIVER_DIR) };
+    let result = AeronHandle::connect();
+    assert!(
+        result.is_err(),
+        "expected connection error when no media driver is running"
+    );
+}
+
+/// Spin-mode round-trip: an independent ticker-driven publisher sends values over the
+/// media driver; the spin subscriber receives them.
+///
+/// Publisher and subscriber are on the same channel + stream_id, so every value the
+/// publisher offers is routed back to the subscriber by the media driver.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_spin_sub_single_message_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2001i32;
+
+    // Subscribe before publishing so the media driver can pair them.
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    // Ticker-driven source: emit a burst of [42i64] every 10 ms.
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(42i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    // Run pub and sub in the same graph.  pub sends independently; sub accumulates.
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok(); // graph exits on timeout — that's expected
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&42i64),
+        "expected to receive 42, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// Spin-mode burst: publish a burst of sequential values every tick; assert at least 10
+/// total values are received.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_spin_sub_burst_accumulation() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2002i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    // Emit a burst of 15 copies of the tick count every 10 ms.
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|n| {
+            let mut burst = Burst::new();
+            for i in 0..15 {
+                burst.push(n as i64 * 15 + i);
+            }
+            burst
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let total: usize = collected.peek_value().iter().map(|b| b.value.len()).sum();
+    assert!(
+        total >= 10,
+        "expected at least 10 accumulated values, got: {total}"
+    );
+    Ok(())
+}
+
+/// Threaded-mode subscriber delivers messages via its background channel.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_threaded_sub_delivers_messages() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2003i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Threaded,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(20))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(99i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        !values.is_empty(),
+        "expected at least one message via threaded subscriber"
+    );
+    Ok(())
+}
+
+/// Invalid (wrong-length) fragments are silently discarded by the parser.
+///
+/// The `i64` parser returns `None` for any buffer that is not exactly 8 bytes.
+/// This test publishes one malformed 4-byte fragment and one valid 8-byte fragment
+/// by calling `offer()` directly (bypassing the wingfoil pub node), then runs the
+/// subscriber to collect results.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_invalid_fragments_are_discarded() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2004i32;
+
+    // Subscribe first so the media driver has a consumer for the seeded fragments.
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    // Seed one malformed + one valid fragment directly via a second publication.
+    {
+        use crate::adapters::aeron::transport::AeronPublisherBackend;
+        let mut seed_pub = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+        seed_pub.offer(&[0xDE, 0xAD, 0xBE, 0xEF])?; // 4 bytes — invalid for i64
+        seed_pub.offer(&12345i64.to_le_bytes())?; // 8 bytes — valid
+    }
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    collected
+        .clone()
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
+        .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&12345i64),
+        "expected valid value 12345, got: {values:?}"
+    );
+    // The 4-byte fragment must not appear as a garbage i64.
+    assert!(
+        !values.contains(&0x0000_0000_EFBE_ADDE_i64),
+        "garbage from malformed fragment should have been discarded"
+    );
+    Ok(())
+}
+
+/// `try_claim` zero-copy round-trip: claim a 64-byte slot, fill with `0xAB`,
+/// commit, and assert the subscriber receives exactly those bytes.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2005i32;
+
+    let mut sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let mut claim = pub_.try_claim(64).expect("try_claim succeeds");
+    assert_eq!(claim.len(), 64);
+    for b in claim.data().iter_mut() {
+        *b = 0xAB;
+    }
+    claim.commit().expect("commit succeeds");
+
+    let mut received: Option<Vec<u8>> = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && received.is_none() {
+        let _ = sub.poll(&mut |bytes: &[u8]| {
+            received = Some(bytes.to_vec());
+        });
+        if received.is_none() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let bytes = received.expect("subscription observes committed claim within 2s");
+    assert_eq!(bytes.len(), 64);
+    assert!(
+        bytes.iter().all(|b| *b == 0xAB),
+        "all 64 bytes equal 0xAB: {bytes:?}"
+    );
+    Ok(())
+}
+
+/// `try_claim` returns `TransportError::BackPressure` once the term buffer
+/// saturates with no subscriber polling.
+///
+/// Uses a small term length (`term-length=65536`, the minimum supported) so the
+/// buffer fills within a bounded iteration count.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::AeronPublisherBackend;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2006i32;
+    let channel = "aeron:ipc?term-length=65536";
+
+    let mut pub_ = handle.publication(channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let mut back_pressure_seen = false;
+    for _ in 0..200 {
+        match pub_.try_claim(1024) {
+            Ok(claim) => {
+                claim.commit().expect("commit succeeds");
+            }
+            Err(TransportError::BackPressure) => {
+                back_pressure_seen = true;
+                break;
+            }
+            Err(other) => panic!("unexpected error from try_claim: {other:?}"),
+        }
+    }
+
+    assert!(
+        back_pressure_seen,
+        "back-pressure never observed within 200 iterations on term-length=65536"
+    );
+    Ok(())
+}
+
+/// Dropping an un-committed `ClaimBuffer` releases the term-buffer slot via the
+/// `Drop` backstop, so the next `try_claim` succeeds immediately rather than
+/// waiting 15 s for the publication-unblock timeout.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::AeronPublisherBackend;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2007i32;
+
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let claim = pub_.try_claim(64).expect("first try_claim succeeds");
+    drop(claim);
+
+    let claim2 = pub_.try_claim(64).expect("second try_claim succeeds");
+    claim2.commit().expect("commit succeeds");
+    Ok(())
+}
+
+/// aeron-rs (pure-Rust) backend: ticker-driven round-trip.
+#[cfg(feature = "aeron-rs")]
+#[test]
+fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronRsHandle::connect()?;
+    let stream_id = 3001i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(77i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&77i64),
+        "expected 77 via aeron-rs backend, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// `fragment_limit` is a per-`poll()` cap, not a target.
+///
+/// Publish 1000 small messages, then poll with `fragment_limit = 32` and assert
+/// that every non-zero `poll()` returns at most 32 fragments while all 1000 are
+/// delivered in total. At Aeron IPC throughput the publisher fills the term
+/// buffer faster than the capped subscriber drains, guaranteeing at least one
+/// non-zero poll within the cap — a buggy `fragment_limit` wiring would deliver
+/// all 1000 in a single poll.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_fragment_limit_caps_burst_size() -> anyhow::Result<()> {
+    use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2008i32;
+
+    let mut sub = handle
+        .subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?
+        .with_fragment_limit(32);
+    let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    // Publish 1000 8-byte payloads with bounded back-pressure retry.
+    let mut published = 0usize;
+    let pub_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while published < 1000 {
+        anyhow::ensure!(
+            std::time::Instant::now() < pub_deadline,
+            "timed out publishing at {published} of 1000"
+        );
+        let bytes = (published as i64).to_le_bytes();
+        match pub_.offer(&bytes) {
+            Ok(()) => published += 1,
+            Err(_) => std::thread::sleep(Duration::from_micros(100)),
+        }
+    }
+
+    // Poll until all 1000 received, asserting the cap on every non-zero poll.
+    let mut total = 0usize;
+    let mut saw_capped_burst = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while total < 1000 {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out at {total} of 1000"
+        );
+        let count = sub.poll(&mut |_fragment: &[u8]| ())?;
+        assert!(
+            count <= 32,
+            "fragment_limit=32 cap violated: poll returned {count}"
+        );
+        if count > 0 {
+            saw_capped_burst = true;
+        }
+        total += count;
+    }
+    assert_eq!(total, 1000, "expected exactly 1000 fragments");
+    assert!(
+        saw_capped_burst,
+        "expected at least one non-zero poll within the 32-fragment cap"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Story 12.4 — aeron_sub_burst typed-parser surface
+// ---------------------------------------------------------------------------
+
+/// Spin-mode typed-parser round-trip: an independent ticker-driven publisher
+/// emits a single value over the media driver; `aeron_sub_burst` collects it.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2009i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(42i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&42i64),
+        "expected to receive 42, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// Spin-mode typed-parser burst accumulation: publish bursts of 15 each tick;
+/// assert at least 10 total received.
+///
+/// Disambiguated from the existing bytes-parser `test_spin_sub_burst_accumulation`
+/// by the `_typed_` infix — the two tests exercise the parallel-additive
+/// factories side-by-side.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_spin_sub_burst_typed_accumulation() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2010i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(
+        sub,
+        parser,
+        AeronSubOptions {
+            mode: AeronMode::Spin,
+            fragment_limit: 256,
+        },
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|n| {
+            let mut burst = Burst::new();
+            for i in 0..15 {
+                burst.push(n as i64 * 15 + i);
+            }
+            burst
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let total: usize = collected.peek_value().iter().map(|b| b.value.len()).sum();
+    assert!(
+        total >= 10,
+        "expected at least 10 accumulated values, got: {total}"
+    );
+    Ok(())
+}
+
+/// Threaded-mode typed-parser burst node delivers messages via its
+/// background channel.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_threaded_sub_burst_accumulates_across_channel_drain() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2011i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(
+        sub,
+        parser,
+        AeronSubOptions {
+            mode: AeronMode::Threaded,
+            fragment_limit: 256,
+        },
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(20))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(99i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        !values.is_empty(),
+        "expected at least one value via threaded burst subscriber"
+    );
+    Ok(())
+}
+
+/// `.collapse()` on `Rc<dyn Stream<Burst<T>>>` reduces each burst to its
+/// latest element, yielding `Rc<dyn Stream<T>>`.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_collapse_yields_latest_value() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2012i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    // `.collapse()` reduces a burst stream to a scalar stream of latest values.
+    let collapsed = subscriber.collapse();
+    let collected = collapsed.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|n| {
+            let mut burst = Burst::new();
+            for i in 0..10 {
+                burst.push(n as i64 * 10 + i);
+            }
+            burst
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(1)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .map(|v| v.value)
+        .collect();
+    assert!(
+        !values.is_empty(),
+        "expected at least one collapsed value, got: {values:?}"
+    );
+    // Latest-wins: every emitted value MUST be a per-burst tail (n*10+9 style)
+    // — i.e. equal to 9 mod 10 — because `.collapse()` keeps the last element
+    // of each burst.
+    assert!(
+        values.iter().any(|v| *v % 10 == 9),
+        "expected at least one tail-of-burst value (== 9 mod 10), got: {values:?}"
+    );
+    Ok(())
+}
+
+/// Regression guard: the rusteron `poll_fragments` override delivers real
+/// per-fragment header data, not the synthesised zero from the default impl.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2013i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let captured_position = Arc::new(AtomicI64::new(0));
+    let captured_for_parser = captured_position.clone();
+    let parser = move |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        // Compare-exchange records the FIRST observed position only.
+        let _ = captured_for_parser.compare_exchange(
+            0,
+            frag.position(),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        Ok(Some(frag.position()))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(1i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let observed = captured_position.load(Ordering::SeqCst);
+    assert!(
+        observed > 0,
+        "expected non-zero fragment position from rusteron override, got: {observed}"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Story 12.5 — status stream + opt-in publisher dedup integration tests.
+// Stream IDs 2014–2019 (next free after Story 12.4's 2009-2013).
+// ---------------------------------------------------------------------------
+
+/// Status stream emits a `Connected` transition once the subscriber observes
+/// the publication. The exact cycle on which the transition lands depends on
+/// the media driver, but it MUST appear somewhere during the run.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2014i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let (_data, status_stream) =
+        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let observed = observed.borrow();
+    assert!(
+        observed.contains(&AeronStatus::Connected),
+        "expected status stream to record AeronStatus::Connected, got: {observed:?}"
+    );
+    Ok(())
+}
+
+/// Steady-state run produces at most one transition. The producer node clears
+/// the status burst at the start of each cycle, and `record()` is a no-op when
+/// the new status equals the previous — so we should only ever see the
+/// initial `Disconnected → Connected` transition, never a re-emit.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2015i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let (_data, status_stream) =
+        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    let source = crate::nodes::ticker(Duration::from_millis(20))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    // Expect at most one transition during the entire run (the initial
+    // Disconnected → Connected). Re-emission would manifest as ≥2 entries.
+    let observed = observed.borrow();
+    assert!(
+        observed.len() <= 1,
+        "expected ≤1 transition under steady state, observed: {observed:?}"
+    );
+    Ok(())
+}
+
+/// Saturate the publication term buffer until back-pressure surfaces and
+/// assert the publisher status stream records `BackPressured` at least once.
+///
+/// The saturation harness depends on media-driver buffer sizes and is
+/// environmental — gated on `aeron-integration-test` rather than the
+/// compile-only `aeron-rusteron` feature.
+#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+#[test]
+fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2016i32;
+
+    let _sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    // 256 KiB payload — enough to saturate the publication term buffer
+    // quickly. The exact threshold depends on media-driver config; this
+    // mirrors the saturation harness used by Story 12.2 try_claim tests.
+    let payload: Vec<u8> = vec![0xABu8; 256 * 1024];
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(move |_| {
+            let mut b = Burst::new();
+            b.push(payload.clone());
+            b
+        });
+    let (pub_node, status_stream) = source.aeron_pub_with_status(pub_, |v: &Vec<u8>| v.clone());
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    Graph::new(
+        vec![inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(3)),
+    )
+    .run()
+    .ok();
+
+    let observed = observed.borrow();
+    assert!(
+        observed.contains(&AeronStatus::BackPressured),
+        "expected publisher status to record BackPressured under saturation, got: {observed:?}"
+    );
+    Ok(())
+}
+
+/// `aeron_pub_dedup` collapses N identical upstream items into a single
+/// `offer()` over the lifetime of a steady publisher. The subscriber receives
+/// at most a handful of messages even though the producer ticks at 1ms.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_publisher_dedup_suppresses_consecutive_equal_values() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2017i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(42i64);
+            b
+        });
+    let pub_node = source.aeron_pub_dedup(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(1)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    // Allow a small slack for startup-race duplicates; the steady-state count
+    // should be one — N times-larger ticks must NOT translate to N offers.
+    assert!(
+        values.len() <= 2,
+        "expected ≤2 messages under dedup with constant upstream, got {} values: {values:?}",
+        values.len()
+    );
+    assert!(
+        values.contains(&42i64),
+        "expected at least one 42 received, got: {values:?}"
+    );
+    Ok(())
+}
+
+/// Back-pressure → drain → latest-wins: the dedup retry contract preserves
+/// the latest upstream value across back-pressure cycles.
+///
+/// Environmental — saturation depends on media-driver state. Gated on
+/// `aeron-integration-test`.
+#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+#[test]
+fn test_publisher_dedup_back_pressure_retries_latest() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2018i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    // Source: monotonically advancing 64-bit counter. With dedup off, every
+    // tick offers a new value; under saturation many of those offers
+    // back-pressure. The latest-wins contract guarantees that whatever value
+    // is current when the publisher recovers is the value that lands on the
+    // wire — so the subscriber MUST see the late counter values.
+    let source = crate::nodes::ticker(Duration::from_millis(1))
+        .count()
+        .map(|n| {
+            let mut b = Burst::new();
+            b.push(n as i64);
+            b
+        });
+    let pub_node = source.aeron_pub_dedup(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    let max = values.iter().copied().max().unwrap_or(0);
+    assert!(
+        max > 100,
+        "expected a late counter value after back-pressure recovery, max observed: {max}"
+    );
+    Ok(())
+}
+
+/// Plain `aeron_pub` (no dedup) publishes every distinct value when none
+/// repeat. The subscriber receives all of them.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2019i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|n| {
+            let mut b = Burst::new();
+            b.push(n as i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    let unique: std::collections::HashSet<i64> = values.iter().copied().collect();
+    assert!(
+        unique.len() >= 5,
+        "expected at least 5 distinct values via plain aeron_pub, got {} unique: {values:?}",
+        unique.len()
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Story 12.6: ChannelUri + named-discovery integration tests
+//   (stream IDs 2020-2024)
+// ---------------------------------------------------------------------------
+
+/// `ChannelUri::ipc()` produces a usable IPC URI: round-trip a single i64
+/// from a publisher to a subscriber both constructed via the builder.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2020i32;
+    let channel = ChannelUri::ipc();
+
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&7i64),
+        "ChannelUri::ipc() round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// `ChannelUri::mdc_publication` + `ChannelUri::mdc_subscription` compose a
+/// usable MDC channel pair: round-trip a single i64 across them.
+///
+/// MDC depends on UDP loopback being functional; on environments where this
+/// is flaky, gate this test additionally behind `aeron-integration-test`.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2021i32;
+    let pub_channel = ChannelUri::mdc_publication("127.0.0.1:40456")?;
+    let sub_channel = ChannelUri::mdc_subscription("127.0.0.1:40457", "127.0.0.1:40456")?;
+
+    let sub = handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let subscriber = aeron_sub(
+        sub,
+        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
+        AeronMode::Spin,
+    );
+    let collected = subscriber.collect();
+
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(99i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+
+    assert!(
+        values.contains(&99i64),
+        "ChannelUri::mdc_* round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// Full registry round-trip: register pub + sub, wrap the rusteron backends
+/// via `aeron_pub_named` / `aeron_sub_burst_named`, round-trip a single i64.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2022i32;
+    let channel = ChannelUri::ipc();
+
+    register_pub("test-zero-egress-roundtrip", channel.clone(), stream_id)?;
+    register_sub("test-zero-egress-roundtrip", channel.clone(), stream_id)?;
+
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let sub_stream = aeron_sub_burst_named(
+        "test-zero-egress-roundtrip",
+        sub,
+        parser,
+        AeronSubOptions::default(),
+    )?;
+    let collected = sub_stream.collect();
+
+    let named_pub = aeron_pub_named("test-zero-egress-roundtrip", pub_)?;
+    let source = crate::nodes::ticker(Duration::from_millis(10))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(123i64);
+            b
+        });
+    let pub_node = source.aeron_pub(named_pub, |v: &i64| v.to_le_bytes().to_vec());
+
+    Graph::new(
+        vec![collected.clone().as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let values: Vec<i64> = collected
+        .peek_value()
+        .into_iter()
+        .flat_map(|b| b.value)
+        .collect();
+    assert!(
+        values.contains(&123i64),
+        "named-discovery round-trip lost message: {values:?}"
+    );
+    Ok(())
+}
+
+/// `aeron_sub_burst_named` returns `Err(DiscoveryError::Unknown)` for a name
+/// that has not been registered — the error short-circuits before any Aeron
+/// call so the test does not actually need the driver for behaviour, but we
+/// start one for symmetry with the rest of the integration suite.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_named_discovery_unknown_returns_error() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2023i32;
+    let channel = ChannelUri::ipc();
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    let parser = |_frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
+    let err = aeron_sub_burst_named(
+        "test-never-registered-2023",
+        sub,
+        parser,
+        AeronSubOptions::default(),
+    )
+    .expect_err("unregistered name returns DiscoveryError::Unknown");
+    assert!(matches!(err, DiscoveryError::Unknown(_)));
+    Ok(())
+}
+
+/// The deprecated alias `aeron_sub_discover` still compiles and routes to
+/// `aeron_sub_named` — guards against accidental removal of the alias.
+#[cfg(feature = "aeron-rusteron")]
+#[test]
+fn test_aeron_sub_discover_alias_still_compiles() -> anyhow::Result<()> {
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2024i32;
+    let channel = ChannelUri::ipc();
+
+    register_sub("test-alias-2024", channel.clone(), stream_id)?;
+    let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
+
+    #[allow(deprecated)]
+    let result = aeron_sub_discover("test-alias-2024", sub);
+    assert!(
+        result.is_ok(),
+        "deprecated aeron_sub_discover alias should delegate to aeron_sub_named"
+    );
+    Ok(())
+}

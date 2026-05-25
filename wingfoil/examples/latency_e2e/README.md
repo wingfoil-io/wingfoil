@@ -54,13 +54,11 @@ export LMAX_PASSWORD=...
 
 # Terminal 1
 cargo run --release --example latency_e2e_fix_gw \
-  --features "fix,iceoryx2"
+  --features "fix,iceoryx2-beta" -- --precise
 
-# Terminal 2 — local dev: plain HTTP (skip --tls-cert/--tls-key).
-# For HTTPS / WSS, pass --tls-cert / --tls-key (or set
-# WINGFOIL_TLS_CERT / WINGFOIL_TLS_KEY); the cargo feature is the same.
+# Terminal 2
 cargo run --release --example latency_e2e_ws_server \
-  --features "web-tls,iceoryx2,prometheus,otlp" -- --addr 0.0.0.0:8080
+  --features "web,iceoryx2-beta,prometheus,otlp" -- --addr 0.0.0.0:8080 --precise
 
 # Terminal 3 (operator stack — Prometheus + Tempo + Grafana, auto-provisioned)
 docker compose -f wingfoil/examples/latency_e2e/docker-compose.yml up -d
@@ -81,17 +79,13 @@ fresh TSC, ~5–10 ns extra cost). Either way, stages that share an engine
 cycle would otherwise collide on identical timestamps; precise mode gives
 each stamp a distinct value.
 
-Precise stamps are **on by default** in this example — without them,
-hops that fire in the same cycle (e.g. `ws_recv → ws_publish`,
-`gw_recv → gw_price → fix_send`, `fix_recv → gw_publish`,
-`ws_sub_recv → ws_send`) measure 0 ns and disappear from the log-scale
-chart. To opt out:
+Toggle either way:
 
 ```bash
 # CLI
-cargo run --example latency_e2e_ws_server -- --no-precise
-# or env (also accepts false / no / off)
-WINGFOIL_PRECISE_STAMPS=0 cargo run --example latency_e2e_ws_server
+cargo run --example latency_e2e_ws_server -- --precise
+# or env
+WINGFOIL_PRECISE_STAMPS=1 cargo run --example latency_e2e_ws_server
 ```
 
 The `.stamp_if::<S>(enabled)` / `.stamp_precise_if::<S>(enabled)`

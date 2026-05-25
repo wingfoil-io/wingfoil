@@ -6,8 +6,10 @@
 # five service images into an Amazon Linux 2023 AMI. Result: a Spot reclaim
 # recovers in ~60-90s instead of ~5min (no apt install, no image pulls).
 #
-# Triggers: manual dispatch only. Run `latency-e2e.build.images` first so the
-# image tag you bake into the AMI actually exists in ECR.
+# Triggers:
+#   - Manual dispatch (use this for ad-hoc rebuilds with custom image tags).
+#   - A push trigger for ec2-spot stack files / Dockerfile changes is intended
+#     but not yet wired up — see the DISABLED note below.
 #
 # After the build, the resulting AMI ID is published to:
 #   - SSM Parameter Store at /wingfoil/latency-e2e/ec2-spot/ami_id (so
@@ -20,12 +22,16 @@
 #       - Build AMIs (ec2:* on AMI/snapshot/instance lifecycle)
 #       - Pull from ECR (ecr:GetAuthorizationToken, ecr:BatchGetImage etc.)
 #       - Write SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id
-#   - AWS_REGION  (optional, default eu-west-2) — single region for the AMI
-#                 build, ECR images, and the ec2-spot stack (LMAX LD4 in
-#                 London). AMIs are region-scoped, so this must match
-#                 `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default.
+#   - AWS_REGION  (optional, default eu-west-2) — region the AMI is built in
+#                 and where the ec2-spot stack launches it (LMAX LD4 in London).
+#                 Must match `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default,
+#                 since AMIs are region-scoped.
+#   - ECR_REGION  (optional, default us-east-1) — region the wingfoil/* images
+#                 live in, set by `build-latency-e2e-images.yml`. The build
+#                 instance pulls cross-region from here over ECR's public
+#                 endpoint.
 
-name: latency-e2e.build.ami
+name: Build latency_e2e AMI (ec2-spot)
 
 on:
   workflow_dispatch:
@@ -34,23 +40,25 @@ on:
         description: "Image tag to bake into the AMI (default: latest)"
         required: false
         default: "latest"
-      instance_type:
-        description: >-
-          EC2 instance type for the Packer builder. Default `c6in.large` is
-          network-optimised (up to 25 Gbps) and finishes near the ~3-4 min
-          floor; on AWS Free-plan accounts override to a free-tier-eligible
-          type (e.g. `t3.micro`, much slower) since Free rejects non-free-
-          tier launches.
-        required: false
-        default: "c6in.large"
+  push:
+    branches: [main]
+    paths:
+      - 'wingfoil/examples/latency_e2e/pulumi/ec2-spot/**'
+      - 'wingfoil/examples/latency_e2e/Dockerfile.*'
+      - 'wingfoil/examples/latency_e2e/docker-compose.yml'
+      - '.github/workflows/build-latency-e2e-ami.yml'
 
 env:
-  # Single region for AMI build + ECR pulls + ec2-spot stack launch (London,
-  # near LMAX LD4). AMIs are region-scoped, so this must match
-  # `pulumi/ec2-spot/Pulumi.yaml`'s aws:region default.
+  # AMI build region — must match the ec2-spot Pulumi stack (eu-west-2,
+  # London) since AMIs are region-scoped and the stack launches there.
   AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  # ECR registry region — where build-latency-e2e-images.yml pushes to.
+  # Decoupled from AWS_REGION because the AMI build instance pulls from
+  # us-east-1 cross-region.
+  ECR_REGION: ${{ secrets.ECR_REGION || 'us-east-1' }}
+  # Push-triggered runs don't get workflow_dispatch inputs, so fall back to
+  # `latest` (matches the tag pushed by build-latency-e2e-images.yml).
   IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
-  INSTANCE_TYPE: ${{ inputs.instance_type || 'c6in.large' }}
   SSM_AMI_PARAM: /wingfoil/latency-e2e/ec2-spot/ami_id
 
 jobs:
@@ -76,7 +84,7 @@ jobs:
         id: ecr
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com"
           {
             echo "registry=${REGISTRY}"
             echo "ws_server=${REGISTRY}/wingfoil/ws-server:${IMAGE_TAG}"
@@ -92,12 +100,6 @@ jobs:
           version: 1.11.2
 
       - name: Packer init
-        env:
-          # Authenticate plugin downloads against the GitHub API. Anonymous
-          # requests share a low IP-pool quota and intermittently hit 403
-          # ("API rate limit exceeded"); the workflow's GITHUB_TOKEN bumps
-          # the limit to 5000 req/h and is available on every run.
-          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init wingfoil-latency.pkr.hcl
 
       # Fetch the ECR auth token on the runner (which has AWS creds via OIDC)
@@ -109,7 +111,6 @@ jobs:
         env:
           PKR_VAR_region: ${{ env.AWS_REGION }}
           PKR_VAR_image_tag: ${{ env.IMAGE_TAG }}
-          PKR_VAR_instance_type: ${{ env.INSTANCE_TYPE }}
           PKR_VAR_ecr_registry: ${{ steps.ecr.outputs.registry }}
           PKR_VAR_ws_server_image: ${{ steps.ecr.outputs.ws_server }}
           PKR_VAR_fix_gw_image: ${{ steps.ecr.outputs.fix_gw }}
@@ -117,7 +118,7 @@ jobs:
           PKR_VAR_tempo_image: ${{ steps.ecr.outputs.tempo }}
           PKR_VAR_grafana_image: ${{ steps.ecr.outputs.grafana }}
         run: |
-          ECR_PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
+          ECR_PASSWORD=$(aws ecr get-login-password --region "$ECR_REGION")
           echo "::add-mask::$ECR_PASSWORD"
           PKR_VAR_ecr_password="$ECR_PASSWORD" packer build wingfoil-latency.pkr.hcl
 

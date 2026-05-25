@@ -335,9 +335,9 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 
         // SAFETY: `#[repr(C)]` packed `u64` fields are self-contained and
         // have a uniform memory representation, satisfying `ZeroCopySend`'s
-        // invariants. Only emitted when the `iceoryx2` feature is on
+        // invariants. Only emitted when the `iceoryx2-beta` feature is on
         // in the consuming crate.
-        #[cfg(feature = "iceoryx2")]
+        #[cfg(feature = "iceoryx2-beta")]
         unsafe impl ::iceoryx2::prelude::ZeroCopySend for #name {
             #zero_copy_send_body
         }

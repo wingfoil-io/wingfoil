@@ -19,7 +19,7 @@
 // Run:
 //   LMAX_USERNAME=xxx LMAX_PASSWORD=yyy \
 //     cargo run --release --example latency_e2e_fix_gw \
-//     --features "fix,iceoryx2" -- [--no-precise]
+//     --features "fix,iceoryx2-beta" -- [--precise]
 //
 // Without LMAX_USERNAME / LMAX_PASSWORD the binary refuses to start —
 // real order routing requires real creds. (We deliberately removed the
@@ -133,14 +133,6 @@ fn main() -> anyhow::Result<()> {
     // ── Outbound: orders → price → stamp fix_send → (fork) ───────────────
     let orders = iceoryx2_sub::<Traced<RoundTrip, RoundTripLatency>>(SVC_ORDERS)
         .collapse::<Traced<RoundTrip, RoundTripLatency>>()
-        .inspect(|t| {
-            log::info!(
-                "fix_gw: order received via iceoryx2 cl_ord={} qty={} side={}",
-                cl_ord_id(&t.payload),
-                t.payload.qty,
-                t.payload.side,
-            );
-        })
         .stamp_if::<round_trip_latency::gw_recv>(!precise)
         .stamp_precise_if::<round_trip_latency::gw_recv>(precise);
 
@@ -179,11 +171,6 @@ fn main() -> anyhow::Result<()> {
         if t.payload.fill_price_bps == 0 {
             return; // book was stale at pricing time — already logged
         }
-        log::info!(
-            "fix_gw: sending NewOrderSingle cl_ord={} px_bps={}",
-            cl_ord_id(&t.payload),
-            t.payload.fill_price_bps,
-        );
         send_new_order_single(&sender, &t.payload);
     });
 
@@ -197,15 +184,6 @@ fn main() -> anyhow::Result<()> {
         fix_ord.data.clone().collapse::<FixMessage>(),
         Box::new(|m: FixMessage| {
             let is_exec = m.msg_type == "8";
-            if is_exec {
-                log::info!(
-                    "fix_gw: ExecutionReport received cl_ord={} exec_type={}",
-                    m.field(TAG_CL_ORD_ID).unwrap_or(""),
-                    m.field(TAG_EXEC_TYPE).unwrap_or(""),
-                );
-            } else {
-                log::debug!("fix_gw: non-exec msg_type={} dropped at filter", m.msg_type);
-            }
             (MatcherEvent::Exec(m), is_exec)
         }),
     )
@@ -310,19 +288,7 @@ fn main() -> anyhow::Result<()> {
     .stamp_if::<round_trip_latency::gw_publish>(!precise)
     .stamp_precise_if::<round_trip_latency::gw_publish>(precise);
 
-    let pub_fills = iceoryx2_pub(
-        fills
-            .inspect(|t| {
-                log::info!(
-                    "fix_gw: publishing fill cl_ord={} filled_qty={} px_bps={}",
-                    cl_ord_id(&t.payload),
-                    t.payload.filled_qty,
-                    t.payload.fill_price_bps,
-                );
-            })
-            .map(|t| burst![t]),
-        SVC_FILLS,
-    );
+    let pub_fills = iceoryx2_pub(fills.map(|t| burst![t]), SVC_FILLS);
 
     let nodes: Vec<Rc<dyn Node>> = vec![
         pub_fills,

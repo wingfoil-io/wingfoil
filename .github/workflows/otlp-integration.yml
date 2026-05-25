@@ -1,4 +1,4 @@
-name: test.integration.otlp
+name: OTLP Integration Tests
 
 on:
   workflow_dispatch:

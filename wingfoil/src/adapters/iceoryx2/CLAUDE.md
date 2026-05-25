@@ -42,11 +42,12 @@ A `#[repr(C)]` fixed-size byte buffer implementing `ZeroCopySend`. Bridges the g
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
-cargo test -p wingfoil --features iceoryx2
+cargo test -p wingfoil --features iceoryx2-beta
 cargo test -p wingfoil --features iceoryx2-integration-test -- --test-threads=1
 ```
 
 ## Gotchas
 
+- Feature flag is `iceoryx2-beta` (not `iceoryx2`) because the iceoryx2 crate is pre-1.0.
 - Shared memory paths on Linux live under `/dev/shm/`; stale files from crashed processes may need manual cleanup.
 - Service names must be non-empty and follow iceoryx2's naming rules — invalid names fail fast in `start()`.

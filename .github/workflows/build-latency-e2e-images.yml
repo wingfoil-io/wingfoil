@@ -1,23 +1,28 @@
 # Build and push the five latency_e2e container images to ECR.
 #
-# Manual dispatch only — image rebuilds are deliberate, not implicit on every
-# push to main. ECR repositories (wingfoil/<name>) are created idempotently on
-# first run, so no separate bootstrap step is needed.
+# Runs on pushes to main that touch the wingfoil crate or the latency_e2e
+# example, and on manual dispatch. ECR repositories (wingfoil/<name>) are
+# created idempotently on first run, so no separate bootstrap step is needed.
 #
-# Required GitHub secrets (also used by build-latency-e2e-ami.yml and
-# deploy-latency-e2e.yml):
+# Required GitHub secrets (already used by deploy-latency-e2e.yml):
 #   - AWS_ROLE_TO_ASSUME  IAM role with ecr:* on wingfoil/* repositories
-#   - AWS_REGION          (optional, defaults to eu-west-2)
+#   - AWS_REGION          (optional, defaults to us-east-1)
 #
 # After this workflow runs, deploy-latency-e2e.yml can pull <registry>/wingfoil/<name>:latest.
 
-name: latency-e2e.build.images
+name: Build & Push latency_e2e Images
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'wingfoil/**'
+      - 'wingfoil/examples/latency_e2e/**'
+      - '.github/workflows/build-latency-e2e-images.yml'
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
 jobs:
   build:

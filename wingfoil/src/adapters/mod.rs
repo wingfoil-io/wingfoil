@@ -1,5 +1,6 @@
 //! A library of input and output adapters
 
+pub mod aeron;
 #[cfg(feature = "kdb")]
 pub mod cache;
 #[cfg(feature = "csv")]
@@ -11,7 +12,7 @@ pub mod etcd;
 pub mod fix;
 #[cfg(feature = "fluvio")]
 pub mod fluvio;
-#[cfg(feature = "iceoryx2")]
+#[cfg(feature = "iceoryx2-beta")]
 #[doc(hidden)]
 pub mod iceoryx2;
 #[cfg(feature = "kafka")]

@@ -1,4 +1,4 @@
-name: test.integration.etcd
+name: etcd Integration Tests
 
 on:
   workflow_call:

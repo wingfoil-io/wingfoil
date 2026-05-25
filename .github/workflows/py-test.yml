@@ -1,0 +1,80 @@
+name: Python Tests
+
+on:
+  workflow_call:
+  push:
+    paths:
+      - "wingfoil-python/**"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y protobuf-compiler patchelf
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov
+
+      - name: Build and test Python bindings with Rust coverage
+        run: |
+          source <(cargo llvm-cov show-env --export-prefix)
+          cd wingfoil-python
+          .venv/bin/maturin develop --features iceoryx2-beta
+          .venv/bin/pytest tests/ \
+            --cov=wingfoil \
+            --cov-report=lcov:lcov-python.info
+          cd ..
+          cargo llvm-cov report -p wingfoil-python \
+            --ignore-filename-regex 'py_etcd|py_kdb|py_zmq|py_iceoryx2' \
+            --lcov \
+            --output-path wingfoil-python/lcov-rust.info
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: wingfoil-python/lcov-python.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python
+          fail_ci_if_error: false
+
+      - name: Upload Rust-from-Python coverage to Codecov
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: wingfoil-python/lcov-rust.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python-rust
+          fail_ci_if_error: false

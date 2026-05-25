@@ -1,6 +1,6 @@
 //! Benchmark for iceoryx2 adapter - Burst operations
 //!
-//! Run with: cargo bench --features iceoryx2 -- iceoryx2
+//! Run with: cargo bench --features iceoryx2-beta -- iceoryx2
 
 use criterion::{Criterion, criterion_group, criterion_main};
 

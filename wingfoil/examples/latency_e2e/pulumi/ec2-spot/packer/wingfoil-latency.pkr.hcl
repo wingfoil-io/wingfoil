@@ -32,16 +32,8 @@ variable "region" {
 }
 
 variable "instance_type" {
-  type = string
-  # `c6in.large` is network-optimised (up to 25 Gbps) — purpose-built for the
-  # ECR-pull-bound work that dominates this build. Wall-clock floor is ~3-4
-  # min (cloud-init + AMI snapshot/register), and c6in.large gets close to it
-  # without paying for unused CPU/RAM. Requires a Paid AWS account — the AWS
-  # Free plan rejects non-free-tier launches with `InvalidParameterCombination:
-  # ... not eligible for Free Tier`; fall back to `t3.micro` (free-tier-
-  # eligible, ~4-5× slower) by overriding via the workflow input or
-  # `PKR_VAR_instance_type` if the account is on Free.
-  default = "c6in.large"
+  type    = string
+  default = "t3.small"
 }
 
 variable "ws_server_image"  { type = string }
@@ -75,12 +67,6 @@ variable "ecr_password" {
 
 locals {
   ami_name = "wingfoil-latency-ec2-spot-${var.image_tag}-${formatdate("YYYYMMDD-hhmmss", timestamp())}"
-
-  # Five concurrent docker pulls drain a t*.micro/nano's network burst credits
-  # faster than they save by overlapping, and 1 GiB RAM also makes parallel
-  # layer extraction painful. Anything larger (t3.small upward, m5/c6in/etc.)
-  # has enough headroom to actually win from parallelism.
-  parallel_pulls = !can(regex("^t[0-9]+a?\\.(nano|micro)$", var.instance_type))
 }
 
 source "amazon-ebs" "wingfoil" {
@@ -131,42 +117,6 @@ build {
     destination = "/tmp/docker-compose.yml"
   }
 
-  # Bind-mount sources for prometheus, tempo, and grafana. Compose paths are
-  # relative to /opt/wingfoil/docker-compose.yml, so install.sh moves these
-  # under /opt/wingfoil/{prometheus,tempo,grafana}.
-  #
-  # Destination is `/tmp` (which exists) — Packer's file provisioner appends
-  # the source's basename to the destination when there's no trailing slash on
-  # the source path, so e.g. `.../prometheus` -> `/tmp/prometheus/`. Uploading
-  # to a non-existent `/tmp/prometheus` instead produces `/tmp/prometheus/
-  # prometheus/` (basename appended a second time), and the docs explicitly
-  # warn that "if the destination directory does not exist, the file
-  # provisioner may succeed, but it will have undefined results".
-  provisioner "file" {
-    source      = "${path.root}/../../../prometheus"
-    destination = "/tmp"
-  }
-
-  provisioner "file" {
-    source      = "${path.root}/../../../tempo"
-    destination = "/tmp"
-  }
-
-  provisioner "file" {
-    source      = "${path.root}/../../../grafana"
-    destination = "/tmp"
-  }
-
-  # ws_server's static UI assets, bind-mounted into the container at
-  # /app/static (overlaying the in-image copy). Staging them outside the
-  # image is what lets the operator iterate on the UI by syncing files
-  # into /opt/wingfoil/static and bouncing the container — no AMI bake,
-  # no image rebuild.
-  provisioner "file" {
-    source      = "${path.root}/../../../static"
-    destination = "/tmp"
-  }
-
   provisioner "shell" {
     environment_vars = [
       "WS_SERVER_IMAGE=${var.ws_server_image}",
@@ -177,7 +127,6 @@ build {
       "ECR_REGISTRY=${var.ecr_registry}",
       "ECR_PASSWORD=${var.ecr_password}",
       "AWS_REGION=${var.region}",
-      "PARALLEL_PULLS=${local.parallel_pulls}",
     ]
     script = "${path.root}/install.sh"
   }
