@@ -2,7 +2,7 @@
 
 ## Post
 
-We added an Iceoryx2 adapter to Wingfoil last week, behind the `iceoryx2-beta` feature flag.
+We added an Iceoryx2 adapter to Wingfoil last week, behind the `iceoryx2` feature flag.
 
 If you haven't run into Iceoryx2 before: it's a Linux IPC layer that moves data between processes via shared memory, so there's no copy and no kernel round-trip. Useful when two processes on the same box need to talk to each other faster than a socket can.
 
