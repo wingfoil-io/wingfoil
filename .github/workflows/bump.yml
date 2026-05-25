@@ -39,7 +39,8 @@ jobs:
           BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
           CARGO_VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           NPM_VERSION=$(node -p "require('./wingfoil-js/package.json').version")
-          BASE=$(printf '%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" | sort -V | tail -n 1)
+          WASM_VERSION=$(grep -m 1 '^version' wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
+          BASE=$(printf '%s\n%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" "$WASM_VERSION" | sort -V | tail -n 1)
           IFS='.' read -r MAJ MIN PATCH <<< "$BASE"
           case "$BUMP_TYPE" in
             major) MAJ=$((MAJ + 1)); MIN=0; PATCH=0 ;;
@@ -48,9 +49,18 @@ jobs:
             *) echo "unknown bump type: $BUMP_TYPE" >&2; exit 1 ;;
           esac
           NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
-          echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, base: $BASE, new: $NEW_VERSION"
+          echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, wasm: $WASM_VERSION, base: $BASE, new: $NEW_VERSION"
           cargo set-version "$NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Bump wingfoil-wasm (excluded from workspace)
+        run: |
+          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
+          WASM_TOML="wingfoil-wasm/Cargo.toml"
+          cargo set-version "$NEW_VERSION" --manifest-path "$WASM_TOML"
+          # cargo set-version doesn't touch the wingfoil-wire-types path-dep pin
+          # here because wingfoil-wire-types lives in the outer workspace.
+          sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" "$WASM_TOML"
 
       - name: Update conf.py with new version
         run: |
