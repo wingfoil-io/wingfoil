@@ -12,7 +12,7 @@
 workflows below. `all-tests.yml` runs `rust-test.yml` + `python-test.yml` +
 `integration-tests.yml`.
 
-* `adapter-integration.yml` — matrix: aeron, fix, fluvio, kafka, zmq.
+* `adapter-integration.yml` — matrix: fix, fluvio, kafka, zmq.
   Pure-Rust adapter integration tests sharing the same shape.
 * `kdb-integration.yml` — KDB+ (custom Docker image, license secret).
 * `etcd-integration.yml` — etcd (Docker container, Python tests).
