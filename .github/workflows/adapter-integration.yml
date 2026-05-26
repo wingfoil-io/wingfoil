@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil/src/adapters/aeron/**'
       - 'wingfoil/src/adapters/fix/**'
       - 'wingfoil/src/adapters/fluvio/**'
       - 'wingfoil/src/adapters/kafka/**'
@@ -24,10 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - adapter: aeron
-            feature: aeron-integration-test
-            test-filter: 'aeron::integration_tests'
-            extra-deps: 'cmake clang libclang-dev uuid-dev libbsd-dev'
           - adapter: fix
             feature: fix-integration-test
             test-filter: 'fix::integration_tests'
