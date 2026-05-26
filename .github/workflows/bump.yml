@@ -58,9 +58,12 @@ jobs:
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
           WASM_TOML="wingfoil-wasm/Cargo.toml"
-          cargo set-version "$NEW_VERSION" --manifest-path "$WASM_TOML"
-          # cargo set-version doesn't touch the wingfoil-wire-types path-dep pin
-          # here because wingfoil-wire-types lives in the outer workspace.
+          # `cargo set-version --manifest-path` is not usable here: it runs
+          # `cargo metadata` first, which refuses to resolve when the existing
+          # path-dep pin (wingfoil-wire-types = "^OLD") doesn't match the
+          # already-bumped workspace member (NEW). Sed-bump both lines
+          # directly — pure text edit, no resolver involvement.
+          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s||version = \"${NEW_VERSION}\"|" "$WASM_TOML"
           sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" "$WASM_TOML"
 
       - name: Update conf.py with new version
