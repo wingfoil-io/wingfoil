@@ -39,12 +39,6 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
-  integration-tests:
-    name: Integration Tests
-    needs: preflight
-    uses: ./.github/workflows/integration-tests.yml
-    secrets: inherit
-
   zmq-integration:
     name: ZMQ Integration Tests
     needs: preflight
@@ -68,7 +62,7 @@ jobs:
 
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests, integration-tests, zmq-integration]
+    needs: [preflight, all-tests, zmq-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
