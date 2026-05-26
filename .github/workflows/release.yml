@@ -11,6 +11,7 @@ jobs:
   preflight:
     name: Preflight — version check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -48,6 +49,7 @@ jobs:
     name: ZMQ Integration Tests
     needs: preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +70,7 @@ jobs:
     name: Cut release tag
     needs: [preflight, all-tests, integration-tests, zmq-integration]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:

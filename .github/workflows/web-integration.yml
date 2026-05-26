@@ -18,6 +18,7 @@ jobs:
   wingfoil-wasm-build:
     name: wingfoil-wasm build + unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +47,7 @@ jobs:
   wingfoil-js-typecheck:
     name: wingfoil-js build + typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: wingfoil-wasm-build
 
     steps:
