@@ -62,6 +62,11 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
 
     let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
 
+    // The SC logs "started successfully" before its 9003 listener is bound.
+    // With host networking and back-to-back test containers this race shows up
+    // as ECONNREFUSED on the next admin call. Probe the port until accept() works.
+    wait_for_port(&endpoint, std::time::Duration::from_secs(10))?;
+
     // Register the custom SPU with the SC before starting the SPU process.
     register_spu(&endpoint)?;
 
@@ -80,6 +85,27 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     Ok((container, endpoint))
+}
+
+/// Block until `endpoint` accepts a TCP connection, or `timeout` elapses.
+fn wait_for_port(endpoint: &str, timeout: std::time::Duration) -> anyhow::Result<()> {
+    let addr: std::net::SocketAddr = endpoint
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid endpoint {endpoint}: {e}"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)) {
+            Ok(_) => return Ok(()),
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "fluvio SC never accepted on {endpoint}: {e}"
+                ));
+            }
+        }
+    }
 }
 
 /// Register a custom SPU spec with the SC via the admin API.
