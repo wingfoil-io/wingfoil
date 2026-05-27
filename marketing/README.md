@@ -11,12 +11,14 @@
 | 5 | WebSocket + JS client | [`linkedin/websocket-js-client.md`](linkedin/websocket-js-client.md) | Streaming graph values to browsers with shared Rust→WASM wire types. |
 | 6 | Kafka adapter | [`linkedin/kafka.md`](linkedin/kafka.md) | Two nodes, multi-topic publish, per-burst delivery via `FuturesUnordered`. |
 | 7 | KDB+ follow-up | [`linkedin/kdb-group-followup.md`](linkedin/kdb-group-followup.md) | Deeper-dive companion for the KDB LinkedIn group — caller-owned q, time slicing, `kdb_read_cached`. |
+| 8 | Fluvio adapter | [`linkedin/fluvio.md`](linkedin/fluvio.md) | Two nodes, per-burst flush, absolute-offset resume, SC+SPU cluster shape. |
 
 ## Other drafts
 
 | File | Destination | Notes |
 |------|-------------|-------|
 | [`github/iceoryx2-discussion.md`](github/iceoryx2-discussion.md) | iceoryx2 GitHub discussions board | Long-form Show-and-Tell companion to the LinkedIn iceoryx2 post. Pair it with #2 above. |
+| [`github/fluvio-discussion.md`](github/fluvio-discussion.md) | Fluvio GitHub discussions board | Show-and-Tell companion to the LinkedIn Fluvio post. Notes SC+SPU gotchas and asks about single-container test setup. |
 
 ## Format convention
 
