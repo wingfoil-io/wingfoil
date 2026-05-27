@@ -77,3 +77,23 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: tag
+    uses: ./.github/workflows/crates-publish.yml
+    secrets: inherit
+
+  publish-npm:
+    name: Publish to npm
+    needs: tag
+    uses: ./.github/workflows/npm-publish.yml
+    secrets: inherit
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: tag
+    uses: ./.github/workflows/pypi-publish.yml
+    secrets: inherit
+    with:
+      pypi-target: prod
