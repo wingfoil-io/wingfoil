@@ -12,7 +12,7 @@ When an agent writes a chunk of code that's almost right but quietly wrong — a
 
 The alternative loop — write code, run it, observe the wrong behaviour, narrow down where it went wrong, write a guess at a fix, run again — is the one that burns tokens and wall-clock time. Compiler-as-collaborator turns out to be genuinely much cheaper.
 
-It's not pure upside. The Bun port reportedly carries around 13,000 `unsafe` blocks where a comparable native-Rust runtime like uv has closer to 70. That's the natural shape of a fast mechanical translation — you transliterate first, refactor for idiom later — and it's worth watching whether the Bun team gradually walks those numbers down.
+It's not pure upside. Early reports note the Bun port carries a lot more `unsafe` blocks than a Rust codebase written from scratch — orders of magnitude more, by some counts. That's the natural shape of a fast mechanical translation: you transliterate first, refactor for idiom later. Worth watching whether the Bun team gradually walks those numbers down.
 
 It's also not a point against Zig. Zig is a thoughtful language with a strong community. But it's a fair question worth sitting with: as more code gets written with agent assistance, does the balance tilt toward languages whose type systems catch more before runtime? Or is the gap smaller than it looks once test generation is automated too?
 
