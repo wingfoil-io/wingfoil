@@ -29,5 +29,5 @@ Every LinkedIn draft has two sections:
 
 ## Before posting
 
-- Verify the Bun-rewrite numbers in post #1 (~13k unsafe blocks, uv ~70) — these may shift as the Bun team refactors.
 - Spot-check every URL in the "First comment" sections — file and folder paths were lifted from the working tree and not all have been visited.
+- Post #7 (KDB+ follow-up) references q syntax with backticks that LinkedIn will eat. Plan: post the q snippet as a screenshot inline rather than rewording.
