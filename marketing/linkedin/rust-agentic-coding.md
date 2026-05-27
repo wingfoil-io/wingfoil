@@ -8,7 +8,7 @@ It's a striking data point, and it's got us talking again about why we picked Ru
 
 Our take, briefly: the strictness we used to think of as friction has turned into the most useful collaborator we've got.
 
-When an agent writes a chunk of code that's almost right but quietly wrong — a borrow that won't survive an async boundary, a `&str` where the API wanted a `String`, a match arm that missed a variant — the compiler stops it at the door. The agent reads the error, fixes it, and tries again. The loop is tight, deterministic, and the feedback is precise: a line number and a sentence of English.
+When an agent writes a chunk of code that's almost right but quietly wrong — a value moved into a closure that's then used again, an `Rc<T>` shared across a thread boundary that would be a data race at runtime, a match arm that silently falls through when a new enum variant gets added — the compiler stops it at the door. The agent reads the error, fixes it, and tries again. The loop is tight, deterministic, and the feedback is precise: a line number and a sentence of English.
 
 The alternative loop — write code, run it, observe the wrong behaviour, narrow down where it went wrong, write a guess at a fix, run again — is the one that burns tokens and wall-clock time. Compiler-as-collaborator turns out to be genuinely much cheaper.
 
