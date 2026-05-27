@@ -41,7 +41,7 @@ web-tls-integration-test = ["web-tls", "tokio-tungstenite/rustls-tls-webpki-root
 
 [package]
 name = "wingfoil"
-version = "5.0.1"
+version = "5.0.2"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 rust-version.workspace = true
@@ -64,7 +64,7 @@ scrape-examples = true
 [dependencies]
 
 # derives
-wingfoil-derive = { path = "../wingfoil-derive", version = "5.0.1" }
+wingfoil-derive = { path = "../wingfoil-derive", version = "5.0.2" }
 
 # workspace
 chrono = {workspace=true}
@@ -130,7 +130,7 @@ webpki-roots = { version = "0.26", optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
-wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "5.0.1", optional = true }
+wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "5.0.2", optional = true }
 
 # web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
 # `tls-rustls-no-provider` keeps the rustls crypto provider choice in our
