@@ -11,6 +11,12 @@ on:
         options:
           - test
           - prod
+  workflow_call:
+    inputs:
+      pypi-target:
+        description: 'Choose PyPI target (test or prod)'
+        required: true
+        type: string
 
 jobs:
   build-wheels:
