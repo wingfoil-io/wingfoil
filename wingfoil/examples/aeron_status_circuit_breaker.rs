@@ -49,11 +49,11 @@ impl MutableNode for CircuitBreakerNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         // 1. Latch the latest status transition (if any).
         let status_burst = self.status.peek_value();
-        if let Some(latest) = status_burst.last() {
-            if *latest != self.last_status {
-                println!("breaker: status {:?} → {:?}", self.last_status, latest);
-                self.last_status = latest.clone();
-            }
+        if let Some(latest) = status_burst.last()
+            && *latest != self.last_status
+        {
+            println!("breaker: status {:?} → {:?}", self.last_status, latest);
+            self.last_status = latest.clone();
         }
 
         // 2. Gate the data burst on the healthy predicate.
