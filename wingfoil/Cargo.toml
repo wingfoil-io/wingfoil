@@ -362,7 +362,7 @@ required-features = ["aeron"]
 
 [[example]]
 name = "aeron_status_circuit_breaker"
-path = "examples/aeron_status_circuit_breaker.rs"
+path = "examples/aeron/status_circuit_breaker.rs"
 required-features = ["aeron"]
 
 [[bench]]
