@@ -33,7 +33,7 @@ jobs:
       # via bindgen + CMake. Docker (for the testcontainers media driver) is
       # already present on ubuntu-latest.
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev uuid-dev
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
 
       # The Aeron sources bundled by rusteron-client require CMake >= 3.30,
       # which is newer than the version shipped on ubuntu-latest. Install 3.31
