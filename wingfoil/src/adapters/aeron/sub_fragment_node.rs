@@ -14,9 +14,10 @@
 //! [`super::sub_spin`] / [`super::sub_threaded`]. The split keeps `cycle()`
 //! bodies linear (the spin variant polls inline; the threaded variant
 //! delegates to [`ReceiverStream`](crate::nodes::receiver::ReceiverStream))
-//! and matches the existing module layout one-for-one. Story 12.5 will add
-//! status-stream wiring to the threaded variant, at which point the two
-//! shapes diverge further — abstraction over them is an explicit non-goal.
+//! and matches the existing module layout one-for-one. The status-aware
+//! threaded variant ([`build_threaded_with_status`]) multiplexes data and
+//! lifecycle status over the single receiver channel via [`AeronItem`], so the
+//! two shapes diverge further — abstraction over them is an explicit non-goal.
 //!
 //! # Existing surface is untouched
 //!
@@ -268,6 +269,187 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Threaded status-aware burst node
+// ---------------------------------------------------------------------------
+
+/// Channel payload for the status-aware threaded subscriber.
+///
+/// The background poll thread multiplexes two kinds of event over the single
+/// [`ReceiverStream`] channel: decoded data values and lifecycle-status
+/// transitions. Carrying both in one enum keeps status **ordered in-band** with
+/// the data that surrounds it (a `Connected` transition is delivered before the
+/// fragments that followed it) and reuses the existing channel/notifier machinery
+/// rather than adding a second channel.
+#[derive(Debug, Clone)]
+enum AeronItem<T> {
+    /// A decoded data fragment.
+    Data(T),
+    /// A lifecycle-status transition derived from the backend after a poll.
+    Status(AeronStatus),
+}
+
+// `Element` requires `Default`; the value is never observed (it only satisfies
+// the `TinyVec` backing-array bound), so a default `Data` is fine.
+impl<T: Default> Default for AeronItem<T> {
+    fn default() -> Self {
+        AeronItem::Data(T::default())
+    }
+}
+
+/// Status-aware threaded subscriber node.
+///
+/// Wraps a [`ReceiverStream<AeronItem<T>>`] whose background thread sends both
+/// data and status over one channel. Each `cycle()` drains the channel, routes
+/// [`AeronItem::Data`] into the node's `Burst<T>` output and replays each
+/// [`AeronItem::Status`] transition into the shared [`AeronStatusStream`] — the
+/// exact `clear()` / `record()` contract the spin node uses, so the status node
+/// (wired as our active downstream) forwards transitions identically.
+struct ThreadedAeronStatusFragmentNode<T: Element + Send> {
+    inner: ReceiverStream<AeronItem<T>>,
+    value: Burst<T>,
+    status: Rc<RefCell<AeronStatusStream>>,
+    stop_flag: Arc<AtomicBool>,
+}
+
+impl<T: Element + Send> MutableNode for ThreadedAeronStatusFragmentNode<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value.clear();
+        self.status.borrow_mut().clear();
+        // Drain the channel into the inner receiver's burst, then demux it.
+        self.inner.cycle(state)?;
+        let mut transition = false;
+        for item in self.inner.peek_ref().iter() {
+            match item {
+                AeronItem::Data(v) => self.value.push(v.clone()),
+                AeronItem::Status(s) => {
+                    transition |= self.status.borrow_mut().record(s.clone());
+                }
+            }
+        }
+        // Tick when data arrived OR a status transition was recorded, so the
+        // status node (our active downstream) is scheduled to forward it.
+        Ok(!self.value.is_empty() || transition)
+    }
+
+    fn upstreams(&self) -> UpStreams {
+        self.inner.upstreams()
+    }
+
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.setup(state)
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.start(state)
+    }
+
+    fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        self.inner.stop(state).ok();
+        Ok(())
+    }
+
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.inner.teardown(state)
+    }
+}
+
+impl<T: Element + Send> StreamPeekRef<Burst<T>> for ThreadedAeronStatusFragmentNode<T> {
+    fn peek_ref(&self) -> &Burst<T> {
+        &self.value
+    }
+}
+
+/// Build a threaded typed-parser Aeron subscriber that also propagates
+/// lifecycle status onto the supplied reactive [`AeronStatusStream`].
+///
+/// Mirrors [`build_threaded`] but multiplexes status transitions over the
+/// receiver channel via [`AeronItem`]. The background thread derives the status
+/// after each poll (`is_closed` → [`AeronStatus::Closed`] first, then
+/// `is_connected` → [`AeronStatus::Connected`], else
+/// [`AeronStatus::Disconnected`]) and sends an [`AeronItem::Status`] **only on
+/// transition** — matching the spin node's derivation order and dedup. Returns
+/// the data stream; the caller wires the status node's producer to it (exactly
+/// as the spin path does) so transitions are forwarded once per tick.
+pub(crate) fn build_threaded_with_status<T, F, B>(
+    backend: B,
+    parser: F,
+    status: Rc<RefCell<AeronStatusStream>>,
+) -> Rc<dyn Stream<Burst<T>>>
+where
+    T: Element + Send,
+    F: FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError> + Send + 'static,
+    B: AeronSubscriberBackend,
+{
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop_flag.clone();
+
+    let state = Mutex::new(Some((backend, parser)));
+    let inner = ReceiverStream::new(
+        move |sender: ChannelSender<AeronItem<T>>, _stop: Arc<AtomicBool>| {
+            let mut state_guard = state.lock().expect("state lock poisoned");
+            let (mut backend, mut parser) = state_guard
+                .take()
+                .expect("threaded aeron status closure called more than once");
+            drop(state_guard);
+
+            let mut idle_count = 0u32;
+            // Mirror `AeronStatusStream`'s default so the first observed state
+            // (e.g. Connected) registers as a transition.
+            let mut last_status = AeronStatus::Disconnected;
+            loop {
+                if stop_thread.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let count = backend.poll_fragments(&mut |frag| match parser(frag) {
+                    Ok(Some(v)) => {
+                        let _ = sender.send_message(Message::RealtimeValue(AeronItem::Data(v)));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "[wingfoil::adapters::aeron] WARN parser dropped fragment at position {}: {e}",
+                            frag.position()
+                        );
+                    }
+                })?;
+
+                // Derive the lifecycle status and propagate it in-band on change.
+                let new_status = if backend.is_closed() {
+                    AeronStatus::Closed
+                } else if backend.is_connected() {
+                    AeronStatus::Connected
+                } else {
+                    AeronStatus::Disconnected
+                };
+                if new_status != last_status {
+                    last_status = new_status.clone();
+                    let _ =
+                        sender.send_message(Message::RealtimeValue(AeronItem::Status(new_status)));
+                }
+
+                if count == 0 {
+                    idle_count = (idle_count + 1).min(20);
+                    let micros = 1u64 << idle_count.min(10);
+                    std::thread::sleep(Duration::from_micros(micros));
+                } else {
+                    idle_count = 0;
+                }
+            }
+        },
+        true,
+    );
+
+    ThreadedAeronStatusFragmentNode {
+        inner,
+        value: Burst::new(),
+        status,
+        stop_flag,
+    }
+    .into_stream()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -275,7 +457,7 @@ where
 mod tests {
     use super::*;
     use crate::adapters::aeron::transport::MockSubscriber;
-    use crate::{IntoStream, NanoTime, NodeOperators, RunFor, RunMode};
+    use crate::{IntoStream, NanoTime, NodeOperators, RunFor, RunMode, StreamOperators};
     use std::cell::RefCell;
 
     /// Typed-parser sibling of `transport::i64_parser` for the burst surface.
@@ -549,5 +731,43 @@ mod tests {
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert!(node.status.is_none());
+    }
+
+    // ---------------------------------------------------------------------
+    // Threaded status propagation (build_threaded_with_status).
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn given_threaded_status_when_connected_backend_then_connected_transition_propagates() {
+        // A connected backend: the poll thread derives `Connected`, which
+        // differs from the default `Disconnected`, and multiplexes it onto the
+        // channel as `AeronItem::Status`. The data node replays it into the
+        // shared status stream; a brief real run must surface the transition.
+        let backend = ConnectedMockSubscriber::new(vec![7i64.to_le_bytes().to_vec()], true);
+        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let data = build_threaded_with_status(backend, i64_parser_typed, Rc::clone(&status));
+        let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
+        status
+            .borrow_mut()
+            .set_producer(Rc::downgrade(&data.clone().as_node()));
+
+        let collected = status_stream.collect();
+        collected
+            .clone()
+            .run(
+                RunMode::RealTime,
+                RunFor::Duration(std::time::Duration::from_millis(400)),
+            )
+            .unwrap();
+
+        let statuses: Vec<AeronStatus> = collected
+            .peek_value()
+            .into_iter()
+            .flat_map(|burst| burst.value)
+            .collect();
+        assert!(
+            statuses.contains(&AeronStatus::Connected),
+            "expected a Connected transition, got {statuses:?}"
+        );
     }
 }

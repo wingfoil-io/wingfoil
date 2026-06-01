@@ -51,8 +51,10 @@ running media driver (the normal production topology).
   `FnMut(&FragmentBuffer) -> Result<Option<T>, TransportError>` with access to
   the per-fragment `FragmentHeader` (position, session_id, stream_id).
 - `aeron_sub_fragment_with_status(...)` — returns `(data_stream, status_stream)`;
-  the status stream emits `Burst<AeronStatus>` on connect/disconnect transitions
-  (spin mode only — threaded mode returns a default-state placeholder).
+  the status stream emits `Burst<AeronStatus>` on connect/disconnect transitions.
+  In threaded mode the poll thread multiplexes data and status over the single
+  receiver channel (`AeronItem`); status is sampled at the poll cadence rather
+  than per graph cycle.
 - `aeron_sub_fragment_named(...)` — resolves the subscriber from the named-endpoint
   registry (see `discovery.rs`).
 
@@ -144,5 +146,6 @@ feature set.
 - **`aeron` needs cmake ≥3.30** (Ubuntu 24.04 ships 3.28) plus clang, uuid-dev,
   libbsd-dev. Missing/old cmake yields a clear build-script error; the pure-Rust
   `aeron-rs-beta` backend needs none of this.
-- **Threaded status** is a default-state placeholder — only spin mode wires a
-  live `AeronStatusStream`.
+- **Threaded status** is propagated in-band via `AeronItem` (data/status
+  multiplexed over the receiver channel); the data node demuxes and replays
+  transitions into the shared `AeronStatusStream`, sampled at the poll cadence.

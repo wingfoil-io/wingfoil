@@ -962,6 +962,75 @@ fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Threaded-mode counterpart of `test_status_stream_emits_on_connect`: with
+/// `AeronMode::Threaded` the background poll thread multiplexes the lifecycle
+/// status onto the receiver channel (as `AeronItem::Status`), and the data node
+/// demuxes it back into the shared status stream. The `Connected` transition
+/// MUST still surface somewhere during the run, exercising the rusteron
+/// backend's real `is_connected()` across the thread boundary.
+#[cfg(feature = "aeron")]
+#[test]
+fn test_threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _container = start_media_driver()?;
+
+    let handle = AeronHandle::connect()?;
+    let stream_id = 2025i32;
+
+    let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    // Establish the image before the graph runs so the subscriber's first
+    // background poll captures the Disconnected → Connected transition.
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
+
+    let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
+    };
+    let (data, status_stream) = aeron_sub_fragment_with_status(
+        sub,
+        parser,
+        AeronSubOptions {
+            mode: AeronMode::Threaded,
+            fragment_limit: 256,
+        },
+    );
+    let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
+    let observed_inspect = Rc::clone(&observed);
+    let inspected = status_stream.clone().inspect(move |burst| {
+        for s in burst.iter() {
+            observed_inspect.borrow_mut().push(s.clone());
+        }
+    });
+
+    let source = crate::nodes::ticker(Duration::from_millis(50))
+        .count()
+        .map(|_| {
+            let mut b = Burst::new();
+            b.push(7i64);
+            b
+        });
+    let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+    // The subscriber data node demuxes data + status from its background poll
+    // thread; without it in the graph the status stream is never driven.
+    Graph::new(
+        vec![data.as_node(), inspected.as_node(), pub_node],
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_secs(2)),
+    )
+    .run()
+    .ok();
+
+    let observed = observed.borrow();
+    assert!(
+        observed.contains(&AeronStatus::Connected),
+        "expected threaded status stream to record AeronStatus::Connected, got: {observed:?}"
+    );
+    Ok(())
+}
+
 /// Saturate the publication term buffer until back-pressure surfaces and
 /// assert the publisher status stream records `BackPressured` at least once.
 ///
