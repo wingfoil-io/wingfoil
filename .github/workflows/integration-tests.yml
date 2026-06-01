@@ -40,6 +40,11 @@ jobs:
     uses: ./.github/workflows/iceoryx2-integration.yml
     secrets: inherit
 
+  aeron-integration:
+    name: Aeron Integration Tests
+    uses: ./.github/workflows/aeron-integration.yml
+    secrets: inherit
+
   web-integration:
     name: Web Integration Tests
     uses: ./.github/workflows/web-integration.yml

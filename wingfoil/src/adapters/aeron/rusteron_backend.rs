@@ -251,9 +251,11 @@ impl AeronPublisherBackend for RusteronPublisher {
         let position = self
             .publication
             .offer(buffer, Handlers::no_reserved_value_supplier_handler());
-        if position < 0 {
-            anyhow::bail!("Aeron offer back-pressure: position={position}");
-        }
+        // Route through the shared code→error mapping so back-pressure surfaces
+        // as a typed `TransportError::BackPressure` (which the publisher node
+        // downcasts to record `AeronStatus::BackPressured`), rather than an
+        // opaque string error that the node can't distinguish from a fatal one.
+        result_to_transport_error(position)?;
         Ok(())
     }
 

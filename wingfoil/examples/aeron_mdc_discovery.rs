@@ -13,7 +13,7 @@
 //!   URI string.
 //! - [`aeron_pub_named`](wingfoil::adapters::aeron::aeron_pub_named) is the
 //!   publisher-side pass-through guard.
-//! - [`aeron_sub_burst_named`](wingfoil::adapters::aeron::aeron_sub_burst_named)
+//! - [`aeron_sub_fragment_named`](wingfoil::adapters::aeron::aeron_sub_fragment_named)
 //!   is the subscriber-side factory wrapper that builds the burst stream
 //!   after asserting `name` is registered.
 //!
@@ -29,7 +29,7 @@ use std::time::Duration;
 use wingfoil::adapters::aeron::buffer::FragmentBuffer;
 use wingfoil::adapters::aeron::error::TransportError;
 use wingfoil::adapters::aeron::{
-    AeronHandle, AeronPub, AeronSubOptions, ChannelUri, aeron_pub_named, aeron_sub_burst_named,
+    AeronHandle, AeronPub, AeronSubOptions, ChannelUri, aeron_pub_named, aeron_sub_fragment_named,
     lookup_pub, lookup_sub, register_pub, register_sub,
 };
 use wingfoil::*;
@@ -76,13 +76,13 @@ fn main() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let sub_stream = aeron_sub_burst_named::<i64, _, _>(
+    let sub_stream = aeron_sub_fragment_named::<i64, _, _>(
         "positions",
         rusteron_sub,
         parser,
         AeronSubOptions::default(),
     )
-    .map_err(|e| anyhow::anyhow!("aeron_sub_burst_named: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("aeron_sub_fragment_named: {e}"))?;
 
     // 7. Publish 5 values from a ticker, inspect on the receive side.
     let printer = sub_stream.inspect(|burst| {
