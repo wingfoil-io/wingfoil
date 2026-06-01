@@ -1,6 +1,6 @@
 //! Typed-parser Aeron subscriber nodes — parallel-additive surface.
 //!
-//! Backs [`aeron_sub_burst`](super::aeron_sub_burst) — the typed-parser
+//! Backs [`aeron_sub_fragment`](super::aeron_sub_fragment) — the typed-parser
 //! evolution of the bytes-only [`aeron_sub`](super::aeron_sub) factory.
 //! The new surface exposes Aeron's per-fragment header (`position`,
 //! `session_id`, `stream_id`) and lets parsers signal recoverable errors via
@@ -10,7 +10,7 @@
 //! # Two structs, not one enum
 //!
 //! Spin and threaded modes live as two distinct types
-//! ([`AeronSpinSubBurstNode`] and the `build_threaded` factory) mirroring
+//! ([`AeronSpinSubFragmentNode`] and the `build_threaded` factory) mirroring
 //! [`super::sub_spin`] / [`super::sub_threaded`]. The split keeps `cycle()`
 //! bodies linear (the spin variant polls inline; the threaded variant
 //! delegates to [`ReceiverStream`](crate::nodes::receiver::ReceiverStream))
@@ -45,7 +45,7 @@ use std::time::Duration;
 use tinyvec::TinyVec;
 
 // ---------------------------------------------------------------------------
-// AeronSpinSubBurstNode<T, F, B>
+// AeronSpinSubFragmentNode<T, F, B>
 // ---------------------------------------------------------------------------
 
 /// Busy-spin typed-parser Aeron subscriber node.
@@ -53,7 +53,7 @@ use tinyvec::TinyVec;
 /// Polls Aeron via [`AeronSubscriberBackend::poll_fragments`] inside
 /// `cycle()` on the graph thread. Parser errors are logged and dropped — a
 /// malformed fragment never aborts the cycle (NFR5 zero-stopping rule).
-pub(crate) struct AeronSpinSubBurstNode<T, F, B>
+pub(crate) struct AeronSpinSubFragmentNode<T, F, B>
 where
     T: Element,
     F: FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError>,
@@ -65,7 +65,7 @@ where
     status: Option<Rc<RefCell<AeronStatusStream>>>,
 }
 
-impl<T, F, B> AeronSpinSubBurstNode<T, F, B>
+impl<T, F, B> AeronSpinSubFragmentNode<T, F, B>
 where
     T: Element,
     F: FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError>,
@@ -104,7 +104,7 @@ where
     }
 }
 
-impl<T, F, B> MutableNode for AeronSpinSubBurstNode<T, F, B>
+impl<T, F, B> MutableNode for AeronSpinSubFragmentNode<T, F, B>
 where
     T: Element,
     F: FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError> + 'static,
@@ -151,7 +151,7 @@ where
     }
 }
 
-impl<T, F, B> StreamPeekRef<Burst<T>> for AeronSpinSubBurstNode<T, F, B>
+impl<T, F, B> StreamPeekRef<Burst<T>> for AeronSpinSubFragmentNode<T, F, B>
 where
     T: Element,
     F: FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError> + 'static,
@@ -168,12 +168,12 @@ where
 
 /// Wraps [`ReceiverStream`] to add a cooperative stop signal for the
 /// background polling thread (parallel to `sub_threaded::ThreadedAeronNode`).
-struct ThreadedAeronBurstNode<T: Element + Send> {
+struct ThreadedAeronFragmentNode<T: Element + Send> {
     inner: ReceiverStream<T>,
     stop_flag: Arc<AtomicBool>,
 }
 
-impl<T: Element + Send> MutableNode for ThreadedAeronBurstNode<T> {
+impl<T: Element + Send> MutableNode for ThreadedAeronFragmentNode<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.inner.cycle(state)
     }
@@ -201,7 +201,7 @@ impl<T: Element + Send> MutableNode for ThreadedAeronBurstNode<T> {
     }
 }
 
-impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ThreadedAeronBurstNode<T> {
+impl<T: Element + Send> StreamPeekRef<TinyVec<[T; 1]>> for ThreadedAeronFragmentNode<T> {
     fn peek_ref(&self) -> &TinyVec<[T; 1]> {
         self.inner.peek_ref()
     }
@@ -260,7 +260,7 @@ where
         true,
     );
 
-    ThreadedAeronBurstNode { inner, stop_flag }.into_stream()
+    ThreadedAeronFragmentNode { inner, stop_flag }.into_stream()
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn given_burst_spin_node_when_no_fragments_then_empty_burst_and_returns_false_active() {
         let backend = MockSubscriber::new(vec![vec![]]);
-        let node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let stream = node.into_stream();
         stream
             .clone()
@@ -341,7 +341,7 @@ mod tests {
     fn given_burst_spin_node_when_single_fragment_then_one_element_burst() {
         let msg = 42i64.to_le_bytes().to_vec();
         let backend = MockSubscriber::from_messages(vec![msg]);
-        let node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let stream = node.into_stream();
         stream
             .clone()
@@ -359,7 +359,7 @@ mod tests {
             3i64.to_le_bytes().to_vec(),
         ];
         let backend = MockSubscriber::new(vec![batch]);
-        let node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let stream = node.into_stream();
         stream
             .clone()
@@ -377,7 +377,7 @@ mod tests {
             42i64.to_le_bytes().to_vec(), // valid
         ];
         let backend = MockSubscriber::new(vec![batch]);
-        let node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let stream = node.into_stream();
         stream
             .clone()
@@ -405,7 +405,7 @@ mod tests {
                 _ => Ok(None),
             }
         };
-        let node = AeronSpinSubBurstNode::new(backend, parser);
+        let node = AeronSpinSubFragmentNode::new(backend, parser);
         let stream = node.into_stream();
         stream
             .clone()
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn given_burst_spin_node_when_burst_completes_then_clears_before_next_cycle() {
         let backend = MockSubscriber::new(vec![vec![1i64.to_le_bytes().to_vec()], vec![]]);
-        let node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let stream = node.into_stream();
         stream
             .clone()
@@ -439,7 +439,7 @@ mod tests {
             assert_eq!(f.header().stream_id, 0);
             Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
         };
-        let node = AeronSpinSubBurstNode::new(backend, parser);
+        let node = AeronSpinSubFragmentNode::new(backend, parser);
         let stream = node.into_stream();
         stream
             .clone()
@@ -467,7 +467,7 @@ mod tests {
         let backend = ConnectedMockSubscriber::new(vec![], true);
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let mut node =
-            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+            AeronSpinSubFragmentNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert_eq!(status.borrow().current(), AeronStatus::Connected);
@@ -480,7 +480,7 @@ mod tests {
         let backend = ConnectedMockSubscriber::new(vec![], false);
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let mut node =
-            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+            AeronSpinSubFragmentNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert_eq!(status.borrow().current(), AeronStatus::Disconnected);
@@ -494,7 +494,7 @@ mod tests {
         let backend = ConnectedMockSubscriber::with_batches(vec![vec![], vec![]], true);
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let mut node =
-            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+            AeronSpinSubFragmentNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert_eq!(status.borrow().current(), AeronStatus::Connected);
@@ -509,7 +509,7 @@ mod tests {
         let backend = ConnectedMockSubscriber::with_batches(vec![vec![], vec![]], true);
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let mut node =
-            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+            AeronSpinSubFragmentNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert_eq!(status.borrow().peek_ref().len(), 1);
@@ -526,7 +526,7 @@ mod tests {
         let backend = ConnectedMockSubscriber::new(vec![], true);
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let mut node =
-            AeronSpinSubBurstNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
+            AeronSpinSubFragmentNode::with_status(backend, i64_parser_typed, Rc::clone(&status));
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert_eq!(status.borrow().peek_ref().len(), 1);
@@ -541,7 +541,7 @@ mod tests {
         // Regression guard: the no-status `new()` constructor leaves `status`
         // as None, so no clear / record side-effect runs at all.
         let backend = MockSubscriber::from_messages(vec![]);
-        let mut node = AeronSpinSubBurstNode::new(backend, i64_parser_typed);
+        let mut node = AeronSpinSubFragmentNode::new(backend, i64_parser_typed);
         let mut state = make_graph_state();
         node.cycle(&mut state).unwrap();
         assert!(node.status.is_none());

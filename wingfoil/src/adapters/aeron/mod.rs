@@ -101,7 +101,7 @@ mod discovery;
 mod external;
 mod pub_node;
 mod status_stream;
-mod sub_burst_node;
+mod sub_fragment_node;
 mod sub_spin;
 mod sub_threaded;
 
@@ -264,7 +264,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// aeron_sub_burst — typed-parser surface (parallel-additive)
+// aeron_sub_fragment — typed-parser surface (parallel-additive)
 // ---------------------------------------------------------------------------
 
 /// Create an Aeron subscriber stream with a typed-parser surface.
@@ -272,7 +272,7 @@ where
 /// Parallel-additive sibling of [`aeron_sub`]. Differs only in the parser
 /// signature — both factories return `Rc<dyn Stream<Burst<T>>>`.
 ///
-/// | Surface       | `aeron_sub` (bytes parser)                | `aeron_sub_burst` (typed parser)                                    |
+/// | Surface       | `aeron_sub` (bytes parser)                | `aeron_sub_fragment` (typed parser)                                    |
 /// |---------------|-------------------------------------------|---------------------------------------------------------------------|
 /// | Parser sig    | `FnMut(&[u8]) -> Option<T>`               | `FnMut(&FragmentBuffer<'_>) -> Result<Option<T>, TransportError>`   |
 /// | Header access | No                                        | Yes — `position`, `session_id`, `stream_id`                         |
@@ -291,7 +291,7 @@ where
 /// // before
 /// aeron_sub(sub, |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes), Spin);
 /// // after
-/// aeron_sub_burst(
+/// aeron_sub_fragment(
 ///     sub,
 ///     |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
 ///         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
@@ -307,7 +307,7 @@ where
 /// thread, so the parser bound MUST be `Send` for the factory even though
 /// the spin variant alone would not require it.
 #[must_use]
-pub fn aeron_sub_burst<T, F, B>(
+pub fn aeron_sub_fragment<T, F, B>(
     subscriber: B,
     parser: F,
     opts: AeronSubOptions,
@@ -322,23 +322,23 @@ where
     let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
     match opts.mode {
         AeronMode::Spin => {
-            sub_burst_node::AeronSpinSubBurstNode::new(subscriber, parser).into_stream()
+            sub_fragment_node::AeronSpinSubFragmentNode::new(subscriber, parser).into_stream()
         }
-        AeronMode::Threaded => sub_burst_node::build_threaded(subscriber, parser),
+        AeronMode::Threaded => sub_fragment_node::build_threaded(subscriber, parser),
     }
 }
 
 // ---------------------------------------------------------------------------
-// aeron_sub_burst_with_status — typed-parser surface with reactive status
+// aeron_sub_fragment_with_status — typed-parser surface with reactive status
 // side-channel (Story 12.5)
 // ---------------------------------------------------------------------------
 
 /// Create an Aeron subscriber stream paired with a reactive
 /// [`AeronStatusStream`].
 ///
-/// Parallel-additive sibling of [`aeron_sub_burst`]. Returns a tuple
+/// Parallel-additive sibling of [`aeron_sub_fragment`]. Returns a tuple
 /// `(data_stream, status_stream)`:
-/// - `data_stream` is identical in shape to [`aeron_sub_burst`]'s output.
+/// - `data_stream` is identical in shape to [`aeron_sub_fragment`]'s output.
 /// - `status_stream` emits a `Burst<AeronStatus>` **only on transition
 ///   cycles** (no re-emission on steady state). Wire it as a `Dep::Active`
 ///   upstream and iterate `peek_ref()` for transitions, or call
@@ -366,7 +366,7 @@ where
 /// which add scope and are deferred to a follow-up. Use `AeronMode::Spin`
 /// for live status.
 #[must_use]
-pub fn aeron_sub_burst_with_status<T, F, B>(
+pub fn aeron_sub_fragment_with_status<T, F, B>(
     subscriber: B,
     parser: F,
     opts: AeronSubOptions,
@@ -387,7 +387,7 @@ where
                 status_stream::AeronStatusStream::self_scheduling(),
             ));
             let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
-            let data = sub_burst_node::AeronSpinSubBurstNode::with_status(
+            let data = sub_fragment_node::AeronSpinSubFragmentNode::with_status(
                 subscriber,
                 parser,
                 Rc::clone(&status),
@@ -404,26 +404,26 @@ where
             // the placeholder never busy-spins the graph thread.
             let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
             let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
-            let data = sub_burst_node::build_threaded(subscriber, parser);
+            let data = sub_fragment_node::build_threaded(subscriber, parser);
             (data, status_stream)
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// aeron_sub_burst_named — name-checked factory wrapper around aeron_sub_burst
+// aeron_sub_fragment_named — name-checked factory wrapper around aeron_sub_fragment
 // (Story 12.6)
 // ---------------------------------------------------------------------------
 
 /// Create an Aeron subscriber stream after verifying `name` is registered in
 /// the discovery layer.
 ///
-/// Wraps [`aeron_sub_burst`] with a [`discovery::aeron_sub_named`] guard: the
+/// Wraps [`aeron_sub_fragment`] with a [`discovery::aeron_sub_named`] guard: the
 /// name is validated and looked up before any stream construction happens.
 /// On unknown / empty / invalid names, returns `Err(DiscoveryError::*)`
 /// before constructing the underlying node.
 ///
-/// See [`aeron_sub_burst`] for the data-stream contract (parser signature,
+/// See [`aeron_sub_fragment`] for the data-stream contract (parser signature,
 /// `Burst<T>` shape, fragment limit) and [`discovery::aeron_sub_named`] for
 /// the validation contract.
 ///
@@ -432,7 +432,7 @@ where
 /// Returns [`discovery::DiscoveryError`] if the name fails validation or has
 /// not been registered via [`discovery::register_sub`].
 #[must_use = "the returned subscriber stream must be wired into a graph or its fragments are silently dropped"]
-pub fn aeron_sub_burst_named<T, F, B>(
+pub fn aeron_sub_fragment_named<T, F, B>(
     name: &str,
     subscriber: B,
     parser: F,
@@ -446,19 +446,19 @@ where
     B: transport::AeronSubscriberBackend,
 {
     let subscriber = discovery::aeron_sub_named(name, subscriber)?;
-    Ok(aeron_sub_burst(subscriber, parser, opts))
+    Ok(aeron_sub_fragment(subscriber, parser, opts))
 }
 
 // ---------------------------------------------------------------------------
-// aeron_sub_burst_with_status_named — name-checked factory wrapper around
-// aeron_sub_burst_with_status (Story 12.6)
+// aeron_sub_fragment_with_status_named — name-checked factory wrapper around
+// aeron_sub_fragment_with_status (Story 12.6)
 // ---------------------------------------------------------------------------
 
 /// Create an Aeron subscriber stream paired with a reactive
 /// [`AeronStatusStream`], after verifying `name` is registered.
 ///
-/// Wraps [`aeron_sub_burst_with_status`] with a [`discovery::aeron_sub_named`]
-/// guard. See [`aeron_sub_burst_with_status`] for the data + status-stream
+/// Wraps [`aeron_sub_fragment_with_status`] with a [`discovery::aeron_sub_named`]
+/// guard. See [`aeron_sub_fragment_with_status`] for the data + status-stream
 /// contract (including the threaded-mode caveat that the status stream stays
 /// in its `Default` state) and [`discovery::aeron_sub_named`] for the
 /// validation contract.
@@ -468,7 +468,7 @@ where
 /// Returns [`discovery::DiscoveryError`] if the name fails validation or has
 /// not been registered via [`discovery::register_sub`].
 #[must_use = "the returned (data, status) stream pair must be wired into a graph or its fragments are silently dropped"]
-pub fn aeron_sub_burst_with_status_named<T, F, B>(
+pub fn aeron_sub_fragment_with_status_named<T, F, B>(
     name: &str,
     subscriber: B,
     parser: F,
@@ -482,7 +482,7 @@ where
     B: transport::AeronSubscriberBackend,
 {
     let subscriber = discovery::aeron_sub_named(name, subscriber)?;
-    Ok(aeron_sub_burst_with_status(subscriber, parser, opts))
+    Ok(aeron_sub_fragment_with_status(subscriber, parser, opts))
 }
 
 #[cfg(test)]
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_burst_with_status_when_threaded_mode_then_status_stream_stays_default() {
+    fn given_aeron_sub_fragment_with_status_when_threaded_mode_then_status_stream_stays_default() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::error::TransportError;
         use crate::adapters::aeron::transport::MockSubscriber;
@@ -516,7 +516,7 @@ mod tests {
         let parser = |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
             Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
         };
-        let (_data, status_stream) = aeron_sub_burst_with_status(
+        let (_data, status_stream) = aeron_sub_fragment_with_status(
             backend,
             parser,
             AeronSubOptions {
@@ -531,8 +531,8 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Story 12.6: factory wrapper tests (aeron_sub_burst_named +
-    // aeron_sub_burst_with_status_named).
+    // Story 12.6: factory wrapper tests (aeron_sub_fragment_named +
+    // aeron_sub_fragment_with_status_named).
     //
     // Each test uses a unique registry name to avoid cross-test
     // contamination of the process-global registry (PUB_REGISTRY /
@@ -540,7 +540,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn given_aeron_sub_burst_named_when_registered_then_returns_stream() {
+    fn given_aeron_sub_fragment_named_when_registered_then_returns_stream() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::register_sub;
         use crate::adapters::aeron::error::TransportError;
@@ -549,7 +549,7 @@ mod tests {
         register_sub("test-named-sub-1", "aeron:ipc".to_string(), 1001).unwrap();
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let stream = aeron_sub_burst_named(
+        let stream = aeron_sub_fragment_named(
             "test-named-sub-1",
             backend,
             parser,
@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_burst_named_when_unregistered_then_returns_unknown_error() {
+    fn given_aeron_sub_fragment_named_when_unregistered_then_returns_unknown_error() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::DiscoveryError;
         use crate::adapters::aeron::error::TransportError;
@@ -568,7 +568,7 @@ mod tests {
 
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let err = aeron_sub_burst_named(
+        let err = aeron_sub_fragment_named(
             "test-never-registered-2",
             backend,
             parser,
@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_burst_named_when_empty_name_then_returns_empty_name_error() {
+    fn given_aeron_sub_fragment_named_when_empty_name_then_returns_empty_name_error() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::DiscoveryError;
         use crate::adapters::aeron::error::TransportError;
@@ -587,13 +587,13 @@ mod tests {
 
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let err = aeron_sub_burst_named("", backend, parser, AeronSubOptions::default())
+        let err = aeron_sub_fragment_named("", backend, parser, AeronSubOptions::default())
             .expect_err("empty name returns EmptyName before stream construction");
         assert_eq!(err, DiscoveryError::EmptyName);
     }
 
     #[test]
-    fn given_aeron_sub_burst_named_when_invalid_name_then_returns_invalid_name_error() {
+    fn given_aeron_sub_fragment_named_when_invalid_name_then_returns_invalid_name_error() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::DiscoveryError;
         use crate::adapters::aeron::error::TransportError;
@@ -601,7 +601,7 @@ mod tests {
 
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let err = aeron_sub_burst_named(
+        let err = aeron_sub_fragment_named(
             "contains space",
             backend,
             parser,
@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_burst_with_status_named_when_registered_then_returns_pair() {
+    fn given_aeron_sub_fragment_with_status_named_when_registered_then_returns_pair() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::register_sub;
         use crate::adapters::aeron::error::TransportError;
@@ -621,7 +621,7 @@ mod tests {
         register_sub("test-named-sub-5", "aeron:ipc".to_string(), 1005).unwrap();
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let (data_stream, status_stream) = aeron_sub_burst_with_status_named(
+        let (data_stream, status_stream) = aeron_sub_fragment_with_status_named(
             "test-named-sub-5",
             backend,
             parser,
@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_burst_with_status_named_when_unregistered_then_returns_unknown_error() {
+    fn given_aeron_sub_fragment_with_status_named_when_unregistered_then_returns_unknown_error() {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::discovery::DiscoveryError;
         use crate::adapters::aeron::error::TransportError;
@@ -641,7 +641,7 @@ mod tests {
 
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |_f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-        let err = aeron_sub_burst_with_status_named(
+        let err = aeron_sub_fragment_with_status_named(
             "test-never-registered-6",
             backend,
             parser,

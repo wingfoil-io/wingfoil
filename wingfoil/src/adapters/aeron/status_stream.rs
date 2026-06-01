@@ -14,7 +14,7 @@ use crate::{Burst, GraphState, MutableNode, StreamPeekRef, UpStreams};
 /// A passive wingfoil node that buffers `AeronStatus` transitions for the
 /// current cycle.
 ///
-/// The producer node (e.g. `AeronSpinSubBurstNode`) owns an
+/// The producer node (e.g. `AeronSpinSubFragmentNode`) owns an
 /// `Rc<RefCell<AeronStatusStream>>` and drives it via `clear()` (cycle start)
 /// and `record(new_status)` (after each poll). The stream's own `cycle()` is
 /// passive — it returns `Ok(!self.out.is_empty())` so any active downstream

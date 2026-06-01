@@ -1,6 +1,6 @@
 # Aeron Adapter
 
-Subscribes to an Aeron channel and emits `Burst<T>` (`aeron_sub` / `aeron_sub_burst`),
+Subscribes to an Aeron channel and emits `Burst<T>` (`aeron_sub` / `aeron_sub_fragment`),
 and publishes serialised values to an Aeron channel (`AeronPub::aeron_pub`).
 Aeron is a low-latency UDP/IPC message transport; this adapter wraps it as
 wingfoil source and sink nodes.
@@ -15,7 +15,7 @@ aeron/
   aeron_rs_backend.rs  # `aeron-rs-beta` feature: pure-Rust aeron-rs backend (experimental)
   sub_spin.rs          # Spin-mode subscriber node (polls in cycle() on the graph thread)
   sub_threaded.rs      # Threaded-mode subscriber node (background thread + ReceiverStream)
-  sub_burst_node.rs    # Burst<T> subscriber surface (typed parser with FragmentHeader access)
+  sub_fragment_node.rs    # Burst<T> subscriber surface (typed parser with FragmentHeader access)
   pub_node.rs          # AeronPub trait + publisher node (offer, dedup, status variants)
   status.rs            # AeronStatus enum (Disconnected / Connected / BackPressured / Closed)
   status_stream.rs     # AeronStatusStream — reactive Burst<AeronStatus> side-channel
@@ -43,17 +43,17 @@ running media driver (the normal production topology).
 
 ## Key Components
 
-### Subscribing — `aeron_sub` / `aeron_sub_burst`
+### Subscribing — `aeron_sub` / `aeron_sub_fragment`
 
 - `aeron_sub(subscriber, parser, mode)` — `parser: FnMut(&[u8]) -> Option<T>`,
   emits `Burst<T>`.
-- `aeron_sub_burst(subscriber, parser, opts)` — typed parser
+- `aeron_sub_fragment(subscriber, parser, opts)` — typed parser
   `FnMut(&FragmentBuffer) -> Result<Option<T>, TransportError>` with access to
   the per-fragment `FragmentHeader` (position, session_id, stream_id).
-- `aeron_sub_burst_with_status(...)` — returns `(data_stream, status_stream)`;
+- `aeron_sub_fragment_with_status(...)` — returns `(data_stream, status_stream)`;
   the status stream emits `Burst<AeronStatus>` on connect/disconnect transitions
   (spin mode only — threaded mode returns a default-state placeholder).
-- `aeron_sub_burst_named(...)` — resolves the subscriber from the named-endpoint
+- `aeron_sub_fragment_named(...)` — resolves the subscriber from the named-endpoint
   registry (see `discovery.rs`).
 
 The `subscriber` handle comes from `AeronHandle::subscription(channel, stream_id, timeout)`

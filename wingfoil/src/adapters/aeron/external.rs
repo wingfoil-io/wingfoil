@@ -6,7 +6,7 @@
 //!
 //! # When to reach for `ExternalSource`
 //!
-//! - Prefer [`aeron_sub_burst`](super::aeron_sub_burst) for graph-native use:
+//! - Prefer [`aeron_sub_fragment`](super::aeron_sub_fragment) for graph-native use:
 //!   it returns a `Burst<T>` per cycle and integrates with the standard
 //!   wingfoil scheduler.
 //! - Reach for `ExternalSource` only when the caller's poll loop owns

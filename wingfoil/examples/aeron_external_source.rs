@@ -12,7 +12,7 @@
 //!
 //! # When to use this pattern
 //!
-//! Prefer the graph-native `aeron_sub_burst` (returns a `Burst<T>`) for most
+//! Prefer the graph-native `aeron_sub_fragment` (returns a `Burst<T>`) for most
 //! use cases. `ExternalSource` is the escape hatch when you need:
 //! - Zero-copy SBE decoding with flyweight lifetimes (decoders only live
 //!   during the poll callback).

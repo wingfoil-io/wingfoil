@@ -558,11 +558,11 @@ fn test_fragment_limit_caps_burst_size() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Story 12.4 — aeron_sub_burst typed-parser surface
+// Story 12.4 — aeron_sub_fragment typed-parser surface
 // ---------------------------------------------------------------------------
 
 /// Spin-mode typed-parser round-trip: an independent ticker-driven publisher
-/// emits a single value over the media driver; `aeron_sub_burst` collects it.
+/// emits a single value over the media driver; `aeron_sub_fragment` collects it.
 #[cfg(feature = "aeron")]
 #[test]
 fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
@@ -577,7 +577,7 @@ fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     let collected = subscriber.collect();
 
     let source = crate::nodes::ticker(Duration::from_millis(10))
@@ -630,7 +630,7 @@ fn test_spin_sub_burst_typed_accumulation() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(
+    let subscriber = aeron_sub_fragment(
         sub,
         parser,
         AeronSubOptions {
@@ -683,7 +683,7 @@ fn test_threaded_sub_burst_accumulates_across_channel_drain() -> anyhow::Result<
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(
+    let subscriber = aeron_sub_fragment(
         sub,
         parser,
         AeronSubOptions {
@@ -739,7 +739,7 @@ fn test_collapse_yields_latest_value() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     // `.collapse()` reduces a burst stream to a scalar stream of latest values.
     let collapsed = subscriber.collapse();
     let collected = collapsed.collect();
@@ -810,7 +810,7 @@ fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result
         );
         Ok(Some(frag.position()))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     let collected = subscriber.collect();
 
     let source = crate::nodes::ticker(Duration::from_millis(50))
@@ -867,7 +867,7 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
     let (data, status_stream) =
-        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+        aeron_sub_fragment_with_status(sub, parser, AeronSubOptions::default());
     let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
@@ -926,7 +926,7 @@ fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
     let (_data, status_stream) =
-        aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
+        aeron_sub_fragment_with_status(sub, parser, AeronSubOptions::default());
     let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
@@ -1038,7 +1038,7 @@ fn test_publisher_dedup_suppresses_consecutive_equal_values() -> anyhow::Result<
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     let collected = subscriber.collect();
 
     let source = crate::nodes::ticker(Duration::from_millis(1))
@@ -1096,7 +1096,7 @@ fn test_publisher_dedup_back_pressure_retries_latest() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     let collected = subscriber.collect();
 
     // Source: monotonically advancing 64-bit counter. With dedup off, every
@@ -1150,7 +1150,7 @@ fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let subscriber = aeron_sub_burst(sub, parser, AeronSubOptions::default());
+    let subscriber = aeron_sub_fragment(sub, parser, AeronSubOptions::default());
     let collected = subscriber.collect();
 
     let source = crate::nodes::ticker(Duration::from_millis(50))
@@ -1299,7 +1299,7 @@ fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
 }
 
 /// Full registry round-trip: register pub + sub, wrap the rusteron backends
-/// via `aeron_pub_named` / `aeron_sub_burst_named`, round-trip a single i64.
+/// via `aeron_pub_named` / `aeron_sub_fragment_named`, round-trip a single i64.
 #[cfg(feature = "aeron")]
 #[test]
 fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
@@ -1318,7 +1318,7 @@ fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let sub_stream = aeron_sub_burst_named(
+    let sub_stream = aeron_sub_fragment_named(
         "test-zero-egress-roundtrip",
         sub,
         parser,
@@ -1356,7 +1356,7 @@ fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `aeron_sub_burst_named` returns `Err(DiscoveryError::Unknown)` for a name
+/// `aeron_sub_fragment_named` returns `Err(DiscoveryError::Unknown)` for a name
 /// that has not been registered — the error short-circuits before any Aeron
 /// call so the test does not actually need the driver for behaviour, but we
 /// start one for symmetry with the rest of the integration suite.
@@ -1371,7 +1371,7 @@ fn test_named_discovery_unknown_returns_error() -> anyhow::Result<()> {
     let sub = handle.subscription(&channel, stream_id, CONNECT_TIMEOUT)?;
 
     let parser = |_frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> { Ok(None) };
-    let err = aeron_sub_burst_named(
+    let err = aeron_sub_fragment_named(
         "test-never-registered-2023",
         sub,
         parser,
