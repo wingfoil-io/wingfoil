@@ -1,9 +1,30 @@
 //! Pure-Rust `aeron-rs` backend for the Aeron adapter.
 //!
-//! Requires the `aeron-rs` feature flag.  No C++ toolchain needed.
+//! Requires the `aeron-rs-beta` feature flag.  No C++ toolchain needed.
 //!
-//! `aeron-rs` is less mature than the rusteron C++ FFI backend.  Prefer
-//! `aeron-rusteron` for production use.
+//! `aeron-rs` is less mature than the rusteron C++ FFI backend.  Prefer the
+//! `aeron` (rusteron) backend for production use.
+//!
+//! # ⚠️ Lock on the graph thread (why this is `-beta`)
+//!
+//! The `aeron-rs` crate hands back its `Subscription` and `Publication` as
+//! `Arc<Mutex<…>>` and shares them with its own background client-conductor
+//! thread, which upgrades the weak refs and locks them on every publisher
+//! connect/disconnect (`on_available_image` / `on_unavailable_image`). The
+//! lock is the live synchronisation point between our poll and that conductor,
+//! so it **cannot be hoisted to wiring time** (holding it would stall the
+//! conductor) — it must be taken and released on every [`poll`] / [`offer`].
+//!
+//! [`AeronSubscriberBackend::poll`] / [`AeronPublisherBackend::offer`] are
+//! called from the graph `cycle()` in [`AeronMode::Spin`], so that contended
+//! lock lands on the graph thread — antithetical to Aeron's lock-free design
+//! and to wingfoil's "no locks in `cycle()`" invariant. Use the `aeron`
+//! backend for low latency, or [`AeronMode::Threaded`] to move the subscriber
+//! lock onto the background poll thread. The publisher has no threaded mode and
+//! always locks on the calling thread.
+//!
+//! [`AeronMode::Spin`]: crate::adapters::aeron::AeronMode::Spin
+//! [`AeronMode::Threaded`]: crate::adapters::aeron::AeronMode::Threaded
 //!
 //! # Connection lifecycle
 //!
@@ -139,6 +160,8 @@ impl AeronRsSubscriber {
 impl AeronSubscriberBackend for AeronRsSubscriber {
     fn poll(&mut self, handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
         let mut count = 0usize;
+        // Conductor-shared lock; on the graph thread in Spin mode. See module
+        // docs ("Lock on the graph thread") for why this can't be hoisted.
         let mut sub = self.sub.lock().unwrap();
         sub.poll(
             &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {

@@ -8,10 +8,33 @@
 //!
 //! Enable exactly one backend feature flag:
 //!
-//! | Feature            | Crate             | Notes                                    |
-//! |--------------------|-------------------|------------------------------------------|
-//! | `aeron-rusteron`   | `rusteron-client` | C++ FFI, recommended for production      |
-//! | `aeron-rs`         | `aeron-rs`        | Pure Rust, no C++ toolchain required     |
+//! | Feature         | Crate             | Notes                                           |
+//! |-----------------|-------------------|-------------------------------------------------|
+//! | `aeron`         | `rusteron-client` | C++ FFI. Recommended for production.            |
+//! | `aeron-rs-beta` | `aeron-rs`        | Pure Rust, no C++ toolchain. **Beta — not for low-latency use, see warning below.** |
+//!
+//! The optional `aeron-driver` feature additionally embeds a media driver
+//! (`rusteron-media-driver`) in-process; it implies `aeron`. Without it, point
+//! the client at an externally-running media driver (the usual production
+//! topology).
+//!
+//! ## ⚠️ `aeron-rs-beta` takes a lock on the graph thread
+//!
+//! The `aeron-rs` crate returns its `Subscription` / `Publication` handles as
+//! `Arc<Mutex<…>>` and shares them with its own background client-conductor
+//! thread, which locks them on every publisher connect/disconnect. The backend
+//! therefore **acquires that `Mutex` on every `poll()` / `offer()`** — and in
+//! [`AeronMode::Spin`] those calls run inside the graph `cycle()` on the graph
+//! thread. That contended lock on the hot path is antithetical to Aeron's
+//! lock-free design and violates wingfoil's "no locks in `cycle()`" invariant.
+//!
+//! Consequences and guidance:
+//! - For latency-sensitive or production workloads, use the `aeron` (rusteron)
+//!   backend, whose `poll()` / `offer()` are genuinely lock-free.
+//! - If you must use `aeron-rs-beta`, prefer [`AeronMode::Threaded`] so the lock
+//!   is taken on the background poll thread rather than the graph thread.
+//! - The `aeron-rs-beta` publisher has no threaded mode; its `offer()` always
+//!   locks on the calling (graph) thread. Treat it as functional-but-slow.
 //!
 //! # Polling modes
 //!
@@ -82,10 +105,10 @@ mod sub_burst_node;
 mod sub_spin;
 mod sub_threaded;
 
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 pub mod rusteron_backend;
 
-#[cfg(feature = "aeron-rs")]
+#[cfg(feature = "aeron-rs-beta")]
 pub mod aeron_rs_backend;
 
 pub use buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
@@ -103,10 +126,10 @@ pub use status::AeronStatus;
 pub use status_stream::AeronStatusStream;
 pub use transport::{AeronPublisherBackend, AeronSubscriberBackend};
 
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 pub use rusteron_backend::AeronHandle;
 
-#[cfg(feature = "aeron-rs")]
+#[cfg(feature = "aeron-rs-beta")]
 pub use aeron_rs_backend::AeronRsHandle;
 
 use crate::{Burst, Element, IntoStream, Stream};

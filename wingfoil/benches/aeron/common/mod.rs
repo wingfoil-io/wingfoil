@@ -47,7 +47,7 @@ impl MediaDriverGuard {
     /// # Errors
     ///
     /// Returns an error if the media driver cannot be started.
-    #[cfg(feature = "embedded-driver")]
+    #[cfg(feature = "aeron-driver")]
     pub fn start() -> Result<Self, String> {
         // Check if user wants to use an external driver
         if std::env::var("AERON_EXTERNAL_DRIVER").is_ok() {
@@ -60,7 +60,7 @@ impl MediaDriverGuard {
         Self::start_embedded()
     }
 
-    #[cfg(feature = "embedded-driver")]
+    #[cfg(feature = "aeron-driver")]
     fn start_embedded() -> Result<Self, String> {
         use rusteron_media_driver::{AeronDriver, AeronDriverContext};
 
@@ -100,9 +100,9 @@ impl MediaDriverGuard {
         Ok(MediaDriverGuard { stop_signal })
     }
 
-    #[cfg(not(feature = "embedded-driver"))]
+    #[cfg(not(feature = "aeron-driver"))]
     pub fn start() -> Result<Self, String> {
-        Err("No driver feature enabled. Enable 'embedded-driver'.".to_string())
+        Err("No driver feature enabled. Enable 'aeron-driver'.".to_string())
     }
 }
 
@@ -156,7 +156,7 @@ impl MessageSize {
 // Rusteron benchmark helpers
 // ============================================================================
 
-#[cfg(feature = "embedded-driver")]
+#[cfg(feature = "aeron-driver")]
 pub mod rusteron_support {
     use super::*;
     use rusteron_client::IntoCString;

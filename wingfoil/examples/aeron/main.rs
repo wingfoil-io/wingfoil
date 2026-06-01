@@ -6,7 +6,7 @@
 //! Run with:
 //! ```sh
 //! # Start the Aeron media driver first, then:
-//! cargo run --example aeron --features aeron-rusteron
+//! cargo run --example aeron --features aeron
 //! ```
 
 use std::time::Duration;
