@@ -379,10 +379,14 @@ where
     B: transport::AeronSubscriberBackend,
 {
     let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
-    let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
-    let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
     match opts.mode {
         AeronMode::Spin => {
+            // Spin records status on the graph thread, so the status node must
+            // self-schedule (always_callback) to forward recorded transitions.
+            let status = Rc::new(RefCell::new(
+                status_stream::AeronStatusStream::self_scheduling(),
+            ));
+            let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
             let data = sub_burst_node::AeronSpinSubBurstNode::with_status(
                 subscriber,
                 parser,
@@ -394,9 +398,12 @@ where
         AeronMode::Threaded => {
             // Threaded variant: status is not wired across the channel
             // boundary in this story. The returned status stream is the
-            // default-state AeronStatusStream that never records a
-            // transition — `peek_ref()` always observes `Burst::new()`
-            // (empty), `current()` returns `Disconnected`.
+            // default-state AeronStatusStream that never records a transition —
+            // `peek_ref()` always observes `Burst::new()` (empty), `current()`
+            // returns `Disconnected`. It deliberately does NOT self-schedule, so
+            // the placeholder never busy-spins the graph thread.
+            let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
+            let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
             let data = sub_burst_node::build_threaded(subscriber, parser);
             (data, status_stream)
         }

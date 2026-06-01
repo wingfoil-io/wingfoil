@@ -23,9 +23,30 @@ use crate::{Burst, GraphState, MutableNode, StreamPeekRef, UpStreams};
 pub struct AeronStatusStream {
     last: AeronStatus,
     out: Burst<AeronStatus>,
+    /// When `true`, the node registers an `always_callback` in `start()` so it
+    /// is re-cycled every graph cycle and can propagate transitions recorded by
+    /// its producer. Set for the driven cases (spin subscriber, publisher);
+    /// left `false` for the threaded-subscriber placeholder, which never records
+    /// and so must not keep the graph thread spinning.
+    self_schedule: bool,
 }
 
 impl AeronStatusStream {
+    /// Construct a status stream that re-schedules itself every graph cycle.
+    ///
+    /// Use this when a producer node records transitions on the graph thread
+    /// (spin subscriber / publisher) so the node cycles and forwards them to
+    /// downstream consumers. The threaded-subscriber placeholder uses
+    /// [`default`](Default::default) instead — it never records, so leaving it
+    /// unscheduled lets the graph idle.
+    #[must_use]
+    pub(crate) fn self_scheduling() -> Self {
+        Self {
+            self_schedule: true,
+            ..Default::default()
+        }
+    }
+
     /// Records `new` as a transition iff it differs from the previously
     /// recorded status. Called by the host node from its poll / offer path.
     pub(crate) fn record(&mut self, new: AeronStatus) {
@@ -59,7 +80,13 @@ impl MutableNode for AeronStatusStream {
         Ok(!self.out.is_empty())
     }
 
-    fn start(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        // Driven status streams (spin subscriber / publisher) must re-cycle
+        // every graph cycle to forward producer-recorded transitions; the
+        // threaded placeholder stays inert so the graph thread can idle.
+        if self.self_schedule {
+            state.always_callback();
+        }
         Ok(())
     }
 

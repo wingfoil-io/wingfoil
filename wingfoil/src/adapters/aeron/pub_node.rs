@@ -328,7 +328,7 @@ impl<T: Element> AeronPub<T> for dyn Stream<Burst<T>> {
         publisher: B,
         serialiser: impl Fn(&T) -> Vec<u8> + 'static,
     ) -> (Rc<dyn Node>, Rc<dyn Stream<Burst<AeronStatus>>>) {
-        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let status = Rc::new(RefCell::new(AeronStatusStream::self_scheduling()));
         let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
         let node = build_with_status(self.clone(), serialiser, publisher, status);
         (node, status_stream)
@@ -342,7 +342,7 @@ impl<T: Element> AeronPub<T> for dyn Stream<Burst<T>> {
     where
         T: PartialEq,
     {
-        let status = Rc::new(RefCell::new(AeronStatusStream::default()));
+        let status = Rc::new(RefCell::new(AeronStatusStream::self_scheduling()));
         let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
         let node = build_dedup_with_status(self.clone(), serialiser, publisher, status);
         (node, status_stream)

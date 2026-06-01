@@ -866,7 +866,7 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
     };
-    let (_data, status_stream) =
+    let (data, status_stream) =
         aeron_sub_burst_with_status(sub, parser, AeronSubOptions::default());
     let observed: Rc<RefCell<Vec<AeronStatus>>> = Rc::new(RefCell::new(Vec::new()));
     let observed_inspect = Rc::clone(&observed);
@@ -885,8 +885,11 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
+    // The subscriber data node must be in the graph: it polls Aeron and records
+    // the connection transition into the (shared) status stream. Without it the
+    // subscriber never polls and the status stream stays empty.
     Graph::new(
-        vec![inspected.as_node(), pub_node],
+        vec![data.as_node(), inspected.as_node(), pub_node],
         RunMode::RealTime,
         RunFor::Duration(Duration::from_secs(2)),
     )
