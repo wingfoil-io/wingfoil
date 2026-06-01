@@ -314,7 +314,7 @@ impl<T: Element + Send> MutableNode for ThreadedAeronStatusFragmentNode<T> {
             match item {
                 AeronItem::Data(v) => self.value.push(v.clone()),
                 AeronItem::Status(s) => {
-                    transition |= self.status.borrow_mut().record(s.clone());
+                    transition |= self.status.borrow_mut().record(*s);
                 }
             }
         }
@@ -415,7 +415,7 @@ where
                     AeronStatus::Disconnected
                 };
                 if new_status != last_status {
-                    last_status = new_status.clone();
+                    last_status = new_status;
                     let _ =
                         sender.send_message(Message::RealtimeValue(AeronItem::Status(new_status)));
                 }

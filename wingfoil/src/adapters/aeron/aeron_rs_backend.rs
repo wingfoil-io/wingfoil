@@ -94,7 +94,10 @@ impl AeronRsHandle {
         stream_id: i32,
         timeout: Duration,
     ) -> anyhow::Result<AeronRsSubscriber> {
-        let mut aeron = self.aeron.lock().unwrap();
+        let mut aeron = self
+            .aeron
+            .lock()
+            .map_err(|e| anyhow::anyhow!("aeron-rs client mutex poisoned: {e}"))?;
         let id = aeron.add_subscription(CString::new(channel)?, stream_id)?;
         let sub = poll_until_found(
             || aeron.find_subscription(id).ok(),
@@ -113,7 +116,10 @@ impl AeronRsHandle {
         stream_id: i32,
         timeout: Duration,
     ) -> anyhow::Result<AeronRsPublisher> {
-        let mut aeron = self.aeron.lock().unwrap();
+        let mut aeron = self
+            .aeron
+            .lock()
+            .map_err(|e| anyhow::anyhow!("aeron-rs client mutex poisoned: {e}"))?;
         let id = aeron.add_publication(CString::new(channel)?, stream_id)?;
         let publication = poll_until_found(
             || aeron.find_publication(id).ok(),
@@ -162,7 +168,10 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
         let mut count = 0usize;
         // Conductor-shared lock; on the graph thread in Spin mode. See module
         // docs ("Lock on the graph thread") for why this can't be hoisted.
-        let mut sub = self.sub.lock().unwrap();
+        let mut sub = self
+            .sub
+            .lock()
+            .map_err(|e| anyhow::anyhow!("aeron-rs subscription mutex poisoned: {e}"))?;
         sub.poll(
             &mut |buffer: &AtomicBuffer, offset: Index, length: Index, _header: &Header| {
                 handler(buffer.as_sub_slice(offset, length));
@@ -252,7 +261,10 @@ pub struct AeronRsPublisher {
 
 impl AeronPublisherBackend for AeronRsPublisher {
     fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
-        let publication = self.publication.lock().unwrap();
+        let publication = self
+            .publication
+            .lock()
+            .map_err(|e| anyhow::anyhow!("aeron-rs publication mutex poisoned: {e}"))?;
         let len = buffer.len() as Index;
         let aligned = AlignedBuffer::with_capacity(len);
         let ab = AtomicBuffer::from_aligned(&aligned);
