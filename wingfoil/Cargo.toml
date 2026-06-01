@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "aeron"]
 # Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
 # Off by default so consumers don't pull in criterion's dependency tree.
 bench = ["dep:criterion"]
