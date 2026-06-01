@@ -85,6 +85,16 @@ impl RunFor {
     }
 }
 
+/// Resolved start/end bounds for a run, computed once before the run loop.
+///
+/// `end_time` / `end_cycle` default to their `MAX` sentinel when the
+/// corresponding bound does not apply (e.g. `end_cycle` for `RunFor::Duration`).
+struct RunBounds {
+    start_time: NanoTime,
+    end_time: NanoTime,
+    end_cycle: u32,
+}
+
 fn average_duration(duration: Duration, n: u32) -> Duration {
     let avg_nanos = if n == 0 {
         0
@@ -489,71 +499,67 @@ impl Graph {
             timer.elapsed(),
             self.state.nodes.len()
         );
-        //println!("*** {:}graph {:} {:} done", "   ".repeat(self.state.id), self.state.id, desc);
         Ok(())
     }
 
-    fn resolve_start_end(
-        &self,
-        start_time: &mut NanoTime,
-        end_time: &mut NanoTime,
-        end_cycle: &mut u32,
-        is_realtime: &mut bool,
-    ) {
-        *end_time = NanoTime::MAX; // can update after first tick
-        *end_cycle = u32::MAX; // can update after first tick
-        match self.state.run_mode() {
-            RunMode::RealTime => {
-                *is_realtime = true;
-                *start_time = NanoTime::now();
-            }
-            RunMode::HistoricalFrom(t) => {
-                *is_realtime = false;
-                *start_time = t;
-            }
+    fn resolve_start_end(&self) -> RunBounds {
+        let start_time = match self.state.run_mode() {
+            RunMode::RealTime => NanoTime::now(),
+            RunMode::HistoricalFrom(t) => t,
         };
+        // Defaults leave the loop unbounded until refined by `run_for`.
+        let mut end_time = NanoTime::MAX;
+        let mut end_cycle = u32::MAX;
         match self.state.run_for {
             RunFor::Duration(duration) => {
-                *end_time = *start_time + duration;
+                end_time = start_time + duration;
                 debug!("end_time = {end_time}",);
             }
             RunFor::Cycles(cycle) => {
-                *end_cycle = cycle;
+                end_cycle = cycle;
                 debug!("end_cycle = {end_cycle}",);
             }
             RunFor::Forever => {}
         }
+        RunBounds {
+            start_time,
+            end_time,
+            end_cycle,
+        }
     }
 
     pub(crate) fn run_nodes(&mut self) -> anyhow::Result<()> {
-        //println!("*** {:}graph {:} run_nodes", "   ".repeat(self.state.id), self.state.id);
         let run_timer = Instant::now();
         let mut cycles: u32 = 0;
         let mut empty_cycles: u32 = 0;
-        let mut end_time = NanoTime::MAX;
-        let mut end_cycle = u32::MAX;
-        let mut is_realtime = false;
-        let mut start_time = NanoTime::ZERO;
-        self.resolve_start_end(
-            &mut start_time,
-            &mut end_time,
-            &mut end_cycle,
-            &mut is_realtime,
-        );
+        let RunBounds {
+            start_time,
+            end_time,
+            end_cycle,
+        } = self.resolve_start_end();
+        let is_realtime = matches!(self.state.run_mode(), RunMode::RealTime);
         self.state.start_time = start_time;
         loop {
-            if self.state.is_last_cycle && (self.state.time >= end_time || cycles >= end_cycle) {
+            // Single source of truth for whether we have reached the configured
+            // bound: the duration elapsed or the cycle count was hit.
+            // Comparisons stay `>=` to preserve historical behavior (see #374).
+            let cycles_done = cycles >= end_cycle;
+            let time_done = self.state.time >= end_time;
+            // Break once the bound has been reached. The cycle-count bound can
+            // terminate immediately (it requires no final cycle to run), which
+            // gives `Cycles(0)` a clean zero-cycle exit; the time bound is gated
+            // on `is_last_cycle` so the final scheduled cycle still executes.
+            if cycles_done || (self.state.is_last_cycle && time_done) {
                 debug!(
                     "Finished. {:}, {:}, {:}, {:}",
-                    self.state.time >= end_time,
-                    cycles >= end_cycle,
-                    self.state.time,
-                    end_time
+                    time_done, cycles_done, self.state.time, end_time
                 );
                 break;
             }
-            if !self.state.is_last_cycle && (cycles >= end_cycle - 1 || self.state.time >= end_time)
-            {
+            // One-cycle lookahead: flag the upcoming cycle as the last. The
+            // `cycles + 1 >= end_cycle` form avoids the `end_cycle - 1`
+            // underflow that previously wrapped to `u32::MAX` for `Cycles(0)`.
+            if !self.state.is_last_cycle && (cycles + 1 >= end_cycle || time_done) {
                 debug!("last cycle");
                 self.state.is_last_cycle = true;
             }
@@ -571,15 +577,6 @@ impl Graph {
                 }
             }
             self.cycle()?;
-            /*
-            if cycles == 0 && !is_realtime {
-                // first cycle
-                if let RunFor::Duration(duration) = run_for {
-                    end_time = self.state.time + duration.as_nanos();
-                    debug!("end_time = {:}", end_time);
-                }
-            }
-             */
             cycles += 1;
             debug!("cycles={cycles}");
         }
@@ -591,7 +588,6 @@ impl Graph {
             run_timer.elapsed(),
             average_duration(elapsed, cycles)
         );
-        //println!("*** {:}graph {:} run_nodes done", "   ".repeat(self.state.id), self.state.id);
         Ok(())
     }
 
@@ -712,7 +708,7 @@ impl Graph {
 
     fn process_callbacks_historical(&mut self) -> bool {
         if !self.state.ready_callbacks.is_empty() {
-            panic!("ready_callbacks are not supported in realtime mode.");
+            panic!("ready_callbacks are not supported in historical mode.");
         }
         if self.state.has_scheduled_callbacks() {
             let next = self.state.next_scheduled_time();
@@ -1466,6 +1462,32 @@ Caused by:
             "time went backwards or stalled: {:?} -> {:?}",
             times[0],
             times[1]
+        );
+    }
+
+    /// `RunFor::Cycles(0)` must exit cleanly without running any cycle and
+    /// without panicking. This guards the run-loop termination against the
+    /// `end_cycle - 1` underflow (which wrapped to `u32::MAX` for `Cycles(0)`,
+    /// see #374): the cycle bound is now reached immediately so zero node
+    /// cycles execute.
+    #[test]
+    fn run_for_zero_cycles_exits_without_running() {
+        let node = Rc::new(RefCell::new(TimeCapturingNode {
+            times: vec![],
+            resched_time: NanoTime::new(100),
+        }));
+        Graph::new(
+            vec![node.clone().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(0),
+        )
+        .run()
+        .unwrap();
+
+        assert!(
+            node.borrow().times.is_empty(),
+            "expected zero cycles for RunFor::Cycles(0), got {:?}",
+            node.borrow().times
         );
     }
 
