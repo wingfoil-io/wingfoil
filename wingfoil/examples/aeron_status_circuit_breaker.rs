@@ -1,6 +1,6 @@
 //! Circuit-breaker example driven by the Aeron status side-channel.
 //!
-//! Demonstrates [`aeron_sub_burst_with_status`] from Story 12.5: the factory
+//! Demonstrates [`aeron_sub_fragment_with_status`] from Story 12.5: the factory
 //! returns `(data_stream, status_stream)`. This example wires a custom node
 //! that consumes both streams. The status stream drives a "healthy" gate:
 //! when the subscriber's last observed [`AeronStatus`] is `Connected`,
@@ -8,7 +8,7 @@
 //! the drop is logged for visibility).
 //!
 //! Cross-references:
-//! - [`aeron_sub_burst_with_status`](wingfoil::adapters::aeron::aeron_sub_burst_with_status)
+//! - [`aeron_sub_fragment_with_status`](wingfoil::adapters::aeron::aeron_sub_fragment_with_status)
 //! - [`AeronStatusStream`](wingfoil::adapters::aeron::AeronStatusStream)
 //!
 //! Run with: `cargo run --example aeron_status_circuit_breaker --features aeron`
@@ -19,7 +19,7 @@ use std::time::Duration;
 use wingfoil::adapters::aeron::buffer::FragmentBuffer;
 use wingfoil::adapters::aeron::error::TransportError;
 use wingfoil::adapters::aeron::{
-    AeronHandle, AeronPub, AeronStatus, AeronSubOptions, aeron_sub_burst_with_status,
+    AeronHandle, AeronPub, AeronStatus, AeronSubOptions, aeron_sub_fragment_with_status,
 };
 use wingfoil::*;
 
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let (data_stream, status_stream) =
-        aeron_sub_burst_with_status::<i64, _, _>(sub, parser, AeronSubOptions::default());
+        aeron_sub_fragment_with_status::<i64, _, _>(sub, parser, AeronSubOptions::default());
 
     // Build a publisher that emits a small ramp of 10 values from a ticker.
     let publisher_node = wingfoil::ticker(Duration::from_millis(200))
