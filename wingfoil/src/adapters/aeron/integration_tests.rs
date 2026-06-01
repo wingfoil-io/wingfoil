@@ -349,6 +349,29 @@ fn test_try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Poll until the publication reports a connected subscriber image, or fail
+/// after `timeout`. An Aeron IPC/UDP publication is only "connected" once a
+/// matching subscription has joined, and the media-driver conductor establishes
+/// that image asynchronously; until then `try_claim`/`offer` return
+/// `Connection("Not connected")`. Exercising a publication before the image is
+/// ready is the dominant source of flakiness on slower CI runners, so tests
+/// that act on a publication directly wait here first.
+#[cfg(feature = "aeron")]
+fn wait_for_pub_connected<P>(pub_: &P, timeout: Duration) -> anyhow::Result<()>
+where
+    P: crate::adapters::aeron::transport::AeronPublisherBackend,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    while !pub_.is_connected() {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "publication did not connect within {timeout:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
 /// `try_claim` returns `TransportError::BackPressure` once the term buffer
 /// saturates with no subscriber polling.
 ///
@@ -365,7 +388,12 @@ fn test_try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
     let stream_id = 2006i32;
     let channel = "aeron:ipc?term-length=65536";
 
+    // A publication connects only once a subscriber joins. Hold a subscription
+    // (never polled, so the term buffer saturates) and wait for the image
+    // before claiming, otherwise the first `try_claim` returns "Not connected".
+    let _sub = handle.subscription(channel, stream_id, CONNECT_TIMEOUT)?;
     let mut pub_ = handle.publication(channel, stream_id, CONNECT_TIMEOUT)?;
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
     let mut back_pressure_seen = false;
     for _ in 0..200 {
@@ -401,7 +429,11 @@ fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
     let handle = AeronHandle::connect()?;
     let stream_id = 2007i32;
 
+    // Hold a subscriber so the publication can reach the connected state, then
+    // wait for the image before claiming.
+    let _sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
     let mut pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
     let claim = pub_.try_claim(64).expect("first try_claim succeeds");
     drop(claim);
@@ -827,6 +859,9 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
 
     let sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
     let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    // Ensure the image is established before the graph runs; the subscriber's
+    // first poll then captures the Disconnected → Connected transition.
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
     let parser = |frag: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
         Ok(frag.as_ref().try_into().ok().map(i64::from_le_bytes))
@@ -943,6 +978,9 @@ fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
 
     let _sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
     let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    // Saturation only produces BackPressured once the publication is connected;
+    // an unconnected publication reports Disconnected and never back-pressures.
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
     // 256 KiB payload — enough to saturate the publication term buffer
     // quickly. The exact threshold depends on media-driver config; this
@@ -1216,6 +1254,9 @@ fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
 
     let sub = handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?;
     let pub_ = handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?;
+    // MDC connects over UDP loopback and is slower to establish than IPC; wait
+    // for the image so the round-trip does not miss its window on CI.
+    wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
     let subscriber = aeron_sub(
         sub,
