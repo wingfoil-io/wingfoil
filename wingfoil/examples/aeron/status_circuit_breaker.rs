@@ -53,7 +53,7 @@ impl MutableNode for CircuitBreakerNode {
             && *latest != self.last_status
         {
             println!("breaker: status {:?} → {:?}", self.last_status, latest);
-            self.last_status = latest.clone();
+            self.last_status = *latest;
         }
 
         // 2. Gate the data burst on the healthy predicate.

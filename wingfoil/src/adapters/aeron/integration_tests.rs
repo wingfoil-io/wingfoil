@@ -658,7 +658,7 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
         for s in burst.iter() {
-            observed_inspect.borrow_mut().push(s.clone());
+            observed_inspect.borrow_mut().push(*s);
         }
     });
 
@@ -717,7 +717,7 @@ fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
         for s in burst.iter() {
-            observed_inspect.borrow_mut().push(s.clone());
+            observed_inspect.borrow_mut().push(*s);
         }
     });
 
@@ -786,7 +786,7 @@ fn test_threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
         for s in burst.iter() {
-            observed_inspect.borrow_mut().push(s.clone());
+            observed_inspect.borrow_mut().push(*s);
         }
     });
 
@@ -861,7 +861,7 @@ fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
     let observed_inspect = Rc::clone(&observed);
     let inspected = status_stream.clone().inspect(move |burst| {
         for s in burst.iter() {
-            observed_inspect.borrow_mut().push(s.clone());
+            observed_inspect.borrow_mut().push(*s);
         }
     });
 
