@@ -8,9 +8,11 @@
 //
 // On `CONTROL_START`, `OrderGenerator` calls `state.add_upstream` to wire
 // in a `ticker(period)` subgraph keyed by the session UUID — that ticker
-// IS the rate. On `STOP`, `state.remove_node` tears it down. A "live
-// rate update" (browser tweaks Hz while running) is just del-then-add:
-// the user sees a smooth rate change with no stop/restart.
+// IS the rate. On `STOP`, `state.remove_node` tears it down. A live tweak
+// while running re-sends `START`: a side/qty change is applied in place
+// (same ticker, `client_seq` preserved, no node churn) and only a *rate*
+// change rebuilds the ticker via del-then-add — a smooth change with no
+// stop/restart either way.
 //
 // Stamps `ws_recv` and `ws_publish` inline in the generator, `ws_sub_recv`
 // and `ws_send` on the inbound stamp ops. Session cap + TTL backstop
@@ -55,12 +57,13 @@ struct ActiveSession {
     side: u8,
     alt_next: u8,
     qty: u64,
+    rate_hz: u32,
     client_seq: u64,
     admitted_at: NanoTime,
 }
 
 struct OrderGenerator {
-    control: Rc<dyn Stream<ControlFrame>>,
+    control: Rc<dyn Stream<Burst<ControlFrame>>>,
     gc: Rc<dyn Node>,
     active: HashMap<SessionId, ActiveSession>,
     cap: usize,
@@ -71,7 +74,7 @@ struct OrderGenerator {
 
 impl OrderGenerator {
     fn new(
-        control: Rc<dyn Stream<ControlFrame>>,
+        control: Rc<dyn Stream<Burst<ControlFrame>>>,
         gc: Rc<dyn Node>,
         cap: usize,
         ttl: Duration,
@@ -94,6 +97,53 @@ impl OrderGenerator {
         }
     }
 
+    /// Handle a `CONTROL_START` frame.
+    ///
+    /// For an already-active session this is a *live update*: `side`/`qty`
+    /// are applied in place (preserving `client_seq` and `alt_next`), and
+    /// the ticker is only rebuilt — via `remove_node` + `add_upstream` —
+    /// when the rate actually changed. Rebuilding on every tweak would
+    /// reset `client_seq` and churn the graph's node index (whose slots are
+    /// never freed; see `GraphState::remove_node`), so we avoid it.
+    fn start(&mut self, state: &mut GraphState, frame: &ControlFrame) {
+        if let Some(s) = self.active.get_mut(&frame.session) {
+            s.side = frame.side;
+            s.qty = frame.qty;
+            s.admitted_at = state.wall_time();
+            if s.rate_hz != frame.rate_hz {
+                let old = s.ticker.clone();
+                let tick = ticker(period_for(frame.rate_hz));
+                state.remove_node(old);
+                state.add_upstream(tick.clone(), true, true);
+                s.ticker = tick;
+                s.rate_hz = frame.rate_hz;
+            }
+            return;
+        }
+        if self.active.len() >= self.cap {
+            log::warn!(
+                "rejected start session={} (cap {} reached)",
+                session_hex(&frame.session),
+                self.cap,
+            );
+            return;
+        }
+        let tick = ticker(period_for(frame.rate_hz));
+        state.add_upstream(tick.clone(), true, true);
+        self.active.insert(
+            frame.session,
+            ActiveSession {
+                ticker: tick,
+                side: frame.side,
+                alt_next: 0,
+                qty: frame.qty,
+                rate_hz: frame.rate_hz,
+                client_seq: 0,
+                admitted_at: state.wall_time(),
+            },
+        );
+    }
+
     fn now(&self, state: &mut GraphState) -> NanoTime {
         if self.precise {
             state.wall_time_precise()
@@ -101,6 +151,11 @@ impl OrderGenerator {
             state.wall_time()
         }
     }
+}
+
+/// Ticker period for a requested rate, flooring `rate_hz` at 1 Hz.
+fn period_for(rate_hz: u32) -> Duration {
+    Duration::from_nanos(1_000_000_000 / rate_hz.max(1) as u64)
 }
 
 #[node(output = value: Burst<Traced<RoundTrip, RoundTripLatency>>)]
@@ -116,35 +171,25 @@ impl MutableNode for OrderGenerator {
         self.value.clear();
 
         if state.ticked(self.control.clone().as_node()) {
-            let frame = self.control.peek_value();
-            // START on an existing session = rate update via del+add.
-            self.evict(state, &frame.session);
-            match frame.action {
-                CONTROL_START if self.active.len() >= self.cap => {
-                    log::warn!(
-                        "rejected start session={} (cap {} reached)",
-                        session_hex(&frame.session),
-                        self.cap,
-                    );
+            // Collapse the burst *per session* — last frame per session wins.
+            // A global collapse (the old `.collapse()`) would drop all but the
+            // very last frame, losing other sessions' control frames that
+            // landed in the same cycle. Collapsing per session keeps every
+            // session's latest intent while guaranteeing each session gets at
+            // most one add/remove per cycle: applying multiple frames for one
+            // session would risk orphaning a ticker, since a pending
+            // `add_upstream` issued earlier in the cycle can't be cancelled by
+            // a later `remove_node` (removal no-ops on a not-yet-wired node).
+            let mut latest: HashMap<SessionId, ControlFrame> = HashMap::new();
+            for frame in self.control.peek_value() {
+                latest.insert(frame.session, frame);
+            }
+            for frame in latest.values() {
+                match frame.action {
+                    CONTROL_START => self.start(state, frame),
+                    CONTROL_STOP => self.evict(state, &frame.session),
+                    _ => {}
                 }
-                CONTROL_START => {
-                    let period = Duration::from_nanos(1_000_000_000 / frame.rate_hz.max(1) as u64);
-                    let tick = ticker(period);
-                    state.add_upstream(tick.clone(), true, true);
-                    self.active.insert(
-                        frame.session,
-                        ActiveSession {
-                            ticker: tick,
-                            side: frame.side,
-                            alt_next: 0,
-                            qty: frame.qty,
-                            client_seq: 0,
-                            admitted_at: state.wall_time(),
-                        },
-                    );
-                }
-                CONTROL_STOP => {} // already evicted
-                _ => {}
             }
         }
 
@@ -251,7 +296,7 @@ fn main() -> anyhow::Result<()> {
         session_ttl,
     );
 
-    let control = web_sub::<ControlFrame>(&server, TOPIC_CONTROL).collapse::<ControlFrame>();
+    let control = web_sub::<ControlFrame>(&server, TOPIC_CONTROL);
     let gc_tick = ticker(Duration::from_secs(1));
     let orders =
         OrderGenerator::new(control, gc_tick, session_cap, session_ttl, precise).into_stream();
