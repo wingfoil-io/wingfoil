@@ -60,7 +60,7 @@ impl AeronStatusStream {
     /// on a cycle that produced no data.
     pub(crate) fn record(&mut self, new: AeronStatus) -> bool {
         if new != self.last {
-            self.last = new.clone();
+            self.last = new;
             self.out.push(new);
             true
         } else {
@@ -80,10 +80,7 @@ impl AeronStatusStream {
     /// callers (e.g. test fixtures, migration shims) — graph consumers should
     /// iterate `peek_ref()` instead.
     pub fn current(&self) -> AeronStatus {
-        self.out
-            .last()
-            .cloned()
-            .unwrap_or_else(|| self.last.clone())
+        self.out.last().copied().unwrap_or(self.last)
     }
 }
 

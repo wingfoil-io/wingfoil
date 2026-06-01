@@ -79,8 +79,10 @@ fn validate_host_port(label: &str, value: &str) -> Result<(), TransportError> {
                 "{label} bare IPv6 must be bracketed like '[::1]:port' (got '{value}')"
             )));
         }
-        // Exactly one ':' so split is infallible.
-        let (host, port) = value.split_once(':').unwrap();
+        // Exactly one ':' validated above, so the split is infallible.
+        let (host, port) = value
+            .split_once(':')
+            .expect("invariant: exactly one ':' validated above");
         if host.contains('[') || host.contains(']') {
             return Err(TransportError::Invalid(format!(
                 "{label} brackets are only allowed as the bracketed-IPv6 prefix '[ipv6]:port' (got '{value}')"
