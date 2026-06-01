@@ -28,8 +28,9 @@ pub struct AeronStatusStream {
     /// The producer node that records transitions into this stream, wired as an
     /// active upstream so this node cycles when the producer ticks. Held as a
     /// `Weak` to avoid a reference cycle (the producer owns an `Rc` to this
-    /// stream). `None` for the threaded-subscriber placeholder, which never
-    /// records and so stays an inert source that is never re-cycled.
+    /// stream). Both the spin and threaded subscribers wire a producer; `None`
+    /// only for a status stream that is never driven, which stays an inert
+    /// source that is never re-cycled.
     producer: Option<Weak<dyn Node>>,
 }
 

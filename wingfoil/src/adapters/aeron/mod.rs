@@ -357,14 +357,16 @@ where
 /// recorded, so a transient I/O failure does not register a phantom
 /// `Disconnected` transition.
 ///
-/// # Threaded mode caveat
+/// # Threaded mode
 ///
-/// `opts.mode == AeronMode::Threaded` is accepted for shape symmetry but
-/// the returned status stream stays in its `Default` (`Disconnected`)
-/// state and never records a transition — cross-thread status propagation
-/// requires either an `Arc<Mutex<...>>` wrap or a status channel, both of
-/// which add scope and are deferred to a follow-up. Use `AeronMode::Spin`
-/// for live status.
+/// `opts.mode == AeronMode::Threaded` propagates status too: the background
+/// poll thread multiplexes data values and lifecycle-status transitions over
+/// the single receiver channel (carried in-band so a `Connected` transition is
+/// ordered before the fragments that followed it), and the data node demuxes
+/// them into the same `(data, status)` pair. Status is sampled at the poll
+/// thread's cadence (which backs off when idle), so a transition surfaces
+/// within roughly one poll interval rather than per graph cycle as in spin
+/// mode.
 #[must_use]
 pub fn aeron_sub_fragment_with_status<T, F, B>(
     subscriber: B,
@@ -398,15 +400,22 @@ where
             (data, status_stream)
         }
         AeronMode::Threaded => {
-            // Threaded variant: status is not wired across the channel
-            // boundary in this story. The returned status stream is the
-            // default-state AeronStatusStream with no producer — it never
-            // records a transition, `peek_ref()` always observes `Burst::new()`
-            // (empty), `current()` returns `Disconnected`, and with no upstream
-            // it stays an inert source that never busy-spins the graph thread.
+            // Threaded variant: the background poll thread multiplexes data and
+            // lifecycle-status transitions over the single receiver channel
+            // (see `AeronItem`). The data node demuxes them, replaying each
+            // status transition into the shared `AeronStatusStream`. We wire the
+            // status node's producer to the data node exactly as the spin path
+            // does, so transitions are forwarded once per tick.
             let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
             let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
-            let data = sub_fragment_node::build_threaded(subscriber, parser);
+            let data = sub_fragment_node::build_threaded_with_status(
+                subscriber,
+                parser,
+                Rc::clone(&status),
+            );
+            status
+                .borrow_mut()
+                .set_producer(Rc::downgrade(&data.clone().as_node()));
             (data, status_stream)
         }
     }
@@ -509,11 +518,18 @@ mod tests {
     }
 
     #[test]
-    fn given_aeron_sub_fragment_with_status_when_threaded_mode_then_status_stream_stays_default() {
+    fn given_aeron_sub_fragment_with_status_when_threaded_mode_then_disconnected_emits_no_transition()
+     {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::error::TransportError;
         use crate::adapters::aeron::transport::MockSubscriber;
+        use crate::{NodeOperators, RunFor, RunMode, StreamOperators};
+        use std::time::Duration;
 
+        // The default MockSubscriber is never connected, so the threaded poll
+        // thread derives `Disconnected` — which equals the stream's default —
+        // and sends no transition. A brief real run must therefore leave the
+        // status stream empty (no spurious transitions).
         let backend = MockSubscriber::from_messages(vec![]);
         let parser = |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
             Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
@@ -526,10 +542,21 @@ mod tests {
                 fragment_limit: DEFAULT_FRAGMENT_LIMIT,
             },
         );
-        // Documented limitation per AC #5: threaded-mode status is a
-        // default-state placeholder. We can inspect it without running the
-        // graph — no transition has been recorded.
-        assert!(status_stream.peek_value().is_empty());
+        let collected = status_stream.collect();
+        collected
+            .clone()
+            .run(
+                RunMode::RealTime,
+                RunFor::Duration(Duration::from_millis(100)),
+            )
+            .unwrap();
+        assert!(
+            collected
+                .peek_value()
+                .into_iter()
+                .all(|burst| burst.value.is_empty()),
+            "disconnected backend must not emit any status transition"
+        );
     }
 
     // -----------------------------------------------------------------
