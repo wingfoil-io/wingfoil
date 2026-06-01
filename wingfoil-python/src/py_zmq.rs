@@ -2,6 +2,7 @@
 
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use crate::types::{INTO_PY_INFALLIBLE, LIST_NEW_INFALLIBLE};
 
 use pyo3::prelude::*;
 use std::rc::Rc;
@@ -64,7 +65,7 @@ fn streams_to_py(
                 .collect();
             PyElement::new(
                 pyo3::types::PyList::new(py, items)
-                    .unwrap()
+                    .expect(LIST_NEW_INFALLIBLE)
                     .into_any()
                     .unbind(),
             )
@@ -77,7 +78,13 @@ fn streams_to_py(
                 ZmqStatus::Connected => "connected",
                 ZmqStatus::Disconnected => "disconnected",
             };
-            PyElement::new(s_str.into_pyobject(py).unwrap().into_any().unbind())
+            PyElement::new(
+                s_str
+                    .into_pyobject(py)
+                    .expect(INTO_PY_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 

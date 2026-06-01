@@ -105,7 +105,11 @@ impl PyLatency {
         let stamps: Vec<u64> = (0..n)
             .map(|i| {
                 let offset = i * 8;
-                u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
+                u64::from_le_bytes(
+                    data[offset..offset + 8]
+                        .try_into()
+                        .expect("invariant: an 8-byte slice always converts to [u8; 8]"),
+                )
             })
             .collect();
         Ok(Self {
@@ -156,7 +160,11 @@ impl PyLatency {
             .map(|i| {
                 let offset = i * 8;
                 if offset + 8 <= data.len() {
-                    u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
+                    u64::from_le_bytes(
+                        data[offset..offset + 8]
+                            .try_into()
+                            .expect("invariant: an 8-byte slice always converts to [u8; 8]"),
+                    )
                 } else {
                     0
                 }

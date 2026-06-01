@@ -14,6 +14,14 @@ use crate::py_element::PyElement;
 use crate::types::*;
 use crate::*;
 
+/// Wrap a Python exception raised inside a user callback into an `anyhow::Error`
+/// so it can flow through the fallible (`try_*`) graph operators. The original
+/// `PyErr` is recovered by [`ToPyResult`] at the `#[pymethods]` boundary, so the
+/// Python type, message and traceback propagate unchanged.
+pub(crate) fn py_callback_error(err: PyErr) -> anyhow::Error {
+    anyhow::Error::new(err)
+}
+
 #[derive(Clone)]
 #[pyclass(subclass, unsendable, name = "Stream")]
 pub struct PyStream(pub Rc<dyn Stream<PyElement>>);
@@ -23,12 +31,14 @@ impl PyStream {
     where
         T: Element + for<'a, 'py> FromPyObject<'a, 'py>,
     {
-        self.0.map(move |x: PyElement| {
-            Python::attach(|py| match x.as_ref().extract::<T>(py) {
-                Ok(val) => val,
-                Err(_err) => {
-                    panic!("Failed to convert from python type to native rust type")
-                }
+        self.0.try_map(move |x: PyElement| {
+            Python::attach(|py| {
+                x.as_ref().extract::<T>(py).map_err(|e| {
+                    py_callback_error(e.into()).context(format!(
+                        "failed to convert Python value to native {}",
+                        type_name::<T>()
+                    ))
+                })
             })
         })
     }
@@ -42,18 +52,33 @@ impl PyStream {
     }
 }
 
+/// Convert a native Rust value into a `Py<PyAny>`.
+///
+/// Only ever called with concrete types (`f64`, `u64`, `Vec<Py<PyAny>>`) whose
+/// `IntoPyObject` impl is infallible, so a failure here is an invariant
+/// violation rather than a user-facing error.
 pub fn to_pyany<T>(x: T) -> Py<PyAny>
 where
     T: for<'py> IntoPyObject<'py>,
 {
-    Python::attach(|py| match x.into_pyobject(py) {
-        Ok(bound) => bound.into_any().unbind(),
-        Err(_) => panic!("Conversion to PyAny from type {} failed", type_name::<T>()),
+    Python::attach(|py| {
+        x.into_pyobject(py)
+            .map(|bound| bound.into_any().unbind())
+            .unwrap_or_else(|_| {
+                panic!(
+                    "invariant: IntoPyObject for {} is expected to be infallible",
+                    type_name::<T>()
+                )
+            })
     })
 }
 
 pub fn vec_any_to_pyany(x: Vec<Py<PyAny>>) -> Py<PyAny> {
-    Python::attach(|py| x.into_pyobject(py).unwrap().into_any().unbind())
+    Python::attach(|py| {
+        x.into_pyobject(py)
+            .map(|bound| bound.into_any().unbind())
+            .expect("invariant: IntoPyObject for Vec<Py<PyAny>> is infallible")
+    })
 }
 
 pub trait AsPyStream<T>
@@ -149,11 +174,14 @@ impl PyStream {
                     let py_tuple = pyo3::types::PyTuple::new(
                         py,
                         &[
-                            time_secs.into_pyobject(py).unwrap().into_any(),
+                            time_secs
+                                .into_pyobject(py)
+                                .expect("invariant: IntoPyObject for f64 is infallible")
+                                .into_any(),
                             val.value().into_bound(py),
                         ],
                     )
-                    .unwrap();
+                    .expect("invariant: fixed-size tuple construction cannot fail");
 
                     PyElement::new(py_tuple.into_any().unbind())
                 })
@@ -191,34 +219,39 @@ impl PyStream {
     }
 
     fn finally(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.finally(|py_elmnt, _| {
+        let node = self.0.finally(move |py_elmnt, _| {
             Python::attach(move |py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let args = (res,);
-                func.call1(py, args).unwrap();
-            });
-            Ok(())
+                func.call1(py, args).map_err(py_callback_error)?;
+                Ok(())
+            })
         });
         PyNode(node)
     }
 
     fn for_each(&self, func: Py<PyAny>) -> PyNode {
-        let node = self.0.for_each(move |py_elmnt, t| {
+        let node = self.0.try_for_each(move |py_elmnt, t| {
             Python::attach(|py| {
                 let res = py_elmnt.as_ref().clone_ref(py);
                 let t: f64 = t.into();
                 let args = (res, t);
-                func.call1(py, args).unwrap();
-            });
+                func.call1(py, args).map_err(py_callback_error)?;
+                Ok(())
+            })
         });
         PyNode(node)
     }
 
     fn inspect(&self, func: Py<PyAny>) -> PyStream {
-        let stream = self.0.inspect(move |x| {
+        // No fallible `inspect` operator exists in core; express the
+        // side-effecting pass-through as a `try_map` that returns the value
+        // unchanged so a Python exception in `func` propagates.
+        let stream = self.0.try_map(move |x: PyElement| {
             Python::attach(|py| {
-                func.call1(py, (x.value(),)).unwrap();
-            });
+                func.call1(py, (x.value(),)).map_err(py_callback_error)?;
+                Ok(x)
+            })
         });
         PyStream(stream)
     }
@@ -241,13 +274,14 @@ impl PyStream {
 
     /// drops source contingent on supplied predicate (Python callable)
     fn filter(&self, keep_func: Py<PyAny>) -> PyStream {
-        let keep = self.0.map(move |x| {
+        let keep = self.0.try_map(move |x: PyElement| {
             Python::attach(|py| {
-                keep_func
+                let res = keep_func
                     .call1(py, (x.value(),))
-                    .unwrap()
-                    .extract::<bool>(py)
-                    .unwrap()
+                    .map_err(py_callback_error)?;
+                res.extract::<bool>(py).map_err(|e| {
+                    py_callback_error(e).context("filter predicate must return a bool")
+                })
             })
         });
         PyStream(self.0.filter(keep))
@@ -265,10 +299,10 @@ impl PyStream {
 
     /// Map’s its source into a new Stream using the supplied Python callable.
     fn map(&self, func: Py<PyAny>) -> PyStream {
-        let stream = self.0.map(move |x| {
+        let stream = self.0.try_map(move |x: PyElement| {
             Python::attach(|py| {
-                let res = func.call1(py, (x.value(),)).unwrap();
-                PyElement::new(res)
+                let res = func.call1(py, (x.value(),)).map_err(py_callback_error)?;
+                Ok(PyElement::new(res))
             })
         });
         PyStream(stream)
@@ -279,16 +313,17 @@ impl PyStream {
         PyStream(self.0.not())
     }
 
-    fn sample(&self, trigger: Py<PyAny>) -> PyStream {
+    fn sample(&self, trigger: Py<PyAny>) -> PyResult<PyStream> {
         Python::attach(|py| {
             let obj = trigger.as_ref();
             if let Ok(node) = obj.extract::<PyRef<PyNode>>(py) {
-                return PyStream(self.0.sample(node.0.clone()));
+                return Ok(PyStream(self.0.sample(node.0.clone())));
             }
             if let Ok(stream) = obj.extract::<PyRef<PyStream>>(py) {
-                return PyStream(self.0.sample(stream.0.clone()));
+                return Ok(PyStream(self.0.sample(stream.0.clone())));
             }
-            panic!("Expected a PyNode or PyStream");
+            Err::<PyStream, _>(py_type_error("sample: expected a Node or Stream trigger"))
+                .to_pyresult()
         })
     }
 
@@ -310,11 +345,14 @@ impl PyStream {
                 let py_tuple = pyo3::types::PyTuple::new(
                     py,
                     &[
-                        time_secs.into_pyobject(py).unwrap().into_any(),
+                        time_secs
+                            .into_pyobject(py)
+                            .expect("invariant: IntoPyObject for f64 is infallible")
+                            .into_any(),
                         v.value().into_bound(py),
                     ],
                 )
-                .unwrap();
+                .expect("invariant: fixed-size tuple construction cannot fail");
                 PyElement::new(py_tuple.into_any().unbind())
             })
         });
@@ -331,8 +369,9 @@ impl PyStream {
     ///
     /// Returns:
     ///     A Node that drives the write operation.
-    fn csv_write(&self, path: String) -> PyNode {
-        PyNode::new(crate::py_csv::py_csv_write_inner(&self.0, path))
+    fn csv_write(&self, path: String) -> PyResult<PyNode> {
+        let node = crate::py_csv::py_csv_write_inner(&self.0, path).to_pyresult()?;
+        Ok(PyNode::new(node))
     }
 
     /// Write this stream to a KDB+ table.

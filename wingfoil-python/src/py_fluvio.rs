@@ -2,6 +2,7 @@
 
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use crate::types::{DICT_INSERT_INFALLIBLE, LIST_NEW_INFALLIBLE};
 
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
@@ -42,16 +43,26 @@ pub fn py_fluvio_sub(
                 .map(|event| {
                     let dict = PyDict::new(py);
                     match &event.key {
-                        Some(k) => dict.set_item("key", PyBytes::new(py, k)).unwrap(),
-                        None => dict.set_item("key", py.None()).unwrap(),
+                        Some(k) => dict
+                            .set_item("key", PyBytes::new(py, k))
+                            .expect(DICT_INSERT_INFALLIBLE),
+                        None => dict
+                            .set_item("key", py.None())
+                            .expect(DICT_INSERT_INFALLIBLE),
                     }
                     dict.set_item("value", PyBytes::new(py, &event.value))
-                        .unwrap();
-                    dict.set_item("offset", event.offset).unwrap();
+                        .expect(DICT_INSERT_INFALLIBLE);
+                    dict.set_item("offset", event.offset)
+                        .expect(DICT_INSERT_INFALLIBLE);
                     dict.into_any().unbind()
                 })
                 .collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 

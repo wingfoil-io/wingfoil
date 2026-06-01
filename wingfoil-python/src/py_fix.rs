@@ -2,6 +2,7 @@
 
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use crate::types::{DICT_INSERT_INFALLIBLE, INTO_PY_INFALLIBLE, LIST_NEW_INFALLIBLE};
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -39,14 +40,24 @@ pub fn py_fix_connect(
     let py_data = data.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|msg| msg_to_py(py, &msg)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
     let py_status = status.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|s| status_to_py(py, &s)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
@@ -87,14 +98,24 @@ pub fn py_fix_connect_tls(
     let py_data = fix.data.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|msg| msg_to_py(py, &msg)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
     let py_status = fix.status.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|s| status_to_py(py, &s)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
@@ -102,7 +123,9 @@ pub fn py_fix_connect_tls(
         let sender_cls = PyFixSender {
             sender: fix.sender(),
         };
-        Py::new(py, sender_cls).unwrap().into_any()
+        Py::new(py, sender_cls)
+            .expect("invariant: allocating a PyFixSender pyclass cannot fail")
+            .into_any()
     });
 
     (PyStream(py_data), PyStream(py_status), sender_obj)
@@ -130,14 +153,24 @@ pub fn py_fix_accept(
     let py_data = data.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|msg| msg_to_py(py, &msg)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
     let py_status = status.map(|burst| {
         Python::attach(|py| {
             let items: Vec<Py<PyAny>> = burst.into_iter().map(|s| status_to_py(py, &s)).collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
 
@@ -193,10 +226,13 @@ impl PyFixSender {
 
 fn msg_to_py(py: Python<'_>, msg: &FixMessage) -> Py<PyAny> {
     let dict = PyDict::new(py);
-    dict.set_item("msg_type", &msg.msg_type).unwrap();
-    dict.set_item("seq_num", msg.seq_num).unwrap();
+    dict.set_item("msg_type", &msg.msg_type)
+        .expect(DICT_INSERT_INFALLIBLE);
+    dict.set_item("seq_num", msg.seq_num)
+        .expect(DICT_INSERT_INFALLIBLE);
     let fields: Vec<(u32, &str)> = msg.fields.iter().map(|(t, v)| (*t, v.as_str())).collect();
-    dict.set_item("fields", fields).unwrap();
+    dict.set_item("fields", fields)
+        .expect(DICT_INSERT_INFALLIBLE);
     dict.into_any().unbind()
 }
 
@@ -204,22 +240,33 @@ fn status_to_py(py: Python<'_>, status: &FixSessionStatus) -> Py<PyAny> {
     match status {
         FixSessionStatus::Disconnected => "disconnected"
             .into_pyobject(py)
-            .unwrap()
+            .expect(INTO_PY_INFALLIBLE)
             .into_any()
             .unbind(),
-        FixSessionStatus::LoggingIn => "logging_in".into_pyobject(py).unwrap().into_any().unbind(),
-        FixSessionStatus::LoggedIn => "logged_in".into_pyobject(py).unwrap().into_any().unbind(),
+        FixSessionStatus::LoggingIn => "logging_in"
+            .into_pyobject(py)
+            .expect(INTO_PY_INFALLIBLE)
+            .into_any()
+            .unbind(),
+        FixSessionStatus::LoggedIn => "logged_in"
+            .into_pyobject(py)
+            .expect(INTO_PY_INFALLIBLE)
+            .into_any()
+            .unbind(),
         FixSessionStatus::LoggedOut(reason) => {
             let dict = PyDict::new(py);
-            dict.set_item("status", "logged_out").unwrap();
+            dict.set_item("status", "logged_out")
+                .expect(DICT_INSERT_INFALLIBLE);
             dict.set_item("reason", reason.as_deref().unwrap_or(""))
-                .unwrap();
+                .expect(DICT_INSERT_INFALLIBLE);
             dict.into_any().unbind()
         }
         FixSessionStatus::Error(msg) => {
             let dict = PyDict::new(py);
-            dict.set_item("status", "error").unwrap();
-            dict.set_item("message", msg.as_str()).unwrap();
+            dict.set_item("status", "error")
+                .expect(DICT_INSERT_INFALLIBLE);
+            dict.set_item("message", msg.as_str())
+                .expect(DICT_INSERT_INFALLIBLE);
             dict.into_any().unbind()
         }
     }

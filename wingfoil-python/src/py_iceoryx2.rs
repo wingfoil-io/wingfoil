@@ -109,14 +109,18 @@ pub fn py_iceoryx2_sub(
                                     bytes.len()
                                 );
                                 let payload = PyBytes::new(py, &bytes).into_any().unbind();
-                                let lat = Py::new(py, PyLatency::create(stage_names.clone())).unwrap();
-                                let traced = Py::new(py, PyTracedBytes::create(payload, lat)).unwrap();
+                                let lat = Py::new(py, PyLatency::create(stage_names.clone()))
+                                    .expect("invariant: allocating a PyLatency pyclass cannot fail");
+                                let traced = Py::new(py, PyTracedBytes::create(payload, lat))
+                                    .expect("invariant: allocating a PyTracedBytes pyclass cannot fail");
                                 return traced.into_any();
                             }
                             let lat = PyLatency::create_from_bytes(&bytes[..header_len], stage_names.clone());
                             let payload = PyBytes::new(py, &bytes[header_len..]).into_any().unbind();
-                            let lat = Py::new(py, lat).unwrap();
-                            let traced = Py::new(py, PyTracedBytes::create(payload, lat)).unwrap();
+                            let lat = Py::new(py, lat)
+                                .expect("invariant: allocating a PyLatency pyclass cannot fail");
+                            let traced = Py::new(py, PyTracedBytes::create(payload, lat))
+                                .expect("invariant: allocating a PyTracedBytes pyclass cannot fail");
                             traced.into_any()
                         })
                         .collect();

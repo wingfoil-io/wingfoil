@@ -30,10 +30,17 @@ impl Clone for PyProxyStream {
 
 impl MutableNode for PyProxyStream {
     fn upstreams(&self) -> UpStreams {
+        // `MutableNode::upstreams` is infallible, so a malformed Python proxy
+        // (wrong `upstreams()` return type / element type) is an unrecoverable
+        // contract violation and surfaces as a panic with a descriptive message.
         let ups = Python::attach(|py| {
             let this = self.0.bind(py);
-            let res = this.call_method0("upstreams").unwrap();
-            let res = res.extract::<Vec<Py<PyAny>>>().unwrap();
+            let res = this
+                .call_method0("upstreams")
+                .expect("invariant: Python proxy must implement upstreams()");
+            let res = res
+                .extract::<Vec<Py<PyAny>>>()
+                .expect("invariant: upstreams() must return a list of Stream/Node");
             res.iter()
                 .map(|obj| {
                     let bound = obj.bind(py);
@@ -42,7 +49,7 @@ impl MutableNode for PyProxyStream {
                     } else if let Ok(stream) = bound.extract::<PyProxyStream>() {
                         stream.into_node()
                     } else {
-                        panic!("Unexpected upstream type");
+                        panic!("upstreams() returned an unexpected type: expected Stream or Node");
                     }
                 })
                 .collect::<Vec<_>>()
@@ -75,7 +82,10 @@ impl StreamPeekRef<PyElement> for PyProxyStream {
 
     fn clone_from_cell_ref(&self, _cell_ref: std::cell::Ref<'_, PyElement>) -> PyElement {
         Python::attach(|py| {
-            let res = self.0.call_method0(py, "peek").unwrap();
+            let res = self
+                .0
+                .call_method0(py, "peek")
+                .expect("invariant: Python proxy must implement peek()");
             PyElement::new(res)
         })
     }

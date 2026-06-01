@@ -288,5 +288,61 @@ class TestDataframe(unittest.TestCase):
         self.assertTrue(all(times[i] < times[i + 1] for i in range(len(times) - 1)))
 
 
+class TestCallbackExceptionPropagation(unittest.TestCase):
+    """A Python exception raised inside a user callback must propagate out of
+    `run()` with its original type / message instead of aborting the process."""
+
+    def test_map_callback_exception_propagates(self):
+        class Boom(Exception):
+            pass
+
+        def explode(_x):
+            raise Boom("map blew up")
+
+        stream = constant(1).map(explode).collect()
+        with self.assertRaises(Boom) as ctx:
+            stream.run(realtime=False, cycles=1)
+        self.assertIn("map blew up", str(ctx.exception))
+
+    def test_filter_callback_exception_propagates(self):
+        def explode(_x):
+            raise ValueError("filter predicate blew up")
+
+        stream = ticker(0.1).count().filter(explode).collect()
+        with self.assertRaises(ValueError):
+            stream.run(realtime=False, cycles=1)
+
+    def test_filter_non_bool_return_raises(self):
+        stream = ticker(0.1).count().filter(lambda x: "not a bool").collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, cycles=1)
+
+    def test_for_each_callback_exception_propagates(self):
+        def explode(_value, _t):
+            raise RuntimeError("for_each blew up")
+
+        node = ticker(0.1).count().for_each(explode)
+        with self.assertRaises(RuntimeError):
+            node.run(realtime=False, cycles=1)
+
+    def test_inspect_callback_exception_propagates(self):
+        def explode(_x):
+            raise KeyError("inspect blew up")
+
+        stream = ticker(0.1).count().inspect(explode).collect()
+        with self.assertRaises(KeyError):
+            stream.run(realtime=False, cycles=1)
+
+    def test_bimap_callback_exception_propagates(self):
+        def explode(_a, _b):
+            raise TypeError("bimap blew up")
+
+        a = ticker(0.1).count()
+        b = ticker(0.1).count()
+        stream = bimap(a, b, explode).collect()
+        with self.assertRaises(TypeError):
+            stream.run(realtime=False, cycles=1)
+
+
 if __name__ == '__main__':
     unittest.main()

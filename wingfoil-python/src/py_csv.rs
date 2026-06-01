@@ -2,6 +2,7 @@
 
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use anyhow::Context;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::cell::RefCell;
@@ -39,7 +40,8 @@ pub fn py_csv_read(path: String, time_column: String) -> PyStream {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             for (key, value) in &row {
-                dict.set_item(key, value).unwrap();
+                dict.set_item(key, value)
+                    .expect("invariant: inserting str keys/values into a dict cannot fail");
             }
             PyElement::new(dict.into_any().unbind())
         })
@@ -56,13 +58,13 @@ struct CsvWriteState {
 }
 
 impl CsvWriteState {
-    fn new(path: &str) -> Self {
+    fn new(path: &str) -> anyhow::Result<Self> {
         let file = std::fs::File::create(path)
-            .unwrap_or_else(|e| panic!("failed to open CSV file for writing: {e}"));
-        Self {
+            .with_context(|| format!("failed to open CSV file for writing: {path}"))?;
+        Ok(Self {
             file: std::io::LineWriter::new(file),
             headers: None,
-        }
+        })
     }
 
     fn write_row(&mut self, values: &[String]) {
@@ -93,10 +95,13 @@ impl CsvWriteState {
 ///
 /// Writes each dict as a CSV row. Headers are inferred from the first dict's keys.
 /// A `time` column is prepended with the graph time in nanoseconds.
-pub fn py_csv_write_inner(stream: &Rc<dyn Stream<PyElement>>, path: String) -> Rc<dyn Node> {
-    let state: RefCell<CsvWriteState> = RefCell::new(CsvWriteState::new(&path));
+pub fn py_csv_write_inner(
+    stream: &Rc<dyn Stream<PyElement>>,
+    path: String,
+) -> anyhow::Result<Rc<dyn Node>> {
+    let state: RefCell<CsvWriteState> = RefCell::new(CsvWriteState::new(&path)?);
 
-    stream.for_each(move |elem, time| {
+    Ok(stream.for_each(move |elem, time| {
         Python::attach(|py| {
             let obj = elem.as_ref().bind(py);
             if let Ok(dict) = obj.cast::<PyDict>() {
@@ -114,7 +119,10 @@ pub fn py_csv_write_inner(stream: &Rc<dyn Stream<PyElement>>, path: String) -> R
                     guard.headers = Some(keys);
                 }
 
-                let h = guard.headers.clone().unwrap();
+                let h = guard
+                    .headers
+                    .clone()
+                    .expect("invariant: headers set above before this point");
                 let time_nanos: u64 = time.into();
                 let mut values = vec![time_nanos.to_string()];
                 for key in &h {
@@ -129,5 +137,5 @@ pub fn py_csv_write_inner(stream: &Rc<dyn Stream<PyElement>>, path: String) -> R
                 guard.write_row(&values);
             }
         });
-    })
+    }))
 }

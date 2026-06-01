@@ -3,6 +3,7 @@
 use crate::PyNode;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use crate::types::INTO_PY_INFALLIBLE;
 
 use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
@@ -43,12 +44,37 @@ impl Default for PyKdbValue {
 impl PyKdbValue {
     fn to_py(&self, py: Python<'_>) -> Py<PyAny> {
         match self {
-            PyKdbValue::Long(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-            PyKdbValue::Float(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-            PyKdbValue::Symbol(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-            PyKdbValue::Bool(v) => v.into_pyobject(py).unwrap().to_owned().into_any().unbind(),
-            PyKdbValue::Int(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
-            PyKdbValue::Real(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
+            PyKdbValue::Long(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .into_any()
+                .unbind(),
+            PyKdbValue::Float(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .into_any()
+                .unbind(),
+            PyKdbValue::Symbol(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .into_any()
+                .unbind(),
+            PyKdbValue::Bool(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .to_owned()
+                .into_any()
+                .unbind(),
+            PyKdbValue::Int(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .into_any()
+                .unbind(),
+            PyKdbValue::Real(v) => v
+                .into_pyobject(py)
+                .expect(INTO_PY_INFALLIBLE)
+                .into_any()
+                .unbind(),
         }
     }
 }
@@ -139,7 +165,8 @@ pub fn py_kdb_read(
         Python::attach(|py| {
             let dict = PyDict::new(py);
             for (name, value) in &row.columns {
-                dict.set_item(name, value.to_py(py)).unwrap();
+                dict.set_item(name, value.to_py(py))
+                    .expect("invariant: inserting into a fresh dict cannot fail");
             }
             PyElement::new(dict.into_any().unbind())
         })

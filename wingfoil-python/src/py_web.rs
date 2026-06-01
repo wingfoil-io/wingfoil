@@ -15,6 +15,7 @@ use wingfoil::{Burst, Node, Stream, StreamOperators};
 
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
+use crate::types::{DICT_INSERT_INFALLIBLE, INTO_PY_INFALLIBLE, LIST_NEW_INFALLIBLE};
 
 /// Python-facing handle to a running [`WebServer`].
 ///
@@ -123,7 +124,12 @@ pub fn py_web_sub(server: &WebServer, topic: String) -> PyStream {
                 .into_iter()
                 .map(|v| serde_to_py(py, &v).unbind())
                 .collect();
-            PyElement::new(PyList::new(py, items).unwrap().into_any().unbind())
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
     PyStream(py_stream)
@@ -204,24 +210,31 @@ fn serde_to_py<'py>(py: Python<'py>, value: &serde_json::Value) -> Bound<'py, Py
         V::Bool(b) => PyBool::new(py, *b).to_owned().into_any(),
         V::Number(n) => {
             if let Some(i) = n.as_i64() {
-                i.into_pyobject(py).unwrap().into_any()
+                i.into_pyobject(py).expect(INTO_PY_INFALLIBLE).into_any()
             } else if let Some(u) = n.as_u64() {
-                u.into_pyobject(py).unwrap().into_any()
+                u.into_pyobject(py).expect(INTO_PY_INFALLIBLE).into_any()
             } else if let Some(f) = n.as_f64() {
-                f.into_pyobject(py).unwrap().into_any()
+                f.into_pyobject(py).expect(INTO_PY_INFALLIBLE).into_any()
             } else {
                 py.None().into_bound(py)
             }
         }
-        V::String(s) => s.as_str().into_pyobject(py).unwrap().into_any(),
+        V::String(s) => s
+            .as_str()
+            .into_pyobject(py)
+            .expect(INTO_PY_INFALLIBLE)
+            .into_any(),
         V::Array(arr) => {
             let items: Vec<Bound<'py, PyAny>> = arr.iter().map(|v| serde_to_py(py, v)).collect();
-            PyList::new(py, items).unwrap().into_any()
+            PyList::new(py, items)
+                .expect(LIST_NEW_INFALLIBLE)
+                .into_any()
         }
         V::Object(obj) => {
             let d = PyDict::new(py);
             for (k, v) in obj.iter() {
-                d.set_item(k, serde_to_py(py, v)).unwrap();
+                d.set_item(k, serde_to_py(py, v))
+                    .expect(DICT_INSERT_INFALLIBLE);
             }
             d.into_any()
         }

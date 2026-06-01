@@ -13,7 +13,9 @@ impl PyElement {
     }
 
     pub fn as_ref(&self) -> &Py<PyAny> {
-        self.0.as_ref().unwrap()
+        self.0
+            .as_ref()
+            .expect("invariant: as_ref called on an empty (None) PyElement")
     }
 
     pub fn value(&self) -> Py<PyAny> {
@@ -33,10 +35,11 @@ impl std::fmt::Debug for PyElement {
             let res = self
                 .as_ref()
                 .call_method0(py, "__str__")
-                .unwrap()
-                .extract::<String>(py)
-                .unwrap();
-            write!(f, "{res}")
+                .and_then(|s| s.extract::<String>(py));
+            match res {
+                Ok(res) => write!(f, "{res}"),
+                Err(err) => write!(f, "<PyElement __str__ failed: {err}>"),
+            }
         })
     }
 }
@@ -55,7 +58,10 @@ impl std::ops::Not for PyElement {
 
     fn not(self) -> Self::Output {
         Python::attach(|py| {
-            let res = self.as_ref().call_method0(py, "__neg__").unwrap();
+            let res = self
+                .as_ref()
+                .call_method0(py, "__neg__")
+                .expect("invariant: PyElement value must support __neg__ for `not`/`!`");
             PyElement::new(res)
         })
     }
@@ -69,7 +75,7 @@ impl std::ops::Add for PyElement {
             let res = self
                 .as_ref()
                 .call_method1(py, "__add__", (rhs.as_ref(),))
-                .unwrap();
+                .expect("invariant: PyElement value must support __add__ for `+`/`sum`");
             PyElement::new(res)
         })
     }
@@ -83,7 +89,7 @@ impl std::ops::Sub for PyElement {
             let res = self
                 .as_ref()
                 .call_method1(py, "__sub__", (rhs.as_ref(),))
-                .unwrap();
+                .expect("invariant: PyElement value must support __sub__ for `-`/`difference`");
             PyElement::new(res)
         })
     }
@@ -127,12 +133,14 @@ impl Hash for PyElement {
                     let bound = obj_ref.bind(py);
                     match bound.hash() {
                         Ok(hash_val) => state.write_isize(hash_val),
-                        Err(err) => panic!("hash failed, {err:?}"),
+                        Err(err) => {
+                            panic!("invariant: PyElement value must be hashable: {err:?}")
+                        }
                     }
                 });
             }
             None => {
-                panic!("can not hash empty PyElement")
+                panic!("invariant: cannot hash an empty (None) PyElement")
             }
         }
     }
