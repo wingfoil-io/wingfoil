@@ -22,6 +22,7 @@ workspace = true
 default = ["etcd"]
 etcd = ["wingfoil/etcd"]
 iceoryx2 = ["wingfoil/iceoryx2"]
+aeron = ["wingfoil/aeron"]
 
 [dependencies]
 
