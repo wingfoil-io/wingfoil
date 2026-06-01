@@ -19,6 +19,7 @@ workflows below. `all-tests.yml` runs `rust-test.yml` + `python-test.yml` +
 * `prometheus-integration.yml` — Prometheus + Grafana stack via compose.
 * `otlp-integration.yml` — OpenTelemetry collector + Python tests.
 * `iceoryx2-integration.yml` — iceoryx2 (Local + IPC) + Python tests.
+* `aeron-integration.yml` — Aeron (media driver via testcontainers, `aeron:ipc`).
 * `kafka-python-integration.yml` — Kafka via Redpanda service container.
 * `zmq-etcd-integration.yml` — ZMQ + etcd Python tests.
 * `web-integration.yml` — `wingfoil-wasm` build + `wingfoil-js` typecheck.

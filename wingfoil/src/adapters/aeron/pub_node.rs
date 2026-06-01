@@ -330,7 +330,9 @@ impl<T: Element> AeronPub<T> for dyn Stream<Burst<T>> {
     ) -> (Rc<dyn Node>, Rc<dyn Stream<Burst<AeronStatus>>>) {
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
-        let node = build_with_status(self.clone(), serialiser, publisher, status);
+        let node = build_with_status(self.clone(), serialiser, publisher, Rc::clone(&status));
+        // Drive the status node off the publisher's tick (no busy-spin).
+        status.borrow_mut().set_producer(Rc::downgrade(&node));
         (node, status_stream)
     }
 
@@ -344,7 +346,9 @@ impl<T: Element> AeronPub<T> for dyn Stream<Burst<T>> {
     {
         let status = Rc::new(RefCell::new(AeronStatusStream::default()));
         let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
-        let node = build_dedup_with_status(self.clone(), serialiser, publisher, status);
+        let node = build_dedup_with_status(self.clone(), serialiser, publisher, Rc::clone(&status));
+        // Drive the status node off the publisher's tick (no busy-spin).
+        status.borrow_mut().set_producer(Rc::downgrade(&node));
         (node, status_stream)
     }
 }
