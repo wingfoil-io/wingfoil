@@ -104,7 +104,7 @@ fn test_no_driver_connection_fails() {
 ///
 /// Publisher and subscriber are on the same channel + stream_id, so every value the
 /// publisher offers is routed back to the subscriber by the media driver.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_spin_sub_single_message_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -157,7 +157,7 @@ fn test_spin_sub_single_message_roundtrip() -> anyhow::Result<()> {
 
 /// Spin-mode burst: publish a burst of sequential values every tick; assert at least 10
 /// total values are received.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_spin_sub_burst_accumulation() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -204,7 +204,7 @@ fn test_spin_sub_burst_accumulation() -> anyhow::Result<()> {
 }
 
 /// Threaded-mode subscriber delivers messages via its background channel.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_threaded_sub_delivers_messages() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -258,7 +258,7 @@ fn test_threaded_sub_delivers_messages() -> anyhow::Result<()> {
 /// This test publishes one malformed 4-byte fragment and one valid 8-byte fragment
 /// by calling `offer()` directly (bypassing the wingfoil pub node), then runs the
 /// subscriber to collect results.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_invalid_fragments_are_discarded() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -309,7 +309,7 @@ fn test_invalid_fragments_are_discarded() -> anyhow::Result<()> {
 
 /// `try_claim` zero-copy round-trip: claim a 64-byte slot, fill with `0xAB`,
 /// commit, and assert the subscriber receives exactly those bytes.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
     use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
@@ -354,7 +354,7 @@ fn test_try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
 ///
 /// Uses a small term length (`term-length=65536`, the minimum supported) so the
 /// buffer fills within a bounded iteration count.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
     use crate::adapters::aeron::transport::AeronPublisherBackend;
@@ -391,7 +391,7 @@ fn test_try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
 /// Dropping an un-committed `ClaimBuffer` releases the term-buffer slot via the
 /// `Drop` backstop, so the next `try_claim` succeeds immediately rather than
 /// waiting 15 s for the publication-unblock timeout.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
     use crate::adapters::aeron::transport::AeronPublisherBackend;
@@ -412,7 +412,7 @@ fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
 }
 
 /// aeron-rs (pure-Rust) backend: ticker-driven round-trip.
-#[cfg(feature = "aeron-rs")]
+#[cfg(feature = "aeron-rs-beta")]
 #[test]
 fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -468,7 +468,7 @@ fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
 /// buffer faster than the capped subscriber drains, guaranteeing at least one
 /// non-zero poll within the cap — a buggy `fragment_limit` wiring would deliver
 /// all 1000 in a single poll.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_fragment_limit_caps_burst_size() -> anyhow::Result<()> {
     use crate::adapters::aeron::transport::{AeronPublisherBackend, AeronSubscriberBackend};
@@ -531,7 +531,7 @@ fn test_fragment_limit_caps_burst_size() -> anyhow::Result<()> {
 
 /// Spin-mode typed-parser round-trip: an independent ticker-driven publisher
 /// emits a single value over the media driver; `aeron_sub_burst` collects it.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -584,7 +584,7 @@ fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
 /// Disambiguated from the existing bytes-parser `test_spin_sub_burst_accumulation`
 /// by the `_typed_` infix — the two tests exercise the parallel-additive
 /// factories side-by-side.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_spin_sub_burst_typed_accumulation() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -637,7 +637,7 @@ fn test_spin_sub_burst_typed_accumulation() -> anyhow::Result<()> {
 
 /// Threaded-mode typed-parser burst node delivers messages via its
 /// background channel.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_threaded_sub_burst_accumulates_across_channel_drain() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -693,7 +693,7 @@ fn test_threaded_sub_burst_accumulates_across_channel_drain() -> anyhow::Result<
 
 /// `.collapse()` on `Rc<dyn Stream<Burst<T>>>` reduces each burst to its
 /// latest element, yielding `Rc<dyn Stream<T>>`.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_collapse_yields_latest_value() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -752,7 +752,7 @@ fn test_collapse_yields_latest_value() -> anyhow::Result<()> {
 
 /// Regression guard: the rusteron `poll_fragments` override delivers real
 /// per-fragment header data, not the synthesised zero from the default impl.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result<()> {
     use std::sync::Arc;
@@ -814,7 +814,7 @@ fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result
 /// Status stream emits a `Connected` transition once the subscriber observes
 /// the publication. The exact cycle on which the transition lands depends on
 /// the media driver, but it MUST appear somewhere during the run.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
     use std::cell::RefCell;
@@ -870,7 +870,7 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
 /// the status burst at the start of each cycle, and `record()` is a no-op when
 /// the new status equals the previous — so we should only ever see the
 /// initial `Disconnected → Connected` transition, never a re-emit.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
     use std::cell::RefCell;
@@ -929,8 +929,8 @@ fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
 ///
 /// The saturation harness depends on media-driver buffer sizes and is
 /// environmental — gated on `aeron-integration-test` rather than the
-/// compile-only `aeron-rusteron` feature.
-#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+/// compile-only `aeron` feature.
+#[cfg(all(feature = "aeron", feature = "aeron-integration-test"))]
 #[test]
 fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
     use std::cell::RefCell;
@@ -983,7 +983,7 @@ fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
 /// `aeron_pub_dedup` collapses N identical upstream items into a single
 /// `offer()` over the lifetime of a steady publisher. The subscriber receives
 /// at most a handful of messages even though the producer ticks at 1ms.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_publisher_dedup_suppresses_consecutive_equal_values() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1041,7 +1041,7 @@ fn test_publisher_dedup_suppresses_consecutive_equal_values() -> anyhow::Result<
 ///
 /// Environmental — saturation depends on media-driver state. Gated on
 /// `aeron-integration-test`.
-#[cfg(all(feature = "aeron-rusteron", feature = "aeron-integration-test"))]
+#[cfg(all(feature = "aeron", feature = "aeron-integration-test"))]
 #[test]
 fn test_publisher_dedup_back_pressure_retries_latest() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1095,7 +1095,7 @@ fn test_publisher_dedup_back_pressure_retries_latest() -> anyhow::Result<()> {
 
 /// Plain `aeron_pub` (no dedup) publishes every distinct value when none
 /// repeat. The subscriber receives all of them.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1150,7 +1150,7 @@ fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
 
 /// `ChannelUri::ipc()` produces a usable IPC URI: round-trip a single i64
 /// from a publisher to a subscriber both constructed via the builder.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1204,7 +1204,7 @@ fn test_channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
 ///
 /// MDC depends on UDP loopback being functional; on environments where this
 /// is flaky, gate this test additionally behind `aeron-integration-test`.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1256,7 +1256,7 @@ fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
 
 /// Full registry round-trip: register pub + sub, wrap the rusteron backends
 /// via `aeron_pub_named` / `aeron_sub_burst_named`, round-trip a single i64.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1316,7 +1316,7 @@ fn test_named_discovery_roundtrip() -> anyhow::Result<()> {
 /// that has not been registered — the error short-circuits before any Aeron
 /// call so the test does not actually need the driver for behaviour, but we
 /// start one for symmetry with the rest of the integration suite.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_named_discovery_unknown_returns_error() -> anyhow::Result<()> {
     let _container = start_media_driver()?;
@@ -1340,7 +1340,7 @@ fn test_named_discovery_unknown_returns_error() -> anyhow::Result<()> {
 
 /// The deprecated alias `aeron_sub_discover` still compiles and routes to
 /// `aeron_sub_named` — guards against accidental removal of the alias.
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 #[test]
 fn test_aeron_sub_discover_alias_still_compiles() -> anyhow::Result<()> {
     let _container = start_media_driver()?;

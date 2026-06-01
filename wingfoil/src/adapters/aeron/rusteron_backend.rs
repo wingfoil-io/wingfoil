@@ -1,6 +1,6 @@
 //! Rusteron (C++ FFI) backend for the Aeron adapter.
 //!
-//! Requires the `aeron-rusteron` feature flag and a C++ toolchain with
+//! Requires the `aeron` feature flag and a C++ toolchain with
 //! the Aeron C++ library headers available on the build machine.
 //!
 //! # Connection lifecycle

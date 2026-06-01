@@ -17,7 +17,7 @@
 //!   is the subscriber-side factory wrapper that builds the burst stream
 //!   after asserting `name` is registered.
 //!
-//! Run with: `cargo run --example aeron_mdc_discovery --features aeron-rusteron`
+//! Run with: `cargo run --example aeron_mdc_discovery --features aeron`
 //!
 //! Note: re-running in the same process will surface
 //! `Err(DiscoveryError::AlreadyRegistered)`-style behaviour because the

@@ -11,7 +11,7 @@
 //! - [`aeron_sub_burst_with_status`](wingfoil::adapters::aeron::aeron_sub_burst_with_status)
 //! - [`AeronStatusStream`](wingfoil::adapters::aeron::AeronStatusStream)
 //!
-//! Run with: `cargo run --example aeron_status_circuit_breaker --features aeron-rusteron`
+//! Run with: `cargo run --example aeron_status_circuit_breaker --features aeron`
 
 use std::cell::RefCell;
 use std::rc::Rc;
