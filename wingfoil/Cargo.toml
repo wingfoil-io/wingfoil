@@ -365,16 +365,6 @@ name = "aeron_status_circuit_breaker"
 path = "examples/aeron_status_circuit_breaker.rs"
 required-features = ["aeron"]
 
-[[example]]
-name = "aeron_mdc_discovery"
-path = "examples/aeron_mdc_discovery.rs"
-required-features = ["aeron"]
-
-[[example]]
-name = "aeron_external_source"
-path = "examples/aeron_external_source.rs"
-required-features = ["aeron"]
-
 [[bench]]
 name = "aeron_publication_latency"
 path = "benches/aeron/publication_latency.rs"
