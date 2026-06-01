@@ -136,7 +136,7 @@ fn bench_bidirectional(c: &mut Criterion) {
     for size in [MessageSize::Small, MessageSize::Medium, MessageSize::Large] {
         // Side A: pub to B, sub from B.
         // Stream IDs in the 14000+ range keep benches disjoint from the
-        // 9000+ range that examples (Story 12.7 Dev Notes) reserve.
+        // 9000+ range that examples reserve.
         let pub_a = ctx.add_publication(14001);
         let sub_a = ctx.add_subscription(14002);
         let mut publisher_a = RusteronPublisher::new(pub_a);

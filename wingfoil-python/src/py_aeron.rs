@@ -6,7 +6,7 @@
 //! construction time, so `py_aeron_sub` / `_inner` connect eagerly and raise on
 //! failure rather than deferring to graph run.
 //!
-//! The wire format is raw `bytes` (like zmq): `aeron_sub` yields `list[bytes]`
+//! The wire format is raw `bytes` (like zmq): the subscriber yields `list[bytes]`
 //! per tick and `aeron_pub` publishes each `bytes` value as one message.
 
 use crate::py_element::PyElement;
@@ -16,7 +16,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::rc::Rc;
 use std::time::Duration;
-use wingfoil::adapters::aeron::{AeronHandle, AeronMode, AeronPub, aeron_sub};
+use wingfoil::adapters::aeron::{
+    AeronHandle, AeronMode, AeronPub, AeronSubOptions, FragmentBuffer, TransportError,
+    aeron_sub_fragment,
+};
 use wingfoil::{Burst, Node, Stream, StreamOperators};
 
 /// Polling strategy for the Aeron subscriber.
@@ -70,8 +73,16 @@ pub fn py_aeron_sub(
         .subscription(&channel, stream_id, connect_timeout(timeout_secs))
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-    let data: Rc<dyn Stream<Burst<Vec<u8>>>> =
-        aeron_sub(subscriber, |bytes: &[u8]| Some(bytes.to_vec()), mode.into());
+    let data: Rc<dyn Stream<Burst<Vec<u8>>>> = aeron_sub_fragment(
+        subscriber,
+        |f: &FragmentBuffer<'_>| -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(Some(f.as_ref().to_vec()))
+        },
+        AeronSubOptions {
+            mode: mode.into(),
+            ..Default::default()
+        },
+    );
 
     let data_py = data.map(|burst| {
         Python::attach(|py| {
