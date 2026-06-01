@@ -152,11 +152,6 @@ impl AeronPublisherBackend for MockPublisher {
 }
 
 #[cfg(test)]
-pub(crate) fn i64_parser(bytes: &[u8]) -> Option<i64> {
-    bytes.try_into().ok().map(i64::from_le_bytes)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

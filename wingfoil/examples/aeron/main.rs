@@ -10,7 +10,10 @@
 //! ```
 
 use std::time::Duration;
-use wingfoil::adapters::aeron::{AeronHandle, AeronMode, AeronPub, aeron_sub};
+use wingfoil::adapters::aeron::{
+    AeronHandle, AeronMode, AeronPub, AeronSubOptions, FragmentBuffer, TransportError,
+    aeron_sub_fragment,
+};
 use wingfoil::*;
 
 fn main() -> anyhow::Result<()> {
@@ -30,10 +33,15 @@ fn main() -> anyhow::Result<()> {
     let sub = handle.subscription(channel, stream_id, timeout)?;
     let pub_ = handle.publication(channel, stream_id, timeout)?;
 
-    let subscriber = aeron_sub(
+    let subscriber = aeron_sub_fragment(
         sub,
-        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
-        AeronMode::Spin,
+        |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+            Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+        },
+        AeronSubOptions {
+            mode: AeronMode::Spin,
+            ..Default::default()
+        },
     );
 
     // Publisher runs in its own graph on the same thread.
@@ -60,10 +68,15 @@ fn main() -> anyhow::Result<()> {
 
     let sub2 = handle.subscription(channel, stream_id + 1, timeout)?;
 
-    let threaded = aeron_sub(
+    let threaded = aeron_sub_fragment(
         sub2,
-        |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
-        AeronMode::Threaded,
+        |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+            Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+        },
+        AeronSubOptions {
+            mode: AeronMode::Threaded,
+            ..Default::default()
+        },
     );
 
     threaded

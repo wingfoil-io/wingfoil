@@ -69,7 +69,7 @@ impl AeronStatusStream {
     }
 
     /// Clears the burst at the start of the host node's cycle. Mirrors the
-    /// per-cycle data-burst clear contract from Story 12.4.
+    /// per-cycle data-burst clear contract.
     pub(crate) fn clear(&mut self) {
         self.out.clear();
     }

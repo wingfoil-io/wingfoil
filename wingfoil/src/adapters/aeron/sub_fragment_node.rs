@@ -1,30 +1,22 @@
-//! Typed-parser Aeron subscriber nodes — parallel-additive surface.
+//! Typed-parser Aeron subscriber nodes.
 //!
-//! Backs [`aeron_sub_fragment`](super::aeron_sub_fragment) — the typed-parser
-//! evolution of the bytes-only [`aeron_sub`](super::aeron_sub) factory.
-//! The new surface exposes Aeron's per-fragment header (`position`,
-//! `session_id`, `stream_id`) and lets parsers signal recoverable errors via
+//! Backs [`aeron_sub_fragment`](super::aeron_sub_fragment). The typed-parser
+//! surface exposes Aeron's per-fragment header (`position`, `session_id`,
+//! `stream_id`) and lets parsers signal recoverable errors via
 //! [`TransportError`] instead of collapsing "valid but skip" and "malformed"
 //! into a single `None`.
 //!
 //! # Two structs, not one enum
 //!
 //! Spin and threaded modes live as two distinct types
-//! ([`AeronSpinSubFragmentNode`] and the `build_threaded` factory) mirroring
-//! [`super::sub_spin`] / [`super::sub_threaded`]. The split keeps `cycle()`
-//! bodies linear (the spin variant polls inline; the threaded variant
-//! delegates to [`ReceiverStream`](crate::nodes::receiver::ReceiverStream))
-//! and matches the existing module layout one-for-one. The status-aware
-//! threaded variant ([`build_threaded_with_status`]) multiplexes data and
-//! lifecycle status over the single receiver channel via [`AeronItem`], so the
-//! two shapes diverge further — abstraction over them is an explicit non-goal.
-//!
-//! # Existing surface is untouched
-//!
-//! `aeron_sub` / `aeron_sub_with_options` and their bytes-parser `Fn(&[u8])
-//! -> Option<T>` shape remain bit-identical. The new surface is parallel and
-//! additive: backends pick up the typed surface via a defaulted
-//! [`AeronSubscriberBackend::poll_fragments`] method.
+//! ([`AeronSpinSubFragmentNode`] and the `build_threaded` factory). The split
+//! keeps `cycle()` bodies linear (the spin variant polls inline; the threaded
+//! variant delegates to
+//! [`ReceiverStream`](crate::nodes::receiver::ReceiverStream)). The
+//! status-aware threaded variant ([`build_threaded_with_status`]) multiplexes
+//! data and lifecycle status over the single receiver channel via
+//! [`AeronItem`], so the two shapes diverge further — abstraction over them is
+//! an explicit non-goal.
 
 use crate::adapters::aeron::buffer::FragmentBuffer;
 use crate::adapters::aeron::error::TransportError;
@@ -460,7 +452,7 @@ mod tests {
     use crate::{IntoStream, NanoTime, NodeOperators, RunFor, RunMode, StreamOperators};
     use std::cell::RefCell;
 
-    /// Typed-parser sibling of `transport::i64_parser` for the burst surface.
+    /// Typed little-endian i64 parser for the burst surface.
     fn i64_parser_typed(f: &FragmentBuffer<'_>) -> Result<Option<i64>, TransportError> {
         Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
     }
@@ -636,7 +628,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Status-stream wiring tests (Story 12.5 AC #10).
+    // Status-stream wiring tests.
     // ---------------------------------------------------------------------
 
     fn make_graph_state() -> GraphState {

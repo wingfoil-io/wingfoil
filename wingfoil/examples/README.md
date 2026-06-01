@@ -178,17 +178,21 @@ Publish `i64` values over a low-latency Aeron channel and subscribe to them back
 
 ```rust,ignore
 use std::time::Duration;
-use wingfoil::adapters::aeron::{AeronHandle, AeronMode, AeronPub, aeron_sub};
+use wingfoil::adapters::aeron::{
+    AeronHandle, AeronPub, AeronSubOptions, FragmentBuffer, TransportError, aeron_sub_fragment,
+};
 use wingfoil::*;
 
 let handle = AeronHandle::connect()?; // requires a running media driver
 let sub = handle.subscription("aeron:ipc", 1001, Duration::from_secs(5))?;
 let pub_ = handle.publication("aeron:ipc", 1001, Duration::from_secs(5))?;
 
-let received = aeron_sub(
+let received = aeron_sub_fragment(
     sub,
-    |bytes: &[u8]| bytes.try_into().ok().map(i64::from_le_bytes),
-    AeronMode::Spin,
+    |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+    },
+    AeronSubOptions::default(),
 );
 let publisher = received.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
