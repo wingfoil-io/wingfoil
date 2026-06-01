@@ -381,11 +381,10 @@ where
     let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
     match opts.mode {
         AeronMode::Spin => {
-            // Spin records status on the graph thread, so the status node must
-            // self-schedule (always_callback) to forward recorded transitions.
-            let status = Rc::new(RefCell::new(
-                status_stream::AeronStatusStream::self_scheduling(),
-            ));
+            // The spin subscriber records status on the graph thread; wire it as
+            // the status node's active upstream so transitions are forwarded once
+            // per producer tick (no always_callback busy-spin).
+            let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
             let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
             let data = sub_fragment_node::AeronSpinSubFragmentNode::with_status(
                 subscriber,
@@ -393,15 +392,18 @@ where
                 Rc::clone(&status),
             )
             .into_stream();
+            status
+                .borrow_mut()
+                .set_producer(Rc::downgrade(&data.clone().as_node()));
             (data, status_stream)
         }
         AeronMode::Threaded => {
             // Threaded variant: status is not wired across the channel
             // boundary in this story. The returned status stream is the
-            // default-state AeronStatusStream that never records a transition —
-            // `peek_ref()` always observes `Burst::new()` (empty), `current()`
-            // returns `Disconnected`. It deliberately does NOT self-schedule, so
-            // the placeholder never busy-spins the graph thread.
+            // default-state AeronStatusStream with no producer — it never
+            // records a transition, `peek_ref()` always observes `Burst::new()`
+            // (empty), `current()` returns `Disconnected`, and with no upstream
+            // it stays an inert source that never busy-spins the graph thread.
             let status = Rc::new(RefCell::new(status_stream::AeronStatusStream::default()));
             let status_stream: Rc<dyn Stream<Burst<AeronStatus>>> = status.clone();
             let data = sub_fragment_node::build_threaded(subscriber, parser);

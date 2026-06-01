@@ -979,16 +979,21 @@ fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
     let handle = AeronHandle::connect()?;
     let stream_id = 2016i32;
 
-    let _sub = handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
-    let pub_ = handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?;
+    // Use the minimum term length (64 KiB) so the publication term buffer
+    // saturates after a bounded handful of offers, independent of runner speed.
+    // (The default 16 MiB term needs ~hundreds of large offers, which a slow CI
+    // runner may not reach within the run window.) Max message length is
+    // term-length/8 = 8 KiB, so the payload below stays under that.
+    let channel = "aeron:ipc?term-length=65536";
+    let _sub = handle.subscription(channel, stream_id, CONNECT_TIMEOUT)?;
+    let pub_ = handle.publication(channel, stream_id, CONNECT_TIMEOUT)?;
     // Saturation only produces BackPressured once the publication is connected;
     // an unconnected publication reports Disconnected and never back-pressures.
     wait_for_pub_connected(&pub_, CONNECT_TIMEOUT)?;
 
-    // 256 KiB payload — enough to saturate the publication term buffer
-    // quickly. The exact threshold depends on media-driver config; this
-    // mirrors the saturation harness used by Story 12.2 try_claim tests.
-    let payload: Vec<u8> = vec![0xABu8; 256 * 1024];
+    // 4 KiB payload — fits the 64 KiB term (max message 8 KiB) and fills the
+    // buffer within a few dozen offers since the subscriber is never polled.
+    let payload: Vec<u8> = vec![0xABu8; 4 * 1024];
     let source = crate::nodes::ticker(Duration::from_millis(1))
         .count()
         .map(move |_| {

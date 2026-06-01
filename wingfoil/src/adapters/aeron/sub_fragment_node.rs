@@ -127,7 +127,7 @@ where
                 );
             }
         })?;
-        if let Some(status) = &self.status {
+        let transition = if let Some(status) = &self.status {
             let new_status = if self.backend.is_closed() {
                 AeronStatus::Closed
             } else if self.backend.is_connected() {
@@ -135,9 +135,13 @@ where
             } else {
                 AeronStatus::Disconnected
             };
-            status.borrow_mut().record(new_status);
-        }
-        Ok(!self.value.is_empty())
+            status.borrow_mut().record(new_status)
+        } else {
+            false
+        };
+        // Tick when fragments arrived OR a status transition was recorded, so
+        // the status node (our active downstream) is scheduled to forward it.
+        Ok(!self.value.is_empty() || transition)
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
