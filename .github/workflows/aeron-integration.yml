@@ -1,0 +1,54 @@
+name: test.integration.aeron
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/aeron/**'
+      - '.github/workflows/aeron-integration.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  aeron-integration:
+    name: Aeron Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      # The Aeron FFI backends (rusteron-client / aeron-rs) build native code
+      # via bindgen + CMake. Docker (for the testcontainers media driver) is
+      # already present on ubuntu-latest.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
+
+      # The Aeron sources bundled by rusteron-client require CMake >= 3.30,
+      # which is newer than the version shipped on ubuntu-latest. Install 3.31
+      # from Kitware, matching the project setup instructions in CLAUDE.md.
+      - name: Install CMake 3.31
+        run: |
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
+          cmake --version
+
+      # The suite starts an Aeron media driver in a container and shares the
+      # CNC file via /dev/shm, so it must run single-threaded.
+      - name: Run Aeron integration tests
+        run: |
+          cargo test --features aeron-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture aeron::integration_tests
+        env:
+          RUST_LOG: INFO
