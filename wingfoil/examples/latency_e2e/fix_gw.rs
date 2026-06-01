@@ -193,25 +193,25 @@ fn main() -> anyhow::Result<()> {
     // Inbound: ExecutionReports from the order session. Filter here so
     // only MsgType=8 frames propagate — admin / heartbeat frames never
     // show up in the matcher's burst.
-    let exec_events: Rc<dyn Stream<MatcherEvent>> = MapFilterStream::new(
-        fix_ord.data.clone().collapse::<FixMessage>(),
-        Box::new(|m: FixMessage| {
-            let is_exec = m.msg_type == "8";
-            if is_exec {
+    let exec_events: Rc<dyn Stream<MatcherEvent>> = fix_ord
+        .data
+        .clone()
+        .collapse::<FixMessage>()
+        .filter_map(|m: FixMessage| {
+            if m.msg_type == "8" {
                 log::info!(
                     "fix_gw: ExecutionReport received cl_ord={} exec_type={}",
                     m.field(TAG_CL_ORD_ID).unwrap_or(""),
                     m.field(TAG_EXEC_TYPE).unwrap_or(""),
                 );
+                Some(MatcherEvent::Exec(m))
             } else {
                 log::debug!("fix_gw: non-exec msg_type={} dropped at filter", m.msg_type);
+                None
             }
-            (MatcherEvent::Exec(m), is_exec)
-        }),
-    )
-    .into_stream();
+        });
 
-    // ── Matcher: combine + fold + map_filter ─────────────────────────────
+    // ── Matcher: combine + fold + filter_map ─────────────────────────────
     //
     // `combine` collects the ticked values from both upstreams into a
     // single `Burst<MatcherEvent>` per cycle — if an Order and an
@@ -220,7 +220,7 @@ fn main() -> anyhow::Result<()> {
     // `RefCell<HashMap<ClOrdID, Traced>>` of parked orders in its
     // captured state. Each cycle, we walk the burst in order, parking
     // orders or matching ExecReports. The output value is the last
-    // matched fill this cycle (or None); downstream `MapFilterStream`
+    // matched fill this cycle (or None); the downstream `filter_map`
     // drops the Nones.
     //
     // Invariant: each upstream emits at most one event per cycle
@@ -297,18 +297,12 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Drop Nones, stamp the inbound stages, publish back via iceoryx2.
-    let fills = MapFilterStream::new(
-        matched,
-        Box::new(|v: Option<Traced<RoundTrip, RoundTripLatency>>| {
-            let ticked = v.is_some();
-            (v.unwrap_or_default(), ticked)
-        }),
-    )
-    .into_stream()
-    .stamp_if::<round_trip_latency::fix_recv>(!precise)
-    .stamp_precise_if::<round_trip_latency::fix_recv>(precise)
-    .stamp_if::<round_trip_latency::gw_publish>(!precise)
-    .stamp_precise_if::<round_trip_latency::gw_publish>(precise);
+    let fills = matched
+        .filter_map(|v: Option<Traced<RoundTrip, RoundTripLatency>>| v)
+        .stamp_if::<round_trip_latency::fix_recv>(!precise)
+        .stamp_precise_if::<round_trip_latency::fix_recv>(precise)
+        .stamp_if::<round_trip_latency::gw_publish>(!precise)
+        .stamp_precise_if::<round_trip_latency::gw_publish>(precise);
 
     let pub_fills = iceoryx2_pub(
         fills

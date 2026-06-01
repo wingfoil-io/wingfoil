@@ -486,6 +486,14 @@ pub trait StreamOperators<T: Element> {
     #[must_use]
     fn filter_value(self: &Rc<Self>, predicate: impl Fn(&T) -> bool + 'static)
     -> Rc<dyn Stream<T>>;
+    /// Maps and filters in a single step: applies `func` to each value and
+    /// ticks the returned `Some`, dropping `None`. Mirrors
+    /// [`Iterator::filter_map`].
+    #[must_use]
+    fn filter_map<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(T) -> Option<OUT> + 'static,
+    ) -> Rc<dyn Stream<OUT>>;
     /// Passes through values unchanged while calling the supplied closure
     /// on a reference to each value, for side effects (debugging, logging, etc.).
     #[must_use]
@@ -723,6 +731,17 @@ where
     ) -> Rc<dyn Stream<T>> {
         let condition = self.clone().map(move |val| predicate(&val));
         FilterStream::new(self.clone(), condition).into_stream()
+    }
+
+    fn filter_map<OUT: Element>(
+        self: &Rc<Self>,
+        func: impl Fn(T) -> Option<OUT> + 'static,
+    ) -> Rc<dyn Stream<OUT>> {
+        let f = move |val: T| match func(val) {
+            Some(out) => (out, true),
+            None => (OUT::default(), false),
+        };
+        MapFilterStream::new(self.clone(), Box::new(f)).into_stream()
     }
 
     fn finally<F: FnOnce(T, &GraphState) -> anyhow::Result<()> + 'static>(
@@ -1023,6 +1042,19 @@ mod tests {
         // only the non-empty vec produces a tick
         assert_eq!(ticks.len(), 1);
         assert_eq!(ticks[0].value, 2u64); // last() of [1,2]
+    }
+
+    #[test]
+    fn filter_map_keeps_some_drops_none() {
+        // count() → 1,2,3,4,5,6; keep squares of odd inputs only: 1,9,25
+        let source = ticker(Duration::from_nanos(100)).count();
+        let out = source.filter_map(|x: u64| (x % 2 == 1).then_some(x * x));
+        let collected = out.collect();
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let values: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![1, 9, 25]);
     }
 
     #[test]
