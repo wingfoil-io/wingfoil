@@ -1,6 +1,6 @@
 //! Circuit-breaker example driven by the Aeron status side-channel.
 //!
-//! Demonstrates [`aeron_sub_fragment_with_status`] from Story 12.5: the factory
+//! Demonstrates [`aeron_sub_fragment_with_status`]: the factory
 //! returns `(data_stream, status_stream)`. This example wires a custom node
 //! that consumes both streams. The status stream drives a "healthy" gate:
 //! when the subscriber's last observed [`AeronStatus`] is `Connected`,

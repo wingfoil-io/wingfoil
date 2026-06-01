@@ -1,6 +1,6 @@
 # Aeron Adapter
 
-Subscribes to an Aeron channel and emits `Burst<T>` (`aeron_sub` / `aeron_sub_fragment`),
+Subscribes to an Aeron channel and emits `Burst<T>` (`aeron_sub_fragment`),
 and publishes serialised values to an Aeron channel (`AeronPub::aeron_pub`).
 Aeron is a low-latency UDP/IPC message transport; this adapter wraps it as
 wingfoil source and sink nodes.
@@ -9,20 +9,16 @@ wingfoil source and sink nodes.
 
 ```
 aeron/
-  mod.rs               # AeronMode, AeronSubOptions, aeron_sub* factories, public re-exports
+  mod.rs               # AeronMode, AeronSubOptions, aeron_sub_fragment* factories, public re-exports
   transport.rs         # AeronSubscriberBackend / AeronPublisherBackend traits + test mocks
   rusteron_backend.rs  # `aeron` feature: rusteron-client C++ FFI backend (production)
   aeron_rs_backend.rs  # `aeron-rs-beta` feature: pure-Rust aeron-rs backend (experimental)
-  sub_spin.rs          # Spin-mode subscriber node (polls in cycle() on the graph thread)
-  sub_threaded.rs      # Threaded-mode subscriber node (background thread + ReceiverStream)
-  sub_fragment_node.rs    # Burst<T> subscriber surface (typed parser with FragmentHeader access)
-  pub_node.rs          # AeronPub trait + publisher node (offer, dedup, status variants)
+  sub_fragment_node.rs # Burst<T> subscriber surface (spin + threaded; typed parser with FragmentHeader access)
+  pub_node.rs          # AeronPub trait + publisher node (offer + status variants)
   status.rs            # AeronStatus enum (Disconnected / Connected / BackPressured / Closed)
   status_stream.rs     # AeronStatusStream — reactive Burst<AeronStatus> side-channel
   buffer.rs            # FragmentBuffer (borrowed read view) + ClaimBuffer (zero-copy write)
   channel.rs           # ChannelUri builder/validator (IPC, UDP, MDC)
-  discovery.rs         # Named-endpoint registry + aeron_*_named factories
-  external.rs          # ExternalSource escape hatch for caller-owned poll loops
   error.rs             # TransportError (BackPressure / Connection / Backend / Invalid)
   integration_tests.rs # Integration tests (requires a media driver, gated by feature)
   CLAUDE.md            # This file
@@ -43,20 +39,17 @@ running media driver (the normal production topology).
 
 ## Key Components
 
-### Subscribing — `aeron_sub` / `aeron_sub_fragment`
+### Subscribing — `aeron_sub_fragment`
 
-- `aeron_sub(subscriber, parser, mode)` — `parser: FnMut(&[u8]) -> Option<T>`,
-  emits `Burst<T>`.
 - `aeron_sub_fragment(subscriber, parser, opts)` — typed parser
   `FnMut(&FragmentBuffer) -> Result<Option<T>, TransportError>` with access to
-  the per-fragment `FragmentHeader` (position, session_id, stream_id).
+  the per-fragment `FragmentHeader` (position, session_id, stream_id); emits
+  `Burst<T>`.
 - `aeron_sub_fragment_with_status(...)` — returns `(data_stream, status_stream)`;
   the status stream emits `Burst<AeronStatus>` on connect/disconnect transitions.
   In threaded mode the poll thread multiplexes data and status over the single
   receiver channel (`AeronItem`); status is sampled at the poll cadence rather
   than per graph cycle.
-- `aeron_sub_fragment_named(...)` — resolves the subscriber from the named-endpoint
-  registry (see `discovery.rs`).
 
 The `subscriber` handle comes from `AeronHandle::subscription(channel, stream_id, timeout)`
 (rusteron) or `AeronRsHandle::subscription(...)` (aeron-rs-beta). Constructing it
@@ -76,23 +69,14 @@ caps fragments processed per `poll()` (default `DEFAULT_FRAGMENT_LIMIT = 256`).
 
 ### Publishing — `AeronPub`
 
-Fluent trait on `Rc<dyn Stream<Burst<T>>>` (and the single-value `Rc<dyn Stream<T>>`):
+Fluent trait on `Rc<dyn Stream<Burst<T>>>`:
 
-- `aeron_pub(publisher, serialize)` — offer every value each cycle.
-- `aeron_pub_dedup(...)` — skip offering when the value equals the last published
-  (latest-wins on back-pressure: `last_published` is not advanced on a
-  back-pressured offer).
-- `aeron_pub_with_status(...)` / `aeron_pub_dedup_with_status(...)` — also return
-  a status stream. `Closed` is terminal and checked first.
+- `aeron_pub(publisher, serialize)` — offer every burst item each cycle.
+- `aeron_pub_with_status(...)` — also returns a status stream. `Closed` is
+  terminal and checked first.
 
 The `publisher` handle comes from `AeronHandle::publication(...)` /
 `AeronRsHandle::publication(...)`.
-
-### ExternalSource escape hatch
-
-`ExternalSource<T>` lets a caller-owned Aeron poll loop push decoded values into
-the graph (zero-copy SBE decode inside the poll callback, custom idle strategy,
-single-threaded HFT control flow). See `examples/aeron_external_source.rs`.
 
 ## ⚠️ Design note: `aeron-rs-beta` locks on the graph thread
 
