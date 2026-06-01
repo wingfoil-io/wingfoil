@@ -12,13 +12,35 @@ use syn::{
 struct NodeArgs {
     active: Vec<Ident>,
     passive: Vec<Ident>,
+    dep: Vec<Ident>,
     output: Option<(Ident, Type)>,
+}
+
+/// Parse a bracketed, comma-separated list of identifiers (e.g. `[a, b, c]`)
+/// into `slot`, erroring if the key has already been seen.
+fn parse_ident_list(
+    input: ParseStream,
+    key: &Ident,
+    slot: &mut Option<Vec<Ident>>,
+) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(syn::Error::new(
+            key.span(),
+            format!("duplicate key `{key}`"),
+        ));
+    }
+    let content;
+    bracketed!(content in input);
+    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+    *slot = Some(list.into_iter().collect());
+    Ok(())
 }
 
 impl Parse for NodeArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut active: Option<Vec<Ident>> = None;
         let mut passive: Option<Vec<Ident>> = None;
+        let mut dep: Option<Vec<Ident>> = None;
         let mut output: Option<(Ident, Type)> = None;
 
         while !input.is_empty() {
@@ -26,24 +48,9 @@ impl Parse for NodeArgs {
             input.parse::<Token![=]>()?;
 
             match key.to_string().as_str() {
-                "active" => {
-                    if active.is_some() {
-                        return Err(syn::Error::new(key.span(), "duplicate key `active`"));
-                    }
-                    let content;
-                    bracketed!(content in input);
-                    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
-                    active = Some(list.into_iter().collect());
-                }
-                "passive" => {
-                    if passive.is_some() {
-                        return Err(syn::Error::new(key.span(), "duplicate key `passive`"));
-                    }
-                    let content;
-                    bracketed!(content in input);
-                    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
-                    passive = Some(list.into_iter().collect());
-                }
+                "active" => parse_ident_list(input, &key, &mut active)?,
+                "passive" => parse_ident_list(input, &key, &mut passive)?,
+                "dep" => parse_ident_list(input, &key, &mut dep)?,
                 "output" => {
                     if output.is_some() {
                         return Err(syn::Error::new(key.span(), "duplicate key `output`"));
@@ -56,7 +63,9 @@ impl Parse for NodeArgs {
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{key}`; expected `active`, `passive`, or `output`"),
+                        format!(
+                            "unknown key `{key}`; expected `active`, `passive`, `dep`, or `output`"
+                        ),
                     ));
                 }
             }
@@ -69,6 +78,7 @@ impl Parse for NodeArgs {
         Ok(NodeArgs {
             active: active.unwrap_or_default(),
             passive: passive.unwrap_or_default(),
+            dep: dep.unwrap_or_default(),
             output,
         })
     }
@@ -78,11 +88,16 @@ impl Parse for NodeArgs {
 ///
 /// Place `#[node(...)]` on an `impl MutableNode for MyType` block. It can:
 ///
-/// - Inject `fn upstreams()` from `active = [field1, field2]` and/or `passive = [field3]`
+/// - Inject `fn upstreams()` from `active = [field1, field2]`, `passive = [field3]`,
+///   and/or `dep = [field4]`
 /// - Emit a separate `impl StreamPeekRef<T>` from `output = field_name: FieldType`
 ///
 /// Fields listed as `active` or `passive` must implement `AsUpstreamNodes`
 /// (`Rc<dyn Node>`, `Rc<dyn Stream<T>>`, or `Vec` of either).
+///
+/// Fields listed as `dep` must be [`Dep<T>`]; each is routed into the active or
+/// passive set at runtime according to [`Dep::is_active`]. Do not also write a
+/// manual `upstreams()` when using `dep`.
 ///
 /// If neither `active` nor `passive` is specified, no `upstreams()` is injected —
 /// the default `UpStreams::none()` from [`MutableNode`] is used (source node), or you
@@ -116,11 +131,10 @@ impl Parse for NodeArgs {
 /// #[node(passive = [upstream], active = [trigger], output = value: T)]
 /// impl<T: Element> MutableNode for SampleStream<T> { ... }
 ///
-/// // Complex upstreams (Dep<T> etc.) — write upstreams() manually, use #[node] for output only
-/// #[node(output = value: OUT)]
+/// // Dep<T> upstreams — routed active/passive at runtime via Dep::is_active
+/// #[node(dep = [upstream1, upstream2], output = value: OUT)]
 /// impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
 ///     fn cycle(&mut self, ...) -> anyhow::Result<bool> { ... }
-///     fn upstreams(&self) -> UpStreams { /* Dep<T> logic */ }
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -131,10 +145,13 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let self_ty = impl_block.self_ty.clone();
     let (impl_generics, _, where_clause) = impl_block.generics.split_for_impl();
 
-    // Inject fn upstreams() if active/passive fields are specified.
-    if !args.active.is_empty() || !args.passive.is_empty() {
+    // Inject fn upstreams() if active/passive/dep fields are specified.
+    // `dep` fields are `Dep<T>` values whose active/passive routing is decided
+    // at runtime by `Dep::is_active`; `active`/`passive` are statically routed.
+    if !args.active.is_empty() || !args.passive.is_empty() || !args.dep.is_empty() {
         let active_fields = &args.active;
         let passive_fields = &args.passive;
+        let dep_fields = &args.dep;
 
         // All wingfoil paths are fully qualified so the generated code is
         // hygienic against user-defined traits/types of the same name.
@@ -146,6 +163,13 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let mut passive: ::std::vec::Vec<::std::rc::Rc<dyn ::wingfoil::Node>> = ::std::vec::Vec::new();
                 #(active.extend(::wingfoil::AsUpstreamNodes::as_upstream_nodes(&self.#active_fields));)*
                 #(passive.extend(::wingfoil::AsUpstreamNodes::as_upstream_nodes(&self.#passive_fields));)*
+                #(
+                    if ::wingfoil::Dep::is_active(&self.#dep_fields) {
+                        active.push(::wingfoil::Dep::as_node(&self.#dep_fields));
+                    } else {
+                        passive.push(::wingfoil::Dep::as_node(&self.#dep_fields));
+                    }
+                )*
                 ::wingfoil::UpStreams::new(active, passive)
             }
         };

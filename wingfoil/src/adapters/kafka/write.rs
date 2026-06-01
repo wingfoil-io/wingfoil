@@ -2,7 +2,6 @@
 
 use super::{KafkaConnection, KafkaRecord};
 use crate::RunParams;
-use crate::burst;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use futures::StreamExt;
@@ -77,7 +76,7 @@ impl KafkaPubOperators for dyn Stream<Burst<KafkaRecord>> {
 
 impl KafkaPubOperators for dyn Stream<KafkaRecord> {
     fn kafka_pub(self: &Rc<Self>, conn: KafkaConnection) -> Rc<dyn Node> {
-        let burst_stream = self.map(|record| burst![record]);
+        let burst_stream = crate::adapters::single_to_burst(self);
         kafka_pub(conn, &burst_stream)
     }
 }

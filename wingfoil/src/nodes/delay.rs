@@ -6,11 +6,15 @@ use crate::queue::TimeQueue;
 use crate::types::*;
 use derive_new::new;
 
-/// Emits it's source delayed by the specified time
+/// Shared delay machinery used by both [`DelayStream`] and
+/// [`DelayWithResetStream`](super::delay_with_reset::DelayWithResetStream).
+///
+/// Holds the delayed output value, the pending queue and the delay window, and
+/// implements the core "push on upstream tick, pop when due" advance logic.
 #[derive(new)]
-pub(crate) struct DelayStream<T: Element + Hash + Eq> {
+pub(crate) struct DelayCore<T: Element + Hash + Eq> {
     #[new(default)]
-    value: T,
+    pub(crate) value: T,
     #[new(default)]
     queue: TimeQueue<T>,
     #[new(default)]
@@ -19,13 +23,27 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     delay: NanoTime,
 }
 
-#[node(active = [upstream], output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
-    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+impl<T: Element + Hash + Eq> DelayCore<T> {
+    /// The upstream stream this core delays, as a node (for `upstreams()`).
+    pub(crate) fn upstream_node(&self) -> Rc<dyn Node> {
+        self.upstream.clone().as_node()
+    }
+
+    /// Reset the core: snap output to the current upstream value and clear the
+    /// pending queue.
+    pub(crate) fn reset(&mut self) {
+        self.value = self.upstream.peek_value();
+        self.queue.clear();
+        self.initialized = true;
+    }
+
+    /// Advance the delay by one cycle (no reset handling). Returns whether the
+    /// output value ticked.
+    pub(crate) fn advance(&mut self, state: &mut GraphState) -> bool {
         if self.delay == NanoTime::ZERO {
             // just tick on this cycle
             self.value = self.upstream.peek_value();
-            Ok(true)
+            true
         } else {
             let current_time = state.time();
             let mut ticked = false;
@@ -42,8 +60,36 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
                 self.value = value;
                 ticked = true;
             }
-            Ok(ticked)
+            ticked
         }
+    }
+}
+
+/// Emits it's source delayed by the specified time
+pub(crate) struct DelayStream<T: Element + Hash + Eq> {
+    core: DelayCore<T>,
+}
+
+impl<T: Element + Hash + Eq> DelayStream<T> {
+    pub(crate) fn new(upstream: Rc<dyn Stream<T>>, delay: NanoTime) -> Self {
+        DelayStream {
+            core: DelayCore::new(upstream, delay),
+        }
+    }
+}
+
+impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        Ok(self.core.advance(state))
+    }
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(vec![self.core.upstream_node()], vec![])
+    }
+}
+
+impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayStream<T> {
+    fn peek_ref(&self) -> &T {
+        &self.core.value
     }
 }
 

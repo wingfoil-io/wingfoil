@@ -2,58 +2,46 @@ use std::cmp::Eq;
 use std::hash::Hash;
 use std::rc::Rc;
 
-use crate::queue::TimeQueue;
+use super::delay::DelayCore;
 use crate::types::*;
-use derive_new::new;
 
 /// Like [`DelayStream`](super::delay::DelayStream) but with a reset trigger.
 /// When the trigger fires, the output snaps to the current upstream value and
 /// the pending queue is cleared.
-#[derive(new)]
 pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
-    #[new(default)]
-    value: T,
-    #[new(default)]
-    queue: TimeQueue<T>,
-    #[new(default)]
-    initialized: bool,
-    upstream: Rc<dyn Stream<T>>,
+    core: DelayCore<T>,
     trigger: Rc<dyn Node>,
-    delay: NanoTime,
 }
 
-#[node(active = [upstream, trigger], output = value: T)]
+impl<T: Element + Hash + Eq> DelayWithResetStream<T> {
+    pub(crate) fn new(upstream: Rc<dyn Stream<T>>, trigger: Rc<dyn Node>, delay: NanoTime) -> Self {
+        DelayWithResetStream {
+            core: DelayCore::new(upstream, delay),
+            trigger,
+        }
+    }
+}
+
 impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if state.ticked(self.trigger.clone()) {
             // Reset: snap to current upstream value, clear pending queue
-            self.value = self.upstream.peek_value();
-            self.queue.clear();
-            self.initialized = true;
+            self.core.reset();
             return Ok(true);
         }
+        Ok(self.core.advance(state))
+    }
+    fn upstreams(&self) -> UpStreams {
+        UpStreams::new(
+            vec![self.core.upstream_node(), self.trigger.clone()],
+            vec![],
+        )
+    }
+}
 
-        if self.delay == NanoTime::ZERO {
-            self.value = self.upstream.peek_value();
-            Ok(true)
-        } else {
-            let current_time = state.time();
-            let mut ticked = false;
-            if state.ticked(self.upstream.clone().as_node()) {
-                if !self.initialized {
-                    self.value = self.upstream.peek_value();
-                    self.initialized = true;
-                }
-                let next_time = current_time + self.delay;
-                state.add_callback(next_time);
-                self.queue.push(self.upstream.peek_value(), next_time)
-            }
-            while let Some(value) = self.queue.pop_if_pending(current_time) {
-                self.value = value;
-                ticked = true;
-            }
-            Ok(ticked)
-        }
+impl<T: Element + Hash + Eq> StreamPeekRef<T> for DelayWithResetStream<T> {
+    fn peek_ref(&self) -> &T {
+        &self.core.value
     }
 }
 

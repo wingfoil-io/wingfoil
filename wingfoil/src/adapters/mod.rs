@@ -1,5 +1,26 @@
 //! A library of input and output adapters
 
+/// Interpret a byte slice as a UTF-8 string.
+///
+/// Shared `value_str`/`key_str` accessor for message-payload adapters
+/// (kafka, fluvio, etcd) so the `from_utf8` boilerplate lives in one place.
+#[cfg(any(feature = "kafka", feature = "fluvio", feature = "etcd"))]
+pub(crate) fn bytes_str(bytes: &[u8]) -> Result<&str, std::str::Utf8Error> {
+    std::str::from_utf8(bytes)
+}
+
+/// Wrap a single-item stream into a `Burst`-of-one stream.
+///
+/// Shared helper for the `*_pub` fluent operators, whose single-value impls all
+/// delegate to their `Burst`-based counterpart after wrapping each item.
+#[cfg(any(feature = "kafka", feature = "fluvio", feature = "etcd"))]
+pub(crate) fn single_to_burst<T: crate::types::Element>(
+    stream: &std::rc::Rc<dyn crate::types::Stream<T>>,
+) -> std::rc::Rc<dyn crate::types::Stream<crate::types::Burst<T>>> {
+    use crate::nodes::StreamOperators;
+    stream.map(|item| crate::burst![item])
+}
+
 #[cfg(feature = "kdb")]
 pub mod cache;
 #[cfg(feature = "csv")]

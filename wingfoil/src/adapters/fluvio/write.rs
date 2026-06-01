@@ -2,7 +2,6 @@
 
 use super::{FluvioConnection, FluvioRecord};
 use crate::RunParams;
-use crate::burst;
 use crate::nodes::{FutStream, StreamOperators};
 use crate::types::*;
 use fluvio::{Fluvio, FluvioClusterConfig, RecordKey};
@@ -104,7 +103,7 @@ impl FluvioPubOperators for dyn Stream<FluvioRecord> {
         conn: FluvioConnection,
         topic: impl Into<String>,
     ) -> Rc<dyn Node> {
-        let burst_stream = self.map(|record| burst![record]);
+        let burst_stream = crate::adapters::single_to_burst(self);
         fluvio_pub(conn, topic, &burst_stream)
     }
 }

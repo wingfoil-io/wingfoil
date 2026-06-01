@@ -14,20 +14,8 @@ pub(crate) struct TryBiMapStream<IN1, IN2, OUT: Element> {
     func: Box<dyn Fn(IN1, IN2) -> anyhow::Result<OUT>>,
 }
 
-#[node(output = value: OUT)]
+#[node(dep = [upstream1, upstream2], output = value: OUT)]
 impl<IN1: 'static, IN2: 'static, OUT: Element> MutableNode for TryBiMapStream<IN1, IN2, OUT> {
-    fn upstreams(&self) -> UpStreams {
-        let (active, passive): (Vec<_>, Vec<_>) = [
-            (self.upstream1.as_node(), self.upstream1.is_active()),
-            (self.upstream2.as_node(), self.upstream2.is_active()),
-        ]
-        .into_iter()
-        .partition(|(_, active)| *active);
-        UpStreams::new(
-            active.into_iter().map(|(n, _)| n).collect(),
-            passive.into_iter().map(|(n, _)| n).collect(),
-        )
-    }
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = (self.func)(
             self.upstream1.stream().peek_value(),

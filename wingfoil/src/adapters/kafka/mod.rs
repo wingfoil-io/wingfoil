@@ -130,7 +130,7 @@ pub struct KafkaRecord {
 impl KafkaRecord {
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> Result<&str, std::str::Utf8Error> {
-        std::str::from_utf8(&self.value)
+        crate::adapters::bytes_str(&self.value)
     }
 }
 
@@ -152,11 +152,11 @@ pub struct KafkaEvent {
 impl KafkaEvent {
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> Result<&str, std::str::Utf8Error> {
-        std::str::from_utf8(&self.value)
+        crate::adapters::bytes_str(&self.value)
     }
 
     /// Interpret the key as a UTF-8 string, if present.
     pub fn key_str(&self) -> Option<Result<&str, std::str::Utf8Error>> {
-        self.key.as_deref().map(std::str::from_utf8)
+        self.key.as_deref().map(crate::adapters::bytes_str)
     }
 }

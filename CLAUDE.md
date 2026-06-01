@@ -106,16 +106,17 @@ impl<IN, OUT: Element> MutableNode for MyStream<IN, OUT> {
 
 - `active = [f1, f2]` — fields that trigger this node when they tick
 - `passive = [f3]` — fields read but not triggering
+- `dep = [f1, f2]` — `Dep<T>` fields routed active/passive at runtime via `Dep::is_active`
 - `output = field: Type` — emits `impl StreamPeekRef<Type>`
-- No `active`/`passive` → source node (default `upstreams()` returns `UpStreams::none()`)
-- Complex cases (e.g. `Dep<T>`, `Option<Rc<dyn Node>>`) → write `upstreams()` manually in the impl block; use `#[node(output = ...)]` alone to still get `StreamPeekRef`:
+- No `active`/`passive`/`dep` → source node (default `upstreams()` returns `UpStreams::none()`)
+- `Dep<T>` upstreams → use `dep = [...]`; the macro generates `upstreams()` for you:
   ```rust
-  #[node(output = value: OUT)]
+  #[node(dep = [upstream1, upstream2], output = value: OUT)]
   impl<IN1, IN2, OUT: Element> MutableNode for BiMapStream<IN1, IN2, OUT> {
       fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> { ... }
-      fn upstreams(&self) -> UpStreams { /* custom Dep<T> logic */ }
   }
   ```
+- Other complex cases (e.g. `Option<Rc<dyn Node>>`) → write `upstreams()` manually in the impl block; use `#[node(output = ...)]` alone to still get `StreamPeekRef`. Do not combine `dep` with a hand-written `upstreams()`.
 - Requires `use wingfoil::*` (or explicit `use wingfoil::AsUpstreamNodes`) for the generated code to compile
 
 See `wingfoil/examples/dynamic/dynamic-manual/main.rs` for a fully manual custom node example.
