@@ -1,5 +1,6 @@
 //! A library of input and output adapters
 
+#[cfg(any(feature = "aeron", feature = "aeron-rs-beta"))]
 pub mod aeron;
 #[cfg(feature = "kdb")]
 pub mod cache;
