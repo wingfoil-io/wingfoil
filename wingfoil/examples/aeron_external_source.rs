@@ -35,7 +35,7 @@
 //!   4. idle_strategy.idle(work_count)  // CPU management (sketch)
 //! ```
 //!
-//! Run with: `cargo run --example aeron_external_source --features aeron-rusteron`
+//! Run with: `cargo run --example aeron_external_source --features aeron`
 //!
 //! Note: requires the Aeron media driver to be running.
 

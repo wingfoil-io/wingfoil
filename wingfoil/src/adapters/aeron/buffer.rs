@@ -9,10 +9,10 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 use rusteron_client::AeronBufferClaim;
 
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 use crate::adapters::aeron::error::TransportError;
 
 // ---------------------------------------------------------------------------
@@ -50,16 +50,16 @@ use crate::adapters::aeron::error::TransportError;
 /// the commit/abort invariant visible at every call site.
 pub struct ClaimBuffer<'a> {
     // REVIEW NOTE: the rusteron-owned fields are feature-gated because
-    // `AeronBufferClaim` only exists with the `aeron-rusteron` feature.
+    // `AeronBufferClaim` only exists with the `aeron` feature.
     // Without the feature `ClaimBuffer` is publicly unconstructable — the
     // trait default `try_claim` returns `Err` before any construction — so
     // the type still appears in the trait signature without dragging rusteron
     // into every build configuration.
-    #[cfg(feature = "aeron-rusteron")]
+    #[cfg(feature = "aeron")]
     claim: AeronBufferClaim,
-    #[cfg(feature = "aeron-rusteron")]
+    #[cfg(feature = "aeron")]
     position: i64,
-    #[cfg(feature = "aeron-rusteron")]
+    #[cfg(feature = "aeron")]
     finalised: bool,
     _publisher: PhantomData<&'a mut ()>,
 }
@@ -67,7 +67,7 @@ pub struct ClaimBuffer<'a> {
 impl<'a> std::fmt::Debug for ClaimBuffer<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut dbg = f.debug_struct("ClaimBuffer");
-        #[cfg(feature = "aeron-rusteron")]
+        #[cfg(feature = "aeron")]
         {
             dbg.field("position", &self.position)
                 .field("finalised", &self.finalised)
@@ -77,7 +77,7 @@ impl<'a> std::fmt::Debug for ClaimBuffer<'a> {
     }
 }
 
-#[cfg(feature = "aeron-rusteron")]
+#[cfg(feature = "aeron")]
 impl<'a> ClaimBuffer<'a> {
     /// Constructs a `ClaimBuffer` from a successful rusteron `try_claim` result.
     ///
@@ -136,7 +136,7 @@ impl<'a> ClaimBuffer<'a> {
 
 impl<'a> Drop for ClaimBuffer<'a> {
     fn drop(&mut self) {
-        #[cfg(feature = "aeron-rusteron")]
+        #[cfg(feature = "aeron")]
         if !self.finalised {
             // Defensive backstop: aborting an un-finalised claim releases the
             // term-buffer slot immediately instead of waiting 15s for the
@@ -273,7 +273,7 @@ mod tests {
     // ClaimBuffer tests need rusteron's AeronBufferClaim default to construct
     // a "defused" claim whose finalised flag is pre-set so Drop does not call
     // the FFI on a zero-default (null inner ptr) claim.
-    #[cfg(feature = "aeron-rusteron")]
+    #[cfg(feature = "aeron")]
     mod claim_buffer {
         use super::super::*;
         use rusteron_client::AeronBufferClaim;
