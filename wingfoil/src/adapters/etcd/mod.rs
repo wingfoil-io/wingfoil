@@ -225,7 +225,7 @@ pub struct EtcdEntry {
 impl EtcdEntry {
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> Result<&str, std::str::Utf8Error> {
-        crate::adapters::bytes_str(&self.value)
+        std::str::from_utf8(&self.value)
     }
 }
 

@@ -76,7 +76,7 @@ impl KafkaPubOperators for dyn Stream<Burst<KafkaRecord>> {
 
 impl KafkaPubOperators for dyn Stream<KafkaRecord> {
     fn kafka_pub(self: &Rc<Self>, conn: KafkaConnection) -> Rc<dyn Node> {
-        let burst_stream = crate::adapters::single_to_burst(self);
+        let burst_stream = self.map(|record| crate::burst![record]);
         kafka_pub(conn, &burst_stream)
     }
 }

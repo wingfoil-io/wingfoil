@@ -140,11 +140,11 @@ pub struct FluvioEvent {
 impl FluvioEvent {
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> Result<&str, std::str::Utf8Error> {
-        crate::adapters::bytes_str(&self.value)
+        std::str::from_utf8(&self.value)
     }
 
     /// Interpret the key as a UTF-8 string, if present.
     pub fn key_str(&self) -> Option<Result<&str, std::str::Utf8Error>> {
-        self.key.as_deref().map(crate::adapters::bytes_str)
+        self.key.as_deref().map(std::str::from_utf8)
     }
 }
