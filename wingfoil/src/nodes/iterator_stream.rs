@@ -64,6 +64,83 @@ where
     }
 }
 
+type TryPeeker<T> = std::iter::Peekable<Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>>;
+
+/// Like [`IteratorStream`] but for a fallible iterator: each item is an
+/// `anyhow::Result<ValueAt<T>>`. A row that resolves to `Err` is surfaced to
+/// the graph (failing the run) the moment the stream reaches it, instead of
+/// panicking. Successful items are grouped into a [`Burst<T>`] per tick, as in
+/// [`IteratorStream`].
+pub struct TryIteratorStream<T: Element> {
+    peekable: TryPeeker<T>,
+    value: Burst<T>,
+}
+
+/// Schedule a callback for the next item, or surface its error.
+///
+/// If the next item is `Ok`, a callback is scheduled at its time. If it is
+/// `Err`, the error is consumed and returned (we cannot know its time, so it is
+/// surfaced as soon as it reaches the head of the iterator). Returns `Ok(false)`
+/// when the iterator is exhausted.
+fn try_add_callback<T: Element>(
+    peekable: &mut TryPeeker<T>,
+    state: &mut GraphState,
+) -> anyhow::Result<bool> {
+    match peekable.peek() {
+        Some(Ok(value_at)) => {
+            let time = value_at.time;
+            state.add_callback(time);
+            Ok(true)
+        }
+        Some(Err(_)) => Err(peekable
+            .next()
+            .expect("peek() just returned Some")
+            .expect_err("peek() just returned Err")),
+        None => Ok(false),
+    }
+}
+
+#[node(output = value: Burst<T>)]
+impl<T: Element> MutableNode for TryIteratorStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        self.value.clear();
+        while let Some(item) = self.peekable.peek() {
+            let due = match item {
+                Ok(value_at) => value_at.time == state.time(),
+                Err(_) => false,
+            };
+            if !due {
+                break;
+            }
+            // peek() returned Some(Ok), so next() yields the same Ok item.
+            let value_at = self
+                .peekable
+                .next()
+                .expect("peek() just returned Some")
+                .expect("peek() just returned Ok");
+            self.value.push(value_at.value);
+        }
+        try_add_callback(&mut self.peekable, state)
+    }
+
+    fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        try_add_callback(&mut self.peekable, state)?;
+        Ok(())
+    }
+}
+
+impl<T> TryIteratorStream<T>
+where
+    T: Element + 'static,
+{
+    pub fn new(it: Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>) -> Self {
+        Self {
+            peekable: it.peekable(),
+            value: Burst::new(),
+        }
+    }
+}
+
 /// Wraps an Iterator and exposes it as a [Stream] of values.
 /// The source must be strictly ascending in time. If the source
 /// can tick multiple times at the same timestamp, use
@@ -164,6 +241,46 @@ mod tests {
         assert_eq!(ticks.len(), 2);
         assert_eq!(ticks[0].value.as_slice(), &[1u64, 2u64]);
         assert_eq!(ticks[1].value.as_slice(), &[3u64]);
+    }
+
+    #[test]
+    fn try_iterator_groups_ok_items_into_burst() {
+        // Two Ok items at t=0, one at t=100, plus a sentinel at t=200.
+        let items: Vec<anyhow::Result<ValueAt<u64>>> =
+            value_ats(&[(1, 0), (2, 0), (3, 100), (0, 200)])
+                .into_iter()
+                .map(Ok)
+                .collect();
+        let out = TryIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .collect();
+        out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let ticks = out.peek_value();
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks[0].value.as_slice(), &[1u64, 2u64]);
+        assert_eq!(ticks[1].value.as_slice(), &[3u64]);
+    }
+
+    #[test]
+    fn try_iterator_surfaces_item_error() {
+        // An Err item must fail the run rather than panic.
+        let items: Vec<anyhow::Result<ValueAt<u64>>> = vec![
+            Ok(ValueAt {
+                value: 1,
+                time: NanoTime::new(0),
+            }),
+            Err(anyhow!("bad row")),
+            Ok(ValueAt {
+                value: 3,
+                time: NanoTime::new(200),
+            }),
+        ];
+        let result = TryIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let err = result.expect_err("expected the item error to surface");
+        assert!(format!("{err:#}").contains("bad row"), "got: {err:#}");
     }
 
     #[test]

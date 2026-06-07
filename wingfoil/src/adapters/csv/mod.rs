@@ -18,7 +18,10 @@
 //!
 //! // Multiple rows with the same timestamp arrive as a Burst.
 //! // Use .collapse() when the source is strictly ascending.
+//! // `csv_read` returns a Result so a missing file surfaces as an error
+//! // rather than a panic.
 //! csv_read("data.csv", |r: &Row| NanoTime::new(r.timestamp), true)
+//!     .unwrap()
 //!     .collapse()
 //!     .for_each(|row, _| println!("{:?}", row))
 //!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -32,6 +35,7 @@
 //! use wingfoil::*;
 //!
 //! csv_read("input.csv", get_time, true)
+//!     .unwrap()
 //!     .csv_write("output.csv")
 //!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
 //!     .unwrap();

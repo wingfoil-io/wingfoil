@@ -88,6 +88,7 @@ mod tests {
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         let get_time = |rec: &Record| rec.0 as NanoTime;
         csv_read("src/adapters/csv/test_data/simple.csv", get_time, false)
+            .unwrap()
             .csv_write("src/adapters/csv/test_data/simple_out.csv")
             .run(run_mode, run_to)
             .unwrap();
@@ -99,6 +100,7 @@ mod tests {
         let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
         let get_time = |rec: &Record| rec.0 as NanoTime;
         csv_read("src/adapters/csv/test_data/example.csv", get_time, false)
+            .unwrap()
             .csv_write("src/adapters/csv/test_data/example_out.csv")
             .run(run_mode, run_to)
             .unwrap();

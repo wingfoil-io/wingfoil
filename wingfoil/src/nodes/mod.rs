@@ -62,7 +62,7 @@ use feedback::FeedbackSendStream;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
 #[cfg(feature = "async")]
 pub use graph_node::*;
-pub use iterator_stream::{IteratorStream, SimpleIteratorStream};
+pub use iterator_stream::{IteratorStream, SimpleIteratorStream, TryIteratorStream};
 pub use map_filter::MapFilterStream;
 pub use never::*;
 

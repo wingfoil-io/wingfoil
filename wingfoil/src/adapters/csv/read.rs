@@ -1,8 +1,9 @@
+use anyhow::Context;
 use serde::de::DeserializeOwned;
 use std::fs::File;
 use std::rc::Rc;
 
-use crate::nodes::IteratorStream;
+use crate::nodes::TryIteratorStream;
 use crate::queue::ValueAt;
 use crate::types::*;
 
@@ -10,42 +11,43 @@ fn csv_iterator<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Box<dyn Iterator<Item = ValueAt<T>>>
+) -> anyhow::Result<Box<dyn Iterator<Item = anyhow::Result<ValueAt<T>>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    let file = File::open(path).unwrap_or_else(|e| panic!("csv_read: failed to open {path}: {e}"));
+    let file = File::open(path).with_context(|| format!("csv_read: failed to open {path}"))?;
     let path_owned = path.to_owned();
     let data = csv::ReaderBuilder::new()
         .has_headers(has_headers)
         .from_reader(file)
         .into_deserialize();
-    Box::new(data.map(move |record: Result<T, csv::Error>| {
-        let rec = record.unwrap_or_else(|e| {
-            panic!("csv_read: failed to deserialize row from {path_owned}: {e}")
-        });
-        let t = get_time_func(&rec);
-        ValueAt {
-            value: rec,
-            time: t,
-        }
-    }))
+    Ok(Box::new(data.map(move |record: Result<T, csv::Error>| {
+        let rec = record
+            .with_context(|| format!("csv_read: failed to deserialize row from {path_owned}"))?;
+        let time = get_time_func(&rec);
+        Ok(ValueAt { value: rec, time })
+    })))
 }
 
 /// Returns a stream that emits records from a CSV file as a [`Burst<T>`] per tick.
 /// Multiple rows sharing the same timestamp are grouped into a single burst.
 /// Use [`.collapse()`](crate::StreamOperators::collapse) when the source is
 /// strictly ascending and you need a plain `T` per tick.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened. Rows that fail to
+/// deserialize do not panic — the error is surfaced to graph execution when
+/// the stream reaches that row.
 pub fn csv_read<T>(
     path: &str,
     get_time_func: impl Fn(&T) -> NanoTime + 'static,
     has_headers: bool,
-) -> Rc<dyn Stream<Burst<T>>>
+) -> anyhow::Result<Rc<dyn Stream<Burst<T>>>>
 where
     T: Element + DeserializeOwned + 'static,
 {
-    IteratorStream::new(csv_iterator(path, get_time_func, has_headers)).into_stream()
+    Ok(TryIteratorStream::new(csv_iterator(path, get_time_func, has_headers)?).into_stream())
 }
 
 #[cfg(test)]
@@ -64,7 +66,7 @@ mod tests {
     fn csv_read_emits_all_rows() {
         // read_test.csv has 6 data rows + a sentinel row (9999,0) so all 6 emit.
         // IteratorStream needs at least one item after the last real item to trigger emission.
-        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false);
+        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false).unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -81,7 +83,7 @@ mod tests {
     #[test]
     fn csv_read_each_row_is_single_burst() {
         // read_test.csv: 6 data rows, each unique timestamp → 6 single-element bursts
-        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false);
+        let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false).unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -96,14 +98,37 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "csv_read: failed to open")]
-    fn csv_read_missing_file_panics_with_context() {
-        // Verify that a missing CSV file produces a contextual panic message
-        // rather than a bare "called Option::unwrap on None".
-        let _ = csv_read::<Record>(
+    fn csv_read_missing_file_returns_error_with_context() {
+        // A missing CSV file must surface a contextual error rather than panic.
+        let result = csv_read::<Record>(
             "src/adapters/csv/test_data/does_not_exist.csv",
             get_time,
             false,
+        );
+        let err = result.expect_err("expected an error for a missing file");
+        assert!(
+            format!("{err:#}").contains("csv_read: failed to open"),
+            "unexpected error message: {err:#}"
+        );
+    }
+
+    #[test]
+    fn csv_read_malformed_row_surfaces_error_not_panic() {
+        // A row that cannot be deserialized into `Record` must fail the graph
+        // run with a contextual error rather than aborting the process.
+        let stream = csv_read::<Record>(
+            "src/adapters/csv/test_data/read_test_malformed.csv",
+            get_time,
+            false,
+        )
+        .expect("file opens fine; the error is in a row");
+        let result = stream
+            .collect()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let err = result.expect_err("expected a deserialize error");
+        assert!(
+            format!("{err:#}").contains("failed to deserialize row"),
+            "unexpected error message: {err:#}"
         );
     }
 
@@ -115,7 +140,8 @@ mod tests {
             "src/adapters/csv/test_data/read_test_multi.csv",
             get_time,
             false,
-        );
+        )
+        .unwrap();
         let collected = stream.collect();
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
