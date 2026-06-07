@@ -12,6 +12,8 @@
 | 6 | Kafka adapter | [`linkedin/kafka.md`](linkedin/kafka.md) | Two nodes, multi-topic publish, per-burst delivery via `FuturesUnordered`. |
 | 7 | KDB+ follow-up | [`linkedin/kdb-group-followup.md`](linkedin/kdb-group-followup.md) | Deeper-dive companion for the KDB LinkedIn group — caller-owned q, time slicing, `kdb_read_cached`. |
 | 8 | Fluvio adapter | [`linkedin/fluvio.md`](linkedin/fluvio.md) | Two nodes, per-burst flush, absolute-offset resume, SC+SPU cluster shape. |
+| 9 | `/new-adapter` call for contributors | [`linkedin/new-adapter-skill-contributors.md`](linkedin/new-adapter-skill-contributors.md) | Companion to #4 — same speed/consistency story, framed as an open call to build whatever adapter you need, with specced-out issues to pick up. |
+| 10 | Three-language stack | [`linkedin/three-language-stack.md`](linkedin/three-language-stack.md) | Rust/Python/TS is enough for greenfield work (Rust core, PyO3, JS/TS edge); C++/Java/C#/Go on new projects driven by codebase inertia and talent constraints, not technical merit. Deliberately provocative — ends by daring readers to name the counterexample. |
 
 ## Other drafts
 
