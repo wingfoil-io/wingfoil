@@ -267,3 +267,14 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
         Ok(())
     }
 }
+
+// Only consumed by `ReceiverStream`, which is itself gated on the zmq/aeron
+// adapters; mirror that gate so the default build doesn't flag it as dead code.
+#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+impl<T: Element + Send> ChannelReceiverStream<T> {
+    /// `true` once the channel has delivered `EndOfStream`; the stream is
+    /// complete and no further messages will arrive.
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished
+    }
+}

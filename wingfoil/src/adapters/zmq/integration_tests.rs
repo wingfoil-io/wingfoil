@@ -247,6 +247,45 @@ fn zmq_sub_stops_cleanly_without_publisher_endofstream() {
     );
 }
 
+#[test]
+fn zmq_sub_survives_publisher_endofstream_mid_run() {
+    _ = env_logger::try_init();
+    let period = Duration::from_millis(50);
+    let port = 5557;
+    let address = format!("tcp://127.0.0.1:{port}");
+
+    // Publisher runs its own graph for a short while, then stops — which sends
+    // EndOfStream over the wire. The subscriber graph keeps running afterwards.
+    // The subscriber must treat the publisher's clean shutdown as end-of-stream
+    // rather than erroring with "Receiver thread exited unexpectedly".
+    let pub_handle = std::thread::spawn(move || {
+        sender(period, port)
+            .run(RunMode::RealTime, RunFor::Duration(period * 8))
+            .unwrap();
+    });
+
+    let (data, _status) = zmq_sub::<u64>(&address).unwrap();
+    let received = data.collect().finally(|res, _| {
+        let values: Vec<u64> = res.into_iter().flat_map(|item| item.value).collect();
+        assert!(
+            !values.is_empty(),
+            "no data received before publisher ended"
+        );
+        Ok(())
+    });
+
+    // Outlive the publisher so the subscriber observes its EndOfStream mid-run.
+    Graph::new(
+        vec![received],
+        RunMode::RealTime,
+        RunFor::Duration(period * 16),
+    )
+    .run()
+    .unwrap();
+
+    pub_handle.join().unwrap();
+}
+
 // --- shared etcd test helpers (requires zmq-etcd-integration-test) ---
 
 /// Start an etcd container and return (container_handle, endpoint_url).

@@ -78,7 +78,14 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         // checked first, a still-running thread would skip error handling, and
         // nothing would wake the graph once the sender drops.
         let cycle_result = self.inner.cycle(state)?;
-        if let Err(thread_err) = self.state.check_running() {
+        // Once the channel has delivered EndOfStream the stream is complete, so a
+        // background thread returning is following the normal end-of-stream path,
+        // not dying unexpectedly. Stop monitoring it to avoid surfacing a spurious
+        // "exited unexpectedly" error — e.g. a ZMQ publisher cleanly shutting down
+        // while the subscriber graph is still running.
+        if !self.inner.is_finished()
+            && let Err(thread_err) = self.state.check_running()
+        {
             self.pending_err = Some(thread_err);
             // Self-notify: schedule one more graph cycle to propagate the error.
             if let Some(notifier) = &self.notifier {
