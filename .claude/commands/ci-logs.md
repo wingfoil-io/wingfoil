@@ -6,12 +6,23 @@ This skill wraps `scripts/ci-logs.sh`, which resolves a job's signed log URL via
 
 `scripts/ci-logs.sh` takes a **job** ID, not a run ID. Resolve whatever the user gave you:
 
+- **Full Actions URL** (e.g. `.../actions/runs/<run_id>/job/<job_id>?pr=<n>`) —
+  parse the IDs from the **path only**. Use the `job/<job_id>` segment directly
+  as the job ID; if only `runs/<run_id>` is present, resolve it as a Run ID below.
+  **Ignore `?pr=` and every other query parameter.** The `?pr=` value is a UI
+  scoping hint, not part of the job's identity, and it can be flat-out wrong — a
+  run is associated with the PR whose branch triggered it, which need not match
+  whatever `?pr=` the user copied. Trust the path's job/run IDs over the query
+  string, always. (A mismatched `?pr=` is also why the web page 404s even though
+  the run and job exist.)
 - **Bare numeric job ID** (the script's native input) — use it directly.
 - **Run ID** — list its jobs and pick the failed one:
   `GET /repos/wingfoil-io/wingfoil/actions/runs/<run_id>/jobs`
 - **Branch name** — find the latest run, then its failed job:
   `GET /repos/wingfoil-io/wingfoil/actions/runs?branch=<branch>&per_page=1`
-- **PR number** — read the PR's head branch (`mcp__github__pull_request_read`), then resolve as a branch.
+- **Bare PR number** (not from a URL) — read the PR's head branch
+  (`mcp__github__pull_request_read`), then resolve as a branch. Do **not** derive
+  a PR number from a URL's `?pr=` — see the Full Actions URL note above.
 - **Nothing / "the failing one"** — list recent failures and pick the most recent:
   `GET /repos/wingfoil-io/wingfoil/actions/runs?per_page=10&status=failure`
 
