@@ -23,18 +23,22 @@
 //! The `aeron-rs` crate returns its `Subscription` / `Publication` handles as
 //! `Arc<Mutex<…>>` and shares them with its own background client-conductor
 //! thread, which locks them on every publisher connect/disconnect. The backend
-//! therefore **acquires that `Mutex` on every `poll()` / `offer()`** — and in
-//! [`AeronMode::Spin`] those calls run inside the graph `cycle()` on the graph
-//! thread. That contended lock on the hot path is antithetical to Aeron's
-//! lock-free design and violates wingfoil's "no locks in `cycle()`" invariant.
+//! therefore **acquires that `Mutex` on every `poll()` / `offer()`**. To keep
+//! that lock off the graph `cycle()`, the subscriber backend reports
+//! [`supports_graph_thread_poll`](AeronSubscriberBackend::supports_graph_thread_poll)
+//! `= false`, and [`aeron_sub_fragment`] **automatically downgrades a requested
+//! [`AeronMode::Spin`] to [`AeronMode::Threaded`]** for it (logging a warning) —
+//! so its lock can never land on the graph thread. `Spin` is unreachable for
+//! the `aeron-rs-beta` subscriber by construction.
 //!
 //! Consequences and guidance:
 //! - For latency-sensitive or production workloads, use the `aeron` (rusteron)
-//!   backend, whose `poll()` / `offer()` are genuinely lock-free.
-//! - If you must use `aeron-rs-beta`, prefer [`AeronMode::Threaded`] so the lock
-//!   is taken on the background poll thread rather than the graph thread.
-//! - The `aeron-rs-beta` publisher has no threaded mode; its `offer()` always
-//!   locks on the calling (graph) thread. Treat it as functional-but-slow.
+//!   backend, whose `poll()` / `offer()` are genuinely lock-free and run on the
+//!   graph thread in [`AeronMode::Spin`] without a lock.
+//! - The `aeron-rs-beta` **publisher** has no threaded mode; its `offer()`
+//!   always locks on the calling (graph) thread. It remains functional-but-slow
+//!   and there is no automatic downgrade for the publish side — avoid it on
+//!   latency-sensitive paths.
 //!
 //! # Polling modes
 //!
@@ -203,6 +207,30 @@ impl Default for AeronSubOptions {
     }
 }
 
+/// Resolve the polling mode actually used for `subscriber`.
+///
+/// A backend that cannot be polled on the graph thread (see
+/// [`AeronSubscriberBackend::supports_graph_thread_poll`]) downgrades a
+/// requested [`AeronMode::Spin`] to [`AeronMode::Threaded`], so its lock never
+/// runs inside the graph `cycle()`. This keeps the `aeron-rs-beta` backend
+/// from violating the "no locks in `cycle()`" invariant by construction —
+/// `Spin` is simply unreachable for it. Lock-free backends (rusteron, mocks)
+/// pass the requested mode through unchanged.
+fn effective_mode<B: transport::AeronSubscriberBackend>(
+    requested: AeronMode,
+    subscriber: &B,
+) -> AeronMode {
+    if requested == AeronMode::Spin && !subscriber.supports_graph_thread_poll() {
+        log::warn!(
+            "aeron sub: backend cannot be polled on the graph thread (it locks on poll); \
+             downgrading AeronMode::Spin to Threaded to honour the no-locks-in-cycle invariant"
+        );
+        AeronMode::Threaded
+    } else {
+        requested
+    }
+}
+
 // ---------------------------------------------------------------------------
 // aeron_sub_fragment — typed-parser surface
 // ---------------------------------------------------------------------------
@@ -237,7 +265,7 @@ where
     B: transport::AeronSubscriberBackend,
 {
     let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
-    match opts.mode {
+    match effective_mode(opts.mode, &subscriber) {
         AeronMode::Spin => {
             sub_fragment_node::AeronSpinSubFragmentNode::new(subscriber, parser).into_stream()
         }
@@ -298,7 +326,7 @@ where
     B: transport::AeronSubscriberBackend,
 {
     let subscriber = subscriber.with_fragment_limit(opts.fragment_limit);
-    match opts.mode {
+    match effective_mode(opts.mode, &subscriber) {
         AeronMode::Spin => {
             // The spin subscriber records status on the graph thread; wire it as
             // the status node's active upstream so transitions are forwarded once
@@ -357,6 +385,46 @@ mod tests {
     #[test]
     fn given_aeron_sub_options_when_default_then_mode_is_spin() {
         assert!(matches!(AeronSubOptions::default().mode, AeronMode::Spin));
+    }
+
+    /// Minimal subscriber that reports it cannot be polled on the graph thread,
+    /// to exercise the `Spin` → `Threaded` downgrade in [`effective_mode`].
+    struct NoGraphThreadPollSubscriber;
+
+    impl transport::AeronSubscriberBackend for NoGraphThreadPollSubscriber {
+        fn poll(&mut self, _handler: &mut dyn FnMut(&[u8])) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
+        fn supports_graph_thread_poll(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn given_non_graph_thread_backend_when_spin_requested_then_downgraded_to_threaded() {
+        let backend = NoGraphThreadPollSubscriber;
+        assert_eq!(
+            effective_mode(AeronMode::Spin, &backend),
+            AeronMode::Threaded,
+            "a backend that locks on poll must never run Spin on the graph thread"
+        );
+    }
+
+    #[test]
+    fn given_non_graph_thread_backend_when_threaded_requested_then_stays_threaded() {
+        let backend = NoGraphThreadPollSubscriber;
+        assert_eq!(
+            effective_mode(AeronMode::Threaded, &backend),
+            AeronMode::Threaded
+        );
+    }
+
+    #[test]
+    fn given_lock_free_backend_when_spin_requested_then_stays_spin() {
+        // The default `MockSubscriber` inherits `supports_graph_thread_poll() == true`.
+        let backend = transport::MockSubscriber::from_messages(vec![]);
+        assert_eq!(effective_mode(AeronMode::Spin, &backend), AeronMode::Spin);
     }
 
     #[test]
