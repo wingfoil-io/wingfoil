@@ -12,6 +12,7 @@
 | 6 | Kafka adapter | [`linkedin/kafka.md`](linkedin/kafka.md) | Two nodes, multi-topic publish, per-burst delivery via `FuturesUnordered`. |
 | 7 | KDB+ follow-up | [`linkedin/kdb-group-followup.md`](linkedin/kdb-group-followup.md) | Deeper-dive companion for the KDB LinkedIn group — caller-owned q, time slicing, `kdb_read_cached`. |
 | 8 | Fluvio adapter | [`linkedin/fluvio.md`](linkedin/fluvio.md) | Two nodes, per-burst flush, absolute-offset resume, SC+SPU cluster shape. |
+| 9 | `/new-adapter` call for contributors | [`linkedin/new-adapter-skill-contributors.md`](linkedin/new-adapter-skill-contributors.md) | Companion to #4 — same speed/consistency story, framed as an open call to build whatever adapter you need, with specced-out issues to pick up. |
 
 ## Other drafts
 
