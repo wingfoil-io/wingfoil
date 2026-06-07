@@ -225,6 +225,7 @@ macro_rules! tracing_log_enabled {
 
 pub mod adapters;
 
+#[cfg(feature = "bench")]
 mod bencher;
 mod channel;
 mod graph;
@@ -234,6 +235,7 @@ mod queue;
 mod time;
 mod types;
 
+#[cfg(feature = "bench")]
 pub use bencher::*;
 pub use graph::*;
 pub use latency::*;
