@@ -59,7 +59,7 @@ mod tests {
         average
             .iter()
             .for_each(|x| println!("{:} {:?}", x.time, x.value));
-        let err = num::abs(period.as_nanos() as f64 - average.last().unwrap().value);
+        let err = (period.as_nanos() as f64 - average.last().unwrap().value).abs();
         debug_assert!(err < Duration::from_millis(10).as_nanos() as f64)
     }
 }
