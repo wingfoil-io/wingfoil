@@ -13,6 +13,7 @@
 | 7 | Fluvio adapter | | [`linkedin/fluvio.md`](linkedin/fluvio.md) | Two nodes, per-burst flush, absolute-offset resume, SC+SPU cluster shape. |
 | 8 | `/new-adapter` call for contributors | | [`linkedin/new-adapter-skill-contributors.md`](linkedin/new-adapter-skill-contributors.md) | Month-to-weekend speedup for new I/O adapters; consistency as a quality multiplier, framed as an open call to build whatever adapter you need, with specced-out issues to pick up. |
 | 9 | Three-language stack | | [`linkedin/three-language-stack.md`](linkedin/three-language-stack.md) | Rust/Python/TS is enough for greenfield work (Rust core, PyO3, JS/TS edge); C++/Java/C#/Go on new projects driven by codebase inertia and talent constraints, not technical merit. Deliberately provocative — ends by daring readers to name the counterexample. |
+| 10 | Aeron adapter | | [`linkedin/aeron.md`](linkedin/aeron.md) | Low-latency UDP/IPC transport, two nodes, spin vs threaded polling, and a status side-channel that turns backpressure/disconnects into graph events for circuit breaking. Two backends (rusteron C++, pure-Rust beta). |
 
 ## Other drafts
 
