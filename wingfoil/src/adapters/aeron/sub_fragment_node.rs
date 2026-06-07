@@ -110,16 +110,15 @@ where
         }
         let parser = &mut self.parser;
         let value = &mut self.value;
-        self.backend.poll_fragments(&mut |frag| match parser(frag) {
-            Ok(Some(v)) => value.push(v),
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!(
-                    "[wingfoil::adapters::aeron] WARN parser dropped fragment at position {}: {e}",
+        self.backend
+            .poll_fragments(&mut |frag| match parser(frag) {
+                Ok(Some(v)) => value.push(v),
+                Ok(None) => {}
+                Err(e) => log::warn!(
+                    "aeron sub: parser dropped fragment at position {}: {e}",
                     frag.position()
-                );
-            }
-        })?;
+                ),
+            })?;
         let transition = if let Some(status) = &self.status {
             let new_status = if self.backend.is_closed() {
                 AeronStatus::Closed
@@ -237,12 +236,10 @@ where
                         let _ = sender.send_message(Message::RealtimeValue(v));
                     }
                     Ok(None) => {}
-                    Err(e) => {
-                        eprintln!(
-                            "[wingfoil::adapters::aeron] WARN parser dropped fragment at position {}: {e}",
-                            frag.position()
-                        );
-                    }
+                    Err(e) => log::warn!(
+                        "aeron sub: parser dropped fragment at position {}: {e}",
+                        frag.position()
+                    ),
                 })?;
 
                 if count == 0 {
@@ -398,12 +395,10 @@ where
                         let _ = sender.send_message(Message::RealtimeValue(AeronItem::Data(v)));
                     }
                     Ok(None) => {}
-                    Err(e) => {
-                        eprintln!(
-                            "[wingfoil::adapters::aeron] WARN parser dropped fragment at position {}: {e}",
-                            frag.position()
-                        );
-                    }
+                    Err(e) => log::warn!(
+                        "aeron sub: parser dropped fragment at position {}: {e}",
+                        frag.position()
+                    ),
                 })?;
 
                 // Derive the lifecycle status and propagate it in-band on change.
