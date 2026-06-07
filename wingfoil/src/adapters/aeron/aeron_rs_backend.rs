@@ -211,6 +211,15 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
     fn with_fragment_limit(self, fragment_limit: usize) -> Self {
         AeronRsSubscriber::with_fragment_limit(self, fragment_limit)
     }
+
+    /// `aeron-rs` polls under a `Mutex` shared with its conductor thread, so it
+    /// is unsafe to poll on the graph thread. Returning `false` makes the
+    /// factory downgrade `AeronMode::Spin` to `Threaded`, keeping the lock off
+    /// the graph `cycle()`. See the module-level "Lock on the graph thread"
+    /// note for why this lock cannot be hoisted.
+    fn supports_graph_thread_poll(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------

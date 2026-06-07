@@ -49,6 +49,23 @@ pub trait AeronSubscriberBackend: Send + 'static {
         false
     }
 
+    /// Whether this backend may be polled inside the graph `cycle()` on the
+    /// graph thread (i.e. is safe for [`AeronMode::Spin`]).
+    ///
+    /// Default `true` — lock-free backends (rusteron, the mocks) poll without
+    /// blocking. Backends whose `poll()` takes a lock or otherwise blocks (the
+    /// `aeron-rs` backend, whose handle is an `Arc<Mutex<…>>` shared with a
+    /// client-conductor thread) override this to `false`. The
+    /// [`aeron_sub_fragment`] factory honours it by downgrading a requested
+    /// `Spin` mode to `Threaded` rather than running a contended lock on the
+    /// graph thread — see the crate's "no locks in `cycle()`" invariant.
+    ///
+    /// [`AeronMode::Spin`]: crate::adapters::aeron::AeronMode::Spin
+    /// [`aeron_sub_fragment`]: crate::adapters::aeron::aeron_sub_fragment
+    fn supports_graph_thread_poll(&self) -> bool {
+        true
+    }
+
     /// Override the per-`poll()` fragment cap for this subscriber.
     ///
     /// Default impl is the identity move — backends without a tunable cap
