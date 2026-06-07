@@ -11,6 +11,8 @@ use tinyvec::TinyVec;
 enum State<T: Element + Send> {
     Func(Box<dyn Fn(ChannelSender<T>, Arc<AtomicBool>) -> anyhow::Result<()> + Send + 'static>),
     JoinHandle(JoinHandle<anyhow::Result<()>>),
+    /// The producer thread completed cleanly after signalling end-of-stream.
+    Done,
     Empty,
 }
 
@@ -22,20 +24,32 @@ impl<T: Element + Send> State<T> {
         }
     }
 
-    pub fn check_running(&mut self) -> anyhow::Result<()> {
-        match &*self {
+    /// Check whether the producer thread is still healthy.
+    ///
+    /// `finished` reports whether the channel has drained a
+    /// [`Message::EndOfStream`](crate::channel::Message::EndOfStream): a thread
+    /// that returns `Ok(())` after signalling end-of-stream has shut down
+    /// cleanly and is not treated as an error.
+    pub fn check_running(&mut self, finished: bool) -> anyhow::Result<()> {
+        match self {
             State::JoinHandle(handle) if handle.is_finished() => {
-                if let State::JoinHandle(handle) = std::mem::replace(self, State::Empty) {
-                    return match handle.join() {
-                        Err(e) => Err(anyhow::anyhow!("Receiver thread panicked: {e:?}")),
-                        Ok(Err(e)) => Err(e),
-                        Ok(Ok(())) => Err(anyhow::anyhow!("Receiver thread exited unexpectedly")),
-                    };
+                let State::JoinHandle(handle) = std::mem::replace(self, State::Empty) else {
+                    unreachable!("state matched JoinHandle on the previous line");
+                };
+                match handle.join() {
+                    Err(e) => Err(anyhow::anyhow!("Receiver thread panicked: {e:?}")),
+                    Ok(Err(e)) => Err(e),
+                    // A producer that signalled end-of-stream before returning
+                    // has shut down cleanly — not an unexpected exit.
+                    Ok(Ok(())) if finished => {
+                        *self = State::Done;
+                        Ok(())
+                    }
+                    Ok(Ok(())) => Err(anyhow::anyhow!("Receiver thread exited unexpectedly")),
                 }
-                Ok(())
             }
-            State::JoinHandle(_) => Ok(()),
-            _ => Err(anyhow::anyhow!("Receiver thread not running")),
+            State::JoinHandle(_) | State::Done => Ok(()),
+            State::Func(_) | State::Empty => Err(anyhow::anyhow!("Receiver thread not running")),
         }
     }
 
@@ -78,7 +92,7 @@ impl<T: Element + Send> MutableNode for ReceiverStream<T> {
         // checked first, a still-running thread would skip error handling, and
         // nothing would wake the graph once the sender drops.
         let cycle_result = self.inner.cycle(state)?;
-        if let Err(thread_err) = self.state.check_running() {
+        if let Err(thread_err) = self.state.check_running(self.inner.finished()) {
             self.pending_err = Some(thread_err);
             // Self-notify: schedule one more graph cycle to propagate the error.
             if let Some(notifier) = &self.notifier {
@@ -145,5 +159,74 @@ impl<T: Element + Send> ReceiverStream<T> {
             pending_err: None,
             notifier: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel::Message;
+    use crate::nodes::NodeOperators;
+    use crate::{IntoStream, RunFor, RunMode};
+    use std::time::Duration;
+
+    /// Spawn a producer that runs `f`, then spin until its thread has exited so
+    /// `check_running` exercises the just-finished branch deterministically.
+    fn finished_state(f: impl FnOnce() -> anyhow::Result<()> + Send + 'static) -> State<u64> {
+        let state = State::JoinHandle(thread::spawn(f));
+        while !matches!(&state, State::JoinHandle(h) if h.is_finished()) {
+            std::thread::yield_now();
+        }
+        state
+    }
+
+    /// A producer that returns `Ok(())` after signalling end-of-stream
+    /// (`finished == true`) has shut down cleanly — not an error. Subsequent
+    /// checks stay `Ok` because the state transitions to `Done`.
+    #[test]
+    fn clean_exit_after_end_of_stream_is_ok() {
+        let mut state = finished_state(|| Ok(()));
+        assert!(state.check_running(true).is_ok());
+        assert!(matches!(state, State::Done));
+        assert!(state.check_running(true).is_ok());
+    }
+
+    /// A producer that returns `Ok(())` without signalling end-of-stream has
+    /// exited unexpectedly and must surface as an error.
+    #[test]
+    fn silent_exit_without_end_of_stream_is_error() {
+        let mut state = finished_state(|| Ok(()));
+        assert!(state.check_running(false).is_err());
+    }
+
+    /// An error returned by the producer thread propagates unchanged.
+    #[test]
+    fn thread_error_propagates() {
+        let mut state = finished_state(|| Err(anyhow::anyhow!("boom")));
+        let err = state.check_running(true).unwrap_err();
+        assert!(err.to_string().contains("boom"));
+    }
+
+    /// End-to-end: a producer that emits a value, signals end-of-stream, then
+    /// returns `Ok(())` must run cleanly (regression: a ZMQ subscriber whose
+    /// publisher disconnects mid-run).
+    #[test]
+    fn clean_end_of_stream_does_not_error_the_graph() {
+        let stream = ReceiverStream::new(
+            |sender, _stop| {
+                sender.send_message(Message::RealtimeValue(1u64))?;
+                sender.send_message(Message::EndOfStream)?;
+                Ok(())
+            },
+            true,
+        )
+        .into_stream();
+        stream
+            .count()
+            .run(
+                RunMode::RealTime,
+                RunFor::Duration(Duration::from_millis(100)),
+            )
+            .expect("clean end-of-stream should not error");
     }
 }

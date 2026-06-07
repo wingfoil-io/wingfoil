@@ -99,6 +99,18 @@ pub struct ChannelReceiverStream<T: Element + Send> {
     queue: VecDeque<ValueAt<T>>,
 }
 
+// `finished` is only read by `ReceiverStream`, which is itself gated behind the
+// zmq/aeron adapters; gate the accessor the same way to avoid a dead-code warning
+// in the default build.
+#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+impl<T: Element + Send> ChannelReceiverStream<T> {
+    /// Whether the producer has signalled end-of-stream (i.e. a
+    /// [`Message::EndOfStream`] has been received and drained).
+    pub(crate) fn finished(&self) -> bool {
+        self.finished
+    }
+}
+
 #[node(output = value: Burst<T>)]
 impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     fn upstreams(&self) -> UpStreams {
