@@ -516,6 +516,133 @@ impl <Name>PubOperators for dyn Stream<<Name>Entry> {
 }
 ```
 
+## 8a. Optional: on-graph status side-channel (lifecycle streams)
+
+Network adapters have a connection lifecycle (connected, disconnected,
+back-pressured, closed) that downstream nodes often want to observe **on the
+graph** — to gate trading on a healthy feed, drive a circuit breaker, or surface
+a status panel. When that's in scope, expose the lifecycle as a reactive
+`Stream<Burst<<Name>Status>>` alongside the data stream rather than logging it or
+hiding it behind a `Mutex`. The Aeron adapter
+(`wingfoil/src/adapters/aeron/status.rs`, `status_stream.rs`) is the reference
+implementation; skip this whole section for adapters with no meaningful
+connection state (file-based, IPC).
+
+### a. Lifecycle enum — `status.rs`
+
+A small `Element` enum, `#[non_exhaustive]` so variants can grow without breaking
+downstream matches, with the initial state as `#[default]`:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum <Name>Status {
+    Connected,
+    #[default]
+    Disconnected,
+    BackPressured, // include only if the transport surfaces back-pressure
+    Closed,        // terminal
+}
+```
+
+### b. Transition-only status node — `status_stream.rs`
+
+A `MutableNode` that buffers a `Burst<<Name>Status>` and emits **only when the
+status changes** — no re-emission on steady state. The producer node (sub or
+pub) owns an `Rc<RefCell<<Name>StatusStream>>`, clears it at the start of its own
+`cycle()`, and calls `record(new_status)` after each poll / offer.
+
+The key wiring move: the status node declares the **producer as an active
+upstream** so the graph cycles it exactly when the producer ticks — forwarding
+each transition once with **no `always_callback` busy-spin**. The producer is
+held as a `Weak<dyn Node>` to break the reference cycle (the producer owns an
+`Rc` to the status stream).
+
+```rust
+#[derive(Default)]
+pub struct <Name>StatusStream {
+    last: <Name>Status,
+    out: Burst<<Name>Status>,
+    producer: Option<Weak<dyn Node>>, // wired via set_producer; None = inert source
+}
+
+impl <Name>StatusStream {
+    pub(crate) fn set_producer(&mut self, producer: Weak<dyn Node>) {
+        self.producer = Some(producer);
+    }
+    /// Push iff changed. Returns true on a transition so the producer can decide
+    /// to tick (and thus schedule this node) on a cycle that produced no data.
+    pub(crate) fn record(&mut self, new: <Name>Status) -> bool {
+        if new != self.last { self.last = new; self.out.push(new); true } else { false }
+    }
+    pub(crate) fn clear(&mut self) { self.out.clear(); } // producer calls at cycle start
+}
+
+impl MutableNode for <Name>StatusStream {
+    fn cycle(&mut self, _: &mut GraphState) -> anyhow::Result<bool> { Ok(!self.out.is_empty()) }
+    fn upstreams(&self) -> UpStreams {
+        // Cycle only when the producer ticks; placeholder stays a never-recycled source.
+        match self.producer.as_ref().and_then(Weak::upgrade) {
+            Some(p) => UpStreams::new(vec![p], vec![]),
+            None    => UpStreams::none(),
+        }
+    }
+}
+
+impl StreamPeekRef<Burst<<Name>Status>> for <Name>StatusStream {
+    fn peek_ref(&self) -> &Burst<<Name>Status> { &self.out }
+}
+```
+
+Derive the status from the backend in a fixed order, terminal state first, so a
+transient error never registers a phantom transition (an I/O error should
+short-circuit the cycle *before* the status is recorded):
+
+```rust
+let new = if backend.is_closed()      { <Name>Status::Closed }
+          else if backend.is_connected() { <Name>Status::Connected }
+          else                           { <Name>Status::Disconnected };
+status.borrow_mut().record(new);
+```
+
+### c. Paired-factory convention — `*_with_status`
+
+Add the status stream as a **parallel-additive sibling** of the plain factory,
+not a breaking change to it. The `_with_status` variant returns a tuple and
+wires the producer:
+
+```rust
+#[must_use]
+pub fn $ARGUMENTS_sub_with_status<T, ...>(...)
+    -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<Burst<<Name>Status>>>)
+{
+    let status = Rc::new(RefCell::new(<Name>StatusStream::default()));
+    let status_stream: Rc<dyn Stream<Burst<<Name>Status>>> = status.clone();
+    let data = /* build the producer node, handing it Rc::clone(&status) */;
+    status.borrow_mut().set_producer(Rc::downgrade(&data.clone().as_node()));
+    (data, status_stream)
+}
+```
+
+Consumers wire `status_stream` as a `Dep::Active` upstream and iterate
+`peek_ref()` (or `peek_value().last()` for a one-shot read) — see
+`wingfoil/examples/aeron/status_circuit_breaker.rs`.
+
+### d. Threaded mode — multiplex status in-band
+
+If the producer also offers a `Threaded` mode (step 7), the background poll
+thread must **not** reach across to a shared status cell directly. Multiplex data
+values and status transitions over the *single* existing channel via an enum, so
+a `Connected` transition stays ordered before the fragments that followed it:
+
+```rust
+enum <Name>Item<T> { Data(T), Status(<Name>Status) }
+```
+
+The data node demuxes on the graph thread and replays each `Status(_)` into the
+shared `<Name>StatusStream` — no second channel, no lock. Status is then sampled
+at the poll thread's cadence rather than per graph cycle; document that.
+
 ## 9. Integration tests — `integration_tests.rs`
 
 Gate with `#[cfg(all(test, feature = "$ARGUMENTS-integration-test"))]`.
@@ -1076,7 +1203,8 @@ in the implementation.
 Run this as a subagent (so the parent context stays clean) with these tasks:
 
 1. **Re-read this skill file end to end.** Then walk the diff (`git diff main...HEAD`)
-   step-by-step against sections 1–14 and produce a checklist of what is present,
+   step-by-step against sections 1–14 (plus 8a if the adapter has a connection
+   lifecycle) and produce a checklist of what is present,
    what is missing, and what diverges. Flag every divergence — even intentional
    ones — so the author can confirm or fix.
 
@@ -1086,6 +1214,9 @@ Run this as a subagent (so the parent context stays clean) with these tasks:
    - `pub mod` in `wingfoil/src/adapters/mod.rs` (step 3)
    - File layout matches step 5 (or a documented variation)
    - Module-level `//!` doc covers setup + producer + consumer (step 6)
+   - If the adapter has a connection lifecycle: transition-only status node
+     wired to its producer as an active upstream (no `always_callback`), and a
+     `*_with_status` paired factory (step 8a)
    - Integration tests gated by `$ARGUMENTS-integration-test` (step 9)
    - Example + `README.md` + entries in **both** `/README.md` and
      `wingfoil/examples/README.md` tables, plus snippet section (step 10)
@@ -1100,7 +1231,9 @@ Run this as a subagent (so the parent context stays clean) with these tasks:
 
 4. **Review for quality and simplicity** (the `simplify` skill territory):
    - No `Mutex`/`RwLock` taken inside `cycle()` / `setup()` (the invariant at the
-     top of this skill)
+     top of this skill) — including the status side-channel: status crosses
+     thread boundaries in-band over the existing channel, never via a shared lock
+     (step 8a.d)
    - No speculative abstractions, dead code, or backwards-compat shims
    - No comments that just restate the code
    - No half-finished implementations
