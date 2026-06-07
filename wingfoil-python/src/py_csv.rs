@@ -24,7 +24,7 @@ type CsvRow = HashMap<String, String>;
 ///     time_column: Name of the column containing the timestamp
 ///                  (parsed as integer nanoseconds since epoch)
 #[pyfunction]
-pub fn py_csv_read(path: String, time_column: String) -> PyStream {
+pub fn py_csv_read(path: String, time_column: String) -> PyResult<PyStream> {
     let stream: Rc<dyn Stream<Burst<CsvRow>>> = csv_read(
         &path,
         move |row: &CsvRow| {
@@ -34,7 +34,8 @@ pub fn py_csv_read(path: String, time_column: String) -> PyStream {
                 .unwrap_or(NanoTime::ZERO)
         },
         true,
-    );
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
 
     let py_stream = stream.collapse().map(|row: CsvRow| {
         Python::attach(|py| {
@@ -47,7 +48,7 @@ pub fn py_csv_read(path: String, time_column: String) -> PyStream {
         })
     });
 
-    PyStream(py_stream)
+    Ok(PyStream(py_stream))
 }
 
 /// State for the CSV writer: column order and a line-buffered writer
