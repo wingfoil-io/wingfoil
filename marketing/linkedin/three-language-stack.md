@@ -2,7 +2,7 @@
 
 ## Post
 
-Here's a position I'll defend: for a greenfield project in 2026, three languages cover almost everything that matters, and the rest are mostly kept alive by inertia rather than merit.
+Here's a position I'll defend: for a greenfield project in 2026, three languages cover almost everything that matters, and the rest are reached for out of inertia more often than merit.
 
 - **Rust for the systems layer** — C and C++ performance with memory safety out of the box. Infrastructure, high-throughput services, anything resource-constrained.
 - **Python for data and orchestration** — not fast, but the non-negotiable interface for AI/ML, data science, and prototyping. That isn't changing soon.
@@ -15,7 +15,7 @@ So where does that leave C++, Java, C#, and Go for *new* work? Strip away the ma
 - **Codebase inertia** — there's a large, working footprint you have to extend or integrate with.
 - **Talent constraints** — the hiring pool in your org or region is weighted toward those ecosystems.
 
-Both are real, and on a given Monday they're often decisive. But they're constraints you've inherited, not capabilities the language uniquely brings. On a clean slate, Rust + Python + TypeScript handles almost any modern requirement with less sprawl and sharper specialization.
+Both are real, and on a given Monday they're often decisive. But they're constraints you've inherited, not capabilities the language uniquely brings. There are genuine exceptions — Go's goroutine-and-single-binary story is why so much of the cloud-native control plane chose it greenfield, and the JVM's GC tuning and low-latency ecosystem are a real edge in places like trading. I'd argue those niches are narrowing, not that they don't exist. But on a clean slate, Rust + Python + TypeScript handles almost any modern requirement with less sprawl and sharper specialization.
 
 Tell me where this breaks. What's the workload — a real one, not a hypothetical — where reaching for the JVM, Go, or C++ on a new project is the *technical* call and not the inherited one?
 
