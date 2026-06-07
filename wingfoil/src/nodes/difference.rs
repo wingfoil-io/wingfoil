@@ -19,14 +19,15 @@ pub(crate) struct DifferenceStream<T: Element> {
 #[node(active = [upstream], output = diff: T)]
 impl<T: Element + Sub<Output = T>> MutableNode for DifferenceStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        let ticked = match self.prev_val.clone() {
+        let value = self.upstream.peek_value();
+        let ticked = match self.prev_val.take() {
             Some(prv) => {
-                self.diff = self.upstream.peek_value() - prv;
+                self.diff = value.clone() - prv;
                 true
             }
             None => false,
         };
-        self.prev_val = Some(self.upstream.peek_value());
+        self.prev_val = Some(value);
         Ok(ticked)
     }
 }

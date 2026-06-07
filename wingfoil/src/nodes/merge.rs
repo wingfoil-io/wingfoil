@@ -3,10 +3,16 @@ use derive_new::new;
 
 use std::rc::Rc;
 
-/// Counts how many times upstream has ticked.
+/// Merges several upstreams into one, emitting the value of whichever ticked
+/// (the earliest-supplied wins ties). Used by [merge](crate::nodes::merge).
 #[derive(new)]
 pub struct MergeStream<T: Element> {
     upstreams: Vec<Rc<dyn Stream<T>>>,
+    /// Graph indices of `upstreams`, resolved once on the first cycle so the
+    /// per-tick tick-check is an O(1) array read rather than an `Rc` clone plus
+    /// hash-map lookup per upstream.
+    #[new(default)]
+    upstream_indices: Vec<usize>,
     #[new(default)]
     value: T,
 }
@@ -14,13 +20,26 @@ pub struct MergeStream<T: Element> {
 #[node(active = [upstreams], output = value: T)]
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        for stream in self.upstreams.iter() {
-            if state.ticked(stream.clone().as_node()) {
+        if self.upstream_indices.is_empty() && !self.upstreams.is_empty() {
+            self.upstream_indices = self
+                .upstreams
+                .iter()
+                .map(|stream| {
+                    state
+                        .node_index(stream.clone().as_node())
+                        .expect("invariant: merge upstream wired at graph init")
+                })
+                .collect();
+        }
+        let mut ticked = false;
+        for (stream, &index) in self.upstreams.iter().zip(&self.upstream_indices) {
+            if state.node_index_ticked(index) {
                 self.value = stream.peek_value();
+                ticked = true;
                 break;
             }
         }
-        Ok(true)
+        Ok(ticked)
     }
 }
 

@@ -15,6 +15,10 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
     queue: TimeQueue<T>,
     #[new(default)]
     initialized: bool,
+    /// Graph index of `upstream`, resolved once on the first cycle so the
+    /// tick-check avoids an `Rc` clone plus hash-map lookup every tick.
+    #[new(default)]
+    upstream_index: Option<usize>,
     upstream: Rc<dyn Stream<T>>,
     delay: NanoTime,
 }
@@ -29,14 +33,20 @@ impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
         } else {
             let current_time = state.time();
             let mut ticked = false;
-            if state.ticked(self.upstream.clone().as_node()) {
+            let upstream_index = *self.upstream_index.get_or_insert_with(|| {
+                state
+                    .node_index(self.upstream.clone().as_node())
+                    .expect("invariant: delay upstream wired at graph init")
+            });
+            if state.node_index_ticked(upstream_index) {
+                let value = self.upstream.peek_value();
                 if !self.initialized {
-                    self.value = self.upstream.peek_value();
+                    self.value = value.clone();
                     self.initialized = true;
                 }
                 let next_time = current_time + self.delay;
                 state.add_callback(next_time);
-                self.queue.push(self.upstream.peek_value(), next_time)
+                self.queue.push(value, next_time)
             }
             while let Some(value) = self.queue.pop_if_pending(current_time) {
                 self.value = value;
