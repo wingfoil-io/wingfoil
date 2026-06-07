@@ -17,6 +17,12 @@ pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
     queue: TimeQueue<T>,
     #[new(default)]
     initialized: bool,
+    /// Graph indices of `trigger` / `upstream`, resolved once on the first
+    /// cycle so the per-tick checks avoid an `Rc` clone plus hash-map lookup.
+    #[new(default)]
+    trigger_index: Option<usize>,
+    #[new(default)]
+    upstream_index: Option<usize>,
     upstream: Rc<dyn Stream<T>>,
     trigger: Rc<dyn Node>,
     delay: NanoTime,
@@ -25,7 +31,12 @@ pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
 #[node(active = [upstream, trigger], output = value: T)]
 impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
-        if state.ticked(self.trigger.clone()) {
+        let trigger_index = *self.trigger_index.get_or_insert_with(|| {
+            state
+                .node_index(self.trigger.clone())
+                .expect("invariant: delay_with_reset trigger wired at graph init")
+        });
+        if state.node_index_ticked(trigger_index) {
             // Reset: snap to current upstream value, clear pending queue
             self.value = self.upstream.peek_value();
             self.queue.clear();
@@ -39,14 +50,20 @@ impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
         } else {
             let current_time = state.time();
             let mut ticked = false;
-            if state.ticked(self.upstream.clone().as_node()) {
+            let upstream_index = *self.upstream_index.get_or_insert_with(|| {
+                state
+                    .node_index(self.upstream.clone().as_node())
+                    .expect("invariant: delay_with_reset upstream wired at graph init")
+            });
+            if state.node_index_ticked(upstream_index) {
+                let value = self.upstream.peek_value();
                 if !self.initialized {
-                    self.value = self.upstream.peek_value();
+                    self.value = value.clone();
                     self.initialized = true;
                 }
                 let next_time = current_time + self.delay;
                 state.add_callback(next_time);
-                self.queue.push(self.upstream.peek_value(), next_time)
+                self.queue.push(value, next_time)
             }
             while let Some(value) = self.queue.pop_if_pending(current_time) {
                 self.value = value;

@@ -38,6 +38,10 @@ pub(crate) struct SenderNode<T: Element + Send> {
     source: Rc<dyn Stream<T>>,
     sender: ChannelSender<T>,
     trigger: Option<Rc<dyn Node>>,
+    /// Graph index of `source`, resolved once on the first cycle so the
+    /// tick-check avoids an `Rc` clone plus hash-map lookup every tick.
+    #[new(default)]
+    source_index: Option<usize>,
 }
 
 impl<T: Element + Send> MutableNode for SenderNode<T> {
@@ -51,7 +55,12 @@ impl<T: Element + Send> MutableNode for SenderNode<T> {
 
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         //println!("SenderNode::cycle");
-        if state.ticked(self.source.clone().as_node()) {
+        let source_index = *self.source_index.get_or_insert_with(|| {
+            state
+                .node_index(self.source.clone().as_node())
+                .expect("invariant: channel sender source wired at graph init")
+        });
+        if state.node_index_ticked(source_index) {
             self.sender.send(state, self.source.peek_value())?;
             Ok(true)
         } else {
