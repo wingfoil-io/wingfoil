@@ -1,4 +1,6 @@
 mod proxy_stream;
+#[cfg(feature = "aeron")]
+mod py_aeron;
 mod py_csv;
 mod py_element;
 #[cfg(feature = "etcd")]
@@ -202,6 +204,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
     #[cfg(feature = "iceoryx2")]
     module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;
+    #[cfg(feature = "aeron")]
+    module.add_function(wrap_pyfunction!(py_aeron::py_aeron_sub, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub_etcd, module)?)?;
     module.add_function(wrap_pyfunction!(py_fix::py_fix_connect, module)?)?;
@@ -214,6 +218,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<py_iceoryx2::PyIceoryx2ServiceVariant>()?;
     #[cfg(feature = "iceoryx2")]
     module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
+    #[cfg(feature = "aeron")]
+    module.add_class::<py_aeron::PyAeronMode>()?;
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add_class::<py_latency::PyLatency>()?;
     module.add_class::<py_latency::PyTracedBytes>()?;

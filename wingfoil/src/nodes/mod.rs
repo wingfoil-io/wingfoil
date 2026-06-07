@@ -37,8 +37,10 @@ mod never;
 mod node_flow;
 mod print;
 mod producer;
-#[cfg(feature = "zmq")]
-mod receiver;
+// `ReceiverStream` is only consumed by the zmq and aeron adapters; gate the
+// module on them so the default build doesn't flag it as dead code.
+#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+pub(crate) mod receiver;
 mod sample;
 mod throttle;
 mod tick;

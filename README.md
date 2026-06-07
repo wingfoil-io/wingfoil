@@ -111,6 +111,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`zmq`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/) | ZeroMQ pub/sub with direct addressing or etcd-based service discovery. |
 | [`etcd`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/) | etcd key-value store adapter for sub/pub with transformation. |
 | [`iceoryx2`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
+| [`aeron`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/) | Metrics export via Prometheus scraping (pull) and OpenTelemetry OTLP (push). |
 

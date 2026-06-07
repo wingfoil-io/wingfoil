@@ -598,6 +598,31 @@ impl PyStream {
         ))
     }
 
+    /// Publish this stream of `bytes` to an Aeron channel.
+    ///
+    /// Each stream value is published as one Aeron message. Requires a running
+    /// media driver — connection happens at call time and raises
+    /// `RuntimeError` if the driver is unreachable or the publication cannot be
+    /// resolved within `timeout_secs`.
+    ///
+    /// Args:
+    ///     channel: Aeron channel URI, e.g. `"aeron:ipc"`
+    ///     stream_id: Aeron stream id
+    ///     timeout_secs: How long to wait for the publication to resolve
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    #[cfg(feature = "aeron")]
+    #[pyo3(signature = (channel, stream_id, timeout_secs=5.0))]
+    fn aeron_pub(&self, channel: String, stream_id: i32, timeout_secs: f64) -> PyResult<PyNode> {
+        Ok(PyNode::new(crate::py_aeron::py_aeron_pub_inner(
+            &self.0,
+            channel,
+            stream_id,
+            timeout_secs,
+        )?))
+    }
+
     /// Push this stream as an OTLP gauge metric.
     ///
     /// Args:

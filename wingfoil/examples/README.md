@@ -26,6 +26,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`zmq`](zmq/) | ZeroMQ pub/sub: [`direct`](zmq/direct/) (direct addressing) and [`etcd`](zmq/etcd/) (service discovery via etcd). |
 | [`etcd`](etcd/) | etcd key-value store adapter for sub/pub with transformation. |
 | [`iceoryx2`](iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
+| [`aeron`](aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](telemetry/) | Metrics export: [`prometheus`](telemetry/prometheus/) (pull-based scrape) and [`otlp`](telemetry/otlp/) (push to Grafana Alloy, Datadog, Honeycomb, etc.). |
 
@@ -170,6 +171,44 @@ data.print()
 Service discovery via etcd is also supported — see [`zmq/etcd`](zmq/etcd/) for details.
 
 [Full example.](zmq/)
+
+### Aeron
+
+Publish `i64` values over a low-latency Aeron channel and subscribe to them back. The subscriber polls Aeron directly inside the graph `cycle()` (spin mode) for zero thread-crossing latency:
+
+```rust,ignore
+use std::time::Duration;
+use wingfoil::adapters::aeron::{
+    AeronHandle, AeronPub, AeronSubOptions, FragmentBuffer, TransportError, aeron_sub_fragment,
+};
+use wingfoil::*;
+
+let handle = AeronHandle::connect()?; // requires a running media driver
+let sub = handle.subscription("aeron:ipc", 1001, Duration::from_secs(5))?;
+let pub_ = handle.publication("aeron:ipc", 1001, Duration::from_secs(5))?;
+
+let received = aeron_sub_fragment(
+    sub,
+    |f: &FragmentBuffer<'_>| -> Result<Option<i64>, TransportError> {
+        Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))
+    },
+    AeronSubOptions::default(),
+);
+let publisher = received.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
+
+Graph::new(
+    vec![received.print().as_node(), publisher],
+    RunMode::RealTime,
+    RunFor::Cycles(10),
+)
+.run()?;
+```
+
+Use `AeronMode::Threaded` to poll on a background thread instead. The pure-Rust
+`aeron-rs-beta` backend needs no C++ toolchain but takes a lock on the graph
+thread — see the [adapter docs](../src/adapters/aeron/CLAUDE.md).
+
+[Full example.](aeron/)
 
 ### FIX protocol
 
