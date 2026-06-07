@@ -92,9 +92,14 @@ thread, violating wingfoil's "no locks in `cycle()`" invariant.
 Guidance:
 - Use the `aeron` (rusteron) backend for low-latency / production — its
   `poll()` / `offer()` are genuinely lock-free.
-- If you must use `aeron-rs-beta`, prefer `AeronMode::Threaded` so the
-  subscriber lock runs on the background poll thread. The publisher has no
-  threaded mode and always locks on the calling thread.
+- The `aeron-rs-beta` subscriber reports `supports_graph_thread_poll() == false`,
+  so `aeron_sub_fragment` **automatically downgrades `AeronMode::Spin` to
+  `Threaded`** for it (logging a warning) — the subscriber lock can only ever run
+  on the background poll thread. `Spin` is unreachable for this backend by
+  construction.
+- The publisher has no threaded mode and always locks on the calling thread;
+  there is no automatic downgrade for the publish side, so avoid the
+  `aeron-rs-beta` publisher on latency-sensitive paths.
 
 This is why `aeron-rs-beta` is named `-beta` and is excluded from the `full`
 feature set.
