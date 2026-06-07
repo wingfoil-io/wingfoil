@@ -66,7 +66,12 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run tests with coverage
-        run: cargo llvm-cov nextest -p wingfoil --features full --no-capture --lcov --output-path lcov.info
+        # Restrict to --lib --tests: the 33 example binaries each statically link
+        # the entire `full` dependency tree, and linking them all under coverage
+        # instrumentation exhausts the runner's disk (lld dies with SIGBUS writing
+        # past EOF on its mmap'd output). Examples run no tests, so they add zero
+        # coverage; they are still compile-checked by the clippy --all-targets step.
+        run: cargo llvm-cov nextest -p wingfoil --features full --lib --tests --no-capture --lcov --output-path lcov.info
         env:
           RUST_LOG: INFO
 
