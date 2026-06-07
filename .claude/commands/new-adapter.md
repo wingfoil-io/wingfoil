@@ -516,6 +516,76 @@ impl <Name>PubOperators for dyn Stream<<Name>Entry> {
 }
 ```
 
+## 8a. Optional: on-graph status / lifecycle streams
+
+Adapters with a connection lifecycle (connect / disconnect / back-pressure / close)
+can expose that state as a **first-class stream** alongside the data stream, so
+downstream nodes react to transport health on-graph — circuit breakers, health
+gates, reconnect metrics — without reaching outside the graph. The Aeron adapter is
+the reference implementation (`status.rs`, `status_stream.rs`,
+`examples/aeron/status_circuit_breaker.rs`).
+
+Build it as a **parallel-additive sibling** — never change the primary factory's
+signature. Four pieces:
+
+1. **Status enum** — a small `#[non_exhaustive]` enum with a `#[default]`
+   "disconnected" variant. Derive `Copy` so transitions are cheap to forward:
+
+   ```rust
+   #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   #[non_exhaustive]
+   pub enum <Name>Status {
+       Connected,
+       #[default]
+       Disconnected,
+       BackPressured,
+       Closed,
+   }
+   ```
+
+2. **Status node** — a `MutableNode` holding a `Burst<<Name>Status>` that emits
+   **only on transition** (dedups against the last value). The producer node (the
+   sub/pub) owns an `Rc<RefCell<…>>` to it and drives it via `clear()` at cycle start
+   and `record(new)` after each poll/offer. Wire it as an **active upstream of the
+   producer** via a `Weak<dyn Node>`, so the graph cycles it exactly when the producer
+   ticks — no `always_callback` busy-spin, and the `Weak` breaks the producer↔status
+   reference cycle. With no producer wired it stays an inert source that never re-cycles.
+
+   ```rust
+   pub(crate) fn record(&mut self, new: <Name>Status) -> bool {
+       if new != self.last { self.last = new; self.out.push(new); true } else { false }
+   }
+   fn upstreams(&self) -> UpStreams {
+       match self.producer.as_ref().and_then(Weak::upgrade) {
+           Some(p) => UpStreams::new(vec![p], vec![]),
+           None => UpStreams::none(),
+       }
+   }
+   ```
+
+3. **`*_with_status` factory** — return a tuple `(data, status)` rather than
+   overloading the primary factory:
+
+   ```rust
+   pub fn $ARGUMENTS_sub_with_status<…>(…)
+       -> (Rc<dyn Stream<Burst<T>>>, Rc<dyn Stream<Burst<<Name>Status>>>)
+   ```
+
+   Derive the new status from the backend in a **fixed order** each cycle (terminal
+   states first, e.g. `Closed` → `Connected` → `Disconnected`), and `record` it only
+   **after** a successful poll/offer so a transient I/O error doesn't register a
+   phantom transition.
+
+4. **Threaded mode** — if the sub uses a background thread, multiplex status
+   transitions **in-band** with data over the single channel (an
+   `enum Item { Data(T), Status(S) }`), so a `Connected` transition stays correctly
+   ordered before the fragments that followed it. The data node demuxes and replays
+   transitions into the shared status node. (Status is then sampled at the poll
+   thread's cadence, not per graph cycle.)
+
+Consumers wire the status stream as a `Dep::Active` upstream and read
+`peek_value().last()` (or iterate `peek_ref()`) for the cycle's transitions.
+
 ## 9. Integration tests — `integration_tests.rs`
 
 Gate with `#[cfg(all(test, feature = "$ARGUMENTS-integration-test"))]`.
@@ -647,6 +717,15 @@ Do **not** add the snippet to `/README.md` — only the one-row table entry
 goes there. If the adapter is so significant that it warrants a flagship
 section on the front page (like Order Book), flag it for the user rather
 than silently adding it there.
+
+### Optional: benchmarks (low-latency adapters)
+
+For latency- or throughput-sensitive adapters, add a Criterion bench suite under
+`wingfoil/benches/$ARGUMENTS/` (e.g. publication latency, subscription throughput,
+per-cycle allocation tracking) and register each bench in `wingfoil/Cargo.toml` with
+`harness = false` and `required-features = ["$ARGUMENTS"]`. See `wingfoil/benches/aeron/`
+for the layout. Skip this when throughput is bounded by the remote service rather than
+the adapter glue — benches only earn their keep where the adapter itself is on the hot path.
 
 ## 11. CLAUDE.md — `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
 
@@ -959,6 +1038,16 @@ don't skip on `hasattr(_ext, "...")`. Module-level references to feature-gated c
 imports the file during collection even when deselecting; parametrize with string IDs
 and resolve the constants inside the test body instead.
 
+**Bindings behind a native toolchain (like Aeron):** when the binding's Cargo feature
+pulls in a heavyweight native toolchain (C++ / cmake / FFI), the default `maturin develop`
+build *cannot compile it at all*, so the binding is legitimately absent from the default
+coverage build. Unlike the iceoryx2 case, here a `hasattr(wf, "$ARGUMENTS_sub")` /
+`pytest.mark.skipif` guard on the **construction** tests is the correct call: it lets a
+default build skip the not-compiled binding instead of failing collection, while a
+`maturin develop --features $ARGUMENTS` build still runs them (asserting that construction
+without a live service raises, which exercises the marshaling glue). Reserve the
+marker-only / no-`hasattr` rule for bindings that *do* compile in the default build.
+
 ### g. Unit-level coverage tests (no live service)
 
 The integration tests above are deselected from the default `pytest` run, so they
@@ -1094,6 +1183,11 @@ Run this as a subagent (so the parent context stays clean) with these tasks:
    - Python feature flag, binding module, `lib.rs` registration, `PyStream`
      method, `__init__.py` alias, marker registered in `pyproject.toml`, and
      both unit + integration tests (step 13)
+   - If the adapter exposes a status stream: transition-only emission, `Weak`
+     producer wiring (no `always_callback`), and a `*_with_status` tuple factory
+     that leaves the primary factory's signature unchanged (step 8a)
+   - If the adapter ships benches: each registered with `harness = false` and
+     `required-features` (optional, step 10)
 
 3. **Run the pre-commit checklist from step 14** and confirm all five commands
    pass. Do not skip any.
