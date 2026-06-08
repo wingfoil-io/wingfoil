@@ -48,6 +48,14 @@ jobs:
           toolchain: stable
           override: true
 
+      # Several transitive deps of the Python build (etcd-client, fluvio,
+      # opentelemetry-proto) compile .proto files via prost-build at build
+      # time, which needs the protobuf compiler. Install it cross-platform.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install maturin
         run: pip install maturin
 
