@@ -155,28 +155,48 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                 }
             }
             RunMode::HistoricalFrom(_) => {
-                // no notifications from sender, block until message recieved
+                // No notifications from the sender. While we are behind the
+                // current engine time we block for the next message; once we
+                // have caught up (a message stamped at the current time) we
+                // switch to non-blocking reads so that a burst of same-time
+                // ticks delivered as separate messages is drained together.
+                //
+                // We must never *block* for the next message once caught up:
+                // an untriggered receiver may be fed one value per engine step
+                // (e.g. the graph-map worker), and blocking would deadlock it.
                 loop {
                     if self.finished {
                         break;
                     }
+                    let mut non_blocking = false;
                     if let Some(t) = self.message_time {
                         if t > state.time() {
+                            // Read past the current time; nothing more is due now.
                             break;
                         } else if t == state.time() {
                             if self.trigger.is_some() {
-                                break;
-                            } else {
-                                //println!("callback {}", t + 1);
-                                state.add_callback(t);
+                                // Triggered receivers are driven by the trigger
+                                // node: deliver what we have and let the next
+                                // trigger tick cycle us again.
                                 break;
                             }
+                            // Caught up to the current time. Drain any further
+                            // same-time messages that are *already* buffered,
+                            // but do not block for the next one.
+                            non_blocking = true;
                         }
                     }
 
-                    // block for message
-                    //println!("blocking for receive");
-                    let message = self.receiver.recv();
+                    let message = if non_blocking {
+                        match self.receiver.try_recv() {
+                            Some(message) => message,
+                            // Nothing more buffered at the current time.
+                            None => break,
+                        }
+                    } else {
+                        // block for message
+                        self.receiver.recv()
+                    };
                     match message {
                         Message::RealtimeValue(_) => {
                             return Err(anyhow!(
@@ -241,11 +261,18 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                     }
                 }
                 match self.queue.front() {
+                    Some(head) => state.add_callback(head.time),
                     None => {
-                        // Clear message_time when queue is empty to avoid infinite callback loops.
+                        // No buffered look-ahead. If the stream is still open and
+                        // we are self-driven (no trigger), schedule one more wakeup
+                        // so the next cycle blocks for the next message; a triggered
+                        // or finished receiver is left to wind down. Clearing
+                        // message_time makes that next cycle block.
+                        if !self.finished && self.trigger.is_none() {
+                            state.add_callback(state.time());
+                        }
                         self.message_time = None;
                     }
-                    Some(head) => state.add_callback(head.time),
                 }
             }
         }
@@ -287,7 +314,7 @@ mod tests {
     use crate::queue::ValueAt;
     use std::cell::RefCell;
 
-    /// Regression repro: a `ReceiverStream` fed multiple ticks that share the
+    /// Regression: a historical-mode receiver fed multiple ticks that share the
     /// same engine time, delivered as separate messages in a single burst, must
     /// surface them all at that time without driving engine time backwards.
     ///
@@ -295,22 +322,17 @@ mod tests {
     /// distinct `HistoricalValue` messages (exactly what an upstream burst looks
     /// like once it has been fanned out onto the channel), then ends the stream.
     ///
-    /// Expected (correct) behaviour: the receiver yields both values at t=100 —
-    /// either as one burst `[1, 2]` or as two ticks both stamped t=100 — and the
-    /// graph completes cleanly.
-    ///
-    /// Actual (buggy) behaviour: the historical-mode drain in
-    /// `ChannelReceiverStream::cycle` stops reading after the first value reaches
-    /// the current engine time and clears `message_time`. The graph's strict
-    /// monotonic clock then advances to t=101 before the second same-time message
-    /// is read, so the receiver observes a message whose timestamp (100) is now in
-    /// the past and the run aborts with
+    /// Previously the drain in `ChannelReceiverStream::cycle` stopped reading
+    /// after the first value reached the current engine time and cleared
+    /// `message_time`. The graph's strict monotonic clock then advanced to t=101
+    /// before the second same-time message was read, so the receiver observed a
+    /// message whose timestamp (100) was now in the past and aborted the run with
     /// "received Historical message but with time less than graph time, 100 < 101".
     ///
-    /// Marked `#[ignore]` because it currently fails — it documents the defect and
-    /// should be un-ignored once the receiver is fixed.
+    /// The fix drains every message already buffered at the current time
+    /// (non-blocking) before yielding, so a same-time burst is surfaced as one
+    /// burst instead of being split across cycles.
     #[test]
-    #[ignore = "repro for receiver non-monotonic-time defect: same-timestamp burst splits and aborts the run; remove #[ignore] once fixed"]
     fn same_time_burst_does_not_break_monotonic_engine_time() {
         let (sender, receiver) = channel_pair::<u64>(None);
 
