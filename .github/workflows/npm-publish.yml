@@ -36,7 +36,8 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # >=10.12 required for npm OIDC trusted publishing
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -79,9 +80,10 @@ jobs:
             exit 1
           fi
 
+      # Auth is handled by npm OIDC trusted publishing (id-token: write above);
+      # the trusted publisher for wingfoil-io/wingfoil + npm-publish.yml must be
+      # registered on npmjs.com for @wingfoil/client. No NPM_TOKEN needed, and
+      # provenance is emitted automatically.
       - name: Publish to npm
         working-directory: wingfoil-js
-        run: pnpm publish --access public --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
+        run: pnpm publish --access public --no-git-checks
