@@ -35,6 +35,19 @@ jobs:
       - name: Wait for wingfoil-derive index
         run: sleep 15
 
+      # Publish wingfoil-wire-types next — wingfoil has an optional
+      # dependency on it (the `web` feature), and cargo resolves all
+      # dependencies during publish regardless of feature gating.
+      - name: Publish wingfoil-wire-types
+        working-directory: wingfoil-wire-types
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
+
+      # Wait for crates.io to index wingfoil-wire-types
+      - name: Wait for wingfoil-wire-types index
+        run: sleep 15
+
       # Publish wingfoil
       - name: Publish wingfoil
         working-directory: wingfoil
