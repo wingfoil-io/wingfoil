@@ -279,3 +279,82 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel::{Message, channel_pair};
+    use crate::queue::ValueAt;
+    use std::cell::RefCell;
+
+    /// Regression repro: a `ReceiverStream` fed multiple ticks that share the
+    /// same engine time, delivered as separate messages in a single burst, must
+    /// surface them all at that time without driving engine time backwards.
+    ///
+    /// The producer publishes two historical values stamped at t=100 as two
+    /// distinct `HistoricalValue` messages (exactly what an upstream burst looks
+    /// like once it has been fanned out onto the channel), then ends the stream.
+    ///
+    /// Expected (correct) behaviour: the receiver yields both values at t=100 —
+    /// either as one burst `[1, 2]` or as two ticks both stamped t=100 — and the
+    /// graph completes cleanly.
+    ///
+    /// Actual (buggy) behaviour: the historical-mode drain in
+    /// `ChannelReceiverStream::cycle` stops reading after the first value reaches
+    /// the current engine time and clears `message_time`. The graph's strict
+    /// monotonic clock then advances to t=101 before the second same-time message
+    /// is read, so the receiver observes a message whose timestamp (100) is now in
+    /// the past and the run aborts with
+    /// "received Historical message but with time less than graph time, 100 < 101".
+    ///
+    /// Marked `#[ignore]` because it currently fails — it documents the defect and
+    /// should be un-ignored once the receiver is fixed.
+    #[test]
+    #[ignore = "repro for receiver non-monotonic-time defect: same-timestamp burst splits and aborts the run; remove #[ignore] once fixed"]
+    fn same_time_burst_does_not_break_monotonic_engine_time() {
+        let (sender, receiver) = channel_pair::<u64>(None);
+
+        // A burst of two ticks at the *same* engine time, fanned out as separate
+        // messages onto the channel.
+        sender
+            .send_message(Message::HistoricalValue(ValueAt::new(
+                1u64,
+                NanoTime::new(100),
+            )))
+            .unwrap();
+        sender
+            .send_message(Message::HistoricalValue(ValueAt::new(
+                2u64,
+                NanoTime::new(100),
+            )))
+            .unwrap();
+        sender.send_message(Message::EndOfStream).unwrap();
+        // Drop the sending end so `teardown()`'s "wait for sender to close" check
+        // sees the channel closed.
+        drop(sender);
+
+        let receiver_stream = Rc::new(RefCell::new(ChannelReceiverStream::new(
+            receiver, None, None,
+        )));
+        let collected = receiver_stream.as_stream().collect();
+
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .expect("same-time burst must not abort the historical run");
+
+        // Flatten every burst the receiver emitted, pairing each value with the
+        // engine time it was delivered at.
+        let delivered: Vec<(u64, NanoTime)> = collected
+            .peek_value()
+            .iter()
+            .flat_map(|burst| burst.value.iter().map(|v| (*v, burst.time)))
+            .collect();
+
+        // Both values must be delivered, and both at t=100 (their real time).
+        assert_eq!(
+            delivered,
+            vec![(1, NanoTime::new(100)), (2, NanoTime::new(100))],
+            "expected both same-time values delivered at t=100, got {delivered:?}"
+        );
+    }
+}
