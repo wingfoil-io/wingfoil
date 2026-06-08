@@ -44,6 +44,15 @@ futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Several enabled features pull OpenSSL via native-tls (kdb-plus-fixed, reqwest,
+# tokio-native-tls). On Windows MSVC there is no system OpenSSL to link against,
+# so the wheel build fails with "couldn't detect an OpenSSL installation".
+# Declaring openssl with the `vendored` feature on Windows makes openssl-sys
+# build OpenSSL from source (feature-unified across the whole graph). No effect
+# on the Linux/macOS legs, which link the system OpenSSL.
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 
 [package.metadata.maturin]
 name = "wingfoil"

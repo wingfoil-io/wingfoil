@@ -7067,6 +7067,7 @@ dependencies = [
  "futures",
  "kdb-plus-fixed",
  "log",
+ "openssl",
  "pyo3",
  "serde",
  "serde_json",

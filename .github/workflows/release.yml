@@ -87,6 +87,11 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: tag
+    # id-token must be granted at the caller for OIDC to reach the reusable
+    # workflow (reusable-workflow permissions are capped by the caller).
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/npm-publish.yml
     secrets: inherit
 

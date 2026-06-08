@@ -39,11 +39,17 @@ jobs:
           # >=10.12 required for npm OIDC trusted publishing
           version: 10
 
+      # NB: do NOT pass `registry-url` here. setup-node's registry-url support
+      # writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into a temp
+      # .npmrc and exports a placeholder NODE_AUTH_TOKEN. pnpm then sees a
+      # (bogus) credential and uses token auth instead of OIDC trusted
+      # publishing, which fails with a 404. With no token configured, pnpm
+      # falls back to OIDC. The default registry is already registry.npmjs.org.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          # Node >= 22.14 is required for npm OIDC trusted publishing.
+          node-version: '22'
           cache: 'pnpm'
           cache-dependency-path: wingfoil-js/pnpm-lock.yaml
 
