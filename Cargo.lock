@@ -4577,6 +4577,7 @@ version = "4.10.0+2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e234cf318915c1059d4921ef7f75616b5219b10b46e9f3a511a15eb4b56a3f77"
 dependencies = [
+ "cmake",
  "libc",
  "libz-sys",
  "num_enum",
@@ -6988,7 +6989,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wingfoil"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "aeron-rs",
  "anyhow",
@@ -7059,7 +7060,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-derive"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7068,7 +7069,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-python"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7088,7 +7089,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-wire-types"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "anyhow",
  "bincode",
