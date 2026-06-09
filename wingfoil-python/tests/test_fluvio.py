@@ -1,36 +1,23 @@
 """Tests for the Fluvio Python bindings.
 
-Integration tests (TestFluvioSub, TestFluvioPub) are skipped automatically
-when a Fluvio cluster is not running on localhost:9003. Start a local
-cluster with:
+Integration tests (TestFluvioSub, TestFluvioPub) are selected via
+`-m requires_fluvio` and deselected from the default `pytest` run. Without a
+Fluvio cluster on localhost:9003 they fail loudly — they do not silently skip.
+Start a local cluster with:
 
     fluvio cluster start --local
 
 The TestFluvioConstruction and TestFluvioUnreachable suites exercise the
 Python binding code without requiring a live cluster: stream/node setup,
 the dict_to_record marshaling closure, and error propagation when the
-SC is unreachable or the start offset is invalid.
+SC is unreachable or the start offset is invalid. They run by default (no marker).
 """
 
-import socket
-import urllib.request
 import unittest
 
+import pytest
+
 FLUVIO_ENDPOINT = "127.0.0.1:9003"
-FLUVIO_HOST = "127.0.0.1"
-FLUVIO_SC_PORT = 9003
-
-
-def fluvio_available() -> bool:
-    """Return True if a Fluvio SC is accepting connections on localhost:9003."""
-    try:
-        with socket.create_connection((FLUVIO_HOST, FLUVIO_SC_PORT), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-FLUVIO_AVAILABLE = fluvio_available()
 
 # An endpoint that's guaranteed not to host a Fluvio SC: TCP reject on loopback.
 UNREACHABLE_ENDPOINT = "127.0.0.1:1"
@@ -123,7 +110,7 @@ class TestFluvioUnreachable(unittest.TestCase):
             node.run(realtime=True, cycles=1)
 
 
-@unittest.skipUnless(FLUVIO_AVAILABLE, f"Fluvio not running on {FLUVIO_ENDPOINT}")
+@pytest.mark.requires_fluvio
 class TestFluvioSub(unittest.TestCase):
     """Tests for py_fluvio_sub / fluvio_sub."""
 
@@ -158,7 +145,7 @@ class TestFluvioSub(unittest.TestCase):
             self.assertIsInstance(event["offset"], int)
 
 
-@unittest.skipUnless(FLUVIO_AVAILABLE, f"Fluvio not running on {FLUVIO_ENDPOINT}")
+@pytest.mark.requires_fluvio
 class TestFluvioPub(unittest.TestCase):
     """Tests for the .fluvio_pub() stream method."""
 

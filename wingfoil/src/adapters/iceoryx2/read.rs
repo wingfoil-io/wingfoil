@@ -377,6 +377,9 @@ where
     fn start(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
         match self.opts.mode {
             Iceoryx2Mode::Spin => {
+                if state.run_mode() != crate::RunMode::RealTime {
+                    anyhow::bail!("iceoryx2 spin mode only supports real-time");
+                }
                 state.always_callback();
 
                 match self.opts.variant {
@@ -565,6 +568,9 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
     fn start(&mut self, state: &mut crate::GraphState) -> anyhow::Result<()> {
         match self.opts.mode {
             Iceoryx2Mode::Spin => {
+                if state.run_mode() != crate::RunMode::RealTime {
+                    anyhow::bail!("iceoryx2 spin mode only supports real-time");
+                }
                 state.always_callback();
                 match self.opts.variant {
                     Iceoryx2ServiceVariant::Ipc => {
