@@ -44,14 +44,19 @@ futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Several enabled features pull OpenSSL via native-tls (kdb-plus-fixed, reqwest,
-# tokio-native-tls). On Windows MSVC there is no system OpenSSL to link against,
-# so the wheel build fails with "couldn't detect an OpenSSL installation".
-# Declaring openssl with the `vendored` feature on Windows makes openssl-sys
-# build OpenSSL from source (feature-unified across the whole graph). No effect
-# on the Linux/macOS legs, which link the system OpenSSL.
+# Windows MSVC has none of the system C libraries these features need, so build
+# them from source there. Feature-unified across the whole graph; no effect on
+# the Linux/macOS legs, which link the system libraries.
+#   - openssl (native-tls via kdb-plus-fixed, reqwest, tokio-native-tls):
+#     `vendored` builds OpenSSL from source instead of "couldn't detect an
+#     OpenSSL installation".
+#   - rdkafka (kafka): `cmake-build` builds librdkafka via CMake instead of the
+#     Unix-only ./configure script ("%1 is not a valid Win32 application").
+# CMake is present on the windows-latest runner. (zmq needs no flag here:
+# zmq-sys 0.12 always builds libzmq from source via zeromq-src/cc.)
 [target.'cfg(windows)'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
+rdkafka = { version = "0.37", features = ["cmake-build"] }
 
 
 [package.metadata.maturin]

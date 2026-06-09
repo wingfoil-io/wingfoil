@@ -41,10 +41,10 @@ jobs:
 
       # NB: do NOT pass `registry-url` here. setup-node's registry-url support
       # writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into a temp
-      # .npmrc and exports a placeholder NODE_AUTH_TOKEN. pnpm then sees a
-      # (bogus) credential and uses token auth instead of OIDC trusted
-      # publishing, which fails with a 404. With no token configured, pnpm
-      # falls back to OIDC. The default registry is already registry.npmjs.org.
+      # .npmrc and exports a placeholder NODE_AUTH_TOKEN. The npm client then
+      # sees a (bogus) credential and uses token auth instead of OIDC trusted
+      # publishing, which fails with a 404. With no token configured it uses
+      # OIDC. The default registry is already registry.npmjs.org.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -86,10 +86,16 @@ jobs:
             exit 1
           fi
 
-      # Auth is handled by npm OIDC trusted publishing (id-token: write above);
-      # the trusted publisher for wingfoil-io/wingfoil + npm-publish.yml must be
+      # Publish with the npm CLI, not pnpm: OIDC trusted publishing is only
+      # implemented in npm (>= 11.5.1), not pnpm (see pnpm/pnpm#9812), so
+      # `pnpm publish` falls through to ENEEDAUTH. Node 22 ships npm 10.x, so
+      # upgrade npm first. Auth is handled by OIDC (id-token: write above); the
+      # trusted publisher for wingfoil-io/wingfoil + npm-publish.yml must be
       # registered on npmjs.com for @wingfoil/client. No NPM_TOKEN needed, and
       # provenance is emitted automatically.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
       - name: Publish to npm
         working-directory: wingfoil-js
-        run: pnpm publish --access public --no-git-checks
+        run: npm publish --access public
