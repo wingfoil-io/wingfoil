@@ -96,7 +96,7 @@ pub struct ChannelReceiverStream<T: Element + Send> {
     #[new(default)]
     message_time: Option<NanoTime>,
     #[new(default)]
-    queue: VecDeque<ValueAt<T>>,
+    queue: VecDeque<ValueAt<Burst<T>>>,
 }
 
 // `finished` is only read by `ReceiverStream`, which is itself gated behind the
@@ -136,12 +136,7 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                                     values.push(value);
                                 }
                                 Message::HistoricalValue(value_at) => {
-                                    values.push(value_at.value);
-                                }
-                                Message::HistoricalBatch(_) => {
-                                    return Err(anyhow!(
-                                        "received HistoricalBatch but RunMode is RealTime"
-                                    ));
+                                    values.extend(value_at.value);
                                 }
                                 Message::EndOfStream => self.finished = true,
                                 Message::CheckPoint(_) => {}
@@ -214,34 +209,6 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                             self.message_time = Some(value_at.time);
                             self.queue.push_back(value_at);
                         }
-                        Message::HistoricalBatch(batch) => {
-                            if batch.is_empty() {
-                                continue;
-                            }
-
-                            // Validate: all timestamps must be >= current graph time
-                            // (batch is non-empty per the `is_empty()` check above).
-                            let min_time = batch
-                                .iter()
-                                .map(|va| va.time)
-                                .min()
-                                .expect("batch is non-empty");
-                            if min_time < state.time() {
-                                return Err(anyhow!(
-                                    "received HistoricalBatch with timestamp less than graph time, {} < {}",
-                                    min_time,
-                                    state.time()
-                                ));
-                            }
-
-                            // Set message_time to earliest timestamp
-                            self.message_time = Some(min_time);
-
-                            // Unpack all values into queue
-                            for value_at in batch.iter() {
-                                self.queue.push_back(value_at.clone());
-                            }
-                        }
                         Message::EndOfStream => self.finished = true,
                         Message::CheckPoint(check_point) => {
                             self.message_time = Some(check_point);
@@ -255,7 +222,7 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
                     if value_at.time <= state.time() {
                         // front() returned Some, so pop_front is guaranteed.
                         let popped = self.queue.pop_front().expect("front() just returned Some");
-                        values.push(popped.value);
+                        values.extend(popped.value);
                     } else {
                         break;
                     }
@@ -340,13 +307,13 @@ mod tests {
         // messages onto the channel.
         sender
             .send_message(Message::HistoricalValue(ValueAt::new(
-                1u64,
+                burst![1u64],
                 NanoTime::new(100),
             )))
             .unwrap();
         sender
             .send_message(Message::HistoricalValue(ValueAt::new(
-                2u64,
+                burst![2u64],
                 NanoTime::new(100),
             )))
             .unwrap();

@@ -128,12 +128,16 @@ mod tests {
     }
 
     #[test]
-    fn send_historical_batch() {
+    fn send_in_historical_mode_wraps_value_in_single_burst() {
+        let state = historical_state();
         let (tx, rx) = channel_pair::<u64>(None);
-        let batch = vec![ValueAt::new(1, NanoTime::new(1))];
-        tx.send_historical_batch(batch).unwrap();
-        let msg = rx.try_recv().unwrap();
-        assert!(matches!(msg, Message::HistoricalBatch(_)));
+        tx.send(&state, 7).unwrap();
+        match rx.try_recv().unwrap() {
+            Message::HistoricalValue(value_at) => {
+                assert_eq!(value_at.value.as_slice(), &[7]);
+            }
+            other => panic!("expected HistoricalValue, got {other:?}"),
+        }
     }
 
     #[test]
@@ -206,7 +210,7 @@ impl<T: Element + Send> ChannelSender<T> {
     pub fn send(&self, state: &GraphState, value: T) -> SendResult {
         let message = match state.run_mode() {
             RunMode::HistoricalFrom(_) => {
-                let value_at = ValueAt::new(value, state.time());
+                let value_at = ValueAt::new(crate::burst![value], state.time());
                 Message::HistoricalValue(value_at)
             }
             RunMode::RealTime => Message::RealtimeValue(value),
@@ -216,12 +220,6 @@ impl<T: Element + Send> ChannelSender<T> {
 
     pub fn send_checkpoint(&self, state: &GraphState) -> SendResult {
         let message = Message::CheckPoint(state.time());
-        self.send_message(message)
-    }
-
-    #[allow(dead_code)]
-    pub fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) -> SendResult {
-        let message = Message::HistoricalBatch(batch.into_boxed_slice());
         self.send_message(message)
     }
 
@@ -288,7 +286,7 @@ impl<T: Element + Send> AsyncChannelSender<T> {
     pub async fn send(&self, run_mode: RunMode, time: NanoTime, value: T) {
         let message = match run_mode {
             RunMode::HistoricalFrom(_) => {
-                let value_at = ValueAt::new(value, time);
+                let value_at = ValueAt::new(crate::burst![value], time);
                 Message::HistoricalValue(value_at)
             }
             RunMode::RealTime => Message::RealtimeValue(value),
@@ -299,12 +297,6 @@ impl<T: Element + Send> AsyncChannelSender<T> {
     #[allow(dead_code)]
     pub async fn send_checkpoint(&self, time: NanoTime) {
         let message = Message::CheckPoint(time);
-        self.send_message(message).await;
-    }
-
-    #[allow(dead_code)]
-    pub async fn send_historical_batch(&self, batch: Vec<ValueAt<T>>) {
-        let message = Message::HistoricalBatch(batch.into_boxed_slice());
         self.send_message(message).await;
     }
 

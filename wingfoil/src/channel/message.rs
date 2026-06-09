@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::queue::ValueAt;
 use crate::time::NanoTime;
-use crate::types::Element;
+use crate::types::{Burst, Element};
 #[cfg(feature = "zmq")]
 use crate::{GraphState, RunMode};
 
@@ -23,17 +23,38 @@ pub(crate) enum Message<T: Element + Send> {
     /// Tells the receiving node that there are no messages
     /// so it can shutdown cleanly.
     EndOfStream,
-    /// Used in [RunMode::HistoricalFrom].  A value and its
-    /// associated time.
-    HistoricalValue(ValueAt<T>),
+    /// Used in [RunMode::HistoricalFrom]. A burst of values sharing one
+    /// timestamp, delivered atomically so a same-time group can never be split
+    /// across the graph's strictly-monotonic clock.
+    HistoricalValue(#[serde(with = "burst_value_at_serde")] ValueAt<Burst<T>>),
     /// Sent in [RunMode::RealTime].  Just a value.
     RealtimeValue(T),
-    /// Used in [RunMode::HistoricalFrom] for bulk data transfer.
-    /// Contains multiple values with their timestamps.
-    HistoricalBatch(Box<[ValueAt<T>]>),
     /// Error message that can be propagated through channels.
     /// When received, the receiver will immediately return the error.
     Error(#[serde(with = "arc_error_serde")] Arc<anyhow::Error>),
+}
+
+// Serialize the burst as a plain slice/`Vec` so we don't need tinyvec's `serde`
+// feature: enabling it would make `Burst<T>: Serialize`, which makes
+// `Stream<Burst<T>>` satisfy both the `Stream<T>` and `Stream<Burst<T>>`
+// operator impls (e.g. `CsvOperators`) and breaks inference across the crate.
+mod burst_value_at_serde {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer, T: Element + Send + Serialize>(
+        value_at: &ValueAt<Burst<T>>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        (value_at.time, value_at.value.as_slice()).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Element + Send + Deserialize<'de>>(
+        d: D,
+    ) -> Result<ValueAt<Burst<T>>, D::Error> {
+        let (time, values): (NanoTime, Vec<T>) = Deserialize::deserialize(d)?;
+        Ok(ValueAt::new(values.into_iter().collect(), time))
+    }
 }
 
 mod arc_error_serde {
@@ -57,7 +78,6 @@ impl<T: Element + Send + PartialEq> PartialEq for Message<T> {
             (Message::EndOfStream, Message::EndOfStream) => true,
             (Message::HistoricalValue(v1), Message::HistoricalValue(v2)) => v1 == v2,
             (Message::RealtimeValue(v1), Message::RealtimeValue(v2)) => v1 == v2,
-            (Message::HistoricalBatch(b1), Message::HistoricalBatch(b2)) => b1 == b2,
             (Message::Error(_), Message::Error(_)) => false,
             _ => false,
         }
@@ -76,7 +96,7 @@ impl<T: Element + Send> Message<T> {
         match graph_state.run_mode() {
             RunMode::RealTime => Message::RealtimeValue(value),
             RunMode::HistoricalFrom(_) => {
-                Message::HistoricalValue(ValueAt::new(value, graph_state.time()))
+                Message::HistoricalValue(ValueAt::new(crate::burst![value], graph_state.time()))
             }
         }
     }
@@ -109,9 +129,9 @@ mod tests {
 
     #[test]
     fn historical_value_eq() {
-        let v1 = ValueAt::new(1u64, NanoTime::new(10));
-        let v2 = ValueAt::new(1u64, NanoTime::new(10));
-        let v3 = ValueAt::new(2u64, NanoTime::new(10));
+        let v1 = ValueAt::new(crate::burst![1u64], NanoTime::new(10));
+        let v2 = ValueAt::new(crate::burst![1u64], NanoTime::new(10));
+        let v3 = ValueAt::new(crate::burst![2u64], NanoTime::new(10));
         assert_eq!(
             Message::HistoricalValue(v1.clone()),
             Message::HistoricalValue(v2)
@@ -126,10 +146,16 @@ mod tests {
     }
 
     #[test]
-    fn historical_batch_eq() {
-        let b1: Box<[ValueAt<u64>]> = vec![ValueAt::new(1, NanoTime::new(1))].into_boxed_slice();
-        let b2: Box<[ValueAt<u64>]> = vec![ValueAt::new(1, NanoTime::new(1))].into_boxed_slice();
-        assert_eq!(Message::HistoricalBatch(b1), Message::HistoricalBatch(b2));
+    fn historical_value_burst_eq() {
+        // A multi-value same-time burst compares by its contained values.
+        let b1 = ValueAt::new(crate::burst![1u64, 2], NanoTime::new(1));
+        let b2 = ValueAt::new(crate::burst![1u64, 2], NanoTime::new(1));
+        let b3 = ValueAt::new(crate::burst![1u64, 3], NanoTime::new(1));
+        assert_eq!(
+            Message::HistoricalValue(b1.clone()),
+            Message::HistoricalValue(b2)
+        );
+        assert_ne!(Message::HistoricalValue(b1), Message::HistoricalValue(b3));
     }
 
     #[test]
@@ -165,7 +191,16 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_historical_value() {
-        let msg = Message::HistoricalValue(ValueAt::new(42u64, NanoTime::new(5)));
+        let msg = Message::HistoricalValue(ValueAt::new(crate::burst![42u64], NanoTime::new(5)));
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn serde_roundtrip_historical_value_multi() {
+        let msg =
+            Message::HistoricalValue(ValueAt::new(crate::burst![1u64, 2, 3], NanoTime::new(7)));
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, decoded);
@@ -174,19 +209,6 @@ mod tests {
     #[test]
     fn serde_roundtrip_realtime_value() {
         let msg = Message::RealtimeValue(99u64);
-        let json = serde_json::to_string(&msg).unwrap();
-        let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn serde_roundtrip_historical_batch() {
-        let batch: Box<[ValueAt<u64>]> = vec![
-            ValueAt::new(1, NanoTime::new(1)),
-            ValueAt::new(2, NanoTime::new(2)),
-        ]
-        .into_boxed_slice();
-        let msg = Message::HistoricalBatch(batch);
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: Message<u64> = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, decoded);

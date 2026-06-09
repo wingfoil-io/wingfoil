@@ -321,16 +321,35 @@ where
     fn to_message_stream(self, run_mode: RunMode) -> impl futures::Stream<Item = Message<T>> {
         async_stream::stream! {
             let mut source = Box::pin(self);
+            // Group consecutive same-time values into one atomic `HistoricalValue`
+            // message so a slow producer can't split a timestamp across the
+            // receiver's monotonic clock. The source is time-ordered, so a change
+            // in `time` marks the previous group complete.
+            let mut pending: Option<ValueAt<Burst<T>>> = None;
             while let Some(result) = source.next().await {
                 match result {
                     Ok((time, value)) => match run_mode {
                         RunMode::RealTime => yield Message::RealtimeValue(value),
-                        RunMode::HistoricalFrom(_) => yield Message::HistoricalValue(ValueAt::new(value, time)),
+                        RunMode::HistoricalFrom(_) => match &mut pending {
+                            Some(group) if group.time == time => group.value.push(value),
+                            _ => {
+                                if let Some(group) = pending.take() {
+                                    yield Message::HistoricalValue(group);
+                                }
+                                pending = Some(ValueAt::new(crate::burst![value], time));
+                            }
+                        },
                     },
                     Err(e) => {
+                        if let Some(group) = pending.take() {
+                            yield Message::HistoricalValue(group);
+                        }
                         yield Message::Error(std::sync::Arc::new(e));
                     }
                 }
+            }
+            if let Some(group) = pending.take() {
+                yield Message::HistoricalValue(group);
             }
             yield Message::EndOfStream;
         }
@@ -368,12 +387,6 @@ where
                     Message::CheckPoint(t) => {
                         time = *t;
                     },
-                    Message::HistoricalBatch(batch) => {
-                        // Update time to earliest timestamp in batch
-                        if let Some(value_at) = batch.first() {
-                            time = value_at.time;
-                        }
-                    }
                     Message::EndOfStream => {
                         finished = true;
                     },
@@ -400,15 +413,11 @@ where
                         yield (NanoTime::now(), value)
                     }
                     Message::HistoricalValue(value_at) => {
-                        yield (value_at.time, value_at.value)
-                    },
-                    Message::HistoricalBatch(batch) => {
-                        // Convert to Vec to own the data and avoid holding reference across await
-                        let batch_vec = batch.into_vec();
-                        for value_at in batch_vec {
-                            yield (value_at.time, value_at.value)
+                        let time = value_at.time;
+                        for value in value_at.value {
+                            yield (time, value)
                         }
-                    }
+                    },
                     Message::CheckPoint(_) => {},
                     Message::EndOfStream => {},
                     Message::Error(err) => {
@@ -431,48 +440,19 @@ mod tests {
     use std::pin::Pin;
     use std::time::Duration;
 
-    /// Regression repro for the client's async/historical KDB defect.
-    ///
-    /// `kdb_read` streams rows through `produce_async`: a background tokio task
-    /// reads rows and sends one `HistoricalValue` per row over the channel, while
-    /// the graph pulls them out via `ChannelReceiverStream`. A KDB table routinely
-    /// holds several rows stamped at the *same* timestamp (multiple events in the
-    /// same nanosecond bucket), and a live query streams them with arbitrary
-    /// latency between rows.
-    ///
-    /// The same-timestamp fix in #397 drains every same-time message that is
-    /// *already buffered* on the channel before yielding. That is sufficient when
-    /// the whole burst is produced up front (the in-process channel test in
-    /// `nodes/channel.rs`), but NOT for an async producer: if the next same-time
-    /// row has not been sent yet when the receiver drains, the non-blocking
-    /// `try_recv` returns `None`, the receiver yields, and the graph's strict
-    /// monotonic clock advances by 1ns. When the straggler row — still stamped at
-    /// the old time — finally lands, the receiver reads a timestamp now behind
-    /// engine time and aborts the run with:
-    ///   "received Historical message but with time less than graph time, 100 < 101".
-    ///
-    /// The `sleep` between the two same-time rows makes the background producer
-    /// reliably lag the receiver, reproducing the timing the client hits against a
-    /// live KDB instance without needing a running KDB+ server.
-    ///
-    /// Asserts the correct behaviour (both rows delivered at their real time) and
-    /// is marked `#[ignore]` so CI stays green until the receiver is fixed; run it
-    /// with `--ignored` to observe the failure.
+    /// An async producer that emits same-time values with latency between them
+    /// must not drive engine time backwards. The `sleep` makes the producer lag
+    /// the receiver, so without producer-side grouping the second value lands
+    /// behind engine time and aborts with "time less than graph time".
     #[test]
-    #[ignore]
     fn async_same_time_burst_breaks_monotonic_engine_time() {
         let _ = env_logger::try_init();
 
-        // Two rows stamped at the *same* time (t=100), streamed by a background
-        // task with latency between them — exactly what a live KDB query produces
-        // when several events share a timestamp.
         let producer = move |_ctx: RunParams| async move {
             Ok(async_stream::stream! {
                 yield Ok((NanoTime::new(100), 1u32));
-                // The straggler: arrives only after the receiver has already
-                // drained the first row, yielded, and let engine time advance
-                // past t=100. The non-blocking drain in the receiver cannot see
-                // it because it has not been sent yet.
+                // Lands after the receiver has drained the first value and let
+                // engine time advance past t=100.
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 yield Ok((NanoTime::new(100), 2u32));
             })
@@ -484,19 +464,16 @@ mod tests {
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
             .expect("async same-time burst must not drive engine time backwards");
 
-        // Flatten every burst the receiver emitted, pairing each value with the
-        // engine time it was delivered at.
         let delivered: Vec<(u32, NanoTime)> = collected
             .peek_value()
             .iter()
             .flat_map(|burst| burst.value.iter().map(|v| (*v, burst.time)))
             .collect();
 
-        // Both rows must be delivered, and both at t=100 (their real time).
         assert_eq!(
             delivered,
             vec![(1, NanoTime::new(100)), (2, NanoTime::new(100))],
-            "expected both same-time rows delivered at t=100, got {delivered:?}"
+            "expected both same-time values delivered at t=100, got {delivered:?}"
         );
     }
 
