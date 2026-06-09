@@ -1,7 +1,12 @@
-"""Integration tests for KDB+ read/write Python bindings.
+"""Tests for the KDB+ read/write Python bindings.
 
-Selected via `-m requires_kdb`. Without a KDB+ instance on localhost:5000
-the tests will fail loudly — they do not silently skip.
+The TestKdbConstruction and TestKdbUnreachable suites run by default (no
+marker): they exercise the binding wiring and the connection-error path
+without a live KDB+ instance.
+
+The TestKdbRead and TestKdbWrite integration suites are selected via
+`-m requires_kdb` and deselected from the default run. Without a KDB+ instance
+on localhost:5000 they fail loudly — they do not silently skip.
 
 Setup:
     q -p 5000
@@ -16,6 +21,13 @@ import pytest
 TABLE = "py_kdb_test_trades"
 HOST = "localhost"
 PORT = 5000
+
+# A host:port guaranteed not to host a KDB+ instance: TCP reject on loopback.
+# QStream::connect fails fast with ECONNREFUSED, so these tests are quick.
+UNREACHABLE_HOST = "127.0.0.1"
+UNREACHABLE_PORT = 1
+# 2000-01-01 00:00:00 UTC in Unix seconds — historical reads need a non-zero start.
+EPOCH_2000 = 946684800.0
 
 
 def q_exec(query: str):
@@ -63,6 +75,68 @@ def _recv_exact(s: socket.socket, n: int) -> bytes:
             raise EOFError(f"connection closed after {len(buf)}/{n} bytes")
         buf += chunk
     return buf
+
+
+class TestKdbConstruction(unittest.TestCase):
+    """Binding construction paths that don't need a running KDB+ instance.
+
+    Exercises py_kdb_read / py_kdb_write wiring, including the fluent
+    .kdb_write() stream method and #[pyo3(signature = ...)] defaults, without
+    connecting.
+    """
+
+    def test_kdb_read_constructs_stream(self):
+        from wingfoil import kdb_read
+
+        stream = kdb_read(
+            host=UNREACHABLE_HOST,
+            port=UNREACHABLE_PORT,
+            query="select from t",
+            time_col="time",
+        )
+        self.assertIsNotNone(stream)
+
+    def test_kdb_write_method_constructs_node(self):
+        from wingfoil import constant
+
+        node = constant({"sym": "X", "price": 1.0, "qty": 1}).kdb_write(
+            host=UNREACHABLE_HOST,
+            port=UNREACHABLE_PORT,
+            table="t",
+            columns=[("sym", "symbol"), ("price", "float"), ("qty", "long")],
+        )
+        self.assertIsNotNone(node)
+
+
+class TestKdbUnreachable(unittest.TestCase):
+    """Running against an unreachable instance exercises the connect-error
+    path in the async producer / consumer (ECONNREFUSED on loopback port 1).
+    """
+
+    def test_kdb_read_unreachable_errors(self):
+        from wingfoil import kdb_read
+
+        stream = kdb_read(
+            host=UNREACHABLE_HOST,
+            port=UNREACHABLE_PORT,
+            query="select from t",
+            time_col="time",
+            chunk_size=10000,
+        ).collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, start=EPOCH_2000, duration=86400.0)
+
+    def test_kdb_write_unreachable_errors(self):
+        from wingfoil import constant
+
+        node = constant({"sym": "X", "price": 1.0, "qty": 1}).kdb_write(
+            host=UNREACHABLE_HOST,
+            port=UNREACHABLE_PORT,
+            table="t",
+            columns=[("sym", "symbol"), ("price", "float"), ("qty", "long")],
+        )
+        with self.assertRaises(Exception):
+            node.run(realtime=False, start=EPOCH_2000, cycles=1)
 
 
 @pytest.mark.requires_kdb
