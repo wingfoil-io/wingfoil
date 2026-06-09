@@ -1,3 +1,15 @@
+//! File-based result cache backing the KDB+ adapter's [`kdb_read_cached`].
+//!
+//! This is **not** a standalone I/O adapter — it exposes no graph nodes. It is
+//! a support module gated under the `kdb` feature and consumed only by
+//! [`kdb_read_cached`](crate::adapters::kdb::kdb_read_cached), which caches the
+//! rows fetched for each time slice to disk so repeated backtests over the same
+//! query skip the round-trip to the database.
+//!
+//! - [`CacheKey`] — a stable SHA-256 digest of `[host, port, query]`.
+//! - [`CacheConfig`] — the cache directory plus an LRU on-disk size cap.
+//! - [`FileCache`] — async get/put of serialized rows, with LRU eviction.
+
 pub mod file_cache;
 pub use file_cache::FileCache;
 

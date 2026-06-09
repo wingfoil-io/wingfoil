@@ -172,6 +172,38 @@ Service discovery via etcd is also supported — see [`zmq/etcd`](zmq/etcd/) for
 
 [Full example.](zmq/)
 
+### iceoryx2
+
+Zero-copy IPC over shared memory between processes. The payload is a `#[repr(C)]` `ZeroCopySend` type; the subscriber picks a polling mode (`Spin`, `Threaded`, or `Signaled`) trading latency for CPU:
+
+```rust,ignore
+use iceoryx2::prelude::ZeroCopySend;
+use wingfoil::adapters::iceoryx2::{Iceoryx2Mode, Iceoryx2SubOpts, iceoryx2_pub, iceoryx2_sub_opts};
+use wingfoil::*;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, ZeroCopySend)]
+struct Counter {
+    seq: u64,
+}
+
+// publisher
+let upstream = ticker(Duration::from_millis(100)).count().map(|seq: u64| burst![Counter { seq }]);
+iceoryx2_pub(upstream, "wingfoil/examples/counter")
+    .run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+```rust,ignore
+// subscriber (in another process)
+let opts = Iceoryx2SubOpts { mode: Iceoryx2Mode::Spin, ..Default::default() };
+iceoryx2_sub_opts::<Counter>("wingfoil/examples/counter", opts)
+    .collapse()
+    .inspect(|c: &Counter| println!("received seq={}", c.seq))
+    .run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+[Full example.](iceoryx2/)
+
 ### Aeron
 
 Publish `i64` values over a low-latency Aeron channel and subscribe to them back. The subscriber polls Aeron directly inside the graph `cycle()` (spin mode) for zero thread-crossing latency:
@@ -245,6 +277,35 @@ RUST_LOG=info cargo run --example fix_loopback --features fix
 ```
 
 [Full examples.](fix/)
+
+### Web
+
+Stream values to one or more browsers over WebSocket and receive UI events back, all as on-graph streams. The `WebServer` hosts an HTTP + WebSocket listener on its own tokio runtime:
+
+```rust,ignore
+use wingfoil::adapters::web::*;
+use wingfoil::*;
+
+let server = WebServer::bind("127.0.0.1:0").start()?;
+let port = server.port();
+println!("open ws://127.0.0.1:{port}/ws");
+
+// publish: graph → browser
+ticker(Duration::from_millis(10))
+    .count()
+    .web_pub(&server, "tick")
+    .run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+```rust,ignore
+// subscribe: browser → graph
+let clicks: Rc<dyn Stream<Burst<u32>>> = web_sub(&server, "ui_events");
+clicks.collapse().print().run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+Serve a static UI bundle with `.serve_static("./dist")`, and enable the `web-tls` feature with `.tls(cert, key)` for HTTPS/WSS.
+
+[Full example.](web/)
 
 ### Telemetry
 
