@@ -25,9 +25,11 @@ kdb/
   - Caller constructs the full query — date/time filters, partition hints, etc.
   - Terminates automatically when all slices are exhausted
 - `kdb_read_cached()` - Cached variant of `kdb_read`
-  - Same signature as `kdb_read` plus a `cache_dir: impl Into<PathBuf>` parameter
-  - Checks `<cache_dir>/<hash>.cache` before each slice query; writes on miss
-  - Cache files persist until manually deleted — no TTL, no eviction
+  - Same signature as `kdb_read` plus a `cache_config: CacheConfig` parameter
+  - Checks `<folder>/<hash>.cache` before each slice query; writes on miss
+  - LRU eviction once the total on-disk size would exceed `CacheConfig::max_size_bytes`
+    (use `u64::MAX` for an unbounded cache). Each `.cache` file is self-documenting —
+    the producing query is written as a header line. See `../cache/CLAUDE.md`.
   - Lazy TCP connection: if all slices are cache hits, no KDB connection is opened
   - `T` must additionally implement `serde::Serialize + serde::Deserialize`; `Sync` is also required
   - `Sym` is fully supported — it serializes as a plain string (interning not restored on load)
@@ -142,12 +144,12 @@ impl KdbSerialize for Trade {
 ### Reading with kdb_read_cached
 
 ```rust
-// Same query closure as kdb_read, plus a cache directory.
+// Same query closure as kdb_read, plus a CacheConfig (folder + LRU size cap).
 // T must also implement serde::Serialize + serde::Deserialize + Sync.
 let stream = kdb_read_cached::<Trade, _>(
     conn,
     std::time::Duration::from_secs(3600),
-    "/tmp/my-backtest-cache",
+    CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024), // 512 MiB cap
     |(t0, t1), date, _| {
         format!(
             "select from trades where date=2000.01.01+{}, \
