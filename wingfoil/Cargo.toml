@@ -210,6 +210,10 @@ required-features = ["kdb"]
 [[example]]
 name = "run_mode"
 
+[[example]]
+name = "crossover"
+path = "examples/crossover/main.rs"
+
 [[bench]]
 name = "graph"
 harness = false
