@@ -14,6 +14,7 @@ mod py_kdb;
 mod py_latency;
 mod py_otlp;
 mod py_prometheus;
+mod py_redis;
 mod py_stream;
 mod py_web;
 mod py_zmq;
@@ -199,6 +200,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_etcd::py_etcd_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_fluvio::py_fluvio_sub, module)?)?;
     module.add_function(wrap_pyfunction!(py_kafka::py_kafka_sub, module)?)?;
+    module.add_function(wrap_pyfunction!(py_redis::py_redis_sub, module)?)?;
+    module.add_function(wrap_pyfunction!(py_redis::py_redis_stream_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;

@@ -25,6 +25,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`fix`](fix/) | FIX 4.4 protocol: [`fix_loopback`](fix/fix_loopback.rs) (self-contained), [`fix_client`](fix/fix_client.rs), [`fix_echo_server`](fix/fix_echo_server.rs), [`lmax_demo`](fix/lmax_demo.rs) (live LMAX market data over TLS), [`lmax_instruments`](fix/lmax_instruments.rs). |
 | [`zmq`](zmq/) | ZeroMQ pub/sub: [`direct`](zmq/direct/) (direct addressing) and [`etcd`](zmq/etcd/) (service discovery via etcd). |
 | [`etcd`](etcd/) | etcd key-value store adapter for sub/pub with transformation. |
+| [`redis`](redis/) | Redis adapter — Pub/Sub channels (subscribe, transform, republish) and persistent Streams (snapshot + tail). |
 | [`iceoryx2`](iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
 | [`aeron`](aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
@@ -140,6 +141,35 @@ round_trip.run(RunMode::RealTime, RunFor::Cycles(10)).unwrap();
 ```
 
 [Full example.](kafka/)
+
+### Redis
+
+Subscribe to a Redis Pub/Sub channel, uppercase each payload, and republish to another channel. Redis Pub/Sub is fire-and-forget, so subscribers must be live before a message is published:
+
+```rust,ignore
+use wingfoil::adapters::redis::*;
+use wingfoil::*;
+
+let conn = RedisConnection::new("redis://127.0.0.1:6379");
+
+let processor = redis_sub(conn.clone(), "source")
+    .map(|burst| {
+        burst.into_iter().map(|event| {
+            let upper = event.payload_str().unwrap_or("").to_uppercase().into_bytes();
+            RedisEntry { channel: "dest".into(), payload: upper }
+        })
+        .collect::<Burst<RedisEntry>>()
+    })
+    .redis_pub(conn);
+
+processor.run(RunMode::RealTime, RunFor::Forever).unwrap();
+```
+
+The adapter also supports Redis **Streams** for a persistent, replayable log:
+`redis_stream_write` appends entries via `XADD`, and `redis_stream_read` replays
+existing entries (`XRANGE`) before tailing live appends (`XREAD BLOCK`).
+
+[Full example.](redis/)
 
 ### ZeroMQ
 
