@@ -66,6 +66,11 @@ jobs:
           cache: "pip"
           cache-dependency-path: wingfoil-python/pyproject.toml
 
+      - name: Install protoc
+        # Building the Python bindings compiles wingfoil-python, which enables the
+        # `etcd` feature; etcd-client's build script requires protoc.
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Install maturin and build Python bindings
         run: |
           python -m venv wingfoil-python/.venv
