@@ -20,12 +20,22 @@ historical data. It's aimed at high-frequency trading and real-time AI pipelines
 We just added an Aeron adapter that wraps a subscription/publication as wingfoil
 source and sink nodes:
 
-- `aeron_sub_fragment` subscribes to a channel and emits `Burst<T>` through a
-  typed parser that gets access to the per-fragment `FragmentHeader` (position,
-  session id, stream id).
+- `aeron_sub_fragment` polls a subscription via the fragment-level
+  `poll(FragmentHandler, limit)` surface and emits `Burst<T>`. The parser runs
+  per fragment and gets the `FragmentHeader` (position, session id, stream id);
+  a parser error drops that fragment without stopping the graph.
 - `AeronPub::aeron_pub` offers serialised values to a channel, with
   `_with_status` variants that surface connect/disconnect/back-pressure
   transitions as a reactive side-channel stream.
+
+**Up front, since this group will spot it immediately:** the subscriber works at
+the *fragment* level and does **not** currently wrap a `FragmentAssembler`, so
+the parser sees one fragment per callback rather than a reassembled message. In
+practice that means it assumes messages fit within a single fragment (sub-MTU)
+today. Adding optional fragment reassembly (and likely a `controlledPoll`
+variant for flow control) is the obvious next step — feedback on whether we
+should reassemble by default, or keep the raw-fragment surface as the primary
+one and layer assembly on top, is exactly the kind of input we're after.
 
 The design points we'd most like feedback on:
 
