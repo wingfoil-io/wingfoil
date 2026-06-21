@@ -34,6 +34,10 @@ fluvio_sub = _ext.py_fluvio_sub
 # User-friendly aliases for Kafka functions
 kafka_sub = _ext.py_kafka_sub
 
+# User-friendly aliases for Redis functions
+redis_sub = _ext.py_redis_sub
+redis_stream_read = _ext.py_redis_stream_read
+
 # User-friendly aliases for KDB+ functions
 kdb_read = _ext.py_kdb_read
 kdb_write = _ext.py_kdb_write

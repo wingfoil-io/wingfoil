@@ -20,6 +20,11 @@ jobs:
     uses: ./.github/workflows/etcd-integration.yml
     secrets: inherit
 
+  redis-integration:
+    name: redis Integration Tests
+    uses: ./.github/workflows/redis-integration.yml
+    secrets: inherit
+
   prometheus-integration:
     name: Prometheus Integration Tests
     uses: ./.github/workflows/prometheus-integration.yml

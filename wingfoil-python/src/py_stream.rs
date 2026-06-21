@@ -454,6 +454,38 @@ impl PyStream {
         PyNode::new(crate::py_kafka::py_kafka_pub_inner(&self.0, brokers, topic))
     }
 
+    /// Publish this stream of dicts to Redis via `PUBLISH`.
+    ///
+    /// Stream values must be dicts with `"payload"` (bytes) and optionally
+    /// `"channel"` (str), or lists of such dicts for multi-message writes per tick.
+    ///
+    /// Args:
+    ///     url: Redis URL, e.g. `"redis://127.0.0.1:6379"`
+    ///     channel: default channel for dicts that don't specify one
+    ///
+    /// Returns:
+    ///     A Node that drives the publish operation.
+    fn redis_pub(&self, url: String, channel: String) -> PyNode {
+        PyNode::new(crate::py_redis::py_redis_pub_inner(&self.0, url, channel))
+    }
+
+    /// Append this stream of dicts to a Redis stream via `XADD`.
+    ///
+    /// Stream values must be dicts with `"fields"` (dict of `name -> bytes`) and
+    /// optionally `"key"` (str), or lists of such dicts for multi-entry writes per tick.
+    ///
+    /// Args:
+    ///     url: Redis URL, e.g. `"redis://127.0.0.1:6379"`
+    ///     key: default stream key for dicts that don't specify one
+    ///
+    /// Returns:
+    ///     A Node that drives the append operation.
+    fn redis_stream_write(&self, url: String, key: String) -> PyNode {
+        PyNode::new(crate::py_redis::py_redis_stream_write_inner(
+            &self.0, url, key,
+        ))
+    }
+
     /// Publish this stream of bytes to a ZMQ PUB socket bound on the given port.
     ///
     /// The stream values must be `bytes` objects. Only supported in real-time mode.
