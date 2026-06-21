@@ -1,0 +1,65 @@
+name: test.integration.augurs
+
+# augurs is a pure-Rust compute library (no external service), so this workflow
+# runs the in-crate unit tests behind `--features augurs`, the example, and the
+# Python binding tests. There is no container to start and no `requires_*`
+# marker — the Python tests run by default.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/augurs/**'
+      - 'wingfoil/examples/augurs/**'
+      - 'wingfoil-python/src/py_augurs.rs'
+      - 'wingfoil-python/tests/test_augurs.py'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  augurs-integration:
+    name: augurs Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Run augurs unit tests
+        run: |
+          cargo test --features augurs -p wingfoil \
+            -- --nocapture adapters::augurs
+        env:
+          RUST_LOG: INFO
+
+      - name: Run augurs example
+        run: cargo run -p wingfoil --example augurs --features augurs
+
+      # --- Python bindings ---
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Install maturin and build Python bindings
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest
+          cd wingfoil-python && .venv/bin/maturin develop
+
+      - name: Run Python augurs tests
+        run: |
+          cd wingfoil-python && .venv/bin/pytest tests/test_augurs.py -v

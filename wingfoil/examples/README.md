@@ -30,6 +30,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`aeron`](aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](telemetry/) | Metrics export: [`prometheus`](telemetry/prometheus/) (pull-based scrape) and [`otlp`](telemetry/otlp/) (push to Grafana Alloy, Datadog, Honeycomb, etc.). |
+| [`augurs`](augurs/) | augurs time-series toolkit — on-graph ETS forecasting and MAD outlier detection over sliding windows. |
 
 ## Snippets
 
@@ -301,3 +302,28 @@ Graph::new(vec![prometheus_node, otlp_node], RunMode::RealTime, RunFor::Forever)
 ```
 
 [Full example.](telemetry/)
+
+### augurs
+
+On-graph time-series analysis with the [augurs](https://docs.rs/augurs) toolkit — no external service. Buffer a sliding window of a stream and forecast it with ETS, or detect outliers across a group of series with MAD:
+
+```rust,ignore
+use wingfoil::adapters::augurs::*;
+use wingfoil::*;
+
+// Forecast a noisy upward ramp 5 steps ahead with 90% prediction intervals.
+ticker(Duration::from_secs(1))
+    .count()
+    .map(|n| n as f64 + (n as f64 * 0.5).sin())
+    .augurs_forecast(AugursForecastConfig::new(48, 5).with_level(0.90))
+    .for_each(|f, _| println!("next 5: {:?}", f.point))
+    .run(RunMode::RealTime, RunFor::Forever)?;
+
+// Flag the series that diverges from the group (one Vec<f64> per tick).
+readings // Rc<dyn Stream<Vec<f64>>>
+    .augurs_outlier(AugursOutlierConfig::new(40, 0.5))
+    .for_each(|o, _| println!("outlying: {:?}", o.outlying))
+    .run(RunMode::RealTime, RunFor::Forever)?;
+```
+
+[Full example.](augurs/)

@@ -374,6 +374,48 @@ impl PyStream {
         Ok(PyNode::new(node))
     }
 
+    /// Forecast this stream of floats with the augurs ETS model.
+    ///
+    /// Buffers a sliding window of the last `window` values and, once
+    /// `min_points` have arrived, emits a dict each tick:
+    /// `{"point": list[float], "lower": list[float], "upper": list[float]}`.
+    /// `lower`/`upper` are empty unless a `level` (0..1) is requested.
+    ///
+    /// Args:
+    ///     window: Maximum number of recent points retained as history.
+    ///     horizon: Number of steps to forecast ahead.
+    ///     level: Confidence level for prediction intervals (0..1), or None.
+    ///     min_points: Minimum points before fitting begins (floored at 12).
+    #[pyo3(signature = (window, horizon, level=None, min_points=12))]
+    fn augurs_forecast(
+        &self,
+        window: usize,
+        horizon: usize,
+        level: Option<f64>,
+        min_points: usize,
+    ) -> PyStream {
+        PyStream(crate::py_augurs::py_augurs_forecast_inner(
+            &self.0, window, horizon, level, min_points,
+        ))
+    }
+
+    /// Detect outlying series in this stream of per-series readings.
+    ///
+    /// Each value must be a `list[float]` carrying one reading per series.
+    /// Buffers the last `window` ticks and emits a dict each tick:
+    /// `{"outlying": list[int], "scores": list[float]}`.
+    ///
+    /// Args:
+    ///     window: Number of recent samples in the detection window.
+    ///     sensitivity: MAD sensitivity, strictly between 0 and 1.
+    fn augurs_outlier(&self, window: usize, sensitivity: f64) -> PyStream {
+        PyStream(crate::py_augurs::py_augurs_outlier_inner(
+            &self.0,
+            window,
+            sensitivity,
+        ))
+    }
+
     /// Write this stream to a KDB+ table.
     ///
     /// Args:

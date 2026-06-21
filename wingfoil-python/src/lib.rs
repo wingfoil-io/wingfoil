@@ -1,6 +1,7 @@
 mod proxy_stream;
 #[cfg(feature = "aeron")]
 mod py_aeron;
+mod py_augurs;
 mod py_csv;
 mod py_element;
 #[cfg(feature = "etcd")]
