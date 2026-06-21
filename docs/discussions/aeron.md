@@ -17,38 +17,29 @@ library — you wire up a graph of nodes where each node ticks when its upstream
 produce a value, and the graph runs either in real time or replayed from
 historical data. It's aimed at high-frequency trading and real-time AI pipelines.
 
-We just added an Aeron adapter that wraps a subscription/publication as wingfoil
-source and sink nodes:
+We just added an Aeron adapter that exposes a channel as wingfoil source and
+sink nodes:
 
-- `aeron_sub_fragment` polls a subscription via the fragment-level
-  `poll(FragmentHandler, limit)` surface and emits `Burst<T>`. The parser runs
-  per fragment and gets the `FragmentHeader` (position, session id, stream id);
-  a parser error drops that fragment without stopping the graph.
-- `AeronPub::aeron_pub` offers serialised values to a channel, with
-  `_with_status` variants that surface connect/disconnect/back-pressure
-  transitions as a reactive side-channel stream.
+- **Subscribe** — point a node at an Aeron channel and a parser, and you get a
+  typed wingfoil stream you can wire into the rest of your graph. A status
+  variant also gives you a reactive stream of connect/disconnect/back-pressure
+  transitions as a side-channel.
+- **Publish** — `.aeron_pub(...)` on any stream offers its values to a channel,
+  with the same optional status side-channel on the publish side.
 
-**Up front, since this group will spot it immediately:** the subscriber works at
-the *fragment* level and does **not** currently wrap a `FragmentAssembler`, so
-the parser sees one fragment per callback rather than a reassembled message. In
-practice that means it assumes messages fit within a single fragment (sub-MTU)
-today. Adding optional fragment reassembly (and likely a `controlledPoll`
-variant for flow control) is the obvious next step — feedback on whether we
-should reassemble by default, or keep the raw-fragment surface as the primary
-one and layer assembly on top, is exactly the kind of input we're after.
+The design choices we'd most like feedback on are the ones a user actually
+makes:
 
-The design points we'd most like feedback on:
-
-- **Two polling modes.** `Spin` polls Aeron *inside* the graph `cycle()` on the
-  graph thread — zero thread-crossing latency, burns a core, ticks downstream
-  only when fragments actually arrive. `Threaded` polls on a background thread
-  and delivers over a channel (one hop of latency, frees the graph thread).
+- **Two polling modes.** `Spin` polls Aeron *inside* the graph cycle on the
+  graph thread — zero thread-crossing latency, burns a core, and ticks
+  downstream only when data actually arrives. `Threaded` polls on a background
+  thread and delivers over a channel: one hop of latency, frees the graph thread.
 - **Two backends.** A `rusteron-client` C/C++ FFI backend for production
   (genuinely lock-free `poll()`/`offer()`), and an experimental pure-Rust
   `aeron-rs` backend. The latter shares `Arc<Mutex<…>>` handles with its own
-  client-conductor thread, so the lock can't be hoisted out of `cycle()` — we
+  client-conductor thread, so the lock can't be hoisted out of the cycle — we
   detect that and automatically downgrade `Spin` to `Threaded` for it rather
-  than violate our "no locks in `cycle()`" invariant. Curious whether that
+  than violate our "no locks in the hot path" invariant. Curious whether that
   matches how others have integrated aeron-rs.
 
 A concrete use case: a `Spin`-mode subscriber feeding a wingfoil graph that
