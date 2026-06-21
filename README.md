@@ -99,6 +99,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`dynamic`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic/) | Add and remove nodes at runtime. Includes `demux`, `dynamic-group`, and `dynamic-manual` variants. |
 | [`tracing`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
 | [`latency`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
+| [`candle`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/candle/) | Neural inference on streams — run a [candle](https://github.com/huggingface/candle) model (here an MLP price forecaster) inline or off-thread via `candle_infer`. |
 
 ### I/O adapters
 

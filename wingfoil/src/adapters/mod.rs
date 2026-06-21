@@ -4,6 +4,8 @@
 pub mod aeron;
 #[cfg(feature = "kdb")]
 pub mod cache;
+#[cfg(feature = "candle")]
+pub mod candle;
 #[cfg(feature = "csv")]
 pub mod csv;
 #[cfg(feature = "etcd")]

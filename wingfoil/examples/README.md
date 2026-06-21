@@ -14,6 +14,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`dynamic`](dynamic/) | Add and remove nodes at runtime. Includes `demux` (static slot pool), `dynamic-group` (high-level API), `dynamic-manual` (low-level `MutableNode`). |
 | [`tracing`](tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
 | [`latency`](latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
+| [`candle`](candle/) | Neural inference on streams — run a [candle](https://github.com/huggingface/candle) model (here an MLP price forecaster) inline or off-thread via `candle_infer`. |
 
 ## I/O adapters
 
@@ -301,3 +302,31 @@ Graph::new(vec![prometheus_node, otlp_node], RunMode::RealTime, RunFor::Forever)
 ```
 
 [Full example.](telemetry/)
+
+### candle (neural inference)
+
+Run a [candle](https://github.com/huggingface/candle) model over a stream. Each value is shaped into a tensor, pushed through a user-supplied `forward` closure (your model — load its weights via `candle_nn::VarBuilder`), and the result is parsed back into a graph value:
+
+```rust,ignore
+use wingfoil::adapters::candle::*;
+use wingfoil::*;
+
+let prices = ticker(Duration::from_millis(100)).count().map(|n| 100.0 + n as f64);
+
+let forecast = candle_infer(
+    &prices,
+    CandleConfig::inline(),                         // or ::off_thread() for heavy models
+    |price: &f64, device| Ok(Tensor::new(&[*price as f32], device)?),
+    move |input: &Tensor| Ok((input * 2.0)?),       // your model's forward()
+    |output: &Tensor| Ok(output.to_vec1::<f32>()?[0] as f64),
+)
+.collapse::<f64>();
+
+forecast.print().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
+```
+
+`CandleMode::Inline` runs `forward()` on the graph thread (deterministic, both run
+modes); `CandleMode::OffThread` runs it on a dedicated worker thread (real-time only)
+so a slow forward pass never stalls the cycle.
+
+[Full example.](candle/)

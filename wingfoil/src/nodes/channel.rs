@@ -100,9 +100,14 @@ pub struct ChannelReceiverStream<T: Element + Send> {
 }
 
 // `finished` is only read by `ReceiverStream`, which is itself gated behind the
-// zmq/aeron adapters; gate the accessor the same way to avoid a dead-code warning
-// in the default build.
-#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+// zmq/aeron/candle adapters; gate the accessor the same way to avoid a dead-code
+// warning in the default build.
+#[cfg(any(
+    feature = "zmq",
+    feature = "aeron",
+    feature = "aeron-rs-beta",
+    feature = "candle"
+))]
 impl<T: Element + Send> ChannelReceiverStream<T> {
     /// Whether the producer has signalled end-of-stream (i.e. a
     /// [`Message::EndOfStream`] has been received and drained).
