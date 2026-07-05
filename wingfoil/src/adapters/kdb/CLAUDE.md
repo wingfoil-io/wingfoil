@@ -7,7 +7,7 @@ This directory contains the KDB+ adapter for wingfoil, enabling reading from and
 ```
 kdb/
   mod.rs               # Public API, connection types, error handling, Sym
-  read.rs              # kdb_read() and shared helpers (compute_time_slices, KdbExt, etc.)
+  read.rs              # kdb_read() and shared helpers (KdbExt, chunk_stream, etc.)
   read_cached.rs       # kdb_read_cached() — file-cached variant of kdb_read
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)

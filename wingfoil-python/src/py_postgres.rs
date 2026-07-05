@@ -81,6 +81,9 @@ fn column_value(row: &Row, idx: usize) -> PyPgValue {
     if let Ok(v) = row.try_get::<_, Option<bool>>(idx) {
         return v.map_or(PyPgValue::Null, PyPgValue::Bool);
     }
+    if let Ok(v) = row.try_get::<_, Option<i16>>(idx) {
+        return v.map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64));
+    }
     if let Ok(v) = row.try_get::<_, Option<i32>>(idx) {
         return v.map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64));
     }
