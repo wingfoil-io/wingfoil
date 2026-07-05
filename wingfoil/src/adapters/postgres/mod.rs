@@ -97,6 +97,32 @@ pub use write::*;
 pub use tokio_postgres::Row;
 /// Re-export of [`tokio_postgres::types::ToSql`] for [`PostgresSerialize`] impls.
 pub use tokio_postgres::types::ToSql;
+/// Re-export of [`tokio_postgres::types::Type`] for dispatching on column SQL types
+/// in [`PostgresDeserialize`] impls.
+pub use tokio_postgres::types::Type;
+
+/// Quote a PostgreSQL identifier: wrap in double quotes, doubling any embedded quotes.
+///
+/// Makes mixed-case, reserved-word, and special-character identifiers safe to splice
+/// into SQL (`quote_ident("eventTime")` → `"eventTime"`). Note that quoting disables
+/// PostgreSQL's lower-case folding, so the identifier must match the column/table name
+/// exactly as stored in the catalog.
+#[must_use]
+pub fn quote_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// Quote a possibly schema-qualified table name, quoting each dot-separated segment.
+///
+/// `quote_table("public.My Trades")` → `"public"."My Trades"`.
+#[must_use]
+pub fn quote_table(table: &str) -> String {
+    table
+        .split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".")
+}
 
 /// PostgreSQL connection configuration.
 ///
@@ -145,5 +171,18 @@ mod tests {
     fn test_connection_new() {
         let conn = PostgresConnection::new("host=x".to_string());
         assert_eq!(conn.conn_str, "host=x");
+    }
+
+    #[test]
+    fn test_quote_ident() {
+        assert_eq!(quote_ident("time"), "\"time\"");
+        assert_eq!(quote_ident("eventTime"), "\"eventTime\"");
+        assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    #[test]
+    fn test_quote_table() {
+        assert_eq!(quote_table("trades"), "\"trades\"");
+        assert_eq!(quote_table("public.My Trades"), "\"public\".\"My Trades\"");
     }
 }

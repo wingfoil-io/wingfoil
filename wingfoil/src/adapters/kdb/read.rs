@@ -1,7 +1,7 @@
 //! KDB+ read functionality for streaming data from q/kdb+ instances.
 
 use super::{KdbConnection, Sym, SymbolInterner};
-use crate::adapters::time_slice::compute_time_slices;
+use crate::adapters::time_slice::compute_validated_time_slices;
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};
@@ -359,26 +359,8 @@ where
         let end_time_result = ctx.end_time();
 
         async move {
-            if start_time == NanoTime::ZERO {
-                anyhow::bail!(
-                    "kdb_read_time_sliced: start_time is NanoTime::ZERO; \
-                    use RunMode::HistoricalFrom with an explicit start time"
-                );
-            }
-
-            let end_time = match end_time_result {
-                Ok(t) if t == NanoTime::MAX => anyhow::bail!(
-                    "kdb_read_time_sliced requires RunFor::Duration; \
-                    RunFor::Forever would generate an unbounded number of slices"
-                ),
-                Ok(t) => t,
-                Err(_) => anyhow::bail!(
-                    "kdb_read_time_sliced requires RunFor::Duration; \
-                    RunFor::Cycles does not provide an end time"
-                ),
-            };
-
-            let slices = compute_time_slices(start_time, end_time, period);
+            let slices =
+                compute_validated_time_slices("kdb_read", start_time, end_time_result, period)?;
 
             let creds = connection.credentials_string();
             let socket = QStream::connect(

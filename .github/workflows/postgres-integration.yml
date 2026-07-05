@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - 'wingfoil/src/adapters/postgres/**'
+      - 'wingfoil/src/adapters/time_slice.rs'
       - 'wingfoil-python/src/py_postgres.rs'
       - 'wingfoil-python/tests/test_postgres.py'
 

@@ -5,14 +5,15 @@ use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
 use crate::types::{DICT_INSERT_INFALLIBLE, INTO_PY_INFALLIBLE};
 
+use anyhow::bail;
 use chrono::NaiveDateTime;
 use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use std::rc::Rc;
 use wingfoil::adapters::postgres::{
-    PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, Row, ToSql,
-    postgres_read, postgres_write,
+    PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, Row, ToSql, Type,
+    postgres_read, postgres_timestamp, postgres_write, quote_ident,
 };
 use wingfoil::{Burst, NanoTime, Node, Stream, StreamOperators};
 
@@ -33,7 +34,7 @@ enum PyPgValue {
     Float(f64),
     Text(String),
     Bytes(Vec<u8>),
-    /// A `timestamp` rendered as an ISO-8601 string.
+    /// A timestamp rendered with [`postgres_timestamp`] formatting.
     Timestamp(String),
 }
 
@@ -72,42 +73,57 @@ impl PyPgValue {
     }
 }
 
-/// Read a single column, probing candidate SQL types in turn.
+/// Read a single column, dispatching on the column's declared SQL type.
 ///
-/// `try_get::<Option<T>>` returns `Ok(None)` for SQL NULL and `Err` when the column
-/// type is incompatible with `T`, so probing in order resolves the value without
-/// knowing the column type up front.
-fn column_value(row: &Row, idx: usize) -> PyPgValue {
-    if let Ok(v) = row.try_get::<_, Option<bool>>(idx) {
-        return v.map_or(PyPgValue::Null, PyPgValue::Bool);
-    }
-    if let Ok(v) = row.try_get::<_, Option<i16>>(idx) {
-        return v.map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64));
-    }
-    if let Ok(v) = row.try_get::<_, Option<i32>>(idx) {
-        return v.map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64));
-    }
-    if let Ok(v) = row.try_get::<_, Option<i64>>(idx) {
-        return v.map_or(PyPgValue::Null, PyPgValue::Int);
-    }
-    if let Ok(v) = row.try_get::<_, Option<f32>>(idx) {
-        return v.map_or(PyPgValue::Null, |f| PyPgValue::Float(f as f64));
-    }
-    if let Ok(v) = row.try_get::<_, Option<f64>>(idx) {
-        return v.map_or(PyPgValue::Null, PyPgValue::Float);
-    }
-    if let Ok(v) = row.try_get::<_, Option<String>>(idx) {
-        return v.map_or(PyPgValue::Null, PyPgValue::Text);
-    }
-    if let Ok(v) = row.try_get::<_, Option<NaiveDateTime>>(idx) {
-        return v.map_or(PyPgValue::Null, |t| {
-            PyPgValue::Timestamp(t.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
-        });
-    }
-    if let Ok(v) = row.try_get::<_, Option<Vec<u8>>>(idx) {
-        return v.map_or(PyPgValue::Null, PyPgValue::Bytes);
-    }
-    PyPgValue::Null
+/// The type is resolved from the row metadata (no per-cell trial and error), and an
+/// unsupported column type is an **error** — not a silent `None` — so a schema
+/// mismatch (e.g. a `numeric` or `uuid` column) aborts on the first row instead of
+/// producing rows full of nulls that are indistinguishable from SQL NULL.
+fn column_value(row: &Row, idx: usize) -> anyhow::Result<PyPgValue> {
+    let ty = row.columns()[idx].type_();
+    let value = if *ty == Type::BOOL {
+        row.try_get::<_, Option<bool>>(idx)?
+            .map_or(PyPgValue::Null, PyPgValue::Bool)
+    } else if *ty == Type::INT2 {
+        row.try_get::<_, Option<i16>>(idx)?
+            .map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64))
+    } else if *ty == Type::INT4 {
+        row.try_get::<_, Option<i32>>(idx)?
+            .map_or(PyPgValue::Null, |i| PyPgValue::Int(i as i64))
+    } else if *ty == Type::INT8 {
+        row.try_get::<_, Option<i64>>(idx)?
+            .map_or(PyPgValue::Null, PyPgValue::Int)
+    } else if *ty == Type::FLOAT4 {
+        row.try_get::<_, Option<f32>>(idx)?
+            .map_or(PyPgValue::Null, |f| PyPgValue::Float(f as f64))
+    } else if *ty == Type::FLOAT8 {
+        row.try_get::<_, Option<f64>>(idx)?
+            .map_or(PyPgValue::Null, PyPgValue::Float)
+    } else if *ty == Type::TEXT || *ty == Type::VARCHAR || *ty == Type::BPCHAR || *ty == Type::NAME
+    {
+        row.try_get::<_, Option<String>>(idx)?
+            .map_or(PyPgValue::Null, PyPgValue::Text)
+    } else if *ty == Type::TIMESTAMP {
+        row.try_get::<_, Option<NaiveDateTime>>(idx)?
+            .map_or(PyPgValue::Null, |t| {
+                PyPgValue::Timestamp(postgres_timestamp(t.into()))
+            })
+    } else if *ty == Type::TIMESTAMPTZ {
+        row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx)?
+            .map_or(PyPgValue::Null, |t| {
+                PyPgValue::Timestamp(postgres_timestamp(t.naive_utc().into()))
+            })
+    } else if *ty == Type::BYTEA {
+        row.try_get::<_, Option<Vec<u8>>>(idx)?
+            .map_or(PyPgValue::Null, PyPgValue::Bytes)
+    } else {
+        bail!(
+            "postgres_read: unsupported column type `{ty}` for column `{}`; supported: \
+             bool, int2/int4/int8, float4/float8, text/varchar, timestamp/timestamptz, bytea",
+            row.columns()[idx].name()
+        );
+    };
+    Ok(value)
 }
 
 impl PostgresDeserialize for PyPgRow {
@@ -118,8 +134,8 @@ impl PostgresDeserialize for PyPgRow {
             .columns()
             .iter()
             .enumerate()
-            .map(|(i, col)| (col.name().to_string(), column_value(row, i)))
-            .collect();
+            .map(|(i, col)| Ok((col.name().to_string(), column_value(row, i)?)))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok((time, PyPgRow { columns }))
     }
 }
@@ -130,12 +146,17 @@ impl PostgresDeserialize for PyPgRow {
 /// **The query must select `time_col` as its first column** so it can be extracted
 /// as the on-graph timestamp. Each tick yields a `dict` of `{column_name: value}`.
 ///
+/// `time_col` is identifier-quoted, so it must match the column name exactly as
+/// stored (lower-case unless the column was created quoted). A trailing `;` on the
+/// query is stripped. A column whose SQL type is unsupported (e.g. `numeric`,
+/// `uuid`, `json`) fails the run on the first row rather than reading as `None`.
+///
 /// Args:
 ///     conn_str: libpq connection string, e.g.
 ///         `"host=localhost user=postgres password=postgres dbname=postgres"`
 ///     query: SQL selecting the rows (time column first), e.g.
 ///         `"SELECT time, sym, price FROM trades"`
-///     time_col: name of the `timestamp` column used for slicing
+///     time_col: name of the `timestamp`/`timestamptz` column used for slicing
 ///     chunk_size: duration of each time slice in seconds (default: 3600)
 ///
 /// Requires RunMode::HistoricalFrom with a non-zero start time and RunFor::Duration.
@@ -148,16 +169,18 @@ pub fn py_postgres_read(
     chunk_size: u64,
 ) -> PyStream {
     let conn = PostgresConnection::new(conn_str);
+    // Strip a trailing `;` so `SELECT ...;` survives the subquery wrap below.
+    let query = query.trim().trim_end_matches(';').trim_end().to_string();
+    let tc = quote_ident(&time_col);
     let stream: Rc<dyn Stream<Burst<PyPgRow>>> = postgres_read::<PyPgRow, _>(
         conn,
         std::time::Duration::from_secs(chunk_size),
         move |(t0, t1), _date, _iter| {
-            use wingfoil::adapters::postgres::postgres_timestamp;
             format!(
                 "SELECT sub.* FROM ({q}) AS sub \
                  WHERE sub.{tc} >= '{t0}' AND sub.{tc} < '{t1}' ORDER BY sub.{tc}",
                 q = query,
-                tc = time_col,
+                tc = tc,
                 t0 = postgres_timestamp(t0),
                 t1 = postgres_timestamp(t1),
             )
@@ -184,26 +207,31 @@ struct PyPgWriteRow {
     values: Vec<PgParam>,
 }
 
-/// An owned, `ToSql`-able parameter produced from a Python value.
+/// An owned, typed parameter produced from a Python value.
+///
+/// `None` inside a variant is a **typed** SQL NULL, so nullable columns bind with the
+/// correct parameter type regardless of the column's SQL type.
 #[derive(Debug, Clone)]
 enum PgParam {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Text(String),
-    Bytes(Vec<u8>),
-    Null,
+    Bool(Option<bool>),
+    Int4(Option<i32>),
+    Int8(Option<i64>),
+    Float4(Option<f32>),
+    Float8(Option<f64>),
+    Text(Option<String>),
+    Bytes(Option<Vec<u8>>),
 }
 
 impl PgParam {
     fn boxed(&self) -> Box<dyn ToSql + Sync + Send> {
         match self {
-            PgParam::Bool(b) => Box::new(*b),
-            PgParam::Int(i) => Box::new(*i),
-            PgParam::Float(f) => Box::new(*f),
-            PgParam::Text(s) => Box::new(s.clone()),
-            PgParam::Bytes(b) => Box::new(b.clone()),
-            PgParam::Null => Box::new(Option::<String>::None),
+            PgParam::Bool(v) => Box::new(*v),
+            PgParam::Int4(v) => Box::new(*v),
+            PgParam::Int8(v) => Box::new(*v),
+            PgParam::Float4(v) => Box::new(*v),
+            PgParam::Float8(v) => Box::new(*v),
+            PgParam::Text(v) => Box::new(v.clone()),
+            PgParam::Bytes(v) => Box::new(v.clone()),
         }
     }
 }
@@ -215,39 +243,62 @@ impl PostgresSerialize for PyPgWriteRow {
 }
 
 /// Extract the declared columns from a Python dict into an ordered write row.
-fn dict_to_write_row(dict: &Bound<'_, PyDict>, columns: &[(String, String)]) -> PyPgWriteRow {
+///
+/// Fails loudly: a missing key, an unsupported declared type, or a wrong-typed value
+/// is an error that aborts the run — never a silently-inserted NULL. Pass an explicit
+/// Python `None` to write a SQL NULL.
+fn dict_to_write_row(
+    dict: &Bound<'_, PyDict>,
+    columns: &[(String, String)],
+) -> anyhow::Result<PyPgWriteRow> {
     let values = columns
         .iter()
         .map(|(name, ty)| {
-            let item = dict.get_item(name).ok().flatten();
-            match item {
-                None => PgParam::Null,
-                Some(value) if value.is_none() => PgParam::Null,
-                Some(value) => match ty.as_str() {
-                    "bool" => value.extract::<bool>().map(PgParam::Bool),
-                    "int" | "long" => value.extract::<i64>().map(PgParam::Int),
-                    "float" | "double" => value.extract::<f64>().map(PgParam::Float),
-                    "text" | "str" => value.extract::<String>().map(PgParam::Text),
-                    "bytes" | "bytea" => value.extract::<Vec<u8>>().map(PgParam::Bytes),
-                    other => {
-                        log::error!("postgres_write: unsupported column type '{other}'");
-                        Ok(PgParam::Null)
+            let value = dict
+                .get_item(name)
+                .map_err(|e| anyhow::anyhow!("postgres_write: reading key '{name}': {e}"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "postgres_write: missing column '{name}' in dict \
+                         (pass an explicit None to write SQL NULL)"
+                    )
+                })?;
+            // Extract Some(T) from the Python value, or None for Python None.
+            macro_rules! extract {
+                ($t:ty) => {
+                    if value.is_none() {
+                        None
+                    } else {
+                        Some(value.extract::<$t>().map_err(|e| {
+                            anyhow::anyhow!("postgres_write: column '{name}' ({ty}): {e}")
+                        })?)
                     }
-                }
-                .unwrap_or_else(|e| {
-                    log::error!("postgres_write: column '{name}' extract failed: {e}");
-                    PgParam::Null
-                }),
+                };
             }
+            Ok(match ty.as_str() {
+                "bool" => PgParam::Bool(extract!(bool)),
+                "int" | "int4" | "integer" => PgParam::Int4(extract!(i32)),
+                "long" | "int8" | "bigint" => PgParam::Int8(extract!(i64)),
+                "float4" | "real" => PgParam::Float4(extract!(f32)),
+                "float" | "float8" | "double" => PgParam::Float8(extract!(f64)),
+                "text" | "str" => PgParam::Text(extract!(String)),
+                "bytes" | "bytea" => PgParam::Bytes(extract!(Vec<u8>)),
+                other => bail!(
+                    "postgres_write: unsupported column type '{other}' for column '{name}'; \
+                     supported: bool, int/int4/integer, long/int8/bigint, float4/real, \
+                     float/float8/double, text/str, bytes/bytea"
+                ),
+            })
         })
-        .collect();
-    PyPgWriteRow { values }
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(PyPgWriteRow { values })
 }
 
 /// Inner implementation for the `.postgres_write()` stream method.
 ///
 /// The stream must yield either a single `dict` of the declared columns, or a `list`
 /// of such dicts for multiple rows per tick. The graph timestamp is prepended.
+/// Marshaling failures abort the run (see [`dict_to_write_row`]).
 pub fn py_postgres_write_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     conn_str: String,
@@ -256,22 +307,28 @@ pub fn py_postgres_write_inner(
 ) -> Rc<dyn Node> {
     let conn = PostgresConnection::new(conn_str);
 
-    let burst_stream: Rc<dyn Stream<Burst<PyPgWriteRow>>> = stream.map(move |elem| {
-        Python::attach(|py| {
+    let burst_stream: Rc<dyn Stream<Burst<PyPgWriteRow>>> = stream.try_map(move |elem| {
+        Python::attach(|py| -> anyhow::Result<Burst<PyPgWriteRow>> {
             let obj = elem.as_ref().bind(py);
             if let Ok(dict) = obj.cast_exact::<PyDict>() {
-                std::iter::once(dict_to_write_row(dict, &columns)).collect()
+                Ok(std::iter::once(dict_to_write_row(dict, &columns)?).collect())
             } else if let Ok(list) = obj.cast_exact::<PyList>() {
                 list.iter()
-                    .filter_map(|item| {
-                        item.cast_exact::<PyDict>()
-                            .ok()
-                            .map(|d| dict_to_write_row(d, &columns))
+                    .map(|item| {
+                        let dict = item.cast_exact::<PyDict>().map_err(|_| {
+                            anyhow::anyhow!(
+                                "postgres_write: list items must be dicts, got {}",
+                                item.get_type()
+                            )
+                        })?;
+                        dict_to_write_row(dict, &columns)
                     })
-                    .collect()
+                    .collect::<anyhow::Result<Burst<PyPgWriteRow>>>()
             } else {
-                log::error!("postgres_write: stream value must be a dict or list of dicts");
-                Burst::new()
+                bail!(
+                    "postgres_write: stream value must be a dict or list of dicts, got {}",
+                    obj.get_type()
+                );
             }
         })
     });

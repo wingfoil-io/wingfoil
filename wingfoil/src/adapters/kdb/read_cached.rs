@@ -2,10 +2,9 @@
 
 use super::{KdbConnection, KdbDeserialize, KdbExt, SymbolInterner};
 use crate::adapters::cache::{CacheConfig, CacheKey, FileCache};
-use crate::adapters::time_slice::compute_time_slices;
+use crate::adapters::time_slice::compute_validated_time_slices;
 use crate::nodes::produce_async;
 use crate::types::*;
-use anyhow::bail;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use log::info;
 use std::rc::Rc;
@@ -72,28 +71,15 @@ where
         let end_time_result = ctx.end_time();
 
         async move {
-            if start_time == NanoTime::ZERO {
-                bail!(
-                    "kdb_read_cached: start_time is NanoTime::ZERO; \
-                    use RunMode::HistoricalFrom with an explicit start time"
-                );
-            }
-
-            let end_time = match end_time_result {
-                Ok(t) if t == NanoTime::MAX => bail!(
-                    "kdb_read_cached requires RunFor::Duration; \
-                    RunFor::Forever would generate an unbounded number of slices"
-                ),
-                Ok(t) => t,
-                Err(_) => bail!(
-                    "kdb_read_cached requires RunFor::Duration; \
-                    RunFor::Cycles does not provide an end time"
-                ),
-            };
+            let slices = compute_validated_time_slices(
+                "kdb_read_cached",
+                start_time,
+                end_time_result,
+                period,
+            )?;
 
             tokio::fs::create_dir_all(&cache_config.folder).await?;
             let cache = FileCache::<T>::new(cache_config);
-            let slices = compute_time_slices(start_time, end_time, period);
 
             Ok(async_stream::stream! {
                 let mut socket: Option<QStream> = None;

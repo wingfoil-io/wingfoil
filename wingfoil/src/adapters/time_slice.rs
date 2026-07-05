@@ -15,6 +15,46 @@
 
 use crate::types::NanoTime;
 
+/// Validate the run window and period, then compute the time slices.
+///
+/// Shared front door for time-sliced readers (`kdb_read`, `kdb_read_cached`,
+/// `postgres_read`): enforces the preconditions of [`compute_time_slices`] with
+/// uniform error messages (prefixed with `adapter` so callers see the function
+/// they actually called), then delegates to it.
+///
+/// * `period` must be non-zero (a zero period cannot advance through the window).
+/// * `start_time` must be non-zero — i.e. `RunMode::HistoricalFrom` with an explicit start.
+/// * `end_time` must be a bounded time from `RunFor::Duration`; `Forever` arrives as
+///   `Ok(NanoTime::MAX)` and `Cycles` as `Err`, both rejected.
+pub(crate) fn compute_validated_time_slices(
+    adapter: &str,
+    start_time: NanoTime,
+    end_time: anyhow::Result<NanoTime>,
+    period: std::time::Duration,
+) -> anyhow::Result<Vec<((NanoTime, NanoTime), i32, usize)>> {
+    if period.is_zero() {
+        anyhow::bail!("{adapter}: period must be greater than zero");
+    }
+    if start_time == NanoTime::ZERO {
+        anyhow::bail!(
+            "{adapter}: start_time is NanoTime::ZERO; \
+            use RunMode::HistoricalFrom with an explicit start time"
+        );
+    }
+    let end_time = match end_time {
+        Ok(t) if t == NanoTime::MAX => anyhow::bail!(
+            "{adapter} requires RunFor::Duration; \
+            RunFor::Forever would generate an unbounded number of slices"
+        ),
+        Ok(t) => t,
+        Err(_) => anyhow::bail!(
+            "{adapter} requires RunFor::Duration; \
+            RunFor::Cycles does not provide an end time"
+        ),
+    };
+    Ok(compute_time_slices(start_time, end_time, period))
+}
+
 /// Split `[start_time, end_time)` into contiguous half-open slices of length `period`.
 ///
 /// Slices never straddle a midnight boundary: the final slice of each day clamps
@@ -38,7 +78,9 @@ pub(crate) fn compute_time_slices(
 
     let start_day = start_kdb.div_euclid(DAY_NANOS);
     // Subtract 1 before dividing so that an end_time that falls exactly on midnight
-    // does not pull in an extra (empty) day. start_time is always > 0 so end_kdb >= 1.
+    // does not pull in an extra (empty) day. Note end_kdb can be negative for
+    // pre-2000 windows (KDB epoch is 2000-01-01) — div_euclid keeps day
+    // arithmetic correct there, so don't replace it with plain `/` division.
     let end_day = (end_kdb - 1).div_euclid(DAY_NANOS);
 
     let mut result = Vec::new();
@@ -320,6 +362,66 @@ mod tests {
             slices[1].0.1,
             NanoTime::new(u64::from(epoch) + DAY_NANOS + HOUR_NANOS)
         );
+    }
+
+    #[test]
+    fn test_validated_rejects_zero_period() {
+        let err = compute_validated_time_slices(
+            "test_adapter",
+            kdb_epoch(),
+            Ok(NanoTime::new(u64::from(kdb_epoch()) + DAY_NANOS)),
+            std::time::Duration::ZERO,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("period must be greater than zero"));
+        assert!(err.to_string().contains("test_adapter"));
+    }
+
+    #[test]
+    fn test_validated_rejects_zero_start() {
+        let err = compute_validated_time_slices(
+            "test_adapter",
+            NanoTime::ZERO,
+            Ok(NanoTime::new(DAY_NANOS)),
+            std::time::Duration::from_secs(3600),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("start_time is NanoTime::ZERO"));
+    }
+
+    #[test]
+    fn test_validated_rejects_forever_and_cycles() {
+        // RunFor::Forever arrives as Ok(NanoTime::MAX).
+        let err = compute_validated_time_slices(
+            "test_adapter",
+            kdb_epoch(),
+            Ok(NanoTime::MAX),
+            std::time::Duration::from_secs(3600),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("RunFor::Forever"));
+
+        // RunFor::Cycles arrives as Err.
+        let err = compute_validated_time_slices(
+            "test_adapter",
+            kdb_epoch(),
+            Err(anyhow::anyhow!("end_time not available for RunFor::Cycles")),
+            std::time::Duration::from_secs(3600),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("RunFor::Cycles"));
+    }
+
+    #[test]
+    fn test_validated_passes_through_to_compute() {
+        let slices = compute_validated_time_slices(
+            "test_adapter",
+            kdb_epoch(),
+            Ok(NanoTime::new(u64::from(kdb_epoch()) + DAY_NANOS)),
+            std::time::Duration::from_secs(8 * 3600),
+        )
+        .unwrap();
+        assert_eq!(slices.len(), 3);
     }
 
     /// end_time exactly on a period boundary, one period into day 1.
