@@ -1,10 +1,12 @@
 //! PostgreSQL database adapter for time-partitioned reads and streaming writes.
 //!
-//! Provides two graph nodes:
+//! Provides three graph nodes:
 //! - [`postgres_read`] — producer that replays a historical table in contiguous,
 //!   caller-defined time slices (one query per slice), driven by the run's
 //!   `RunMode::HistoricalFrom` / `RunFor::Duration` window. Shares its slicing
 //!   logic with the KDB+ adapter (`crate::adapters::time_slice`).
+//! - [`postgres_sub`] — real-time producer that live-tails a table via
+//!   `LISTEN`/`NOTIFY` (notification as wake-up, rows re-queried past a cursor).
 //! - [`postgres_write`] — consumer that inserts each on-graph record, prepending
 //!   the graph timestamp as the first column.
 //!
@@ -57,6 +59,34 @@
 //!     .unwrap();
 //! ```
 //!
+//! # Subscribing (real-time live tail)
+//!
+//! [`postgres_sub`] streams rows as they are inserted, using `LISTEN`/`NOTIFY` as a
+//! wake-up signal and re-querying past a time cursor (so nothing is lost to NOTIFY's
+//! payload limits). Install the trigger with [`postgres_notify_trigger_sql`], then:
+//!
+//! ```ignore
+//! use wingfoil::adapters::postgres::*;
+//! use wingfoil::*;
+//!
+//! let conn = PostgresConnection::new("host=localhost user=postgres password=postgres dbname=postgres");
+//!
+//! // One-time setup (psql or any client): install the notify trigger.
+//! //   postgres_notify_trigger_sql("trades", "trades_feed")
+//!
+//! postgres_sub::<Trade, _>(conn, "trades_feed", NanoTime::now(), |cursor| {
+//!     format!(
+//!         "SELECT time, sym, price, qty FROM trades \
+//!          WHERE time > '{}' ORDER BY time",
+//!         postgres_timestamp(cursor),
+//!     )
+//! })
+//!     .collapse()
+//!     .print()
+//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .unwrap();
+//! ```
+//!
 //! # Writing
 //!
 //! [`postgres_write`] (or the fluent `.postgres_write()` method) inserts each record,
@@ -84,12 +114,14 @@
 //! ```
 
 mod read;
+mod sub;
 mod write;
 
 #[cfg(all(test, feature = "postgres-integration-test"))]
 mod integration_tests;
 
 pub use read::*;
+pub use sub::*;
 pub use write::*;
 
 /// Re-export of [`tokio_postgres::Row`] so callers can implement

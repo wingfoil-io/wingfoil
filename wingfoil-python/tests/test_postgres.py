@@ -142,6 +142,42 @@ class TestPostgresUnreachable(unittest.TestCase):
             stream.run(realtime=False, start=KDB_EPOCH_SECS, duration=ONE_DAY)
 
 
+class TestPostgresSub(unittest.TestCase):
+    def test_sub_constructs_stream(self):
+        from wingfoil import postgres_sub
+
+        stream = postgres_sub(
+            UNREACHABLE, "SELECT time, sym FROM trades", "time", "trades_feed"
+        )
+        self.assertIsNotNone(stream)
+
+    def test_sub_rejects_historical_mode(self):
+        # postgres_sub is real-time only; bails before connecting.
+        from wingfoil import postgres_sub
+
+        stream = postgres_sub(
+            UNREACHABLE, "SELECT time, sym FROM trades", "time", "trades_feed"
+        ).collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
+
+    def test_sub_unreachable_errors(self):
+        from wingfoil import postgres_sub
+
+        stream = postgres_sub(
+            UNREACHABLE, "SELECT time, sym FROM trades", "time", "trades_feed"
+        ).collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=True, duration=2.0)
+
+    def test_notify_trigger_sql_shape(self):
+        from wingfoil import postgres_notify_trigger_sql
+
+        sql = postgres_notify_trigger_sql("trades", "trades_feed")
+        self.assertIn("pg_notify('trades_feed', '')", sql)
+        self.assertIn('AFTER INSERT ON "trades"', sql)
+
+
 # ---- Integration tests (require PostgreSQL on localhost:5432) ----
 
 
@@ -245,3 +281,48 @@ class TestPostgresWrite(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["qty"], 7)
         self.assertIsNone(rows[0]["note"])
+
+
+@pytest.mark.requires_postgres
+class TestPostgresSubLive(unittest.TestCase):
+    def test_sub_catch_up_then_live_inserts(self):
+        """Seeded rows arrive via catch-up; mid-run inserts arrive via NOTIFY."""
+        import threading
+        import time as time_mod
+
+        import psycopg
+        from wingfoil import postgres_notify_trigger_sql, postgres_sub
+
+        _reset_table(
+            [("2000-01-01 00:00:00", "SEED0", 1.0, 10)]
+        )
+        with psycopg.connect(CONN_STR, autocommit=True) as conn:
+            conn.execute(postgres_notify_trigger_sql("py_pg_trades", "py_pg_feed"))
+
+        def insert_later():
+            time_mod.sleep(0.5)
+            with psycopg.connect(CONN_STR, autocommit=True) as conn:
+                conn.execute(
+                    "INSERT INTO py_pg_trades VALUES "
+                    "('2000-01-01 00:00:01', 'LIVE1', 2.0, 20)"
+                )
+                conn.execute(
+                    "INSERT INTO py_pg_trades VALUES "
+                    "('2000-01-01 00:00:02', 'LIVE2', 3.0, 30)"
+                )
+
+        inserter = threading.Thread(target=insert_later)
+        inserter.start()
+
+        stream = postgres_sub(
+            CONN_STR,
+            "SELECT time, sym, price, qty FROM py_pg_trades",
+            "time",
+            "py_pg_feed",
+            start=0.0,  # cursor in the past -> catch-up picks up SEED0
+        ).collect()
+        stream.run(realtime=True, duration=3.0)
+        inserter.join()
+
+        rows = stream.peek_value()
+        self.assertEqual([r["sym"] for r in rows], ["SEED0", "LIVE1", "LIVE2"])
