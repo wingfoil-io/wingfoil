@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "aeron"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "postgres", "aeron"]
 # Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
 # Off by default so consumers don't pull in criterion's dependency tree.
 bench = ["dep:criterion"]
@@ -24,6 +24,8 @@ kafka = ["dep:rdkafka", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
 redis = ["dep:redis", "async"]
 redis-integration-test = ["redis", "dep:testcontainers"]
+postgres = ["dep:tokio-postgres", "async"]
+postgres-integration-test = ["postgres", "dep:testcontainers"]
 tracing = []
 instrument-run = ["tracing"]
 instrument-cycle = ["tracing"]
@@ -121,6 +123,9 @@ zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 rdkafka = { version = "0.37", optional = true }
 redis = { version = "0.27", features = ["tokio-comp", "aio", "streams"], optional = true }
+# `with-chrono-0_4` lets NaiveDateTime bind directly to timestamp columns for
+# both reads (row.get) and writes (ToSql), matching the on-graph NanoTime model.
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"], optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"] }
 fluvio = { version = "0.50.1", optional = true }
@@ -248,6 +253,11 @@ required-features = ["iceoryx2"]
 name = "iceoryx2_modes"
 harness = false
 required-features = ["iceoryx2"]
+
+[[example]]
+name = "postgres"
+path = "examples/postgres/main.rs"
+required-features = ["postgres"]
 
 [[example]]
 name = "prometheus"

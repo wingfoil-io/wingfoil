@@ -22,10 +22,15 @@ pub mod kafka;
 pub mod kdb;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+// Shared time-slicing logic for time-partitioned database reads (kdb, postgres).
+#[cfg(any(feature = "kdb", feature = "postgres"))]
+pub(crate) mod time_slice;
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "zmq")]

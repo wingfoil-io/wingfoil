@@ -42,6 +42,10 @@ redis_stream_read = _ext.py_redis_stream_read
 kdb_read = _ext.py_kdb_read
 kdb_write = _ext.py_kdb_write
 
+# User-friendly aliases for PostgreSQL functions
+postgres_read = _ext.py_postgres_read
+postgres_write = _ext.py_postgres_write
+
 # User-friendly aliases for iceoryx2 functions (feature-gated)
 if hasattr(_ext, "py_iceoryx2_sub"):
     iceoryx2_sub = _ext.py_iceoryx2_sub

@@ -25,6 +25,11 @@ jobs:
     uses: ./.github/workflows/redis-integration.yml
     secrets: inherit
 
+  postgres-integration:
+    name: postgres Integration Tests
+    uses: ./.github/workflows/postgres-integration.yml
+    secrets: inherit
+
   prometheus-integration:
     name: Prometheus Integration Tests
     uses: ./.github/workflows/prometheus-integration.yml

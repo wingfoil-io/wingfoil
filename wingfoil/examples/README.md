@@ -26,6 +26,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`zmq`](zmq/) | ZeroMQ pub/sub: [`direct`](zmq/direct/) (direct addressing) and [`etcd`](zmq/etcd/) (service discovery via etcd). |
 | [`etcd`](etcd/) | etcd key-value store adapter for sub/pub with transformation. |
 | [`redis`](redis/) | Redis adapter — Pub/Sub channels (subscribe, transform, republish) and persistent Streams (snapshot + tail). |
+| [`postgres`](postgres/) | PostgreSQL adapter — time-sliced historical reads and streaming writes, round-trip write/read/validate. |
 | [`iceoryx2`](iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
 | [`aeron`](aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
@@ -170,6 +171,48 @@ The adapter also supports Redis **Streams** for a persistent, replayable log:
 existing entries (`XRANGE`) before tailing live appends (`XREAD BLOCK`).
 
 [Full example.](redis/)
+
+### PostgreSQL
+
+Replay a PostgreSQL table historically in time slices, then write records back. Time
+is carried on-graph (`(NanoTime, T)`) — extracted from a `timestamp` column on read and
+prepended on write. `postgres_read` shares its time-slicing logic with the KDB+ adapter:
+
+```rust,ignore
+use wingfoil::adapters::postgres::*;
+use wingfoil::*;
+
+#[derive(Debug, Clone, Default)]
+struct Trade { sym: String, price: f64, qty: i64 }
+
+impl PostgresDeserialize for Trade {
+    fn from_row(row: &Row) -> anyhow::Result<(NanoTime, Self)> {
+        Ok((
+            row.get_nanotime(0)?, // col 0: time
+            Trade { sym: row.try_get(1)?, price: row.try_get(2)?, qty: row.try_get(3)? },
+        ))
+    }
+}
+
+let conn = PostgresConnection::new("host=localhost user=postgres password=postgres dbname=postgres");
+
+postgres_read::<Trade, _>(conn, std::time::Duration::from_secs(3600), |(t0, t1), _date, _| {
+    format!(
+        "SELECT time, sym, price, qty FROM trades \
+         WHERE time >= '{}' AND time < '{}' ORDER BY time",
+        postgres_timestamp(t0), postgres_timestamp(t1),
+    )
+})
+    .collapse()
+    .print()
+    .run(
+        RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+        RunFor::Duration(std::time::Duration::from_secs(86400)),
+    )
+    .unwrap();
+```
+
+[Full example.](postgres/)
 
 ### ZeroMQ
 

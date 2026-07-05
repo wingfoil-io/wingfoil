@@ -1,8 +1,8 @@
 //! Cached variant of `kdb_read` — checks a file cache before each time-slice query.
 
-use super::read::compute_time_slices;
 use super::{KdbConnection, KdbDeserialize, KdbExt, SymbolInterner};
 use crate::adapters::cache::{CacheConfig, CacheKey, FileCache};
+use crate::adapters::time_slice::compute_time_slices;
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::bail;
