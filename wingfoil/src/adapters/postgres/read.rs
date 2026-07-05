@@ -1,7 +1,7 @@
 //! PostgreSQL read functionality — time-partitioned streaming reads.
 
 use super::PostgresConnection;
-use crate::adapters::time_slice::compute_time_slices;
+use crate::adapters::time_slice::compute_validated_time_slices;
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::Context;
@@ -21,30 +21,37 @@ pub trait PostgresDeserialize: Sized {
     fn from_row(row: &Row) -> anyhow::Result<(NanoTime, Self)>;
 }
 
-/// Extension trait for extracting a [`NanoTime`] from a PostgreSQL `timestamp` column.
+/// Extension trait for extracting a [`NanoTime`] from a PostgreSQL timestamp column.
 ///
-/// Reads the column as a `chrono::NaiveDateTime` (the mapping for SQL `timestamp`
-/// without time zone) and converts it to [`NanoTime`] (nanoseconds since the Unix epoch).
+/// Supports both `timestamp` (read as `chrono::NaiveDateTime`, interpreted as UTC)
+/// and `timestamptz` (read as `chrono::DateTime<Utc>`), converted to [`NanoTime`]
+/// (nanoseconds since the Unix epoch).
 pub trait PostgresRowExt {
-    /// Read the `timestamp` column at index `idx` as a [`NanoTime`].
+    /// Read the `timestamp`/`timestamptz` column at index `idx` as a [`NanoTime`].
     fn get_nanotime(&self, idx: usize) -> anyhow::Result<NanoTime>;
-    /// Read the `timestamp` column named `name` as a [`NanoTime`].
+    /// Read the `timestamp`/`timestamptz` column named `name` as a [`NanoTime`].
     fn get_nanotime_named(&self, name: &str) -> anyhow::Result<NanoTime>;
 }
 
 impl PostgresRowExt for Row {
     fn get_nanotime(&self, idx: usize) -> anyhow::Result<NanoTime> {
-        let dt: NaiveDateTime = self
+        if let Ok(dt) = self.try_get::<_, NaiveDateTime>(idx) {
+            return Ok(dt.into());
+        }
+        let dt: chrono::DateTime<chrono::Utc> = self
             .try_get(idx)
-            .with_context(|| format!("column {idx} is not a `timestamp`"))?;
-        Ok(dt.into())
+            .with_context(|| format!("column {idx} is not a `timestamp`/`timestamptz`"))?;
+        Ok(dt.naive_utc().into())
     }
 
     fn get_nanotime_named(&self, name: &str) -> anyhow::Result<NanoTime> {
-        let dt: NaiveDateTime = self
+        if let Ok(dt) = self.try_get::<_, NaiveDateTime>(name) {
+            return Ok(dt.into());
+        }
+        let dt: chrono::DateTime<chrono::Utc> = self
             .try_get(name)
-            .with_context(|| format!("column `{name}` is not a `timestamp`"))?;
-        Ok(dt.into())
+            .with_context(|| format!("column `{name}` is not a `timestamp`/`timestamptz`"))?;
+        Ok(dt.naive_utc().into())
     }
 }
 
@@ -67,6 +74,11 @@ pub fn postgres_timestamp(time: NanoTime) -> String {
 /// on `time >= t0 AND time < t1`, ordered by time. Rows are streamed on-graph as
 /// `Burst<T>` in time order; a non-monotonic timestamp aborts the run.
 ///
+/// `date` is the KDB-style date integer of the day containing the slice — **days since
+/// 2000-01-01** (not the Unix epoch) — matching the KDB+ adapter so date-partitioned
+/// query logic ports across. `iteration` is the slice index within that day (resets to
+/// 0 each new day). Most queries only need `t0`/`t1` and can ignore both.
+///
 /// # Requirements
 /// - `RunMode::HistoricalFrom` with a non-zero start time.
 /// - `RunFor::Duration` (not `Forever`/`Cycles`) so the slice set is bounded.
@@ -88,26 +100,12 @@ where
         let mut query_fn = query_fn;
 
         async move {
-            if start_time == NanoTime::ZERO {
-                anyhow::bail!(
-                    "postgres_read: start_time is NanoTime::ZERO; \
-                    use RunMode::HistoricalFrom with an explicit start time"
-                );
-            }
-
-            let end_time = match end_time_result {
-                Ok(t) if t == NanoTime::MAX => anyhow::bail!(
-                    "postgres_read requires RunFor::Duration; \
-                    RunFor::Forever would generate an unbounded number of slices"
-                ),
-                Ok(t) => t,
-                Err(_) => anyhow::bail!(
-                    "postgres_read requires RunFor::Duration; \
-                    RunFor::Cycles does not provide an end time"
-                ),
-            };
-
-            let slices = compute_time_slices(start_time, end_time, period);
+            let slices = compute_validated_time_slices(
+                "postgres_read",
+                start_time,
+                end_time_result,
+                period,
+            )?;
 
             let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
                 .await

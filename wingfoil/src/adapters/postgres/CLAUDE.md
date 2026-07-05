@@ -27,22 +27,28 @@ Record structs hold only business data. This mirrors the KDB+ adapter.
 
 ### Shared time-slicing logic
 
-`postgres_read` computes its query slices with `crate::adapters::time_slice::compute_time_slices`
-— the exact same routine the KDB+ adapter uses. The run's `[start, end)` window (from
-`RunMode::HistoricalFrom` + `RunFor::Duration`) is split into contiguous, half-open,
-per-day slices, and `query_fn` is called once per slice with `((t0, t1), date, iteration)`.
-Callers filter on `time >= t0 AND time < t1` and `ORDER BY time`.
+`postgres_read` computes its query slices with
+`crate::adapters::time_slice::compute_validated_time_slices` — the exact same routine the
+KDB+ adapter uses (validation of period/start/`RunFor` included). The run's `[start, end)`
+window (from `RunMode::HistoricalFrom` + `RunFor::Duration`) is split into contiguous,
+half-open slices of length `period`, clamped so no slice straddles a midnight boundary,
+and `query_fn` is called once per slice with `((t0, t1), date, iteration)`.
+Callers filter on `time >= t0 AND time < t1` and `ORDER BY time`. `date` is the KDB-style
+date integer — **days since 2000-01-01**, not the Unix epoch (documented on `postgres_read`).
 
 Unlike KDB+ (where the time column is time-of-day within a date partition, so ordering is
 checked per slice), PostgreSQL rows carry full timestamps, so the monotonic-ordering check
 spans the whole read.
 
-### Parameterised writes (no SQL injection)
+### Parameterised writes, quoted identifiers
 
 `PostgresSerialize::to_params` returns owned, boxed `ToSql` values. `postgres_write` binds
 them positionally into a prepared `INSERT INTO <table> VALUES ($1, …, $N)` statement, with the
-timestamp bound as `$1`. Values are never string-formatted into SQL. The statement is prepared
-once (on the first record) and reused.
+timestamp bound as `$1`. Values are never string-formatted into SQL; the table name — the one
+identifier that must be spliced — is quoted per dot-separated segment via `quote_table`
+(so mixed-case and reserved-word names work). The statement is prepared once (on the first
+burst) and reused; within a burst all inserts are launched concurrently so tokio-postgres
+pipelines them over the connection (~1 round trip per burst instead of N).
 
 ### No locks on the graph path
 
@@ -52,10 +58,19 @@ tokio runtime, off the graph thread, communicating via the framework's channel p
 
 ### Timestamps
 
-`timestamp` (without time zone) maps to `chrono::NaiveDateTime` (enabled via tokio-postgres'
-`with-chrono-0_4` feature). `get_nanotime` reads that as UTC `NanoTime`. `postgres_timestamp`
+`timestamp` (without time zone) maps to `chrono::NaiveDateTime`, interpreted as UTC;
+`timestamptz` maps to `chrono::DateTime<Utc>` (both via tokio-postgres' `with-chrono-0_4`
+feature). `get_nanotime` accepts either and returns a UTC `NanoTime`. `postgres_timestamp`
 formats a `NanoTime` back to a `timestamp` literal (microsecond precision) for `WHERE` bounds.
-Use `timestamp` columns, not `timestamptz`, to match this mapping.
+
+### Python bindings fail loudly
+
+`py_postgres_read` dispatches each column on its SQL type from the row metadata; an
+unsupported type (`numeric`, `uuid`, `json`, …) is an error on the first row — never a
+silent `None`. `py_postgres_write` errors on a missing dict key, an unsupported declared
+type name, or a wrong-typed value (via `try_map`, aborting the run); an explicit Python
+`None` writes a typed SQL NULL. Declared type names select the parameter width and must
+match the column: `"int"` is int4, `"long"` is int8 (mirrors the KDB binding).
 
 ## Pre-Commit Requirements
 
@@ -66,11 +81,12 @@ Use `timestamp` columns, not `timestamptz`, to match this mapping.
      -- --test-threads=1 postgres::integration_tests
    ```
 
-2. **Run standard checks:**
+2. **Run standard checks** (the lint aliases mirror CI, including `-D warnings`):
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
+   cargo lint        # default features
+   cargo lint-all    # all features
    cargo test -p wingfoil
    ```
 

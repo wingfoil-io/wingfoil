@@ -80,13 +80,44 @@ class TestPostgresUnreachable(unittest.TestCase):
         with self.assertRaises(Exception):
             node.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
 
-    def test_write_bad_value_type_marshals_empty_burst(self):
-        # Fallthrough branch: neither dict nor list. Logs an error and emits an
-        # empty burst; the run still fails at connect time.
+    def test_write_bad_value_type_errors(self):
+        # Fallthrough branch: neither dict nor list is a marshaling error that
+        # aborts the run (fail loud, not silent).
         from wingfoil import constant
 
         node = constant("not a dict").postgres_write(
             UNREACHABLE, "trades", [("sym", "text")]
+        )
+        with self.assertRaises(Exception):
+            node.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
+
+    def test_write_missing_key_errors(self):
+        # A declared column absent from the dict aborts the run instead of
+        # silently inserting NULL.
+        from wingfoil import constant
+
+        node = constant({"sym": "A"}).postgres_write(
+            UNREACHABLE, "trades", [("sym", "text"), ("price", "float")]
+        )
+        with self.assertRaises(Exception):
+            node.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
+
+    def test_write_unsupported_type_errors(self):
+        # A typo'd/unsupported declared type aborts the run.
+        from wingfoil import constant
+
+        node = constant({"price": 1.0}).postgres_write(
+            UNREACHABLE, "trades", [("price", "flaot")]
+        )
+        with self.assertRaises(Exception):
+            node.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
+
+    def test_write_wrong_value_type_errors(self):
+        # A value that can't extract as the declared type aborts the run.
+        from wingfoil import constant
+
+        node = constant({"qty": "not an int"}).postgres_write(
+            UNREACHABLE, "trades", [("qty", "long")]
         )
         with self.assertRaises(Exception):
             node.run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
@@ -96,6 +127,16 @@ class TestPostgresUnreachable(unittest.TestCase):
 
         stream = postgres_read(
             UNREACHABLE, "SELECT time, sym FROM trades", "time"
+        ).collect()
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, start=KDB_EPOCH_SECS, duration=ONE_DAY)
+
+    def test_read_zero_chunk_size_errors(self):
+        # period must be > 0; a clean error, not a divide-by-zero panic.
+        from wingfoil import postgres_read
+
+        stream = postgres_read(
+            UNREACHABLE, "SELECT time, sym FROM trades", "time", chunk_size=0
         ).collect()
         with self.assertRaises(Exception):
             stream.run(realtime=False, start=KDB_EPOCH_SECS, duration=ONE_DAY)
@@ -158,10 +199,11 @@ class TestPostgresWrite(unittest.TestCase):
 
         _reset_table()
 
+        # The table's qty column is int8, so the declared type is "long".
         constant({"sym": "TEST", "price": 42.0, "qty": 100}).postgres_write(
             CONN_STR,
             "py_pg_trades",
-            [("sym", "text"), ("price", "float"), ("qty", "int")],
+            [("sym", "text"), ("price", "float"), ("qty", "long")],
         ).run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
 
         with psycopg.connect(CONN_STR) as conn:
@@ -171,3 +213,35 @@ class TestPostgresWrite(unittest.TestCase):
         self.assertEqual(row[0], "TEST")
         self.assertAlmostEqual(row[1], 42.0)
         self.assertEqual(row[2], 100)
+
+    def test_write_int4_and_null_round_trip(self):
+        """"int" binds as int4 (plain `integer` columns work), None writes SQL NULL."""
+        import psycopg
+        from wingfoil import constant, postgres_read
+
+        with psycopg.connect(CONN_STR, autocommit=True) as conn:
+            conn.execute("DROP TABLE IF EXISTS py_pg_int4")
+            conn.execute(
+                "CREATE TABLE py_pg_int4 (time timestamp, qty integer, note text)"
+            )
+
+        constant({"qty": 7, "note": None}).postgres_write(
+            CONN_STR,
+            "py_pg_int4",
+            [("qty", "int"), ("note", "text")],
+        ).run(realtime=False, start=KDB_EPOCH_SECS, cycles=1)
+
+        with psycopg.connect(CONN_STR) as conn:
+            row = conn.execute("SELECT qty, note FROM py_pg_int4").fetchone()
+        self.assertEqual(row[0], 7)
+        self.assertIsNone(row[1])
+
+        # Read back through the adapter: int4 dispatch + NULL -> None.
+        stream = postgres_read(
+            CONN_STR, "SELECT time, qty, note FROM py_pg_int4", "time", chunk_size=86400
+        ).collect()
+        stream.run(realtime=False, start=KDB_EPOCH_SECS, duration=ONE_DAY)
+        rows = stream.peek_value()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["qty"], 7)
+        self.assertIsNone(rows[0]["note"])

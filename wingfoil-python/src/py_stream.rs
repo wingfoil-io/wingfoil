@@ -556,13 +556,17 @@ impl PyStream {
     /// Args:
     ///     conn_str: libpq connection string, e.g.
     ///         `"host=localhost user=postgres password=postgres dbname=postgres"`
-    ///     table: target table name
-    ///     columns: list of (name, type) tuples for the non-time columns.
-    ///              Supported types: "bool", "int"/"long", "float"/"double",
+    ///     table: target table name (identifier-quoted per dot-separated segment)
+    ///     columns: list of (name, type) tuples for the non-time columns. The type
+    ///              selects the SQL parameter width and must match the column:
+    ///              "bool", "int"/"int4"/"integer" (int4), "long"/"int8"/"bigint"
+    ///              (int8), "float4"/"real", "float"/"float8"/"double" (float8),
     ///              "text"/"str", "bytes"/"bytea".
     ///
     /// Stream values must be dicts with the declared column names, or lists of such
-    /// dicts for multiple rows per tick.
+    /// dicts for multiple rows per tick. A missing key, an unsupported declared
+    /// type, or a wrong-typed value aborts the run — pass an explicit `None` to
+    /// write SQL NULL.
     #[pyo3(signature = (conn_str, table, columns))]
     fn postgres_write(
         &self,

@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - "wingfoil/src/adapters/kdb/**"
+      - "wingfoil/src/adapters/time_slice.rs"
       - "wingfoil-python/src/py_kdb.rs"
       - "wingfoil-python/tests/test_kdb.py"
 
