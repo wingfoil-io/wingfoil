@@ -13,7 +13,8 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use std::rc::Rc;
 use wingfoil::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, Row, ToSql, Type,
-    postgres_read, postgres_timestamp, postgres_write, quote_ident,
+    postgres_notify_trigger_sql, postgres_read, postgres_sub, postgres_timestamp, postgres_write,
+    quote_ident,
 };
 use wingfoil::{Burst, NanoTime, Node, Stream, StreamOperators};
 
@@ -187,6 +188,11 @@ pub fn py_postgres_read(
         },
     );
 
+    rows_to_py_stream(stream)
+}
+
+/// Collapse a burst-of-rows stream and marshal each row into a Python dict.
+fn rows_to_py_stream(stream: Rc<dyn Stream<Burst<PyPgRow>>>) -> PyStream {
     let py_stream = stream.collapse().map(|row: PyPgRow| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
@@ -197,8 +203,63 @@ pub fn py_postgres_read(
             PyElement::new(dict.into_any().unbind())
         })
     });
-
     PyStream(py_stream)
+}
+
+/// Live-tail a PostgreSQL table in real time using `LISTEN`/`NOTIFY`.
+///
+/// The `query` is wrapped as a subquery and re-run past a time cursor whenever a
+/// notification arrives on `channel` (notifications are a wake-up signal only — rows
+/// always come from the query). **The query must select `time_col` as its first
+/// column.** Each tick yields a `dict` of `{column_name: value}`.
+///
+/// Install the notify trigger on the table first — `postgres_notify_trigger_sql`
+/// returns the SQL. Requires a real-time run (`realtime=True`); the time column must
+/// be non-decreasing across inserts, and rows time-stamped at or before the cursor
+/// are never picked up.
+///
+/// Args:
+///     conn_str: libpq connection string
+///     query: SQL selecting the rows (time column first), e.g.
+///         `"SELECT time, sym, price FROM trades"`
+///     time_col: name of the `timestamp`/`timestamptz` cursor column
+///     channel: NOTIFY channel to LISTEN on (must match the trigger)
+///     start: Unix seconds to start the cursor from (default 0.0 = emit all
+///         existing rows as a catch-up, then tail live inserts)
+#[pyfunction]
+#[pyo3(signature = (conn_str, query, time_col, channel, start=0.0))]
+pub fn py_postgres_sub(
+    conn_str: String,
+    query: String,
+    time_col: String,
+    channel: String,
+    start: f64,
+) -> PyStream {
+    let conn = PostgresConnection::new(conn_str);
+    // Strip a trailing `;` so `SELECT ...;` survives the subquery wrap below.
+    let query = query.trim().trim_end_matches(';').trim_end().to_string();
+    let tc = quote_ident(&time_col);
+    let start_from = NanoTime::new((start * 1e9) as u64);
+    let stream: Rc<dyn Stream<Burst<PyPgRow>>> =
+        postgres_sub::<PyPgRow, _>(conn, channel, start_from, move |cursor| {
+            format!(
+                "SELECT sub.* FROM ({q}) AS sub \
+                 WHERE sub.{tc} > '{c}' ORDER BY sub.{tc}",
+                q = query,
+                tc = tc,
+                c = postgres_timestamp(cursor),
+            )
+        });
+    rows_to_py_stream(stream)
+}
+
+/// SQL that installs an AFTER INSERT trigger firing `pg_notify(channel, '')`.
+///
+/// Run it against the database (e.g. with psycopg) to wire a table up for
+/// `postgres_sub`. Idempotent.
+#[pyfunction]
+pub fn py_postgres_notify_trigger_sql(table: String, channel: String) -> String {
+    postgres_notify_trigger_sql(&table, &channel)
 }
 
 /// A single write row: business column values in table order (after time).

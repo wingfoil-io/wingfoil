@@ -44,7 +44,9 @@ kdb_write = _ext.py_kdb_write
 
 # User-friendly aliases for PostgreSQL functions
 postgres_read = _ext.py_postgres_read
+postgres_sub = _ext.py_postgres_sub
 postgres_write = _ext.py_postgres_write
+postgres_notify_trigger_sql = _ext.py_postgres_notify_trigger_sql
 
 # User-friendly aliases for iceoryx2 functions (feature-gated)
 if hasattr(_ext, "py_iceoryx2_sub"):

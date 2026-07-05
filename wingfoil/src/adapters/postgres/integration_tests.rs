@@ -216,6 +216,68 @@ fn test_write_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Live tail with `start_from` in the past: seeded rows arrive via the initial
+/// catch-up query (no trigger needed), then rows inserted mid-run arrive via
+/// NOTIFY wake-ups.
+#[test]
+fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
+    let _ = env_logger::try_init();
+    let (_container, conn) = start_postgres()?;
+    exec(
+        &conn,
+        &[
+            "CREATE TABLE trades (time timestamp, sym text, price float8, qty int8)",
+            &postgres_notify_trigger_sql("trades", "trades_feed"),
+            // Pre-seeded rows, picked up by the catch-up query.
+            "INSERT INTO trades VALUES
+               ('2000-01-01 00:00:00', 'SEED0', 1.0, 0),
+               ('2000-01-01 00:00:01', 'SEED1', 2.0, 1)",
+        ],
+    )?;
+
+    // Insert two live rows (one statement each → two NOTIFYs) shortly after the
+    // subscriber has started. Timestamps must exceed the catch-up cursor.
+    let insert_conn = conn.clone();
+    let inserter = std::thread::spawn(move || -> anyhow::Result<()> {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        exec(
+            &insert_conn,
+            &[
+                "INSERT INTO trades VALUES ('2000-01-01 00:00:02', 'LIVE2', 3.0, 2)",
+                "INSERT INTO trades VALUES ('2000-01-01 00:00:03', 'LIVE3', 4.0, 3)",
+            ],
+        )
+    });
+
+    let stream = postgres_sub::<TestTrade, _>(
+        conn,
+        "trades_feed",
+        NanoTime::from_kdb_timestamp(0), // cursor in the past → catch-up
+        |cursor| {
+            format!(
+                "SELECT time, sym, price, qty FROM trades \
+                 WHERE time > '{}' ORDER BY time",
+                postgres_timestamp(cursor),
+            )
+        },
+    );
+    let collected = stream.collapse().collect();
+    collected.clone().run(
+        RunMode::RealTime,
+        RunFor::Duration(std::time::Duration::from_secs(3)),
+    )?;
+    inserter.join().expect("inserter thread panicked")?;
+
+    let rows = collected.peek_value();
+    let syms: Vec<&str> = rows.iter().map(|r| r.value.sym.as_str()).collect();
+    assert_eq!(
+        syms,
+        vec!["SEED0", "SEED1", "LIVE2", "LIVE3"],
+        "catch-up rows then live rows, in time order"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_write_burst_multi_row() -> anyhow::Result<()> {
     let _ = env_logger::try_init();

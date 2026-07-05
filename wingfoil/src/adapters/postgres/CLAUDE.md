@@ -1,14 +1,16 @@
 # PostgreSQL Adapter
 
-Time-partitioned reads (`postgres_read`) and streaming writes (`postgres_write`)
-against a PostgreSQL database, using the async `tokio-postgres` client.
+Time-partitioned historical reads (`postgres_read`), real-time live tailing
+(`postgres_sub`), and streaming writes (`postgres_write`) against a PostgreSQL
+database, using the async `tokio-postgres` client.
 
 ## Module Structure
 
 ```
 postgres/
-  mod.rs               # PostgresConnection, ToSql/Row re-exports, module doc
+  mod.rs               # PostgresConnection, quote_ident/quote_table, ToSql/Row/Type re-exports
   read.rs              # postgres_read() producer, PostgresDeserialize, PostgresRowExt, postgres_timestamp()
+  sub.rs               # postgres_sub() real-time producer, postgres_notify_trigger_sql()
   write.rs             # postgres_write() consumer, PostgresSerialize, PostgresWriteOperators
   integration_tests.rs # Integration tests (requires Docker, gated by feature)
   CLAUDE.md            # This file
@@ -49,6 +51,22 @@ identifier that must be spliced — is quoted per dot-separated segment via `quo
 (so mixed-case and reserved-word names work). The statement is prepared once (on the first
 burst) and reused; within a burst all inserts are launched concurrently so tokio-postgres
 pipelines them over the connection (~1 round trip per burst instead of N).
+
+### Live tail — `postgres_sub` (LISTEN/NOTIFY as wake-up, never as data)
+
+`postgres_sub(conn, channel, start_from, query_fn)` is the real-time counterpart to
+`postgres_read`. NOTIFY payloads are lossy (8 KB cap, dropped on disconnect), so the
+notification is only a **wake-up signal**; rows are always fetched by re-running
+`query_fn(cursor)` with `time > cursor ORDER BY time`, decoded by the same
+`PostgresDeserialize` impl. The handoff is race-free because `LISTEN` is issued
+**before** the catch-up query (watch-before-get, same as the etcd adapter). Pending
+notifications are coalesced after each drain — N inserts during a query trigger one
+re-query, not N.
+
+Requirements: `RunMode::RealTime` (bails otherwise); the time column must be
+non-decreasing across inserts (a row stamped at or before the cursor is never picked
+up). `postgres_notify_trigger_sql(table, channel)` returns idempotent SQL installing
+the per-statement `AFTER INSERT` trigger.
 
 ### No locks on the graph path
 
@@ -104,6 +122,7 @@ Feature flag: `postgres-integration-test` (implies `postgres`).
 | `test_read_empty_table` | Empty table yields 0 rows |
 | `test_write_round_trip` | `postgres_write` rows are readable via direct query and the adapter |
 | `test_write_burst_multi_row` | A multi-record burst inserts all rows at the shared timestamp |
+| `test_sub_catch_up_then_live_inserts` | `postgres_sub` emits seeded rows via catch-up, then live inserts via NOTIFY |
 
 ## Gotchas
 
