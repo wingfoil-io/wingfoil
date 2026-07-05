@@ -14,6 +14,7 @@ on:
       - 'wingfoil/examples/augurs/**'
       - 'wingfoil-python/src/py_augurs.rs'
       - 'wingfoil-python/tests/test_augurs.py'
+      - '.github/workflows/augurs-integration.yml'
 
 env:
   CARGO_TERM_COLOR: always
