@@ -75,13 +75,16 @@ impl AugursSeasonsNode {
         if let Some(max_period) = config.max_period {
             builder = builder.max_period(max_period);
         }
-        let cap = config.window.max(config.min_points);
+        // Grow the window to at least `min_points` so a `window` below the
+        // warm-up floor still lets the node fill up and emit rather than never
+        // ticking.
+        let window = config.window.max(config.min_points);
         Self {
             upstream,
             detector: builder.build(),
-            window: config.window,
+            window,
             min_points: config.min_points,
-            buffer: VecDeque::with_capacity(cap),
+            buffer: VecDeque::with_capacity(window),
             value: AugursSeasons::default(),
         }
     }
@@ -161,6 +164,25 @@ mod tests {
         );
         let dominant = last.dominant().unwrap();
         assert!((10..=14).contains(&dominant), "dominant was {dominant}");
+    }
+
+    /// A `window` below the default `min_points` floor still warms up and emits
+    /// rather than never ticking (the effective window grows to the floor).
+    #[test]
+    fn seasons_window_below_floor_still_emits() {
+        let series = ticker(Duration::from_secs(1))
+            .count()
+            .map(|n| (n as f64 * std::f64::consts::TAU / 6.0).sin());
+        // window 12 is below the default min_points floor of 16.
+        let seasons = series.augurs_seasons(AugursSeasonsConfig::new(12));
+        let captured = seasons.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(40))
+            .unwrap();
+        assert!(
+            !captured.peek_value().is_empty(),
+            "should emit despite window < floor"
+        );
     }
 
     /// The node stays silent until `min_points` have arrived.

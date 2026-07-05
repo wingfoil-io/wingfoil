@@ -89,21 +89,36 @@ use std::collections::VecDeque;
 
 /// Transpose a window of per-tick multi-series samples (one value per series per
 /// tick) into aligned per-series columns of equal length. Short samples are
-/// forward-filled with the series' previous value (or `0.0` before any value
-/// exists) so every column spans the full window.
+/// forward-filled with the series' previous value so every column spans the full
+/// window. A series that first appears part-way through the window has its
+/// leading gap back-filled with its own first observed value — never a
+/// fabricated `0.0`, which would read as a large deviation to the outlier / DTW
+/// operators for the rest of the window.
 ///
 /// Shared by the multi-series operators ([`augurs_outlier`](AugursOutlierOperators),
 /// [`augurs_dtw`](AugursDtwOperators), [`augurs_cluster`](AugursClusterOperators)).
 pub(crate) fn transpose_window(buffer: &VecDeque<Vec<f64>>) -> Vec<Vec<f64>> {
     let n_series = buffer.iter().map(Vec::len).max().unwrap_or(0);
-    let mut series: Vec<Vec<f64>> = vec![Vec::with_capacity(buffer.len()); n_series];
+    let mut series: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(buffer.len()); n_series];
     for sample in buffer {
         for (j, col) in series.iter_mut().enumerate() {
-            let value = sample.get(j).copied().or_else(|| col.last().copied());
-            col.push(value.unwrap_or(0.0));
+            // Forward-fill a short sample from the series' previous value; a
+            // series that has not appeared yet stays `None` and is back-filled
+            // below.
+            let value = sample
+                .get(j)
+                .copied()
+                .or_else(|| col.last().copied().flatten());
+            col.push(value);
         }
     }
     series
+        .into_iter()
+        .map(|col| {
+            let first = col.iter().copied().flatten().next().unwrap_or(0.0);
+            col.into_iter().map(|v| v.unwrap_or(first)).collect()
+        })
+        .collect()
 }
 
 /// A forecast produced by [`AugursForecastOperators::augurs_forecast`].
@@ -213,5 +228,40 @@ impl AugursClusters {
         seen.sort_unstable();
         seen.dedup();
         seen.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A series that only appears part-way through the window has its leading
+    /// gap back-filled with its own first value, not a fabricated `0.0` (which
+    /// would read as a large deviation to the outlier / DTW operators).
+    #[test]
+    fn transpose_backfills_late_series_with_first_value() {
+        let mut buffer = VecDeque::new();
+        buffer.push_back(vec![1.0, 2.0]);
+        buffer.push_back(vec![1.0, 2.0]);
+        buffer.push_back(vec![1.0, 2.0, 3.0]);
+        let cols = transpose_window(&buffer);
+        assert_eq!(
+            cols,
+            vec![
+                vec![1.0, 1.0, 1.0],
+                vec![2.0, 2.0, 2.0],
+                vec![3.0, 3.0, 3.0],
+            ]
+        );
+    }
+
+    /// A short sample forward-fills each missing series from its previous value.
+    #[test]
+    fn transpose_forward_fills_short_samples() {
+        let mut buffer = VecDeque::new();
+        buffer.push_back(vec![1.0, 2.0]);
+        buffer.push_back(vec![5.0]);
+        let cols = transpose_window(&buffer);
+        assert_eq!(cols, vec![vec![1.0, 5.0], vec![2.0, 2.0]]);
     }
 }

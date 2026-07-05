@@ -49,7 +49,9 @@ augurs/
 - **Multi-series transpose.** The `Vec<f64>` operators buffer the last `window`
   ticks and transpose them into aligned per-series columns via the shared
   `transpose_window()` helper in `mod.rs`. Short samples are forward-filled so
-  columns stay equal length.
+  columns stay equal length; a series that first appears part-way through the
+  window has its leading gap back-filled with its own first value (never a
+  fabricated `0.0`, which the detectors would read as a large deviation).
 
 - **Model / detector choice via config, not new operators.** `augurs_forecast`
   takes an `AugursForecastModel` (`Ets` | `Mstl{periods}`) and `augurs_outlier`
@@ -59,7 +61,11 @@ augurs/
 
 - **Warm-up floors.** ETS needs >~8 points (floored at 12). MSTL/STL cannot
   decompose fewer than **two full seasonal periods**, so the forecast floor
-  becomes `2 * max_period + 1` for MSTL. Multi-series operators need ≥2 series.
+  becomes `2 * max_period + 1` for MSTL. When the requested `window` is below a
+  model's floor the node grows its effective window to the floor so it still
+  warms up and emits (rather than silently never ticking). `augurs_dtw` /
+  `augurs_cluster` need ≥2 series for a distance matrix; `augurs_outlier` (MAD)
+  runs with a single series.
 
 - **BOCPD index 0 is dropped.** Bayesian online changepoint detection always
   reports index 0 (the window start) as a changepoint; the node filters it out

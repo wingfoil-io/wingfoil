@@ -415,13 +415,18 @@ impl PyStream {
     ///     sensitivity: Detector sensitivity, strictly between 0 and 1.
     ///     detector: "mad" (default) or "dbscan". DBSCAN needs >= 3 series.
     #[pyo3(signature = (window, sensitivity, detector="mad"))]
-    fn augurs_outlier(&self, window: usize, sensitivity: f64, detector: &str) -> PyStream {
-        PyStream(crate::py_augurs::py_augurs_outlier_inner(
+    fn augurs_outlier(
+        &self,
+        window: usize,
+        sensitivity: f64,
+        detector: &str,
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_outlier_inner(
             &self.0,
             window,
             sensitivity,
             detector,
-        ))
+        )?))
     }
 
     /// Detect changepoints in this stream of floats (Bayesian online
@@ -474,10 +479,10 @@ impl PyStream {
     ///     window: Number of recent samples compared per series.
     ///     metric: "euclidean" (default) or "manhattan".
     #[pyo3(signature = (window, metric="euclidean"))]
-    fn augurs_dtw(&self, window: usize, metric: &str) -> PyStream {
-        PyStream(crate::py_augurs::py_augurs_dtw_inner(
+    fn augurs_dtw(&self, window: usize, metric: &str) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_dtw_inner(
             &self.0, window, metric,
-        ))
+        )?))
     }
 
     /// Cluster the series in a window of per-series readings via DBSCAN over
@@ -499,14 +504,14 @@ impl PyStream {
         epsilon: f64,
         min_cluster_size: usize,
         metric: &str,
-    ) -> PyStream {
-        PyStream(crate::py_augurs::py_augurs_cluster_inner(
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_cluster_inner(
             &self.0,
             window,
             epsilon,
             min_cluster_size,
             metric,
-        ))
+        )?))
     }
 
     /// Write this stream to a KDB+ table.

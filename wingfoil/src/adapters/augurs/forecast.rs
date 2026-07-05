@@ -115,16 +115,25 @@ impl From<(usize, usize)> for AugursForecastConfig {
 pub(crate) struct AugursForecastNode {
     upstream: Rc<dyn Stream<f64>>,
     config: AugursForecastConfig,
+    /// Effective window: the configured `window` grown to the model's warm-up
+    /// floor so a `window` smaller than the floor still lets the node fill up
+    /// and emit rather than never ticking.
+    window: usize,
+    /// Resolved warm-up floor, computed once (`effective_min_points`).
+    min_points: usize,
     buffer: VecDeque<f64>,
     value: AugursForecast,
 }
 
 impl AugursForecastNode {
     fn new(upstream: Rc<dyn Stream<f64>>, config: AugursForecastConfig) -> Self {
-        let window = config.window.max(config.effective_min_points());
+        let min_points = config.effective_min_points();
+        let window = config.window.max(min_points);
         Self {
             upstream,
             config,
+            window,
+            min_points,
             buffer: VecDeque::with_capacity(window),
             value: AugursForecast::default(),
         }
@@ -135,10 +144,10 @@ impl AugursForecastNode {
 impl MutableNode for AugursForecastNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.config.window {
+        while self.buffer.len() > self.window {
             self.buffer.pop_front();
         }
-        if self.buffer.len() < self.config.effective_min_points() {
+        if self.buffer.len() < self.min_points {
             return Ok(false);
         }
 
@@ -275,6 +284,27 @@ mod tests {
             "expected a seasonal swing, got range {:.3} for {:?}",
             max - min,
             last.point
+        );
+    }
+
+    /// A `window` smaller than the model's warm-up floor still warms up and
+    /// emits — the effective window grows to the floor — rather than silently
+    /// never ticking.
+    #[test]
+    fn forecast_window_below_floor_still_emits() {
+        let source = ticker(Duration::from_secs(1))
+            .count()
+            .map(|n| n as f64 + (n as f64 * 0.5).sin());
+        // window 10 is below the ETS floor of 12.
+        let forecast = source.augurs_forecast(AugursForecastConfig::new(10, 2));
+        let captured = forecast.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+            .unwrap();
+        assert_eq!(
+            forecast.peek_value().point.len(),
+            2,
+            "should emit despite window < floor"
         );
     }
 

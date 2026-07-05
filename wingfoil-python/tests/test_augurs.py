@@ -197,5 +197,29 @@ class TestConstruction(unittest.TestCase):
         self.assertIsNotNone(_series().augurs_cluster(16, 1.0, 2))
 
 
+class TestValidation(unittest.TestCase):
+    """Invalid arguments are rejected loudly rather than silently coerced."""
+
+    def test_unknown_detector_raises(self):
+        with self.assertRaises(ValueError):
+            _series().augurs_outlier(30, 0.5, detector="dbscann")
+
+    def test_unknown_metric_raises(self):
+        with self.assertRaises(ValueError):
+            _series().augurs_dtw(30, metric="manhatten")
+
+    def test_unknown_cluster_metric_raises(self):
+        with self.assertRaises(ValueError):
+            _series().augurs_cluster(30, 1.0, 2, metric="chebyshev")
+
+    def test_non_float_input_fails_fast(self):
+        # A non-float value is a hard error (like .average()/.sum()), not a
+        # silently substituted NaN that would poison the model window.
+        bad = ticker(1.0).count().map(lambda n: "not a float")
+        captured = bad.augurs_forecast(16, 1).collect()
+        with self.assertRaises(Exception):
+            captured.run(realtime=False, cycles=20)
+
+
 if __name__ == "__main__":
     unittest.main()

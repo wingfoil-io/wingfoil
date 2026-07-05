@@ -57,17 +57,22 @@ impl From<usize> for AugursChangepointConfig {
 pub(crate) struct AugursChangepointNode {
     upstream: Rc<dyn Stream<f64>>,
     config: AugursChangepointConfig,
+    /// Effective window: the configured `window` grown to at least `min_points`
+    /// so a `window` below the warm-up floor still lets the node fill up and
+    /// emit rather than never ticking.
+    window: usize,
     buffer: VecDeque<f64>,
     value: AugursChangepoints,
 }
 
 impl AugursChangepointNode {
     fn new(upstream: Rc<dyn Stream<f64>>, config: AugursChangepointConfig) -> Self {
-        let cap = config.window.max(config.min_points);
+        let window = config.window.max(config.min_points);
         Self {
             upstream,
             config,
-            buffer: VecDeque::with_capacity(cap),
+            window,
+            buffer: VecDeque::with_capacity(window),
             value: AugursChangepoints::default(),
         }
     }
@@ -77,7 +82,7 @@ impl AugursChangepointNode {
 impl MutableNode for AugursChangepointNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.config.window {
+        while self.buffer.len() > self.window {
             self.buffer.pop_front();
         }
         if self.buffer.len() < self.config.min_points {

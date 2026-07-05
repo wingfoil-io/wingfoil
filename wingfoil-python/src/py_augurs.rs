@@ -25,36 +25,41 @@ use wingfoil::{Stream, StreamOperators};
 
 use crate::py_element::PyElement;
 
-/// Map a `PyElement` stream to an `f64` stream, logging and substituting `NaN`
-/// on values that are not floats.
+/// Map a `PyElement` stream to an `f64` stream, failing the graph run with a
+/// contextual error on a value that is not a float. This mirrors
+/// [`PyStream::extract`] used by `.average()` / `.sum()`; substituting `NaN`
+/// instead would silently poison the model window and abort the run later with
+/// an augurs-internal message that never points back at the offending value.
 fn as_floats(stream: &Rc<dyn Stream<PyElement>>, op: &'static str) -> Rc<dyn Stream<f64>> {
-    stream.map(move |elem| {
+    stream.try_map(move |elem: PyElement| {
         Python::attach(|py| {
-            elem.as_ref().extract::<f64>(py).unwrap_or_else(|e| {
-                log::error!("{op}: expected a float input value: {e}");
-                f64::NAN
+            elem.as_ref().extract::<f64>(py).map_err(|e| {
+                anyhow::Error::new(e).context(format!("{op}: expected a float input value"))
             })
         })
     })
 }
 
 /// Map a `PyElement` stream to a `Vec<f64>` (per-series readings) stream,
-/// logging and substituting an empty vector on values that are not lists.
+/// failing the graph run with a contextual error on a value that is not a
+/// `list[float]`.
 fn as_series(stream: &Rc<dyn Stream<PyElement>>, op: &'static str) -> Rc<dyn Stream<Vec<f64>>> {
-    stream.map(move |elem| {
+    stream.try_map(move |elem: PyElement| {
         Python::attach(|py| {
-            elem.as_ref().extract::<Vec<f64>>(py).unwrap_or_else(|e| {
-                log::error!("{op}: expected a list[float] input value: {e}");
-                Vec::new()
+            elem.as_ref().extract::<Vec<f64>>(py).map_err(|e| {
+                anyhow::Error::new(e).context(format!("{op}: expected a list[float] input value"))
             })
         })
     })
 }
 
-fn metric_from_str(metric: &str) -> AugursDtwMetric {
+fn metric_from_str(metric: &str) -> PyResult<AugursDtwMetric> {
     match metric.to_ascii_lowercase().as_str() {
-        "manhattan" | "l1" => AugursDtwMetric::Manhattan,
-        _ => AugursDtwMetric::Euclidean,
+        "manhattan" | "l1" => Ok(AugursDtwMetric::Manhattan),
+        "euclidean" | "l2" => Ok(AugursDtwMetric::Euclidean),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown metric '{other}' (expected 'euclidean' or 'manhattan')"
+        ))),
     }
 }
 
@@ -95,14 +100,19 @@ pub fn py_augurs_outlier_inner(
     window: usize,
     sensitivity: f64,
     detector: &str,
-) -> Rc<dyn Stream<PyElement>> {
+) -> PyResult<Rc<dyn Stream<PyElement>>> {
     let series = as_series(stream, "augurs_outlier");
     let config = match detector.to_ascii_lowercase().as_str() {
         "dbscan" => AugursOutlierConfig::dbscan(window, sensitivity),
-        _ => AugursOutlierConfig::mad(window, sensitivity),
+        "mad" => AugursOutlierConfig::mad(window, sensitivity),
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown detector '{other}' (expected 'mad' or 'dbscan')"
+            )));
+        }
     };
 
-    series.augurs_outlier(config).map(|outliers| {
+    Ok(series.augurs_outlier(config).map(|outliers| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("outlying", outliers.outlying)
@@ -110,7 +120,7 @@ pub fn py_augurs_outlier_inner(
                 .expect("invariant: inserting list values into a dict cannot fail");
             PyElement::new(dict.into_any().unbind())
         })
-    })
+    }))
 }
 
 /// Inner implementation for the `.augurs_changepoint()` stream method.
@@ -148,9 +158,10 @@ pub fn py_augurs_seasons_inner(
     if let Some(min_points) = min_points {
         config = config.with_min_points(min_points);
     }
-    if let (Some(min_period), Some(max_period)) = (min_period, max_period) {
-        config = config.with_period_range(min_period, max_period);
-    }
+    // Apply each period bound independently — the Python signature documents
+    // them as separately optional, so passing only one must not be discarded.
+    config.min_period = min_period;
+    config.max_period = max_period;
 
     floats.augurs_seasons(config).map(|seasons| {
         Python::attach(|py| {
@@ -167,18 +178,18 @@ pub fn py_augurs_dtw_inner(
     stream: &Rc<dyn Stream<PyElement>>,
     window: usize,
     metric: &str,
-) -> Rc<dyn Stream<PyElement>> {
+) -> PyResult<Rc<dyn Stream<PyElement>>> {
     let series = as_series(stream, "augurs_dtw");
-    let config = AugursDtwConfig::new(window).with_metric(metric_from_str(metric));
+    let config = AugursDtwConfig::new(window).with_metric(metric_from_str(metric)?);
 
-    series.augurs_dtw(config).map(|matrix| {
+    Ok(series.augurs_dtw(config).map(|matrix| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("rows", matrix.rows)
                 .expect("invariant: inserting a list into a dict cannot fail");
             PyElement::new(dict.into_any().unbind())
         })
-    })
+    }))
 }
 
 /// Inner implementation for the `.augurs_cluster()` stream method.
@@ -188,17 +199,17 @@ pub fn py_augurs_cluster_inner(
     epsilon: f64,
     min_cluster_size: usize,
     metric: &str,
-) -> Rc<dyn Stream<PyElement>> {
+) -> PyResult<Rc<dyn Stream<PyElement>>> {
     let series = as_series(stream, "augurs_cluster");
     let config = AugursClusterConfig::new(window, epsilon, min_cluster_size)
-        .with_metric(metric_from_str(metric));
+        .with_metric(metric_from_str(metric)?);
 
-    series.augurs_cluster(config).map(|clusters| {
+    Ok(series.augurs_cluster(config).map(|clusters| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("labels", clusters.labels)
                 .expect("invariant: inserting a list into a dict cannot fail");
             PyElement::new(dict.into_any().unbind())
         })
-    })
+    }))
 }

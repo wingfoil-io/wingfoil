@@ -125,9 +125,11 @@ zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 rdkafka = { version = "0.37", optional = true }
 redis = { version = "0.27", features = ["tokio-comp", "aio", "streams"], optional = true }
-# augurs time-series toolkit — ETS forecasting and MAD outlier detection.
-# Pure-Rust compute (no network/async), so only the `ets` and `outlier`
-# sub-features are pulled in.
+# augurs time-series toolkit — forecasting, outlier/changepoint/season
+# detection, DTW and clustering. Pure-Rust compute (no network/async), so
+# `default-features = false` and only the compute sub-features the adapter uses
+# are enabled (Prophet is deliberately excluded — it needs a bundled Stan
+# toolchain).
 augurs = { version = "0.10.2", default-features = false, features = ["ets", "mstl", "outlier", "changepoint", "seasons", "dtw", "clustering"], optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"] }
