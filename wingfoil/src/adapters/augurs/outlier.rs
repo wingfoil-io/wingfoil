@@ -1,50 +1,119 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use augurs::outlier::{MADDetector, OutlierDetector};
+use augurs::outlier::{DbscanDetector, MADDetector, OutlierDetector, OutlierOutput};
 
 use super::AugursOutliers;
 use crate::types::*;
+
+/// Which outlier-detection algorithm [`AugursOutlierOperators::augurs_outlier`]
+/// uses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AugursOutlierDetector {
+    /// Median absolute deviation. Flags series whose values sit far from the
+    /// rolling median of the group. Works with any number of series (including
+    /// one) and is robust to a few out-of-sync members.
+    #[default]
+    Mad,
+    /// DBSCAN density clustering. Flags series that fall outside the main
+    /// cluster of similarly-behaving series. Needs **at least three** series to
+    /// form a cluster; with fewer it reports nothing.
+    Dbscan,
+}
 
 /// Configuration for [`AugursOutlierOperators::augurs_outlier`].
 #[derive(Debug, Clone)]
 pub struct AugursOutlierConfig {
     /// Number of recent samples retained as the detection window.
     pub window: usize,
-    /// MAD sensitivity, strictly between 0 and 1. Higher is more sensitive.
-    /// Used to derive a detection threshold from the scale of the data.
+    /// Detector sensitivity, strictly between 0 and 1. Higher is more
+    /// sensitive. Used to derive a detection threshold from the scale of the
+    /// data.
     pub sensitivity: f64,
+    /// Which detector to run.
+    pub detector: AugursOutlierDetector,
 }
 
 impl AugursOutlierConfig {
-    /// Detect over the last `window` samples at the given MAD `sensitivity`
-    /// (must be in `(0, 1)`).
+    /// Detect over the last `window` samples at the given `sensitivity` (must be
+    /// in `(0, 1)`) using the default [MAD](AugursOutlierDetector::Mad)
+    /// detector.
     #[must_use]
     pub fn new(window: usize, sensitivity: f64) -> Self {
         Self {
             window,
             sensitivity,
+            detector: AugursOutlierDetector::Mad,
+        }
+    }
+
+    /// A MAD-detector config (same as [`new`](Self::new); reads clearer at call
+    /// sites that also use [`dbscan`](Self::dbscan)).
+    #[must_use]
+    pub fn mad(window: usize, sensitivity: f64) -> Self {
+        Self::new(window, sensitivity)
+    }
+
+    /// A [DBSCAN](AugursOutlierDetector::Dbscan)-detector config. Needs at least
+    /// three series to report anything.
+    #[must_use]
+    pub fn dbscan(window: usize, sensitivity: f64) -> Self {
+        Self {
+            window,
+            sensitivity,
+            detector: AugursOutlierDetector::Dbscan,
         }
     }
 }
 
 impl From<(usize, f64)> for AugursOutlierConfig {
-    /// `(window, sensitivity)`.
+    /// `(window, sensitivity)` using the default MAD detector.
     fn from((window, sensitivity): (usize, f64)) -> Self {
         Self::new(window, sensitivity)
     }
 }
 
+/// A constructed detector. `OutlierDetector` has an associated `PreprocessedData`
+/// type so it is not object-safe; this enum dispatches over the two concrete
+/// implementations instead.
+enum Detector {
+    Mad(MADDetector),
+    Dbscan(DbscanDetector),
+}
+
+impl Detector {
+    fn run(&self, series: &[&[f64]]) -> anyhow::Result<OutlierOutput> {
+        // augurs' outlier `Error` is not `Send + Sync`, so it cannot flow
+        // through `anyhow::Context`; render it into an `anyhow::Error` instead.
+        match self {
+            Detector::Mad(d) => {
+                let pre = d
+                    .preprocess(series)
+                    .map_err(|e| anyhow::anyhow!("augurs_outlier: MAD preprocess failed: {e}"))?;
+                d.detect(&pre)
+                    .map_err(|e| anyhow::anyhow!("augurs_outlier: MAD detect failed: {e}"))
+            }
+            Detector::Dbscan(d) => {
+                let pre = d.preprocess(series).map_err(|e| {
+                    anyhow::anyhow!("augurs_outlier: DBSCAN preprocess failed: {e}")
+                })?;
+                d.detect(&pre)
+                    .map_err(|e| anyhow::anyhow!("augurs_outlier: DBSCAN detect failed: {e}"))
+            }
+        }
+    }
+}
+
 pub(crate) struct AugursOutlierNode {
     upstream: Rc<dyn Stream<Vec<f64>>>,
-    detector: MADDetector,
+    detector: Detector,
     window: usize,
     buffer: VecDeque<Vec<f64>>,
     value: AugursOutliers,
 }
 
 impl AugursOutlierNode {
-    fn new(upstream: Rc<dyn Stream<Vec<f64>>>, detector: MADDetector, window: usize) -> Self {
+    fn new(upstream: Rc<dyn Stream<Vec<f64>>>, detector: Detector, window: usize) -> Self {
         Self {
             upstream,
             detector,
@@ -62,37 +131,19 @@ impl MutableNode for AugursOutlierNode {
         while self.buffer.len() > self.window {
             self.buffer.pop_front();
         }
-        // MAD needs at least two timestamps to have any spread to measure.
+        // Need at least two timestamps to have any spread to measure.
         if self.buffer.len() < 2 {
             return Ok(false);
         }
 
         // Transpose the buffered samples (one value per series per tick) into
-        // aligned per-series time series. Missing entries are filled forward
-        // with the series' previous value so the columns stay the same length.
-        let n_series = self.buffer.iter().map(Vec::len).max().unwrap_or(0);
-        if n_series == 0 {
+        // aligned per-series time series.
+        let series = super::transpose_window(&self.buffer);
+        if series.is_empty() {
             return Ok(false);
         }
-        let mut series: Vec<Vec<f64>> = vec![Vec::with_capacity(self.buffer.len()); n_series];
-        for sample in &self.buffer {
-            for (j, col) in series.iter_mut().enumerate() {
-                let value = sample.get(j).copied().or_else(|| col.last().copied());
-                col.push(value.unwrap_or(0.0));
-            }
-        }
-
         let refs: Vec<&[f64]> = series.iter().map(Vec::as_slice).collect();
-        // augurs' outlier `Error` is not `Send + Sync`, so it cannot flow
-        // through `anyhow::Context`; render it into an `anyhow::Error` instead.
-        let preprocessed = self
-            .detector
-            .preprocess(&refs)
-            .map_err(|e| anyhow::anyhow!("augurs_outlier: MAD preprocess failed: {e}"))?;
-        let output = self
-            .detector
-            .detect(&preprocessed)
-            .map_err(|e| anyhow::anyhow!("augurs_outlier: MAD detect failed: {e}"))?;
+        let output = self.detector.run(&refs)?;
 
         self.value = AugursOutliers {
             outlying: output.outlying_series.iter().copied().collect(),
@@ -111,8 +162,8 @@ impl MutableNode for AugursOutlierNode {
 pub trait AugursOutlierOperators {
     /// Maintain a sliding window of per-series readings (one `f64` per series
     /// per tick) and emit an [`AugursOutliers`] each tick once at least two
-    /// samples have arrived, flagging series that deviate from the group via
-    /// the MAD detector.
+    /// samples have arrived, flagging series that deviate from the group via the
+    /// configured detector.
     ///
     /// # Panics
     ///
@@ -130,12 +181,24 @@ impl AugursOutlierOperators for dyn Stream<Vec<f64>> {
         config: impl Into<AugursOutlierConfig>,
     ) -> Rc<dyn Stream<AugursOutliers>> {
         let config = config.into();
-        let detector = MADDetector::with_sensitivity(config.sensitivity).unwrap_or_else(|e| {
-            panic!(
-                "augurs_outlier: invalid sensitivity {}: {e}",
-                config.sensitivity
-            )
-        });
+        let detector = match config.detector {
+            AugursOutlierDetector::Mad => Detector::Mad(
+                MADDetector::with_sensitivity(config.sensitivity).unwrap_or_else(|e| {
+                    panic!(
+                        "augurs_outlier: invalid sensitivity {}: {e}",
+                        config.sensitivity
+                    )
+                }),
+            ),
+            AugursOutlierDetector::Dbscan => Detector::Dbscan(
+                DbscanDetector::with_sensitivity(config.sensitivity).unwrap_or_else(|e| {
+                    panic!(
+                        "augurs_outlier: invalid sensitivity {}: {e}",
+                        config.sensitivity
+                    )
+                }),
+            ),
+        };
         AugursOutlierNode::new(self.clone(), detector, config.window).into_stream()
     }
 }
@@ -148,9 +211,9 @@ mod tests {
     use std::time::Duration;
 
     /// Three series move together except one, which jumps away part-way
-    /// through. The diverging series should be flagged as an outlier.
+    /// through. The diverging series should be flagged by MAD.
     #[test]
-    fn outlier_flags_diverging_series() {
+    fn outlier_mad_flags_diverging_series() {
         // Per tick: [series0, series1, series2]. Series 2 spikes after a while.
         let readings = ticker(Duration::from_secs(1)).count().map(|n| {
             let base = 100.0 + (n as f64 * 0.4).sin();
@@ -171,6 +234,29 @@ mod tests {
         );
         assert!(!last.is_outlier(0));
         assert!(!last.is_outlier(1));
+    }
+
+    /// DBSCAN flags a series diverging from a cluster of similar series.
+    #[test]
+    fn outlier_dbscan_flags_diverging_series() {
+        // Four series: three cluster together, series 3 diverges.
+        let readings = ticker(Duration::from_secs(1)).count().map(|n| {
+            let base = 100.0 + (n as f64 * 0.4).sin();
+            let series3 = if n > 15 { base + 90.0 } else { base + 0.3 };
+            vec![base, base + 0.1, base - 0.1, series3]
+        });
+        let outliers = readings.augurs_outlier(AugursOutlierConfig::dbscan(40, 0.5));
+        let captured = outliers.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(40))
+            .unwrap();
+
+        let last = outliers.peek_value();
+        assert_eq!(last.scores.len(), 4);
+        assert!(
+            last.is_outlier(3),
+            "series 3 diverged and should be flagged by DBSCAN, got {last:?}"
+        );
     }
 
     /// With all series moving together, nothing is flagged.

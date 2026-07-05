@@ -3,10 +3,30 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use augurs::ets::AutoETS;
+use augurs::ets::trend::AutoETSTrendModel;
+use augurs::mstl::MSTLModel;
 use augurs::{Fit, Predict};
 
 use super::AugursForecast;
 use crate::types::*;
+
+/// The forecasting model used by [`AugursForecastOperators::augurs_forecast`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum AugursForecastModel {
+    /// Non-seasonal [`AutoETS`]. Fast and a good default for data without a
+    /// fixed seasonal period.
+    #[default]
+    Ets,
+    /// [MSTL](augurs::mstl) seasonal-trend decomposition with an [`AutoETS`]
+    /// trend, using the given seasonal `periods` (in samples). Choose this when
+    /// the data has one or more known seasonalities (e.g. `[24]` for hourly
+    /// data with a daily cycle). Needs a window of at least a couple of full
+    /// periods.
+    Mstl {
+        /// Seasonal period lengths, in samples.
+        periods: Vec<usize>,
+    },
+}
 
 /// Configuration for [`AugursForecastOperators::augurs_forecast`].
 #[derive(Debug, Clone)]
@@ -23,6 +43,8 @@ pub struct AugursForecastConfig {
     /// Confidence level for prediction intervals (between 0 and 1). When `None`,
     /// only point forecasts are produced and `lower`/`upper` stay empty.
     pub level: Option<f64>,
+    /// Which forecasting model to fit each cycle.
+    pub model: AugursForecastModel,
 }
 
 impl AugursForecastConfig {
@@ -35,6 +57,7 @@ impl AugursForecastConfig {
             min_points: 12,
             horizon,
             level: None,
+            model: AugursForecastModel::Ets,
         }
     }
 
@@ -45,6 +68,21 @@ impl AugursForecastConfig {
         self
     }
 
+    /// Use MSTL seasonal-trend forecasting with the given seasonal `periods`
+    /// (in samples) instead of the default non-seasonal ETS model.
+    #[must_use]
+    pub fn mstl(mut self, periods: Vec<usize>) -> Self {
+        self.model = AugursForecastModel::Mstl { periods };
+        self
+    }
+
+    /// Select the forecasting model explicitly.
+    #[must_use]
+    pub fn with_model(mut self, model: AugursForecastModel) -> Self {
+        self.model = model;
+        self
+    }
+
     /// Set the minimum number of points required before fitting begins.
     #[must_use]
     pub fn with_min_points(mut self, min_points: usize) -> Self {
@@ -52,9 +90,18 @@ impl AugursForecastConfig {
         self
     }
 
-    /// The effective minimum, never below the `AutoETS` floor.
+    /// The effective minimum. Never below the `AutoETS` floor (~12 points), and
+    /// for MSTL never below two full seasonal periods (STL cannot decompose
+    /// fewer than two periods).
     fn effective_min_points(&self) -> usize {
-        self.min_points.max(12)
+        let floor = match &self.model {
+            AugursForecastModel::Ets => 12,
+            AugursForecastModel::Mstl { periods } => {
+                let max_period = periods.iter().copied().max().unwrap_or(1);
+                (2 * max_period + 1).max(12)
+            }
+        };
+        self.min_points.max(floor)
     }
 }
 
@@ -96,12 +143,25 @@ impl MutableNode for AugursForecastNode {
         }
 
         let data: Vec<f64> = self.buffer.iter().copied().collect();
-        let fitted = AutoETS::non_seasonal()
-            .fit(&data)
-            .context("augurs_forecast: ETS fit failed")?;
-        let forecast = fitted
-            .predict(self.config.horizon, self.config.level)
-            .context("augurs_forecast: ETS predict failed")?;
+        let forecast = match &self.config.model {
+            AugursForecastModel::Ets => {
+                let fitted = AutoETS::non_seasonal()
+                    .fit(&data)
+                    .context("augurs_forecast: ETS fit failed")?;
+                fitted
+                    .predict(self.config.horizon, self.config.level)
+                    .context("augurs_forecast: ETS predict failed")?
+            }
+            AugursForecastModel::Mstl { periods } => {
+                let trend = AutoETSTrendModel::from(AutoETS::non_seasonal());
+                let fitted = MSTLModel::new(periods.clone(), trend)
+                    .fit(&data)
+                    .context("augurs_forecast: MSTL fit failed")?;
+                fitted
+                    .predict(self.config.horizon, self.config.level)
+                    .context("augurs_forecast: MSTL predict failed")?
+            }
+        };
 
         let (lower, upper) = match forecast.intervals {
             Some(intervals) => (intervals.lower, intervals.upper),
@@ -187,6 +247,35 @@ mod tests {
             .unwrap();
         // 15 cycles < 20 min_points → never ticked.
         assert!(captured.peek_value().is_empty());
+    }
+
+    /// MSTL with a seasonal period forecasts a strongly seasonal series and
+    /// reproduces its seasonal swing rather than a flat line.
+    #[test]
+    fn forecast_mstl_captures_season() {
+        // Period-12 sine wave riding on a gentle ramp.
+        let source = ticker(Duration::from_secs(1)).count().map(|n| {
+            let t = n as f64;
+            0.1 * t + 5.0 * (t * std::f64::consts::TAU / 12.0).sin()
+        });
+        let forecast = source.augurs_forecast(AugursForecastConfig::new(120, 12).mstl(vec![12]));
+        let captured = forecast.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(80))
+            .unwrap();
+
+        let last = forecast.peek_value();
+        assert_eq!(last.point.len(), 12, "horizon == 12 point forecasts");
+        // A seasonal forecast should swing: max and min of the 12-step forecast
+        // must differ by a meaningful fraction of the amplitude (10.0 pk-pk).
+        let max = last.point.iter().cloned().fold(f64::MIN, f64::max);
+        let min = last.point.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            max - min > 2.0,
+            "expected a seasonal swing, got range {:.3} for {:?}",
+            max - min,
+            last.point
+        );
     }
 
     /// `(window, horizon)` tuples convert into a config.

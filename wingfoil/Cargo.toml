@@ -128,7 +128,7 @@ redis = { version = "0.27", features = ["tokio-comp", "aio", "streams"], optiona
 # augurs time-series toolkit — ETS forecasting and MAD outlier detection.
 # Pure-Rust compute (no network/async), so only the `ets` and `outlier`
 # sub-features are pulled in.
-augurs = { version = "0.10.2", default-features = false, features = ["ets", "outlier"], optional = true }
+augurs = { version = "0.10.2", default-features = false, features = ["ets", "mstl", "outlier", "changepoint", "seasons", "dtw", "clustering"], optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"] }
 fluvio = { version = "0.50.1", optional = true }

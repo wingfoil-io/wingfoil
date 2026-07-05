@@ -115,7 +115,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`aeron`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/) | Metrics export via Prometheus scraping (pull) and OpenTelemetry OTLP (push). |
-| [`augurs`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/augurs/) | augurs time-series toolkit — on-graph ETS forecasting and MAD outlier detection over sliding windows. |
+| [`augurs`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
 
 ## Links
 - Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
