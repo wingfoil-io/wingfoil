@@ -228,10 +228,12 @@ fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
         &[
             "CREATE TABLE trades (time timestamp, sym text, price float8, qty int8)",
             &postgres_notify_trigger_sql("trades", "trades_feed"),
-            // Pre-seeded rows, picked up by the catch-up query.
+            // Pre-seeded rows, picked up by the catch-up query. Timestamps are
+            // strictly after start_from — the cursor query is `time > cursor`,
+            // so a row ON the cursor is (correctly) excluded.
             "INSERT INTO trades VALUES
-               ('2000-01-01 00:00:00', 'SEED0', 1.0, 0),
-               ('2000-01-01 00:00:01', 'SEED1', 2.0, 1)",
+               ('2000-01-01 00:00:01', 'SEED1', 1.0, 1),
+               ('2000-01-01 00:00:02', 'SEED2', 2.0, 2)",
         ],
     )?;
 
@@ -243,8 +245,8 @@ fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
         exec(
             &insert_conn,
             &[
-                "INSERT INTO trades VALUES ('2000-01-01 00:00:02', 'LIVE2', 3.0, 2)",
-                "INSERT INTO trades VALUES ('2000-01-01 00:00:03', 'LIVE3', 4.0, 3)",
+                "INSERT INTO trades VALUES ('2000-01-01 00:00:03', 'LIVE3', 3.0, 3)",
+                "INSERT INTO trades VALUES ('2000-01-01 00:00:04', 'LIVE4', 4.0, 4)",
             ],
         )
     });
@@ -261,18 +263,23 @@ fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
             )
         },
     );
-    let collected = stream.collapse().collect();
+    // Collect whole bursts: in real-time mode several rows can arrive in one
+    // graph cycle, and `collapse()` would keep only the last of each burst.
+    let collected = stream.collect();
     collected.clone().run(
         RunMode::RealTime,
         RunFor::Duration(std::time::Duration::from_secs(3)),
     )?;
     inserter.join().expect("inserter thread panicked")?;
 
-    let rows = collected.peek_value();
-    let syms: Vec<&str> = rows.iter().map(|r| r.value.sym.as_str()).collect();
+    let syms: Vec<String> = collected
+        .peek_value()
+        .iter()
+        .flat_map(|tick| tick.value.iter().map(|t| t.sym.clone()))
+        .collect();
     assert_eq!(
         syms,
-        vec!["SEED0", "SEED1", "LIVE2", "LIVE3"],
+        vec!["SEED1", "SEED2", "LIVE3", "LIVE4"],
         "catch-up rows then live rows, in time order"
     );
     Ok(())
