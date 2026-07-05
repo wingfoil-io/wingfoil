@@ -81,11 +81,14 @@
 //!         postgres_timestamp(cursor),
 //!     )
 //! })
-//!     .collapse()
-//!     .print()
+//!     .print() // prints each burst; several rows can arrive per real-time cycle
 //!     .run(RunMode::RealTime, RunFor::Forever)
 //!     .unwrap();
 //! ```
+//!
+//! Note: `collapse()` keeps only the **last** element of each burst — fine for
+//! historical replay (one row per tick when timestamps are distinct) but lossy on
+//! a real-time tail, where a burst carries every row drained in that cycle.
 //!
 //! # Writing
 //!

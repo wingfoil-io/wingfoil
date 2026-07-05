@@ -324,5 +324,8 @@ class TestPostgresSubLive(unittest.TestCase):
         stream.run(realtime=True, duration=3.0)
         inserter.join()
 
-        rows = stream.peek_value()
-        self.assertEqual([r["sym"] for r in rows], ["SEED0", "LIVE1", "LIVE2"])
+        # Each tick is a list of row dicts (several rows can share one
+        # real-time cycle); flatten before asserting.
+        ticks = stream.peek_value()
+        syms = [row["sym"] for tick in ticks for row in tick]
+        self.assertEqual(syms, ["SEED0", "LIVE1", "LIVE2"])

@@ -3,7 +3,7 @@
 use crate::PyNode;
 use crate::py_element::PyElement;
 use crate::py_stream::PyStream;
-use crate::types::{DICT_INSERT_INFALLIBLE, INTO_PY_INFALLIBLE};
+use crate::types::{DICT_INSERT_INFALLIBLE, INTO_PY_INFALLIBLE, LIST_NEW_INFALLIBLE};
 
 use anyhow::bail;
 use chrono::NaiveDateTime;
@@ -151,6 +151,8 @@ impl PostgresDeserialize for PyPgRow {
 /// stored (lower-case unless the column was created quoted). A trailing `;` on the
 /// query is stripped. A column whose SQL type is unsupported (e.g. `numeric`,
 /// `uuid`, `json`) fails the run on the first row rather than reading as `None`.
+/// Rows must have distinct timestamps: rows sharing one timestamp arrive in a
+/// single tick, which yields only the last of them.
 ///
 /// Args:
 ///     conn_str: libpq connection string, e.g.
@@ -191,16 +193,43 @@ pub fn py_postgres_read(
     rows_to_py_stream(stream)
 }
 
+/// Marshal one row into a Python dict.
+fn row_to_py_dict(py: Python<'_>, row: &PyPgRow) -> Py<PyAny> {
+    let dict = PyDict::new(py);
+    for (name, value) in &row.columns {
+        dict.set_item(name, value.to_py(py))
+            .expect(DICT_INSERT_INFALLIBLE);
+    }
+    dict.into_any().unbind()
+}
+
 /// Collapse a burst-of-rows stream and marshal each row into a Python dict.
+///
+/// Suitable for **historical** reads, where each graph tick carries the rows of a
+/// single timestamp (one row when timestamps are distinct). Real-time sources must
+/// use [`bursts_to_py_stream`] instead — in real-time mode a tick can carry many
+/// rows, and `collapse` keeps only the last.
 fn rows_to_py_stream(stream: Rc<dyn Stream<Burst<PyPgRow>>>) -> PyStream {
-    let py_stream = stream.collapse().map(|row: PyPgRow| {
+    let py_stream = stream
+        .collapse()
+        .map(|row: PyPgRow| Python::attach(|py| PyElement::new(row_to_py_dict(py, &row))));
+    PyStream(py_stream)
+}
+
+/// Marshal each burst into a Python list of row dicts (one list per tick).
+///
+/// The real-time counterpart of [`rows_to_py_stream`]: lossless when several rows
+/// arrive in one graph cycle. Matches the etcd/kafka/redis sub bindings' shape.
+fn bursts_to_py_stream(stream: Rc<dyn Stream<Burst<PyPgRow>>>) -> PyStream {
+    let py_stream = stream.map(|burst: Burst<PyPgRow>| {
         Python::attach(|py| {
-            let dict = PyDict::new(py);
-            for (name, value) in &row.columns {
-                dict.set_item(name, value.to_py(py))
-                    .expect(DICT_INSERT_INFALLIBLE);
-            }
-            PyElement::new(dict.into_any().unbind())
+            let items: Vec<Py<PyAny>> = burst.iter().map(|row| row_to_py_dict(py, row)).collect();
+            PyElement::new(
+                PyList::new(py, items)
+                    .expect(LIST_NEW_INFALLIBLE)
+                    .into_any()
+                    .unbind(),
+            )
         })
     });
     PyStream(py_stream)
@@ -211,7 +240,8 @@ fn rows_to_py_stream(stream: Rc<dyn Stream<Burst<PyPgRow>>>) -> PyStream {
 /// The `query` is wrapped as a subquery and re-run past a time cursor whenever a
 /// notification arrives on `channel` (notifications are a wake-up signal only — rows
 /// always come from the query). **The query must select `time_col` as its first
-/// column.** Each tick yields a `dict` of `{column_name: value}`.
+/// column.** Each tick yields a `list` of `{column_name: value}` dicts — a list,
+/// not a single dict, because several rows can arrive in one real-time cycle.
 ///
 /// Install the notify trigger on the table first — `postgres_notify_trigger_sql`
 /// returns the SQL. Requires a real-time run (`realtime=True`); the time column must
@@ -250,7 +280,7 @@ pub fn py_postgres_sub(
                 c = postgres_timestamp(cursor),
             )
         });
-    rows_to_py_stream(stream)
+    bursts_to_py_stream(stream)
 }
 
 /// SQL that installs an AFTER INSERT trigger firing `pg_notify(channel, '')`.
