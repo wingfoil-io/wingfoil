@@ -30,6 +30,11 @@ jobs:
         with:
           shared-key: integration
 
+      - name: Install protoc
+        # The Python bindings build (maturin, below) compiles wingfoil-python,
+        # which pulls in etcd-client — its build script requires protoc.
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Pre-pull postgres image
         # testcontainers pulls the image lazily on first use, which is
         # vulnerable to transient registry flakes. Pull once up front with
