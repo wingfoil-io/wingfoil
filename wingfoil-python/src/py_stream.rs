@@ -548,6 +548,33 @@ impl PyStream {
         Ok(PyNode::new(node))
     }
 
+    /// Write this stream of dicts to a PostgreSQL table.
+    ///
+    /// The graph timestamp is prepended as the first column, so the target table's
+    /// columns must be `(timestamp, <columns in the given order>)`.
+    ///
+    /// Args:
+    ///     conn_str: libpq connection string, e.g.
+    ///         `"host=localhost user=postgres password=postgres dbname=postgres"`
+    ///     table: target table name
+    ///     columns: list of (name, type) tuples for the non-time columns.
+    ///              Supported types: "bool", "int"/"long", "float"/"double",
+    ///              "text"/"str", "bytes"/"bytea".
+    ///
+    /// Stream values must be dicts with the declared column names, or lists of such
+    /// dicts for multiple rows per tick.
+    #[pyo3(signature = (conn_str, table, columns))]
+    fn postgres_write(
+        &self,
+        conn_str: String,
+        table: String,
+        columns: Vec<(String, String)>,
+    ) -> PyNode {
+        PyNode::new(crate::py_postgres::py_postgres_write_inner(
+            &self.0, conn_str, table, columns,
+        ))
+    }
+
     /// Publish this stream of dicts to etcd via PUT.
     ///
     /// Stream values must be dicts with `"key"` (str) and `"value"` (bytes),

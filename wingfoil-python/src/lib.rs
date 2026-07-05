@@ -14,6 +14,7 @@ mod py_kafka;
 mod py_kdb;
 mod py_latency;
 mod py_otlp;
+mod py_postgres;
 mod py_prometheus;
 mod py_redis;
 mod py_stream;
@@ -205,6 +206,8 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_redis::py_redis_stream_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_read, module)?)?;
     module.add_function(wrap_pyfunction!(py_kdb::py_kdb_write, module)?)?;
+    module.add_function(wrap_pyfunction!(py_postgres::py_postgres_read, module)?)?;
+    module.add_function(wrap_pyfunction!(py_postgres::py_postgres_write, module)?)?;
     module.add_function(wrap_pyfunction!(py_zmq::py_zmq_sub, module)?)?;
     #[cfg(feature = "iceoryx2")]
     module.add_function(wrap_pyfunction!(py_iceoryx2::py_iceoryx2_sub, module)?)?;

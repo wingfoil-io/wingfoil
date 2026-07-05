@@ -60,5 +60,6 @@ markers = [
     "requires_kafka: needs a Kafka-compatible broker on localhost:9092",
     "requires_redis: needs Redis on localhost:6379",
     "requires_aeron: needs an Aeron media driver (and wingfoil built with --features aeron)",
+    "requires_postgres: needs PostgreSQL on localhost:5432",
 ]
-addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2 and not requires_web and not requires_kafka and not requires_redis and not requires_aeron'"
+addopts = "-m 'not requires_etcd and not requires_kdb and not requires_otel and not requires_iceoryx2 and not requires_web and not requires_kafka and not requires_redis and not requires_aeron and not requires_postgres'"
