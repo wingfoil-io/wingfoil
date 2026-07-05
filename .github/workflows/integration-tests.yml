@@ -50,6 +50,11 @@ jobs:
     uses: ./.github/workflows/aeron-integration.yml
     secrets: inherit
 
+  augurs-integration:
+    name: augurs Integration Tests
+    uses: ./.github/workflows/augurs-integration.yml
+    secrets: inherit
+
   web-integration:
     name: Web Integration Tests
     uses: ./.github/workflows/web-integration.yml
