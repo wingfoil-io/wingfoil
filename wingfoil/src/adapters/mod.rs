@@ -4,10 +4,10 @@
 pub mod aeron;
 #[cfg(feature = "kdb")]
 pub mod cache;
-// Shared adapter helpers (e.g. the out-of-window row filter). Add your adapter's
-// feature to this gate when it becomes the first non-kdb consumer.
-#[cfg(feature = "kdb")]
-pub(crate) mod common;
+/// Shared helpers reusable across I/O adapters (e.g. the out-of-window row
+/// filter for historical reads). Always compiled so any adapter can use it
+/// without touching feature gates.
+pub mod common;
 #[cfg(feature = "csv")]
 pub mod csv;
 #[cfg(feature = "etcd")]

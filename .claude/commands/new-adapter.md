@@ -63,9 +63,8 @@ for (time, record) in rows {
 filter.finish();                          // one summary warn! if anything was dropped
 ```
 
-`adapters::common` is feature-gated in `wingfoil/src/adapters/mod.rs` (currently
-`#[cfg(feature = "kdb")]`); add your adapter's feature to that gate when you
-become the first non-kdb consumer. Reference implementation: `kdb_read` /
+`adapters::common` is always compiled (no feature gate), so it's available to
+every adapter out of the box. Reference implementation: `kdb_read` /
 `kdb_read_cached` in `wingfoil/src/adapters/kdb/`.
 
 ## 1. Branch

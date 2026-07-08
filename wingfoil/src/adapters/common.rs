@@ -13,7 +13,7 @@ use crate::time::NanoTime;
 
 /// A half-open on-graph time window `[lo, hi)`.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TimeWindow {
+pub struct TimeWindow {
     lo: NanoTime,
     hi: NanoTime,
 }
@@ -24,7 +24,7 @@ impl TimeWindow {
     /// Use when a source's natural boundaries (`t0`, `t1`) may fall outside the
     /// requested range — e.g. period-aligned query slices whose first `t0`
     /// precedes `start`, or a final slice whose `t1` overshoots `end`.
-    pub(crate) fn clamp(t0: NanoTime, t1: NanoTime, start: NanoTime, end: NanoTime) -> Self {
+    pub fn clamp(t0: NanoTime, t1: NanoTime, start: NanoTime, end: NanoTime) -> Self {
         Self {
             lo: t0.max(start),
             hi: t1.min(end),
@@ -32,7 +32,7 @@ impl TimeWindow {
     }
 
     /// True if `time` is within `[lo, hi)`.
-    pub(crate) fn contains(&self, time: NanoTime) -> bool {
+    pub fn contains(&self, time: NanoTime) -> bool {
         self.lo <= time && time < self.hi
     }
 }
@@ -51,14 +51,14 @@ impl TimeWindow {
 /// }
 /// filter.finish();
 /// ```
-pub(crate) struct WindowFilter {
+pub struct WindowFilter {
     label: &'static str,
     window: TimeWindow,
     dropped: usize,
 }
 
 impl WindowFilter {
-    pub(crate) fn new(label: &'static str, window: TimeWindow) -> Self {
+    pub fn new(label: &'static str, window: TimeWindow) -> Self {
         Self {
             label,
             window,
@@ -68,7 +68,7 @@ impl WindowFilter {
 
     /// Returns `true` if the row at `time` should be emitted; otherwise records
     /// a discard.
-    pub(crate) fn keep(&mut self, time: NanoTime) -> bool {
+    pub fn keep(&mut self, time: NanoTime) -> bool {
         if self.window.contains(time) {
             true
         } else {
@@ -79,7 +79,7 @@ impl WindowFilter {
 
     /// Emit a single summary warning if any rows were discarded. Consumes `self`
     /// so it is called exactly once per batch.
-    pub(crate) fn finish(self) {
+    pub fn finish(self) {
         if self.dropped > 0 {
             log::warn!(
                 "{}: dropped {} row(s) outside the requested window [{:?}, {:?}); \
