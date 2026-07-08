@@ -17,7 +17,8 @@
 //! [`fix_connect_tls_logon`] with a [`FixLogon`]. [`FixLogon::custom`] hands a
 //! builder the [`LogonContext`] (SenderCompID/TargetCompID/MsgSeqNum/SendingTime)
 //! so it can attach a signature bound to the exact Logon header — e.g. Binance's
-//! Ed25519 `RawData` (tag 96), signed over tags 35/49/56/34/52 joined by SOH.
+//! Ed25519 `RawData` (tag 96), preceded by `RawDataLength` (tag 95), signed over
+//! tags 35/49/56/34/52 joined by SOH.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -52,7 +53,7 @@ const TAG_TEST_REQ_ID: u32 = 112;
 const TAG_ENCRYPT_METHOD: u32 = 98;
 const TAG_USERNAME: u32 = 553;
 const TAG_PASSWORD: u32 = 554;
-const TAG_RESET_ON_LOGON: u32 = 141;
+const TAG_RESET_SEQ_NUM_FLAG: u32 = 141;
 const TAG_TEXT: u32 = 58;
 
 const MSG_HEARTBEAT: &str = "0";
@@ -484,6 +485,29 @@ impl FixSession {
         }
     }
 
+    /// Encode `msg_type` with the current sequence number and `sending_time`,
+    /// then write and flush it. Shared by [`send`](Self::send) and
+    /// [`send_with`](Self::send_with) so both stamp the frame identically.
+    fn write_encoded<W: Write>(
+        &mut self,
+        sock: &mut W,
+        msg_type: &str,
+        sending_time: &str,
+        extra: &[(u32, String)],
+    ) -> anyhow::Result<()> {
+        let bytes = encode_message(
+            msg_type,
+            &self.sender_comp_id,
+            &self.target_comp_id,
+            self.out_seq,
+            sending_time,
+            extra,
+        );
+        sock.write_all(&bytes)?;
+        sock.flush()?;
+        Ok(())
+    }
+
     /// Stamp and send a message, building the application fields from the
     /// sequence number and SendingTime this message will carry. The two are
     /// computed once here so a signer sees exactly what goes on the wire.
@@ -496,17 +520,7 @@ impl FixSession {
         self.out_seq += 1;
         let sending_time = now_sending_time();
         let extra = build_extra(self.out_seq, &sending_time);
-        let bytes = encode_message(
-            msg_type,
-            &self.sender_comp_id,
-            &self.target_comp_id,
-            self.out_seq,
-            &sending_time,
-            &extra,
-        );
-        sock.write_all(&bytes)?;
-        sock.flush()?;
-        Ok(())
+        self.write_encoded(sock, msg_type, &sending_time, &extra)
     }
 
     fn send<W: Write>(
@@ -515,7 +529,9 @@ impl FixSession {
         msg_type: &str,
         extra: &[(u32, String)],
     ) -> anyhow::Result<()> {
-        self.send_with(sock, msg_type, |_seq, _sending_time| extra.to_vec())
+        self.out_seq += 1;
+        let sending_time = now_sending_time();
+        self.write_encoded(sock, msg_type, &sending_time, extra)
     }
 
     fn send_logon<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
@@ -529,7 +545,7 @@ impl FixSession {
                 // ResetSeqNumFlag=Y tells the counterparty to reset sequence
                 // numbers, avoiding rejections due to stale expected sequence
                 // numbers from previous sessions.
-                (TAG_RESET_ON_LOGON, "Y".to_string()),
+                (TAG_RESET_SEQ_NUM_FLAG, "Y".to_string()),
             ];
             match &logon {
                 FixLogon::None => {}
@@ -1561,8 +1577,8 @@ pub fn fix_connect_tls(
 /// Same as [`fix_connect_tls`] but takes a [`FixLogon`] so the caller controls
 /// the authentication fields. Use [`FixLogon::custom`] to attach a signature
 /// computed over the Logon header — for example Binance's Ed25519 `RawData`
-/// (tag 96), signed over tags 35/49/56/34/52 joined by SOH, which the
-/// [`LogonContext`] exposes.
+/// (tag 96, preceded by `RawDataLength` tag 95), signed over tags
+/// 35/49/56/34/52 joined by SOH, which the [`LogonContext`] exposes.
 pub fn fix_connect_tls_logon(
     host: &str,
     port: u16,
@@ -1719,6 +1735,26 @@ mod tests {
             "expected signed RawData bound to seq 1, got {:?}",
             msg.field(96)
         );
+    }
+
+    /// A [`FixLogon::Password`] session sends Username (tag 553 = SenderCompID)
+    /// and Password (tag 554) in the Logon, alongside the standard defaults.
+    /// This is the LMAX-style login path `fix_connect_tls` delegates to.
+    #[test]
+    fn password_logon_sends_username_and_password() {
+        let mut session =
+            FixSession::new_with_logon("ME", "YOU", FixLogon::Password("secret".to_string()));
+
+        let mut buf: Vec<u8> = Vec::new();
+        session.send_logon(&mut buf).expect("logon encodes");
+        let (msg_bytes, _) = find_message(&buf).expect("message not found");
+        let msg = build_message(decode_fields(&msg_bytes)).expect("parse failed");
+
+        assert_eq!(msg.msg_type, "A");
+        assert_eq!(msg.field(98), Some("0")); // EncryptMethod default
+        assert_eq!(msg.field(141), Some("Y")); // ResetSeqNumFlag default
+        assert_eq!(msg.field(553), Some("ME")); // Username = SenderCompID
+        assert_eq!(msg.field(554), Some("secret")); // Password
     }
 
     #[test]
