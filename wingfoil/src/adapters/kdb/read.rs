@@ -321,14 +321,23 @@ pub trait KdbDeserialize: Sized {
 
 /// Core streaming loop driven by a caller-supplied query closure.
 ///
-/// Calls `query_fn()` before each chunk. Returns `None` to stop, or
-/// `Some(query_string)` to execute next.
+/// Calls `next_slice()` before each chunk. Returns `None` to stop, or
+/// `Some((query, lo, hi))` — the query to execute plus the half-open window
+/// `[lo, hi)` the resulting rows are expected to fall in.
+///
+/// Rows whose extracted time falls outside `[lo, hi)` are **dropped** (with a
+/// single per-slice warning). This is necessary because callers build their own
+/// filters and the first slice starts at the period boundary at or before
+/// `start_time`, so a query can legitimately return rows before `start_time`,
+/// after `end_time`, or otherwise beyond the slice it was asked to fill. The
+/// graph clock is monotonic and bounded to the run window, so emitting such rows
+/// would abort the run.
 ///
 /// `prev_time` is reset each chunk so time-of-day columns work correctly when
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    mut query_fn: impl FnMut() -> Option<String> + Send + 'static,
+    mut next_slice: impl FnMut() -> Option<(String, NanoTime, NanoTime)> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
     T: KdbDeserialize + Send + 'static,
@@ -336,7 +345,7 @@ where
     async_stream::stream! {
         let mut interner = SymbolInterner::default();
 
-        'outer: while let Some(query) = query_fn() {
+        'outer: while let Some((query, lo, hi)) = next_slice() {
             info!("KDB query: {query}");
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
@@ -353,11 +362,21 @@ where
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
             let mut prev_time: Option<NanoTime> = None;
+            let mut dropped: usize = 0;
             for row in &rows {
                 let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
                     Err(e) => { yield Err(e.into()); break 'outer; }
                 };
+
+                // Drop rows the query returned outside this slice's [lo, hi)
+                // window (before start_time, at/after end_time, or beyond the
+                // slice bounds). Emitting them would drive the monotonic graph
+                // clock backwards and abort the run.
+                if time < lo || time >= hi {
+                    dropped += 1;
+                    continue;
+                }
 
                 if let Some(prev) = prev_time
                     && time < prev
@@ -371,6 +390,13 @@ where
                 prev_time = Some(time);
 
                 yield Ok((time, record));
+            }
+
+            if dropped > 0 {
+                log::warn!(
+                    "kdb_read: dropped {dropped} row(s) outside the requested window \
+                    [{lo:?}, {hi:?}); the query returned data beyond the slice it was asked to fill"
+                );
             }
         }
     }
@@ -490,9 +516,17 @@ where
 
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move || -> Option<String> {
-                let (within, date, iteration) = slices_iter.next()?;
-                Some(query_fn(within, date, iteration))
+            let slice_fn = move || -> Option<(String, NanoTime, NanoTime)> {
+                let ((t0, t1), date, iteration) = slices_iter.next()?;
+                // The query still uses the period-aligned (t0, t1) for clean
+                // round-number boundaries, but rows are clamped to the run's
+                // [start_time, end_time) so out-of-window rows are dropped rather
+                // than aborting the run. `t0` may precede `start_time` on the
+                // first slice; `t1` may exceed `end_time` on the last.
+                let lo = t0.max(start_time);
+                let hi = t1.min(end_time);
+                let query = query_fn((t0, t1), date, iteration);
+                Some((query, lo, hi))
             };
 
             Ok(chunk_stream::<T>(socket, slice_fn))
@@ -834,11 +868,13 @@ mod tests {
         assert_eq!(slices.last().unwrap().2, 0);
     }
 
-    /// DEFECT (part 1/2): when `start_time` is not aligned to `period`, the first
-    /// slice's `t0` is the period boundary *at or before* `start_time` — i.e.
-    /// strictly before it. A caller's documented `time >= t0j` filter therefore
-    /// selects rows in `[t0, start_time)`, whose on-graph time is before the run's
-    /// `start_time`.
+    /// When `start_time` is not aligned to `period`, the first slice's `t0` is the
+    /// period boundary *at or before* `start_time` — i.e. strictly before it. A
+    /// caller's documented `time >= t0j` filter therefore selects rows in
+    /// `[t0, start_time)`, whose on-graph time is before the run's `start_time`.
+    /// `kdb_read` clamps emitted rows to `[start_time, end_time)` so these are
+    /// dropped rather than aborting the run; this test pins the over-read that
+    /// makes the clamp necessary.
     #[test]
     fn test_first_slice_precedes_unaligned_start() {
         let epoch = kdb_epoch();
@@ -862,10 +898,12 @@ mod tests {
         );
     }
 
-    /// DEFECT (part 2/2): a value whose time is before `start_time` — exactly what
-    /// part 1 shows the first slice returns — aborts a historical run. This is the
-    /// mechanism by which `kdb_read` "can throw": the engine forbids delivering a
-    /// historical value earlier than the graph clock, which starts at `start_time`.
+    /// Engine constraint that motivates the clamp: a value whose time is before
+    /// `start_time` aborts a historical run. The engine forbids delivering a
+    /// historical value earlier than the graph clock (which starts at
+    /// `start_time`) — in release with an explicit error, in debug via a
+    /// `NanoTime` subtraction underflow. `kdb_read` avoids both by dropping such
+    /// rows; this test pins why unclamped rows are unsafe to emit.
     #[test]
     fn test_row_before_start_time_aborts_run() {
         use crate::nodes::{NodeOperators, StreamOperators};
@@ -895,11 +933,12 @@ mod tests {
         );
     }
 
-    /// DEFECT (related): `kdb_read` does not clamp emitted rows to the slice
-    /// window — it trusts the caller's query. If a slice returns a row *ahead* of
-    /// its `[t0, t1)` window, the graph clock jumps forward to it; a later slice's
-    /// legitimate in-window row is then behind the clock and the run is aborted by
-    /// the same monotonic-time check. So out-of-window rows throw too.
+    /// Engine constraint (ahead-of-window case): if a slice's query returns a row
+    /// *ahead* of its `[t0, t1)` window, the graph clock jumps forward to it and a
+    /// later slice's legitimate in-window row would then be behind the clock,
+    /// aborting the run via the same monotonic-time check. `kdb_read`'s per-slice
+    /// clamp (drop at/after `hi`) prevents the forward jump; this test pins the
+    /// hazard the upper bound guards against.
     #[test]
     fn test_row_ahead_of_window_then_in_window_aborts_run() {
         use crate::nodes::{NodeOperators, StreamOperators};

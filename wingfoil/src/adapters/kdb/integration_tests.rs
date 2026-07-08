@@ -838,3 +838,80 @@ fn test_kdb_sub_realtime_receives_published_rows() -> Result<()> {
     );
     Ok(())
 }
+
+// --- kdb_read out-of-window row handling ---
+
+/// Regression: `kdb_read` must drop rows the query returns outside the run's
+/// `[start_time, end_time)` window rather than aborting the run.
+///
+/// When `start_time` is not aligned to `period`, the first slice begins at the
+/// period boundary *before* `start_time` (for clean round-number queries), so a
+/// `time >= t0` filter returns rows earlier than `start_time`. Those rows have
+/// on-graph time before the graph clock; emitting them would abort the run. This
+/// test seeds one pre-start row plus three in-window rows and asserts the run
+/// succeeds with only the three in-window rows delivered.
+#[test]
+fn test_kdb_read_drops_rows_outside_window() -> Result<()> {
+    let _ = env_logger::try_init();
+    let conn = TestDataBuilder::connection();
+    let rt = tokio::runtime::Runtime::new()?;
+
+    const TBL: &str = "read_window_trades";
+
+    // Table (time, sym, price, qty) with rows at 75s, 90s, 150s, 210s past the
+    // KDB epoch. Start at 90s with a 60s period, so the first slice is
+    // [60s, 120s) — its `time >= 60s` filter also returns the 75s row, which is
+    // before start_time and must be dropped.
+    rt.block_on(async {
+        let mut s = connect(&conn).await?;
+        q_exec(
+            &mut s,
+            &format!("{TBL}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())"),
+        )
+        .await?;
+        q_exec(
+            &mut s,
+            &format!(
+                "insert[`{TBL};(2000.01.01D00:00:00+1000000000*75 90 150 210;\
+                 `EARLY`AAPL`GOOG`MSFT;100 101 102 103f;10 20 30 40j)]"
+            ),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // 90s past the epoch — deliberately NOT aligned to the 60s period.
+    let start = NanoTime::from_kdb_timestamp(90 * 1_000_000_000);
+    let period = std::time::Duration::from_secs(60);
+    let stream = kdb_read::<TestTick>(conn.clone(), period, move |(t0, t1), _date, _| {
+        format!(
+            "select from {TBL} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            t0.to_kdb_timestamp(),
+            t1.to_kdb_timestamp(),
+        )
+    });
+    let collected = stream.collapse().collect();
+    // Run through 270s (start + 180s), covering the 90s/150s/210s rows.
+    let run_result = collected.clone().run(
+        RunMode::HistoricalFrom(start),
+        RunFor::Duration(std::time::Duration::from_secs(180)),
+    );
+
+    let teardown_result = rt.block_on(async {
+        let mut s = connect(&conn).await?;
+        q_exec(&mut s, &format!("delete {TBL} from `.")).await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    run_result?; // must NOT throw despite the pre-start (75s) row
+    teardown_result?;
+
+    let rows = collected.peek_value();
+    let syms: Vec<String> = rows.iter().map(|v| v.value.sym.to_string()).collect();
+    assert_eq!(
+        syms,
+        vec!["AAPL", "GOOG", "MSFT"],
+        "the pre-start `EARLY` row must be dropped; got {syms:?}"
+    );
+    Ok(())
+}

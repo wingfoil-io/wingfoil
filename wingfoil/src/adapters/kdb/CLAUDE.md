@@ -24,6 +24,11 @@ kdb/
   - Use `time >= t0j, time < t1j` in the q filter for clean round-number boundaries
   - Requires `RunMode::HistoricalFrom` (non-zero start) and `RunFor::Duration`
   - Caller constructs the full query — date/time filters, partition hints, etc.
+  - Rows a query returns outside the run window `[start_time, end_time)` are
+    dropped (with a per-slice warning), not emitted on-graph. This matters because
+    the first slice starts at the period boundary at/before `start_time`, so a
+    `time >= t0j` filter can legitimately return rows before `start_time`; emitting
+    them would drive the monotonic graph clock backwards and abort the run
   - Terminates automatically when all slices are exhausted
 - `kdb_read_cached()` - Cached variant of `kdb_read`
   - Same signature as `kdb_read` plus a `cache_dir: impl Into<PathBuf>` parameter
