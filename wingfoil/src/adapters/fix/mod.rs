@@ -12,6 +12,12 @@
 //! Use [`fix_connect_tls`] to connect to TLS-secured endpoints (e.g. LMAX London Demo).
 //! It returns a [`FixConnection`] with data/status streams and
 //! [`fix_sub`](FixConnection::fix_sub) for declarative market data subscription.
+//!
+//! For venues that authenticate with something other than a password, use
+//! [`fix_connect_tls_logon`] with a [`FixLogon`]. [`FixLogon::custom`] hands a
+//! builder the [`LogonContext`] (SenderCompID/TargetCompID/MsgSeqNum/SendingTime)
+//! so it can attach a signature bound to the exact Logon header — e.g. Binance's
+//! Ed25519 `RawData` (tag 96), signed over tags 35/49/56/34/52 joined by SOH.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -127,6 +133,61 @@ pub enum FixPollMode {
     AlwaysSpin,
     /// Background thread + channel — shares CPU with other work.
     Threaded,
+}
+
+/// The subset of the Logon message the header is stamped with at send time,
+/// handed to a [`FixLogon::Custom`] builder so it can compute an
+/// authentication payload bound to the exact bytes going on the wire.
+///
+/// The canonical Binance/Ed25519 signing payload, for example, is the values of
+/// tags 35, 49, 56, 34, 52 joined by SOH — every one of which is available here.
+pub struct LogonContext<'a> {
+    /// MsgType (tag 35) — always `"A"` for a Logon.
+    pub msg_type: &'a str,
+    /// SenderCompID (tag 49).
+    pub sender_comp_id: &'a str,
+    /// TargetCompID (tag 56).
+    pub target_comp_id: &'a str,
+    /// MsgSeqNum (tag 34) this Logon will carry.
+    pub msg_seq_num: u64,
+    /// SendingTime (tag 52) this Logon will carry, exactly as formatted on the wire.
+    pub sending_time: &'a str,
+}
+
+/// How a session authenticates in its Logon message.
+///
+/// The default `None` sends only EncryptMethod/HeartBtInt/ResetSeqNumFlag.
+/// `Password` adds Username (tag 553 = SenderCompID) and Password (tag 554),
+/// as LMAX and similar venues expect. `Custom` hands a builder the
+/// [`LogonContext`] and appends whatever tag/value pairs it returns — the seam
+/// venues like Binance use to attach an Ed25519 signature (RawData, tag 96)
+/// computed over the logon header.
+#[derive(Clone)]
+pub enum FixLogon {
+    /// No authentication fields.
+    None,
+    /// Username (tag 553 = SenderCompID) + Password (tag 554).
+    Password(String),
+    /// Caller-supplied builder, e.g. an Ed25519 RawData signature.
+    Custom(Arc<dyn Fn(&LogonContext) -> Vec<(u32, String)> + Send + Sync>),
+}
+
+impl FixLogon {
+    /// Wrap a logon-field builder (see [`FixLogon::Custom`]).
+    pub fn custom(
+        builder: impl Fn(&LogonContext) -> Vec<(u32, String)> + Send + Sync + 'static,
+    ) -> Self {
+        FixLogon::Custom(Arc::new(builder))
+    }
+}
+
+impl From<Option<&str>> for FixLogon {
+    fn from(password: Option<&str>) -> Self {
+        match password {
+            Some(p) => FixLogon::Password(p.to_string()),
+            None => FixLogon::None,
+        }
+    }
 }
 
 /// Bounded capacity of the outbound inject channel. `try_send` returns full
@@ -270,11 +331,20 @@ fn append_field(buf: &mut Vec<u8>, tag: u32, value: &str) {
     buf.push(SOH);
 }
 
+/// Current UTC time formatted as a FIX `SendingTime` (tag 52) with millisecond
+/// precision (`YYYYMMDD-HH:MM:SS.sss`). Millisecond precision is what venues
+/// like Binance require, and it is the exact string a Logon signature is
+/// computed over, so it is formatted once and threaded through both.
+fn now_sending_time() -> String {
+    chrono::Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string()
+}
+
 fn encode_message(
     msg_type: &str,
     sender: &str,
     target: &str,
     seq: u64,
+    sending_time: &str,
     extra: &[(u32, String)],
 ) -> Vec<u8> {
     let mut body = Vec::<u8>::new();
@@ -282,8 +352,7 @@ fn encode_message(
     append_field(&mut body, TAG_SENDER_COMP_ID, sender);
     append_field(&mut body, TAG_TARGET_COMP_ID, target);
     append_field(&mut body, TAG_MSG_SEQ_NUM, &seq.to_string());
-    let ts = chrono::Utc::now().format("%Y%m%d-%H:%M:%S").to_string();
-    append_field(&mut body, TAG_SENDING_TIME, &ts);
+    append_field(&mut body, TAG_SENDING_TIME, sending_time);
     for (tag, val) in extra {
         append_field(&mut body, *tag, val);
     }
@@ -397,27 +466,47 @@ struct FixSession {
     sender_comp_id: String,
     target_comp_id: String,
     out_seq: u64,
-    /// Optional credentials: sent as tags 553 (Username) and 554 (Password) in Logon.
-    password: Option<String>,
+    /// How the Logon message authenticates (password, custom signer, or none).
+    logon: FixLogon,
 }
 
 impl FixSession {
     fn new(sender: &str, target: &str) -> Self {
+        Self::new_with_logon(sender, target, FixLogon::None)
+    }
+
+    fn new_with_logon(sender: &str, target: &str, logon: FixLogon) -> Self {
         Self {
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
             out_seq: 0,
-            password: None,
+            logon,
         }
     }
 
-    fn new_with_password(sender: &str, target: &str, password: &str) -> Self {
-        Self {
-            sender_comp_id: sender.to_string(),
-            target_comp_id: target.to_string(),
-            out_seq: 0,
-            password: Some(password.to_string()),
-        }
+    /// Stamp and send a message, building the application fields from the
+    /// sequence number and SendingTime this message will carry. The two are
+    /// computed once here so a signer sees exactly what goes on the wire.
+    fn send_with<W: Write>(
+        &mut self,
+        sock: &mut W,
+        msg_type: &str,
+        build_extra: impl FnOnce(u64, &str) -> Vec<(u32, String)>,
+    ) -> anyhow::Result<()> {
+        self.out_seq += 1;
+        let sending_time = now_sending_time();
+        let extra = build_extra(self.out_seq, &sending_time);
+        let bytes = encode_message(
+            msg_type,
+            &self.sender_comp_id,
+            &self.target_comp_id,
+            self.out_seq,
+            &sending_time,
+            &extra,
+        );
+        sock.write_all(&bytes)?;
+        sock.flush()?;
+        Ok(())
     }
 
     fn send<W: Write>(
@@ -426,35 +515,43 @@ impl FixSession {
         msg_type: &str,
         extra: &[(u32, String)],
     ) -> anyhow::Result<()> {
-        self.out_seq += 1;
-        let bytes = encode_message(
-            msg_type,
-            &self.sender_comp_id,
-            &self.target_comp_id,
-            self.out_seq,
-            extra,
-        );
-        sock.write_all(&bytes)?;
-        sock.flush()?;
-        Ok(())
+        self.send_with(sock, msg_type, |_seq, _sending_time| extra.to_vec())
     }
 
     fn send_logon<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
-        let mut extra = vec![
-            (TAG_ENCRYPT_METHOD, "0".to_string()),
-            (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
-            // ResetOnLogon=Y tells the counterparty to reset sequence numbers,
-            // avoiding rejections due to stale expected sequence numbers from
-            // previous sessions.
-            (TAG_RESET_ON_LOGON, "Y".to_string()),
-        ];
-        if let Some(ref pwd) = self.password.clone() {
-            // LMAX and other venues require tag 553 (Username) = SenderCompID
-            // and tag 554 (Password) in the Logon message.
-            extra.push((TAG_USERNAME, self.sender_comp_id.clone()));
-            extra.push((TAG_PASSWORD, pwd.clone()));
-        }
-        self.send(sock, MSG_LOGON, &extra)
+        let logon = self.logon.clone();
+        let sender_id = self.sender_comp_id.clone();
+        let target_id = self.target_comp_id.clone();
+        self.send_with(sock, MSG_LOGON, move |seq, sending_time| {
+            let mut extra = vec![
+                (TAG_ENCRYPT_METHOD, "0".to_string()),
+                (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
+                // ResetSeqNumFlag=Y tells the counterparty to reset sequence
+                // numbers, avoiding rejections due to stale expected sequence
+                // numbers from previous sessions.
+                (TAG_RESET_ON_LOGON, "Y".to_string()),
+            ];
+            match &logon {
+                FixLogon::None => {}
+                FixLogon::Password(pwd) => {
+                    // LMAX and other venues require tag 553 (Username) =
+                    // SenderCompID and tag 554 (Password) in the Logon message.
+                    extra.push((TAG_USERNAME, sender_id.clone()));
+                    extra.push((TAG_PASSWORD, pwd.clone()));
+                }
+                FixLogon::Custom(builder) => {
+                    let ctx = LogonContext {
+                        msg_type: MSG_LOGON,
+                        sender_comp_id: &sender_id,
+                        target_comp_id: &target_id,
+                        msg_seq_num: seq,
+                        sending_time,
+                    };
+                    extra.extend(builder(&ctx));
+                }
+            }
+            extra
+        })
     }
 
     fn send_logout<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
@@ -937,7 +1034,7 @@ struct FixThreadedSource {
     port: u16,
     sender_comp_id: String,
     target_comp_id: String,
-    password: Option<String>,
+    logon: FixLogon,
     tls: bool,
     is_acceptor: bool,
     // Graph integration
@@ -967,7 +1064,7 @@ impl FixThreadedSource {
             port,
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
-            password: None,
+            logon: FixLogon::None,
             tls: false,
             is_acceptor: false,
             inner,
@@ -985,7 +1082,7 @@ impl FixThreadedSource {
         port: u16,
         sender: &str,
         target: &str,
-        password: Option<&str>,
+        logon: FixLogon,
     ) -> Self {
         let (chan_sender, receiver) = channel_pair(None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
@@ -995,7 +1092,7 @@ impl FixThreadedSource {
             port,
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
-            password: password.map(str::to_string),
+            logon,
             tls: true,
             is_acceptor: false,
             inner,
@@ -1017,7 +1114,7 @@ impl FixThreadedSource {
             port,
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
-            password: None,
+            logon: FixLogon::None,
             tls: false,
             is_acceptor: true,
             inner,
@@ -1062,7 +1159,7 @@ impl MutableNode for FixThreadedSource {
         let port = self.port;
         let sender_id = self.sender_comp_id.clone();
         let target_id = self.target_comp_id.clone();
-        let password = self.password.clone();
+        let logon = self.logon.clone();
         let tls = self.tls;
         let is_acceptor = self.is_acceptor;
 
@@ -1144,11 +1241,7 @@ impl MutableNode for FixThreadedSource {
                     }
                 }
 
-                let mut session = if let Some(ref pwd) = password {
-                    FixSession::new_with_password(&sender_id, &target_id, pwd)
-                } else {
-                    FixSession::new(&sender_id, &target_id)
-                };
+                let mut session = FixSession::new_with_logon(&sender_id, &target_id, logon.clone());
 
                 let still_open = if tls {
                     // Set a short read timeout so the session loop can flush the inject queue
@@ -1454,8 +1547,31 @@ pub fn fix_connect_tls(
     target_comp_id: &str,
     password: Option<&str>,
 ) -> FixConnection {
+    fix_connect_tls_logon(
+        host,
+        port,
+        sender_comp_id,
+        target_comp_id,
+        FixLogon::from(password),
+    )
+}
+
+/// Connect to a TLS-secured FIX acceptor as an initiator with a custom Logon.
+///
+/// Same as [`fix_connect_tls`] but takes a [`FixLogon`] so the caller controls
+/// the authentication fields. Use [`FixLogon::custom`] to attach a signature
+/// computed over the Logon header — for example Binance's Ed25519 `RawData`
+/// (tag 96), signed over tags 35/49/56/34/52 joined by SOH, which the
+/// [`LogonContext`] exposes.
+pub fn fix_connect_tls_logon(
+    host: &str,
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    logon: FixLogon,
+) -> FixConnection {
     let src =
-        FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, password);
+        FixThreadedSource::new_initiator_tls(host, port, sender_comp_id, target_comp_id, logon);
     let sender = FixSender {
         sender: src.inject_sender.clone(),
     };
@@ -1551,6 +1667,7 @@ mod tests {
             "SENDER",
             "TARGET",
             1,
+            "20240627-11:17:25.223",
             &[
                 (55, "AAPL".to_string()),
                 (54, "1".to_string()),
@@ -1566,6 +1683,42 @@ mod tests {
         assert_eq!(msg.field(54), Some("1"));
         assert_eq!(msg.field(38), Some("100"));
         assert_eq!(msg.field(44), Some("150.00"));
+    }
+
+    /// A [`FixLogon::Custom`] builder is invoked with the seq/SendingTime the
+    /// Logon carries, and its returned fields land in the encoded message
+    /// alongside the standard EncryptMethod/ResetSeqNumFlag defaults. This is
+    /// the seam the Binance Ed25519 signer plugs into.
+    #[test]
+    fn custom_logon_fields_are_sent() {
+        let mut session = FixSession::new_with_logon(
+            "ME",
+            "YOU",
+            FixLogon::custom(|ctx: &LogonContext| {
+                assert_eq!(ctx.msg_type, "A");
+                assert_eq!(ctx.sender_comp_id, "ME");
+                vec![
+                    (553, "api-key".to_string()),
+                    (96, format!("sig:{}:{}", ctx.msg_seq_num, ctx.sending_time)),
+                ]
+            }),
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        session.send_logon(&mut buf).expect("logon encodes");
+        let (msg_bytes, _) = find_message(&buf).expect("message not found");
+        let msg = build_message(decode_fields(&msg_bytes)).expect("parse failed");
+
+        assert_eq!(msg.msg_type, "A");
+        assert_eq!(msg.field(98), Some("0")); // EncryptMethod default
+        assert_eq!(msg.field(141), Some("Y")); // ResetSeqNumFlag default
+        assert_eq!(msg.field(553), Some("api-key"));
+        // Signature was bound to the seq (1) and the wire SendingTime.
+        assert!(
+            msg.field(96).is_some_and(|s| s.starts_with("sig:1:")),
+            "expected signed RawData bound to seq 1, got {:?}",
+            msg.field(96)
+        );
     }
 
     #[test]
