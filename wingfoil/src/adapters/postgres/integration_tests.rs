@@ -116,7 +116,7 @@ fn seed_trades(conn: &PostgresConnection, n: usize) -> anyhow::Result<()> {
 
 /// One-day historical read with hourly slices.
 fn read_trades(conn: PostgresConnection) -> Rc<dyn Stream<Burst<TestTrade>>> {
-    postgres_read::<TestTrade, _>(
+    postgres_read::<TestTrade>(
         conn,
         std::time::Duration::from_secs(3600),
         |(t0, t1), _date, _iter| {

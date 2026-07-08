@@ -175,7 +175,7 @@ pub fn py_postgres_read(
     // Strip a trailing `;` so `SELECT ...;` survives the subquery wrap below.
     let query = query.trim().trim_end_matches(';').trim_end().to_string();
     let tc = quote_ident(&time_col);
-    let stream: Rc<dyn Stream<Burst<PyPgRow>>> = postgres_read::<PyPgRow, _>(
+    let stream: Rc<dyn Stream<Burst<PyPgRow>>> = postgres_read::<PyPgRow>(
         conn,
         std::time::Duration::from_secs(chunk_size),
         move |(t0, t1), _date, _iter| {

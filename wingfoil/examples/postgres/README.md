@@ -70,7 +70,7 @@ fn main() -> Result<()> {
         .postgres_write(conn.clone(), "example_trades")
         .run(run_mode, run_for)?;
 
-    let read = postgres_read::<Trade, _>(
+    let read = postgres_read::<Trade>(
         conn,
         std::time::Duration::from_secs(86400),
         move |(t0, t1), _date, _iter| {

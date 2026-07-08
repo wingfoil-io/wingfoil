@@ -43,7 +43,7 @@
 //! }
 //!
 //! let conn = PostgresConnection::new("host=localhost user=postgres password=postgres dbname=postgres");
-//! postgres_read::<Trade, _>(conn, std::time::Duration::from_secs(3600), |(t0, t1), _date, _| {
+//! postgres_read::<Trade>(conn, std::time::Duration::from_secs(3600), |(t0, t1), _date, _| {
 //!     format!(
 //!         "SELECT time, sym, price, qty FROM trades \
 //!          WHERE time >= '{}' AND time < '{}' ORDER BY time",

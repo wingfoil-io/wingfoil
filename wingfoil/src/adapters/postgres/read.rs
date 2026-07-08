@@ -83,14 +83,13 @@ pub fn postgres_timestamp(time: NanoTime) -> String {
 /// - `RunMode::HistoricalFrom` with a non-zero start time.
 /// - `RunFor::Duration` (not `Forever`/`Cycles`) so the slice set is bounded.
 #[must_use]
-pub fn postgres_read<T, F>(
+pub fn postgres_read<T>(
     connection: impl Into<PostgresConnection>,
     period: std::time::Duration,
-    query_fn: F,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + PostgresDeserialize + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     let connection = connection.into();
     produce_async(move |ctx| {

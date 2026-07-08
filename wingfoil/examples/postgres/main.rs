@@ -103,7 +103,7 @@ fn main() -> Result<()> {
 
     let baseline = generate(num_rows);
     // read — time-sliced, one query per day here (single 24h slice covers the run)
-    let read = postgres_read::<Trade, _>(
+    let read = postgres_read::<Trade>(
         conn,
         std::time::Duration::from_secs(86400),
         move |(t0, t1), _date, _iter| {
