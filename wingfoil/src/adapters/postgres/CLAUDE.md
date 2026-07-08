@@ -30,7 +30,7 @@ Record structs hold only business data. This mirrors the KDB+ adapter.
 ### Shared time-slicing logic
 
 `postgres_read` computes its query slices with
-`crate::adapters::time_slice::compute_validated_time_slices` — the exact same routine the
+`crate::adapters::common::compute_validated_time_slices` — the exact same routine the
 KDB+ adapter uses (validation of period/start/`RunFor` included). The run's `[start, end)`
 window (from `RunMode::HistoricalFrom` + `RunFor::Duration`) is split into contiguous,
 half-open slices of length `period`, clamped so no slice straddles a midnight boundary,

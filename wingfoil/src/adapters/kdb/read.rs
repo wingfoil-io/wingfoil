@@ -1,8 +1,7 @@
 //! KDB+ read functionality for streaming data from q/kdb+ instances.
 
 use super::{KdbConnection, Sym, SymbolInterner};
-use crate::adapters::common::{TimeWindow, WindowFilter};
-use crate::adapters::time_slice::compute_validated_time_slices;
+use crate::adapters::common::{TimeWindow, WindowFilter, compute_validated_time_slices};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};

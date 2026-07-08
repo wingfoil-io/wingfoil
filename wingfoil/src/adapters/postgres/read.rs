@@ -1,8 +1,7 @@
 //! PostgreSQL read functionality — time-partitioned streaming reads.
 
 use super::PostgresConnection;
-use crate::adapters::common::{TimeWindow, WindowFilter};
-use crate::adapters::time_slice::compute_validated_time_slices;
+use crate::adapters::common::{TimeWindow, WindowFilter, compute_validated_time_slices};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::Context;

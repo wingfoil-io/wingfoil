@@ -71,12 +71,12 @@ every adapter out of the box. Reference implementation: `kdb_read` /
 
 If the adapter replays a historical window by issuing one query per time slice
 (as `kdb_read` and `postgres_read` do), don't hand-roll the slicing. Use the
-shared slicer in `adapters::time_slice` — both adapters share it so their
-`[t0, t1)` boundaries, midnight/day clamping, and `RunFor` validation stay
-identical:
+shared slicer in `adapters::common` (the same module as `WindowFilter`) — both
+adapters share it so their `[t0, t1)` boundaries, midnight/day clamping, and
+`RunFor` validation stay identical:
 
 ```rust
-use crate::adapters::time_slice::compute_validated_time_slices;
+use crate::adapters::common::compute_validated_time_slices;
 
 // Validates start/end/period (bails on a zero start, RunFor::Forever/::Cycles,
 // or a zero period — the `adapter` label is spliced into the error) and returns
@@ -90,11 +90,11 @@ for ((t0, t1), day, iteration) in slices {
 }
 ```
 
-Unlike `common`, the `time_slice` module is feature-gated to the adapters that
-use it — add your feature to its `#[cfg(any(feature = "kdb", feature = "postgres", …))]`
-in `adapters/mod.rs`. Capture the concrete `end_time` before the call (it's
-`Copy`) if you also need it for the `WindowFilter` clamp, since the validator
-consumes the `Result`.
+The slicer helpers are gated to the adapters that use them — if yours is the
+first new time-partitioned adapter, add your feature to their
+`#[cfg(any(feature = "kdb", feature = "postgres", …))]` in `common.rs`. Capture
+the concrete `end_time` before the call (it's `Copy`) if you also need it for the
+`WindowFilter` clamp, since the validator consumes the `Result`.
 
 ## 1. Branch
 

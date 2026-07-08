@@ -4,7 +4,7 @@
 //! - [`postgres_read`] — producer that replays a historical table in contiguous,
 //!   caller-defined time slices (one query per slice), driven by the run's
 //!   `RunMode::HistoricalFrom` / `RunFor::Duration` window. Shares its slicing
-//!   logic with the KDB+ adapter (`crate::adapters::time_slice`).
+//!   logic with the KDB+ adapter (`crate::adapters::common`).
 //! - [`postgres_sub`] — real-time producer that live-tails a table via
 //!   `LISTEN`/`NOTIFY` (notification as wake-up, rows re-queried past a cursor).
 //! - [`postgres_write`] — consumer that inserts each on-graph record, prepending
