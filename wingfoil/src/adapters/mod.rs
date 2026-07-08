@@ -34,9 +34,9 @@ pub mod postgres;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
-// Time-slicing logic for time-partitioned database reads. Currently used by the
-// postgres adapter; the kdb adapter keeps its own copy in `kdb::read`.
-#[cfg(feature = "postgres")]
+// Shared time-slicing logic for time-partitioned database reads, used by both the
+// kdb and postgres adapters (paired with the out-of-window `WindowFilter` in `common`).
+#[cfg(any(feature = "kdb", feature = "postgres"))]
 pub(crate) mod time_slice;
 #[cfg(feature = "web")]
 pub mod web;
