@@ -52,6 +52,10 @@ kdb/
   - Non-`upd` control messages (e.g. end-of-day `.u.end`) are ignored
   - Tails from the moment of subscription — does **not** replay the tickerplant log / RDB
     buffer, so rows published before the run started are not delivered
+  - A single `upd` can carry many rows; in real time they surface as one on-graph
+    `Burst<T>` (or a few, depending on timing). Consume with `.collect()` or by
+    iterating the burst — `.collapse()` keeps only the **last** row of each burst
+    and would silently drop the rest
   - `KdbDeserialize` trait - Convert KDB+ rows to `(NanoTime, T)` tuples
   - `from_kdb_row` returns `Result<(NanoTime, Self), KdbError>` — implementor owns time extraction
   - Use `row.get_timestamp(col)` to extract a KDB timestamp column as `NanoTime`

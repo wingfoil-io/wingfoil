@@ -794,8 +794,13 @@ fn test_kdb_sub_realtime_receives_published_rows() -> Result<()> {
 
     // 3. Subscribe on-graph in real time and collect for a bounded window. The
     //    run terminates at the duration bound even though kdb_sub never ends.
+    //
+    //    Collect the raw `Burst<T>` stream (not `.collapse()`): in real time the
+    //    receiver drains every row that arrives together into a single burst, and
+    //    `collapse()` keeps only the *last* element of each burst — which would
+    //    silently drop rows from a multi-row `upd`. Flatten the bursts instead.
     let stream = kdb_sub::<TestTick>(conn.clone(), SUB_TABLE_NAME, "`");
-    let collected = stream.collapse().collect();
+    let collected = stream.collect();
     let run_result = collected.clone().run(
         RunMode::RealTime,
         RunFor::Duration(std::time::Duration::from_secs(5)),
@@ -819,11 +824,15 @@ fn test_kdb_sub_realtime_receives_published_rows() -> Result<()> {
     publish_result?;
     teardown_result?;
 
-    // 5. Verify every published row was streamed on-graph, in order.
+    // 5. Verify every published row was streamed on-graph, in order. Flatten the
+    //    per-cycle bursts: a multi-row `upd` may arrive as one burst of many rows
+    //    or several single-row bursts depending on timing; either way order and
+    //    count are preserved.
     let rows = collected.peek_value();
     let got: Vec<(String, f64, i64)> = rows
         .iter()
-        .map(|v| (v.value.sym.to_string(), v.value.price, v.value.qty))
+        .flat_map(|va| va.value.iter())
+        .map(|t| (t.sym.to_string(), t.price, t.qty))
         .collect();
     let expected = vec![
         ("AAPL".to_string(), 100.0, 10),
