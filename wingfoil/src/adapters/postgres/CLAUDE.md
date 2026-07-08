@@ -42,6 +42,17 @@ Unlike KDB+ (where the time column is time-of-day within a date partition, so or
 checked per slice), PostgreSQL rows carry full timestamps, so the monotonic-ordering check
 spans the whole read.
 
+### Out-of-window rows are dropped, not emitted
+
+The first slice starts at the period boundary at or before `start_time`, so when
+`start_time` is not period-aligned the caller's `time >= t0` filter over-reads rows before
+`start_time` (and the final slice's `t1` can reach past `end_time`). `postgres_read` clamps
+each slice to the effective window `[max(t0, start_time), min(t1, end_time))` and **drops**
+rows outside it, logging a single per-slice `warn!` with the dropped count. The query still
+uses the period-aligned `(t0, t1)` for clean boundaries. This mirrors the KDB adapter fix:
+emitting a row before the graph clock aborts a historical run, and a row past `end_time`
+would drive the monotonic check to reject a later slice.
+
 ### Parameterised writes, quoted identifiers
 
 `PostgresSerialize::to_params` returns owned, boxed `ToSql` values. `postgres_write` binds
@@ -121,6 +132,7 @@ Feature flag: `postgres-integration-test` (implies `postgres`).
 | `test_connection_refused` | Error propagates when postgres is unreachable |
 | `test_read_time_sliced` | Seeded rows are read back across hourly slices, time-ordered |
 | `test_read_timestamptz` | `timestamptz` columns convert via the `DateTime<Utc>` branch of `get_nanotime` |
+| `test_read_drops_rows_before_start` | An unaligned start over-reads pre-start rows; they are dropped, not emitted (run succeeds) |
 | `test_read_empty_table` | Empty table yields 0 rows |
 | `test_write_round_trip` | `postgres_write` rows are readable via direct query and the adapter |
 | `test_write_burst_multi_row` | A multi-record burst inserts all rows at the shared timestamp |

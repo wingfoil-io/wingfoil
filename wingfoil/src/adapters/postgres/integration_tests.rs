@@ -196,6 +196,50 @@ fn test_read_timestamptz() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Regression: an unaligned `start_time` makes the first slice's period-aligned `t0`
+/// precede it, so the caller's `time >= t0` filter over-reads rows before the run
+/// window. Those must be dropped (with a warning), not emitted — emitting a pre-start
+/// row aborts the historical run. Pins the fix ported from the KDB adapter.
+#[test]
+fn test_read_drops_rows_before_start() -> anyhow::Result<()> {
+    let _ = env_logger::try_init();
+    let (_container, conn) = start_postgres()?;
+    exec(
+        &conn,
+        &[
+            "CREATE TABLE trades (time timestamp, sym text, price float8, qty int8)",
+            // 00:15 precedes the run's 00:30 start; 00:45 is inside the window.
+            "INSERT INTO trades VALUES \
+               ('2000-01-01 00:15:00', 'EARLY', 1.0, 1), \
+               ('2000-01-01 00:45:00', 'INWIN', 2.0, 2)",
+        ],
+    )?;
+
+    // Start at 00:30 — unaligned to the 1-hour period, so the first slice's t0 is
+    // 00:00 and `time >= t0` returns the 00:15 row (before start_time).
+    let start = NanoTime::from_kdb_timestamp(30 * 60 * 1_000_000_000);
+    let stream = read_trades(conn);
+    let collected = stream.collapse().collect();
+    // Run window [00:30, 01:30). Without the clamp, emitting the 00:15 row would abort
+    // this run; the `?` below would surface that as a test failure.
+    collected.clone().run(
+        RunMode::HistoricalFrom(start),
+        RunFor::Duration(std::time::Duration::from_secs(3600)),
+    )?;
+
+    let syms: Vec<String> = collected
+        .peek_value()
+        .iter()
+        .map(|v| v.value.sym.clone())
+        .collect();
+    assert_eq!(
+        syms,
+        vec!["INWIN"],
+        "pre-start row must be dropped, in-window row kept"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_read_empty_table() -> anyhow::Result<()> {
     let _ = env_logger::try_init();

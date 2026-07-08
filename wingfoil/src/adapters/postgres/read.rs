@@ -74,6 +74,13 @@ pub fn postgres_timestamp(time: NanoTime) -> String {
 /// on `time >= t0 AND time < t1`, ordered by time. Rows are streamed on-graph as
 /// `Burst<T>` in time order; a non-monotonic timestamp aborts the run.
 ///
+/// The first slice begins at the period boundary at or before `start_time`, so when
+/// `start_time` is not period-aligned a `time >= t0` filter can return rows earlier
+/// than `start_time` (and the final slice's `t1` can reach past `end_time`). Rows
+/// outside the run's `[start_time, end_time)` window are **dropped** with a per-slice
+/// warning rather than emitted — emitting a row before the graph clock would abort the
+/// run. The query still uses the period-aligned `(t0, t1)` for clean boundaries.
+///
 /// `date` is the KDB-style date integer of the day containing the slice — **days since
 /// 2000-01-01** (not the Unix epoch) — matching the KDB+ adapter so date-partitioned
 /// query logic ports across. `iteration` is the slice index within that day (resets to
@@ -99,12 +106,19 @@ where
         let mut query_fn = query_fn;
 
         async move {
+            // `compute_validated_time_slices` consumes `end_time_result`; capture the
+            // concrete bound first (NanoTime is Copy) so emitted rows can be clamped to
+            // the run's `[start_time, end_time)` window below. Validation guarantees the
+            // value is present (bounded, non-MAX) by the time we unwrap it.
+            let end_time_bound = end_time_result.as_ref().ok().copied();
             let slices = compute_validated_time_slices(
                 "postgres_read",
                 start_time,
                 end_time_result,
                 period,
             )?;
+            let end_time =
+                end_time_bound.expect("compute_validated_time_slices accepted a bounded end_time");
 
             let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
                 .await
@@ -123,8 +137,8 @@ where
                 // Timestamps are full (not time-of-day), so ordering is enforced
                 // across the whole read, not reset per slice.
                 let mut prev_time: Option<NanoTime> = None;
-                'outer: for (within, date, iteration) in slices {
-                    let query = query_fn(within, date, iteration);
+                'outer: for ((t0, t1), date, iteration) in slices {
+                    let query = query_fn((t0, t1), date, iteration);
                     info!("postgres query: {query}");
                     let fetch_start = std::time::Instant::now();
                     let rows = match client.query(&query, &[]).await {
@@ -136,11 +150,26 @@ where
                     };
                     info!("postgres query: {} rows in {:?}", rows.len(), fetch_start.elapsed());
 
+                    // The query uses the period-aligned (t0, t1) for clean round-number
+                    // boundaries, but the first slice's t0 can precede start_time (and the
+                    // last slice's t1 exceed end_time), so a `time >= t0` filter may return
+                    // rows outside the run window. Clamp to [start_time, end_time) and drop
+                    // the rest: emitting a row before the graph clock aborts the run, and a
+                    // row past end_time would drive the monotonic check to reject a later slice.
+                    let lo = t0.max(start_time);
+                    let hi = t1.min(end_time);
+                    let mut dropped: usize = 0;
+
                     for row in &rows {
                         let (time, record) = match T::from_row(row) {
                             Ok(r) => r,
                             Err(e) => { yield Err(e); break 'outer; }
                         };
+
+                        if time < lo || time >= hi {
+                            dropped += 1;
+                            continue;
+                        }
 
                         if let Some(prev) = prev_time
                             && time < prev
@@ -154,6 +183,14 @@ where
                         prev_time = Some(time);
 
                         yield Ok((time, record));
+                    }
+
+                    if dropped > 0 {
+                        log::warn!(
+                            "postgres_read: dropped {dropped} row(s) outside the requested \
+                            window [{lo:?}, {hi:?}); the query returned data beyond the slice \
+                            it was asked to fill"
+                        );
                     }
                 }
             })
