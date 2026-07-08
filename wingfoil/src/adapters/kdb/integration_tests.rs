@@ -650,3 +650,191 @@ fn test_kdb_write_append() -> Result<()> {
     teardown_result?;
     Ok(())
 }
+
+// --- Real-time subscription (kdb_sub) integration test ---
+
+/// Subscription test table: (time, sym, price, qty) — no date column, as a
+/// tickerplant streams live rows rather than date-partitioned history.
+const SUB_TABLE_NAME: &str = "sub_trades";
+
+/// Business record for the tickerplant stream, matching `SUB_TABLE_NAME`'s
+/// column order (time, sym, price, qty).
+#[derive(Debug, Clone, Default)]
+struct TestTick {
+    sym: Sym,
+    price: f64,
+    qty: i64,
+}
+
+impl KdbDeserialize for TestTick {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((
+            time,
+            TestTick {
+                sym: row.get_sym(1, interner)?,
+                price: row.get(2)?.get_float()?,
+                qty: row.get(3)?.get_long()?,
+            },
+        ))
+    }
+}
+
+/// A minimal in-process tickerplant defined over IPC, so the standard
+/// `q -p 5000` test instance can act as a tickerplant without loading
+/// `tick/u.q`. Defines the table schema plus `.u.sub` / `.u.pub` / `.u.nsub`:
+///
+/// - `.u.sub[t;s]` registers the caller's handle (`.z.w`) as a subscriber and
+///   returns `(t; 0#value t)` — the empty-table schema `kdb_sub` reads column
+///   names from, mirroring a real tickerplant's synchronous subscribe reply.
+/// - `.u.pub[t;x]` pushes `(`upd; t; x)` asynchronously to every subscriber.
+/// - `.u.nsub[t]` reports the subscriber count (so the publisher can wait until
+///   `kdb_sub` has actually subscribed before pushing rows).
+///
+/// `.u.w` is reset here on every setup so a subscriber handle left over from a
+/// previous run cannot cause `.u.pub` to send to a closed handle.
+const TICKERPLANT_INIT: &str = "\
+sub_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$());\
+.u.w:()!();\
+.u.sub:{[t;s].u.w[t]:$[t in key .u.w;.u.w[t];()],enlist(.z.w;s);(t;0#value t)};\
+.u.pub:{[t;x]{[t;x;ws]neg[ws 0](`upd;t;x)}[t;x]each .u.w[t]};\
+.u.nsub:{$[x in key .u.w;count .u.w[x];0]}";
+
+/// Send a q expression synchronously, erroring on a q error object (type -128).
+async fn q_exec(socket: &mut QStream, query: &str) -> Result<K> {
+    let result = socket
+        .send_sync_message(&query)
+        .await
+        .with_context(|| format!("failed to send `{query}`"))?;
+    if result.get_type() == -128 {
+        anyhow::bail!("KDB+ query error for `{query}`: {result:?}");
+    }
+    Ok(result)
+}
+
+async fn connect(conn: &KdbConnection) -> Result<QStream> {
+    let creds = conn.credentials_string();
+    QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds)
+        .await
+        .context("Failed to connect to KDB+")
+}
+
+/// End-to-end test of the `kdb_sub` subscribe → receive → decode path against a
+/// live q instance acting as a tickerplant (see `TICKERPLANT_INIT`).
+///
+/// Flow:
+/// 1. Define the tickerplant (`.u.*`) and table schema over IPC.
+/// 2. Spawn a publisher thread that waits for `kdb_sub` to register, then pushes
+///    5 rows — a 3-row batch in one `upd` (exercises multi-row `from_column_list`)
+///    plus two single-row `upd` messages (exercises the receive loop across
+///    messages).
+/// 3. Subscribe on-graph with `kdb_sub` in `RunMode::RealTime`, collecting for a
+///    bounded window, and assert the decoded rows match what was published.
+#[test]
+fn test_kdb_sub_realtime_receives_published_rows() -> Result<()> {
+    let _ = env_logger::try_init();
+    let conn = TestDataBuilder::connection();
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // 1. Set up the in-process tickerplant on the test instance.
+    rt.block_on(async {
+        let mut socket = connect(&conn).await?;
+        q_exec(&mut socket, TICKERPLANT_INIT).await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // 2. Publisher thread: wait for the subscription, then publish 5 rows.
+    let pub_conn = conn.clone();
+    let publisher = std::thread::spawn(move || -> Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(&pub_conn).await?;
+
+            // Wait until kdb_sub has registered (up to ~5s) so no rows are
+            // published before the subscription exists (the TP does not replay).
+            let mut registered = false;
+            for _ in 0..250 {
+                let n = q_exec(&mut socket, &format!(".u.nsub[`{SUB_TABLE_NAME}]")).await?;
+                if n.get_long().unwrap_or(0) > 0 {
+                    registered = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            if !registered {
+                anyhow::bail!("kdb_sub never registered as a subscriber");
+            }
+
+            // 3-row batch in a single `upd` (multi-row column vectors).
+            q_exec(
+                &mut socket,
+                &format!(
+                    ".u.pub[`{SUB_TABLE_NAME};(`timestamp$3#.z.p;`AAPL`GOOG`MSFT;100 101 102f;10 20 30j)]"
+                ),
+            )
+            .await?;
+            // Two single-row `upd` messages.
+            q_exec(
+                &mut socket,
+                &format!(".u.pub[`{SUB_TABLE_NAME};(enlist .z.p;enlist `AAPL;enlist 103f;enlist 40j)]"),
+            )
+            .await?;
+            q_exec(
+                &mut socket,
+                &format!(".u.pub[`{SUB_TABLE_NAME};(enlist .z.p;enlist `GOOG;enlist 104f;enlist 50j)]"),
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    });
+
+    // 3. Subscribe on-graph in real time and collect for a bounded window. The
+    //    run terminates at the duration bound even though kdb_sub never ends.
+    let stream = kdb_sub::<TestTick>(conn.clone(), SUB_TABLE_NAME, "`");
+    let collected = stream.collapse().collect();
+    let run_result = collected.clone().run(
+        RunMode::RealTime,
+        RunFor::Duration(std::time::Duration::from_secs(5)),
+    );
+
+    let publish_result = publisher.join().expect("publisher thread panicked");
+
+    // 4. Best-effort teardown: drop the table and clear subscribers.
+    let teardown_result = rt.block_on(async {
+        let mut socket = connect(&conn).await?;
+        q_exec(
+            &mut socket,
+            &format!("delete {SUB_TABLE_NAME} from `.;.u.w:()!()"),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    // Surface run/publish errors before assertions; teardown failure last.
+    run_result?;
+    publish_result?;
+    teardown_result?;
+
+    // 5. Verify every published row was streamed on-graph, in order.
+    let rows = collected.peek_value();
+    let got: Vec<(String, f64, i64)> = rows
+        .iter()
+        .map(|v| (v.value.sym.to_string(), v.value.price, v.value.qty))
+        .collect();
+    let expected = vec![
+        ("AAPL".to_string(), 100.0, 10),
+        ("GOOG".to_string(), 101.0, 20),
+        ("MSFT".to_string(), 102.0, 30),
+        ("AAPL".to_string(), 103.0, 40),
+        ("GOOG".to_string(), 104.0, 50),
+    ];
+    assert_eq!(
+        got, expected,
+        "on-graph rows should match the published rows in order, got {got:?}"
+    );
+    Ok(())
+}
