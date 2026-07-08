@@ -124,6 +124,15 @@ class TestChangepoint(unittest.TestCase):
         captured.run(realtime=False, cycles=40)
         self.assertEqual(captured.peek_value()[-1]["indices"], [])
 
+    def test_hazard_and_min_points_marshal(self):
+        # Exercise the hazard/min_points optionals end to end: a level shift
+        # is still detected with a non-default hazard and min_points.
+        series = ticker(1.0).count().map(lambda n: 50.0 if n > 20 else 0.0)
+        changes = series.augurs_changepoint(60, min_points=12, hazard=100.0)
+        captured = changes.collect()
+        captured.run(realtime=False, cycles=50)
+        self.assertTrue(captured.peek_value()[-1]["indices"])
+
 
 class TestSeasons(unittest.TestCase):
     def test_detects_period(self):
@@ -132,6 +141,24 @@ class TestSeasons(unittest.TestCase):
         captured.run(realtime=False, cycles=96)
         periods = captured.peek_value()[-1]["periods"]
         self.assertTrue(any(10 <= p <= 14 for p in periods), periods)
+
+    def test_period_range_and_min_points_marshal(self):
+        # Exercise the min_period/max_period/min_points optionals: a bracket
+        # around 12 must still surface the period, and min_points must gate.
+        seasons = _sine(12).augurs_seasons(
+            96, min_points=40, min_period=8, max_period=16
+        )
+        captured = seasons.collect()
+        captured.run(realtime=False, cycles=96)
+        periods = captured.peek_value()[-1]["periods"]
+        self.assertTrue(any(8 <= p <= 16 for p in periods), periods)
+
+    def test_min_points_gates(self):
+        seasons = _sine(12).augurs_seasons(96, min_points=50)
+        captured = seasons.collect()
+        captured.run(realtime=False, cycles=20)
+        # 20 cycles < 50 min_points → never ticked.
+        self.assertFalse(captured.peek_value())
 
 
 class TestDtw(unittest.TestCase):
@@ -211,6 +238,24 @@ class TestValidation(unittest.TestCase):
     def test_unknown_cluster_metric_raises(self):
         with self.assertRaises(ValueError):
             _series().augurs_cluster(30, 1.0, 2, metric="chebyshev")
+
+    def test_out_of_range_sensitivity_raises(self):
+        # A sensitivity outside (0, 1) raises ValueError at construction rather
+        # than panicking across the FFI boundary.
+        for bad in (0.0, 1.0, 1.5, -0.1):
+            with self.assertRaises(ValueError):
+                _series().augurs_outlier(30, bad)
+
+    def test_out_of_range_level_raises(self):
+        for bad in (0.0, 1.0, 1.5):
+            with self.assertRaises(ValueError):
+                _ramp().augurs_forecast(48, 2, level=bad)
+
+    def test_invalid_mstl_period_raises(self):
+        # STL cannot decompose a period below 2; caught at construction.
+        for bad in ([1], [0], [12, 1]):
+            with self.assertRaises(ValueError):
+                _ramp().augurs_forecast(64, 4, periods=bad)
 
     def test_non_float_input_fails_fast(self):
         # A non-float value is a hard error (like .average()/.sum()), not a

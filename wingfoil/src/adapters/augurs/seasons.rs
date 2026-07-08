@@ -93,10 +93,7 @@ impl AugursSeasonsNode {
 #[node(active = [upstream], output = value: AugursSeasons)]
 impl MutableNode for AugursSeasonsNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.window {
-            self.buffer.pop_front();
-        }
+        super::push_windowed(&mut self.buffer, self.upstream.peek_value(), self.window);
         if self.buffer.len() < self.min_points {
             return Ok(false);
         }

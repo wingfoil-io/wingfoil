@@ -44,6 +44,13 @@ impl AugursClusterConfig {
     }
 }
 
+impl From<(usize, f64, usize)> for AugursClusterConfig {
+    /// `(window, epsilon, min_cluster_size)` using the Euclidean metric.
+    fn from((window, epsilon, min_cluster_size): (usize, f64, usize)) -> Self {
+        Self::new(window, epsilon, min_cluster_size)
+    }
+}
+
 pub(crate) struct AugursClusterNode {
     upstream: Rc<dyn Stream<Vec<f64>>>,
     config: AugursClusterConfig,
@@ -66,9 +73,15 @@ impl AugursClusterNode {
 #[node(active = [upstream], output = value: AugursClusters)]
 impl MutableNode for AugursClusterNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.config.window {
-            self.buffer.pop_front();
+        super::push_windowed(
+            &mut self.buffer,
+            self.upstream.peek_value(),
+            self.config.window,
+        );
+        // Warm up: clustering over length-1 columns compares single points, not
+        // windowed histories, so wait for at least two samples before emitting.
+        if self.buffer.len() < 2 {
+            return Ok(false);
         }
 
         let series = transpose_window(&self.buffer);
@@ -98,16 +111,16 @@ pub trait AugursClusterOperators {
     #[must_use]
     fn augurs_cluster(
         self: &Rc<Self>,
-        config: AugursClusterConfig,
+        config: impl Into<AugursClusterConfig>,
     ) -> Rc<dyn Stream<AugursClusters>>;
 }
 
 impl AugursClusterOperators for dyn Stream<Vec<f64>> {
     fn augurs_cluster(
         self: &Rc<Self>,
-        config: AugursClusterConfig,
+        config: impl Into<AugursClusterConfig>,
     ) -> Rc<dyn Stream<AugursClusters>> {
-        AugursClusterNode::new(self.clone(), config).into_stream()
+        AugursClusterNode::new(self.clone(), config.into()).into_stream()
     }
 }
 
@@ -165,5 +178,37 @@ mod tests {
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
             .unwrap();
         assert!(captured.peek_value().is_empty());
+    }
+
+    /// With two series but only a single sample, the node stays silent —
+    /// clustering length-1 columns compares single points, not histories.
+    #[test]
+    fn cluster_waits_for_two_samples() {
+        let readings = ticker(Duration::from_secs(1))
+            .count()
+            .map(|n| vec![n as f64, n as f64 + 1.0]);
+        let clusters = readings.augurs_cluster(AugursClusterConfig::new(8, 1.0, 2));
+        let captured = clusters.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        assert!(captured.peek_value().is_empty());
+    }
+
+    /// `(window, epsilon, min_cluster_size)` tuples convert into a config, so
+    /// `augurs_cluster` reads like the rest of the operator family.
+    #[test]
+    fn cluster_accepts_tuple_config() {
+        let readings = ticker(Duration::from_secs(1)).count().map(|n| {
+            let t = n as f64;
+            let low = (t * 0.3).sin();
+            vec![low, low + 0.02, low + 20.0, low + 20.02]
+        });
+        let clusters = readings.augurs_cluster((30, 1.0, 2));
+        let captured = clusters.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+            .unwrap();
+        assert_eq!(clusters.peek_value().labels.len(), 4);
     }
 }

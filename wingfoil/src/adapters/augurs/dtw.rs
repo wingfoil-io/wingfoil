@@ -89,9 +89,12 @@ impl AugursDtwNode {
 #[node(active = [upstream], output = value: AugursDistanceMatrix)]
 impl MutableNode for AugursDtwNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.window {
-            self.buffer.pop_front();
+        super::push_windowed(&mut self.buffer, self.upstream.peek_value(), self.window);
+        // Warm up: a DTW distance over length-1 columns is just |x - y|, not a
+        // windowed-history distance, so wait for at least two samples before
+        // emitting.
+        if self.buffer.len() < 2 {
+            return Ok(false);
         }
 
         let series = super::transpose_window(&self.buffer);
@@ -162,6 +165,21 @@ mod tests {
             d02 > d01,
             "dissimilar series should be farther: d02={d02}, d01={d01}"
         );
+    }
+
+    /// With two series but only a single sample, the node stays silent — a DTW
+    /// distance over length-1 columns is not a windowed-history distance.
+    #[test]
+    fn dtw_waits_for_two_samples() {
+        let readings = ticker(Duration::from_secs(1))
+            .count()
+            .map(|n| vec![n as f64, n as f64 + 1.0]);
+        let dists = readings.augurs_dtw(8);
+        let captured = dists.clone().collect();
+        captured
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        assert!(captured.peek_value().is_empty());
     }
 
     /// The node stays silent until it has at least two series.

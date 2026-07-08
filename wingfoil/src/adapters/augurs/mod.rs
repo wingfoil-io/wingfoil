@@ -87,6 +87,16 @@ pub use seasons::*;
 
 use std::collections::VecDeque;
 
+/// Push `value` onto a sliding-window buffer, evicting the oldest samples until
+/// at most `window` remain. Shared by every augurs node's `cycle()` so the
+/// ring-buffer maintenance lives in one place.
+pub(crate) fn push_windowed<T>(buffer: &mut VecDeque<T>, value: T, window: usize) {
+    buffer.push_back(value);
+    while buffer.len() > window {
+        buffer.pop_front();
+    }
+}
+
 /// Transpose a window of per-tick multi-series samples (one value per series per
 /// tick) into aligned per-series columns of equal length. Short samples are
 /// forward-filled with the series' previous value so every column spans the full

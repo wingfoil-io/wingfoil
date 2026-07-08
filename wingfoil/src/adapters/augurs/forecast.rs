@@ -143,10 +143,7 @@ impl AugursForecastNode {
 #[node(active = [upstream], output = value: AugursForecast)]
 impl MutableNode for AugursForecastNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.window {
-            self.buffer.pop_front();
-        }
+        super::push_windowed(&mut self.buffer, self.upstream.peek_value(), self.window);
         if self.buffer.len() < self.min_points {
             return Ok(false);
         }
@@ -162,6 +159,14 @@ impl MutableNode for AugursForecastNode {
                     .context("augurs_forecast: ETS predict failed")?
             }
             AugursForecastModel::Mstl { periods } => {
+                // STL cannot decompose an empty period set or a period below 2;
+                // catch it here with a clear message rather than letting augurs
+                // fail deep inside the fit with an opaque error.
+                if periods.is_empty() || periods.iter().any(|&p| p < 2) {
+                    anyhow::bail!(
+                        "augurs_forecast: MSTL periods must be non-empty and each >= 2, got {periods:?}"
+                    );
+                }
                 let trend = AutoETSTrendModel::from(AutoETS::non_seasonal());
                 let fitted = MSTLModel::new(periods.clone(), trend)
                     .fit(&data)
@@ -305,6 +310,21 @@ mod tests {
             forecast.peek_value().point.len(),
             2,
             "should emit despite window < floor"
+        );
+    }
+
+    /// An MSTL period below 2 (or an empty period set) is rejected with a clear
+    /// error at run time rather than an opaque augurs-internal fit failure.
+    #[test]
+    fn forecast_mstl_rejects_invalid_period() {
+        let source = ticker(Duration::from_secs(1)).count().map(|n| n as f64);
+        let forecast = source.augurs_forecast(AugursForecastConfig::new(64, 2).mstl(vec![1]));
+        let captured = forecast.clone().collect();
+        let result = captured.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30));
+        let err = result.expect_err("period < 2 should fail the run");
+        assert!(
+            format!("{err:#}").contains("MSTL periods"),
+            "expected a clear MSTL period error, got {err:#}"
         );
     }
 

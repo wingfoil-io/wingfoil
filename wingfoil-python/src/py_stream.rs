@@ -388,8 +388,14 @@ impl PyStream {
     ///     window: Maximum number of recent points retained as history.
     ///     horizon: Number of steps to forecast ahead.
     ///     level: Confidence level for prediction intervals (0..1), or None.
-    ///     min_points: Minimum points before fitting begins (floored at 12).
+    ///     min_points: Minimum points before fitting begins. Raised to the
+    ///         model's warm-up floor: 12 for ETS, or `2 * max(periods) + 1`
+    ///         for MSTL (STL needs two full seasonal periods).
     ///     periods: Seasonal period lengths for MSTL, or None for ETS.
+    ///
+    /// Raises:
+    ///     ValueError: if `level` is not in `(0, 1)`, or any `periods` entry
+    ///         is below 2.
     #[pyo3(signature = (window, horizon, level=None, min_points=12, periods=None))]
     fn augurs_forecast(
         &self,
@@ -398,10 +404,10 @@ impl PyStream {
         level: Option<f64>,
         min_points: usize,
         periods: Option<Vec<usize>>,
-    ) -> PyStream {
-        PyStream(crate::py_augurs::py_augurs_forecast_inner(
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_forecast_inner(
             &self.0, window, horizon, level, min_points, periods,
-        ))
+        )?))
     }
 
     /// Detect outlying series in this stream of per-series readings.
@@ -414,6 +420,10 @@ impl PyStream {
     ///     window: Number of recent samples in the detection window.
     ///     sensitivity: Detector sensitivity, strictly between 0 and 1.
     ///     detector: "mad" (default) or "dbscan". DBSCAN needs >= 3 series.
+    ///
+    /// Raises:
+    ///     ValueError: if `sensitivity` is not in `(0, 1)`, or `detector` is
+    ///         not "mad" or "dbscan".
     #[pyo3(signature = (window, sensitivity, detector="mad"))]
     fn augurs_outlier(
         &self,

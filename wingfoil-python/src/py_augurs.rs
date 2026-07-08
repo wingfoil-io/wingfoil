@@ -71,18 +71,32 @@ pub fn py_augurs_forecast_inner(
     level: Option<f64>,
     min_points: usize,
     periods: Option<Vec<usize>>,
-) -> Rc<dyn Stream<PyElement>> {
+) -> PyResult<Rc<dyn Stream<PyElement>>> {
     let floats = as_floats(stream, "augurs_forecast");
 
     let mut config = AugursForecastConfig::new(window, horizon).with_min_points(min_points);
     if let Some(level) = level {
+        // Validate up front so a bad level raises a clean `ValueError` rather
+        // than silently producing `inf`/`NaN` interval bounds downstream.
+        if !(level > 0.0 && level < 1.0) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "augurs_forecast: level must be strictly between 0 and 1, got {level}"
+            )));
+        }
         config = config.with_level(level);
     }
     if let Some(periods) = periods.filter(|p| !p.is_empty()) {
+        // STL cannot decompose a period below 2; reject it here so the caller
+        // gets a clear error at construction rather than a fit failure later.
+        if periods.iter().any(|&p| p < 2) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "augurs_forecast: MSTL periods must each be >= 2, got {periods:?}"
+            )));
+        }
         config = config.mstl(periods);
     }
 
-    floats.augurs_forecast(config).map(|forecast| {
+    Ok(floats.augurs_forecast(config).map(|forecast| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("point", forecast.point)
@@ -91,7 +105,7 @@ pub fn py_augurs_forecast_inner(
                 .expect("invariant: inserting list values into a dict cannot fail");
             PyElement::new(dict.into_any().unbind())
         })
-    })
+    }))
 }
 
 /// Inner implementation for the `.augurs_outlier()` stream method.
@@ -102,6 +116,14 @@ pub fn py_augurs_outlier_inner(
     detector: &str,
 ) -> PyResult<Rc<dyn Stream<PyElement>>> {
     let series = as_series(stream, "augurs_outlier");
+    // Validate up front so an out-of-range value raises a clean `ValueError`
+    // rather than panicking across the FFI boundary (augurs' detector
+    // constructor panics on a sensitivity outside `(0, 1)`).
+    if !(sensitivity > 0.0 && sensitivity < 1.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "augurs_outlier: sensitivity must be strictly between 0 and 1, got {sensitivity}"
+        )));
+    }
     let config = match detector.to_ascii_lowercase().as_str() {
         "dbscan" => AugursOutlierConfig::dbscan(window, sensitivity),
         "mad" => AugursOutlierConfig::mad(window, sensitivity),

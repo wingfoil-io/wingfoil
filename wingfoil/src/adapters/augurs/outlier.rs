@@ -127,10 +127,7 @@ impl AugursOutlierNode {
 #[node(active = [upstream], output = value: AugursOutliers)]
 impl MutableNode for AugursOutlierNode {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        self.buffer.push_back(self.upstream.peek_value());
-        while self.buffer.len() > self.window {
-            self.buffer.pop_front();
-        }
+        super::push_windowed(&mut self.buffer, self.upstream.peek_value(), self.window);
         // Need at least two timestamps to have any spread to measure.
         if self.buffer.len() < 2 {
             return Ok(false);
