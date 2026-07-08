@@ -12,7 +12,7 @@ Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main
 stream processing framework designed for latency-critical use cases such as electronic trading 
 and real-time AI systems.
 
-It ships with a growing library of production-ready I/O adapters covering tick stores, message buses, market protocols, and observability backends — so you can plug graphs into real data sources and sinks with a single line.
+It ships with a growing library of production-ready adapters covering tick stores, message buses, market protocols, and observability backends — so you can plug graphs into real data sources and sinks with a single line.
 
 Wingfoil simplifies receiving, processing, distributing and monitoring streaming data across your entire stack.
 
@@ -22,7 +22,7 @@ Wingfoil simplifies receiving, processing, distributing and monitoring streaming
 - **Fast**: [Ultra low latency](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
 - **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
 - **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
-- **I/O Adapters**: production-ready integrations for [iceoryx2](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2), [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip), [Kafka](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka), [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio), [FIX](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus), [OpenTelemetry](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp), [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), and more.
+- **Adapters**: production-ready integrations for [iceoryx2](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2), [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip), [Kafka](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka), [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio), [FIX](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus), [OpenTelemetry](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp), [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), and more.
 - **Multi-language**: currently available as a [Rust crate](https://crates.io/crates/wingfoil/), [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) and a [TypeScript/JavaScript client](https://www.npmjs.com/package/@wingfoil/client).
 - **Graph dynamism**: [rewire your graph](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic) in response to incoming data.
 - **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
@@ -55,7 +55,7 @@ hello, world 3
 
 ## Order Book Example
 
-Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and modulating the frequency of data. I/O adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and modulating the frequency of data. Adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
 
 ```rust,ignore
 let book = RefCell::new(lobster::OrderBook::default());
@@ -94,13 +94,13 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`order_book`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, export to CSV. |
 | [`breadth_first`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/breadth_first/) | Why wingfoil's BFS execution avoids the O(2^N) node explosion of naive depth-first DAGs. |
 | [`run_mode`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring for backtesting. |
-| [`async`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async/) | Integrate Tokio async/await at graph edges (I/O adapters) while keeping the core graph synchronous. |
+| [`async`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async/) | Integrate Tokio async/await at graph edges (adapters) while keeping the core graph synchronous. |
 | [`threading`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading/) | Distribute graph execution across worker threads with `producer()` / `mapper()`. |
 | [`dynamic`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic/) | Add and remove nodes at runtime. Includes `demux`, `dynamic-group`, and `dynamic-manual` variants. |
 | [`tracing`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
 | [`latency`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
 
-### I/O adapters
+### Adapters
 
 | Example | Description |
 |---|---|
