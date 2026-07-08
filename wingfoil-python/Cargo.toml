@@ -27,7 +27,7 @@ aeron = ["wingfoil/aeron"]
 [dependencies]
 
 # parent
-wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "fluvio", "prometheus", "otlp", "fix", "web", "kafka", "redis", "augurs"] }
+wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "fluvio", "prometheus", "otlp", "fix", "web", "kafka", "redis", "postgres", "augurs"] }
 
 # workspace deps
 anyhow = {workspace = true}

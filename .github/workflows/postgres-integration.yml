@@ -1,0 +1,98 @@
+name: test.integration.postgres
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wingfoil/src/adapters/postgres/**'
+      - 'wingfoil/src/adapters/time_slice.rs'
+      - 'wingfoil-python/src/py_postgres.rs'
+      - 'wingfoil-python/tests/test_postgres.py'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  postgres-integration:
+    name: postgres Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install protoc
+        # The Python bindings build (maturin, below) compiles wingfoil-python,
+        # which pulls in etcd-client — its build script requires protoc.
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Pre-pull postgres image
+        # testcontainers pulls the image lazily on first use, which is
+        # vulnerable to transient registry flakes. Pull once up front with
+        # retries so every test reuses the cached image.
+        run: |
+          for i in 1 2 3; do
+            docker pull postgres:16-alpine && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull postgres image after 3 attempts" && exit 1
+
+      - name: Run postgres integration tests
+        run: |
+          cargo test --features postgres-integration-test -p wingfoil \
+            -- --test-threads=1 --nocapture postgres::integration_tests
+        env:
+          RUST_LOG: INFO
+
+      # --- Python bindings ---
+      - name: Start postgres container for Python tests
+        run: |
+          docker run -d \
+            --name postgres-py \
+            -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            nc -z localhost 5432 && echo "postgres ready" && break
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 5432 || (echo "postgres never became ready" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: wingfoil-python/pyproject.toml
+
+      - name: Install maturin and build Python bindings
+        run: |
+          python -m venv wingfoil-python/.venv
+          wingfoil-python/.venv/bin/pip install maturin pytest "psycopg[binary]"
+          cd wingfoil-python && .venv/bin/maturin develop
+
+      - name: Run Python postgres integration tests
+        run: |
+          cd wingfoil-python && .venv/bin/pytest -m requires_postgres tests/test_postgres.py -v
+        env:
+          RUST_LOG: INFO
+
+      - name: Dump postgres logs on failure
+        if: failure()
+        run: docker logs postgres-py
+
+      - name: Stop postgres container
+        if: always()
+        run: docker stop postgres-py && docker rm postgres-py

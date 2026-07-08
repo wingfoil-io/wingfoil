@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "aeron", "augurs"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "postgres", "aeron", "augurs"]
 # Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
 # Off by default so consumers don't pull in criterion's dependency tree.
 bench = ["dep:criterion"]
@@ -28,6 +28,8 @@ redis-integration-test = ["redis", "dep:testcontainers"]
 # no `*-integration-test` feature — the adapter is covered by in-crate unit
 # tests behind `--features augurs`.
 augurs = ["dep:augurs"]
+postgres = ["dep:tokio-postgres", "async"]
+postgres-integration-test = ["postgres", "dep:testcontainers"]
 tracing = []
 instrument-run = ["tracing"]
 instrument-cycle = ["tracing"]
@@ -131,6 +133,9 @@ redis = { version = "0.27", features = ["tokio-comp", "aio", "streams"], optiona
 # are enabled (Prophet is deliberately excluded — it needs a bundled Stan
 # toolchain).
 augurs = { version = "0.10.2", default-features = false, features = ["ets", "mstl", "outlier", "changepoint", "seasons", "dtw", "clustering"], optional = true }
+# `with-chrono-0_4` lets NaiveDateTime bind directly to timestamp columns for
+# both reads (row.get) and writes (ToSql), matching the on-graph NanoTime model.
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"], optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"] }
 fluvio = { version = "0.50.1", optional = true }
@@ -258,6 +263,11 @@ required-features = ["iceoryx2"]
 name = "iceoryx2_modes"
 harness = false
 required-features = ["iceoryx2"]
+
+[[example]]
+name = "postgres"
+path = "examples/postgres/main.rs"
+required-features = ["postgres"]
 
 [[example]]
 name = "prometheus"

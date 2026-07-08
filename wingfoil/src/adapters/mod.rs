@@ -28,6 +28,8 @@ pub mod kafka;
 pub mod kdb;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
 #[cfg(feature = "redis")]

@@ -67,6 +67,35 @@ filter.finish();                          // one summary warn! if anything was d
 every adapter out of the box. Reference implementation: `kdb_read` /
 `kdb_read_cached` in `wingfoil/src/adapters/kdb/`.
 
+### Time-partitioned reads: slice the window with the shared slicer
+
+If the adapter replays a historical window by issuing one query per time slice
+(as `kdb_read` and `postgres_read` do), don't hand-roll the slicing. Use the
+shared slicer in `adapters::common` (the same module as `WindowFilter`) — both
+adapters share it so their `[t0, t1)` boundaries, midnight/day clamping, and
+`RunFor` validation stay identical:
+
+```rust
+use crate::adapters::common::compute_validated_time_slices;
+
+// Validates start/end/period (bails on a zero start, RunFor::Forever/::Cycles,
+// or a zero period — the `adapter` label is spliced into the error) and returns
+// the period-aligned slices to query.
+let slices = compute_validated_time_slices("$ARGUMENTS_read", start_time, end_time_result, period)?;
+for ((t0, t1), day, iteration) in slices {
+    let query = query_fn((t0, t1), day, iteration);  // caller builds the SQL/q filter
+    // run the query, then clamp emitted rows with the WindowFilter above:
+    // the slicer gives the period-aligned query bounds, the filter drops any
+    // rows the query returns outside the run window.
+}
+```
+
+The slicer helpers are gated to the adapters that use them — if yours is the
+first new time-partitioned adapter, add your feature to their
+`#[cfg(any(feature = "kdb", feature = "postgres", …))]` in `common.rs`. Capture
+the concrete `end_time` before the call (it's `Copy`) if you also need it for the
+`WindowFilter` clamp, since the validator consumes the `Result`.
+
 ## 1. Branch
 
 ```bash
