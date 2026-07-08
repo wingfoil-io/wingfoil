@@ -55,6 +55,16 @@ impl Rows {
         self.n_rows == 0
     }
 
+    /// Build a [`Rows`] accessor directly from a list of column vectors.
+    ///
+    /// A tickerplant `upd` payload is a bare list of per-column vectors rather
+    /// than a flipped table dictionary; this wraps that list so [`kdb_sub`](crate::kdb_sub)
+    /// can reuse the same indexed row access as [`kdb_read`].
+    pub(super) fn from_column_list(columns: Vec<K>) -> Self {
+        let n_rows = columns.first().map(K::len).unwrap_or(0);
+        Rows { columns, n_rows }
+    }
+
     /// Get a row by index.
     pub fn get(&self, index: usize) -> Option<Row<'_>> {
         if index < self.n_rows {
@@ -265,6 +275,29 @@ impl KdbExt for K {
     }
 }
 
+/// Turn a tickerplant `upd` payload into a [`Rows`] accessor.
+///
+/// The third element of a `(`upd; table; data)` message is either a table
+/// (qtype 98) or a bare list of column vectors, depending on the tickerplant.
+/// Both are normalised to [`Rows`] so [`kdb_sub`](crate::kdb_sub) can decode
+/// them with the same [`KdbDeserialize`] impls that [`kdb_read`] uses.
+pub(super) fn upd_payload_rows(data: &K) -> Result<Rows> {
+    if data.get_type() == qtype::TABLE {
+        data.rows()
+    } else {
+        let columns = data
+            .as_vec::<K>()
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "kdb_sub: upd payload is neither a table nor a list of columns (qtype {})",
+                    data.get_type()
+                )
+            })?
+            .clone();
+        Ok(Rows::from_column_list(columns))
+    }
+}
+
 /// Trait for deserializing KDB row data into Rust types.
 ///
 /// Implementors extract fields from the row using indexed column access and return
@@ -412,14 +445,13 @@ pub(crate) fn compute_time_slices(
 }
 
 #[must_use]
-pub fn kdb_read<T, F>(
+pub fn kdb_read<T>(
     connection: KdbConnection,
     period: std::time::Duration,
-    query_fn: F,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     produce_async(move |ctx| {
         let start_time = ctx.start_time;

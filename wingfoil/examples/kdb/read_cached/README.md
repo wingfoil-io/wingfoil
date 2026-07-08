@@ -59,7 +59,7 @@ impl KdbDeserialize for Price {
 // Use u64::MAX for an unbounded cache.
 let config = CacheConfig::new("/tmp/wingfoil-kdb-cache", 10 * 1024 * 1024);
 
-kdb_read_cached::<Price, _>(
+kdb_read_cached::<Price>(
     conn,
     Duration::from_secs(10),
     config,

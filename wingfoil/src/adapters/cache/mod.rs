@@ -38,7 +38,7 @@ impl CacheKey {
 /// # Example
 /// ```ignore
 /// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024); // 512 MiB cap
-/// let stream = kdb_read_cached::<Trade, _>(conn, period, config, query_fn);
+/// let stream = kdb_read_cached::<Trade>(conn, period, config, query_fn);
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {

@@ -46,7 +46,7 @@ impl KdbDeserialize for TestTradeCached {
 
 /// Run `kdb_read_cached` over one day of `TABLE_NAME` and return the row count.
 fn run_cached(conn: KdbConnection, cache_dir: &std::path::Path) -> Result<usize> {
-    let stream = kdb_read_cached::<TestTradeCached, _>(
+    let stream = kdb_read_cached::<TestTradeCached>(
         conn,
         PERIOD,
         CacheConfig::new(cache_dir, u64::MAX),
@@ -160,7 +160,7 @@ fn test_kdb_read_cached_partial_cache() -> Result<()> {
     let half_day = std::time::Duration::from_secs(12 * 3600);
 
     let run = |conn: KdbConnection| -> Result<usize> {
-        let stream = kdb_read_cached::<TestTradeCached, _>(
+        let stream = kdb_read_cached::<TestTradeCached>(
             conn,
             half_day,
             CacheConfig::new(&cache_dir, u64::MAX),

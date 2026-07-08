@@ -32,7 +32,7 @@ impl KdbDeserialize for Price {
 }
 
 fn run(conn: KdbConnection, config: CacheConfig) -> Result<()> {
-    kdb_read_cached::<Price, _>(
+    kdb_read_cached::<Price>(
         conn,
         Duration::from_secs(10),
         config,

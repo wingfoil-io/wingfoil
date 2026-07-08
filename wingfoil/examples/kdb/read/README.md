@@ -49,7 +49,7 @@ impl KdbDeserialize for Price {
     }
 }
 
-kdb_read::<Price, _>(
+kdb_read::<Price>(
     conn,
     Duration::from_secs(10),
     |(t0, t1), _date, _iter| {

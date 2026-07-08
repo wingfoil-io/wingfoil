@@ -7,8 +7,9 @@ This directory contains the KDB+ adapter for wingfoil, enabling reading from and
 ```
 kdb/
   mod.rs               # Public API, connection types, error handling, Sym
-  read.rs              # kdb_read() and shared helpers (compute_time_slices, KdbExt, etc.)
+  read.rs              # kdb_read() and shared helpers (compute_time_slices, KdbExt, upd_payload_rows, etc.)
   read_cached.rs       # kdb_read_cached() — file-cached variant of kdb_read
+  sub.rs               # kdb_sub() — real-time tickerplant subscription
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)
 ```
@@ -33,7 +34,20 @@ kdb/
   - `Sym` is fully supported — it serializes as a plain string (interning not restored on load)
   - If a cache file is corrupt, logs a warning and falls back to KDB, then overwrites the bad file
   - **Schema evolution:** `bincode` is not self-describing — delete the cache dir if `T` changes
-- `KdbDeserialize` trait - Convert KDB+ rows to `(NanoTime, T)` tuples
+- `kdb_sub()` - Real-time subscription to a tickerplant (the live counterpart to `kdb_read`)
+  - `kdb_sub(conn, table, symbols)` — `table` is the tickerplant table name (no backtick),
+    `symbols` a q symbol-list literal (`` "`" `` = all, `` "`AAPL`MSFT" `` to filter)
+  - Requires `RunMode::RealTime` (bails otherwise); `kdb_read` is for historical replay
+  - Sends `.u.sub[`table;syms]` synchronously (capturing the schema for column names),
+    then loops on `receive_message()`, decoding each pushed `(`upd; table; data)` message
+  - Genuinely push-based: unlike the postgres `LISTEN`/`NOTIFY` model, the tickerplant
+    pushes the rows themselves — no re-query, no cursor. The `upd` payload (a table or a
+    bare list of column vectors) is normalised via `upd_payload_rows` and decoded with the
+    same `KdbDeserialize` impl `kdb_read` uses
+  - Non-`upd` control messages (e.g. end-of-day `.u.end`) are ignored
+  - Tails from the moment of subscription — does **not** replay the tickerplant log / RDB
+    buffer, so rows published before the run started are not delivered
+  - `KdbDeserialize` trait - Convert KDB+ rows to `(NanoTime, T)` tuples
   - `from_kdb_row` returns `Result<(NanoTime, Self), KdbError>` — implementor owns time extraction
   - Use `row.get_timestamp(col)` to extract a KDB timestamp column as `NanoTime`
   - Your struct should only contain business data (sym, price, qty, etc.)
@@ -144,7 +158,7 @@ impl KdbSerialize for Trade {
 ```rust
 // Same query closure as kdb_read, plus a cache directory.
 // T must also implement serde::Serialize + serde::Deserialize + Sync.
-let stream = kdb_read_cached::<Trade, _>(
+let stream = kdb_read_cached::<Trade>(
     conn,
     std::time::Duration::from_secs(3600),
     "/tmp/my-backtest-cache",
@@ -162,7 +176,7 @@ let stream = kdb_read_cached::<Trade, _>(
 
 ```rust
 // Date-partitioned table: filter by date and time range in each slice
-let stream = kdb_read::<Trade, _>(
+let stream = kdb_read::<Trade>(
     conn,
     std::time::Duration::from_secs(3600), // 1-hour slices
     |(t0, t1), date, _| {

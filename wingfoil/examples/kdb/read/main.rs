@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let conn = KdbConnection::new("localhost", 5000);
     let chunk = Duration::from_secs(10);
 
-    kdb_read::<Price, _>(
+    kdb_read::<Price>(
         conn,
         chunk,
         |(t0, t1), _date, _iter| {

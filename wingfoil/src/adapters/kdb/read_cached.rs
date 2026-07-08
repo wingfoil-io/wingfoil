@@ -39,7 +39,7 @@ use std::rc::Rc;
 /// # Example
 /// ```ignore
 /// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024);
-/// let stream = kdb_read_cached::<Trade, _>(
+/// let stream = kdb_read_cached::<Trade>(
 ///     KdbConnection::new("localhost", 5000),
 ///     Duration::from_secs(3600),
 ///     config,
@@ -51,11 +51,11 @@ use std::rc::Rc;
 /// );
 /// ```
 #[must_use]
-pub fn kdb_read_cached<T, F>(
+pub fn kdb_read_cached<T>(
     connection: KdbConnection,
     period: std::time::Duration,
     cache_config: CacheConfig,
-    query_fn: F,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element
@@ -65,7 +65,6 @@ where
         + serde::Serialize
         + for<'de> serde::Deserialize<'de>
         + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     produce_async(move |ctx| {
         let start_time = ctx.start_time;

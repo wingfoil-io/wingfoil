@@ -143,7 +143,7 @@ pub fn py_kdb_read(
     chunk_size: u64,
 ) -> PyStream {
     let conn = KdbConnection::new(host, port);
-    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read::<PyKdbRow, _>(
+    let stream: Rc<dyn Stream<Burst<PyKdbRow>>> = kdb_read::<PyKdbRow>(
         conn,
         std::time::Duration::from_secs(chunk_size),
         move |(t0, t1), _date, _iter| {
