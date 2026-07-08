@@ -67,9 +67,13 @@ pub fn postgres_notify_trigger_sql(table: &str, channel: &str) -> String {
 ///
 /// # Requirements
 /// - `RunMode::RealTime` (use `postgres_read` for historical replay).
-/// - The time column must be non-decreasing across inserts; a row inserted with a
-///   timestamp at or before the cursor is never picked up. Prefer strictly
-///   increasing timestamps (e.g. a `now()` default with a single writer).
+/// - The time column must be **strictly increasing** across inserts. The cursor
+///   advances to the max row time seen and the next query filters `time > cursor`,
+///   so a row inserted at a timestamp **equal to** (or before) the current cursor
+///   is silently dropped. A `now()` default is only safe with a single writer and
+///   sub-microsecond-distinct inserts; if two rows can share a timestamp, add a
+///   tie-breaking column and widen the cursor logic, or rows will be lost at the
+///   boundary.
 #[must_use]
 pub fn postgres_sub<T, F>(
     connection: impl Into<PostgresConnection>,

@@ -64,9 +64,10 @@ notifications are coalesced after each drain — N inserts during a query trigge
 re-query, not N.
 
 Requirements: `RunMode::RealTime` (bails otherwise); the time column must be
-non-decreasing across inserts (a row stamped at or before the cursor is never picked
-up). `postgres_notify_trigger_sql(table, channel)` returns idempotent SQL installing
-the per-statement `AFTER INSERT` trigger.
+**strictly increasing** across inserts. The cursor query is `time > cursor`, so a row
+stamped at or before the cursor — including one that ties the current max timestamp —
+is silently dropped. `postgres_notify_trigger_sql(table, channel)` returns idempotent
+SQL installing the per-statement `AFTER INSERT` trigger.
 
 ### No locks on the graph path
 
@@ -119,6 +120,7 @@ Feature flag: `postgres-integration-test` (implies `postgres`).
 |------|----------------|
 | `test_connection_refused` | Error propagates when postgres is unreachable |
 | `test_read_time_sliced` | Seeded rows are read back across hourly slices, time-ordered |
+| `test_read_timestamptz` | `timestamptz` columns convert via the `DateTime<Utc>` branch of `get_nanotime` |
 | `test_read_empty_table` | Empty table yields 0 rows |
 | `test_write_round_trip` | `postgres_write` rows are readable via direct query and the adapter |
 | `test_write_burst_multi_row` | A multi-record burst inserts all rows at the shared timestamp |

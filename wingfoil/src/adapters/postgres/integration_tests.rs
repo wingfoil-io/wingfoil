@@ -169,6 +169,33 @@ fn test_read_time_sliced() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `timestamptz` columns exercise the `DateTime<Utc>` branch of `get_nanotime`
+/// (every other read test uses `timestamp`, which takes the `NaiveDateTime` branch).
+/// Rows seeded at explicit UTC instants must read back at the same `NanoTime`.
+#[test]
+fn test_read_timestamptz() -> anyhow::Result<()> {
+    let _ = env_logger::try_init();
+    let (_container, conn) = start_postgres()?;
+    exec(
+        &conn,
+        &[
+            "CREATE TABLE trades (time timestamptz, sym text, price float8, qty int8)",
+            "INSERT INTO trades \
+             SELECT timestamptz '2000-01-01 00:00:00+00' + (g || ' hours')::interval, \
+                    'SYM' || g, 100.0 + g, g \
+             FROM generate_series(0, 2) AS g",
+        ],
+    )?;
+
+    let rows = collect_read(read_trades(conn))?;
+    assert_eq!(rows.len(), 3, "should read all 3 timestamptz rows");
+    assert_eq!(rows[0].value.sym, "SYM0");
+    assert_eq!(rows[2].value.sym, "SYM2");
+    // 2000-01-01 00:00:00 UTC is the KDB epoch; the tz column must convert to it exactly.
+    assert_eq!(rows[0].time, NanoTime::from_kdb_timestamp(0));
+    Ok(())
+}
+
 #[test]
 fn test_read_empty_table() -> anyhow::Result<()> {
     let _ = env_logger::try_init();

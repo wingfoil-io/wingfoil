@@ -16,6 +16,12 @@ use tokio_postgres::types::ToSql;
 /// Return the **business** column values only, in the same order they appear in the
 /// target table *after* the time column. The graph timestamp is prepended
 /// automatically by [`postgres_write`] as the first inserted column — do not include it.
+///
+/// Each value is returned as an owned `Box<dyn ToSql>`, so this allocates once per
+/// column per row. That is a deliberate trade for an open type set (any `ToSql` type
+/// binds) and an object-safe method; it is a non-issue at the low-frequency write rates
+/// this adapter targets, where the network round-trip dwarfs the allocation. Do not
+/// reach for a zero-alloc borrowing design unless a hot write path proves it necessary.
 pub trait PostgresSerialize {
     /// Owned, boxed column values (excluding time) in table column order.
     fn to_params(&self) -> Vec<Box<dyn ToSql + Sync + Send>>;

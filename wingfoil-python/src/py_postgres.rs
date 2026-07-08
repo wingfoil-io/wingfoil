@@ -245,8 +245,9 @@ fn bursts_to_py_stream(stream: Rc<dyn Stream<Burst<PyPgRow>>>) -> PyStream {
 ///
 /// Install the notify trigger on the table first — `postgres_notify_trigger_sql`
 /// returns the SQL. Requires a real-time run (`realtime=True`); the time column must
-/// be non-decreasing across inserts, and rows time-stamped at or before the cursor
-/// are never picked up.
+/// be **strictly increasing** across inserts — the cursor query is `time > cursor`,
+/// so a row stamped at or before the cursor (including one that ties the current max)
+/// is silently dropped.
 ///
 /// Args:
 ///     conn_str: libpq connection string
