@@ -279,7 +279,7 @@ Graph::new(
 ```
 
 Use `AeronMode::Threaded` to poll on a background thread instead. The pure-Rust
-`aeron-rs-beta` backend needs no C++ toolchain but takes a lock on the graph
+`aeron-rs` backend needs no C++ toolchain but takes a lock on the graph
 thread — see the [adapter docs](../src/adapters/aeron/CLAUDE.md).
 
 [Full example.](aeron/)

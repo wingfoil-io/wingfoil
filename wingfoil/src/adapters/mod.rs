@@ -1,6 +1,6 @@
 //! A library of input and output adapters
 
-#[cfg(any(feature = "aeron", feature = "aeron-rs-beta"))]
+#[cfg(any(feature = "aeron", feature = "aeron-rs"))]
 pub mod aeron;
 #[cfg(feature = "augurs")]
 pub mod augurs;

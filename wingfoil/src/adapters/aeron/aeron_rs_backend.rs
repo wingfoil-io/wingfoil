@@ -1,11 +1,11 @@
 //! Pure-Rust `aeron-rs` backend for the Aeron adapter.
 //!
-//! Requires the `aeron-rs-beta` feature flag.  No C++ toolchain needed.
+//! Requires the `aeron-rs` feature flag.  No C++ toolchain needed.
 //!
 //! `aeron-rs` is less mature than the rusteron C++ FFI backend.  Prefer the
 //! `aeron` (rusteron) backend for production use.
 //!
-//! # ⚠️ Lock on the graph thread (why this is `-beta`)
+//! # ⚠️ Lock on the graph thread (why this backend is experimental)
 //!
 //! The `aeron-rs` crate hands back its `Subscription` and `Publication` as
 //! `Arc<Mutex<…>>` and shares them with its own background client-conductor

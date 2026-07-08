@@ -236,7 +236,7 @@ fn test_try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
 }
 
 /// aeron-rs (pure-Rust) backend: ticker-driven round-trip.
-#[cfg(feature = "aeron-rs-beta")]
+#[cfg(feature = "aeron-rs")]
 #[test]
 fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
     let _container = start_media_driver()?;

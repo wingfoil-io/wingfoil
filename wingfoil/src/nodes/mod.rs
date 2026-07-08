@@ -18,7 +18,7 @@ mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 pub mod dynamic_group;
 mod feedback;
 mod filter;
@@ -39,7 +39,7 @@ mod print;
 mod producer;
 // `ReceiverStream` is only consumed by the zmq and aeron adapters; gate the
 // module on them so the default build doesn't flag it as dead code.
-#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs"))]
 pub(crate) mod receiver;
 mod sample;
 mod throttle;
@@ -58,7 +58,7 @@ pub use async_io::*;
 pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
 pub use demux::*;
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 pub use dynamic_group::*;
 use feedback::FeedbackSendStream;
 pub use feedback::{FeedbackSink, feedback, feedback_node};

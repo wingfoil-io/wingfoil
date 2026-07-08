@@ -12,7 +12,7 @@ aeron/
   mod.rs               # AeronMode, AeronSubOptions, aeron_sub_fragment* factories, public re-exports
   transport.rs         # AeronSubscriberBackend / AeronPublisherBackend traits + test mocks
   rusteron_backend.rs  # `aeron` feature: rusteron-client C++ FFI backend (production)
-  aeron_rs_backend.rs  # `aeron-rs-beta` feature: pure-Rust aeron-rs backend (experimental)
+  aeron_rs_backend.rs  # `aeron-rs` feature: pure-Rust aeron-rs backend (experimental)
   sub_fragment_node.rs # Burst<T> subscriber surface (spin + threaded; typed parser with FragmentHeader access)
   pub_node.rs          # AeronPub trait + publisher node (offer + status variants)
   status.rs            # AeronStatus enum (Disconnected / Connected / BackPressured / Closed)
@@ -31,7 +31,7 @@ Enable **exactly one** backend feature:
 | Feature         | Crate             | Toolchain                       | Status                |
 |-----------------|-------------------|---------------------------------|-----------------------|
 | `aeron`         | `rusteron-client` | cmake ≥3.30, clang, uuid, libbsd| Recommended / production |
-| `aeron-rs-beta` | `aeron-rs`        | pure Rust, none                 | Experimental — see lock warning |
+| `aeron-rs`      | `aeron-rs`        | pure Rust, none                 | Experimental — see lock warning |
 
 `aeron-driver` additionally embeds a media driver (`rusteron-media-driver`) in
 process and implies `aeron`. Without it, point the client at an externally
@@ -52,7 +52,7 @@ running media driver (the normal production topology).
   than per graph cycle.
 
 The `subscriber` handle comes from `AeronHandle::subscription(channel, stream_id, timeout)`
-(rusteron) or `AeronRsHandle::subscription(...)` (aeron-rs-beta). Constructing it
+(rusteron) or `AeronRsHandle::subscription(...)` (aeron-rs). Constructing it
 **requires a live media driver** — there is no offline construction path.
 
 ### Polling modes — `AeronMode`
@@ -78,7 +78,7 @@ Fluent trait on `Rc<dyn Stream<Burst<T>>>`:
 The `publisher` handle comes from `AeronHandle::publication(...)` /
 `AeronRsHandle::publication(...)`.
 
-## ⚠️ Design note: `aeron-rs-beta` locks on the graph thread
+## ⚠️ Design note: `aeron-rs` locks on the graph thread
 
 The `aeron-rs` crate returns `Subscription` / `Publication` as `Arc<Mutex<…>>`
 and shares them with its own background client-conductor thread, which locks
@@ -92,17 +92,17 @@ thread, violating wingfoil's "no locks in `cycle()`" invariant.
 Guidance:
 - Use the `aeron` (rusteron) backend for low-latency / production — its
   `poll()` / `offer()` are genuinely lock-free.
-- The `aeron-rs-beta` subscriber reports `supports_graph_thread_poll() == false`,
+- The `aeron-rs` subscriber reports `supports_graph_thread_poll() == false`,
   so `aeron_sub_fragment` **automatically downgrades `AeronMode::Spin` to
   `Threaded`** for it (logging a warning) — the subscriber lock can only ever run
   on the background poll thread. `Spin` is unreachable for this backend by
   construction.
 - The publisher has no threaded mode and always locks on the calling thread;
   there is no automatic downgrade for the publish side, so avoid the
-  `aeron-rs-beta` publisher on latency-sensitive paths.
+  `aeron-rs` publisher on latency-sensitive paths.
 
-This is why `aeron-rs-beta` is named `-beta` and is excluded from the `full`
-feature set.
+This is why the `aeron-rs` backend is considered experimental and is excluded
+from the `full` feature set.
 
 ## Pre-Commit Requirements
 
@@ -122,7 +122,7 @@ feature set.
    ```bash
    cargo fmt --all
    cargo clippy -p wingfoil --features aeron,aeron-driver --all-targets -- -D warnings
-   cargo clippy -p wingfoil --features aeron-rs-beta   --all-targets -- -D warnings
+   cargo clippy -p wingfoil --features aeron-rs   --all-targets -- -D warnings
    ```
 
 ## Gotchas
@@ -134,7 +134,7 @@ feature set.
   `0.1.x`; the FFI surface changes between minor versions.
 - **`aeron` needs cmake ≥3.30** (Ubuntu 24.04 ships 3.28) plus clang, uuid-dev,
   libbsd-dev. Missing/old cmake yields a clear build-script error; the pure-Rust
-  `aeron-rs-beta` backend needs none of this.
+  `aeron-rs` backend needs none of this.
 - **Threaded status** is propagated in-band via `AeronItem` (data/status
   multiplexed over the receiver channel); the data node demuxes and replays
   transitions into the shared `AeronStatusStream`, sampled at the poll cadence.

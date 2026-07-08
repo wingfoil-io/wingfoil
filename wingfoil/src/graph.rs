@@ -5,7 +5,7 @@ use crate::types::{NanoTime, Node};
 use crossbeam::channel::{Receiver, SendError, Sender, select};
 use std::cmp::{max, min};
 use std::collections::HashMap;
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs::File;
@@ -34,7 +34,7 @@ struct Edge {
     active: bool,
 }
 
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 struct PendingAddition {
     node: Rc<dyn Node>,
     caller_index: usize,
@@ -149,9 +149,9 @@ pub struct GraphState {
     nodes: Vec<NodeData>,
     dirty_nodes_by_layer: Vec<Vec<usize>>,
     node_dirty: Vec<bool>,
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     pending_additions: Vec<PendingAddition>,
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     pending_removals: Vec<Rc<dyn Node>>,
 }
 
@@ -180,9 +180,9 @@ impl GraphState {
             nodes: Vec::new(),
             dirty_nodes_by_layer: Vec::new(),
             node_dirty: Vec::new(),
-            #[cfg(feature = "dynamic-graph-beta")]
+            #[cfg(feature = "dynamic-graph")]
             pending_additions: Vec::new(),
-            #[cfg(feature = "dynamic-graph-beta")]
+            #[cfg(feature = "dynamic-graph")]
             pending_removals: Vec::new(),
         }
     }
@@ -296,7 +296,7 @@ impl GraphState {
     /// the new upstream after it is wired, scheduling it to fire at `t+1ns`.
     /// This lets the calling node catch the value that triggered the
     /// `add_upstream` call without waiting for the next source tick.
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     pub fn add_upstream(&mut self, upstream: Rc<dyn Node>, is_active: bool, recycle: bool) {
         let caller_index = self
             .current_node_index
@@ -317,7 +317,7 @@ impl GraphState {
     /// internal index (`node_to_index`, `node_ticked`, `node_dirty`, `nodes`) are never
     /// freed. In long-running graphs that add and remove many nodes over time, these
     /// dead entries accumulate. This is a known limitation of the current implementation.
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     pub fn remove_node(&mut self, node: Rc<dyn Node>) {
         self.pending_removals.push(node);
     }
@@ -764,9 +764,9 @@ impl Graph {
             }
         }
         self.reset();
-        #[cfg(feature = "dynamic-graph-beta")]
+        #[cfg(feature = "dynamic-graph")]
         self.process_pending_removals()?;
-        #[cfg(feature = "dynamic-graph-beta")]
+        #[cfg(feature = "dynamic-graph")]
         self.process_pending_additions()?;
         Ok(())
     }
@@ -815,7 +815,7 @@ impl Graph {
         }
     }
 
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     fn process_pending_removals(&mut self) -> anyhow::Result<()> {
         let removals = std::mem::take(&mut self.state.pending_removals);
         for node in removals {
@@ -857,7 +857,7 @@ impl Graph {
         Ok(())
     }
 
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     fn process_pending_additions(&mut self) -> anyhow::Result<()> {
         let additions = std::mem::take(&mut self.state.pending_additions);
         if additions.is_empty() {
@@ -973,7 +973,7 @@ impl Graph {
     /// `dirty_nodes_by_layer` to accommodate the new layer.
     ///
     /// Iterative BFS to avoid stack overflows on deep graphs.
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     fn fix_layers(&mut self, start: usize) {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(start);
@@ -1506,7 +1506,7 @@ Caused by:
         assert!(!state.ticked(orphan.as_node()));
     }
 
-    #[cfg(feature = "dynamic-graph-beta")]
+    #[cfg(feature = "dynamic-graph")]
     mod dynamism {
         use super::*;
 
