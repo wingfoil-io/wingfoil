@@ -29,6 +29,9 @@ kdb/
     the first slice starts at the period boundary at/before `start_time`, so a
     `time >= t0j` filter can legitimately return rows before `start_time`; emitting
     them would drive the monotonic graph clock backwards and abort the run
+  - Emits `Burst<T>` (rows sharing a timestamp are grouped into one tick); iterate the
+    burst to process every row. `.collapse()` keeps only the **last** row per tick, so
+    avoid it when multiple rows can share a timestamp
   - Terminates automatically when all slices are exhausted
 - `kdb_read_cached()` - Cached variant of `kdb_read`
   - Same signature as `kdb_read` plus a `cache_dir: impl Into<PathBuf>` parameter
@@ -200,7 +203,13 @@ let stream = kdb_read::<Trade>(
     },
 );
 stream
-    .collapse()
+    // Each tick is a `Burst<Trade>` (all trades at one timestamp). Iterate the
+    // burst to process every row — `.collapse()` keeps only the last per tick.
+    .for_each(|trades, _| {
+        for trade in &trades {
+            println!("{}", trade.price);
+        }
+    })
     .run(
         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(start_kdb)),
         RunFor::Duration(std::time::Duration::from_secs(86400)),

@@ -44,9 +44,13 @@
 //!         )
 //!     },
 //! )
-//!     .collapse()
-//!     .map(|trade| trade.price)
-//!     .print()
+//!     // Each tick is a `Burst<Trade>` — all trades sharing a timestamp. Iterate
+//!     // the burst to see every row; `.collapse()` keeps only the last per tick.
+//!     .for_each(|trades, _time| {
+//!         for trade in &trades {
+//!             println!("{}", trade.price);
+//!         }
+//!     })
 //!     .run(
 //!         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
 //!         RunFor::Duration(std::time::Duration::from_secs(86400)),
