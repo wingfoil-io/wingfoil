@@ -6,6 +6,10 @@ pub mod aeron;
 pub mod augurs;
 #[cfg(feature = "kdb")]
 pub mod cache;
+/// Shared helpers reusable across I/O adapters (e.g. the out-of-window row
+/// filter for historical reads). Always compiled so any adapter can use it
+/// without touching feature gates.
+pub mod common;
 #[cfg(feature = "csv")]
 pub mod csv;
 #[cfg(feature = "etcd")]

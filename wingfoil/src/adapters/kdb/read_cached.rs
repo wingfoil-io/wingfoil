@@ -3,6 +3,7 @@
 use super::read::compute_time_slices;
 use super::{KdbConnection, KdbDeserialize, KdbExt, SymbolInterner};
 use crate::adapters::cache::{CacheConfig, CacheKey, FileCache};
+use crate::adapters::common::{TimeWindow, WindowFilter};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::bail;
@@ -36,10 +37,19 @@ use std::rc::Rc;
 /// fields), old cache files will deserialise as garbage or return an error. The
 /// fix is to call [`CacheConfig::clear`] (or delete the cache directory) and re-run.
 ///
+/// # Out-of-window rows
+///
+/// Like [`kdb_read`], rows a query returns outside the run's
+/// `[start_time, end_time)` window are dropped at emit time (with a per-slice
+/// warning) rather than aborting the run. The **cache stores the full slice
+/// result** (`[t0, t1)`), because the cache key is the query string and does not
+/// encode `start_time`/`end_time`; the clamp is applied on the way out, on both
+/// cache hits and misses.
+///
 /// # Example
 /// ```ignore
 /// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024);
-/// let stream = kdb_read_cached::<Trade, _>(
+/// let stream = kdb_read_cached::<Trade>(
 ///     KdbConnection::new("localhost", 5000),
 ///     Duration::from_secs(3600),
 ///     config,
@@ -51,11 +61,11 @@ use std::rc::Rc;
 /// );
 /// ```
 #[must_use]
-pub fn kdb_read_cached<T, F>(
+pub fn kdb_read_cached<T>(
     connection: KdbConnection,
     period: std::time::Duration,
     cache_config: CacheConfig,
-    query_fn: F,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element
@@ -65,7 +75,6 @@ where
         + serde::Serialize
         + for<'de> serde::Deserialize<'de>
         + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
@@ -101,6 +110,13 @@ where
                 let mut query_fn = query_fn;
 
                 'slices: for (within, date, iteration) in slices {
+                    // Effective window for this slice: clamp the period-aligned
+                    // (t0, t1) to the run's [start_time, end_time). Rows the query
+                    // returns outside it are dropped at emit time (below). The cache
+                    // still stores the full [t0, t1) result, since the cache key is
+                    // the query string and does not encode start_time/end_time.
+                    let (t0, t1) = within;
+                    let window = TimeWindow::clamp(t0, t1, start_time, end_time);
                     let query = query_fn(within, date, iteration);
                     let key = CacheKey::from_parts(&[&query]);
 
@@ -114,9 +130,14 @@ where
                     };
 
                     if let Some(rows) = cached {
+                        let mut filter = WindowFilter::new("kdb_read_cached", window);
                         for (time, record) in rows {
+                            if !filter.keep(time) {
+                                continue;
+                            }
                             yield Ok((time, record));
                         }
+                        filter.finish();
                         continue;
                     }
 
@@ -194,9 +215,14 @@ where
                         log::warn!("KDB cache write error: {e}");
                     }
 
+                    let mut filter = WindowFilter::new("kdb_read_cached", window);
                     for (time, record) in parsed {
+                        if !filter.keep(time) {
+                            continue;
+                        }
                         yield Ok((time, record));
                     }
+                    filter.finish();
                 }
             })
         }

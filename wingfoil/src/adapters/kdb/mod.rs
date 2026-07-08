@@ -1,7 +1,9 @@
 //! KDB+ database adapter for reading and writing data to q/kdb+ instances.
 //!
 //! This module provides async connectivity to KDB+ databases using the `kdbplus` crate,
-//! allowing query results to be streamed into wingfoil graphs.
+//! allowing query results to be streamed into wingfoil graphs. Historical reads
+//! (`kdb_read`), real-time tickerplant subscriptions (`kdb_sub`), and writes
+//! (`kdb_write`) are all supported.
 //!
 //! # Example
 //!
@@ -31,7 +33,7 @@
 //!     .with_credentials("user", "pass");
 //!
 //! // Read with time-sliced chunking, one slice per hour
-//! kdb_read::<Trade, _>(
+//! kdb_read::<Trade>(
 //!     conn,
 //!     std::time::Duration::from_secs(3600),
 //!     |(t0, t1), date, _| {
@@ -42,9 +44,13 @@
 //!         )
 //!     },
 //! )
-//!     .collapse()
-//!     .map(|trade| trade.price)
-//!     .print()
+//!     // Each tick is a `Burst<Trade>` — all trades sharing a timestamp. Iterate
+//!     // the burst to see every row; `.collapse()` keeps only the last per tick.
+//!     .for_each(|trades, _time| {
+//!         for trade in &trades {
+//!             println!("{}", trade.price);
+//!         }
+//!     })
 //!     .run(
 //!         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
 //!         RunFor::Duration(std::time::Duration::from_secs(86400)),
@@ -54,6 +60,7 @@
 
 mod read;
 mod read_cached;
+mod sub;
 mod write;
 
 #[cfg(all(test, feature = "kdb-integration-test"))]
@@ -64,6 +71,7 @@ mod integration_tests;
 pub use crate::adapters::cache::CacheConfig;
 pub use read::*;
 pub use read_cached::*;
+pub use sub::*;
 pub use write::*;
 
 /// Re-export kdbplus error type for convenience.

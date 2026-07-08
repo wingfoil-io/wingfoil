@@ -46,7 +46,7 @@ impl KdbDeserialize for TestTradeCached {
 
 /// Run `kdb_read_cached` over one day of `TABLE_NAME` and return the row count.
 fn run_cached(conn: KdbConnection, cache_dir: &std::path::Path) -> Result<usize> {
-    let stream = kdb_read_cached::<TestTradeCached, _>(
+    let stream = kdb_read_cached::<TestTradeCached>(
         conn,
         PERIOD,
         CacheConfig::new(cache_dir, u64::MAX),
@@ -99,6 +99,146 @@ fn test_kdb_read_cached_populates_and_hits() -> Result<()> {
     assert_eq!(n, 3, "Second run should return same 3 rows from cache");
 
     std::fs::remove_dir_all(&cache_dir).ok();
+    Ok(())
+}
+
+/// Serde record for the out-of-window test: (time, sym, price, qty), no date.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct TickCached {
+    sym: Sym,
+    price: f64,
+    qty: i64,
+}
+
+impl KdbDeserialize for TickCached {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((
+            time,
+            TickCached {
+                sym: row.get_sym(1, interner)?,
+                price: row.get(2)?.get_float()?,
+                qty: row.get(3)?.get_long()?,
+            },
+        ))
+    }
+}
+
+/// Regression: `kdb_read_cached` must drop rows outside the run's
+/// `[start_time, end_time)` window — on both the cache-miss and cache-hit paths —
+/// while the cache still stores the *full* slice result.
+///
+/// Seeds a pre-start row (75s) plus in-window rows (90/150/210s) and runs with an
+/// unaligned start (90s, 60s period), so the first slice `[60s, 120s)` fetches the
+/// 75s row. Three runs:
+///  1. cache miss → fetch + cache full slice, drop 75s at emit;
+///  2. closed port, same window → cache hit, drop 75s at emit;
+///  3. closed port, *wider* window (start 70s) → cache hit surfaces the 75s row,
+///     proving the cache stored the full slice and the clamp is per-run window.
+#[test]
+fn test_kdb_read_cached_drops_rows_outside_window() -> Result<()> {
+    let _ = env_logger::try_init();
+    let conn = super::integration_tests::test_connection();
+    let cache_dir =
+        std::env::temp_dir().join(format!("wingfoil_cache_window_{}", std::process::id()));
+    std::fs::remove_dir_all(&cache_dir).ok();
+
+    const CTBL: &str = "cached_window_trades";
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // Seed rows at 75s (pre-start), 90s, 150s, 210s past the KDB epoch.
+    rt.block_on(async {
+        let mut s = super::integration_tests::connect(&conn).await?;
+        super::integration_tests::q_exec(
+            &mut s,
+            &format!("{CTBL}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())"),
+        )
+        .await?;
+        super::integration_tests::q_exec(
+            &mut s,
+            &format!(
+                "insert[`{CTBL};(2000.01.01D00:00:00+1000000000*75 90 150 210;\
+                 `EARLY`AAPL`GOOG`MSFT;100 101 102 103f;10 20 30 40j)]"
+            ),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    let period = std::time::Duration::from_secs(60);
+    let run = |conn: KdbConnection, start: NanoTime, dur_secs: u64| -> Result<Vec<(String, i64)>> {
+        let stream = kdb_read_cached::<TickCached>(
+            conn,
+            period,
+            CacheConfig::new(&cache_dir, u64::MAX),
+            move |(t0, t1), _, _| {
+                format!(
+                    "select from {CTBL} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+                    t0.to_kdb_timestamp(),
+                    t1.to_kdb_timestamp(),
+                )
+            },
+        );
+        // Collect the raw bursts (not `.collapse()`, which would drop rows).
+        let collected = stream.collect();
+        collected.clone().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(dur_secs)),
+        )?;
+        Ok(collected
+            .peek_value()
+            .iter()
+            .flat_map(|va| va.value.iter())
+            .map(|t| (t.sym.to_string(), t.qty))
+            .collect())
+    };
+
+    let start_90 = NanoTime::from_kdb_timestamp(90 * 1_000_000_000);
+    let start_70 = NanoTime::from_kdb_timestamp(70 * 1_000_000_000);
+    let closed = KdbConnection::new("localhost", 59999);
+
+    // 1. Cache miss: populates cache with the full slice, drops the 75s row at emit.
+    let first = run(conn.clone(), start_90, 180)?;
+    // 2. Cache hit (closed port): still drops the 75s row at emit.
+    let second = run(closed.clone(), start_90, 180)?;
+    // 3. Cache hit, wider window starting at 70s: the 75s row now surfaces,
+    //    proving the cache stored the full slice.
+    let third = run(closed, start_70, 180)?;
+
+    rt.block_on(async {
+        let mut s = super::integration_tests::connect(&conn).await?;
+        super::integration_tests::q_exec(&mut s, &format!("delete {CTBL} from `.")).await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+    std::fs::remove_dir_all(&cache_dir).ok();
+
+    let in_window = vec![
+        ("AAPL".to_string(), 20),
+        ("GOOG".to_string(), 30),
+        ("MSFT".to_string(), 40),
+    ];
+    assert_eq!(
+        first, in_window,
+        "cache-miss path must drop the pre-start row"
+    );
+    assert_eq!(
+        second, in_window,
+        "cache-hit path must also drop the pre-start row"
+    );
+    assert_eq!(
+        third,
+        vec![
+            ("EARLY".to_string(), 10),
+            ("AAPL".to_string(), 20),
+            ("GOOG".to_string(), 30),
+            ("MSFT".to_string(), 40),
+        ],
+        "cache stored the full slice: a wider window surfaces the 75s row from cache"
+    );
     Ok(())
 }
 
@@ -160,7 +300,7 @@ fn test_kdb_read_cached_partial_cache() -> Result<()> {
     let half_day = std::time::Duration::from_secs(12 * 3600);
 
     let run = |conn: KdbConnection| -> Result<usize> {
-        let stream = kdb_read_cached::<TestTradeCached, _>(
+        let stream = kdb_read_cached::<TestTradeCached>(
             conn,
             half_day,
             CacheConfig::new(&cache_dir, u64::MAX),

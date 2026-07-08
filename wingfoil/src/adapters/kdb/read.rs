@@ -1,6 +1,7 @@
 //! KDB+ read functionality for streaming data from q/kdb+ instances.
 
 use super::{KdbConnection, Sym, SymbolInterner};
+use crate::adapters::common::{TimeWindow, WindowFilter};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};
@@ -53,6 +54,16 @@ impl Rows {
     /// Returns true if there are no rows.
     pub fn is_empty(&self) -> bool {
         self.n_rows == 0
+    }
+
+    /// Build a [`Rows`] accessor directly from a list of column vectors.
+    ///
+    /// A tickerplant `upd` payload is a bare list of per-column vectors rather
+    /// than a flipped table dictionary; this wraps that list so [`kdb_sub`](crate::kdb_sub)
+    /// can reuse the same indexed row access as [`kdb_read`].
+    pub(super) fn from_column_list(columns: Vec<K>) -> Self {
+        let n_rows = columns.first().map(K::len).unwrap_or(0);
+        Rows { columns, n_rows }
     }
 
     /// Get a row by index.
@@ -265,6 +276,29 @@ impl KdbExt for K {
     }
 }
 
+/// Turn a tickerplant `upd` payload into a [`Rows`] accessor.
+///
+/// The third element of a `(`upd; table; data)` message is either a table
+/// (qtype 98) or a bare list of column vectors, depending on the tickerplant.
+/// Both are normalised to [`Rows`] so [`kdb_sub`](crate::kdb_sub) can decode
+/// them with the same [`KdbDeserialize`] impls that [`kdb_read`] uses.
+pub(super) fn upd_payload_rows(data: &K) -> Result<Rows> {
+    if data.get_type() == qtype::TABLE {
+        data.rows()
+    } else {
+        let columns = data
+            .as_vec::<K>()
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "kdb_sub: upd payload is neither a table nor a list of columns (qtype {})",
+                    data.get_type()
+                )
+            })?
+            .clone();
+        Ok(Rows::from_column_list(columns))
+    }
+}
+
 /// Trait for deserializing KDB row data into Rust types.
 ///
 /// Implementors extract fields from the row using indexed column access and return
@@ -288,14 +322,23 @@ pub trait KdbDeserialize: Sized {
 
 /// Core streaming loop driven by a caller-supplied query closure.
 ///
-/// Calls `query_fn()` before each chunk. Returns `None` to stop, or
-/// `Some(query_string)` to execute next.
+/// Calls `next_slice()` before each chunk. Returns `None` to stop, or
+/// `Some((query, window))` — the query to execute plus the on-graph time
+/// [`TimeWindow`] the resulting rows are expected to fall in.
+///
+/// Rows whose extracted time falls outside `window` are **dropped** (via
+/// [`WindowFilter`], with a single per-slice warning). This is necessary because
+/// callers build their own filters and the first slice starts at the period
+/// boundary at or before `start_time`, so a query can legitimately return rows
+/// before `start_time`, after `end_time`, or otherwise beyond the slice it was
+/// asked to fill. The graph clock is monotonic and bounded to the run window, so
+/// emitting such rows would abort the run.
 ///
 /// `prev_time` is reset each chunk so time-of-day columns work correctly when
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    mut query_fn: impl FnMut() -> Option<String> + Send + 'static,
+    mut next_slice: impl FnMut() -> Option<(String, TimeWindow)> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
     T: KdbDeserialize + Send + 'static,
@@ -303,7 +346,7 @@ where
     async_stream::stream! {
         let mut interner = SymbolInterner::default();
 
-        'outer: while let Some(query) = query_fn() {
+        'outer: while let Some((query, window)) = next_slice() {
             info!("KDB query: {query}");
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
@@ -320,11 +363,19 @@ where
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
             let mut prev_time: Option<NanoTime> = None;
+            let mut filter = WindowFilter::new("kdb_read", window);
             for row in &rows {
                 let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
                     Err(e) => { yield Err(e.into()); break 'outer; }
                 };
+
+                // Drop rows the query returned outside the run window (before
+                // start_time, at/after end_time, or beyond the slice bounds).
+                // Emitting them would drive the monotonic graph clock backwards.
+                if !filter.keep(time) {
+                    continue;
+                }
 
                 if let Some(prev) = prev_time
                     && time < prev
@@ -339,6 +390,7 @@ where
 
                 yield Ok((time, record));
             }
+            filter.finish();
         }
     }
 }
@@ -412,14 +464,13 @@ pub(crate) fn compute_time_slices(
 }
 
 #[must_use]
-pub fn kdb_read<T, F>(
+pub fn kdb_read<T>(
     connection: KdbConnection,
     period: std::time::Duration,
-    query_fn: F,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
-    F: FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 {
     produce_async(move |ctx| {
         let start_time = ctx.start_time;
@@ -458,9 +509,16 @@ where
 
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move || -> Option<String> {
-                let (within, date, iteration) = slices_iter.next()?;
-                Some(query_fn(within, date, iteration))
+            let slice_fn = move || -> Option<(String, TimeWindow)> {
+                let ((t0, t1), date, iteration) = slices_iter.next()?;
+                // The query still uses the period-aligned (t0, t1) for clean
+                // round-number boundaries, but rows are clamped to the run's
+                // [start_time, end_time) so out-of-window rows are dropped rather
+                // than aborting the run. `t0` may precede `start_time` on the
+                // first slice; `t1` may exceed `end_time` on the last.
+                let window = TimeWindow::clamp(t0, t1, start_time, end_time);
+                let query = query_fn((t0, t1), date, iteration);
+                Some((query, window))
             };
 
             Ok(chunk_stream::<T>(socket, slice_fn))
@@ -800,6 +858,108 @@ mod tests {
         );
         assert_eq!(slices.last().unwrap().1, 1);
         assert_eq!(slices.last().unwrap().2, 0);
+    }
+
+    /// When `start_time` is not aligned to `period`, the first slice's `t0` is the
+    /// period boundary *at or before* `start_time` — i.e. strictly before it. A
+    /// caller's documented `time >= t0j` filter therefore selects rows in
+    /// `[t0, start_time)`, whose on-graph time is before the run's `start_time`.
+    /// `kdb_read` clamps emitted rows to `[start_time, end_time)` so these are
+    /// dropped rather than aborting the run; this test pins the over-read that
+    /// makes the clamp necessary.
+    #[test]
+    fn test_first_slice_precedes_unaligned_start() {
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(60); // 60s slices
+        // 00:01:30 — 30s past the 00:01:00 boundary, so NOT period-aligned.
+        let start = NanoTime::new(u64::from(epoch) + 90 * 1_000_000_000);
+        let end = NanoTime::new(u64::from(start) + 5 * 60 * 1_000_000_000);
+
+        let slices = compute_time_slices(start, end, period);
+        let first_t0 = slices[0].0.0;
+
+        assert!(
+            first_t0 < start,
+            "first slice t0 {first_t0:?} should be < start {start:?} — kdb_read over-reads \
+             the interval [t0, start_time) before the requested start"
+        );
+        // Concretely, the 00:01:00 boundary — 30s before start_time.
+        assert_eq!(
+            first_t0,
+            NanoTime::new(u64::from(epoch) + 60 * 1_000_000_000)
+        );
+    }
+
+    /// Engine constraint that motivates the clamp: a value whose time is before
+    /// `start_time` aborts a historical run. The engine forbids delivering a
+    /// historical value earlier than the graph clock (which starts at
+    /// `start_time`) — in release with an explicit error, in debug via a
+    /// `NanoTime` subtraction underflow. `kdb_read` avoids both by dropping such
+    /// rows; this test pins why unclamped rows are unsafe to emit.
+    #[test]
+    fn test_row_before_start_time_aborts_run() {
+        use crate::nodes::{NodeOperators, StreamOperators};
+        use crate::{RunFor, RunMode};
+
+        let start = NanoTime::new(1_000_000_000_000);
+        let before = NanoTime::new(u64::from(start) - 1);
+
+        // Mimics kdb_read's first slice yielding a row from [t0, start_time).
+        let stream = crate::nodes::produce_async(move |_ctx| async move {
+            Ok(async_stream::stream! {
+                yield Ok((before, 1u32));
+                yield Ok((start, 2u32));
+            })
+        });
+
+        let result = stream.collapse().collect().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(1)),
+        );
+
+        let err = result.expect_err("a row before start_time must abort the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("less than graph time") || msg.contains("panicked"),
+            "expected a time-ordering failure (engine reject or NanoTime underflow), got: {msg}"
+        );
+    }
+
+    /// Engine constraint (ahead-of-window case): if a slice's query returns a row
+    /// *ahead* of its `[t0, t1)` window, the graph clock jumps forward to it and a
+    /// later slice's legitimate in-window row would then be behind the clock,
+    /// aborting the run via the same monotonic-time check. `kdb_read`'s per-slice
+    /// clamp (drop at/after `hi`) prevents the forward jump; this test pins the
+    /// hazard the upper bound guards against.
+    #[test]
+    fn test_row_ahead_of_window_then_in_window_aborts_run() {
+        use crate::nodes::{NodeOperators, StreamOperators};
+        use crate::{RunFor, RunMode};
+
+        let start = NanoTime::new(1_000_000_000_000);
+        // A row a query returns *beyond* its slice window advances the clock...
+        let ahead = NanoTime::new(u64::from(start) + 100);
+        // ...so a later slice's in-window row (earlier than `ahead`) is now "in the past".
+        let in_window = NanoTime::new(u64::from(start) + 30);
+
+        let stream = crate::nodes::produce_async(move |_ctx| async move {
+            Ok(async_stream::stream! {
+                yield Ok((ahead, 1u32));
+                yield Ok((in_window, 2u32));
+            })
+        });
+
+        let result = stream.collapse().collect().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(1)),
+        );
+
+        let err = result.expect_err("a row behind the advanced clock must abort the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("less than graph time"),
+            "expected the engine's monotonic-time rejection, got: {msg}"
+        );
     }
 
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every

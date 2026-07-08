@@ -88,14 +88,19 @@ struct TestDataBuilder {
     tokio: Runtime,
 }
 
+/// KDB connection from `KDB_TEST_HOST` / `KDB_TEST_PORT` (defaults localhost:5000).
+pub(super) fn test_connection() -> KdbConnection {
+    let port = std::env::var("KDB_TEST_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(5000);
+    let host = std::env::var("KDB_TEST_HOST").unwrap_or_else(|_| "localhost".to_string());
+    KdbConnection::new(host, port)
+}
+
 impl TestDataBuilder {
     fn connection() -> KdbConnection {
-        let port = std::env::var("KDB_TEST_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(5000);
-        let host = std::env::var("KDB_TEST_HOST").unwrap_or_else(|_| "localhost".to_string());
-        KdbConnection::new(host, port)
+        test_connection()
     }
 
     async fn socket(&self) -> Result<QStream> {
@@ -286,7 +291,7 @@ fn test_kdb_sorted_data() -> Result<()> {
     let _ = env_logger::try_init();
     // 3 rows/day × 2 days = 6 rows total; one 24-hour slice per day.
     with_test_data(3, 2, true, |_n, conn| {
-        let stream = kdb_read::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -333,7 +338,7 @@ impl KdbDeserialize for BadTrade {
 fn test_kdb_bad_query() -> Result<()> {
     let _ = env_logger::try_init();
     let conn = TestDataBuilder::connection();
-    let stream = kdb_read::<TestTrade, _>(
+    let stream = kdb_read::<TestTrade>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| "select from nonexistent_table_xyz".to_string(),
@@ -351,7 +356,7 @@ fn test_kdb_bad_query() -> Result<()> {
 fn test_kdb_deserialization_error() -> Result<()> {
     let _ = env_logger::try_init();
     let result = with_test_data(3, 1, true, |_n, conn| {
-        let stream = kdb_read::<BadTrade, _>(
+        let stream = kdb_read::<BadTrade>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -392,7 +397,7 @@ fn test_read_read_perf() -> Result<()> {
 
         for &period in &periods {
             let start = std::time::Instant::now();
-            let stream = kdb_read::<TestTrade, _>(conn.clone(), period, |within, date, _| {
+            let stream = kdb_read::<TestTrade>(conn.clone(), period, |within, date, _| {
                 slice_query(date, within.0, within.1)
             });
             let counter = stream.collapse().count();
@@ -412,7 +417,7 @@ fn test_read_read_perf() -> Result<()> {
 fn test_kdb_connection_refused() -> Result<()> {
     let _ = env_logger::try_init();
     let conn = KdbConnection::new("localhost", 59999);
-    let stream = kdb_read::<TestTrade, _>(
+    let stream = kdb_read::<TestTrade>(
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| format!("select from {TABLE_NAME}"),
@@ -430,7 +435,7 @@ fn test_kdb_connection_refused() -> Result<()> {
 fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
     let _ = env_logger::try_init();
     with_empty_table(|conn| {
-        let stream = kdb_read::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
@@ -467,7 +472,7 @@ fn test_kdb_read_works() -> Result<()> {
     with_test_data(3, 2, true, |_n, conn| {
         let start = NanoTime::from_kdb_timestamp(0); // 2000.01.01D00:00:00
 
-        let stream = kdb_read::<TestTrade, _>(
+        let stream = kdb_read::<TestTrade>(
             conn,
             std::time::Duration::from_secs(12 * 3600), // 12-hour slices
             move |(slice_start, slice_end), date, _iteration| {
@@ -561,7 +566,7 @@ fn test_kdb_write_round_trip() -> Result<()> {
 
         // Verify data correctness by reading back via kdb_read.
         // The write table has no date column so we filter by time only.
-        let read_stream = kdb_read::<TestTradeWrite, _>(
+        let read_stream = kdb_read::<TestTradeWrite>(
             conn,
             std::time::Duration::from_secs(24 * 3600),
             move |(t0, t1), _, _| {
@@ -648,5 +653,279 @@ fn test_kdb_write_append() -> Result<()> {
     let teardown_result = builder.tokio.block_on(builder.drop_write_table());
     test_result?;
     teardown_result?;
+    Ok(())
+}
+
+// --- Real-time subscription (kdb_sub) integration test ---
+
+/// Subscription test table: (time, sym, price, qty) — no date column, as a
+/// tickerplant streams live rows rather than date-partitioned history.
+const SUB_TABLE_NAME: &str = "sub_trades";
+
+/// Business record for the tickerplant stream, matching `SUB_TABLE_NAME`'s
+/// column order (time, sym, price, qty).
+#[derive(Debug, Clone, Default)]
+struct TestTick {
+    sym: Sym,
+    price: f64,
+    qty: i64,
+}
+
+impl KdbDeserialize for TestTick {
+    fn from_kdb_row(
+        row: Row<'_>,
+        _columns: &[String],
+        interner: &mut SymbolInterner,
+    ) -> Result<(NanoTime, Self), KdbError> {
+        let time = row.get_timestamp(0)?; // col 0: time
+        Ok((
+            time,
+            TestTick {
+                sym: row.get_sym(1, interner)?,
+                price: row.get(2)?.get_float()?,
+                qty: row.get(3)?.get_long()?,
+            },
+        ))
+    }
+}
+
+/// A minimal in-process tickerplant defined over IPC, so the standard
+/// `q -p 5000` test instance can act as a tickerplant without loading
+/// `tick/u.q`. Defines the table schema plus `.u.sub` / `.u.pub` / `.u.nsub`:
+///
+/// - `.u.sub[t;s]` registers the caller's handle (`.z.w`) as a subscriber and
+///   returns `(t; 0#value t)` — the empty-table schema `kdb_sub` reads column
+///   names from, mirroring a real tickerplant's synchronous subscribe reply.
+/// - `.u.pub[t;x]` pushes `(`upd; t; x)` asynchronously to every subscriber.
+/// - `.u.nsub[t]` reports the subscriber count (so the publisher can wait until
+///   `kdb_sub` has actually subscribed before pushing rows).
+///
+/// `.u.w` is reset here on every setup so a subscriber handle left over from a
+/// previous run cannot cause `.u.pub` to send to a closed handle.
+const TICKERPLANT_INIT: &str = "\
+sub_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$());\
+.u.w:()!();\
+.u.sub:{[t;s].u.w[t]:$[t in key .u.w;.u.w[t];()],enlist(.z.w;s);(t;0#value t)};\
+.u.pub:{[t;x]{[t;x;ws]neg[ws 0](`upd;t;x)}[t;x]each .u.w[t]};\
+.u.nsub:{$[x in key .u.w;count .u.w[x];0]}";
+
+/// Send a q expression synchronously, erroring on a q error object (type -128).
+pub(super) async fn q_exec(socket: &mut QStream, query: &str) -> Result<K> {
+    let result = socket
+        .send_sync_message(&query)
+        .await
+        .with_context(|| format!("failed to send `{query}`"))?;
+    if result.get_type() == -128 {
+        anyhow::bail!("KDB+ query error for `{query}`: {result:?}");
+    }
+    Ok(result)
+}
+
+pub(super) async fn connect(conn: &KdbConnection) -> Result<QStream> {
+    let creds = conn.credentials_string();
+    QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds)
+        .await
+        .context("Failed to connect to KDB+")
+}
+
+/// End-to-end test of the `kdb_sub` subscribe → receive → decode path against a
+/// live q instance acting as a tickerplant (see `TICKERPLANT_INIT`).
+///
+/// Flow:
+/// 1. Define the tickerplant (`.u.*`) and table schema over IPC.
+/// 2. Spawn a publisher thread that waits for `kdb_sub` to register, then pushes
+///    5 rows — a 3-row batch in one `upd` (exercises multi-row `from_column_list`)
+///    plus two single-row `upd` messages (exercises the receive loop across
+///    messages).
+/// 3. Subscribe on-graph with `kdb_sub` in `RunMode::RealTime`, collecting for a
+///    bounded window, and assert the decoded rows match what was published.
+#[test]
+fn test_kdb_sub_realtime_receives_published_rows() -> Result<()> {
+    let _ = env_logger::try_init();
+    let conn = TestDataBuilder::connection();
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // 1. Set up the in-process tickerplant on the test instance.
+    rt.block_on(async {
+        let mut socket = connect(&conn).await?;
+        q_exec(&mut socket, TICKERPLANT_INIT).await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // 2. Publisher thread: wait for the subscription, then publish 5 rows.
+    let pub_conn = conn.clone();
+    let publisher = std::thread::spawn(move || -> Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(&pub_conn).await?;
+
+            // Wait until kdb_sub has registered (up to ~5s) so no rows are
+            // published before the subscription exists (the TP does not replay).
+            let mut registered = false;
+            for _ in 0..250 {
+                let n = q_exec(&mut socket, &format!(".u.nsub[`{SUB_TABLE_NAME}]")).await?;
+                if n.get_long().unwrap_or(0) > 0 {
+                    registered = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            if !registered {
+                anyhow::bail!("kdb_sub never registered as a subscriber");
+            }
+
+            // 3-row batch in a single `upd` (multi-row column vectors).
+            q_exec(
+                &mut socket,
+                &format!(
+                    ".u.pub[`{SUB_TABLE_NAME};(`timestamp$3#.z.p;`AAPL`GOOG`MSFT;100 101 102f;10 20 30j)]"
+                ),
+            )
+            .await?;
+            // Two single-row `upd` messages.
+            q_exec(
+                &mut socket,
+                &format!(".u.pub[`{SUB_TABLE_NAME};(enlist .z.p;enlist `AAPL;enlist 103f;enlist 40j)]"),
+            )
+            .await?;
+            q_exec(
+                &mut socket,
+                &format!(".u.pub[`{SUB_TABLE_NAME};(enlist .z.p;enlist `GOOG;enlist 104f;enlist 50j)]"),
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    });
+
+    // 3. Subscribe on-graph in real time and collect for a bounded window. The
+    //    run terminates at the duration bound even though kdb_sub never ends.
+    //
+    //    Collect the raw `Burst<T>` stream (not `.collapse()`): in real time the
+    //    receiver drains every row that arrives together into a single burst, and
+    //    `collapse()` keeps only the *last* element of each burst — which would
+    //    silently drop rows from a multi-row `upd`. Flatten the bursts instead.
+    let stream = kdb_sub::<TestTick>(conn.clone(), SUB_TABLE_NAME, "`");
+    let collected = stream.collect();
+    let run_result = collected.clone().run(
+        RunMode::RealTime,
+        RunFor::Duration(std::time::Duration::from_secs(5)),
+    );
+
+    let publish_result = publisher.join().expect("publisher thread panicked");
+
+    // 4. Best-effort teardown: drop the table and clear subscribers.
+    let teardown_result = rt.block_on(async {
+        let mut socket = connect(&conn).await?;
+        q_exec(
+            &mut socket,
+            &format!("delete {SUB_TABLE_NAME} from `.;.u.w:()!()"),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    // Surface run/publish errors before assertions; teardown failure last.
+    run_result?;
+    publish_result?;
+    teardown_result?;
+
+    // 5. Verify every published row was streamed on-graph, in order. Flatten the
+    //    per-cycle bursts: a multi-row `upd` may arrive as one burst of many rows
+    //    or several single-row bursts depending on timing; either way order and
+    //    count are preserved.
+    let rows = collected.peek_value();
+    let got: Vec<(String, f64, i64)> = rows
+        .iter()
+        .flat_map(|va| va.value.iter())
+        .map(|t| (t.sym.to_string(), t.price, t.qty))
+        .collect();
+    let expected = vec![
+        ("AAPL".to_string(), 100.0, 10),
+        ("GOOG".to_string(), 101.0, 20),
+        ("MSFT".to_string(), 102.0, 30),
+        ("AAPL".to_string(), 103.0, 40),
+        ("GOOG".to_string(), 104.0, 50),
+    ];
+    assert_eq!(
+        got, expected,
+        "on-graph rows should match the published rows in order, got {got:?}"
+    );
+    Ok(())
+}
+
+// --- kdb_read out-of-window row handling ---
+
+/// Regression: `kdb_read` must drop rows the query returns outside the run's
+/// `[start_time, end_time)` window rather than aborting the run.
+///
+/// When `start_time` is not aligned to `period`, the first slice begins at the
+/// period boundary *before* `start_time` (for clean round-number queries), so a
+/// `time >= t0` filter returns rows earlier than `start_time`. Those rows have
+/// on-graph time before the graph clock; emitting them would abort the run. This
+/// test seeds one pre-start row plus three in-window rows and asserts the run
+/// succeeds with only the three in-window rows delivered.
+#[test]
+fn test_kdb_read_drops_rows_outside_window() -> Result<()> {
+    let _ = env_logger::try_init();
+    let conn = TestDataBuilder::connection();
+    let rt = tokio::runtime::Runtime::new()?;
+
+    const TBL: &str = "read_window_trades";
+
+    // Table (time, sym, price, qty) with rows at 75s, 90s, 150s, 210s past the
+    // KDB epoch. Start at 90s with a 60s period, so the first slice is
+    // [60s, 120s) — its `time >= 60s` filter also returns the 75s row, which is
+    // before start_time and must be dropped.
+    rt.block_on(async {
+        let mut s = connect(&conn).await?;
+        q_exec(
+            &mut s,
+            &format!("{TBL}:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())"),
+        )
+        .await?;
+        q_exec(
+            &mut s,
+            &format!(
+                "insert[`{TBL};(2000.01.01D00:00:00+1000000000*75 90 150 210;\
+                 `EARLY`AAPL`GOOG`MSFT;100 101 102 103f;10 20 30 40j)]"
+            ),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    // 90s past the epoch — deliberately NOT aligned to the 60s period.
+    let start = NanoTime::from_kdb_timestamp(90 * 1_000_000_000);
+    let period = std::time::Duration::from_secs(60);
+    let stream = kdb_read::<TestTick>(conn.clone(), period, move |(t0, t1), _date, _| {
+        format!(
+            "select from {TBL} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+            t0.to_kdb_timestamp(),
+            t1.to_kdb_timestamp(),
+        )
+    });
+    let collected = stream.collapse().collect();
+    // Run through 270s (start + 180s), covering the 90s/150s/210s rows.
+    let run_result = collected.clone().run(
+        RunMode::HistoricalFrom(start),
+        RunFor::Duration(std::time::Duration::from_secs(180)),
+    );
+
+    let teardown_result = rt.block_on(async {
+        let mut s = connect(&conn).await?;
+        q_exec(&mut s, &format!("delete {TBL} from `.")).await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    run_result?; // must NOT throw despite the pre-start (75s) row
+    teardown_result?;
+
+    let rows = collected.peek_value();
+    let syms: Vec<String> = rows.iter().map(|v| v.value.sym.to_string()).collect();
+    assert_eq!(
+        syms,
+        vec!["AAPL", "GOOG", "MSFT"],
+        "the pre-start `EARLY` row must be dropped; got {syms:?}"
+    );
     Ok(())
 }

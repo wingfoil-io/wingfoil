@@ -35,6 +35,38 @@ stream of deltas), `arc_swap::ArcSwap<T>` gives a lock-free atomic pointer swap
 in `cycle()` that the reader can `.load()` off-thread — see
 `wingfoil/src/adapters/prometheus/exporter.rs` for the per-slot pattern.
 
+### Historical reads: clamp emitted rows to the run window
+
+Applies to any adapter that replays historical data (`RunMode::HistoricalFrom`)
+from a caller-parameterised range — time-sliced queries, cursor/offset replays,
+file scans. Real-time sources (`RunMode::RealTime`) stamp arrival time and do
+**not** need this.
+
+The graph clock is strictly monotonic and bounded to the run's
+`[start_time, end_time)`. Delivering a historical value earlier than the clock
+aborts the run (`received Historical message but with time less than graph time`)
+and can underflow `NanoTime` subtraction in debug builds. Callers build their own
+filters and boundaries rarely align perfectly to `start`/`end`, so a source can
+legitimately return rows outside the requested window. Filter every emitted row
+through the shared [`WindowFilter`] before yielding it — do **not** re-implement
+the check per adapter:
+
+```rust
+use crate::adapters::common::{TimeWindow, WindowFilter};
+
+// once per slice/batch:
+let mut filter = WindowFilter::new("$ARGUMENTS_read", TimeWindow::clamp(t0, t1, start, end));
+for (time, record) in rows {
+    if !filter.keep(time) { continue; }   // drops rows outside [max(t0,start), min(t1,end))
+    yield Ok((time, record));
+}
+filter.finish();                          // one summary warn! if anything was dropped
+```
+
+`adapters::common` is always compiled (no feature gate), so it's available to
+every adapter out of the box. Reference implementation: `kdb_read` /
+`kdb_read_cached` in `wingfoil/src/adapters/kdb/`.
+
 ## 1. Branch
 
 ```bash

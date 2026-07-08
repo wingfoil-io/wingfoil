@@ -104,7 +104,7 @@ fn main() -> Result<()> {
         .run(run_mode, run_for)?;
     let baseline = generate(num_rows);
     // Read
-    let read = kdb_read::<Trade, _>(
+    let read = kdb_read::<Trade>(
         conn,
         std::time::Duration::from_secs(86400),
         move |(t0, t1), _date, _iter| {
