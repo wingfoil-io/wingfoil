@@ -8,7 +8,7 @@ sys.modules['wingfoil.wingfoil'] = wingfoil # some workaround for sphinx nonsens
 
 copyright = '2025, Jake Mitchell'
 author = 'Jake Mitchell'
-release = '6.0.5'
+release = '7.0.0'
 
 # -- General configuration ---------------------------------------------------
 extensions = [
