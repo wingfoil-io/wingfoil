@@ -36,6 +36,15 @@ use std::rc::Rc;
 /// fields), old cache files will deserialise as garbage or return an error. The
 /// fix is to call [`CacheConfig::clear`] (or delete the cache directory) and re-run.
 ///
+/// # Out-of-window rows
+///
+/// Like [`kdb_read`], rows a query returns outside the run's
+/// `[start_time, end_time)` window are dropped at emit time (with a per-slice
+/// warning) rather than aborting the run. The **cache stores the full slice
+/// result** (`[t0, t1)`), because the cache key is the query string and does not
+/// encode `start_time`/`end_time`; the clamp is applied on the way out, on both
+/// cache hits and misses.
+///
 /// # Example
 /// ```ignore
 /// let config = CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024);
@@ -100,6 +109,14 @@ where
                 let mut query_fn = query_fn;
 
                 'slices: for (within, date, iteration) in slices {
+                    // Effective window for this slice: clamp the period-aligned
+                    // (t0, t1) to the run's [start_time, end_time). Rows the query
+                    // returns outside it are dropped at emit time (below). The cache
+                    // still stores the full [t0, t1) result, since the cache key is
+                    // the query string and does not encode start_time/end_time.
+                    let (t0, t1) = within;
+                    let lo = t0.max(start_time);
+                    let hi = t1.min(end_time);
                     let query = query_fn(within, date, iteration);
                     let key = CacheKey::from_parts(&[&query]);
 
@@ -113,8 +130,19 @@ where
                     };
 
                     if let Some(rows) = cached {
+                        let mut dropped = 0usize;
                         for (time, record) in rows {
+                            if time < lo || time >= hi {
+                                dropped += 1;
+                                continue;
+                            }
                             yield Ok((time, record));
+                        }
+                        if dropped > 0 {
+                            log::warn!(
+                                "kdb_read_cached: dropped {dropped} cached row(s) outside the \
+                                requested window [{lo:?}, {hi:?})"
+                            );
                         }
                         continue;
                     }
@@ -193,8 +221,19 @@ where
                         log::warn!("KDB cache write error: {e}");
                     }
 
+                    let mut dropped = 0usize;
                     for (time, record) in parsed {
+                        if time < lo || time >= hi {
+                            dropped += 1;
+                            continue;
+                        }
                         yield Ok((time, record));
+                    }
+                    if dropped > 0 {
+                        log::warn!(
+                            "kdb_read_cached: dropped {dropped} row(s) outside the requested \
+                            window [{lo:?}, {hi:?}); the query returned data beyond the slice"
+                        );
                     }
                 }
             })

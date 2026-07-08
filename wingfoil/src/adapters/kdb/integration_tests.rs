@@ -88,14 +88,19 @@ struct TestDataBuilder {
     tokio: Runtime,
 }
 
+/// KDB connection from `KDB_TEST_HOST` / `KDB_TEST_PORT` (defaults localhost:5000).
+pub(super) fn test_connection() -> KdbConnection {
+    let port = std::env::var("KDB_TEST_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(5000);
+    let host = std::env::var("KDB_TEST_HOST").unwrap_or_else(|_| "localhost".to_string());
+    KdbConnection::new(host, port)
+}
+
 impl TestDataBuilder {
     fn connection() -> KdbConnection {
-        let port = std::env::var("KDB_TEST_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(5000);
-        let host = std::env::var("KDB_TEST_HOST").unwrap_or_else(|_| "localhost".to_string());
-        KdbConnection::new(host, port)
+        test_connection()
     }
 
     async fn socket(&self) -> Result<QStream> {
@@ -705,7 +710,7 @@ sub_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$());\
 .u.nsub:{$[x in key .u.w;count .u.w[x];0]}";
 
 /// Send a q expression synchronously, erroring on a q error object (type -128).
-async fn q_exec(socket: &mut QStream, query: &str) -> Result<K> {
+pub(super) async fn q_exec(socket: &mut QStream, query: &str) -> Result<K> {
     let result = socket
         .send_sync_message(&query)
         .await
@@ -716,7 +721,7 @@ async fn q_exec(socket: &mut QStream, query: &str) -> Result<K> {
     Ok(result)
 }
 
-async fn connect(conn: &KdbConnection) -> Result<QStream> {
+pub(super) async fn connect(conn: &KdbConnection) -> Result<QStream> {
     let creds = conn.credentials_string();
     QStream::connect(ConnectionMethod::TCP, &conn.host, conn.port, &creds)
         .await

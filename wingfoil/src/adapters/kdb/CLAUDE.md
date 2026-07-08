@@ -38,6 +38,9 @@ kdb/
   - `T` must additionally implement `serde::Serialize + serde::Deserialize`; `Sync` is also required
   - `Sym` is fully supported — it serializes as a plain string (interning not restored on load)
   - If a cache file is corrupt, logs a warning and falls back to KDB, then overwrites the bad file
+  - Drops rows outside the run window `[start_time, end_time)` like `kdb_read`, but the
+    **cache stores the full `[t0, t1)` slice** (the key is the query string, which does not
+    encode start/end); the clamp is applied on emit, on both cache hits and misses
   - **Schema evolution:** `bincode` is not self-describing — delete the cache dir if `T` changes
 - `kdb_sub()` - Real-time subscription to a tickerplant (the live counterpart to `kdb_read`)
   - `kdb_sub(conn, table, symbols)` — `table` is the tickerplant table name (no backtick),
