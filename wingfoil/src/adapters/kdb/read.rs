@@ -834,6 +834,103 @@ mod tests {
         assert_eq!(slices.last().unwrap().2, 0);
     }
 
+    /// DEFECT (part 1/2): when `start_time` is not aligned to `period`, the first
+    /// slice's `t0` is the period boundary *at or before* `start_time` — i.e.
+    /// strictly before it. A caller's documented `time >= t0j` filter therefore
+    /// selects rows in `[t0, start_time)`, whose on-graph time is before the run's
+    /// `start_time`.
+    #[test]
+    fn test_first_slice_precedes_unaligned_start() {
+        let epoch = kdb_epoch();
+        let period = std::time::Duration::from_secs(60); // 60s slices
+        // 00:01:30 — 30s past the 00:01:00 boundary, so NOT period-aligned.
+        let start = NanoTime::new(u64::from(epoch) + 90 * 1_000_000_000);
+        let end = NanoTime::new(u64::from(start) + 5 * 60 * 1_000_000_000);
+
+        let slices = compute_time_slices(start, end, period);
+        let first_t0 = slices[0].0.0;
+
+        assert!(
+            first_t0 < start,
+            "first slice t0 {first_t0:?} should be < start {start:?} — kdb_read over-reads \
+             the interval [t0, start_time) before the requested start"
+        );
+        // Concretely, the 00:01:00 boundary — 30s before start_time.
+        assert_eq!(
+            first_t0,
+            NanoTime::new(u64::from(epoch) + 60 * 1_000_000_000)
+        );
+    }
+
+    /// DEFECT (part 2/2): a value whose time is before `start_time` — exactly what
+    /// part 1 shows the first slice returns — aborts a historical run. This is the
+    /// mechanism by which `kdb_read` "can throw": the engine forbids delivering a
+    /// historical value earlier than the graph clock, which starts at `start_time`.
+    #[test]
+    fn test_row_before_start_time_aborts_run() {
+        use crate::nodes::{NodeOperators, StreamOperators};
+        use crate::{RunFor, RunMode};
+
+        let start = NanoTime::new(1_000_000_000_000);
+        let before = NanoTime::new(u64::from(start) - 1);
+
+        // Mimics kdb_read's first slice yielding a row from [t0, start_time).
+        let stream = crate::nodes::produce_async(move |_ctx| async move {
+            Ok(async_stream::stream! {
+                yield Ok((before, 1u32));
+                yield Ok((start, 2u32));
+            })
+        });
+
+        let result = stream.collapse().collect().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(1)),
+        );
+
+        let err = result.expect_err("a row before start_time must abort the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("less than graph time") || msg.contains("panicked"),
+            "expected a time-ordering failure (engine reject or NanoTime underflow), got: {msg}"
+        );
+    }
+
+    /// DEFECT (related): `kdb_read` does not clamp emitted rows to the slice
+    /// window — it trusts the caller's query. If a slice returns a row *ahead* of
+    /// its `[t0, t1)` window, the graph clock jumps forward to it; a later slice's
+    /// legitimate in-window row is then behind the clock and the run is aborted by
+    /// the same monotonic-time check. So out-of-window rows throw too.
+    #[test]
+    fn test_row_ahead_of_window_then_in_window_aborts_run() {
+        use crate::nodes::{NodeOperators, StreamOperators};
+        use crate::{RunFor, RunMode};
+
+        let start = NanoTime::new(1_000_000_000_000);
+        // A row a query returns *beyond* its slice window advances the clock...
+        let ahead = NanoTime::new(u64::from(start) + 100);
+        // ...so a later slice's in-window row (earlier than `ahead`) is now "in the past".
+        let in_window = NanoTime::new(u64::from(start) + 30);
+
+        let stream = crate::nodes::produce_async(move |_ctx| async move {
+            Ok(async_stream::stream! {
+                yield Ok((ahead, 1u32));
+                yield Ok((in_window, 2u32));
+            })
+        });
+
+        let result = stream.collapse().collect().run(
+            RunMode::HistoricalFrom(start),
+            RunFor::Duration(std::time::Duration::from_secs(1)),
+        );
+
+        let err = result.expect_err("a row behind the advanced clock must abort the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("less than graph time"),
+            "expected the engine's monotonic-time rejection, got: {msg}"
+        );
+    }
+
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
     /// supported KDB column type:
     ///
