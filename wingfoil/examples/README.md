@@ -30,6 +30,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`aeron`](aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](telemetry/) | Metrics export: [`prometheus`](telemetry/prometheus/) (pull-based scrape) and [`otlp`](telemetry/otlp/) (push to Grafana Alloy, Datadog, Honeycomb, etc.). |
+| [`augurs`](augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
 
 ## Snippets
 
@@ -301,3 +302,33 @@ Graph::new(vec![prometheus_node, otlp_node], RunMode::RealTime, RunFor::Forever)
 ```
 
 [Full example.](telemetry/)
+
+### augurs
+
+On-graph time-series analysis with the [augurs](https://docs.rs/augurs) toolkit — no external service. Six windowed operators: `augurs_forecast` (ETS or MSTL), `augurs_outlier` (MAD or DBSCAN), `augurs_changepoint`, `augurs_seasons`, `augurs_dtw` and `augurs_cluster`:
+
+```rust,ignore
+use wingfoil::adapters::augurs::*;
+use wingfoil::*;
+
+// Forecast a noisy upward ramp 5 steps ahead with 90% prediction intervals
+// (add `.mstl(vec![24])` to the config for a seasonal MSTL model instead).
+ticker(Duration::from_secs(1))
+    .count()
+    .map(|n| n as f64 + (n as f64 * 0.5).sin())
+    .augurs_forecast(AugursForecastConfig::new(48, 5).with_level(0.90))
+    .for_each(|f, _| println!("next 5: {:?}", f.point))
+    .run(RunMode::RealTime, RunFor::Forever)?;
+
+// Flag the series that diverges from the group (one Vec<f64> per tick).
+readings // Rc<dyn Stream<Vec<f64>>>
+    .augurs_outlier(AugursOutlierConfig::mad(40, 0.5))
+    .for_each(|o, _| println!("outlying: {:?}", o.outlying))
+    .run(RunMode::RealTime, RunFor::Forever)?;
+
+// Detect regime changes and seasonal periods in a single series.
+prices.augurs_changepoint(AugursChangepointConfig::new(120));
+prices.augurs_seasons(AugursSeasonsConfig::new(240));
+```
+
+[Full example.](augurs/)

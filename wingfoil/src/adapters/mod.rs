@@ -2,6 +2,8 @@
 
 #[cfg(any(feature = "aeron", feature = "aeron-rs-beta"))]
 pub mod aeron;
+#[cfg(feature = "augurs")]
+pub mod augurs;
 #[cfg(feature = "kdb")]
 pub mod cache;
 #[cfg(feature = "csv")]

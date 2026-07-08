@@ -374,6 +374,156 @@ impl PyStream {
         Ok(PyNode::new(node))
     }
 
+    /// Forecast this stream of floats with an augurs model.
+    ///
+    /// Buffers a sliding window of the last `window` values and, once
+    /// `min_points` have arrived, emits a dict each tick:
+    /// `{"point": list[float], "lower": list[float], "upper": list[float]}`.
+    /// `lower`/`upper` are empty unless a `level` (0..1) is requested.
+    ///
+    /// Uses non-seasonal ETS by default. Pass `periods` (a list of seasonal
+    /// period lengths, e.g. `[24]`) to fit an MSTL seasonal model instead.
+    ///
+    /// Args:
+    ///     window: Maximum number of recent points retained as history.
+    ///     horizon: Number of steps to forecast ahead.
+    ///     level: Confidence level for prediction intervals (0..1), or None.
+    ///     min_points: Minimum points before fitting begins. Raised to the
+    ///         model's warm-up floor: 12 for ETS, or `2 * max(periods) + 1`
+    ///         for MSTL (STL needs two full seasonal periods).
+    ///     periods: Seasonal period lengths for MSTL, or None for ETS.
+    ///
+    /// Raises:
+    ///     ValueError: if `level` is not in `(0, 1)`, or any `periods` entry
+    ///         is below 2.
+    #[pyo3(signature = (window, horizon, level=None, min_points=12, periods=None))]
+    fn augurs_forecast(
+        &self,
+        window: usize,
+        horizon: usize,
+        level: Option<f64>,
+        min_points: usize,
+        periods: Option<Vec<usize>>,
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_forecast_inner(
+            &self.0, window, horizon, level, min_points, periods,
+        )?))
+    }
+
+    /// Detect outlying series in this stream of per-series readings.
+    ///
+    /// Each value must be a `list[float]` carrying one reading per series.
+    /// Buffers the last `window` ticks and emits a dict each tick:
+    /// `{"outlying": list[int], "scores": list[float]}`.
+    ///
+    /// Args:
+    ///     window: Number of recent samples in the detection window.
+    ///     sensitivity: Detector sensitivity, strictly between 0 and 1.
+    ///     detector: "mad" (default) or "dbscan". DBSCAN needs >= 3 series.
+    ///
+    /// Raises:
+    ///     ValueError: if `sensitivity` is not in `(0, 1)`, or `detector` is
+    ///         not "mad" or "dbscan".
+    #[pyo3(signature = (window, sensitivity, detector="mad"))]
+    fn augurs_outlier(
+        &self,
+        window: usize,
+        sensitivity: f64,
+        detector: &str,
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_outlier_inner(
+            &self.0,
+            window,
+            sensitivity,
+            detector,
+        )?))
+    }
+
+    /// Detect changepoints in this stream of floats (Bayesian online
+    /// changepoint detection over a sliding window).
+    ///
+    /// Emits `{"indices": list[int]}` each tick once `min_points` have arrived:
+    /// the indices, within the window, of detected regime changes.
+    ///
+    /// Args:
+    ///     window: Number of recent points in the detection window.
+    ///     min_points: Minimum points before detection begins.
+    ///     hazard: Prior expected run length between changepoints.
+    #[pyo3(signature = (window, min_points=8, hazard=250.0))]
+    fn augurs_changepoint(&self, window: usize, min_points: usize, hazard: f64) -> PyStream {
+        PyStream(crate::py_augurs::py_augurs_changepoint_inner(
+            &self.0, window, min_points, hazard,
+        ))
+    }
+
+    /// Detect seasonal periods in this stream of floats (periodogram over a
+    /// sliding window).
+    ///
+    /// Emits `{"periods": list[int]}` each tick once enough points have arrived.
+    ///
+    /// Args:
+    ///     window: Number of recent points in the detection window.
+    ///     min_points: Minimum points before detection begins, or None.
+    ///     min_period: Shortest period to consider, or None.
+    ///     max_period: Longest period to consider, or None.
+    #[pyo3(signature = (window, min_points=None, min_period=None, max_period=None))]
+    fn augurs_seasons(
+        &self,
+        window: usize,
+        min_points: Option<usize>,
+        min_period: Option<u32>,
+        max_period: Option<u32>,
+    ) -> PyStream {
+        PyStream(crate::py_augurs::py_augurs_seasons_inner(
+            &self.0, window, min_points, min_period, max_period,
+        ))
+    }
+
+    /// Compute the pairwise dynamic time warping distance matrix over a window
+    /// of per-series readings.
+    ///
+    /// Each value must be a `list[float]` (one reading per series). Emits
+    /// `{"rows": list[list[float]]}` each tick, an `n x n` distance matrix.
+    ///
+    /// Args:
+    ///     window: Number of recent samples compared per series.
+    ///     metric: "euclidean" (default) or "manhattan".
+    #[pyo3(signature = (window, metric="euclidean"))]
+    fn augurs_dtw(&self, window: usize, metric: &str) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_dtw_inner(
+            &self.0, window, metric,
+        )?))
+    }
+
+    /// Cluster the series in a window of per-series readings via DBSCAN over
+    /// their pairwise DTW distances.
+    ///
+    /// Each value must be a `list[float]` (one reading per series). Emits
+    /// `{"labels": list[int]}` each tick — a cluster label per series
+    /// (`-1` = noise).
+    ///
+    /// Args:
+    ///     window: Number of recent samples compared per series.
+    ///     epsilon: DBSCAN neighbourhood radius (max DTW distance).
+    ///     min_cluster_size: DBSCAN minimum core-point neighbourhood size.
+    ///     metric: "euclidean" (default) or "manhattan".
+    #[pyo3(signature = (window, epsilon, min_cluster_size, metric="euclidean"))]
+    fn augurs_cluster(
+        &self,
+        window: usize,
+        epsilon: f64,
+        min_cluster_size: usize,
+        metric: &str,
+    ) -> PyResult<PyStream> {
+        Ok(PyStream(crate::py_augurs::py_augurs_cluster_inner(
+            &self.0,
+            window,
+            epsilon,
+            min_cluster_size,
+            metric,
+        )?))
+    }
+
     /// Write this stream to a KDB+ table.
     ///
     /// Args:

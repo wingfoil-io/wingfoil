@@ -1,6 +1,6 @@
 [features]
 default = ["async"]
-full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "aeron"]
+full = ["async", "csv", "kdb", "zmq", "etcd", "fluvio", "dynamic-graph-beta", "instrument-default", "iceoryx2", "prometheus", "otlp", "fix", "web", "web-tls", "kafka", "redis", "aeron", "augurs"]
 # Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
 # Off by default so consumers don't pull in criterion's dependency tree.
 bench = ["dep:criterion"]
@@ -24,6 +24,10 @@ kafka = ["dep:rdkafka", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
 redis = ["dep:redis", "async"]
 redis-integration-test = ["redis", "dep:testcontainers"]
+# augurs is a pure-Rust time-series toolkit (no external service), so there is
+# no `*-integration-test` feature — the adapter is covered by in-crate unit
+# tests behind `--features augurs`.
+augurs = ["dep:augurs"]
 tracing = []
 instrument-run = ["tracing"]
 instrument-cycle = ["tracing"]
@@ -121,6 +125,12 @@ zmq = { version = "0.10.0", optional = true }
 etcd-client = { version = "0.18", optional = true }
 rdkafka = { version = "0.37", optional = true }
 redis = { version = "0.27", features = ["tokio-comp", "aio", "streams"], optional = true }
+# augurs time-series toolkit — forecasting, outlier/changepoint/season
+# detection, DTW and clustering. Pure-Rust compute (no network/async), so
+# `default-features = false` and only the compute sub-features the adapter uses
+# are enabled (Prophet is deliberately excluded — it needs a bundled Stan
+# toolchain).
+augurs = { version = "0.10.2", default-features = false, features = ["ets", "mstl", "outlier", "changepoint", "seasons", "dtw", "clustering"], optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 tracing = { workspace = true, features = ["log", "attributes"] }
 fluvio = { version = "0.50.1", optional = true }
@@ -352,6 +362,11 @@ required-features = ["kafka"]
 name = "redis"
 path = "examples/redis/main.rs"
 required-features = ["redis"]
+
+[[example]]
+name = "augurs"
+path = "examples/augurs/main.rs"
+required-features = ["augurs"]
 
 [[example]]
 name = "latency_e2e_ws_server"
