@@ -29,8 +29,7 @@ pub fn main() {
         .map(move |chunk| process_orders(chunk, &book))
         .split();
     let prices_export = prices
-        .filter_value(|price| !price.is_none())
-        .map(|price| price.unwrap())
+        .filter_map(|price| price)
         .distinct()
         .csv_write("prices.csv");
     let fills_export = fills.csv_write("fills.csv");
