@@ -3,6 +3,7 @@
 use super::read::compute_time_slices;
 use super::{KdbConnection, KdbDeserialize, KdbExt, SymbolInterner};
 use crate::adapters::cache::{CacheConfig, CacheKey, FileCache};
+use crate::adapters::common::{TimeWindow, WindowFilter};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::bail;
@@ -115,8 +116,7 @@ where
                     // still stores the full [t0, t1) result, since the cache key is
                     // the query string and does not encode start_time/end_time.
                     let (t0, t1) = within;
-                    let lo = t0.max(start_time);
-                    let hi = t1.min(end_time);
+                    let window = TimeWindow::clamp(t0, t1, start_time, end_time);
                     let query = query_fn(within, date, iteration);
                     let key = CacheKey::from_parts(&[&query]);
 
@@ -130,20 +130,14 @@ where
                     };
 
                     if let Some(rows) = cached {
-                        let mut dropped = 0usize;
+                        let mut filter = WindowFilter::new("kdb_read_cached", window);
                         for (time, record) in rows {
-                            if time < lo || time >= hi {
-                                dropped += 1;
+                            if !filter.keep(time) {
                                 continue;
                             }
                             yield Ok((time, record));
                         }
-                        if dropped > 0 {
-                            log::warn!(
-                                "kdb_read_cached: dropped {dropped} cached row(s) outside the \
-                                requested window [{lo:?}, {hi:?})"
-                            );
-                        }
+                        filter.finish();
                         continue;
                     }
 
@@ -221,20 +215,14 @@ where
                         log::warn!("KDB cache write error: {e}");
                     }
 
-                    let mut dropped = 0usize;
+                    let mut filter = WindowFilter::new("kdb_read_cached", window);
                     for (time, record) in parsed {
-                        if time < lo || time >= hi {
-                            dropped += 1;
+                        if !filter.keep(time) {
                             continue;
                         }
                         yield Ok((time, record));
                     }
-                    if dropped > 0 {
-                        log::warn!(
-                            "kdb_read_cached: dropped {dropped} row(s) outside the requested \
-                            window [{lo:?}, {hi:?}); the query returned data beyond the slice"
-                        );
-                    }
+                    filter.finish();
                 }
             })
         }

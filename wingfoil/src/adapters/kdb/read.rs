@@ -1,6 +1,7 @@
 //! KDB+ read functionality for streaming data from q/kdb+ instances.
 
 use super::{KdbConnection, Sym, SymbolInterner};
+use crate::adapters::common::{TimeWindow, WindowFilter};
 use crate::nodes::produce_async;
 use crate::types::*;
 use anyhow::{Result, bail};
@@ -322,22 +323,22 @@ pub trait KdbDeserialize: Sized {
 /// Core streaming loop driven by a caller-supplied query closure.
 ///
 /// Calls `next_slice()` before each chunk. Returns `None` to stop, or
-/// `Some((query, lo, hi))` — the query to execute plus the half-open window
-/// `[lo, hi)` the resulting rows are expected to fall in.
+/// `Some((query, window))` — the query to execute plus the on-graph time
+/// [`TimeWindow`] the resulting rows are expected to fall in.
 ///
-/// Rows whose extracted time falls outside `[lo, hi)` are **dropped** (with a
-/// single per-slice warning). This is necessary because callers build their own
-/// filters and the first slice starts at the period boundary at or before
-/// `start_time`, so a query can legitimately return rows before `start_time`,
-/// after `end_time`, or otherwise beyond the slice it was asked to fill. The
-/// graph clock is monotonic and bounded to the run window, so emitting such rows
-/// would abort the run.
+/// Rows whose extracted time falls outside `window` are **dropped** (via
+/// [`WindowFilter`], with a single per-slice warning). This is necessary because
+/// callers build their own filters and the first slice starts at the period
+/// boundary at or before `start_time`, so a query can legitimately return rows
+/// before `start_time`, after `end_time`, or otherwise beyond the slice it was
+/// asked to fill. The graph clock is monotonic and bounded to the run window, so
+/// emitting such rows would abort the run.
 ///
 /// `prev_time` is reset each chunk so time-of-day columns work correctly when
 /// advancing across date partitions (timestamps restart at midnight on each new date).
 fn chunk_stream<T>(
     mut socket: QStream,
-    mut next_slice: impl FnMut() -> Option<(String, NanoTime, NanoTime)> + Send + 'static,
+    mut next_slice: impl FnMut() -> Option<(String, TimeWindow)> + Send + 'static,
 ) -> impl futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static
 where
     T: KdbDeserialize + Send + 'static,
@@ -345,7 +346,7 @@ where
     async_stream::stream! {
         let mut interner = SymbolInterner::default();
 
-        'outer: while let Some((query, lo, hi)) = next_slice() {
+        'outer: while let Some((query, window)) = next_slice() {
             info!("KDB query: {query}");
             let fetch_start = std::time::Instant::now();
             let result: K = match socket.send_sync_message(&query.as_str()).await {
@@ -362,19 +363,17 @@ where
             info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
             let mut prev_time: Option<NanoTime> = None;
-            let mut dropped: usize = 0;
+            let mut filter = WindowFilter::new("kdb_read", window);
             for row in &rows {
                 let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
                     Ok(r) => r,
                     Err(e) => { yield Err(e.into()); break 'outer; }
                 };
 
-                // Drop rows the query returned outside this slice's [lo, hi)
-                // window (before start_time, at/after end_time, or beyond the
-                // slice bounds). Emitting them would drive the monotonic graph
-                // clock backwards and abort the run.
-                if time < lo || time >= hi {
-                    dropped += 1;
+                // Drop rows the query returned outside the run window (before
+                // start_time, at/after end_time, or beyond the slice bounds).
+                // Emitting them would drive the monotonic graph clock backwards.
+                if !filter.keep(time) {
                     continue;
                 }
 
@@ -391,13 +390,7 @@ where
 
                 yield Ok((time, record));
             }
-
-            if dropped > 0 {
-                log::warn!(
-                    "kdb_read: dropped {dropped} row(s) outside the requested window \
-                    [{lo:?}, {hi:?}); the query returned data beyond the slice it was asked to fill"
-                );
-            }
+            filter.finish();
         }
     }
 }
@@ -516,17 +509,16 @@ where
 
             let mut slices_iter = slices.into_iter();
             let mut query_fn = query_fn;
-            let slice_fn = move || -> Option<(String, NanoTime, NanoTime)> {
+            let slice_fn = move || -> Option<(String, TimeWindow)> {
                 let ((t0, t1), date, iteration) = slices_iter.next()?;
                 // The query still uses the period-aligned (t0, t1) for clean
                 // round-number boundaries, but rows are clamped to the run's
                 // [start_time, end_time) so out-of-window rows are dropped rather
                 // than aborting the run. `t0` may precede `start_time` on the
                 // first slice; `t1` may exceed `end_time` on the last.
-                let lo = t0.max(start_time);
-                let hi = t1.min(end_time);
+                let window = TimeWindow::clamp(t0, t1, start_time, end_time);
                 let query = query_fn((t0, t1), date, iteration);
-                Some((query, lo, hi))
+                Some((query, window))
             };
 
             Ok(chunk_stream::<T>(socket, slice_fn))
