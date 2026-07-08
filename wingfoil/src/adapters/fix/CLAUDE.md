@@ -34,6 +34,24 @@ automatically sends `MarketDataRequest` messages once the session reaches `Logge
 use cases (e.g. throttled sweeps, custom message types). `FixSenderNode` is a separate sink for
 cases where a dedicated outbound connection is needed (e.g. order routing).
 
+### Pluggable Logon authentication (`FixLogon`)
+
+`fix_connect_tls` still takes a `password: Option<&str>` (LMAX-style tag 553/554). For
+venues that authenticate differently, `fix_connect_tls_logon` takes a `FixLogon`:
+
+- `FixLogon::None` — defaults only (EncryptMethod/HeartBtInt/ResetSeqNumFlag).
+- `FixLogon::Password(..)` — Username (553) + Password (554).
+- `FixLogon::custom(builder)` — the builder is handed a `LogonContext` (SenderCompID,
+  TargetCompID, MsgSeqNum, and the exact SendingTime string the Logon carries) and returns
+  extra tag/value pairs. This is the seam Binance's Ed25519 signer uses: it signs tags
+  35/49/56/34/52 joined by SOH and returns RawData (96) + RawDataLength (95) + Username (553).
+
+The signing payload must match the bytes on the wire, so `FixSession::send_with` computes
+the sequence number and SendingTime **once** and passes both to the builder and the encoder.
+`SendingTime` is formatted with millisecond precision (`YYYYMMDD-HH:MM:SS.sss`). wingfoil
+stays free of any venue/crypto specifics — the Ed25519 implementation lives in the caller
+(e.g. the kes `binance` adapter).
+
 ### No testcontainers
 
 There is no standard Docker image for a FIX engine. Integration tests connect to the LMAX

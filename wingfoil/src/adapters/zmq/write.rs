@@ -93,7 +93,15 @@ impl<T: Element + Send + Serialize> MutableNode for ZeroMqSenderNode<T> {
             // No subscriber yet — buffer the message.
             let now = Instant::now();
             let start = *self.buffer_start.get_or_insert(now);
-            if now.duration_since(start) > BUFFER_TIMEOUT {
+            // Only discard stale buffered data while no subscriber has begun
+            // connecting. Once we've observed a TCP accept (`accepted_at`), we
+            // are committed to flushing the buffer to that subscriber within
+            // the ~50ms subscription-propagation window, so clearing it here
+            // would drop the very messages the buffer exists to preserve. This
+            // matters on loaded machines where a publisher cycle can be delayed
+            // past BUFFER_TIMEOUT and only observe the accept once the buffer is
+            // already "stale" — without this guard the first message is lost.
+            if self.accepted_at.is_none() && now.duration_since(start) > BUFFER_TIMEOUT {
                 self.buffer.clear();
                 self.buffer_start = Some(now);
             }
