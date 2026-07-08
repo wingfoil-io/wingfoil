@@ -1,6 +1,7 @@
 //! PostgreSQL read functionality — time-partitioned streaming reads.
 
 use super::PostgresConnection;
+use crate::adapters::common::{TimeWindow, WindowFilter};
 use crate::adapters::time_slice::compute_validated_time_slices;
 use crate::nodes::produce_async;
 use crate::types::*;
@@ -153,12 +154,14 @@ where
                     // The query uses the period-aligned (t0, t1) for clean round-number
                     // boundaries, but the first slice's t0 can precede start_time (and the
                     // last slice's t1 exceed end_time), so a `time >= t0` filter may return
-                    // rows outside the run window. Clamp to [start_time, end_time) and drop
-                    // the rest: emitting a row before the graph clock aborts the run, and a
-                    // row past end_time would drive the monotonic check to reject a later slice.
-                    let lo = t0.max(start_time);
-                    let hi = t1.min(end_time);
-                    let mut dropped: usize = 0;
+                    // rows outside the run window. Drop rows outside [start_time, end_time)
+                    // via the shared WindowFilter: emitting a row before the graph clock
+                    // aborts the run, and a row past end_time would drive the monotonic
+                    // check to reject a later slice.
+                    let mut filter = WindowFilter::new(
+                        "postgres_read",
+                        TimeWindow::clamp(t0, t1, start_time, end_time),
+                    );
 
                     for row in &rows {
                         let (time, record) = match T::from_row(row) {
@@ -166,8 +169,7 @@ where
                             Err(e) => { yield Err(e); break 'outer; }
                         };
 
-                        if time < lo || time >= hi {
-                            dropped += 1;
+                        if !filter.keep(time) {
                             continue;
                         }
 
@@ -185,13 +187,7 @@ where
                         yield Ok((time, record));
                     }
 
-                    if dropped > 0 {
-                        log::warn!(
-                            "postgres_read: dropped {dropped} row(s) outside the requested \
-                            window [{lo:?}, {hi:?}); the query returned data beyond the slice \
-                            it was asked to fill"
-                        );
-                    }
+                    filter.finish();
                 }
             })
         }

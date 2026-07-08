@@ -48,9 +48,10 @@ The first slice starts at the period boundary at or before `start_time`, so when
 `start_time` is not period-aligned the caller's `time >= t0` filter over-reads rows before
 `start_time` (and the final slice's `t1` can reach past `end_time`). `postgres_read` clamps
 each slice to the effective window `[max(t0, start_time), min(t1, end_time))` and **drops**
-rows outside it, logging a single per-slice `warn!` with the dropped count. The query still
-uses the period-aligned `(t0, t1)` for clean boundaries. This mirrors the KDB adapter fix:
-emitting a row before the graph clock aborts a historical run, and a row past `end_time`
+rows outside it, logging a single per-slice `warn!` with the dropped count. This uses the
+shared `crate::adapters::common::{TimeWindow, WindowFilter}` helper (same as the KDB
+adapter). The query still uses the period-aligned `(t0, t1)` for clean boundaries.
+Emitting a row before the graph clock aborts a historical run, and a row past `end_time`
 would drive the monotonic check to reject a later slice.
 
 ### Parameterised writes, quoted identifiers
