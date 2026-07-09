@@ -93,8 +93,14 @@ jobs:
       # trusted publisher for wingfoil-io/wingfoil + npm-publish.yml must be
       # registered on npmjs.com for @wingfoil/client. No NPM_TOKEN needed, and
       # provenance is emitted automatically.
+      #
+      # Pin to the 11.x line rather than @latest: npm 12.0.0 (now @latest)
+      # ships a broken bundle whose libnpmpublish/provenance.js cannot resolve
+      # `sigstore`, so `npm publish --provenance` dies with "Cannot find module
+      # 'sigstore'" (npm/cli#9722). The 11.x line still bundles sigstore and
+      # supports OIDC trusted publishing (>= 11.5.1).
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Publish to npm
         working-directory: wingfoil-js
