@@ -64,7 +64,7 @@ let (fills, prices) = csv_read("aapl.csv", get_time, true)
     .map(move |chunk| process_orders(chunk, &book))
     .split();
 let prices_export = prices
-    .filter_map(|price| price)
+    .filter_none()
     .distinct()
     .csv_write("prices.csv");
 let fills_export = fills.csv_write("fills.csv");

@@ -49,7 +49,7 @@ let (fills, prices) = csv_read_vec(source_path, get_time, true)
     .map(move |chunk| process_orders(chunk, &book))
     .split();
 let prices_export = prices
-    .filter_map(|price| price)
+    .filter_none()
     .distinct()
     .csv_write(prices_path);
 let fills_export = fills.csv_write_vec(fills_path);
