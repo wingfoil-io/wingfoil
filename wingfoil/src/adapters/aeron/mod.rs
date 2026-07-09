@@ -11,14 +11,14 @@
 //! | Feature         | Crate             | Notes                                           |
 //! |-----------------|-------------------|-------------------------------------------------|
 //! | `aeron`         | `rusteron-client` | C++ FFI. Recommended for production.            |
-//! | `aeron-rs-beta` | `aeron-rs`        | Pure Rust, no C++ toolchain. **Beta — not for low-latency use, see warning below.** |
+//! | `aeron-rs`      | `aeron-rs`        | Pure Rust, no C++ toolchain. **Experimental — not for low-latency use, see warning below.** |
 //!
 //! The optional `aeron-driver` feature additionally embeds a media driver
 //! (`rusteron-media-driver`) in-process; it implies `aeron`. Without it, point
 //! the client at an externally-running media driver (the usual production
 //! topology).
 //!
-//! ## ⚠️ `aeron-rs-beta` takes a lock on the graph thread
+//! ## ⚠️ `aeron-rs` takes a lock on the graph thread
 //!
 //! The `aeron-rs` crate returns its `Subscription` / `Publication` handles as
 //! `Arc<Mutex<…>>` and shares them with its own background client-conductor
@@ -29,13 +29,13 @@
 //! `= false`, and [`aeron_sub_fragment`] **automatically downgrades a requested
 //! [`AeronMode::Spin`] to [`AeronMode::Threaded`]** for it (logging a warning) —
 //! so its lock can never land on the graph thread. `Spin` is unreachable for
-//! the `aeron-rs-beta` subscriber by construction.
+//! the `aeron-rs` subscriber by construction.
 //!
 //! Consequences and guidance:
 //! - For latency-sensitive or production workloads, use the `aeron` (rusteron)
 //!   backend, whose `poll()` / `offer()` are genuinely lock-free and run on the
 //!   graph thread in [`AeronMode::Spin`] without a lock.
-//! - The `aeron-rs-beta` **publisher** has no threaded mode; its `offer()`
+//! - The `aeron-rs` **publisher** has no threaded mode; its `offer()`
 //!   always locks on the calling (graph) thread. It remains functional-but-slow
 //!   and there is no automatic downgrade for the publish side — avoid it on
 //!   latency-sensitive paths.
@@ -117,7 +117,7 @@ mod sub_fragment_node;
 #[cfg(feature = "aeron")]
 pub mod rusteron_backend;
 
-#[cfg(feature = "aeron-rs-beta")]
+#[cfg(feature = "aeron-rs")]
 pub mod aeron_rs_backend;
 
 pub use buffer::{ClaimBuffer, FragmentBuffer, FragmentHeader};
@@ -131,7 +131,7 @@ pub use transport::{AeronPublisherBackend, AeronSubscriberBackend};
 #[cfg(feature = "aeron")]
 pub use rusteron_backend::AeronHandle;
 
-#[cfg(feature = "aeron-rs-beta")]
+#[cfg(feature = "aeron-rs")]
 pub use aeron_rs_backend::AeronRsHandle;
 
 use crate::{Burst, Element, IntoStream, Stream};
@@ -212,7 +212,7 @@ impl Default for AeronSubOptions {
 /// A backend that cannot be polled on the graph thread (see
 /// [`AeronSubscriberBackend::supports_graph_thread_poll`]) downgrades a
 /// requested [`AeronMode::Spin`] to [`AeronMode::Threaded`], so its lock never
-/// runs inside the graph `cycle()`. This keeps the `aeron-rs-beta` backend
+/// runs inside the graph `cycle()`. This keeps the `aeron-rs` backend
 /// from violating the "no locks in `cycle()`" invariant by construction —
 /// `Spin` is simply unreachable for it. Lock-free backends (rusteron, mocks)
 /// pass the requested mode through unchanged.

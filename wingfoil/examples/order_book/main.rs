@@ -1,7 +1,10 @@
 #![doc = include_str!("./README.md")]
 
 use wingfoil::adapters::csv::*;
-use wingfoil::{Burst, Graph, NanoTime, RunFor, RunMode, StreamOperators, TupleStreamOperators};
+use wingfoil::{
+    Burst, Graph, NanoTime, OptionStreamOperators, RunFor, RunMode, StreamOperators,
+    TupleStreamOperators,
+};
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -28,11 +31,7 @@ pub fn main() {
         .expect("failed to open aapl.csv")
         .map(move |chunk| process_orders(chunk, &book))
         .split();
-    let prices_export = prices
-        .filter_value(|price| !price.is_none())
-        .map(|price| price.unwrap())
-        .distinct()
-        .csv_write("prices.csv");
+    let prices_export = prices.filter_none().distinct().csv_write("prices.csv");
     let fills_export = fills.csv_write("fills.csv");
     let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
     let run_for = RunFor::Forever;

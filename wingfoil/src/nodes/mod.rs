@@ -18,7 +18,7 @@ mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 pub mod dynamic_group;
 mod feedback;
 mod filter;
@@ -39,7 +39,7 @@ mod print;
 mod producer;
 // `ReceiverStream` is only consumed by the zmq and aeron adapters; gate the
 // module on them so the default build doesn't flag it as dead code.
-#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs-beta"))]
+#[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs"))]
 pub(crate) mod receiver;
 mod sample;
 mod throttle;
@@ -58,7 +58,7 @@ pub use async_io::*;
 pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
 pub use demux::*;
-#[cfg(feature = "dynamic-graph-beta")]
+#[cfg(feature = "dynamic-graph")]
 pub use dynamic_group::*;
 use feedback::FeedbackSendStream;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
@@ -878,6 +878,27 @@ where
     }
 }
 
+/// Operators available only on a `Stream<Option<T>>`.
+pub trait OptionStreamOperators<T>
+where
+    T: Element + 'static,
+{
+    /// Drops `None` values, yielding a `Stream<T>` of just the `Some`
+    /// payloads. Equivalent to `filter_map(|opt| opt)`, but says so at the
+    /// call site.
+    #[must_use]
+    fn filter_none(self: &Rc<Self>) -> Rc<dyn Stream<T>>;
+}
+
+impl<T> OptionStreamOperators<T> for dyn Stream<Option<T>>
+where
+    T: Element + 'static,
+{
+    fn filter_none(self: &Rc<Self>) -> Rc<dyn Stream<T>> {
+        self.filter_map(|opt: Option<T>| opt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1057,6 +1078,20 @@ mod tests {
             .unwrap();
         let values: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
         assert_eq!(values, vec![1, 9, 25]);
+    }
+
+    #[test]
+    fn filter_none_keeps_some_drops_none() {
+        // count() → 1,2,3,4,5,6; Some for odd inputs only: 1,3,5
+        let source = ticker(Duration::from_nanos(100)).count();
+        let opt: Rc<dyn Stream<Option<u64>>> = source.map(|x: u64| (x % 2 == 1).then_some(x));
+        let out = opt.filter_none();
+        let collected = out.collect();
+        collected
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let values: Vec<u64> = collected.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![1, 3, 5]);
     }
 
     #[test]

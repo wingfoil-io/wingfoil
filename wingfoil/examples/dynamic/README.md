@@ -21,7 +21,7 @@ All three build the same price aggregator: instruments are created and deleted
 at runtime, and a running price book is maintained across the changes.
 
 ```bash
-cargo run --example dynamic-group --features dynamic-graph-beta
-cargo run --example dynamic-manual --features dynamic-graph-beta
+cargo run --example dynamic-group --features dynamic-graph
+cargo run --example dynamic-manual --features dynamic-graph
 cargo run --example demux
 ```
