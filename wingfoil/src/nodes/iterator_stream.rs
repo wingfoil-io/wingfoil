@@ -43,7 +43,12 @@ impl<T: Element> MutableNode for IteratorStream<T> {
                 break;
             }
         }
-        add_callback(&mut self.peekable, state)
+        // Schedule the next burst's callback, but report "ticked" based on
+        // whether we produced a burst this cycle — not on whether more items
+        // remain. Otherwise the final burst (which schedules no successor) would
+        // report Ok(false) and downstream would never see it.
+        add_callback(&mut self.peekable, state)?;
+        Ok(!self.value.is_empty())
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -120,7 +125,11 @@ impl<T: Element> MutableNode for TryIteratorStream<T> {
                 .expect("peek() just returned Ok");
             self.value.push(value_at.value);
         }
-        try_add_callback(&mut self.peekable, state)
+        // As in `IteratorStream::cycle`: schedule the next callback (surfacing
+        // an item error via `?`), but report "ticked" from the burst we just
+        // built so the final burst is not silently dropped.
+        try_add_callback(&mut self.peekable, state)?;
+        Ok(!self.value.is_empty())
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -174,7 +183,11 @@ impl<T: Element> MutableNode for SimpleIteratorStream<T> {
                 Ordering::Less => {}
             }
         }
-        add_callback(&mut self.peekable, state)
+        // Exactly one item is consumed per cycle, so this cycle always ticks.
+        // Schedule the next item's callback separately; the final item schedules
+        // no successor but must still report Ok(true) so its value emits.
+        add_callback(&mut self.peekable, state)?;
+        Ok(true)
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -214,24 +227,21 @@ mod tests {
 
     #[test]
     fn simple_iterator_emits_in_order() {
-        // SimpleIteratorStream doesn't emit the final item (it acts as the scheduler
-        // for the previous item). Add a sentinel at t=300 so all "real" items emit.
-        let items = value_ats(&[(10, 0), (20, 100), (30, 200), (0, 300)]);
+        // Every item, including the final one, must emit — no sentinel needed.
+        let items = value_ats(&[(10, 0), (20, 100), (30, 200)]);
         let out = SimpleIteratorStream::new(Box::new(items.into_iter()))
             .into_stream()
             .collect();
         out.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
             .unwrap();
         let values: Vec<u64> = out.peek_value().iter().map(|v| v.value).collect();
-        // Sentinel (0 at t=300) schedules t=300 but returns Ok(false), so it doesn't emit.
         assert_eq!(values, vec![10, 20, 30]);
     }
 
     #[test]
     fn iterator_stream_groups_same_timestamp_into_burst() {
-        // Two items at t=0, one at t=100, plus a sentinel at t=200.
-        // IteratorStream doesn't emit the last group (it schedules the previous one).
-        let items = value_ats(&[(1, 0), (2, 0), (3, 100), (0, 200)]);
+        // Two items at t=0, one at t=100. The final group (t=100) must emit.
+        let items = value_ats(&[(1, 0), (2, 0), (3, 100)]);
         let out = IteratorStream::new(Box::new(items.into_iter()))
             .into_stream()
             .collect();
@@ -245,12 +255,11 @@ mod tests {
 
     #[test]
     fn try_iterator_groups_ok_items_into_burst() {
-        // Two Ok items at t=0, one at t=100, plus a sentinel at t=200.
-        let items: Vec<anyhow::Result<ValueAt<u64>>> =
-            value_ats(&[(1, 0), (2, 0), (3, 100), (0, 200)])
-                .into_iter()
-                .map(Ok)
-                .collect();
+        // Two Ok items at t=0, one at t=100. The final group (t=100) must emit.
+        let items: Vec<anyhow::Result<ValueAt<u64>>> = value_ats(&[(1, 0), (2, 0), (3, 100)])
+            .into_iter()
+            .map(Ok)
+            .collect();
         let out = TryIteratorStream::new(Box::new(items.into_iter()))
             .into_stream()
             .collect();
@@ -260,6 +269,47 @@ mod tests {
         assert_eq!(ticks.len(), 2);
         assert_eq!(ticks[0].value.as_slice(), &[1u64, 2u64]);
         assert_eq!(ticks[1].value.as_slice(), &[3u64]);
+    }
+
+    #[test]
+    fn iterator_streams_emit_a_lone_final_item() {
+        // Regression: a source with a single item schedules no successor, so the
+        // one cycle that holds it must still report a tick. Covers all three
+        // stream variants (previously each dropped the item).
+        let simple = SimpleIteratorStream::new(Box::new(value_ats(&[(42, 0)]).into_iter()))
+            .into_stream()
+            .collect();
+        simple
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(
+            simple
+                .peek_value()
+                .iter()
+                .map(|v| v.value)
+                .collect::<Vec<_>>(),
+            vec![42]
+        );
+
+        let burst = IteratorStream::new(Box::new(value_ats(&[(42, 0)]).into_iter()))
+            .into_stream()
+            .collect();
+        burst
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(burst.peek_value().len(), 1);
+        assert_eq!(burst.peek_value()[0].value.as_slice(), &[42u64]);
+
+        let items: Vec<anyhow::Result<ValueAt<u64>>> =
+            value_ats(&[(42, 0)]).into_iter().map(Ok).collect();
+        let try_burst = TryIteratorStream::new(Box::new(items.into_iter()))
+            .into_stream()
+            .collect();
+        try_burst
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(try_burst.peek_value().len(), 1);
+        assert_eq!(try_burst.peek_value()[0].value.as_slice(), &[42u64]);
     }
 
     #[test]
