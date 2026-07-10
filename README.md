@@ -125,6 +125,10 @@ Short code snippets for each adapter live in the [examples README](https://githu
 - Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
 - Download the `@wingfoil/client` browser client from [npmjs.com](https://www.npmjs.com/package/@wingfoil/client)
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=wingfoil-io/wingfoil&type=Date)](https://star-history.com/#wingfoil-io/wingfoil&Date)
+
 ## Get Involved!
 
 We want to hear from you!  Especially if you:
