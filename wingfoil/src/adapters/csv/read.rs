@@ -64,8 +64,7 @@ mod tests {
 
     #[test]
     fn csv_read_emits_all_rows() {
-        // read_test.csv has 6 data rows + a sentinel row (9999,0) so all 6 emit.
-        // IteratorStream needs at least one item after the last real item to trigger emission.
+        // read_test.csv has 6 data rows; every row, including the last, must emit.
         let stream = csv_read("src/adapters/csv/test_data/read_test.csv", get_time, false).unwrap();
         let collected = stream.collect();
         collected
@@ -75,7 +74,6 @@ mod tests {
             .peek_value()
             .iter()
             .flat_map(|b| b.value.iter().map(|r| r.1))
-            .filter(|&v| v != 0) // exclude sentinel
             .collect();
         assert_eq!(all, vec![1, 2, 3, 4, 5, 6]);
     }
@@ -88,11 +86,7 @@ mod tests {
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
             .unwrap();
-        let data_ticks: Vec<_> = collected
-            .peek_value()
-            .into_iter()
-            .filter(|b| b.value.iter().any(|r| r.1 != 0))
-            .collect();
+        let data_ticks = collected.peek_value();
         assert_eq!(data_ticks.len(), 6);
         assert!(data_ticks.iter().all(|b| b.value.len() == 1));
     }
@@ -134,8 +128,8 @@ mod tests {
 
     #[test]
     fn csv_read_groups_same_timestamp_into_one_burst() {
-        // read_test_multi.csv: timestamps 1001, 1002, 1003(×2), 1004, sentinel 9999
-        // → 4 real ticks emitted (1003's two rows grouped), sentinel triggers the last real tick.
+        // read_test_multi.csv: timestamps 1001, 1002, 1003(×2), 1004
+        // → 4 ticks emitted (1003's two rows grouped into one burst).
         let stream = csv_read(
             "src/adapters/csv/test_data/read_test_multi.csv",
             get_time,
@@ -146,11 +140,7 @@ mod tests {
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
             .unwrap();
-        let real_ticks: Vec<_> = collected
-            .peek_value()
-            .into_iter()
-            .filter(|b| b.value.iter().any(|r| r.1 != 0))
-            .collect();
+        let real_ticks = collected.peek_value();
         // 4 distinct data timestamps
         assert_eq!(real_ticks.len(), 4);
         // The burst at timestamp 1003 should have 2 elements

@@ -14,8 +14,7 @@ def _write_csv(path: str, text: str) -> None:
 
 class TestCsvRead(unittest.TestCase):
     def test_read_basic_rows(self):
-        # IteratorStream needs a trailing row to flush the previous timestamp,
-        # so add a sentinel row and filter it out afterwards.
+        # Every row, including the last, must emit — no sentinel needed.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "data.csv")
             _write_csv(
@@ -23,12 +22,11 @@ class TestCsvRead(unittest.TestCase):
                 "time,symbol,price\n"
                 "1000,AAPL,100\n"
                 "2000,MSFT,200\n"
-                "3000,GOOG,300\n"
-                "9999,SENTINEL,0\n",
+                "3000,GOOG,300\n",
             )
             stream = csv_read(path, "time").collect()
             stream.run(realtime=False, cycles=20)
-            rows = [r for r in stream.peek_value() if r["symbol"] != "SENTINEL"]
+            rows = stream.peek_value()
             self.assertEqual(len(rows), 3)
             symbols = [r["symbol"] for r in rows]
             self.assertEqual(symbols, ["AAPL", "MSFT", "GOOG"])
@@ -43,8 +41,7 @@ class TestCsvRead(unittest.TestCase):
                 "time,value\n"
                 "1000,a\n"
                 "2000,b\n"
-                "3000,c\n"
-                "9999,sentinel\n",
+                "3000,c\n",
             )
             stream = (
                 csv_read(path, "time")
@@ -52,7 +49,7 @@ class TestCsvRead(unittest.TestCase):
                 .collect()
             )
             stream.run(realtime=False, cycles=20)
-            uppercased = [v for v in stream.peek_value() if v != "SENTINEL"]
+            uppercased = stream.peek_value()
             self.assertEqual(uppercased, ["A", "B", "C"])
 
 
