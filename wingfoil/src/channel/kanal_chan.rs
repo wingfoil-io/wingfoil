@@ -44,14 +44,14 @@ impl<T: Element + Send> ChannelReceiver<T> {
     pub fn recv(&self) -> Message<T> {
         self.kanal_receiver.recv().unwrap_or(Message::EndOfStream)
     }
-    pub fn teardown(&self) {
+    pub fn teardown(&self) -> anyhow::Result<()> {
         for _ in 0..100 {
             if self.kanal_receiver.sender_count() == 0 {
-                return;
+                return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("timed out waiting for sending end of channel to close");
+        anyhow::bail!("timed out waiting for the sending end of the channel to close")
     }
 }
 
@@ -156,6 +156,26 @@ mod tests {
         let state = realtime_state();
         assert!(tx.send(&state, 1).is_err());
     }
+
+    #[test]
+    fn receiver_teardown_ok_when_sender_dropped() {
+        let (tx, rx) = channel_pair::<u64>(None);
+        drop(tx);
+        assert!(rx.teardown().is_ok());
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn async_send_after_receiver_dropped_errors_not_panics() {
+        // Regression: a receiver dropped during shutdown is a normal teardown
+        // race. The async sender must surface ChannelClosed, not panic.
+        let (tx, rx) = channel_pair::<u64>(None);
+        let sender = tx.into_async();
+        drop(rx);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(sender.send_message(Message::RealtimeValue(1)));
+        assert!(matches!(result, Err(SendNodeError::ChannelClosed)));
+    }
 }
 
 #[cfg(feature = "async")]
@@ -237,7 +257,10 @@ impl<T: Element + Send> ChannelSender<T> {
 
     #[cfg(feature = "async")]
     pub fn into_async(mut self) -> AsyncChannelSender<T> {
-        let kanal_sender = self.kanal_sender.take().unwrap();
+        let kanal_sender = self
+            .kanal_sender
+            .take()
+            .expect("invariant: sender is not closed before into_async");
         let ready_notifier = self.ready_notifier.take();
         AsyncChannelSender::new(kanal_sender, ready_notifier)
     }
@@ -270,20 +293,28 @@ impl<T: Element + Send> AsyncChannelSender<T> {
         }
     }
 
-    pub async fn send_message(&self, message: Message<T>) {
-        self.kanal_sender
+    /// Send a message, surfacing `SendNodeError::ChannelClosed` if the receiver
+    /// has been dropped (a normal shutdown race) rather than panicking. Mirrors
+    /// the synchronous [`ChannelSender::send_message`].
+    pub async fn send_message(&self, message: Message<T>) -> SendResult {
+        let sender = self
+            .kanal_sender
             .as_ref()
-            .unwrap()
+            .ok_or(SendNodeError::ChannelClosed)?;
+        sender
             .send(message)
             .await
-            .unwrap();
+            .map_err(|_| SendNodeError::ChannelClosed)?;
         if let Some(notifier) = &self.ready_notifier {
-            notifier.notify().unwrap();
+            notifier
+                .notify()
+                .map_err(|_| SendNodeError::NotifierClosed)?;
         }
+        Ok(())
     }
 
     #[allow(dead_code)]
-    pub async fn send(&self, run_mode: RunMode, time: NanoTime, value: T) {
+    pub async fn send(&self, run_mode: RunMode, time: NanoTime, value: T) -> SendResult {
         let message = match run_mode {
             RunMode::HistoricalFrom(_) => {
                 let value_at = ValueAt::new(crate::burst![value], time);
@@ -291,18 +322,23 @@ impl<T: Element + Send> AsyncChannelSender<T> {
             }
             RunMode::RealTime => Message::RealtimeValue(value),
         };
-        self.send_message(message).await;
+        self.send_message(message).await
     }
 
     #[allow(dead_code)]
-    pub async fn send_checkpoint(&self, time: NanoTime) {
+    pub async fn send_checkpoint(&self, time: NanoTime) -> SendResult {
         let message = Message::CheckPoint(time);
-        self.send_message(message).await;
+        self.send_message(message).await
     }
 
-    pub async fn close(&mut self) {
-        let message = Message::EndOfStream;
-        self.send_message(message).await;
+    pub async fn close(&mut self) -> SendResult {
+        if self.kanal_sender.is_none() {
+            return Ok(());
+        }
+        // Best-effort EndOfStream: if the receiver is already gone the channel
+        // is effectively closed anyway, so a send error here is not fatal.
+        let _ = self.send_message(Message::EndOfStream).await;
         self.kanal_sender = None;
+        Ok(())
     }
 }

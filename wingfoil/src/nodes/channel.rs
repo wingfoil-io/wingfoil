@@ -269,8 +269,7 @@ impl<T: Element + Send> MutableNode for ChannelReceiverStream<T> {
     }
 
     fn teardown(&mut self, _: &mut GraphState) -> anyhow::Result<()> {
-        self.receiver.teardown();
-        Ok(())
+        self.receiver.teardown()
     }
 }
 
