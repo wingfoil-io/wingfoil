@@ -186,9 +186,17 @@ where
     Ok(())
 }
 
+/// Quote a symbol's text as a q string literal (`"..."`), escaping backslash and
+/// double-quote so any symbol content is representable. Used to build symbols via
+/// the string cast `` `$"..." ``, which — unlike a backtick literal — accepts
+/// symbols containing `-`, spaces, and other non-name characters.
+fn q_string_literal(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 /// Format a column of same-typed K atoms as a q string fragment with correct type suffixes.
 ///
-/// Produces literals like `enlist`AAPL`, `enlist 42.5f`, `enlist 100j`, etc.
+/// Produces literals like `` enlist `$"AAPL" ``, `enlist 42.5f`, `enlist 100j`, etc.
 /// For multi-row columns produces space-joined values with a single trailing suffix.
 fn format_kdb_column_q(atoms: &[K]) -> anyhow::Result<String> {
     if atoms.is_empty() {
@@ -202,14 +210,17 @@ fn format_kdb_column_q(atoms: &[K]) -> anyhow::Result<String> {
                 .map(|k| Ok(k.get_symbol()?.to_string()))
                 .collect();
             let syms = syms?;
+            // Build symbols via the string cast `` `$"..." `` rather than a
+            // backtick literal `` `sym ``. A backtick literal terminates at the
+            // first non-name character, so a symbol containing `-`, ` `, `+`
+            // etc. (e.g. "BTC-USD") is otherwise mis-parsed by q — `` `BTC-USD ``
+            // lexes as `` `BTC `` minus the variable `USD`. The string form is
+            // valid for any symbol content.
             if syms.len() == 1 {
-                Ok(format!("enlist`{}", syms[0]))
+                Ok(format!("enlist `${}", q_string_literal(&syms[0])))
             } else {
-                Ok(syms
-                    .iter()
-                    .map(|s| format!("`{s}"))
-                    .collect::<Vec<_>>()
-                    .join(""))
+                let parts: Vec<String> = syms.iter().map(|s| q_string_literal(s)).collect();
+                Ok(format!("`$({})", parts.join(";")))
             }
         }
         qtype::FLOAT_ATOM => {
@@ -328,6 +339,27 @@ mod tests {
 
         let row = record.to_kdb_row();
         assert_eq!(row.get_type(), qtype::COMPOUND_LIST);
+    }
+
+    #[test]
+    fn symbols_with_special_chars_format_as_string_cast() {
+        // A hyphenated symbol must not become a backtick literal (`` `BTC-USD ``
+        // is mis-parsed by q as `` `BTC `` minus `USD`). It must use `` `$"..." ``.
+        let one = format_kdb_column_q(&[K::new_symbol("BTC-USD".to_string())]).unwrap();
+        assert_eq!(one, "enlist `$\"BTC-USD\"");
+
+        let many = format_kdb_column_q(&[
+            K::new_symbol("BTC-USD".to_string()),
+            K::new_symbol("BTC-100K-3D-YES".to_string()),
+        ])
+        .unwrap();
+        assert_eq!(many, "`$(\"BTC-USD\";\"BTC-100K-3D-YES\")");
+
+        // Plain alphanumeric symbols still round-trip through the same path.
+        assert_eq!(
+            format_kdb_column_q(&[K::new_symbol("AAPL".to_string())]).unwrap(),
+            "enlist `$\"AAPL\""
+        );
     }
 
     #[test]
