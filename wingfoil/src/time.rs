@@ -8,11 +8,32 @@ use serde::{Deserialize, Serialize};
 use std::convert::From;
 use std::ops::{Add, Mul, Sub};
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type RawTime = u64;
 
 static CLOCK: LazyLock<Clock> = LazyLock::new(Clock::new);
+
+/// Nanoseconds added to a raw `quanta` reading to convert it to nanoseconds
+/// since the unix epoch.
+///
+/// `quanta::Clock::now()` is monotonic (nanoseconds since an arbitrary anchor,
+/// effectively boot time), but [`NanoTime`] documents "nanoseconds since the
+/// unix epoch". We snap `SystemTime::now()` against the monotonic clock once,
+/// at first use, and add the resulting offset to every subsequent reading. This
+/// keeps quanta's cheap, TSC-based reads while anchoring them to the documented
+/// epoch, so timestamps persisted in real-time mode (kdb/Postgres/CSV writes,
+/// cross-host latency stamps) are correct as absolute times.
+static EPOCH_OFFSET_NANOS: LazyLock<u64> = LazyLock::new(|| {
+    let mono = CLOCK.now().as_u64();
+    let wall = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("invariant: system clock is later than the unix epoch")
+        .as_nanos() as u64;
+    // Wall clock is ~decades ahead of the monotonic anchor, so this never
+    // saturates in practice; `saturating_sub` only guards a clock set to 1970.
+    wall.saturating_sub(mono)
+});
 
 /// A time in nanoseconds since the unix epoch.
 #[derive(
@@ -43,7 +64,7 @@ impl NanoTime {
     const KDB_EPOCH_OFFSET_NANOS: i64 = 946_684_800_000_000_000;
 
     pub fn now() -> Self {
-        Self(CLOCK.now().as_u64())
+        Self(CLOCK.now().as_u64() + *EPOCH_OFFSET_NANOS)
     }
 
     pub fn pretty(&self) -> String {
@@ -194,7 +215,31 @@ impl Mul<i64> for NanoTime {
 mod tests {
     use super::NanoTime;
     use chrono::Datelike;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn now_is_anchored_to_the_unix_epoch() {
+        // `now()` must return nanoseconds since the unix epoch (its documented
+        // contract), not quanta's boot-relative monotonic reading. Compare
+        // against the wall clock; a few seconds of slack covers scheduling.
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let now = u64::from(NanoTime::now());
+        let diff = now.abs_diff(wall);
+        assert!(
+            diff < 5_000_000_000,
+            "now() ({now}) is not within 5s of the wall clock ({wall}); diff {diff}ns"
+        );
+    }
+
+    #[test]
+    fn now_is_monotonic_non_decreasing() {
+        let a = NanoTime::now();
+        let b = NanoTime::now();
+        assert!(b >= a, "now() went backwards: {a} then {b}");
+    }
 
     #[test]
     fn kdb_timestamp_roundtrip() {
