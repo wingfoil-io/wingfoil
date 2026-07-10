@@ -35,7 +35,7 @@ Before writing code, ground the proposal in the actual source: locate the files 
 - **Plan** — the concrete change: files to touch, signatures to add/alter, behaviour, and any backwards-compatibility implications (a new required parameter on a public fn is a breaking change — call it out and update all call sites/examples).
 - **Verification** — the tests you will add and how you will exercise the change (historical-mode run, new unit test, example still builds).
 
-Keep it tight. Proceed once the plan is clear; only stop for the user if a genuinely load-bearing decision is ambiguous (use `AskUserQuestion`), not for routine choices.
+Keep it tight. Then **stop and ask the user for permission to implement** — always. Do not begin writing code until the user has explicitly approved the proposal. Present the plan and wait for a clear go-ahead (use `AskUserQuestion` to confirm, and to resolve any genuinely load-bearing decision that is ambiguous). If the user asks for changes, revise the proposal and ask again. Only proceed to step 4 once the user has approved.
 
 ## 4. Implement
 
