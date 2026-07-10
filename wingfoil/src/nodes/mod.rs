@@ -20,7 +20,6 @@ mod difference;
 mod distinct;
 #[cfg(feature = "dynamic-graph")]
 pub mod dynamic_group;
-mod ewma;
 mod feedback;
 mod filter;
 mod finally;
@@ -42,8 +41,8 @@ mod producer;
 // module on them so the default build doesn't flag it as dead code.
 #[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs"))]
 pub(crate) mod receiver;
-mod rolling;
 mod sample;
+mod statistics;
 mod throttle;
 mod tick;
 mod timed;
@@ -79,7 +78,6 @@ use delay::*;
 use delay_with_reset::*;
 use difference::*;
 use distinct::*;
-use ewma::EwmaStream;
 use filter::*;
 use finally::*;
 use fold::*;
@@ -91,8 +89,8 @@ use merge::*;
 use node_flow::*;
 use print::*;
 use producer::*;
-use rolling::{RollingStat, RollingStream};
 use sample::*;
+use statistics::{StatStream, WindowStatStream};
 use throttle::*;
 use tick::*;
 use timed::*;
@@ -123,6 +121,13 @@ use std::ops::Add;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
+use watermill::ewmean::EWMean;
+use watermill::maximum::RollingMax;
+use watermill::mean::Mean;
+use watermill::minimum::RollingMin;
+use watermill::quantile::RollingQuantile;
+use watermill::sum::Sum;
+use watermill::variance::Variance;
 
 /// Returns a [Stream] that adds both it's source [Stream]s.  Ticks when either of it's sources ticks.
 #[must_use]
@@ -400,15 +405,21 @@ pub trait StreamOperators<T: Element> {
     where
         T: ToPrimitive;
     /// Rolling sample variance (ddof = 1) over the most recent `window` samples.
-    /// Yields `NaN` until at least two samples are present.
+    /// Yields `0.0` until at least two samples are present.
     #[must_use]
     fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
     /// Rolling sample standard deviation (ddof = 1) over the most recent
-    /// `window` samples.  Yields `NaN` until at least two samples are present.
+    /// `window` samples.
     #[must_use]
     fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling median (50th percentile) over the most recent `window` samples,
+    /// linearly interpolated.
+    #[must_use]
+    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
@@ -631,49 +642,59 @@ where
     where
         T: ToPrimitive,
     {
-        EwmaStream::new(self.clone(), alpha).into_stream()
+        StatStream::new(self.clone(), EWMean::new(alpha)).into_stream()
     }
 
     fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Sum, window).into_stream()
+        WindowStatStream::new(self.clone(), Sum::new(), window).into_stream()
     }
 
     fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Mean, window).into_stream()
+        WindowStatStream::new(self.clone(), Mean::new(), window).into_stream()
     }
 
     fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Min, window).into_stream()
+        StatStream::new(self.clone(), RollingMin::new(window.max(1))).into_stream()
     }
 
     fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Max, window).into_stream()
+        StatStream::new(self.clone(), RollingMax::new(window.max(1))).into_stream()
     }
 
     fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Var, window).into_stream()
+        // ddof = 1 for sample variance, matching the documented convention.
+        WindowStatStream::new(self.clone(), Variance::new(1), window).into_stream()
     }
 
     fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        RollingStream::new(self.clone(), RollingStat::Std, window).into_stream()
+        self.rolling_var(window).map(|v: f64| v.sqrt())
+    }
+
+    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        let quantile = RollingQuantile::new(0.5, window.max(1))
+            .expect("invariant: 0.5 is a valid quantile in [0, 1]");
+        StatStream::new(self.clone(), quantile).into_stream()
     }
 
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>> {
