@@ -20,6 +20,7 @@ mod difference;
 mod distinct;
 #[cfg(feature = "dynamic-graph")]
 pub mod dynamic_group;
+mod ewma;
 mod feedback;
 mod filter;
 mod finally;
@@ -41,6 +42,7 @@ mod producer;
 // module on them so the default build doesn't flag it as dead code.
 #[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs"))]
 pub(crate) mod receiver;
+mod rolling;
 mod sample;
 mod throttle;
 mod tick;
@@ -77,6 +79,7 @@ use delay::*;
 use delay_with_reset::*;
 use difference::*;
 use distinct::*;
+use ewma::EwmaStream;
 use filter::*;
 use finally::*;
 use fold::*;
@@ -88,6 +91,7 @@ use merge::*;
 use node_flow::*;
 use print::*;
 use producer::*;
+use rolling::{RollingStat, RollingStream};
 use sample::*;
 use throttle::*;
 use tick::*;
@@ -368,6 +372,45 @@ pub trait StreamOperators<T: Element> {
     fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
+    /// Exponentially weighted moving average with smoothing factor `alpha`
+    /// (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`).  The first sample
+    /// seeds the average.
+    #[must_use]
+    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling sum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling mean (simple moving average) over the most recent `window` samples.
+    #[must_use]
+    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling minimum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling maximum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling sample variance (ddof = 1) over the most recent `window` samples.
+    /// Yields `NaN` until at least two samples are present.
+    #[must_use]
+    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Rolling sample standard deviation (ddof = 1) over the most recent
+    /// `window` samples.  Yields `NaN` until at least two samples are present.
+    #[must_use]
+    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
     #[must_use]
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>>;
@@ -582,6 +625,55 @@ where
         T: ToPrimitive,
     {
         AverageStream::new(self.clone()).into_stream()
+    }
+
+    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        EwmaStream::new(self.clone(), alpha).into_stream()
+    }
+
+    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Sum, window).into_stream()
+    }
+
+    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Mean, window).into_stream()
+    }
+
+    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Min, window).into_stream()
+    }
+
+    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Max, window).into_stream()
+    }
+
+    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Var, window).into_stream()
+    }
+
+    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        RollingStream::new(self.clone(), RollingStat::Std, window).into_stream()
     }
 
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>> {
