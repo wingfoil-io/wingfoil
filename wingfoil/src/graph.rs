@@ -326,11 +326,21 @@ impl GraphState {
         let ix = self
             .current_node_index
             .expect("always_callback called outside of a node cycle");
-        self.always_callbacks.push(ix);
+        // Registering a node to tick every cycle is idempotent: deduplicate so a
+        // node that calls this from `cycle()` (rather than once from `start()`)
+        // doesn't grow `always_callbacks` without bound and slow every cycle.
+        if !self.always_callbacks.contains(&ix) {
+            self.always_callbacks.push(ix);
+        }
     }
 
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
+    }
+
+    #[cfg(test)]
+    fn always_callbacks_len(&self) -> usize {
+        self.always_callbacks.len()
     }
 
     /// Returns true if node has ticked on the current engine cycle.
@@ -828,12 +838,23 @@ impl Graph {
         if !self.state.ready_callbacks.is_empty() {
             panic!("ready_callbacks are not supported in historical mode.");
         }
-        if self.state.has_scheduled_callbacks() {
-            let next = self.state.next_scheduled_time();
+        let has_scheduled = self.state.has_scheduled_callbacks();
+        // An always-callback keeps the graph cycling every tick. Without a
+        // scheduled callback to drive the clock, `time` would never advance and a
+        // `RunFor::Duration` run (which ends on elapsed time) would loop forever.
+        let has_always = !self.state.always_callbacks.is_empty();
+        if has_scheduled || has_always {
+            let next = if has_scheduled {
+                self.state.next_scheduled_time()
+            } else {
+                // Always-only: advance by the minimum tick each cycle.
+                self.state.time + 1
+            };
             self.state.time = if self.state.first_cycle {
-                // First cycle: use the scheduled time as-is (may be NanoTime::ZERO).
                 self.state.first_cycle = false;
-                next
+                // First cycle fires at the current time (e.g. ZERO); a
+                // scheduled callback uses its own time as-is.
+                if has_scheduled { next } else { self.state.time }
             } else {
                 // Enforce strict monotonic progression: bump to prev+1 if needed.
                 next.max(self.state.time + 1)
@@ -1296,6 +1317,52 @@ mod tests {
         assert!(
             format!("{err:#}").contains("cycle"),
             "expected a cycle error, got: {err:#}"
+        );
+    }
+
+    // ── always_callback ──────────────────────────────────────────────────────
+
+    #[test]
+    fn always_callback_is_deduplicated() {
+        // A node that (mis)uses always_callback() from cycle() on every tick must
+        // not grow the always-callbacks list — registration is idempotent.
+        struct SpamAlwaysNode;
+        impl MutableNode for SpamAlwaysNode {
+            fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+                state.always_callback();
+                Ok(true)
+            }
+            fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+                state.always_callback();
+                Ok(())
+            }
+        }
+        let node = Rc::new(RefCell::new(SpamAlwaysNode));
+        let mut graph = Graph::new(
+            vec![node.as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(10),
+        );
+        graph.run().unwrap();
+        // Registered once despite being called from start() + 10 cycles.
+        assert_eq!(graph.state.always_callbacks_len(), 1);
+    }
+
+    #[test]
+    fn always_only_graph_terminates_in_historical_duration() {
+        // An always-only graph used to freeze `time` in historical mode, so a
+        // RunFor::Duration run never terminated. It must now advance and finish.
+        use std::time::Duration;
+        let count = always().count();
+        count
+            .run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Duration(Duration::from_nanos(5)),
+            )
+            .unwrap();
+        assert!(
+            count.peek_value() >= 1,
+            "always graph should have ticked and then terminated"
         );
     }
 
