@@ -4,7 +4,6 @@
 mod always;
 #[cfg(feature = "async")]
 mod async_io;
-mod average;
 mod bimap;
 mod buffer;
 mod callback;
@@ -69,7 +68,6 @@ pub use iterator_stream::{IteratorStream, SimpleIteratorStream, TryIteratorStrea
 pub use map_filter::MapFilterStream;
 pub use never::*;
 
-use average::*;
 use bimap::*;
 use buffer::BufferStream;
 use constant::*;
@@ -90,7 +88,8 @@ use node_flow::*;
 use print::*;
 use producer::*;
 use sample::*;
-use statistics::{StatStream, WindowStatStream};
+pub use statistics::Weighting;
+use statistics::{EwmaDecay, EwmaStream, Moment, MomentStream, StatStream, WindowStatStream};
 use throttle::*;
 use tick::*;
 use timed::*;
@@ -121,7 +120,6 @@ use std::ops::Add;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
-use watermill::ewmean::EWMean;
 use watermill::maximum::RollingMax;
 use watermill::mean::Mean;
 use watermill::minimum::RollingMin;
@@ -372,16 +370,38 @@ pub trait StreamOperators<T: Element> {
     /// accumulate the source into a vector
     #[must_use]
     fn accumulate(self: &Rc<Self>) -> Rc<dyn Stream<Vec<T>>>;
-    /// running average of source
+    /// Cumulative average of source.  [`Weighting::Count`] is the arithmetic
+    /// mean of the samples; [`Weighting::Time`] is the time-weighted average,
+    /// each value weighted by how long it was in effect.
     #[must_use]
-    fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
+    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
-    /// Exponentially weighted moving average with smoothing factor `alpha`
-    /// (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`).  The first sample
-    /// seeds the average.
+    /// Cumulative variance of source.  [`Weighting::Count`] is the sample
+    /// variance (ddof = 1); [`Weighting::Time`] is the time-weighted
+    /// (population) variance.  Yields `0.0` until enough data is present.
+    #[must_use]
+    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Cumulative standard deviation of source — the square root of
+    /// [`variance`](StreamOperators::variance) under the same `weighting`.
+    #[must_use]
+    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Exponentially weighted moving average with per-tick smoothing factor
+    /// `alpha` (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`).  The first
+    /// sample seeds the average.
     #[must_use]
     fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive;
+    /// Time-decayed exponentially weighted moving average: a sample's weight
+    /// halves every `half_life` of elapsed time, independent of tick rate.
+    /// The first sample seeds the average.
+    #[must_use]
+    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive;
     /// Rolling sum over the most recent `window` samples.
@@ -631,18 +651,40 @@ where
         })
     }
 
-    fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
+    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        AverageStream::new(self.clone()).into_stream()
+        MomentStream::new(self.clone(), Moment::Mean, weighting).into_stream()
+    }
+
+    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        MomentStream::new(self.clone(), Moment::Var, weighting).into_stream()
+    }
+
+    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        MomentStream::new(self.clone(), Moment::Std, weighting).into_stream()
     }
 
     fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
     where
         T: ToPrimitive,
     {
-        StatStream::new(self.clone(), EWMean::new(alpha)).into_stream()
+        EwmaStream::new(self.clone(), EwmaDecay::PerTick(alpha)).into_stream()
+    }
+
+    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>>
+    where
+        T: ToPrimitive,
+    {
+        let half_life = half_life.as_nanos() as f64;
+        EwmaStream::new(self.clone(), EwmaDecay::HalfLife(half_life)).into_stream()
     }
 
     fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>

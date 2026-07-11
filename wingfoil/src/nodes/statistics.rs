@@ -1,11 +1,17 @@
-//! Streaming statistics operators backed by the [`watermill`] crate.
+//! Streaming statistics operators.
 //!
-//! [`watermill`] provides generic, serializable online statistics (a Rust port
-//! of Python `river.stats`).  We adapt its `Univariate` statistics into stream
-//! nodes: [StatStream] wraps any self-contained statistic, and
-//! [WindowStatStream] adds a fixed-size rolling window around a revertable
-//! statistic.  All operators consume `T: Element + ToPrimitive` and emit `f64`,
-//! matching the [average](crate::nodes::StreamOperators::average) convention.
+//! Two families live here:
+//!
+//! * **Weighted moments and EWMA** ([MomentStream], [EwmaStream]) — rolled by
+//!   hand so they can be *time weighted* (each sample weighted by how long it
+//!   was in effect, read from the graph clock) as well as count weighted.  See
+//!   [Weighting].
+//! * **watermill adapters** ([StatStream], [WindowStatStream]) — thin wrappers
+//!   over the [`watermill`] crate (generic serializable online statistics, a
+//!   Rust port of Python `river.stats`) used for the count-based rolling
+//!   `sum`/`min`/`max`/`median` operators.
+//!
+//! All operators consume `T: Element + ToPrimitive` and emit `f64`.
 
 use crate::types::*;
 
@@ -14,11 +20,226 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use watermill::stats::{RollableUnivariate, Univariate};
 
+/// How samples are weighted when aggregating a stream.
+///
+/// A stream's ticks are rarely evenly spaced, so "the average" is ambiguous:
+/// do we average the *samples* or the *signal over time*?  [Weighting] selects
+/// between the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Weighting {
+    /// Every sample counts equally (weight = 1) — the ordinary arithmetic
+    /// statistic over the observed values.
+    Count,
+    /// Each sample is weighted by how long it was in effect: the elapsed time
+    /// since the previous sample (weight = Δt in nanoseconds).  This yields
+    /// time-weighted averages/variances, where a value that persisted for a
+    /// second counts ten times as much as one replaced after 100ms.
+    Time,
+}
+
+/// Incremental weighted mean and variance via West's algorithm (a weighted
+/// generalisation of Welford's — numerically stable, single pass).
+#[derive(Default)]
+struct WeightedMoments {
+    w_sum: f64,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl WeightedMoments {
+    fn push(&mut self, x: f64, weight: f64) {
+        // Zero-duration (simultaneous ticks) or non-positive weights add nothing.
+        if weight <= 0.0 {
+            return;
+        }
+        self.w_sum += weight;
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (weight / self.w_sum) * (x - mean_old);
+        self.m2 += weight * (x - mean_old) * (x - self.mean);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.w_sum <= 0.0
+    }
+
+    fn mean(&self) -> f64 {
+        self.mean
+    }
+
+    fn variance(&self, weighting: Weighting) -> f64 {
+        match weighting {
+            // Sample variance (ddof = 1), matching `rolling_var`.
+            Weighting::Count => {
+                if self.count < 2 {
+                    return 0.0;
+                }
+                self.m2 / (self.count as f64 - 1.0)
+            }
+            // Reliability-weighted variance has no clean ddof correction, so we
+            // report the population form (divide by the total weight).
+            Weighting::Time => {
+                if self.w_sum <= 0.0 {
+                    return 0.0;
+                }
+                self.m2 / self.w_sum
+            }
+        }
+    }
+}
+
+/// Which moment a [MomentStream] emits.
+#[derive(Clone, Copy)]
+pub(crate) enum Moment {
+    Mean,
+    Var,
+    Std,
+}
+
+/// Cumulative weighted mean / variance / standard deviation over a stream.
+///
+/// Under [`Weighting::Count`] each sample contributes equally.  Under
+/// [`Weighting::Time`] each sample is weighted by the interval it was in
+/// effect — so on every tick the *previous* value is credited with the elapsed
+/// Δt before the new value takes over.  The most recent sample therefore only
+/// starts contributing once the next tick advances the clock, which is the
+/// correct treatment of a left-continuous step signal.
+pub(crate) struct MomentStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    moment: Moment,
+    weighting: Weighting,
+    moments: WeightedMoments,
+    last_time: Option<NanoTime>,
+    prev_value: f64,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for MomentStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        match self.weighting {
+            Weighting::Count => self.moments.push(sample, 1.0),
+            Weighting::Time => {
+                let now = state.time();
+                if let Some(prev_t) = self.last_time {
+                    let dt = f64::from(now - prev_t);
+                    self.moments.push(self.prev_value, dt);
+                }
+                self.prev_value = sample;
+                self.last_time = Some(now);
+            }
+        }
+        self.value = self.output(sample);
+        Ok(true)
+    }
+}
+
+impl<T: Element> MomentStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, moment: Moment, weighting: Weighting) -> Self {
+        Self {
+            upstream,
+            moment,
+            weighting,
+            moments: WeightedMoments::default(),
+            last_time: None,
+            prev_value: f64::NAN,
+            value: f64::NAN,
+        }
+    }
+
+    fn output(&self, current: f64) -> f64 {
+        match self.moment {
+            // Before any weight has accumulated (time weighting, first tick) the
+            // mean seeds to the current sample rather than emitting NaN.
+            Moment::Mean if self.moments.is_empty() => current,
+            Moment::Mean => self.moments.mean(),
+            Moment::Var => self.moments.variance(self.weighting),
+            Moment::Std => self.moments.variance(self.weighting).max(0.0).sqrt(),
+        }
+    }
+}
+
+/// How an [EwmaStream] decays older observations.
+#[derive(Clone, Copy)]
+pub(crate) enum EwmaDecay {
+    /// Fixed smoothing factor applied once per tick (count weighting).
+    PerTick(f64),
+    /// Time decay with the given half-life in nanoseconds: a sample's weight
+    /// halves every `half_life` of elapsed time, independent of tick rate.
+    HalfLife(f64),
+}
+
+/// Exponentially weighted moving average.
+///
+/// We implement this rather than use `watermill::ewmean::EWMean` for two
+/// reasons.  First, watermill (0.1.2) uses `if self.mean == 0.0 { self.mean = x }`
+/// as its "not yet initialised" sentinel (see `src/ewmean.rs`), which mis-fires
+/// whenever the average legitimately reaches exactly `0.0` — e.g. a
+/// difference/returns stream crossing zero — and re-seeds to the next raw
+/// sample instead of decaying.  An explicit `initialised` flag avoids that.
+/// (No upstream issue tracks this as of watermill 0.1.2.)  Second, owning the
+/// node lets us support time-based decay ([`EwmaDecay::HalfLife`]) using the
+/// graph clock, which watermill's count-based `EWMean` cannot express.
+pub(crate) struct EwmaStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    decay: EwmaDecay,
+    value: f64,
+    initialised: bool,
+    last_time: Option<NanoTime>,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for EwmaStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        if !self.initialised {
+            // Seed with the first sample regardless of its value.
+            self.value = sample;
+            self.initialised = true;
+            self.last_time = Some(state.time());
+            return Ok(true);
+        }
+        let alpha = match self.decay {
+            EwmaDecay::PerTick(alpha) => alpha,
+            EwmaDecay::HalfLife(half_life) => {
+                let now = state.time();
+                let prev = self
+                    .last_time
+                    .expect("invariant: last_time set once initialised");
+                self.last_time = Some(now);
+                if half_life <= 0.0 {
+                    // Degenerate half-life: fully adapt to the newest sample.
+                    1.0
+                } else {
+                    // alpha = 1 - 2^(-Δt / half_life)
+                    let dt = f64::from(now - prev);
+                    1.0 - (-(dt / half_life) * std::f64::consts::LN_2).exp()
+                }
+            }
+        };
+        self.value += alpha * (sample - self.value);
+        Ok(true)
+    }
+}
+
+impl<T: Element> EwmaStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, decay: EwmaDecay) -> Self {
+        Self {
+            upstream,
+            decay,
+            value: f64::NAN,
+            initialised: false,
+            last_time: None,
+        }
+    }
+}
+
 /// Feeds each upstream sample into a watermill [`Univariate`] statistic and
 /// emits `stat.get()`.  Works for any statistic that owns its own state —
-/// cumulative (`Mean`, `Variance`, …), exponentially weighted (`EWMean`,
-/// `EWVariance`) or self-windowing (`RollingMin`, `RollingMax`,
-/// `RollingQuantile`).
+/// self-windowing (`RollingMin`, `RollingMax`, `RollingQuantile`) or
+/// cumulative.
 pub(crate) struct StatStream<T: Element, S> {
     upstream: Rc<dyn Stream<T>>,
     stat: S,
@@ -103,15 +324,16 @@ mod tests {
     use crate::graph::*;
     use crate::nodes::*;
 
-    /// A stream of 1,2,3,4,5 via `count()`.
+    /// A stream of 1,2,3,4,5 via `count()`, one tick every 100ns.
     fn counter() -> Rc<dyn Stream<u64>> {
         ticker(Duration::from_nanos(100)).count()
     }
 
+    // ── EWMA ─────────────────────────────────────────────────────────────────
+
     #[test]
     fn ewma_seeds_on_first_sample() {
-        // Constant stream of 5 — watermill's EWMean seeds with the first
-        // sample, so a constant stream stays at 5.0.
+        // Constant stream of 5 — seeded with the first sample, stays 5.0.
         let ewma = ticker(Duration::from_nanos(100))
             .count()
             .map(|_: u64| 5u64)
@@ -124,15 +346,93 @@ mod tests {
     #[test]
     fn ewma_of_sequence() {
         // count() gives 1,2,3,4. alpha = 0.5, seeded on the first sample.
-        //   e1 = 1
-        //   e2 = 0.5*2 + 0.5*1    = 1.5
-        //   e3 = 0.5*3 + 0.5*1.5  = 2.25
-        //   e4 = 0.5*4 + 0.5*2.25 = 3.125
+        //   e1 = 1; e2 = 1.5; e3 = 2.25; e4 = 3.125
         let ewma = counter().ewma(0.5);
         ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
             .unwrap();
         assert!((ewma.peek_value() - 3.125).abs() < 1e-10);
     }
+
+    #[test]
+    fn ewma_does_not_reset_at_zero() {
+        // Inputs 0, 0, 5 with alpha 0.5. Our EWMA seeds once (to 0) and then
+        // decays: 0 -> 0 -> 2.5. watermill's `mean == 0` sentinel would instead
+        // re-seed on the 5 and jump to 5.0 — this guards against that.
+        let ewma = counter()
+            .map(|n: u64| if n <= 2 { 0.0 } else { 5.0 })
+            .ewma(0.5);
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+        assert!((ewma.peek_value() - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_decay_matches_per_tick_when_dt_equals_half_life() {
+        // With Δt (100ns) == half-life, alpha = 1 - 2^-1 = 0.5 every tick, so
+        // over 1,2,3,4 the result matches ewma(0.5): 3.125.
+        let ewma = counter().ewma_decay(Duration::from_nanos(100));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+            .unwrap();
+        assert!((ewma.peek_value() - 3.125).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_decay_constant_stream_is_constant() {
+        let ewma = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 7u64)
+            .ewma_decay(Duration::from_nanos(250));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        assert!((ewma.peek_value() - 7.0).abs() < 1e-10);
+    }
+
+    // ── Weighted mean / variance / std ───────────────────────────────────────
+
+    #[test]
+    fn average_count_is_arithmetic_mean() {
+        // 1,2,3,4,5 -> 3.0
+        let avg = counter().average(Weighting::Count);
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((avg.peek_value() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn average_time_weighted_lags_by_one_interval() {
+        // Ticks are evenly spaced, so each of 1,2,3,4 is in effect for one
+        // interval before the next; 5 has not yet been credited.
+        // TWA = (1+2+3+4)/4 = 2.5 (vs count mean 3.0).
+        let avg = counter().average(Weighting::Time);
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((avg.peek_value() - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn variance_count_is_sample_variance() {
+        // 1,2,3,4,5: mean 3, m2 = 10, sample var = 10 / (5-1) = 2.5
+        let var = counter().variance(Weighting::Count);
+        let std = counter().std(Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 2.5).abs() < 1e-10);
+        assert!((std.peek_value() - 2.5_f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn variance_time_weighted_is_population_over_weight() {
+        // Credited values {1,2,3,4} each weight 100: mean 2.5,
+        // m2 = 100 * (2.25+0.25+0.25+2.25) = 500, var = 500 / 400 = 1.25.
+        let var = counter().variance(Weighting::Time);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 1.25).abs() < 1e-10);
+    }
+
+    // ── watermill-backed rolling operators ───────────────────────────────────
 
     #[test]
     fn rolling_sum_over_window() {
@@ -167,8 +467,7 @@ mod tests {
 
     #[test]
     fn rolling_var_std_over_window() {
-        // window 3 over 1,2,3,4,5 -> {3,4,5}
-        // mean = 4, sample var = ((3-4)^2 + (4-4)^2 + (5-4)^2) / (3-1) = 2/2 = 1.0
+        // window 3 over 1,2,3,4,5 -> {3,4,5}: sample var = 2/2 = 1.0
         let var = counter().rolling_var(3);
         let std = counter().rolling_std(3);
         var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))

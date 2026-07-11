@@ -52,7 +52,7 @@ mod tests {
                 let t: u64 = time.into();
                 t
             })
-            .average();
+            .average(Weighting::Count);
         let average = average.clone().collect();
         average.run(run_mode, run_to).unwrap();
         let average = average.peek_value();
