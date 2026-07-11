@@ -4,7 +4,6 @@
 mod always;
 #[cfg(feature = "async")]
 mod async_io;
-mod average;
 mod bimap;
 mod buffer;
 mod callback;
@@ -68,7 +67,6 @@ pub use iterator_stream::{IteratorStream, SimpleIteratorStream, TryIteratorStrea
 pub use map_filter::MapFilterStream;
 pub use never::*;
 
-use average::*;
 use bimap::*;
 use buffer::BufferStream;
 use constant::*;
@@ -109,7 +107,6 @@ pub(crate) use receiver::*;
 use log::Level;
 #[cfg(not(feature = "tracing"))]
 use log::log;
-use num_traits::ToPrimitive;
 use std::cmp::Eq;
 #[cfg(feature = "async")]
 use std::future::Future;
@@ -273,7 +270,9 @@ pub trait NodeOperators {
 
 impl NodeOperators for dyn Node {
     fn count(self: &Rc<Self>) -> Rc<dyn Stream<u64>> {
-        constant(1).sample(self.clone()).sum()
+        constant(1)
+            .sample(self.clone())
+            .reduce(|acc, val| acc + val)
     }
 
     fn ticked_at(self: &Rc<Self>) -> Rc<dyn Stream<NanoTime>> {
@@ -363,11 +362,6 @@ pub trait StreamOperators<T: Element> {
     /// accumulate the source into a vector
     #[must_use]
     fn accumulate(self: &Rc<Self>) -> Rc<dyn Stream<Vec<T>>>;
-    /// running average of source
-    #[must_use]
-    fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
     #[must_use]
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>>;
@@ -539,10 +533,6 @@ pub trait StreamOperators<T: Element> {
     // print stream values to stdout
     #[must_use]
     fn print(self: &Rc<Self>) -> Rc<dyn Stream<T>>;
-    #[must_use]
-    fn sum(self: &Rc<Self>) -> Rc<dyn Stream<T>>
-    where
-        T: Add<T, Output = T>;
     /// Suppresses upstream values that arrive faster than the specified interval.
     /// Emits the first value immediately, then ignores subsequent values until
     /// the interval elapses.
@@ -575,13 +565,6 @@ where
         self.fold(|acc: &mut Vec<T>, value| {
             acc.push(value);
         })
-    }
-
-    fn average(self: &Rc<Self>) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        AverageStream::new(self.clone()).into_stream()
     }
 
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>> {
@@ -837,13 +820,6 @@ where
     fn sample(self: &Rc<Self>, trigger: Rc<dyn Node>) -> Rc<dyn Stream<T>> {
         SampleStream::new(self.clone(), trigger).into_stream()
     }
-    fn sum(self: &Rc<Self>) -> Rc<dyn Stream<T>>
-    where
-        T: Add<T, Output = T>,
-    {
-        self.reduce(|acc, val| acc + val)
-    }
-
     fn throttle(self: &Rc<Self>, interval: Duration) -> Rc<dyn Stream<T>> {
         ThrottleStream::new(self.clone(), NanoTime::new(interval.as_nanos() as u64)).into_stream()
     }

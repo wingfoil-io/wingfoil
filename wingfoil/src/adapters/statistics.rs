@@ -1,0 +1,1333 @@
+//! Streaming statistics operators.
+//!
+//! Everything here is hand-rolled — no external statistics crate.  Each operator
+//! takes a [Window] ([`Count`](Window::Count), [`Time`](Window::Time), or
+//! [`Unbounded`](Window::Unbounded)), and the node backing it is chosen by the
+//! window so each case stays O(1) (except an unbounded median):
+//!
+//! * **Cumulative** ([MomentStream], [CumulativeStream], [EwmaStream]) — over an
+//!   unbounded window: weighted mean/variance/std, `sum`/`min`/`max`, and EWMA,
+//!   each in O(1) time and memory.  Moments and EWMA are *time weighted* (each
+//!   sample weighted by how long it was in effect, read from the graph clock) as
+//!   well as count weighted; see [Weighting].
+//! * **Incremental rolling** ([RollingMomentStream], [RollingSumStream],
+//!   [RollingExtremeStream]) — over a count window: `mean`/`var`/`std` (either
+//!   weighting), `sum`, and `min`/`max` (monotonic deque), each maintained in
+//!   O(1) per tick by updating as samples enter and leave the window.
+//! * **Recompute-per-tick** ([WindowStream]) — `median` (any window) and the
+//!   time-windowed `sum`/`min`/`max`, which have no cheap incremental form here.
+//!
+//! All operators consume `T: Element + ToPrimitive` and emit `f64`.
+
+use crate::types::*;
+
+use num_traits::ToPrimitive;
+use std::collections::VecDeque;
+use std::rc::Rc;
+use std::time::Duration;
+
+/// How samples are weighted when aggregating a stream.
+///
+/// A stream's ticks are rarely evenly spaced, so "the average" is ambiguous:
+/// do we average the *samples* or the *signal over time*?  [Weighting] selects
+/// between the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Weighting {
+    /// Every sample counts equally (weight = 1) — the ordinary arithmetic
+    /// statistic over the observed values.
+    Count,
+    /// Each sample is weighted by how long it was in effect: the elapsed time
+    /// since the previous sample (weight = Δt in nanoseconds).  This yields
+    /// time-weighted averages/variances, where a value that persisted for a
+    /// second counts ten times as much as one replaced after 100ms.
+    Time,
+}
+
+/// How an [`ewma`](StatisticsOperators::ewma) decays older observations.
+///
+/// This is the exponential analogue of [Weighting]: [`PerTick`](EwmaSpan::PerTick)
+/// weights by tick count, [`HalfLife`](EwmaSpan::HalfLife) by elapsed time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EwmaSpan {
+    /// Fixed smoothing factor `alpha` applied once per tick
+    /// (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`) — count weighting.
+    PerTick(f64),
+    /// Time decay: a sample's weight halves every `half_life` of elapsed graph
+    /// time, independent of tick rate — time weighting.
+    HalfLife(Duration),
+}
+
+/// The extent an operator aggregates over: a fixed number of samples, a fixed
+/// span of graph time, or the whole stream so far.
+///
+/// This is the windowing analogue of [Weighting] and [EwmaSpan] — the choice is
+/// an argument to a single operator, not a separate method.  It is orthogonal to
+/// [Weighting]: `Window` bounds *which* samples an operator sees, while
+/// [Weighting] decides *how* they are weighted, so e.g.
+/// `mean(Window::Count(10), Weighting::Time)` time-weights the last ten samples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Window {
+    /// The most recent `n` samples (clamped to at least one).
+    Count(usize),
+    /// All samples seen in the last `Duration` of graph time.
+    Time(Duration),
+    /// Every sample seen so far — a cumulative (expanding) window.  Note that
+    /// [`median`](StatisticsOperators::median) over an unbounded window must
+    /// retain all samples, so its memory grows with the stream; the other
+    /// operators hold O(1) state.
+    Unbounded,
+}
+
+/// Streaming statistics operators for numeric streams.
+///
+/// Chain these onto any `Stream<T>` whose values are numeric
+/// (`T: Element + ToPrimitive`); every operator emits an `f64`.  Bring the
+/// trait into scope with `use wingfoil::adapters::statistics::*` (or
+/// `use wingfoil::adapters::statistics::StatisticsOperators`) to use the fluent
+/// form:
+///
+/// ```
+/// use wingfoil::*;
+/// use wingfoil::adapters::statistics::*;
+/// use std::time::Duration;
+///
+/// let smoothed = ticker(Duration::from_millis(10)).count().ewma(EwmaSpan::PerTick(0.1));
+/// let twap = ticker(Duration::from_millis(10)).count().mean(Window::Unbounded, Weighting::Time);
+/// ```
+///
+/// Every aggregate takes a [Window] — [`Window::Count`], [`Window::Time`], or
+/// [`Window::Unbounded`] (cumulative) — so the same method serves the rolling
+/// and cumulative cases; the moment operators additionally take a [Weighting].
+pub trait StatisticsOperators<T: Element + ToPrimitive> {
+    /// Mean over `window`.  [`Weighting::Count`] is the arithmetic mean;
+    /// [`Weighting::Time`] weights each sample by how long it was in effect.
+    #[must_use]
+    fn mean(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Variance over `window`.  [`Weighting::Count`] is the sample variance
+    /// (ddof = 1); [`Weighting::Time`] is the time-weighted (population)
+    /// variance.  Yields `0.0` until enough data is present.
+    #[must_use]
+    fn variance(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Standard deviation over `window` — the square root of
+    /// [`variance`](StatisticsOperators::variance) under the same `weighting`.
+    #[must_use]
+    fn std(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Sum over `window`.
+    #[must_use]
+    fn sum(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>>;
+    /// Minimum over `window`.
+    #[must_use]
+    fn min(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>>;
+    /// Maximum over `window`.
+    #[must_use]
+    fn max(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>>;
+    /// Median over `window`.  [`Weighting::Count`] is the ordinary median;
+    /// [`Weighting::Time`] is the time-weighted median (the value at which
+    /// cumulative in-effect time crosses one half).  Over [`Window::Unbounded`]
+    /// this retains every sample, so its memory grows with the stream.
+    #[must_use]
+    fn median(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Exponentially weighted moving average.  [`EwmaSpan::PerTick`] applies a
+    /// fixed smoothing factor once per tick; [`EwmaSpan::HalfLife`] decays by
+    /// elapsed time.  The first sample seeds the average.
+    #[must_use]
+    fn ewma(self: &Rc<Self>, span: EwmaSpan) -> Rc<dyn Stream<f64>>;
+}
+
+impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T> {
+    fn mean(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        self.moment(Moment::Mean, window, weighting)
+    }
+
+    fn variance(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        self.moment(Moment::Var, window, weighting)
+    }
+
+    fn std(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        self.moment(Moment::Std, window, weighting)
+    }
+
+    fn sum(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
+        match window {
+            // Cumulative and count windows keep a running total (O(1) per tick);
+            // a time window recomputes over the retained buffer.
+            Window::Unbounded => {
+                CumulativeStream::new(self.clone(), CumulativeStat::Sum).into_stream()
+            }
+            Window::Count(n) => RollingSumStream::new(self.clone(), n).into_stream(),
+            Window::Time(_) => {
+                WindowStream::new(self.clone(), WindowStat::Sum, Weighting::Count, window)
+                    .into_stream()
+            }
+        }
+    }
+
+    fn min(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
+        match window {
+            // Cumulative tracks a running minimum (O(1)); a count window uses a
+            // monotonic deque (O(1) amortised); a time window recomputes.
+            Window::Unbounded => {
+                CumulativeStream::new(self.clone(), CumulativeStat::Min).into_stream()
+            }
+            Window::Count(n) => {
+                RollingExtremeStream::new(self.clone(), Extreme::Min, n).into_stream()
+            }
+            Window::Time(_) => {
+                WindowStream::new(self.clone(), WindowStat::Min, Weighting::Count, window)
+                    .into_stream()
+            }
+        }
+    }
+
+    fn max(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
+        match window {
+            Window::Unbounded => {
+                CumulativeStream::new(self.clone(), CumulativeStat::Max).into_stream()
+            }
+            Window::Count(n) => {
+                RollingExtremeStream::new(self.clone(), Extreme::Max, n).into_stream()
+            }
+            Window::Time(_) => {
+                WindowStream::new(self.clone(), WindowStat::Max, Weighting::Count, window)
+                    .into_stream()
+            }
+        }
+    }
+
+    fn median(self: &Rc<Self>, window: Window, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        // Median has no cheap incremental form, so every window recomputes over
+        // its retained samples; `Window::Unbounded` therefore retains them all.
+        WindowStream::new(self.clone(), WindowStat::Median, weighting, window).into_stream()
+    }
+
+    fn ewma(self: &Rc<Self>, span: EwmaSpan) -> Rc<dyn Stream<f64>> {
+        let decay = match span {
+            EwmaSpan::PerTick(alpha) => {
+                debug_assert!(
+                    (0.0..=1.0).contains(&alpha),
+                    "ewma PerTick smoothing factor must be in [0, 1], got {alpha}"
+                );
+                EwmaDecay::PerTick(alpha)
+            }
+            EwmaSpan::HalfLife(half_life) => EwmaDecay::HalfLife(half_life.as_nanos() as f64),
+        };
+        EwmaStream::new(self.clone(), decay).into_stream()
+    }
+}
+
+impl<T: Element + ToPrimitive + 'static> dyn Stream<T> {
+    /// Route a weighted moment (mean/var/std) to the flat cumulative node for an
+    /// unbounded window, or the incremental sliding-window node otherwise.
+    fn moment(
+        self: &Rc<Self>,
+        moment: Moment,
+        window: Window,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>> {
+        match window {
+            Window::Unbounded => MomentStream::new(self.clone(), moment, weighting).into_stream(),
+            _ => RollingMomentStream::new(self.clone(), moment, weighting, window).into_stream(),
+        }
+    }
+}
+
+/// Incremental weighted mean and variance via West's algorithm (a weighted
+/// generalisation of Welford's — numerically stable, single pass).
+#[derive(Default)]
+struct WeightedMoments {
+    w_sum: f64,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl WeightedMoments {
+    fn push(&mut self, x: f64, weight: f64) {
+        // Zero-duration (simultaneous ticks) or non-positive weights add nothing.
+        if weight <= 0.0 {
+            return;
+        }
+        self.w_sum += weight;
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (weight / self.w_sum) * (x - mean_old);
+        self.m2 += weight * (x - mean_old) * (x - self.mean);
+    }
+
+    /// Exact inverse of [`push`](WeightedMoments::push): drop a `(x, weight)`
+    /// previously pushed, so a sliding window can evict its oldest contribution
+    /// in O(1).  Like any revert-based scheme this can accumulate floating-point
+    /// error over many add/remove cycles, so `m2` is clamped at zero here and
+    /// again by [`variance`](WeightedMoments::variance)'s callers.
+    fn remove(&mut self, x: f64, weight: f64) {
+        if weight <= 0.0 {
+            return;
+        }
+        let w_new = self.w_sum - weight;
+        // Removing the final contribution empties the accumulator; reset cleanly
+        // rather than dividing by a weight at (or below) zero.
+        if self.count <= 1 || w_new <= 0.0 {
+            *self = Self::default();
+            return;
+        }
+        self.count -= 1;
+        // Recover the pre-push mean, then invert the M2 update with it.
+        let mean_old = (self.w_sum * self.mean - weight * x) / w_new;
+        self.m2 -= weight * (x - mean_old) * (x - self.mean);
+        if self.m2 < 0.0 {
+            self.m2 = 0.0;
+        }
+        self.mean = mean_old;
+        self.w_sum = w_new;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.w_sum <= 0.0
+    }
+
+    fn mean(&self) -> f64 {
+        self.mean
+    }
+
+    fn variance(&self, weighting: Weighting) -> f64 {
+        match weighting {
+            // Sample variance (ddof = 1), matching `rolling_var`.
+            Weighting::Count => {
+                if self.count < 2 {
+                    return 0.0;
+                }
+                self.m2 / (self.count as f64 - 1.0)
+            }
+            // Reliability-weighted variance has no clean ddof correction, so we
+            // report the population form (divide by the total weight).
+            Weighting::Time => {
+                if self.w_sum <= 0.0 {
+                    return 0.0;
+                }
+                self.m2 / self.w_sum
+            }
+        }
+    }
+}
+
+/// Which moment a [MomentStream] emits.
+#[derive(Clone, Copy)]
+pub(crate) enum Moment {
+    Mean,
+    Var,
+    Std,
+}
+
+/// Cumulative weighted mean / variance / standard deviation over a stream.
+///
+/// Under [`Weighting::Count`] each sample contributes equally.  Under
+/// [`Weighting::Time`] each sample is weighted by the interval it was in
+/// effect — so on every tick the *previous* value is credited with the elapsed
+/// Δt before the new value takes over.  The most recent sample therefore only
+/// starts contributing once the next tick advances the clock, which is the
+/// correct treatment of a left-continuous step signal.
+pub(crate) struct MomentStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    moment: Moment,
+    weighting: Weighting,
+    moments: WeightedMoments,
+    last_time: Option<NanoTime>,
+    prev_value: f64,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for MomentStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        match self.weighting {
+            Weighting::Count => self.moments.push(sample, 1.0),
+            Weighting::Time => {
+                let now = state.time();
+                if let Some(prev_t) = self.last_time {
+                    let dt = f64::from(now - prev_t);
+                    self.moments.push(self.prev_value, dt);
+                }
+                self.prev_value = sample;
+                self.last_time = Some(now);
+            }
+        }
+        self.value = self.output(sample);
+        Ok(true)
+    }
+}
+
+impl<T: Element> MomentStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, moment: Moment, weighting: Weighting) -> Self {
+        Self {
+            upstream,
+            moment,
+            weighting,
+            moments: WeightedMoments::default(),
+            last_time: None,
+            prev_value: f64::NAN,
+            value: f64::NAN,
+        }
+    }
+
+    fn output(&self, current: f64) -> f64 {
+        match self.moment {
+            // Before any weight has accumulated (time weighting, first tick) the
+            // mean seeds to the current sample rather than emitting NaN.
+            Moment::Mean if self.moments.is_empty() => current,
+            Moment::Mean => self.moments.mean(),
+            Moment::Var => self.moments.variance(self.weighting),
+            Moment::Std => self.moments.variance(self.weighting).max(0.0).sqrt(),
+        }
+    }
+}
+
+/// Incremental rolling weighted mean / variance / standard deviation over a
+/// sliding [Window].
+///
+/// Maintains [WeightedMoments] by adding each sample's contribution on arrival
+/// and removing it on eviction, so a tick is O(1) rather than recomputing over
+/// the window.  A rolling node only cycles when its upstream ticks, so at
+/// compute time the newest sample is always "now" — which fixes every sample's
+/// weight as soon as its successor arrives and makes both weightings
+/// incrementally maintainable:
+///
+/// * [`Weighting::Count`] — each sample is a unit-weight point, added when it
+///   arrives and removed when it leaves the window.
+/// * [`Weighting::Time`] — each sample is credited with the interval until its
+///   successor.  The newest sample opens an interval that is only committed (and
+///   weighted) once the next tick closes it, so it contributes nothing until
+///   then — the same left-continuous-step treatment as [MomentStream].
+pub(crate) struct RollingMomentStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    moment: Moment,
+    weighting: Weighting,
+    window: Window,
+    buffer: VecDeque<(f64, NanoTime)>,
+    moments: WeightedMoments,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for RollingMomentStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let now = state.time();
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+
+        // Commit the contribution the new sample creates.
+        match self.weighting {
+            // A count-weighted sample contributes a unit weight immediately.
+            Weighting::Count => self.moments.push(sample, 1.0),
+            // A time-weighted sample closes the interval opened by the previous
+            // sample, crediting it with the elapsed Δt.  The new sample itself
+            // contributes nothing until the next tick advances the clock.
+            Weighting::Time => {
+                if let Some(&(prev_v, prev_t)) = self.buffer.back() {
+                    self.moments.push(prev_v, f64::from(now - prev_t));
+                }
+            }
+        }
+        self.buffer.push_back((sample, now));
+
+        // Evict from the front, removing each evicted contribution.
+        while self.should_evict(now) {
+            let (old_v, old_t) = self
+                .buffer
+                .pop_front()
+                .expect("invariant: should_evict implies a front sample");
+            match self.weighting {
+                Weighting::Count => self.moments.remove(old_v, 1.0),
+                // The evicted sample's committed interval ran until the new
+                // front's time.  An empty buffer means the sample never had a
+                // committed interval (it was the lone/newest sample).
+                Weighting::Time => {
+                    if let Some(&(_, next_t)) = self.buffer.front() {
+                        self.moments.remove(old_v, f64::from(next_t - old_t));
+                    }
+                }
+            }
+        }
+
+        self.value = self.output(sample);
+        Ok(true)
+    }
+}
+
+impl<T: Element> RollingMomentStream<T> {
+    pub fn new(
+        upstream: Rc<dyn Stream<T>>,
+        moment: Moment,
+        weighting: Weighting,
+        window: Window,
+    ) -> Self {
+        // A window of zero samples is meaningless; clamp to at least one.
+        let window = match window {
+            Window::Count(n) => Window::Count(n.max(1)),
+            Window::Time(_) | Window::Unbounded => window,
+        };
+        Self {
+            upstream,
+            moment,
+            weighting,
+            window,
+            buffer: VecDeque::new(),
+            moments: WeightedMoments::default(),
+            value: f64::NAN,
+        }
+    }
+
+    fn should_evict(&self, now: NanoTime) -> bool {
+        match self.window {
+            Window::Count(n) => self.buffer.len() > n,
+            Window::Time(duration) => {
+                let duration = duration.as_nanos() as u64;
+                // Time is monotonic, so `now >= t` and the subtraction never
+                // underflows.
+                self.buffer
+                    .front()
+                    .is_some_and(|&(_, t)| u64::from(now) - u64::from(t) > duration)
+            }
+            // Cumulative moments route to `MomentStream`, not here.
+            Window::Unbounded => false,
+        }
+    }
+
+    fn output(&self, current: f64) -> f64 {
+        match self.moment {
+            // Before any weight has accumulated the mean seeds to the current
+            // sample rather than emitting NaN.
+            Moment::Mean if self.moments.is_empty() => current,
+            Moment::Mean => self.moments.mean(),
+            Moment::Var => self.moments.variance(self.weighting),
+            Moment::Std => self.moments.variance(self.weighting).max(0.0).sqrt(),
+        }
+    }
+}
+
+/// How an [EwmaStream] decays older observations.
+#[derive(Clone, Copy)]
+pub(crate) enum EwmaDecay {
+    /// Fixed smoothing factor applied once per tick (count weighting).
+    PerTick(f64),
+    /// Time decay with the given half-life in nanoseconds: a sample's weight
+    /// halves every `half_life` of elapsed time, independent of tick rate.
+    HalfLife(f64),
+}
+
+/// Exponentially weighted moving average.
+///
+/// Two implementation notes.  First, initialisation is tracked with an explicit
+/// `initialised` flag rather than a `mean == 0.0` sentinel: a value-based
+/// sentinel mis-fires whenever the average legitimately reaches exactly `0.0`
+/// (e.g. a difference/returns stream crossing zero) and re-seeds to the next raw
+/// sample instead of decaying.  (This is a real bug in the `watermill` crate's
+/// `EWMean`, one reason we roll our own here.)  Second, owning the node lets us
+/// support time-based decay ([`EwmaDecay::HalfLife`]) off the graph clock, which
+/// a count-based EWMA cannot express.
+pub(crate) struct EwmaStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    decay: EwmaDecay,
+    value: f64,
+    initialised: bool,
+    last_time: Option<NanoTime>,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for EwmaStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        if !self.initialised {
+            // Seed with the first sample regardless of its value.
+            self.value = sample;
+            self.initialised = true;
+            self.last_time = Some(state.time());
+            return Ok(true);
+        }
+        let alpha = match self.decay {
+            EwmaDecay::PerTick(alpha) => alpha,
+            EwmaDecay::HalfLife(half_life) => {
+                let now = state.time();
+                let prev = self
+                    .last_time
+                    .expect("invariant: last_time set once initialised");
+                self.last_time = Some(now);
+                if half_life <= 0.0 {
+                    // Degenerate half-life: fully adapt to the newest sample.
+                    1.0
+                } else {
+                    // alpha = 1 - 2^(-Δt / half_life)
+                    let dt = f64::from(now - prev);
+                    1.0 - (-(dt / half_life) * std::f64::consts::LN_2).exp()
+                }
+            }
+        };
+        self.value += alpha * (sample - self.value);
+        Ok(true)
+    }
+}
+
+impl<T: Element> EwmaStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, decay: EwmaDecay) -> Self {
+        Self {
+            upstream,
+            decay,
+            value: f64::NAN,
+            initialised: false,
+            last_time: None,
+        }
+    }
+}
+
+/// Which cumulative reduction a [CumulativeStream] tracks over an unbounded
+/// window.
+#[derive(Clone, Copy)]
+pub(crate) enum CumulativeStat {
+    Sum,
+    Min,
+    Max,
+}
+
+/// Cumulative `sum`/`min`/`max` over the whole stream, in O(1) time and memory
+/// (an unbounded window needs no buffer for these — just a running accumulator).
+pub(crate) struct CumulativeStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    stat: CumulativeStat,
+    acc: f64,
+    seeded: bool,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for CumulativeStream<T> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        self.acc = if !self.seeded {
+            sample
+        } else {
+            match self.stat {
+                CumulativeStat::Sum => self.acc + sample,
+                CumulativeStat::Min => self.acc.min(sample),
+                CumulativeStat::Max => self.acc.max(sample),
+            }
+        };
+        self.seeded = true;
+        self.value = self.acc;
+        Ok(true)
+    }
+}
+
+impl<T: Element> CumulativeStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, stat: CumulativeStat) -> Self {
+        Self {
+            upstream,
+            stat,
+            acc: 0.0,
+            seeded: false,
+            value: f64::NAN,
+        }
+    }
+}
+
+/// Incremental rolling sum over the most recent `window` samples.
+///
+/// Maintains a running total: each sample is added on arrival and the evicted
+/// oldest is subtracted, so a tick is O(1).
+pub(crate) struct RollingSumStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    window: usize,
+    buffer: VecDeque<f64>,
+    sum: f64,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for RollingSumStream<T> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        self.buffer.push_back(sample);
+        self.sum += sample;
+        if self.buffer.len() > self.window {
+            let oldest = self
+                .buffer
+                .pop_front()
+                .expect("invariant: len > window >= 1 implies non-empty");
+            self.sum -= oldest;
+        }
+        self.value = self.sum;
+        Ok(true)
+    }
+}
+
+impl<T: Element> RollingSumStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, window: usize) -> Self {
+        let window = window.max(1);
+        Self {
+            upstream,
+            window,
+            buffer: VecDeque::with_capacity(window),
+            sum: 0.0,
+            value: f64::NAN,
+        }
+    }
+}
+
+/// Which extreme a [RollingExtremeStream] tracks.
+#[derive(Clone, Copy)]
+pub(crate) enum Extreme {
+    Min,
+    Max,
+}
+
+/// Incremental rolling minimum / maximum over the most recent `window` samples,
+/// via a monotonic deque — O(1) amortised per tick.
+///
+/// The deque holds `(index, value)` candidates, monotonic in value (increasing
+/// front-to-back for [`Extreme::Min`], decreasing for [`Extreme::Max`]).  A new
+/// sample evicts every back candidate it dominates (they can never again be the
+/// extreme while it is in the window), and stale candidates fall off the front
+/// once their index leaves the window, so the front is always the answer.
+pub(crate) struct RollingExtremeStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    extreme: Extreme,
+    window: u64,
+    deque: VecDeque<(u64, f64)>,
+    index: u64,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for RollingExtremeStream<T> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        let i = self.index;
+        self.index += 1;
+
+        // Drop back candidates the new sample dominates.
+        while let Some(&(_, back)) = self.deque.back() {
+            let dominated = match self.extreme {
+                Extreme::Min => back >= sample,
+                Extreme::Max => back <= sample,
+            };
+            if dominated {
+                self.deque.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.deque.push_back((i, sample));
+
+        // Drop the front once it falls outside the last `window` indices. The
+        // just-pushed `i` is always in window, so the deque never empties.
+        while let Some(&(idx, _)) = self.deque.front() {
+            if i - idx >= self.window {
+                self.deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.value = self
+            .deque
+            .front()
+            .expect("invariant: deque holds the current sample")
+            .1;
+        Ok(true)
+    }
+}
+
+impl<T: Element> RollingExtremeStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, extreme: Extreme, window: usize) -> Self {
+        Self {
+            upstream,
+            extreme,
+            window: window.max(1) as u64,
+            deque: VecDeque::new(),
+            index: 0,
+            value: f64::NAN,
+        }
+    }
+}
+
+/// Which statistic a [WindowStream] recomputes over its window (the median in
+/// any window, or `sum`/`min`/`max` over a *time* window; the count-windowed and
+/// moment operators have incremental nodes instead).
+#[derive(Clone, Copy)]
+pub(crate) enum WindowStat {
+    Sum,
+    Min,
+    Max,
+    Median,
+}
+
+/// Recompute-per-tick rolling statistic over a sliding [Window] — used for
+/// `median` (count or time) and the time-windowed `sum`/`min`/`max`, none of
+/// which have a cheap incremental form here.  (Count-windowed `sum`/`min`/`max`
+/// use [RollingSumStream]/[RollingExtremeStream]; rolling `mean`/`var`/`std` use
+/// [RollingMomentStream].)
+///
+/// The statistic is recomputed over the retained samples each tick — O(window)
+/// per tick, which is fine for the window sizes these operators target.  Under
+/// [`Weighting::Time`] the median weights each sample by the gap until the next
+/// sample (the most recent by the gap to `now`); the window's leading edge uses
+/// only retained samples, so a value that was in effect *before* the window
+/// opened is not carried in.
+pub(crate) struct WindowStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    stat: WindowStat,
+    weighting: Weighting,
+    window: Window,
+    buffer: VecDeque<(f64, NanoTime)>,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for WindowStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let now = state.time();
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        self.buffer.push_back((sample, now));
+        match self.window {
+            // Keep at most `n` samples (`n >= 1`, clamped at construction).
+            Window::Count(n) => {
+                while self.buffer.len() > n {
+                    self.buffer.pop_front();
+                }
+            }
+            // Evict samples whose age now exceeds the window (time is monotonic,
+            // so `now >= t` and the subtraction never underflows).
+            Window::Time(duration) => {
+                let duration = duration.as_nanos() as u64;
+                while let Some(&(_, t)) = self.buffer.front() {
+                    if u64::from(now) - u64::from(t) > duration {
+                        self.buffer.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // Cumulative: retain every sample (only `median` reaches here with an
+            // unbounded window, so its memory grows with the stream).
+            Window::Unbounded => {}
+        }
+        self.value = self.compute(now);
+        Ok(true)
+    }
+}
+
+impl<T: Element> WindowStream<T> {
+    fn new(
+        upstream: Rc<dyn Stream<T>>,
+        stat: WindowStat,
+        weighting: Weighting,
+        window: Window,
+    ) -> Self {
+        // A window of zero samples is meaningless; clamp to at least one.
+        let window = match window {
+            Window::Count(n) => Window::Count(n.max(1)),
+            Window::Time(_) | Window::Unbounded => window,
+        };
+        Self {
+            upstream,
+            stat,
+            weighting,
+            window,
+            buffer: VecDeque::new(),
+            value: f64::NAN,
+        }
+    }
+
+    /// Invoke `f(value, weight)` for each retained sample under the active
+    /// weighting: unit weight for [`Weighting::Count`], in-effect Δt (the gap to
+    /// the next sample, or to `now` for the most recent) for [`Weighting::Time`].
+    fn for_each_weight(&self, now: NanoTime, mut f: impl FnMut(f64, f64)) {
+        match self.weighting {
+            Weighting::Count => {
+                for &(v, _) in &self.buffer {
+                    f(v, 1.0);
+                }
+            }
+            Weighting::Time => {
+                let n = self.buffer.len();
+                for i in 0..n {
+                    let (v, t) = self.buffer[i];
+                    let next_t = if i + 1 < n { self.buffer[i + 1].1 } else { now };
+                    f(v, f64::from(next_t - t));
+                }
+            }
+        }
+    }
+
+    /// Median of the retained samples under the active weighting.  Sorts by
+    /// value and returns the value at which cumulative weight crosses half the
+    /// total; when the crossing lands exactly on a boundary (e.g. an even count
+    /// under unit weights) the two straddling values are averaged, so unit
+    /// weights reproduce the ordinary median.
+    fn weighted_median(&self, now: NanoTime) -> f64 {
+        let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(self.buffer.len());
+        // Drop zero-weight samples (a time-weighted newest sample with Δt == 0).
+        self.for_each_weight(now, |v, w| {
+            if w > 0.0 {
+                pairs.push((v, w));
+            }
+        });
+        if pairs.is_empty() {
+            // Every retained sample had zero weight; fall back to the latest.
+            return self.buffer.back().expect("invariant: buffer non-empty").0;
+        }
+        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let half = pairs.iter().map(|&(_, w)| w).sum::<f64>() / 2.0;
+        let mut cumulative = 0.0;
+        for (i, &(v, w)) in pairs.iter().enumerate() {
+            cumulative += w;
+            if cumulative > half {
+                return v;
+            }
+            if cumulative == half {
+                // Crossing lands exactly on a boundary: average with the next
+                // value if there is one (the even-count unit-weight median).
+                return match pairs.get(i + 1) {
+                    Some(&(next, _)) => (v + next) / 2.0,
+                    None => v,
+                };
+            }
+        }
+        // Only reachable through floating-point rounding; the last value wins.
+        pairs.last().expect("invariant: pairs non-empty").0
+    }
+
+    fn compute(&self, now: NanoTime) -> f64 {
+        if self.buffer.is_empty() {
+            return f64::NAN;
+        }
+        match self.stat {
+            WindowStat::Sum => self.buffer.iter().map(|&(v, _)| v).sum(),
+            WindowStat::Min => self
+                .buffer
+                .iter()
+                .map(|&(v, _)| v)
+                .fold(f64::INFINITY, f64::min),
+            WindowStat::Max => self
+                .buffer
+                .iter()
+                .map(|&(v, _)| v)
+                .fold(f64::NEG_INFINITY, f64::max),
+            WindowStat::Median => self.weighted_median(now),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::*;
+    use crate::nodes::*;
+
+    /// A stream of 1,2,3,4,5 via `count()`, one tick every 100ns.
+    fn counter() -> Rc<dyn Stream<u64>> {
+        ticker(Duration::from_nanos(100)).count()
+    }
+
+    // ── EWMA ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ewma_seeds_on_first_sample() {
+        // Constant stream of 5 — seeded with the first sample, stays 5.0.
+        let ewma = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 5u64)
+            .ewma(EwmaSpan::PerTick(0.3));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+            .unwrap();
+        assert!((ewma.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_of_sequence() {
+        // count() gives 1,2,3,4. alpha = 0.5, seeded on the first sample.
+        //   e1 = 1; e2 = 1.5; e3 = 2.25; e4 = 3.125
+        let ewma = counter().ewma(EwmaSpan::PerTick(0.5));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+            .unwrap();
+        assert!((ewma.peek_value() - 3.125).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_does_not_reset_at_zero() {
+        // Inputs 0, 0, 5 with alpha 0.5. Our EWMA seeds once (to 0) and then
+        // decays: 0 -> 0 -> 2.5. A naive `mean == 0` sentinel would instead
+        // re-seed on the 5 and jump to 5.0 — this guards against that.
+        let ewma = counter()
+            .map(|n: u64| if n <= 2 { 0.0 } else { 5.0 })
+            .ewma(EwmaSpan::PerTick(0.5));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+        assert!((ewma.peek_value() - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_decay_matches_per_tick_when_dt_equals_half_life() {
+        // With Δt (100ns) == half-life, alpha = 1 - 2^-1 = 0.5 every tick, so
+        // over 1,2,3,4 the result matches ewma(0.5): 3.125.
+        let ewma = counter().ewma(EwmaSpan::HalfLife(Duration::from_nanos(100)));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+            .unwrap();
+        assert!((ewma.peek_value() - 3.125).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ewma_decay_constant_stream_is_constant() {
+        let ewma = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 7u64)
+            .ewma(EwmaSpan::HalfLife(Duration::from_nanos(250)));
+        ewma.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        assert!((ewma.peek_value() - 7.0).abs() < 1e-10);
+    }
+
+    // ── Weighted mean / variance / std ───────────────────────────────────────
+
+    #[test]
+    fn mean_count_is_arithmetic_mean() {
+        // 1,2,3,4,5 -> 3.0
+        let avg = counter().mean(Window::Unbounded, Weighting::Count);
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((avg.peek_value() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn mean_time_weighted_lags_by_one_interval() {
+        // Ticks are evenly spaced, so each of 1,2,3,4 is in effect for one
+        // interval before the next; 5 has not yet been credited.
+        // TWA = (1+2+3+4)/4 = 2.5 (vs count mean 3.0).
+        let avg = counter().mean(Window::Unbounded, Weighting::Time);
+        avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((avg.peek_value() - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn variance_count_is_sample_variance() {
+        // 1,2,3,4,5: mean 3, m2 = 10, sample var = 10 / (5-1) = 2.5
+        let var = counter().variance(Window::Unbounded, Weighting::Count);
+        let std = counter().std(Window::Unbounded, Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 2.5).abs() < 1e-10);
+        assert!((std.peek_value() - 2.5_f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn variance_time_weighted_is_population_over_weight() {
+        // Credited values {1,2,3,4} each weight 100: mean 2.5,
+        // m2 = 100 * (2.25+0.25+0.25+2.25) = 500, var = 500 / 400 = 1.25.
+        let var = counter().variance(Window::Unbounded, Weighting::Time);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 1.25).abs() < 1e-10);
+    }
+
+    // ── count-windowed rolling operators ─────────────────────────────────────
+
+    #[test]
+    fn rolling_sum_over_window() {
+        // window 3 over 1,2,3,4,5 -> last window {3,4,5} = 12
+        let s = counter().sum(Window::Count(3));
+        s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((s.peek_value() - 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_mean_over_window() {
+        // window 3 over 1,2,3,4,5 -> {3,4,5} mean = 4.0
+        let s = counter().mean(Window::Count(3), Weighting::Count);
+        s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((s.peek_value() - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_min_max_over_window() {
+        let mn = counter().min(Window::Count(2));
+        let mx = counter().max(Window::Count(2));
+        mn.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        mx.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        // last window {4,5}
+        assert!((mn.peek_value() - 4.0).abs() < 1e-10);
+        assert!((mx.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_min_max_match_brute_force_every_tick() {
+        // A non-monotonic sequence so the monotonic deque actually evicts from
+        // both ends; check every tick against a brute-force window scan.
+        const N: u64 = 60;
+        const W: usize = 5;
+        let seq = |n: u64| ((n * 7) % 13) as f64;
+
+        let mn = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .min(Window::Count(W))
+            .collect();
+        let mx = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .max(Window::Count(W))
+            .collect();
+        mn.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+        mx.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+
+        let got_min = mn.peek_value();
+        let got_max = mx.peek_value();
+        for k in 0..got_min.len() {
+            // After tick k (0-based) the stream has emitted seq(1..=k+1); the
+            // count window retains the last min(W, k+1) of them.
+            let n = (k + 1) as u64;
+            let start = if n > W as u64 { n - W as u64 + 1 } else { 1 };
+            let window: Vec<f64> = (start..=n).map(seq).collect();
+            let emin = window.iter().copied().fold(f64::INFINITY, f64::min);
+            let emax = window.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(got_min[k].value, emin, "min mismatch at tick {k}");
+            assert_eq!(got_max[k].value, emax, "max mismatch at tick {k}");
+        }
+    }
+
+    #[test]
+    fn rolling_var_std_over_window() {
+        // window 3 over 1,2,3,4,5 -> {3,4,5}: sample var = 2/2 = 1.0
+        let var = counter().variance(Window::Count(3), Weighting::Count);
+        let std = counter().std(Window::Count(3), Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 1.0).abs() < 1e-10);
+        assert!((std.peek_value() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_std_of_constant_window_is_zero_not_nan() {
+        // A constant window has zero variance; floating-point cancellation in the
+        // incremental moments can make it a hair negative, so std must clamp at
+        // zero rather than emit NaN.
+        let std = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 7u64)
+            .std(Window::Count(3), Weighting::Count);
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let v = std.peek_value();
+        assert!(!v.is_nan(), "rolling_std must not be NaN");
+        assert!(
+            v.abs() < 1e-10,
+            "constant window std should be 0.0, got {v}"
+        );
+    }
+
+    #[test]
+    fn rolling_var_is_zero_with_single_sample() {
+        // Sample variance is defined as 0.0 (not NaN) while n <= ddof.
+        let var = counter().variance(Window::Count(3), Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        assert_eq!(var.peek_value(), 0.0);
+    }
+
+    #[test]
+    fn rolling_median_over_window() {
+        // window 3 over 1,2,3,4,5 -> {3,4,5} median = 4.0
+        let med = counter().median(Window::Count(3), Weighting::Count);
+        med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med.peek_value() - 4.0).abs() < 1e-10);
+    }
+
+    // ── time-windowed operators ──────────────────────────────────────────────
+    //
+    // Ticks are 100ns apart, so a 250ns window retains the three most recent
+    // samples (ages 0, 100, 200) and drops the rest — i.e. {3, 4, 5}.
+    const WIN: Duration = Duration::from_nanos(250);
+
+    #[test]
+    fn rolling_sum_over_time_window() {
+        let s = counter().sum(Window::Time(WIN));
+        s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((s.peek_value() - 12.0).abs() < 1e-10); // {3,4,5}
+    }
+
+    #[test]
+    fn rolling_mean_over_time_window_count_and_time() {
+        // Count: mean{3,4,5} = 4.0
+        let mean_c = counter().mean(Window::Time(WIN), Weighting::Count);
+        mean_c
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mean_c.peek_value() - 4.0).abs() < 1e-10);
+
+        // Time: 3 and 4 each held for 100ns, 5 held for 0 (it is "now").
+        // TWA = (3*100 + 4*100) / 200 = 3.5
+        let mean_t = counter().mean(Window::Time(WIN), Weighting::Time);
+        mean_t
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mean_t.peek_value() - 3.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_min_max_over_time_window() {
+        let mn = counter().min(Window::Time(WIN));
+        let mx = counter().max(Window::Time(WIN));
+        mn.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        mx.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mn.peek_value() - 3.0).abs() < 1e-10);
+        assert!((mx.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_var_over_time_window_count() {
+        // Count sample variance of {3,4,5}: mean 4, m2 = 2, var = 2/2 = 1.0
+        let var = counter().variance(Window::Time(WIN), Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_var_std_over_time_window_time_weighted() {
+        // Time window retains {3@200ns, 4@300ns, 5@400ns}; under time weighting
+        // 3 and 4 each held for 100ns and 5 is "now" (Δt = 0, dropped). Committed
+        // {3:100, 4:100}: mean 3.5, m2 = 100*0.25 + 100*0.25 = 50, and the
+        // time-weighted (population) variance is m2 / w_sum = 50 / 200 = 0.25.
+        let var = counter().variance(Window::Time(WIN), Weighting::Time);
+        let std = counter().std(Window::Time(WIN), Weighting::Time);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 0.25).abs() < 1e-10);
+        assert!((std.peek_value() - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_moments_incremental_match_direct_recompute() {
+        // Slide a count window across a long, non-trivial sequence and check the
+        // incrementally maintained mean/variance still equal a direct recompute
+        // of the final window — i.e. add/remove has not drifted.
+        const N: u64 = 200;
+        const W: usize = 10;
+        let seq = |n: u64| ((n % 7) as f64) * 1.5 - 3.0;
+
+        let mean = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .mean(Window::Count(W), Weighting::Count);
+        let var = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .variance(Window::Count(W), Weighting::Count);
+        mean.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+        var.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+
+        // `count()` emits 1..=N, so the final window is the last W values.
+        let window: Vec<f64> = ((N - W as u64 + 1)..=N).map(seq).collect();
+        let expected_mean = window.iter().sum::<f64>() / W as f64;
+        let expected_var = window
+            .iter()
+            .map(|v| (v - expected_mean).powi(2))
+            .sum::<f64>()
+            / (W as f64 - 1.0);
+
+        assert!(
+            (mean.peek_value() - expected_mean).abs() < 1e-9,
+            "mean {} vs {expected_mean}",
+            mean.peek_value()
+        );
+        assert!(
+            (var.peek_value() - expected_var).abs() < 1e-9,
+            "var {} vs {expected_var}",
+            var.peek_value()
+        );
+    }
+
+    #[test]
+    fn rolling_median_over_time_window() {
+        let med = counter().median(Window::Time(WIN), Weighting::Count);
+        med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med.peek_value() - 4.0).abs() < 1e-10); // median{3,4,5}
+    }
+
+    #[test]
+    fn rolling_median_time_weighted() {
+        // Count window {2,3,4,5} (last 4 of 1..5). Under time weighting each of
+        // 2,3,4 was in effect for one 100ns interval; 5 is "now" (Δt = 0, so it
+        // is dropped). Weights {2:100, 3:100, 4:100} — cumulative crosses half
+        // (150) at 3, so the weighted median is 3.0 (vs the count median 3.5).
+        let med = counter().median(Window::Count(4), Weighting::Time);
+        med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med.peek_value() - 3.0).abs() < 1e-10);
+
+        // Same samples, count weighting: median{2,3,4,5} = (3 + 4) / 2 = 3.5.
+        let med_c = counter().median(Window::Count(4), Weighting::Count);
+        med_c
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med_c.peek_value() - 3.5).abs() < 1e-10);
+    }
+
+    // ── cumulative (unbounded window) ────────────────────────────────────────
+
+    #[test]
+    fn cumulative_sum_min_max() {
+        // Over 1,2,3,4,5: running sum 15, min 1, max 5.
+        let s = counter().sum(Window::Unbounded);
+        let mn = counter()
+            .map(|n: u64| 6 - n) // 5,4,3,2,1 — min must keep falling
+            .min(Window::Unbounded);
+        let mx = counter().max(Window::Unbounded);
+        s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        mn.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        mx.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((s.peek_value() - 15.0).abs() < 1e-10);
+        assert!((mn.peek_value() - 1.0).abs() < 1e-10);
+        assert!((mx.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn cumulative_median_over_all_samples() {
+        // Median of every sample seen so far: over 1,2,3,4,5 the middle is 3.0.
+        let med = counter().median(Window::Unbounded, Weighting::Count);
+        med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med.peek_value() - 3.0).abs() < 1e-10);
+    }
+}

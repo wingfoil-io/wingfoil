@@ -32,6 +32,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](telemetry/) | Metrics export: [`prometheus`](telemetry/prometheus/) (pull-based scrape) and [`otlp`](telemetry/otlp/) (push to Grafana Alloy, Datadog, Honeycomb, etc.). |
 | [`augurs`](augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
+| [`statistics`](statistics/) | Streaming statistics toolkit — EWMA (per-tick and time-decayed), cumulative and rolling mean/variance/std/min/max/median, with count- and time-weighted variants over sample- and time-based windows. |
 
 ## Snippets
 
@@ -375,3 +376,27 @@ prices.augurs_seasons(AugursSeasonsConfig::new(240));
 ```
 
 [Full example.](augurs/)
+
+### Statistics
+
+Streaming numeric aggregations via the `StatisticsOperators` trait — no external service, but an explicit import (it lives under `adapters`, not the prelude). Every aggregate takes a `Window` — `Count(n)` (last `n` samples), `Time(duration)` (last `duration` of graph time), or `Unbounded` (cumulative) — so one method serves both rolling and cumulative; the moment operators also take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect):
+
+```rust,ignore
+use wingfoil::*;
+use wingfoil::adapters::statistics::*;
+
+// Exponential smoothing: per-tick alpha, or a time-based half-life.
+prices.ewma(EwmaSpan::PerTick(0.2));
+prices.ewma(EwmaSpan::HalfLife(Duration::from_secs(30)));
+
+// Cumulative mean — arithmetic vs time-weighted (TWAP).
+prices.mean(Window::Unbounded, Weighting::Count);
+prices.mean(Window::Unbounded, Weighting::Time);
+
+// Rolling over the last N samples, or the last N of graph time.
+prices.std(Window::Count(20), Weighting::Count);
+prices.median(Window::Count(20), Weighting::Time);
+prices.mean(Window::Time(Duration::from_secs(5)), Weighting::Time);
+```
+
+[Full example.](statistics/)

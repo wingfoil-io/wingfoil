@@ -34,6 +34,11 @@ pub mod postgres;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+/// Streaming statistics operators (EWMA, weighted moments, rolling windows).
+/// Pure-Rust with no external service, so it is always compiled; bring
+/// [`statistics::StatisticsOperators`] into scope with
+/// `use wingfoil::adapters::statistics::*` to use the fluent operators.
+pub mod statistics;
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "zmq")]
