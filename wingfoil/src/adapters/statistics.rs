@@ -90,14 +90,14 @@ pub enum Window {
 /// use std::time::Duration;
 ///
 /// let smoothed = ticker(Duration::from_millis(10)).count().ewma(EwmaSpan::PerTick(0.1));
-/// let twap = ticker(Duration::from_millis(10)).count().average(Weighting::Time);
+/// let twap = ticker(Duration::from_millis(10)).count().mean(Weighting::Time);
 /// ```
 pub trait StatisticsOperators<T: Element + ToPrimitive> {
-    /// Cumulative average of source.  [`Weighting::Count`] is the arithmetic
+    /// Cumulative mean of source.  [`Weighting::Count`] is the arithmetic
     /// mean of the samples; [`Weighting::Time`] is the time-weighted average,
     /// each value weighted by how long it was in effect.
     #[must_use]
-    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    fn mean(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>;
     /// Cumulative variance of source.  [`Weighting::Count`] is the sample
     /// variance (ddof = 1); [`Weighting::Time`] is the time-weighted
     /// (population) variance.  Yields `0.0` until enough data is present.
@@ -145,7 +145,7 @@ pub trait StatisticsOperators<T: Element + ToPrimitive> {
 }
 
 impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T> {
-    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+    fn mean(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>> {
         MomentStream::new(self.clone(), Moment::Mean, weighting).into_stream()
     }
 
@@ -756,20 +756,20 @@ mod tests {
     // ── Weighted mean / variance / std ───────────────────────────────────────
 
     #[test]
-    fn average_count_is_arithmetic_mean() {
+    fn mean_count_is_arithmetic_mean() {
         // 1,2,3,4,5 -> 3.0
-        let avg = counter().average(Weighting::Count);
+        let avg = counter().mean(Weighting::Count);
         avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
             .unwrap();
         assert!((avg.peek_value() - 3.0).abs() < 1e-10);
     }
 
     #[test]
-    fn average_time_weighted_lags_by_one_interval() {
+    fn mean_time_weighted_lags_by_one_interval() {
         // Ticks are evenly spaced, so each of 1,2,3,4 is in effect for one
         // interval before the next; 5 has not yet been credited.
         // TWA = (1+2+3+4)/4 = 2.5 (vs count mean 3.0).
-        let avg = counter().average(Weighting::Time);
+        let avg = counter().mean(Weighting::Time);
         avg.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
             .unwrap();
         assert!((avg.peek_value() - 2.5).abs() < 1e-10);

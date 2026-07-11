@@ -203,9 +203,7 @@ impl PyStream {
     }
 
     fn average(&self) -> PyStream {
-        self.extract::<f64>()
-            .average(Weighting::Count)
-            .as_py_stream()
+        self.extract::<f64>().mean(Weighting::Count).as_py_stream()
     }
 
     fn buffer(&self, capacity: usize) -> PyStream {

@@ -390,8 +390,8 @@ prices.ewma(EwmaSpan::PerTick(0.2));
 prices.ewma(EwmaSpan::HalfLife(Duration::from_secs(30)));
 
 // Cumulative mean — arithmetic vs time-weighted (TWAP).
-prices.average(Weighting::Count);
-prices.average(Weighting::Time);
+prices.mean(Weighting::Count);
+prices.mean(Weighting::Time);
 
 // Rolling over the last N samples, or the last N of graph time.
 prices.rolling_std(Window::Count(20), Weighting::Count);

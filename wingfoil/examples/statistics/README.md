@@ -3,7 +3,7 @@
 Demonstrates the `StatisticsOperators` trait — streaming numeric aggregations
 that chain onto any `Stream<T: ToPrimitive>` and emit `f64`. It covers
 exponential smoothing (`ewma`, taking an `EwmaSpan` of `PerTick` or `HalfLife`),
-cumulative moments (`average`, `variance`, `std`), and rolling operators
+cumulative moments (`mean`, `variance`, `std`), and rolling operators
 (`rolling_mean`/`std`/`min`/`max`/`median`/`sum`). Each rolling operator takes a
 `Window` — `Count(n)` (the last `n` samples) or `Time(duration)` (the last
 `duration` of graph time) — mirroring how `ewma` takes an `EwmaSpan`. Every
@@ -42,7 +42,7 @@ fn main() {
         price.rolling_std(Window::Count(10), Weighting::Count),
         price.rolling_min(Window::Count(10)),
         price.rolling_max(Window::Count(10)),
-        price.average(Weighting::Time),
+        price.mean(Weighting::Time),
     ];
 
     // Header first, then stream: `combine` collects the columns (in order) into

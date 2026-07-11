@@ -35,7 +35,7 @@ fn main() {
         price.rolling_std(Window::Count(10), Weighting::Count),
         price.rolling_min(Window::Count(10)),
         price.rolling_max(Window::Count(10)),
-        price.average(Weighting::Time),
+        price.mean(Weighting::Time),
     ];
 
     // Header first, then stream: `combine` collects the columns (in order) into
