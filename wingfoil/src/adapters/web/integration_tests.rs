@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::*;
-use crate::nodes::{NodeOperators, StreamOperators, constant, ticker};
+use crate::nodes::{NodeOperators, RunParams, StreamOperators, constant, produce_async, ticker};
 use crate::types::*;
 use crate::{RunFor, RunMode};
 
@@ -177,6 +177,8 @@ fn test_pub_round_trip_bincode() -> anyhow::Result<()> {
         assert_eq!(env.topic, "tick");
         assert!(env.time_ns >= last, "time_ns should be monotonic");
         last = env.time_ns;
+        // A scalar upstream serializes as a scalar payload; the client
+        // treats it as a one-element burst.
         let value: u64 = codec.decode(&env.payload)?;
         assert!(value >= 1);
     }
@@ -268,6 +270,197 @@ fn test_pub_round_trip_json() -> anyhow::Result<()> {
     assert_eq!(env.topic, "answer");
     let decoded: u32 = codec.decode(&env.payload)?;
     assert_eq!(decoded, 42);
+    Ok(())
+}
+
+/// A historical-mode graph served through a real (`start()`) server must
+/// stream every value to a connected client in order, then emit a
+/// `Complete` control frame when the replay ends. This is the core
+/// "stream a backtest / slow computation to the browser" path.
+#[test]
+fn test_historical_streaming_completes() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    assert!(!server.is_historical_noop());
+    let port = server.port();
+    let codec = server.codec();
+
+    // Client thread: subscribe, then collect topic frames until a
+    // `Complete { topic }` control frame arrives (or timeout).
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || -> anyhow::Result<(Vec<u64>, bool)> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(port).await?;
+            send_control(
+                &mut socket,
+                codec,
+                ControlMessage::Subscribe {
+                    topics: vec!["hist".to_string()],
+                },
+            )
+            .await?;
+            ready_tx.send(()).ok();
+
+            let mut values = Vec::new();
+            let mut completed = false;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                let env = match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    recv_envelope(&mut socket, codec),
+                )
+                .await
+                {
+                    Ok(Ok(env)) => env,
+                    Ok(Err(_)) | Err(_) => break,
+                };
+                if env.topic == "hist" {
+                    values.push(codec.decode::<u64>(&env.payload)?);
+                } else if env.topic == CONTROL_TOPIC
+                    && let ControlMessage::Complete { topic } = codec.decode(&env.payload)?
+                {
+                    assert_eq!(topic, "hist");
+                    completed = true;
+                    break;
+                }
+            }
+            Ok((values, completed))
+        })
+    });
+
+    ready_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("client failed to subscribe");
+
+    // 50 values, well under the broadcast buffer, so a loopback client
+    // receives every one with no loss.
+    ticker(Duration::from_millis(10))
+        .count()
+        .web_pub(&server, "hist")
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(50))?;
+
+    let (values, completed) = handle.join().expect("client thread panic")?;
+    assert!(
+        completed,
+        "expected a Complete control frame at end of replay"
+    );
+    assert_eq!(
+        values,
+        (1..=50).collect::<Vec<u64>>(),
+        "every historical frame should arrive in order"
+    );
+    Ok(())
+}
+
+/// Publishing a `Stream<Burst<T>>` puts the whole same-`time_ns` group on
+/// the wire as one array frame — atomic, so a lossy drop can never split a
+/// timestamp. The client sees `[1, 2]` at t=100 and `[3]` at t=200.
+#[test]
+fn test_burst_stream_publishes_atomic_arrays() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    // Client: collect each "burst" frame's decoded array until Complete.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || -> anyhow::Result<Vec<Vec<u32>>> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(port).await?;
+            send_control(
+                &mut socket,
+                codec,
+                ControlMessage::Subscribe {
+                    topics: vec!["burst".to_string()],
+                },
+            )
+            .await?;
+            ready_tx.send(()).ok();
+
+            let mut frames: Vec<Vec<u32>> = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                let env = match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    recv_envelope(&mut socket, codec),
+                )
+                .await
+                {
+                    Ok(Ok(env)) => env,
+                    Ok(Err(_)) | Err(_) => break,
+                };
+                if env.topic == "burst" {
+                    // A same-time burst decodes to a whole array in one frame.
+                    frames.push(codec.decode::<Vec<u32>>(&env.payload)?);
+                } else if env.topic == CONTROL_TOPIC
+                    && matches!(codec.decode(&env.payload)?, ControlMessage::Complete { .. })
+                {
+                    break;
+                }
+            }
+            Ok(frames)
+        })
+    });
+
+    ready_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("client failed to subscribe");
+
+    // Two values at t=100 (grouped into one Burst) and one at t=200.
+    // `Burst<T>` isn't serializable, so map it to a `Vec<T>` — the wire
+    // array the client surfaces as the same-time group.
+    let bursts: Rc<dyn Stream<Burst<u32>>> = produce_async(|_ctx: RunParams| async move {
+        Ok(async_stream::stream! {
+            yield Ok((NanoTime::new(100), 1u32));
+            yield Ok((NanoTime::new(100), 2u32));
+            yield Ok((NanoTime::new(200), 3u32));
+        })
+    });
+    let source = bursts.map(|b: Burst<u32>| b.to_vec());
+    web_pub(&server, "burst", &source)
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+
+    let frames = handle.join().expect("client thread panic")?;
+    assert_eq!(
+        frames,
+        vec![vec![1u32, 2], vec![3]],
+        "same-time values must arrive as one atomic array frame"
+    );
+    Ok(())
+}
+
+/// A live (`start()`) server driving a graph in `RunMode::HistoricalFrom`
+/// must run to completion even when a `web_sub` node is present: live
+/// browser input has no place in a deterministic replay, so `web_sub`
+/// yields an empty source rather than blocking the run waiting for frames.
+#[test]
+fn test_historical_web_sub_does_not_block() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    assert!(!server.is_historical_noop());
+
+    let pub_node = ticker(Duration::from_millis(10))
+        .count()
+        .web_pub(&server, "out");
+    let sub_stream: Rc<dyn Stream<Burst<UiClick>>> = web_sub(&server, "in");
+    let collected = sub_stream.collect();
+
+    // If `web_sub` blocked on its listener this would hang; a bounded
+    // `RunFor` plus a wall-clock guard turns a regression into a failure.
+    let mut graph = crate::Graph::new(
+        vec![pub_node, collected.clone()],
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(20),
+    );
+    let start = Instant::now();
+    graph.run()?;
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "historical run with web_sub should not block"
+    );
+    assert!(
+        collected.peek_value().is_empty(),
+        "web_sub must not tick in historical mode"
+    );
     Ok(())
 }
 

@@ -22,7 +22,16 @@ use crate::types::*;
 ///
 /// Returns a source [`Stream`] of `Burst<T>`, decoded with the server's
 /// configured codec (bincode or JSON). Decoding errors surface as graph
-/// errors. In historical mode the stream never ticks.
+/// errors.
+///
+/// The stream never ticks in historical mode — whether the server is a
+/// [`start_historical`](super::WebServerBuilder::start_historical) no-op
+/// *or* a live server driving a graph in
+/// [`RunMode::HistoricalFrom`]. Live browser input has no place in a
+/// deterministic replay, and an open listener would block the historical
+/// run waiting for frames that never come; so `web_sub` yields an empty,
+/// immediately-ending stream. A historical `web_pub` still streams its
+/// output to the browser as usual.
 #[must_use]
 pub fn web_sub<T: Element + Send + DeserializeOwned>(
     server: &WebServer,
@@ -34,7 +43,7 @@ pub fn web_sub<T: Element + Send + DeserializeOwned>(
 
     // Register the mpsc listener at construction time so frames arriving
     // before the graph starts are buffered up to the mpsc capacity rather
-    // than dropped.
+    // than dropped. Skipped for a no-op server, which has no live socket.
     let rx_opt = if historical {
         None
     } else {
@@ -43,8 +52,14 @@ pub fn web_sub<T: Element + Send + DeserializeOwned>(
         Some(rx)
     };
 
-    produce_async(move |_ctx: RunParams| async move {
+    produce_async(move |ctx: RunParams| async move {
         Ok(async_stream::stream! {
+            // A historical run replays deterministically from its sources;
+            // an open client listener would never yield and would block the
+            // run from completing, so treat web_sub as an empty source here.
+            if matches!(ctx.run_mode, crate::RunMode::HistoricalFrom(_)) {
+                return;
+            }
             let Some(mut rx) = rx_opt else { return; };
             while let Some(payload) = rx.recv().await {
                 match codec.decode::<T>(&payload) {

@@ -74,10 +74,26 @@
 //!
 //! # Historical mode
 //!
-//! The server exposes [`WebServerBuilder::start_historical`] for use in
-//! `RunMode::HistoricalFrom` runs. No TCP port is bound and all
-//! publishes / subscribes become no-ops, so the same graph can run
-//! under both real-time and historical modes without modification.
+//! There are two ways to run a graph under `RunMode::HistoricalFrom`:
+//!
+//! - **Stream the replay to browsers** — use the normal
+//!   [`WebServerBuilder::start`]. `web_pub` streams a historical replay's
+//!   values out exactly as it does in real time, which is what powers
+//!   browser-side visualisation of a backtest or slow computation. When
+//!   the source ends, subscribed clients receive a
+//!   [`ControlMessage::Complete`] end-of-stream marker (surfaced by
+//!   `@wingfoil/client` as `onComplete`). `web_sub` yields an empty source
+//!   in historical mode — live browser input has no place in a
+//!   deterministic replay.
+//! - **No server at all** — use [`WebServerBuilder::start_historical`],
+//!   which binds no TCP port and makes both `web_pub` and `web_sub`
+//!   no-ops, so a backtest that does not want a server can run the same
+//!   graph unmodified.
+//!
+//! Streaming clients never back-pressure the graph: a client that cannot
+//! keep up drops frames (the broadcast buffer is lossy). For a faithful,
+//! loss-free replay, keep the graph from outrunning the client — e.g. a
+//! genuinely compute-bound historical run.
 
 mod codec;
 mod read;

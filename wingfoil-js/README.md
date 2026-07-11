@@ -37,6 +37,53 @@ client.subscribe("price", (value, timeNs) => {
 client.publish("ui", { kind: "click", note: "hi" });
 ```
 
+### Bursts
+
+A frame's payload can be a **burst** — several values that share one
+`timeNs`. A scalar payload (a number or struct) is treated as a
+one-element burst; a payload that decodes to an **array** is the whole
+group. (A wingfoil graph produces a group by publishing a `Stream<Vec<T>>`
+— e.g. `web_sub`'s `Burst<T>` mapped to `Vec<T>`.)
+
+`subscribe` collapses the burst to its latest value (the right default for
+"show the current value"). When you must not drop same-timestamp values —
+e.g. appending every point to a chart — subscribe to the whole burst:
+
+```ts
+client.subscribeBurst("price", (values, timeNs) => {
+  for (const v of values) series.push(v);   // values: T[]
+});
+```
+
+## Streaming historical data (backtests / slow computations)
+
+The same client works for a graph running in historical mode
+(`RunMode::HistoricalFrom`) served over a normal `WebServer::…start()` —
+a backtest or slow computation streams its `web_pub` output to the browser
+frame-by-frame, so you can watch a replay unfold. Two things differ from a
+live feed:
+
+- **End-of-stream.** When a historical replay reaches the end of its
+  source, the server sends a `Complete` control frame. Observe it with
+  `onComplete` to render "replay finished" and stop any progress UI:
+
+  ```ts
+  client.onComplete((topic) => {
+    console.log(`stream ${topic} finished`);
+  });
+  ```
+
+- **No reconnect loop.** A finished replay must not reconnect against a
+  server that has intentionally shut down. Once the client sees a
+  `Complete` frame — or the server closes with a normal code (1000 / 1001)
+  — it treats the session as done and stops reconnecting, regardless of
+  `reconnectMs`. Only an abnormal drop (e.g. 1006) still retries.
+
+Streaming clients are lossy and never back-pressure the graph, so a
+loss-free replay depends on the graph not outrunning the client (a
+genuinely compute-bound historical run is the natural fit). See
+`wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
+
 ## Latency tracing
 
 For UIs that drive a wingfoil server using the `Traced<T, L>` /
@@ -105,6 +152,10 @@ Solid's fine-grained signals are the recommended default for kHz+
 streams — signal writes are cheap and paints coalesce to rAF, so
 high-frequency data drives UI without per-frame DOM thrash.
 
+`useTopic` surfaces the latest value; `useTopicBurst` surfaces the whole
+same-`timeNs` burst (`Accessor<T[] | undefined>`) when you need every
+value — e.g. appending each point of a historical replay to a chart.
+
 ### Svelte
 
 ```svelte
@@ -167,3 +218,14 @@ Every WebSocket frame is binary — either a `bincode`-serialized
 (if the server was started with `.codec(CodecKind::Json)`). The
 `wingfoil-wasm` decoder handles both without any user configuration
 other than the codec hint passed to `WingfoilClient`.
+
+The payload is the stream's value serialized by the codec. A scalar is a
+single value; a value that decodes to an array is surfaced as a
+same-`timeNs` **burst** (the client collapses it for `subscribe` and passes
+it whole to `subscribeBurst`). Client → server frames carry a single value.
+
+The control plane (topic `$ctrl`) carries `Hello` on connect, `Subscribe`
+/ `Unsubscribe` from the client, and `Complete { topic }` from the server
+when a publish topic's stream ends (wire protocol version 2). `Complete`
+was appended to the message enum, so a version-1 server that never sends
+it stays compatible — the client simply never fires `onComplete`.
