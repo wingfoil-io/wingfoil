@@ -635,7 +635,7 @@ impl Graph {
                     continue;
                 }
             } else {
-                let progressed = self.process_callbacks_historical();
+                let progressed = self.process_callbacks_historical()?;
                 if !progressed {
                     debug!("Terminating early.");
                     break;
@@ -834,9 +834,16 @@ impl Graph {
         progressed
     }
 
-    fn process_callbacks_historical(&mut self) -> bool {
+    fn process_callbacks_historical(&mut self) -> anyhow::Result<bool> {
         if !self.state.ready_callbacks.is_empty() {
-            panic!("ready_callbacks are not supported in historical mode.");
+            // A ready-callback comes from a real-time/threaded source (via
+            // `ReadyNotifier`), which has no place in a deterministic historical
+            // replay. This is a wiring error, so surface it through `run()`
+            // rather than aborting the process.
+            anyhow::bail!(
+                "ready callbacks are not supported in historical mode: a real-time \
+                 or threaded source was wired into a `RunMode::HistoricalFrom` run"
+            );
         }
         let has_scheduled = self.state.has_scheduled_callbacks();
         // An always-callback keeps the graph cycling every tick. Without a
@@ -860,7 +867,7 @@ impl Graph {
                 next.max(self.state.time + 1)
             };
         }
-        self.process_scheduled_callbacks()
+        Ok(self.process_scheduled_callbacks())
     }
 
     fn process_ready_callbacks(&mut self) -> bool {
@@ -1363,6 +1370,37 @@ mod tests {
         assert!(
             count.peek_value() >= 1,
             "always graph should have ticked and then terminated"
+        );
+    }
+
+    #[test]
+    fn ready_callbacks_in_historical_mode_error_not_panic() {
+        // A ready-callback belongs to a real-time/threaded source. Wiring one
+        // into a historical run must surface an error from run(), not abort the
+        // process with a panic.
+        struct ThreadedishSource;
+        impl MutableNode for ThreadedishSource {
+            fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+                Ok(false)
+            }
+            fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+                // Announce readiness as a threaded source would.
+                state.ready_notifier().notify()?;
+                Ok(())
+            }
+        }
+
+        let node = Rc::new(RefCell::new(ThreadedishSource));
+        let result = Graph::new(
+            vec![node.as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(3),
+        )
+        .run();
+        let err = result.expect_err("ready callbacks in historical mode must error");
+        assert!(
+            format!("{err:#}").contains("ready callbacks are not supported in historical mode"),
+            "unexpected error: {err:#}"
         );
     }
 
