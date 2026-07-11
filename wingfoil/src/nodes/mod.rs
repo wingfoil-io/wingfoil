@@ -407,7 +407,7 @@ pub trait StreamOperators<T: Element> {
     #[must_use]
     fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq;
+        T: PartialEq;
     /// executes supplied fallible closure on each tick.
     /// Errors propagate to graph execution.
     #[must_use]
@@ -431,7 +431,7 @@ pub trait StreamOperators<T: Element> {
     #[must_use]
     fn delay(self: &Rc<Self>, delay: Duration) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq;
+        T: PartialEq;
     /// Like [`delay`](StreamOperators::delay) but with a reset trigger.
     /// When the trigger fires, the output snaps to the current upstream value
     /// and the pending queue is cleared.
@@ -442,7 +442,7 @@ pub trait StreamOperators<T: Element> {
         trigger: Rc<dyn Node>,
     ) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq;
+        T: PartialEq;
     /// Demuxes its source into a Vec of n streams.
     fn demux<K, F>(
         self: &Rc<Self>,
@@ -674,7 +674,7 @@ where
 
     fn feedback(self: &Rc<Self>, sink: FeedbackSink<T>) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq,
+        T: PartialEq,
     {
         FeedbackSendStream::new(self.clone(), sink).into_stream()
     }
@@ -688,7 +688,7 @@ where
 
     fn delay(self: &Rc<Self>, duration: Duration) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq,
+        T: PartialEq,
     {
         DelayStream::new(self.clone(), NanoTime::new(duration.as_nanos() as u64)).into_stream()
     }
@@ -699,7 +699,7 @@ where
         trigger: Rc<dyn Node>,
     ) -> Rc<dyn Stream<T>>
     where
-        T: Hash + Eq,
+        T: PartialEq,
     {
         DelayWithResetStream::new(
             self.clone(),

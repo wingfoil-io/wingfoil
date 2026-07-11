@@ -1,5 +1,3 @@
-use std::cmp::Eq;
-use std::hash::Hash;
 use std::rc::Rc;
 
 use crate::queue::TimeQueue;
@@ -8,7 +6,7 @@ use derive_new::new;
 
 /// Emits it's source delayed by the specified time
 #[derive(new)]
-pub(crate) struct DelayStream<T: Element + Hash + Eq> {
+pub(crate) struct DelayStream<T: Element + PartialEq> {
     #[new(default)]
     value: T,
     #[new(default)]
@@ -24,7 +22,7 @@ pub(crate) struct DelayStream<T: Element + Hash + Eq> {
 }
 
 #[node(active = [upstream], output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for DelayStream<T> {
+impl<T: Element + PartialEq> MutableNode for DelayStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         if self.delay == NanoTime::ZERO {
             // just tick on this cycle
@@ -117,6 +115,34 @@ mod tests {
         graph.run().unwrap();
         assert_eq!(expected_source, captured_source.peek_value());
         assert_eq!(expected_delayed, captured_delayed.peek_value());
+    }
+
+    #[test]
+    fn delay_works_on_non_eq_values() {
+        // f64 is neither `Hash` nor `Eq`, so this did not compile while the
+        // TimeQueue backing required those bounds. It must now delay floats.
+        let source = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|c: u64| c as f64 * 1.5);
+        let delayed = source.delay(Duration::from_nanos(10)).collect();
+        delayed
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let expected = vec![
+            ValueAt {
+                value: 1.5,
+                time: NanoTime::new(10),
+            },
+            ValueAt {
+                value: 3.0,
+                time: NanoTime::new(110),
+            },
+            ValueAt {
+                value: 4.5,
+                time: NanoTime::new(210),
+            },
+        ];
+        assert_eq!(expected, delayed.peek_value());
     }
 
     #[test]

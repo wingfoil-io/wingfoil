@@ -1,6 +1,3 @@
-use std::cmp::Eq;
-use std::hash::Hash;
-
 use crate::queue::{TimeQueue, ValueAt};
 use crate::types::*;
 
@@ -10,7 +7,7 @@ use derive_new::new;
 /// unit tests.  Can also be used to feed stream output back into
 /// the [Graph](crate::graph::Graph) as input on later cycles.
 #[derive(new)]
-pub struct CallBackStream<T: Element + Hash + Eq> {
+pub struct CallBackStream<T: Element + PartialEq> {
     #[new(default)]
     value: T,
     #[new(default)]
@@ -18,7 +15,7 @@ pub struct CallBackStream<T: Element + Hash + Eq> {
 }
 
 #[node(output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
+impl<T: Element + PartialEq> MutableNode for CallBackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
         while let Some(value) = self.queue.pop_if_pending(state.time()) {
@@ -39,7 +36,7 @@ impl<T: Element + Hash + Eq> MutableNode for CallBackStream<T> {
     }
 }
 
-impl<T: Element + Hash + Eq> CallBackStream<T> {
+impl<T: Element + PartialEq> CallBackStream<T> {
     pub fn push(&mut self, value_at: ValueAt<T>) {
         self.queue.push(value_at.value, value_at.time)
     }

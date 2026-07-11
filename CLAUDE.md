@@ -108,6 +108,20 @@ All three must pass without errors before creating a commit.
 - **Passive** upstreams are read but don't trigger execution
 - Graph executes breadth-first from source nodes
 
+### `TimeQueue` deduplicates by design — don't "fix" it
+
+`queue::TimeQueue<T>` (backs the graph scheduler, `feedback`, `delay`, and
+`CallBackStream`) **intentionally suppresses duplicate `(value, time)` pairs**:
+pushing a `(value, time)` already queued is a no-op. This is a feature, not a
+bug — e.g. a node scheduled for the same instant twice, or the same feedback
+value sent twice in one cycle, must collapse to a single event. Do not remove
+duplicate suppression.
+
+Because dedup only needs equality (not hashing), the bound is `T: PartialEq`,
+**not** `Hash + Eq`. That is deliberate: it lets `f64` (and other float payloads,
+which implement `PartialEq` but neither `Hash` nor `Eq`) flow through `delay`,
+`feedback`, and `CallBackStream`. Keep the bound at `PartialEq`.
+
 ### Custom Nodes
 
 Use the `#[node]` attribute macro on `impl MutableNode` to generate `upstreams()` and `StreamPeekRef`:

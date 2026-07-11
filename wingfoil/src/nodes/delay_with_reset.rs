@@ -1,5 +1,3 @@
-use std::cmp::Eq;
-use std::hash::Hash;
 use std::rc::Rc;
 
 use crate::queue::TimeQueue;
@@ -10,7 +8,7 @@ use derive_new::new;
 /// When the trigger fires, the output snaps to the current upstream value and
 /// the pending queue is cleared.
 #[derive(new)]
-pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
+pub(crate) struct DelayWithResetStream<T: Element + PartialEq> {
     #[new(default)]
     value: T,
     #[new(default)]
@@ -29,7 +27,7 @@ pub(crate) struct DelayWithResetStream<T: Element + Hash + Eq> {
 }
 
 #[node(active = [upstream, trigger], output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for DelayWithResetStream<T> {
+impl<T: Element + PartialEq> MutableNode for DelayWithResetStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let trigger_index = *self.trigger_index.get_or_insert_with(|| {
             state
