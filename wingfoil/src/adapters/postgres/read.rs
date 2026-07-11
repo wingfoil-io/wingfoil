@@ -123,7 +123,10 @@ where
             let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
                 .await
                 .with_context(|| {
-                    format!("postgres_read: failed to connect: {}", connection.conn_str)
+                    format!(
+                        "postgres_read: failed to connect: {}",
+                        connection.redacted()
+                    )
                 })?;
             // Drive the connection's protocol handling in the background; it ends
             // when `client` is dropped after the stream is exhausted.

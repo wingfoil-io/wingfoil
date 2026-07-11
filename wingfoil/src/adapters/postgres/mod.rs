@@ -178,6 +178,31 @@ impl PostgresConnection {
             conn_str: conn_str.into(),
         }
     }
+
+    /// Render the connection string with the `password` value masked, for safe
+    /// inclusion in error messages and logs.
+    ///
+    /// libpq connection strings are space-separated `key=value` pairs, so the
+    /// `password=...` token is replaced with `password=***` while every other
+    /// field is preserved. A value has no way to contain an unescaped space, so
+    /// splitting on whitespace is sufficient.
+    #[must_use]
+    pub fn redacted(&self) -> String {
+        self.conn_str
+            .split_whitespace()
+            .map(|kv| {
+                if kv
+                    .split_once('=')
+                    .is_some_and(|(k, _)| k.eq_ignore_ascii_case("password"))
+                {
+                    "password=***"
+                } else {
+                    kv
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 impl From<&str> for PostgresConnection {
@@ -206,6 +231,31 @@ mod tests {
     fn test_connection_new() {
         let conn = PostgresConnection::new("host=x".to_string());
         assert_eq!(conn.conn_str, "host=x");
+    }
+
+    #[test]
+    fn test_redacted_masks_password() {
+        let conn = PostgresConnection::new(
+            "host=localhost port=5432 user=postgres password=s3cr3t dbname=postgres",
+        );
+        let out = conn.redacted();
+        assert!(!out.contains("s3cr3t"), "password leaked: {out}");
+        assert_eq!(
+            out,
+            "host=localhost port=5432 user=postgres password=*** dbname=postgres"
+        );
+    }
+
+    #[test]
+    fn test_redacted_is_case_insensitive() {
+        let conn = PostgresConnection::new("host=x PassWord=hunter2");
+        assert_eq!(conn.redacted(), "host=x password=***");
+    }
+
+    #[test]
+    fn test_redacted_noop_without_password() {
+        let conn = PostgresConnection::new("host=localhost dbname=db");
+        assert_eq!(conn.redacted(), "host=localhost dbname=db");
     }
 
     #[test]
