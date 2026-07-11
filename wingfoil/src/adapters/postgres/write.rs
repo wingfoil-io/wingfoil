@@ -66,7 +66,12 @@ where
 {
     let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
         .await
-        .with_context(|| format!("postgres_write: failed to connect: {}", connection.conn_str))?;
+        .with_context(|| {
+            format!(
+                "postgres_write: failed to connect: {}",
+                connection.redacted()
+            )
+        })?;
     tokio::spawn(async move {
         if let Err(e) = conn.await {
             log::error!("postgres connection error: {e}");
