@@ -8,7 +8,9 @@ use std::rc::Rc;
 pub(crate) struct DistinctStream<T: Element> {
     source: Rc<dyn Stream<T>>, // the source stream
     #[new(default)] // used by derive_new
-    value: T,
+    value: T, // the output — the last emitted value
+    #[new(default)]
+    last: Option<T>, // last seen value; None until the first cycle
 }
 
 #[node(active = [source], output = value: T)]
@@ -17,11 +19,16 @@ impl<T: Element + PartialEq> MutableNode for DistinctStream<T> {
     // to be cycled
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let curr = self.source.peek_value();
-        if self.value == curr {
+        // Emit the first value, then only when it changes. `last` is an
+        // `Option` rather than comparing against the `T::default()`-initialised
+        // output, so a genuine first value that happens to equal the default
+        // (`0`, `""`, `false`, …) still ticks instead of being swallowed.
+        if self.last.as_ref() == Some(&curr) {
             // value did not change, do not tick
             Ok(false)
         } else {
-            // value changed, tick
+            // first value or a changed value, tick
+            self.last = Some(curr.clone());
             self.value = curr;
             Ok(true)
         }
@@ -48,6 +55,24 @@ mod tests {
             .unwrap();
         let values: Vec<u64> = distinct.peek_value().iter().map(|v| v.value).collect();
         assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn emits_initial_value_equal_to_default() {
+        // Source sequence is 0,0,1,1,2,2 — the first value (0) equals T::default().
+        // It must still emit; distinct then suppresses the repeats: 0, 1, 2.
+        // (The previous implementation compared against a default-initialised
+        // output and swallowed the leading 0.)
+        let distinct = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|x: u64| (x - 1) / 2) // count 1..6 → 0,0,1,1,2,2
+            .distinct()
+            .collect();
+        distinct
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let values: Vec<u64> = distinct.peek_value().iter().map(|v| v.value).collect();
+        assert_eq!(values, vec![0, 1, 2]);
     }
 
     #[test]
