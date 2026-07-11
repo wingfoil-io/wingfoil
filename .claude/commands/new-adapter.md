@@ -743,7 +743,10 @@ cargo run --example $ARGUMENTS --features $ARGUMENTS
 
 ### Register in the examples index
 
-The "Core concepts" / "I/O adapters" tables live in **two** files:
+The example-index tables live in **two** files. The adapters table is headed
+**`### Adapters`** in the top-level `/README.md` and **`## I/O adapters`** in
+`wingfoil/examples/README.md` — the two files use different headings, so match
+whichever one the file already has:
 
 - `/README.md` (top-level project README) — tables only, with absolute
   `https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/...`
@@ -751,17 +754,22 @@ The "Core concepts" / "I/O adapters" tables live in **two** files:
 - `wingfoil/examples/README.md` — same tables with relative links, plus
   per-adapter snippet sections lower down.
 
+Every adapter goes in the adapters table — including pure-compute / analytics
+adapters that do no external I/O (e.g. `augurs`, which lives under
+`wingfoil/src/adapters/`). Do **not** move an adapter into "Core concepts"
+just because it performs no I/O; that table is reserved for framework-mechanic
+examples (BFS execution, run modes, async edges, threading, dynamic graphs).
+
 Three edits are required:
 
-1. **Add a row to the "I/O adapters" table in `/README.md`** (or "Core
-   concepts" if the example is not an I/O adapter). Use an **absolute**
-   GitHub URL. Keep the description to one line:
+1. **Add a row to the `### Adapters` table in `/README.md`.** Use an
+   **absolute** GitHub URL. Keep the description to one line:
 
    ```markdown
    | [`$ARGUMENTS`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/$ARGUMENTS/) | <one-line description — what the adapter does and what the example demonstrates>. |
    ```
 
-2. **Add the same row to the "I/O adapters" table in
+2. **Add the same row to the `## I/O adapters` table in
    `wingfoil/examples/README.md`** with a **relative** link:
 
    ```markdown
