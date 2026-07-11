@@ -1,6 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::cmp::Eq;
-use std::hash::Hash;
 use std::rc::Rc;
 
 use crate::queue::TimeQueue;
@@ -9,14 +7,14 @@ use crate::types::*;
 /// Source end of a [feedback] channel. Has no upstreams so the graph
 /// sees no cycle. Values pushed by the paired [FeedbackSink] are
 /// emitted on the next engine cycle.
-pub(crate) struct FeedbackStream<T: Element + Hash + Eq> {
+pub(crate) struct FeedbackStream<T: Element + PartialEq> {
     value: T,
     queue: Rc<RefCell<TimeQueue<T>>>,
     node_id: Rc<Cell<Option<usize>>>,
 }
 
 #[node(output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
+impl<T: Element + PartialEq> MutableNode for FeedbackStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         let mut ticked = false;
         while let Some(value) = self.queue.borrow_mut().pop_if_pending(state.time()) {
@@ -36,12 +34,12 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackStream<T> {
 /// into closures. Calling [send](FeedbackSink::send) pushes a value
 /// onto the shared queue and schedules the paired source stream to
 /// cycle.
-pub struct FeedbackSink<T: Element + Hash + Eq> {
+pub struct FeedbackSink<T: Element + PartialEq> {
     queue: Rc<RefCell<TimeQueue<T>>>,
     node_id: Rc<Cell<Option<usize>>>,
 }
 
-impl<T: Element + Hash + Eq> Clone for FeedbackSink<T> {
+impl<T: Element + PartialEq> Clone for FeedbackSink<T> {
     fn clone(&self) -> Self {
         Self {
             queue: self.queue.clone(),
@@ -50,7 +48,7 @@ impl<T: Element + Hash + Eq> Clone for FeedbackSink<T> {
     }
 }
 
-impl<T: Element + Hash + Eq> FeedbackSink<T> {
+impl<T: Element + PartialEq> FeedbackSink<T> {
     /// Push a value and schedule the paired source stream to cycle.
     pub fn send(&self, value: T, state: &mut GraphState) {
         let time = state.time() + 1;
@@ -66,13 +64,13 @@ impl<T: Element + Hash + Eq> FeedbackSink<T> {
 /// Pass-through node that forwards upstream values unchanged while also sending
 /// each value to a [FeedbackSink] as a side effect. Created by
 /// [StreamOperators::feedback].
-pub(crate) struct FeedbackSendStream<T: Element + Hash + Eq> {
+pub(crate) struct FeedbackSendStream<T: Element + PartialEq> {
     upstream: Rc<dyn Stream<T>>,
     value: T,
     sink: FeedbackSink<T>,
 }
 
-impl<T: Element + Hash + Eq> FeedbackSendStream<T> {
+impl<T: Element + PartialEq> FeedbackSendStream<T> {
     pub fn new(upstream: Rc<dyn Stream<T>>, sink: FeedbackSink<T>) -> Self {
         Self {
             upstream,
@@ -83,7 +81,7 @@ impl<T: Element + Hash + Eq> FeedbackSendStream<T> {
 }
 
 #[node(active = [upstream], output = value: T)]
-impl<T: Element + Hash + Eq> MutableNode for FeedbackSendStream<T> {
+impl<T: Element + PartialEq> MutableNode for FeedbackSendStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
         self.value = self.upstream.peek_value();
         self.sink.send(self.value.clone(), state);
@@ -111,7 +109,7 @@ impl<T: Element + Hash + Eq> MutableNode for FeedbackSendStream<T> {
 /// // writer is Rc<dyn Stream<u64>> — values pass through, feedback is a side effect
 /// ```
 #[must_use]
-pub fn feedback<T: Element + Hash + Eq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>) {
+pub fn feedback<T: Element + PartialEq>() -> (FeedbackSink<T>, Rc<dyn Stream<T>>) {
     let queue = Rc::new(RefCell::new(TimeQueue::new()));
     let node_id = Rc::new(Cell::new(None));
     let stream = FeedbackStream {
