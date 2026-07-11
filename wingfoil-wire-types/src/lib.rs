@@ -15,7 +15,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 /// Protocol version. Bumped when the wire format changes in a
 /// non-backwards-compatible way. Hello frames carry this value so clients
 /// and servers can reject mismatched peers early.
-pub const WIRE_PROTOCOL_VERSION: u16 = 1;
+///
+/// - `1` — initial `Hello` / `Subscribe` / `Unsubscribe` control plane.
+/// - `2` — adds [`ControlMessage::Complete`], sent when a publish topic's
+///   stream ends (e.g. a historical replay finishing). The new variant is
+///   appended, so `Hello` / `Subscribe` / `Unsubscribe` keep their wire
+///   representation; a v1 peer simply never emits or expects `Complete`.
+pub const WIRE_PROTOCOL_VERSION: u16 = 2;
 
 /// The dedicated topic name for control frames.
 pub const CONTROL_TOPIC: &str = "$ctrl";
@@ -23,9 +29,12 @@ pub const CONTROL_TOPIC: &str = "$ctrl";
 /// The envelope used for every binary WebSocket frame in both directions.
 ///
 /// Server → client: `time_ns` is the graph engine time when the value was
-/// produced; `payload` is the user type serialized by the active
-/// [`CodecKind`]. Client → server: `time_ns` is ignored (clients cannot set
-/// graph time); `payload` is the user type serialized by the active codec.
+/// produced; `payload` is that value serialized by the active [`CodecKind`].
+/// A scalar value is a single JSON/bincode value; a value that is itself a
+/// collection (e.g. a `Vec<T>` carrying a same-`time_ns` burst) serializes
+/// as an array, which the browser client surfaces as the whole group.
+/// Client → server: `time_ns` is ignored (clients cannot set graph time)
+/// and `payload` is a single user value serialized by the active codec.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Envelope {
     /// The topic this frame belongs to. Keep this short — it is sent on
@@ -34,7 +43,9 @@ pub struct Envelope {
     /// Graph time in nanoseconds since the UNIX epoch when the value was
     /// emitted. Zero for client-originated frames.
     pub time_ns: u64,
-    /// The serialized user value (or [`ControlMessage`] for the control topic).
+    /// The serialized user value (or [`ControlMessage`] on the control
+    /// topic). An array-valued payload is surfaced by the client as a
+    /// same-`time_ns` burst.
     pub payload: Vec<u8>,
 }
 
@@ -53,6 +64,16 @@ pub enum ControlMessage {
     Subscribe { topics: Vec<String> },
     /// Sent by the client to unsubscribe from one or more topics.
     Unsubscribe { topics: Vec<String> },
+    /// Sent by the server when a publish `topic`'s stream has ended and no
+    /// further frames will arrive on it — for example when a historical
+    /// replay (or any finite `RunFor`) reaches the end of its source.
+    ///
+    /// Delivered to every client currently subscribed to `topic`. It is a
+    /// clean end-of-stream marker: a client watching a historical replay
+    /// can use it to render "replay finished" and to stop reconnecting
+    /// (the server is done, not merely dropped). Real-time streams with an
+    /// unbounded `RunFor::Forever` source never emit it.
+    Complete { topic: String },
 }
 
 /// The serialization format used for envelope payloads and envelopes.

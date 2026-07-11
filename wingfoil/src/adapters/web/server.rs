@@ -415,8 +415,9 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                         }
                     }
                 }
-                ControlMessage::Hello { .. } => {
-                    // Clients sending Hello is unusual but harmless.
+                ControlMessage::Hello { .. } | ControlMessage::Complete { .. } => {
+                    // Server → client only. A client sending either is
+                    // unusual but harmless; ignore it.
                 }
             }
         } else {

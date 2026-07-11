@@ -42,10 +42,22 @@ web/
 - **Control plane on topic `"$ctrl"`**: `Hello { codec, version }` is sent by
   the server on upgrade; clients send `Subscribe { topics }` /
   `Unsubscribe { topics }` to manage forwarders.
-- **Historical-mode safety**: `WebServerBuilder::start_historical()` returns
-  a no-op server. Both `web_pub` and `web_sub` become no-ops so the same
-  graph can run in `RunMode::HistoricalFrom(...)` without touching the
-  network — mirrors `PrometheusMetricNode`'s `historical` flag.
+- **Historical modes**: two supported shapes.
+  - *Stream the replay* — a normal `start()` server drives a
+    `RunMode::HistoricalFrom` graph and `web_pub` streams the replay to
+    browsers just like real time (powers backtest / slow-computation
+    visualisation). When a `web_pub` source ends, subscribers get a
+    `ControlMessage::Complete { topic }` end-of-stream marker. `web_sub`
+    yields an empty source in historical **run mode** (checked via
+    `RunParams::run_mode`, not the server flag) — a live listener would
+    otherwise block the run waiting for frames that never come.
+  - *No server* — `WebServerBuilder::start_historical()` returns a no-op
+    server; both `web_pub` and `web_sub` become no-ops so a backtest that
+    does not want a server can run unmodified (mirrors
+    `PrometheusMetricNode`'s `historical` flag).
+  - Streaming clients stay lossy and never back-pressure the graph, so a
+    faithful loss-free replay depends on the graph not outrunning the
+    client (e.g. a compute-bound run).
 - **Optional TLS via the `web-tls` feature**. Adds a `.tls(cert, key)`
   builder method that loads PEM files synchronously at `start()` time
   (so a missing/malformed cert surfaces alongside bind errors, before
@@ -75,9 +87,19 @@ Every WebSocket binary frame is an `Envelope`:
 pub struct Envelope {
     pub topic: String,   // e.g. "order_book" or "$ctrl"
     pub time_ns: u64,    // graph engine time (0 for client → server frames)
-    pub payload: Vec<u8>, // bincode(T) or serde_json(T) of the user type
+    pub payload: Vec<u8>, // bincode/json of the stream's value
 }
 ```
+
+`web_pub` serializes each upstream value as-is (immediately, no batching).
+A scalar `T` is a single value; the browser client treats it as a
+one-element burst. A value that is itself a collection — publish a
+`Stream<Vec<T>>` (e.g. `web_sub`'s `Burst<T>` mapped to `Vec<T>`, since
+`Burst`/`TinyVec` isn't `Serialize`) — serializes as an **array**, which
+the client surfaces as the whole same-`time_ns` group: atomic on the wire,
+so a lossy drop can't split a timestamp. The client either collapses the
+group to its latest value (`subscribe`) or consumes it whole
+(`subscribeBurst`).
 
 Control topic `"$ctrl"` carries a `ControlMessage`:
 
@@ -86,8 +108,16 @@ pub enum ControlMessage {
     Hello { codec: CodecKind, version: u16 }, // server → client on upgrade
     Subscribe   { topics: Vec<String> },      // client → server
     Unsubscribe { topics: Vec<String> },      // client → server
+    Complete    { topic: String },            // server → client at end-of-stream
 }
 ```
+
+`WIRE_PROTOCOL_VERSION` is `2`: `Complete` was appended (kept the older
+variants' bincode indices), so a v1 peer keeps working — it simply never
+emits or expects `Complete`. `Complete` is broadcast on the finished
+publish topic's channel but addressed to `$ctrl`, so it reaches exactly
+the clients subscribed to that topic and is routed through their control
+handler.
 
 ## Pre-Commit Requirements
 

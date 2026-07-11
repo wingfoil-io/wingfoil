@@ -58,6 +58,35 @@ mod tests {
     }
 
     #[test]
+    fn control_message_complete_roundtrip() {
+        let ctrl = ControlMessage::Complete {
+            topic: "price".into(),
+        };
+        for codec in [CodecKind::Bincode, CodecKind::Json] {
+            let bytes = codec.encode(&ctrl).unwrap();
+            let back: ControlMessage = codec.decode(&bytes).unwrap();
+            assert_eq!(ctrl, back);
+        }
+    }
+
+    #[test]
+    fn control_message_existing_variants_keep_wire_layout() {
+        // `Complete` was appended after `Unsubscribe`, so the older
+        // variants must keep their bincode representation (variant index).
+        // A hardcoded byte check guards against an accidental reorder that
+        // would silently break v1 peers.
+        let hello = ControlMessage::Hello {
+            codec: CodecKind::Bincode,
+            version: 2,
+        };
+        let bytes = CodecKind::Bincode.encode(&hello).unwrap();
+        assert_eq!(bytes[0..4], [0, 0, 0, 0], "Hello must stay variant 0");
+        let sub = ControlMessage::Subscribe { topics: vec![] };
+        let bytes = CodecKind::Bincode.encode(&sub).unwrap();
+        assert_eq!(bytes[0..4], [1, 0, 0, 0], "Subscribe must stay variant 1");
+    }
+
+    #[test]
     fn bincode_rejects_corrupt_envelope() {
         let err = CodecKind::Bincode
             .decode::<Envelope>(&[0xFF; 4])

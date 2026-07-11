@@ -26,8 +26,38 @@ export interface Envelope {
   payload: Uint8Array;
 }
 
-/** Callback invoked for each decoded payload on a topic. */
+/**
+ * Callback invoked with the latest value of each frame's burst. A frame
+ * carries a *burst* — the values that share one `timeNs` — and the
+ * default `subscribe` collapses it to the last (latest) value, which is
+ * the right default for "show the current value". Use
+ * {@link WingfoilClient.subscribeBurst} to receive the whole group.
+ */
 export type TopicListener = (value: unknown, timeNs: bigint) => void;
+
+/**
+ * Callback invoked with the whole burst — every value that shares one
+ * `timeNs`. A scalar payload is a one-element burst; a graph that publishes
+ * a `Stream<Vec<T>>` sends several values at one timestamp as one frame.
+ */
+export type BurstListener = (values: unknown[], timeNs: bigint) => void;
+
+/**
+ * Normalize a decoded payload into a burst array. A payload that decodes
+ * to an array is the same-`timeNs` group as-is; a scalar payload (number,
+ * struct, …) is wrapped as a single-element burst so scalar and burst
+ * subscribers behave uniformly. Exposed for testing.
+ */
+export function normalizeBurst(decoded: unknown): unknown[] {
+  return Array.isArray(decoded) ? (decoded as unknown[]) : [decoded];
+}
+
+/**
+ * Callback invoked when the server signals a topic's stream has ended
+ * (a [`ControlMessage::Complete`], e.g. a historical replay finishing).
+ * After this fires no further values will arrive on the topic.
+ */
+export type CompleteListener = (topic: string) => void;
 
 /** Callback invoked when the underlying WebSocket state changes. */
 export type ConnectionListener = (state: ConnectionState) => void;
@@ -47,10 +77,44 @@ export interface ClientOptions {
    * `.codec(CodecKind::Json)`.
    */
   codec?: CodecKind;
-  /** Reconnect on close with this delay. Defaults to 1000 ms; `0` disables. */
+  /**
+   * Reconnect on close with this delay. Defaults to 1000 ms; `0` disables.
+   *
+   * A *clean* end is never reconnected regardless of this value: once the
+   * server signals end-of-stream (a `Complete` control frame, e.g. a
+   * historical replay finishing) or closes the socket with a normal code
+   * (1000 / 1001, "going away"), the client treats the session as done and
+   * stops. Only an abnormal drop (e.g. 1006) triggers the reconnect timer.
+   * This prevents a finished historical stream from reconnect-looping
+   * against a server that has intentionally shut down.
+   */
   reconnectMs?: number;
   /** Optional WASM module URL override (advanced). */
   wasmUrl?: string | URL;
+}
+
+/** WebSocket close codes that indicate a deliberate, clean shutdown. */
+const CLEAN_CLOSE_CODES = new Set<number>([1000, 1001]);
+
+/**
+ * Decide whether a closed socket should trigger a reconnect. Exposed for
+ * testing; the client applies it in its `close` handler.
+ *
+ * Reconnect only on an abnormal drop that the caller still wants retried.
+ * A clean finish — the user closed the client, the stream completed, the
+ * server closed with a normal code, or reconnect is disabled — never
+ * reconnects, so a finished historical replay does not loop against a
+ * server that has intentionally shut down.
+ */
+export function shouldReconnect(params: {
+  userClosed: boolean;
+  streamFinished: boolean;
+  closeCode: number;
+  reconnectMs: number;
+}): boolean {
+  const { userClosed, streamFinished, closeCode, reconnectMs } = params;
+  if (userClosed || streamFinished || reconnectMs <= 0) return false;
+  return !CLEAN_CLOSE_CODES.has(closeCode);
 }
 
 /**
@@ -63,9 +127,16 @@ export class WingfoilClient {
   private closed = false;
   private wasmReady = false;
   private readonly listeners = new Map<string, Set<TopicListener>>();
+  private readonly burstListeners = new Map<string, Set<BurstListener>>();
+  private readonly completeListeners = new Set<CompleteListener>();
   private readonly connListeners = new Set<ConnectionListener>();
   private codecKind: CodecKind;
   private serverVersion: number | null = null;
+  /**
+   * Set once the server signals end-of-stream for any topic. A finished
+   * stream must not reconnect — the server is done, not merely dropped.
+   */
+  private streamFinished = false;
 
   constructor(options: ClientOptions) {
     this.opts = {
@@ -91,25 +162,63 @@ export class WingfoilClient {
     }
   }
 
-  /** Subscribe to `topic`. Returns an unsubscribe function. */
+  /**
+   * Subscribe to `topic`, receiving the latest value of each frame's
+   * burst. Returns an unsubscribe function. Use {@link subscribeBurst} to
+   * receive every value in a same-`timeNs` group.
+   */
   subscribe(topic: string, listener: TopicListener): () => void {
+    const fresh = !this.hasTopicListener(topic);
     const set = this.listeners.get(topic) ?? new Set<TopicListener>();
-    const freshTopic = !this.listeners.has(topic);
     set.add(listener);
     this.listeners.set(topic, set);
-    if (freshTopic) this.sendSubscribe([topic]);
+    if (fresh) this.sendSubscribe([topic]);
     return () => this.unsubscribe(topic, listener);
   }
 
-  /** Remove a listener; optionally also send an unsubscribe frame if empty. */
+  /** Remove a scalar listener; send an unsubscribe frame if the topic is now idle. */
   unsubscribe(topic: string, listener: TopicListener): void {
     const set = this.listeners.get(topic);
     if (!set) return;
     set.delete(listener);
-    if (set.size === 0) {
-      this.listeners.delete(topic);
-      this.sendUnsubscribe([topic]);
-    }
+    if (set.size === 0) this.listeners.delete(topic);
+    if (!this.hasTopicListener(topic)) this.sendUnsubscribe([topic]);
+  }
+
+  /**
+   * Subscribe to `topic`, receiving the whole burst (every value that
+   * shares a `timeNs`) per frame. Returns an unsubscribe function. This is
+   * the full-fidelity form — no values are collapsed — useful for charting
+   * a historical replay where several points may land on one timestamp.
+   */
+  subscribeBurst(topic: string, listener: BurstListener): () => void {
+    const fresh = !this.hasTopicListener(topic);
+    const set = this.burstListeners.get(topic) ?? new Set<BurstListener>();
+    set.add(listener);
+    this.burstListeners.set(topic, set);
+    if (fresh) this.sendSubscribe([topic]);
+    return () => this.unsubscribeBurst(topic, listener);
+  }
+
+  /** Remove a burst listener; send an unsubscribe frame if the topic is now idle. */
+  unsubscribeBurst(topic: string, listener: BurstListener): void {
+    const set = this.burstListeners.get(topic);
+    if (!set) return;
+    set.delete(listener);
+    if (set.size === 0) this.burstListeners.delete(topic);
+    if (!this.hasTopicListener(topic)) this.sendUnsubscribe([topic]);
+  }
+
+  /** True when `topic` has any scalar or burst listener attached. */
+  private hasTopicListener(topic: string): boolean {
+    return this.listeners.has(topic) || this.burstListeners.has(topic);
+  }
+
+  /** Every topic with at least one listener (used to resubscribe on reconnect). */
+  private subscribedTopics(): string[] {
+    return Array.from(
+      new Set([...this.listeners.keys(), ...this.burstListeners.keys()]),
+    );
   }
 
   /** Publish a value on `topic` to the server. */
@@ -129,6 +238,17 @@ export class WingfoilClient {
   onConnection(listener: ConnectionListener): () => void {
     this.connListeners.add(listener);
     return () => this.connListeners.delete(listener);
+  }
+
+  /**
+   * Observe end-of-stream signals. The listener fires with the topic name
+   * each time the server sends a `Complete` control frame — for example
+   * when a historical replay reaches the end of its source. Returns a
+   * function that removes the listener.
+   */
+  onComplete(listener: CompleteListener): () => void {
+    this.completeListeners.add(listener);
+    return () => this.completeListeners.delete(listener);
   }
 
   /** Server-reported wire protocol version, once Hello was received. */
@@ -162,13 +282,25 @@ export class WingfoilClient {
     socket.addEventListener("error", (ev) => this.emitConn({ kind: "error", error: ev }));
     socket.addEventListener("close", (ev) => {
       this.emitConn({ kind: "closed", code: ev.code, reason: ev.reason });
-      if (!this.closed && this.opts.reconnectMs > 0) {
+      // Do not reconnect after a clean finish: the stream completed, the
+      // user closed us, reconnect is disabled, or the server closed the
+      // socket deliberately (a normal close code). Only an abnormal drop
+      // reconnects. This stops a finished historical replay from looping
+      // against a server that has intentionally shut down.
+      if (
+        shouldReconnect({
+          userClosed: this.closed,
+          streamFinished: this.streamFinished,
+          closeCode: ev.code,
+          reconnectMs: this.opts.reconnectMs,
+        })
+      ) {
         setTimeout(() => this.connect(), this.opts.reconnectMs);
       }
     });
     socket.addEventListener("open", () => {
       // Re-send any existing subscriptions on reconnect.
-      const topics = Array.from(this.listeners.keys());
+      const topics = this.subscribedTopics();
       if (topics.length > 0) this.sendSubscribe(topics);
     });
   }
@@ -192,20 +324,39 @@ export class WingfoilClient {
       this.handleControl(env.payload);
       return;
     }
-    const listeners = this.listeners.get(env.topic);
-    if (!listeners || listeners.size === 0) return;
-    let payloadValue: unknown;
+    const scalar = this.listeners.get(env.topic);
+    const bursts = this.burstListeners.get(env.topic);
+    if (!scalar?.size && !bursts?.size) return;
+
+    let decoded: unknown;
     try {
-      payloadValue = decodePayload(this.codecKind, env.payload);
+      decoded = decodePayload(this.codecKind, env.payload);
     } catch (err) {
       console.warn("wingfoil: payload decode failed on", env.topic, err);
       return;
     }
-    for (const fn of listeners) {
-      try {
-        fn(payloadValue, env.timeNs);
-      } catch (err) {
-        console.warn("wingfoil: listener threw", err);
+    // Each frame's payload is a burst (array) of same-`timeNs` values.
+    const values = normalizeBurst(decoded);
+    if (values.length === 0) return;
+
+    if (bursts?.size) {
+      for (const fn of bursts) {
+        try {
+          fn(values, env.timeNs);
+        } catch (err) {
+          console.warn("wingfoil: burst listener threw", err);
+        }
+      }
+    }
+    if (scalar?.size) {
+      // Collapse the burst to its latest value for scalar subscribers.
+      const latest = values[values.length - 1];
+      for (const fn of scalar) {
+        try {
+          fn(latest, env.timeNs);
+        } catch (err) {
+          console.warn("wingfoil: listener threw", err);
+        }
       }
     }
   }
@@ -214,6 +365,7 @@ export class WingfoilClient {
     try {
       const ctrl = decodeControl(this.codecKind, payload) as {
         Hello?: { codec: string; version: number };
+        Complete?: { topic: string };
       };
       if (ctrl.Hello) {
         this.serverVersion = ctrl.Hello.version;
@@ -222,9 +374,24 @@ export class WingfoilClient {
           codec: ctrl.Hello.codec as CodecKind,
           version: ctrl.Hello.version,
         });
+      } else if (ctrl.Complete) {
+        this.handleComplete(ctrl.Complete.topic);
       }
     } catch (err) {
       console.warn("wingfoil: control decode failed", err);
+    }
+  }
+
+  private handleComplete(topic: string) {
+    // A completed stream is finished for good — don't reconnect when the
+    // server subsequently closes the socket.
+    this.streamFinished = true;
+    for (const fn of this.completeListeners) {
+      try {
+        fn(topic);
+      } catch (err) {
+        console.warn("wingfoil: complete listener threw", err);
+      }
     }
   }
 

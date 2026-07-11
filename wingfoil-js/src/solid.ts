@@ -32,6 +32,31 @@ export function useTopic<T>(
 }
 
 /**
+ * Like {@link useTopic} but surfaces the whole burst — every value that
+ * shares a `timeNs` — as a Solid signal. In real time each burst is a
+ * single value; a historical replay can group several points on one
+ * timestamp. Use this when you must not drop same-timestamp values (e.g.
+ * appending every point to a chart series).
+ *
+ * @example
+ * ```tsx
+ * const points = useTopicBurst<PriceTick>(client, "price");
+ * createEffect(() => points()?.forEach((p) => series.push(p)));
+ * ```
+ */
+export function useTopicBurst<T>(
+  client: WingfoilClient,
+  topic: string,
+): Accessor<T[] | undefined> {
+  const [values, setValues] = createSignal<T[] | undefined>(undefined);
+  const unsubscribe = client.subscribeBurst(topic, (vs) => {
+    setValues(() => vs as T[]);
+  });
+  onCleanup(unsubscribe);
+  return values;
+}
+
+/**
  * A small publish helper. Returns a function that, given a value, sends
  * it to `topic`. Usage in an event handler:
  *

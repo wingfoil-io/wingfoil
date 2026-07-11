@@ -16,6 +16,24 @@ The server binds to `127.0.0.1:8080` by default. Override with:
 WINGFOIL_WEB_ADDR=0.0.0.0:9000 cargo run --example web --features web
 ```
 
+## Historical streaming
+
+Set `WINGFOIL_WEB_HISTORICAL=1` to run the same graph in
+`RunMode::HistoricalFrom` instead of real time — a finite 500-point series
+replayed with a small per-point delay standing in for a slow computation,
+so the browser can watch the replay unfold live:
+
+```sh
+WINGFOIL_WEB_HISTORICAL=1 cargo run --example web --features web
+```
+
+When the series is exhausted the client receives a `Complete` control
+frame (`@wingfoil/client`'s `onComplete`) and the run ends. `web_sub` is
+inert in historical mode — a deterministic replay has no live browser
+input. The only server-side change is the run mode; it still uses
+`.start()` (not `.start_historical()`, which would make the adapter a
+no-op).
+
 ## Browser client
 
 The sibling [`wingfoil-js`](../../../wingfoil-js) package provides a ready-made
