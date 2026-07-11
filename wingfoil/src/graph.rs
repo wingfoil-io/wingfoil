@@ -95,6 +95,27 @@ struct RunBounds {
     end_cycle: u32,
 }
 
+/// Return the first `Err` in `results`, attaching any subsequent errors as
+/// context so that a failure in a later lifecycle phase (e.g. `teardown`) is
+/// preserved rather than dropped when an earlier phase (e.g. the run loop) has
+/// already failed. Returns `Ok(())` when every result is `Ok`.
+fn first_error<const N: usize>(results: [anyhow::Result<()>; N]) -> anyhow::Result<()> {
+    let mut errors = results.into_iter().filter_map(Result::err);
+    let primary = match errors.next() {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    let extra: Vec<String> = errors.map(|e| format!("{e:#}")).collect();
+    if extra.is_empty() {
+        Err(primary)
+    } else {
+        Err(primary.context(format!(
+            "additional error(s) occurred during graph shutdown:\n  - {}",
+            extra.join("\n  - ")
+        )))
+    }
+}
+
 fn average_duration(duration: Duration, n: u32) -> Duration {
     let avg_nanos = if n == 0 {
         0
@@ -593,12 +614,27 @@ impl Graph {
 
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self) -> anyhow::Result<()> {
+        // `setup` pairs with `teardown`, `start` with `stop`. Once `setup`
+        // succeeds we must always run `teardown`, and once `start` is attempted
+        // we must always run `stop` — even if `start` or `run_nodes` errors — so
+        // nodes release sockets, threads and files on a failed run instead of
+        // leaking them until the process exits.
         self.setup_nodes()?;
-        self.start_nodes()?;
-        self.run_nodes()?;
-        self.stop_nodes()?;
-        self.teardown_nodes()?;
-        Ok(())
+
+        let start_result = self.start_nodes();
+        // Skip the run loop if any node failed to start, but still stop and
+        // tear down so partially-started nodes get cleaned up.
+        let run_result = if start_result.is_ok() {
+            self.run_nodes()
+        } else {
+            Ok(())
+        };
+        let stop_result = self.stop_nodes();
+        let teardown_result = self.teardown_nodes();
+
+        // Surface the first failure in lifecycle order; attach any later ones so
+        // a shutdown error can't hide (or be hidden by) the run error.
+        first_error([start_result, run_result, stop_result, teardown_result])
     }
 
     #[cfg_attr(feature = "instrument-initialise", tracing::instrument(skip_all))]
@@ -1110,6 +1146,83 @@ mod tests {
         assert!(
             err.contains("synthetic cycle failure") || err.contains("Error in node"),
             "expected error to mention the cycle failure, got: {err}"
+        );
+    }
+
+    /// A node that errors on cycle but records whether stop/teardown ran.
+    struct FlakyLifecycleNode {
+        upstream: Rc<dyn Node>,
+        stopped: Rc<std::cell::Cell<bool>>,
+        torn_down: Rc<std::cell::Cell<bool>>,
+    }
+
+    impl MutableNode for FlakyLifecycleNode {
+        fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+            anyhow::bail!("synthetic cycle failure")
+        }
+        fn stop(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+            self.stopped.set(true);
+            Ok(())
+        }
+        fn teardown(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+            self.torn_down.set(true);
+            Ok(())
+        }
+        fn upstreams(&self) -> UpStreams {
+            UpStreams::new(vec![self.upstream.clone()], vec![])
+        }
+    }
+
+    #[test]
+    fn stop_and_teardown_run_even_when_cycle_errors() {
+        // A failed run must still release resources: stop() and teardown() have
+        // to run even though run_nodes() errored partway through.
+        let stopped = Rc::new(std::cell::Cell::new(false));
+        let torn_down = Rc::new(std::cell::Cell::new(false));
+        let src: Rc<RefCell<CallBackStream<u64>>> = Rc::new(RefCell::new(CallBackStream::new()));
+        src.borrow_mut().push(ValueAt::new(1, NanoTime::new(10)));
+        let node = Rc::new(RefCell::new(FlakyLifecycleNode {
+            upstream: src.clone().as_node(),
+            stopped: stopped.clone(),
+            torn_down: torn_down.clone(),
+        }));
+        let result = Graph::new(
+            vec![node.as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Forever,
+        )
+        .run();
+        assert!(result.is_err(), "the cycle error must surface from run()");
+        assert!(stopped.get(), "stop() must run even when the cycle errored");
+        assert!(
+            torn_down.get(),
+            "teardown() must run even when the cycle errored"
+        );
+    }
+
+    #[test]
+    fn first_error_returns_first_and_preserves_extras() {
+        // All-Ok → Ok.
+        assert!(first_error([Ok(()), Ok(())]).is_ok());
+
+        // A single error is returned unchanged.
+        let e = first_error([Ok(()), Err(anyhow::anyhow!("boom")), Ok(())]).unwrap_err();
+        assert!(format!("{e:#}").contains("boom"));
+
+        // Multiple errors: the first is primary, later ones are attached.
+        let e = first_error([
+            Err(anyhow::anyhow!("first failure")),
+            Err(anyhow::anyhow!("second failure")),
+        ])
+        .unwrap_err();
+        let rendered = format!("{e:#}");
+        assert!(
+            rendered.contains("first failure"),
+            "missing primary: {rendered}"
+        );
+        assert!(
+            rendered.contains("second failure"),
+            "missing secondary: {rendered}"
         );
     }
 
