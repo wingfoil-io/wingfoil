@@ -6,8 +6,8 @@
 //! time-weighted one (via [`Weighting`]) so irregular tick spacing is handled
 //! correctly.
 //!
-//! One price stream feeds a spread of statistics; the combined row is sampled
-//! twice a second and logged as a table.
+//! One price stream feeds a spread of statistics; each is sampled twice a
+//! second, collected, and printed as a table.
 //!
 //! ```bash
 //! cargo run --example statistics
@@ -17,21 +17,6 @@ use std::rc::Rc;
 use std::time::Duration;
 use wingfoil::*;
 
-/// Snapshot several `f64` statistics into one row, in the given order.  Each
-/// stat is folded on as a *passive* input — read every cycle, but only the head
-/// (derived from the price) drives the row — so column order is explicit rather
-/// than dependent on graph structure.
-fn snapshot(stats: Vec<Rc<dyn Stream<f64>>>) -> Rc<dyn Stream<Vec<f64>>> {
-    let mut stats = stats.into_iter();
-    let head = stats.next().expect("snapshot needs at least one statistic");
-    stats.fold(head.map(|v| vec![v]), |row, stat| {
-        bimap(Dep::Active(row), Dep::Passive(stat), |mut row, v| {
-            row.push(v);
-            row
-        })
-    })
-}
-
 fn main() {
     // A single synthetic price stream: a gentle sine wave around 100, one
     // sample every 100ms. Every statistic below is derived from this one stream.
@@ -39,34 +24,47 @@ fn main() {
         .count()
         .map(|n: u64| 100.0 + ((n as f64) * 0.6).sin() * 5.0);
 
-    let row = snapshot(vec![
-        price.clone(),                  // raw price
-        price.ewma(0.3),                // exponential smoothing
-        price.rolling_mean(10),         // 10-sample SMA
-        price.rolling_std(10),          // 10-sample volatility
-        price.rolling_min(10),          // 10-sample low
-        price.rolling_max(10),          // 10-sample high
-        price.average(Weighting::Time), // time-weighted average (TWAP)
-    ]);
+    // One labelled statistic per column, all derived from the shared price.
+    let columns: Vec<(&str, Rc<dyn Stream<f64>>)> = vec![
+        ("price", price.clone()),
+        ("ewma", price.ewma(0.3)),
+        ("sma", price.rolling_mean(10)),
+        ("std", price.rolling_std(10)),
+        ("min", price.rolling_min(10)),
+        ("max", price.rolling_max(10)),
+        ("twap", price.average(Weighting::Time)),
+    ];
 
-    println!(
-        "{:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
-        "time", "price", "ewma", "sma", "std", "min", "max", "twap",
-    );
+    // Sample each column twice a second and collect it for reading after the run.
+    let trigger = ticker(Duration::from_millis(500));
+    let collected: Vec<Rc<dyn Stream<Vec<ValueAt<f64>>>>> = columns
+        .iter()
+        .map(|(_, stat)| stat.sample(trigger.clone()).collect())
+        .collect();
 
-    // Sample the row twice a second and log it — the graph runs every 100ms, but
-    // we only want a readable trace, not every tick.
-    row.sample(ticker(Duration::from_millis(500)))
-        .for_each(|r, t| {
-            let secs = f64::from(t) / 1e9;
-            println!(
-                "{:>5.1}s {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2}",
-                secs, r[0], r[1], r[2], r[3], r[4], r[5], r[6],
-            );
-        })
-        .run(
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(Duration::from_secs(5)),
-        )
-        .unwrap();
+    let nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
+    Graph::new(
+        nodes,
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Duration(Duration::from_secs(5)),
+    )
+    .run()
+    .unwrap();
+
+    // Transpose the per-column series into rows and print the table. Every
+    // column was sampled on the same trigger, so they line up index-for-index.
+    print!("{:>6}", "time");
+    for (label, _) in &columns {
+        print!(" {label:>7}");
+    }
+    println!();
+
+    let series: Vec<Vec<ValueAt<f64>>> = collected.iter().map(|c| c.peek_value()).collect();
+    for i in 0..series[0].len() {
+        print!("{:>5.1}s", f64::from(series[0][i].time) / 1e9);
+        for column in &series {
+            print!(" {:>7.2}", column[i].value);
+        }
+        println!();
+    }
 }
