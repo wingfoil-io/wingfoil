@@ -15,7 +15,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`tracing`](tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
 | [`latency`](latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
 
-## I/O adapters
+## Adapters
 
 | Example | Description |
 |---|---|
