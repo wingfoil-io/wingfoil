@@ -233,7 +233,9 @@ where
         let fut = async move {
             match func(ctx).await {
                 Err(e) => {
-                    sender
+                    // Best-effort: forward the producer error to the consumer.
+                    // If the receiver is already gone there is no one to tell.
+                    let _ = sender
                         .send_message(Message::Error(std::sync::Arc::new(e)))
                         .await;
                 }
@@ -241,11 +243,15 @@ where
                     let source = stream.to_message_stream(run_mode).limit(run_mode, run_for);
                     let mut source = Box::pin(source);
                     while let Some(message) = source.next().await {
-                        sender.send_message(message).await;
+                        // A send error means the receiver was dropped (a normal
+                        // teardown race): stop producing instead of panicking.
+                        if sender.send_message(message).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
-            sender.close().await;
+            let _ = sender.close().await;
             Ok(())
         };
         let handle = state.tokio_runtime().spawn(fut);
