@@ -1,6 +1,6 @@
-use crate::queue::HashByRef;
 use crate::queue::TimeQueue;
 use crate::types::{NanoTime, Node};
+use by_address::ByThinAddress;
 
 use crossbeam::channel::{Receiver, SendError, Sender, select};
 use std::cmp::{max, min};
@@ -187,7 +187,7 @@ pub struct GraphState {
     current_node_index: Option<usize>,
     scheduled_callbacks: TimeQueue<usize>,
     always_callbacks: Vec<usize>,
-    node_to_index: HashMap<HashByRef<dyn Node>, usize>,
+    node_to_index: HashMap<ByThinAddress<Rc<dyn Node>>, usize>,
     node_ticked: Vec<bool>,
     #[cfg(feature = "async")]
     run_time: OnceLock<Arc<tokio::runtime::Runtime>>,
@@ -430,7 +430,7 @@ impl GraphState {
     }
 
     pub fn node_index(&self, node: Rc<dyn Node>) -> Option<usize> {
-        let key = HashByRef::new(node.clone());
+        let key = ByThinAddress(node.clone());
         self.node_to_index.get(&key).copied()
     }
 
@@ -445,11 +445,11 @@ impl GraphState {
         self.node_ticked.push(false);
         //self.nodes.push(node.clone());
         self.node_to_index
-            .insert(HashByRef::new(node.clone()), index);
+            .insert(ByThinAddress(node.clone()), index);
     }
 
     fn seen(&self, node: Rc<dyn Node>) -> bool {
-        self.node_to_index.contains_key(&HashByRef::new(node))
+        self.node_to_index.contains_key(&ByThinAddress(node))
     }
 
     fn set_ticked(&mut self, index: usize) {
@@ -746,8 +746,8 @@ impl Graph {
                 .expect("seen() returned true but node_index lookup failed"));
         }
 
-        let mut in_progress: HashSet<HashByRef<dyn Node>> = HashSet::new();
-        in_progress.insert(HashByRef::new(root.clone()));
+        let mut in_progress: HashSet<ByThinAddress<Rc<dyn Node>>> = HashSet::new();
+        in_progress.insert(ByThinAddress(root.clone()));
         let mut stack: Vec<WiringFrame> = vec![WiringFrame::new(root.clone())];
 
         while !stack.is_empty() {
@@ -773,7 +773,7 @@ impl Graph {
                         });
                         frame.layer = max(frame.layer, up_layer + 1);
                         frame.next += 1;
-                    } else if in_progress.contains(&HashByRef::new(up.clone())) {
+                    } else if in_progress.contains(&ByThinAddress(up.clone())) {
                         // Back-edge to a node still being wired → a cycle.
                         anyhow::bail!(
                             "cycle detected in graph wiring: node `{}` is (transitively) \
@@ -784,14 +784,14 @@ impl Graph {
                         // Descend into the upstream first; do NOT advance `next`
                         // — when we return, `up` will be `seen` and the branch
                         // above records the edge.
-                        in_progress.insert(HashByRef::new(up.clone()));
+                        in_progress.insert(ByThinAddress(up.clone()));
                         stack.push(WiringFrame::new(up));
                     }
                 }
                 None => {
                     // All upstreams processed — finalise this node.
                     let frame = stack.pop().expect("stack non-empty");
-                    in_progress.remove(&HashByRef::new(frame.node.clone()));
+                    in_progress.remove(&ByThinAddress(frame.node.clone()));
                     let node_data = NodeData {
                         node: frame.node.clone(),
                         upstreams: frame.edges,
