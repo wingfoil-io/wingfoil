@@ -17,11 +17,19 @@ use std::rc::Rc;
 use std::time::Duration;
 use wingfoil::*;
 
-/// Tag a statistic with its column index.  `combine` assembles the row in graph
-/// evaluation order, which depends on each stat's depth in the DAG — tagging
-/// lets us drop every value into a fixed column regardless.
-fn col(index: usize, stat: Rc<dyn Stream<f64>>) -> Rc<dyn Stream<(usize, f64)>> {
-    stat.map(move |v| (index, v))
+/// Snapshot several `f64` statistics into one row, in the given order.  Each
+/// stat is folded on as a *passive* input — read every cycle, but only the head
+/// (derived from the price) drives the row — so column order is explicit rather
+/// than dependent on graph structure.
+fn snapshot(stats: Vec<Rc<dyn Stream<f64>>>) -> Rc<dyn Stream<Vec<f64>>> {
+    let mut stats = stats.into_iter();
+    let head = stats.next().expect("snapshot needs at least one statistic");
+    stats.fold(head.map(|v| vec![v]), |row, stat| {
+        bimap(Dep::Active(row), Dep::Passive(stat), |mut row, v| {
+            row.push(v);
+            row
+        })
+    })
 }
 
 fn main() {
@@ -31,16 +39,14 @@ fn main() {
         .count()
         .map(|n: u64| 100.0 + ((n as f64) * 0.6).sin() * 5.0);
 
-    // Derive a spread of statistics from the shared price stream and combine
-    // them into one row per tick.
-    let row = combine(vec![
-        col(0, price.clone()),                  // raw price
-        col(1, price.ewma(0.3)),                // exponential smoothing
-        col(2, price.rolling_mean(10)),         // 10-sample SMA
-        col(3, price.rolling_std(10)),          // 10-sample volatility
-        col(4, price.rolling_min(10)),          // 10-sample low
-        col(5, price.rolling_max(10)),          // 10-sample high
-        col(6, price.average(Weighting::Time)), // time-weighted average (TWAP)
+    let row = snapshot(vec![
+        price.clone(),                  // raw price
+        price.ewma(0.3),                // exponential smoothing
+        price.rolling_mean(10),         // 10-sample SMA
+        price.rolling_std(10),          // 10-sample volatility
+        price.rolling_min(10),          // 10-sample low
+        price.rolling_max(10),          // 10-sample high
+        price.average(Weighting::Time), // time-weighted average (TWAP)
     ]);
 
     println!(
@@ -51,15 +57,11 @@ fn main() {
     // Sample the row twice a second and log it — the graph runs every 100ms, but
     // we only want a readable trace, not every tick.
     row.sample(ticker(Duration::from_millis(500)))
-        .for_each(|cells, t| {
-            let mut c = [f64::NAN; 7];
-            for (i, v) in cells {
-                c[i] = v;
-            }
+        .for_each(|r, t| {
             let secs = f64::from(t) / 1e9;
             println!(
                 "{:>5.1}s {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>7.2}",
-                secs, c[0], c[1], c[2], c[3], c[4], c[5], c[6],
+                secs, r[0], r[1], r[2], r[3], r[4], r[5], r[6],
             );
         })
         .run(
