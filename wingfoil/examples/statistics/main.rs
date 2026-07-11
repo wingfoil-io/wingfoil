@@ -31,10 +31,10 @@ fn main() {
     let columns: Vec<Rc<dyn Stream<f64>>> = vec![
         price.clone(),
         price.ewma(EwmaSpan::PerTick(0.3)),
-        price.rolling_mean(10, Weighting::Count),
-        price.rolling_std(10, Weighting::Count),
-        price.rolling_min(10),
-        price.rolling_max(10),
+        price.rolling_mean(Window::Count(10), Weighting::Count),
+        price.rolling_std(Window::Count(10), Weighting::Count),
+        price.rolling_min(Window::Count(10)),
+        price.rolling_max(Window::Count(10)),
         price.average(Weighting::Time),
     ];
 

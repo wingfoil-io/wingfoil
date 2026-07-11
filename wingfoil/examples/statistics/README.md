@@ -3,12 +3,13 @@
 Demonstrates the `StatisticsOperators` trait — streaming numeric aggregations
 that chain onto any `Stream<T: ToPrimitive>` and emit `f64`. It covers
 exponential smoothing (`ewma`, taking an `EwmaSpan` of `PerTick` or `HalfLife`),
-cumulative moments (`average`, `variance`, `std`), count-windowed rolling
-operators (`rolling_mean`/`std`/`min`/`max`/`median`), and time-windowed ones
-(`rolling_*_over`). Every moment operator — cumulative, count-windowed, and
-time-windowed — takes a `Weighting`: `Count` (every sample equal) or `Time`
-(each sample weighted by how long it was in effect), so irregular tick spacing
-is handled correctly.
+cumulative moments (`average`, `variance`, `std`), and rolling operators
+(`rolling_mean`/`std`/`min`/`max`/`median`/`sum`). Each rolling operator takes a
+`Window` — `Count(n)` (the last `n` samples) or `Time(duration)` (the last
+`duration` of graph time) — mirroring how `ewma` takes an `EwmaSpan`. Every
+moment operator additionally takes a `Weighting`: `Count` (every sample equal)
+or `Time` (each sample weighted by how long it was in effect), so irregular tick
+spacing is handled correctly.
 
 One synthetic price stream feeds a spread of statistics, which are `combine`d
 into a row, sampled twice a second, and printed live as a table with `for_each`.
@@ -37,10 +38,10 @@ fn main() {
     let columns: Vec<Rc<dyn Stream<f64>>> = vec![
         price.clone(),
         price.ewma(EwmaSpan::PerTick(0.3)),
-        price.rolling_mean(10, Weighting::Count),
-        price.rolling_std(10, Weighting::Count),
-        price.rolling_min(10),
-        price.rolling_max(10),
+        price.rolling_mean(Window::Count(10), Weighting::Count),
+        price.rolling_std(Window::Count(10), Weighting::Count),
+        price.rolling_min(Window::Count(10)),
+        price.rolling_max(Window::Count(10)),
         price.average(Weighting::Time),
     ];
 
