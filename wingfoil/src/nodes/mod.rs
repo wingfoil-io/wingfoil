@@ -88,11 +88,7 @@ use node_flow::*;
 use print::*;
 use producer::*;
 use sample::*;
-pub use statistics::Weighting;
-use statistics::{
-    EwmaDecay, EwmaStream, Moment, MomentStream, StatStream, TimeWindowStream, WindowStat,
-    WindowStatStream,
-};
+pub use statistics::{StatisticsOperators, Weighting};
 use throttle::*;
 use tick::*;
 use timed::*;
@@ -113,7 +109,6 @@ pub(crate) use receiver::*;
 use log::Level;
 #[cfg(not(feature = "tracing"))]
 use log::log;
-use num_traits::ToPrimitive;
 use std::cmp::Eq;
 #[cfg(feature = "async")]
 use std::future::Future;
@@ -123,12 +118,6 @@ use std::ops::Add;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
-use watermill::maximum::RollingMax;
-use watermill::mean::Mean;
-use watermill::minimum::RollingMin;
-use watermill::quantile::RollingQuantile;
-use watermill::sum::Sum;
-use watermill::variance::Variance;
 
 /// Returns a [Stream] that adds both it's source [Stream]s.  Ticks when either of it's sources ticks.
 #[must_use]
@@ -373,130 +362,6 @@ pub trait StreamOperators<T: Element> {
     /// accumulate the source into a vector
     #[must_use]
     fn accumulate(self: &Rc<Self>) -> Rc<dyn Stream<Vec<T>>>;
-    /// Cumulative average of source.  [`Weighting::Count`] is the arithmetic
-    /// mean of the samples; [`Weighting::Time`] is the time-weighted average,
-    /// each value weighted by how long it was in effect.
-    #[must_use]
-    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Cumulative variance of source.  [`Weighting::Count`] is the sample
-    /// variance (ddof = 1); [`Weighting::Time`] is the time-weighted
-    /// (population) variance.  Yields `0.0` until enough data is present.
-    #[must_use]
-    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Cumulative standard deviation of source — the square root of
-    /// [`variance`](StreamOperators::variance) under the same `weighting`.
-    #[must_use]
-    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Exponentially weighted moving average with per-tick smoothing factor
-    /// `alpha` (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`).  The first
-    /// sample seeds the average.
-    #[must_use]
-    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Time-decayed exponentially weighted moving average: a sample's weight
-    /// halves every `half_life` of elapsed time, independent of tick rate.
-    /// The first sample seeds the average.
-    #[must_use]
-    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling sum over the most recent `window` samples.
-    #[must_use]
-    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling mean (simple moving average) over the most recent `window` samples.
-    #[must_use]
-    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling minimum over the most recent `window` samples.
-    #[must_use]
-    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling maximum over the most recent `window` samples.
-    #[must_use]
-    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling sample variance (ddof = 1) over the most recent `window` samples.
-    /// Yields `0.0` until at least two samples are present.
-    #[must_use]
-    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling sample standard deviation (ddof = 1) over the most recent
-    /// `window` samples.
-    #[must_use]
-    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling median (50th percentile) over the most recent `window` samples,
-    /// linearly interpolated.
-    #[must_use]
-    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling sum over all samples seen in the last `window` of graph time.
-    #[must_use]
-    fn rolling_sum_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling mean over samples seen in the last `window` of graph time.
-    /// [`Weighting::Time`] gives a true time-weighted average over the window.
-    #[must_use]
-    fn rolling_mean_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling minimum over samples seen in the last `window` of graph time.
-    #[must_use]
-    fn rolling_min_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling maximum over samples seen in the last `window` of graph time.
-    #[must_use]
-    fn rolling_max_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling variance over samples seen in the last `window` of graph time.
-    /// [`Weighting::Count`] is the sample variance (ddof = 1); [`Weighting::Time`]
-    /// is the time-weighted (population) variance.
-    #[must_use]
-    fn rolling_var_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling standard deviation over samples seen in the last `window` of
-    /// graph time — the square root of
-    /// [`rolling_var_over`](StreamOperators::rolling_var_over).
-    #[must_use]
-    fn rolling_std_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
-    /// Rolling median over samples seen in the last `window` of graph time.
-    #[must_use]
-    fn rolling_median_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive;
     /// Buffer the source stream.  The buffer is automatically flushed on the last cycle;
     #[must_use]
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>>;
@@ -704,159 +569,6 @@ where
         self.fold(|acc: &mut Vec<T>, value| {
             acc.push(value);
         })
-    }
-
-    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        MomentStream::new(self.clone(), Moment::Mean, weighting).into_stream()
-    }
-
-    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        MomentStream::new(self.clone(), Moment::Var, weighting).into_stream()
-    }
-
-    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        MomentStream::new(self.clone(), Moment::Std, weighting).into_stream()
-    }
-
-    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        EwmaStream::new(self.clone(), EwmaDecay::PerTick(alpha)).into_stream()
-    }
-
-    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        let half_life = half_life.as_nanos() as f64;
-        EwmaStream::new(self.clone(), EwmaDecay::HalfLife(half_life)).into_stream()
-    }
-
-    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        WindowStatStream::new(self.clone(), Sum::new(), window).into_stream()
-    }
-
-    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        WindowStatStream::new(self.clone(), Mean::new(), window).into_stream()
-    }
-
-    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        StatStream::new(self.clone(), RollingMin::new(window.max(1))).into_stream()
-    }
-
-    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        StatStream::new(self.clone(), RollingMax::new(window.max(1))).into_stream()
-    }
-
-    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        // ddof = 1 for sample variance, matching the documented convention.
-        WindowStatStream::new(self.clone(), Variance::new(1), window).into_stream()
-    }
-
-    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        // Clamp at zero: watermill's revert-based variance can dip a hair below
-        // zero from floating-point cancellation on a near-constant window, and
-        // `sqrt` of a negative is NaN.
-        self.rolling_var(window).map(|v: f64| v.max(0.0).sqrt())
-    }
-
-    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        let quantile = RollingQuantile::new(0.5, window.max(1))
-            .expect("invariant: 0.5 is a valid quantile in [0, 1]");
-        StatStream::new(self.clone(), quantile).into_stream()
-    }
-
-    fn rolling_sum_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Sum, Weighting::Count, window).into_stream()
-    }
-
-    fn rolling_mean_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Mean, weighting, window).into_stream()
-    }
-
-    fn rolling_min_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Min, Weighting::Count, window).into_stream()
-    }
-
-    fn rolling_max_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Max, Weighting::Count, window).into_stream()
-    }
-
-    fn rolling_var_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Var, weighting, window).into_stream()
-    }
-
-    fn rolling_std_over(
-        self: &Rc<Self>,
-        window: Duration,
-        weighting: Weighting,
-    ) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Std, weighting, window).into_stream()
-    }
-
-    fn rolling_median_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>
-    where
-        T: ToPrimitive,
-    {
-        TimeWindowStream::new(self.clone(), WindowStat::Median, Weighting::Count, window)
-            .into_stream()
     }
 
     fn buffer(self: &Rc<Self>, capacity: usize) -> Rc<dyn Stream<Vec<T>>> {

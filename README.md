@@ -116,6 +116,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/) | Metrics export via Prometheus scraping (pull) and OpenTelemetry OTLP (push). |
 | [`augurs`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
+| [`statistics`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/statistics/) | Streaming statistics toolkit — EWMA (per-tick and time-decayed), cumulative and rolling mean/variance/std/min/max/median, with count- and time-weighted variants over sample- and time-based windows. |
 
 ## Links
 - Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)

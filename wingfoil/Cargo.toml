@@ -229,6 +229,9 @@ required-features = ["kdb"]
 [[example]]
 name = "run_mode"
 
+[[example]]
+name = "statistics"
+
 [[bench]]
 name = "graph"
 harness = false

@@ -2,7 +2,9 @@ use log::Level;
 use pyo3::BoundObject;
 use std::any::type_name;
 
-use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators, Weighting};
+use ::wingfoil::{
+    Element, IntoStream, NodeOperators, StatisticsOperators, Stream, StreamOperators, Weighting,
+};
 
 use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;

@@ -32,6 +32,7 @@ A guide to the examples in this directory. Each one is runnable — see its own 
 | [`web`](web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
 | [`telemetry`](telemetry/) | Metrics export: [`prometheus`](telemetry/prometheus/) (pull-based scrape) and [`otlp`](telemetry/otlp/) (push to Grafana Alloy, Datadog, Honeycomb, etc.). |
 | [`augurs`](augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
+| [`statistics`](statistics/) | Streaming statistics toolkit — EWMA (per-tick and time-decayed), cumulative and rolling mean/variance/std/min/max/median, with count- and time-weighted variants over sample- and time-based windows. |
 
 ## Snippets
 
@@ -375,3 +376,26 @@ prices.augurs_seasons(AugursSeasonsConfig::new(240));
 ```
 
 [Full example.](augurs/)
+
+### Statistics
+
+Streaming numeric aggregations via the `StatisticsOperators` trait — no external service. Weightable operators take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect), and windows come in count-based (`rolling_*(n)`) and time-based (`rolling_*_over(duration)`) forms:
+
+```rust,ignore
+use wingfoil::*;
+
+// Exponential smoothing: per-tick alpha, or a time-based half-life.
+prices.ewma(0.2);
+prices.ewma_decay(Duration::from_secs(30));
+
+// Cumulative mean — arithmetic vs time-weighted (TWAP).
+prices.average(Weighting::Count);
+prices.average(Weighting::Time);
+
+// Rolling over the last N samples, or the last N of graph time.
+prices.rolling_std(20);
+prices.rolling_median(20);
+prices.rolling_mean_over(Duration::from_secs(5), Weighting::Time);
+```
+
+[Full example.](statistics/)

@@ -13,13 +13,20 @@
 //!
 //! All operators consume `T: Element + ToPrimitive` and emit `f64`.
 
+use crate::nodes::StreamOperators;
 use crate::types::*;
 
 use num_traits::ToPrimitive;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
+use watermill::maximum::RollingMax;
+use watermill::mean::Mean;
+use watermill::minimum::RollingMin;
+use watermill::quantile::RollingQuantile;
 use watermill::stats::{RollableUnivariate, Univariate};
+use watermill::sum::Sum;
+use watermill::variance::Variance;
 
 /// How samples are weighted when aggregating a stream.
 ///
@@ -36,6 +43,207 @@ pub enum Weighting {
     /// time-weighted averages/variances, where a value that persisted for a
     /// second counts ten times as much as one replaced after 100ms.
     Time,
+}
+
+/// Streaming statistics operators for numeric streams.
+///
+/// Chain these onto any `Stream<T>` whose values are numeric
+/// (`T: Element + ToPrimitive`); every operator emits an `f64`.  Bring the
+/// trait into scope with `use wingfoil::*` (or `use wingfoil::StatisticsOperators`)
+/// to use the fluent form:
+///
+/// ```
+/// use wingfoil::*;
+/// use std::time::Duration;
+///
+/// let smoothed = ticker(Duration::from_millis(10)).count().ewma(0.1);
+/// let twap = ticker(Duration::from_millis(10)).count().average(Weighting::Time);
+/// ```
+pub trait StatisticsOperators<T: Element + ToPrimitive> {
+    /// Cumulative average of source.  [`Weighting::Count`] is the arithmetic
+    /// mean of the samples; [`Weighting::Time`] is the time-weighted average,
+    /// each value weighted by how long it was in effect.
+    #[must_use]
+    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Cumulative variance of source.  [`Weighting::Count`] is the sample
+    /// variance (ddof = 1); [`Weighting::Time`] is the time-weighted
+    /// (population) variance.  Yields `0.0` until enough data is present.
+    #[must_use]
+    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Cumulative standard deviation of source — the square root of
+    /// [`variance`](StatisticsOperators::variance) under the same `weighting`.
+    #[must_use]
+    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>>;
+    /// Exponentially weighted moving average with per-tick smoothing factor
+    /// `alpha` (`ewma_t = alpha * x_t + (1 - alpha) * ewma_{t-1}`).  The first
+    /// sample seeds the average.
+    #[must_use]
+    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>>;
+    /// Time-decayed exponentially weighted moving average: a sample's weight
+    /// halves every `half_life` of elapsed time, independent of tick rate.
+    /// The first sample seeds the average.
+    #[must_use]
+    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>>;
+    /// Rolling sum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling mean (simple moving average) over the most recent `window` samples.
+    #[must_use]
+    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling minimum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling maximum over the most recent `window` samples.
+    #[must_use]
+    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling sample variance (ddof = 1) over the most recent `window` samples.
+    /// Yields `0.0` until at least two samples are present.
+    #[must_use]
+    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling sample standard deviation (ddof = 1) over the most recent
+    /// `window` samples.
+    #[must_use]
+    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling median (50th percentile) over the most recent `window` samples,
+    /// linearly interpolated.
+    #[must_use]
+    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>;
+    /// Rolling sum over all samples seen in the last `window` of graph time.
+    #[must_use]
+    fn rolling_sum_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>;
+    /// Rolling mean over samples seen in the last `window` of graph time.
+    /// [`Weighting::Time`] gives a true time-weighted average over the window.
+    #[must_use]
+    fn rolling_mean_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>>;
+    /// Rolling minimum over samples seen in the last `window` of graph time.
+    #[must_use]
+    fn rolling_min_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>;
+    /// Rolling maximum over samples seen in the last `window` of graph time.
+    #[must_use]
+    fn rolling_max_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>;
+    /// Rolling variance over samples seen in the last `window` of graph time.
+    /// [`Weighting::Count`] is the sample variance (ddof = 1); [`Weighting::Time`]
+    /// is the time-weighted (population) variance.
+    #[must_use]
+    fn rolling_var_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>>;
+    /// Rolling standard deviation over samples seen in the last `window` of
+    /// graph time — the square root of
+    /// [`rolling_var_over`](StatisticsOperators::rolling_var_over).
+    #[must_use]
+    fn rolling_std_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>>;
+    /// Rolling median over samples seen in the last `window` of graph time.
+    #[must_use]
+    fn rolling_median_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>>;
+}
+
+impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T> {
+    fn average(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        MomentStream::new(self.clone(), Moment::Mean, weighting).into_stream()
+    }
+
+    fn variance(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        MomentStream::new(self.clone(), Moment::Var, weighting).into_stream()
+    }
+
+    fn std(self: &Rc<Self>, weighting: Weighting) -> Rc<dyn Stream<f64>> {
+        MomentStream::new(self.clone(), Moment::Std, weighting).into_stream()
+    }
+
+    fn ewma(self: &Rc<Self>, alpha: f64) -> Rc<dyn Stream<f64>> {
+        EwmaStream::new(self.clone(), EwmaDecay::PerTick(alpha)).into_stream()
+    }
+
+    fn ewma_decay(self: &Rc<Self>, half_life: Duration) -> Rc<dyn Stream<f64>> {
+        let half_life = half_life.as_nanos() as f64;
+        EwmaStream::new(self.clone(), EwmaDecay::HalfLife(half_life)).into_stream()
+    }
+
+    fn rolling_sum(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        WindowStatStream::new(self.clone(), Sum::new(), window).into_stream()
+    }
+
+    fn rolling_mean(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        WindowStatStream::new(self.clone(), Mean::new(), window).into_stream()
+    }
+
+    fn rolling_min(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        StatStream::new(self.clone(), RollingMin::new(window.max(1))).into_stream()
+    }
+
+    fn rolling_max(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        StatStream::new(self.clone(), RollingMax::new(window.max(1))).into_stream()
+    }
+
+    fn rolling_var(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        // ddof = 1 for sample variance, matching the documented convention.
+        WindowStatStream::new(self.clone(), Variance::new(1), window).into_stream()
+    }
+
+    fn rolling_std(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        // Clamp at zero: watermill's revert-based variance can dip a hair below
+        // zero from floating-point cancellation on a near-constant window, and
+        // `sqrt` of a negative is NaN.
+        self.rolling_var(window).map(|v: f64| v.max(0.0).sqrt())
+    }
+
+    fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>> {
+        let quantile = RollingQuantile::new(0.5, window.max(1))
+            .expect("invariant: 0.5 is a valid quantile in [0, 1]");
+        StatStream::new(self.clone(), quantile).into_stream()
+    }
+
+    fn rolling_sum_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Sum, Weighting::Count, window).into_stream()
+    }
+
+    fn rolling_mean_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Mean, weighting, window).into_stream()
+    }
+
+    fn rolling_min_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Min, Weighting::Count, window).into_stream()
+    }
+
+    fn rolling_max_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Max, Weighting::Count, window).into_stream()
+    }
+
+    fn rolling_var_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Var, weighting, window).into_stream()
+    }
+
+    fn rolling_std_over(
+        self: &Rc<Self>,
+        window: Duration,
+        weighting: Weighting,
+    ) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Std, weighting, window).into_stream()
+    }
+
+    fn rolling_median_over(self: &Rc<Self>, window: Duration) -> Rc<dyn Stream<f64>> {
+        TimeWindowStream::new(self.clone(), WindowStat::Median, Weighting::Count, window)
+            .into_stream()
+    }
 }
 
 /// Incremental weighted mean and variance via West's algorithm (a weighted
