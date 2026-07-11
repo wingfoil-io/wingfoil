@@ -10,7 +10,7 @@ use ::wingfoil::{GraphState, IntoNode, MutableNode, StreamPeekRef, UpStreams};
 
 /// This is used as inner class of python coded base class Stream
 #[derive(Display)]
-#[pyclass(subclass, unsendable)]
+#[pyclass(subclass, unsendable, from_py_object)]
 pub struct PyProxyStream(Py<PyAny>);
 
 #[pymethods]
