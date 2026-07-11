@@ -72,7 +72,7 @@ where
                     RunMode::HistoricalFrom(_) => None,
                     RunMode::RealTime => Some(graph_state.ready_notifier()),
                 };
-                let (sender, receiver) = channel_pair(notifier);
+                let (sender, receiver) = channel_pair(notifier, None);
                 let mut receiver_stream = ChannelReceiverStream::new(receiver, None, None);
                 receiver_stream.setup(graph_state)?;
                 self.receiver_stream
@@ -173,7 +173,7 @@ where
 {
     pub fn new(source: Rc<dyn Stream<IN>>, func: FUNC) -> Self {
         let trigger = Some(source.clone().as_node());
-        let (sender_out, receiver_out) = channel_pair(None);
+        let (sender_out, receiver_out) = channel_pair(None, None);
         //let receiver_out = ChannelReceiver::new(rx_out);
         let receiver_stream = ChannelReceiverStream::new(receiver_out, trigger, None);
         let state = GraphMapStreamState::Func(func, sender_out);
@@ -228,7 +228,7 @@ where
                 let run_for = graph_state.run_for();
                 let tokio_runtime = graph_state.tokio_runtime();
                 let start_time = graph_state.start_time();
-                let (mut sender_in, receiver_in) = channel_pair(None);
+                let (mut sender_in, receiver_in) = channel_pair(None, None);
                 let task = move || {
                     let src = ChannelReceiverStream::new(receiver_in, None, tx_notif).into_stream();
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));

@@ -300,7 +300,7 @@ mod tests {
     /// burst instead of being split across cycles.
     #[test]
     fn same_time_burst_does_not_break_monotonic_engine_time() {
-        let (sender, receiver) = channel_pair::<u64>(None);
+        let (sender, receiver) = channel_pair::<u64>(None, None);
 
         // A burst of two ticks at the *same* engine time, fanned out as separate
         // messages onto the channel.

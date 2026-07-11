@@ -20,10 +20,20 @@ use crate::types::Element;
 
 use kanal::{Receiver, Sender};
 
+/// Creates a connected sender/receiver pair.
+///
+/// `buffer_size` controls the channel capacity: `None` creates an unbounded
+/// channel (a fast producer never blocks, but an unbounded backlog can grow),
+/// while `Some(n)` creates a bounded channel of capacity `n` so the producer
+/// blocks once the buffer is full — the standard back-pressure signal.
 pub fn channel_pair<T: Element + Send>(
     ready_notifier: Option<ReadyNotifier>,
+    buffer_size: Option<usize>,
 ) -> (ChannelSender<T>, ChannelReceiver<T>) {
-    let (tx, rx) = kanal::unbounded();
+    let (tx, rx) = match buffer_size {
+        Some(n) => kanal::bounded(n),
+        None => kanal::unbounded(),
+    };
     let sender = ChannelSender::new(tx, ready_notifier);
     let receiver = ChannelReceiver::new(rx);
     (sender, receiver)
@@ -75,27 +85,27 @@ mod tests {
 
     #[test]
     fn channel_pair_creates_working_channel() {
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         tx.send_message(Message::RealtimeValue(42)).unwrap();
         assert_eq!(rx.try_recv(), Some(Message::RealtimeValue(42)));
     }
 
     #[test]
     fn try_recv_returns_none_on_empty() {
-        let (_tx, rx) = channel_pair::<u64>(None);
+        let (_tx, rx) = channel_pair::<u64>(None, None);
         assert_eq!(rx.try_recv(), None);
     }
 
     #[test]
     fn try_recv_returns_end_of_stream_when_closed() {
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         drop(tx);
         assert_eq!(rx.try_recv(), Some(Message::EndOfStream));
     }
 
     #[test]
     fn recv_returns_end_of_stream_when_sender_dropped() {
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         drop(tx);
         assert_eq!(rx.recv(), Message::EndOfStream);
     }
@@ -103,7 +113,7 @@ mod tests {
     #[test]
     fn send_in_historical_mode_wraps_as_historical_value() {
         let state = historical_state();
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         tx.send(&state, 10).unwrap();
         let msg = rx.try_recv().unwrap();
         assert!(matches!(msg, Message::HistoricalValue(_)));
@@ -112,7 +122,7 @@ mod tests {
     #[test]
     fn send_in_realtime_mode_wraps_as_realtime_value() {
         let state = realtime_state();
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         tx.send(&state, 10).unwrap();
         let msg = rx.try_recv().unwrap();
         assert_eq!(msg, Message::RealtimeValue(10));
@@ -121,7 +131,7 @@ mod tests {
     #[test]
     fn send_checkpoint() {
         let state = historical_state();
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         tx.send_checkpoint(&state).unwrap();
         let msg = rx.try_recv().unwrap();
         assert!(matches!(msg, Message::CheckPoint(_)));
@@ -130,7 +140,7 @@ mod tests {
     #[test]
     fn send_in_historical_mode_wraps_value_in_single_burst() {
         let state = historical_state();
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         tx.send(&state, 7).unwrap();
         match rx.try_recv().unwrap() {
             Message::HistoricalValue(value_at) => {
@@ -142,7 +152,7 @@ mod tests {
 
     #[test]
     fn close_sends_end_of_stream_and_idempotent() {
-        let (mut tx, rx) = channel_pair::<u64>(None);
+        let (mut tx, rx) = channel_pair::<u64>(None, None);
         tx.close().unwrap();
         assert_eq!(rx.try_recv(), Some(Message::EndOfStream));
         // second close is a no-op
@@ -151,7 +161,7 @@ mod tests {
 
     #[test]
     fn send_after_close_returns_error() {
-        let (mut tx, _rx) = channel_pair::<u64>(None);
+        let (mut tx, _rx) = channel_pair::<u64>(None, None);
         tx.close().unwrap();
         let state = realtime_state();
         assert!(tx.send(&state, 1).is_err());
@@ -159,7 +169,7 @@ mod tests {
 
     #[test]
     fn receiver_teardown_ok_when_sender_dropped() {
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         drop(tx);
         assert!(rx.teardown().is_ok());
     }
@@ -169,7 +179,7 @@ mod tests {
     fn async_send_after_receiver_dropped_errors_not_panics() {
         // Regression: a receiver dropped during shutdown is a normal teardown
         // race. The async sender must surface ChannelClosed, not panic.
-        let (tx, rx) = channel_pair::<u64>(None);
+        let (tx, rx) = channel_pair::<u64>(None, None);
         let sender = tx.into_async();
         drop(rx);
         let rt = tokio::runtime::Runtime::new().unwrap();

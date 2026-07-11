@@ -409,13 +409,16 @@ fn test_burst_stream_publishes_atomic_arrays() -> anyhow::Result<()> {
     // Two values at t=100 (grouped into one Burst) and one at t=200.
     // `Burst<T>` isn't serializable, so map it to a `Vec<T>` — the wire
     // array the client surfaces as the same-time group.
-    let bursts: Rc<dyn Stream<Burst<u32>>> = produce_async(|_ctx: RunParams| async move {
-        Ok(async_stream::stream! {
-            yield Ok((NanoTime::new(100), 1u32));
-            yield Ok((NanoTime::new(100), 2u32));
-            yield Ok((NanoTime::new(200), 3u32));
-        })
-    });
+    let bursts: Rc<dyn Stream<Burst<u32>>> = produce_async(
+        |_ctx: RunParams| async move {
+            Ok(async_stream::stream! {
+                yield Ok((NanoTime::new(100), 1u32));
+                yield Ok((NanoTime::new(100), 2u32));
+                yield Ok((NanoTime::new(200), 3u32));
+            })
+        },
+        None,
+    );
     let source = bursts.map(|b: Burst<u32>| b.to_vec());
     web_pub(&server, "burst", &source)
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;

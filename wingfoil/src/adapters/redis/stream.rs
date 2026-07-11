@@ -47,57 +47,60 @@ pub fn redis_stream_read(
 ) -> Rc<dyn Stream<Burst<RedisStreamEvent>>> {
     let connection = connection.into();
     let key = key.into();
-    produce_async(move |_ctx: RunParams| async move {
-        let client = redis::Client::open(connection.url.as_str())
-            .map_err(|e| anyhow::anyhow!("redis client open failed: {e}"))?;
-        let mut conn = client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| anyhow::anyhow!("redis connect failed: {e}"))?;
+    produce_async(
+        move |_ctx: RunParams| async move {
+            let client = redis::Client::open(connection.url.as_str())
+                .map_err(|e| anyhow::anyhow!("redis client open failed: {e}"))?;
+            let mut conn = client
+                .get_multiplexed_async_connection()
+                .await
+                .map_err(|e| anyhow::anyhow!("redis connect failed: {e}"))?;
 
-        // 1. Snapshot all existing entries and capture the last ID.
-        let snapshot: StreamRangeReply = conn
-            .xrange(&key, "-", "+")
-            .await
-            .map_err(|e| anyhow::anyhow!("redis xrange on {key:?} failed: {e}"))?;
-        // "0" means "from the beginning" — used when the stream is empty so the tail
-        // picks up the very first appended entry.
-        let mut last_id = snapshot
-            .ids
-            .last()
-            .map(|id| id.id.clone())
-            .unwrap_or_else(|| "0".to_string());
-        let snapshot_events: Vec<RedisStreamEvent> =
-            snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
+            // 1. Snapshot all existing entries and capture the last ID.
+            let snapshot: StreamRangeReply = conn
+                .xrange(&key, "-", "+")
+                .await
+                .map_err(|e| anyhow::anyhow!("redis xrange on {key:?} failed: {e}"))?;
+            // "0" means "from the beginning" — used when the stream is empty so the tail
+            // picks up the very first appended entry.
+            let mut last_id = snapshot
+                .ids
+                .last()
+                .map(|id| id.id.clone())
+                .unwrap_or_else(|| "0".to_string());
+            let snapshot_events: Vec<RedisStreamEvent> =
+                snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
 
-        Ok(async_stream::stream! {
-            // Phase 1: emit the snapshot.
-            for event in snapshot_events {
-                yield Ok((NanoTime::now(), event));
-            }
+            Ok(async_stream::stream! {
+                // Phase 1: emit the snapshot.
+                for event in snapshot_events {
+                    yield Ok((NanoTime::now(), event));
+                }
 
-            // Phase 2: tail live appends from the snapshot boundary.
-            let opts = StreamReadOptions::default().block(0);
-            loop {
-                let reply: redis::RedisResult<StreamReadReply> =
-                    conn.xread_options(&[&key], &[&last_id], &opts).await;
-                match reply {
-                    Ok(reply) => {
-                        for stream_key in &reply.keys {
-                            for id in &stream_key.ids {
-                                last_id = id.id.clone();
-                                yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
+                // Phase 2: tail live appends from the snapshot boundary.
+                let opts = StreamReadOptions::default().block(0);
+                loop {
+                    let reply: redis::RedisResult<StreamReadReply> =
+                        conn.xread_options(&[&key], &[&last_id], &opts).await;
+                    match reply {
+                        Ok(reply) => {
+                            for stream_key in &reply.keys {
+                                for id in &stream_key.ids {
+                                    last_id = id.id.clone();
+                                    yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        yield Err(anyhow::anyhow!("redis xread on {key:?} failed: {e}"));
-                        break;
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("redis xread on {key:?} failed: {e}"));
+                            break;
+                        }
                     }
                 }
-            }
-        })
-    })
+            })
+        },
+        None,
+    )
 }
 
 /// Append a `Burst<RedisStreamRecord>` stream to Redis via `XADD`.

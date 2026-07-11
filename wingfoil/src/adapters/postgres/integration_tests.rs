@@ -265,14 +265,17 @@ fn test_write_round_trip() -> anyhow::Result<()> {
 
     // Emit three trades at distinct hourly timestamps via the graph, then write them.
     let write_conn = conn.clone();
-    let producer = produce_async(move |_ctx| async move {
-        Ok(async_stream::stream! {
-            for i in 0..3i64 {
-                let time = NanoTime::from_kdb_timestamp(i * 3_600_000_000_000);
-                yield Ok((time, TestTrade { sym: format!("W{i}"), price: 10.0 + i as f64, qty: i }));
-            }
-        })
-    });
+    let producer = produce_async(
+        move |_ctx| async move {
+            Ok(async_stream::stream! {
+                for i in 0..3i64 {
+                    let time = NanoTime::from_kdb_timestamp(i * 3_600_000_000_000);
+                    yield Ok((time, TestTrade { sym: format!("W{i}"), price: 10.0 + i as f64, qty: i }));
+                }
+            })
+        },
+        None,
+    );
     postgres_write(write_conn, "trades", &producer)
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 

@@ -99,101 +99,104 @@ where
     T: Element + Send + PostgresDeserialize + 'static,
 {
     let connection = connection.into();
-    produce_async(move |ctx| {
-        let start_time = ctx.start_time;
-        let end_time_result = ctx.end_time();
-        let connection = connection;
-        let mut query_fn = query_fn;
+    produce_async(
+        move |ctx| {
+            let start_time = ctx.start_time;
+            let end_time_result = ctx.end_time();
+            let connection = connection;
+            let mut query_fn = query_fn;
 
-        async move {
-            // `compute_validated_time_slices` consumes `end_time_result`; capture the
-            // concrete bound first (NanoTime is Copy) so emitted rows can be clamped to
-            // the run's `[start_time, end_time)` window below. Validation guarantees the
-            // value is present (bounded, non-MAX) by the time we unwrap it.
-            let end_time_bound = end_time_result.as_ref().ok().copied();
-            let slices = compute_validated_time_slices(
-                "postgres_read",
-                start_time,
-                end_time_result,
-                period,
-            )?;
-            let end_time =
-                end_time_bound.expect("compute_validated_time_slices accepted a bounded end_time");
+            async move {
+                // `compute_validated_time_slices` consumes `end_time_result`; capture the
+                // concrete bound first (NanoTime is Copy) so emitted rows can be clamped to
+                // the run's `[start_time, end_time)` window below. Validation guarantees the
+                // value is present (bounded, non-MAX) by the time we unwrap it.
+                let end_time_bound = end_time_result.as_ref().ok().copied();
+                let slices = compute_validated_time_slices(
+                    "postgres_read",
+                    start_time,
+                    end_time_result,
+                    period,
+                )?;
+                let end_time = end_time_bound
+                    .expect("compute_validated_time_slices accepted a bounded end_time");
 
-            let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
-                .await
-                .with_context(|| {
-                    format!(
-                        "postgres_read: failed to connect: {}",
-                        connection.redacted()
-                    )
-                })?;
-            // Drive the connection's protocol handling in the background; it ends
-            // when `client` is dropped after the stream is exhausted.
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    log::error!("postgres connection error: {e}");
-                }
-            });
-
-            Ok(async_stream::stream! {
-                // Timestamps are full (not time-of-day), so ordering is enforced
-                // across the whole read, not reset per slice.
-                let mut prev_time: Option<NanoTime> = None;
-                'outer: for ((t0, t1), date, iteration) in slices {
-                    let query = query_fn((t0, t1), date, iteration);
-                    info!("postgres query: {query}");
-                    let fetch_start = std::time::Instant::now();
-                    let rows = match client.query(&query, &[]).await {
-                        Ok(rows) => rows,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("postgres query failed"));
-                            break;
-                        }
-                    };
-                    info!("postgres query: {} rows in {:?}", rows.len(), fetch_start.elapsed());
-
-                    // The query uses the period-aligned (t0, t1) for clean round-number
-                    // boundaries, but the first slice's t0 can precede start_time (and the
-                    // last slice's t1 exceed end_time), so a `time >= t0` filter may return
-                    // rows outside the run window. Drop rows outside [start_time, end_time)
-                    // via the shared WindowFilter: emitting a row before the graph clock
-                    // aborts the run, and a row past end_time would drive the monotonic
-                    // check to reject a later slice.
-                    let mut filter = WindowFilter::new(
-                        "postgres_read",
-                        TimeWindow::clamp(t0, t1, start_time, end_time),
-                    );
-
-                    for row in &rows {
-                        let (time, record) = match T::from_row(row) {
-                            Ok(r) => r,
-                            Err(e) => { yield Err(e); break 'outer; }
-                        };
-
-                        if !filter.keep(time) {
-                            continue;
-                        }
-
-                        if let Some(prev) = prev_time
-                            && time < prev
-                        {
-                            yield Err(anyhow::anyhow!(
-                                "postgres data is not sorted by time: got {time:?} after {prev:?}. \
-                                Add `ORDER BY time` to your query."
-                            ));
-                            break 'outer;
-                        }
-                        prev_time = Some(time);
-
-                        yield Ok((time, record));
+                let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "postgres_read: failed to connect: {}",
+                            connection.redacted()
+                        )
+                    })?;
+                // Drive the connection's protocol handling in the background; it ends
+                // when `client` is dropped after the stream is exhausted.
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        log::error!("postgres connection error: {e}");
                     }
+                });
 
-                    filter.finish();
-                }
-            })
-        }
-    })
+                Ok(async_stream::stream! {
+                    // Timestamps are full (not time-of-day), so ordering is enforced
+                    // across the whole read, not reset per slice.
+                    let mut prev_time: Option<NanoTime> = None;
+                    'outer: for ((t0, t1), date, iteration) in slices {
+                        let query = query_fn((t0, t1), date, iteration);
+                        info!("postgres query: {query}");
+                        let fetch_start = std::time::Instant::now();
+                        let rows = match client.query(&query, &[]).await {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                yield Err(anyhow::Error::new(e).context("postgres query failed"));
+                                break;
+                            }
+                        };
+                        info!("postgres query: {} rows in {:?}", rows.len(), fetch_start.elapsed());
+
+                        // The query uses the period-aligned (t0, t1) for clean round-number
+                        // boundaries, but the first slice's t0 can precede start_time (and the
+                        // last slice's t1 exceed end_time), so a `time >= t0` filter may return
+                        // rows outside the run window. Drop rows outside [start_time, end_time)
+                        // via the shared WindowFilter: emitting a row before the graph clock
+                        // aborts the run, and a row past end_time would drive the monotonic
+                        // check to reject a later slice.
+                        let mut filter = WindowFilter::new(
+                            "postgres_read",
+                            TimeWindow::clamp(t0, t1, start_time, end_time),
+                        );
+
+                        for row in &rows {
+                            let (time, record) = match T::from_row(row) {
+                                Ok(r) => r,
+                                Err(e) => { yield Err(e); break 'outer; }
+                            };
+
+                            if !filter.keep(time) {
+                                continue;
+                            }
+
+                            if let Some(prev) = prev_time
+                                && time < prev
+                            {
+                                yield Err(anyhow::anyhow!(
+                                    "postgres data is not sorted by time: got {time:?} after {prev:?}. \
+                                    Add `ORDER BY time` to your query."
+                                ));
+                                break 'outer;
+                            }
+                            prev_time = Some(time);
+
+                            yield Ok((time, record));
+                        }
+
+                        filter.finish();
+                    }
+                })
+            }
+        },
+        None,
+    )
 }
 
 #[cfg(test)]

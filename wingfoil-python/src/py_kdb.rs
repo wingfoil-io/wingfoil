@@ -157,6 +157,7 @@ pub fn py_kdb_read(
                 t1 = t1.to_kdb_timestamp(),
             )
         },
+        None,
     );
 
     // Collapse burst to single row, convert to PyElement (dict)

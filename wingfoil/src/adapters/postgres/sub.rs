@@ -87,101 +87,106 @@ where
 {
     let connection = connection.into();
     let channel = channel.into();
-    produce_async(move |ctx| {
-        let run_mode = ctx.run_mode;
-        let connection = connection;
-        let channel = channel;
-        let mut query_fn = query_fn;
+    produce_async(
+        move |ctx| {
+            let run_mode = ctx.run_mode;
+            let connection = connection;
+            let channel = channel;
+            let mut query_fn = query_fn;
 
-        async move {
-            if !matches!(run_mode, RunMode::RealTime) {
-                anyhow::bail!(
-                    "postgres_sub requires RunMode::RealTime; \
+            async move {
+                if !matches!(run_mode, RunMode::RealTime) {
+                    anyhow::bail!(
+                        "postgres_sub requires RunMode::RealTime; \
                     use postgres_read for historical replay"
-                );
-            }
+                    );
+                }
 
-            let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
-                .await
-                .with_context(|| {
-                    format!("postgres_sub: failed to connect: {}", connection.redacted())
-                })?;
+                let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
+                    .await
+                    .with_context(|| {
+                        format!("postgres_sub: failed to connect: {}", connection.redacted())
+                    })?;
 
-            // Drive the connection and forward notification wake-ups. Polling
-            // `poll_message` (rather than awaiting the plain connection future)
-            // is what surfaces `AsyncMessage::Notification`s.
-            let (tx, mut rx) = mpsc::unbounded::<()>();
-            tokio::spawn(async move {
-                let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
-                while let Some(message) = messages.next().await {
-                    match message {
-                        Ok(AsyncMessage::Notification(_)) => {
-                            if tx.unbounded_send(()).is_err() {
-                                break; // subscriber gone
+                // Drive the connection and forward notification wake-ups. Polling
+                // `poll_message` (rather than awaiting the plain connection future)
+                // is what surfaces `AsyncMessage::Notification`s.
+                let (tx, mut rx) = mpsc::unbounded::<()>();
+                tokio::spawn(async move {
+                    let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
+                    while let Some(message) = messages.next().await {
+                        match message {
+                            Ok(AsyncMessage::Notification(_)) => {
+                                if tx.unbounded_send(()).is_err() {
+                                    break; // subscriber gone
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::error!("postgres_sub connection error: {e}");
+                                break;
                             }
                         }
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::error!("postgres_sub connection error: {e}");
-                            break;
-                        }
                     }
-                }
-            });
+                });
 
-            // LISTEN before the catch-up query so an insert committed in the
-            // handoff window still produces a wake-up (watch-before-get).
-            client
-                .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
-                .await
-                .with_context(|| format!("postgres_sub: LISTEN on channel `{channel}` failed"))?;
+                // LISTEN before the catch-up query so an insert committed in the
+                // handoff window still produces a wake-up (watch-before-get).
+                client
+                    .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
+                    .await
+                    .with_context(|| {
+                        format!("postgres_sub: LISTEN on channel `{channel}` failed")
+                    })?;
 
-            Ok(async_stream::stream! {
-                let mut cursor = start_from;
-                loop {
-                    // Drain everything past the cursor. The first pass is the
-                    // catch-up from `start_from`; later passes fetch what the
-                    // wake-up announced.
-                    let query = query_fn(cursor);
-                    info!("postgres_sub query: {query}");
-                    let rows = match client.query(&query, &[]).await {
-                        Ok(rows) => rows,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
-                            break;
-                        }
-                    };
-                    if !rows.is_empty() {
-                        info!("postgres_sub: {} new rows", rows.len());
-                    }
-                    for row in &rows {
-                        let (time, record) = match T::from_row(row) {
-                            Ok(r) => r,
-                            Err(e) => { yield Err(e); return; }
+                Ok(async_stream::stream! {
+                    let mut cursor = start_from;
+                    loop {
+                        // Drain everything past the cursor. The first pass is the
+                        // catch-up from `start_from`; later passes fetch what the
+                        // wake-up announced.
+                        let query = query_fn(cursor);
+                        info!("postgres_sub query: {query}");
+                        let rows = match client.query(&query, &[]).await {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
+                                break;
+                            }
                         };
-                        if time > cursor {
-                            cursor = time;
+                        if !rows.is_empty() {
+                            info!("postgres_sub: {} new rows", rows.len());
                         }
-                        yield Ok((time, record));
-                    }
+                        for row in &rows {
+                            let (time, record) = match T::from_row(row) {
+                                Ok(r) => r,
+                                Err(e) => { yield Err(e); return; }
+                            };
+                            if time > cursor {
+                                cursor = time;
+                            }
+                            yield Ok((time, record));
+                        }
 
-                    // Wait for the next wake-up; coalesce any that queued while
-                    // we were querying (they all mean the same thing: re-query).
-                    match rx.next().await {
-                        Some(()) => {
-                            while rx.try_recv().is_ok() {}
-                        }
-                        None => {
-                            yield Err(anyhow::anyhow!(
-                                "postgres_sub: connection to postgres closed"
-                            ));
-                            break;
+                        // Wait for the next wake-up; coalesce any that queued while
+                        // we were querying (they all mean the same thing: re-query).
+                        match rx.next().await {
+                            Some(()) => {
+                                while rx.try_recv().is_ok() {}
+                            }
+                            None => {
+                                yield Err(anyhow::anyhow!(
+                                    "postgres_sub: connection to postgres closed"
+                                ));
+                                break;
+                            }
                         }
                     }
-                }
-            })
-        }
-    })
+                })
+            }
+        },
+        None,
+    )
 }
 
 #[cfg(test)]

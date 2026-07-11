@@ -43,6 +43,7 @@
 //!             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
 //!         )
 //!     },
+//!     None, // buffer_size: None = unbounded; Some(n) applies back-pressure
 //! )
 //!     // Each tick is a `Burst<Trade>` — all trades sharing a timestamp. Iterate
 //!     // the burst to see every row; `.collapse()` keeps only the last per tick.

@@ -395,59 +395,67 @@ where
     }
 }
 
+/// `buffer_size` bounds the channel feeding the graph: `None` is unbounded
+/// (a fast KDB replay never blocks but can build an arbitrarily large backlog
+/// if the graph is the bottleneck), while `Some(n)` bounds it to `n` items so
+/// the replay applies back-pressure, capping memory use.
 #[must_use]
 pub fn kdb_read<T>(
     connection: KdbConnection,
     period: std::time::Duration,
     query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
+    buffer_size: Option<usize>,
 ) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send + KdbDeserialize + 'static,
 {
-    produce_async(move |ctx| {
-        let start_time = ctx.start_time;
-        let end_time_result = ctx.end_time();
+    produce_async(
+        move |ctx| {
+            let start_time = ctx.start_time;
+            let end_time_result = ctx.end_time();
 
-        async move {
-            // `compute_validated_time_slices` consumes `end_time_result`; capture the
-            // concrete bound first (NanoTime is Copy) so the per-slice clamp below can
-            // reference `end_time`. Validation guarantees it is present (bounded, non-MAX).
-            let end_time_bound = end_time_result.as_ref().ok().copied();
-            let slices = compute_validated_time_slices(
-                "kdb_read_time_sliced",
-                start_time,
-                end_time_result,
-                period,
-            )?;
-            let end_time =
-                end_time_bound.expect("compute_validated_time_slices accepted a bounded end_time");
+            async move {
+                // `compute_validated_time_slices` consumes `end_time_result`; capture the
+                // concrete bound first (NanoTime is Copy) so the per-slice clamp below can
+                // reference `end_time`. Validation guarantees it is present (bounded, non-MAX).
+                let end_time_bound = end_time_result.as_ref().ok().copied();
+                let slices = compute_validated_time_slices(
+                    "kdb_read_time_sliced",
+                    start_time,
+                    end_time_result,
+                    period,
+                )?;
+                let end_time = end_time_bound
+                    .expect("compute_validated_time_slices accepted a bounded end_time");
 
-            let creds = connection.credentials_string();
-            let socket = QStream::connect(
-                ConnectionMethod::TCP,
-                &connection.host,
-                connection.port,
-                &creds,
-            )
-            .await?;
+                let creds = connection.credentials_string();
+                let socket = QStream::connect(
+                    ConnectionMethod::TCP,
+                    &connection.host,
+                    connection.port,
+                    &creds,
+                )
+                .await?;
 
-            let mut slices_iter = slices.into_iter();
-            let mut query_fn = query_fn;
-            let slice_fn = move || -> Option<(String, TimeWindow)> {
-                let ((t0, t1), date, iteration) = slices_iter.next()?;
-                // The query still uses the period-aligned (t0, t1) for clean
-                // round-number boundaries, but rows are clamped to the run's
-                // [start_time, end_time) so out-of-window rows are dropped rather
-                // than aborting the run. `t0` may precede `start_time` on the
-                // first slice; `t1` may exceed `end_time` on the last.
-                let window = TimeWindow::clamp(t0, t1, start_time, end_time);
-                let query = query_fn((t0, t1), date, iteration);
-                Some((query, window))
-            };
+                let mut slices_iter = slices.into_iter();
+                let mut query_fn = query_fn;
+                let slice_fn = move || -> Option<(String, TimeWindow)> {
+                    let ((t0, t1), date, iteration) = slices_iter.next()?;
+                    // The query still uses the period-aligned (t0, t1) for clean
+                    // round-number boundaries, but rows are clamped to the run's
+                    // [start_time, end_time) so out-of-window rows are dropped rather
+                    // than aborting the run. `t0` may precede `start_time` on the
+                    // first slice; `t1` may exceed `end_time` on the last.
+                    let window = TimeWindow::clamp(t0, t1, start_time, end_time);
+                    let query = query_fn((t0, t1), date, iteration);
+                    Some((query, window))
+                };
 
-            Ok(chunk_stream::<T>(socket, slice_fn))
-        }
-    })
+                Ok(chunk_stream::<T>(socket, slice_fn))
+            }
+        },
+        buffer_size,
+    )
 }
 
 #[cfg(test)]
@@ -500,12 +508,15 @@ mod tests {
         let before = NanoTime::new(u64::from(start) - 1);
 
         // Mimics kdb_read's first slice yielding a row from [t0, start_time).
-        let stream = crate::nodes::produce_async(move |_ctx| async move {
-            Ok(async_stream::stream! {
-                yield Ok((before, 1u32));
-                yield Ok((start, 2u32));
-            })
-        });
+        let stream = crate::nodes::produce_async(
+            move |_ctx| async move {
+                Ok(async_stream::stream! {
+                    yield Ok((before, 1u32));
+                    yield Ok((start, 2u32));
+                })
+            },
+            None,
+        );
 
         let result = stream.collapse().collect().run(
             RunMode::HistoricalFrom(start),
@@ -537,12 +548,15 @@ mod tests {
         // ...so a later slice's in-window row (earlier than `ahead`) is now "in the past".
         let in_window = NanoTime::new(u64::from(start) + 30);
 
-        let stream = crate::nodes::produce_async(move |_ctx| async move {
-            Ok(async_stream::stream! {
-                yield Ok((ahead, 1u32));
-                yield Ok((in_window, 2u32));
-            })
-        });
+        let stream = crate::nodes::produce_async(
+            move |_ctx| async move {
+                Ok(async_stream::stream! {
+                    yield Ok((ahead, 1u32));
+                    yield Ok((in_window, 2u32));
+                })
+            },
+            None,
+        );
 
         let result = stream.collapse().collect().run(
             RunMode::HistoricalFrom(start),
