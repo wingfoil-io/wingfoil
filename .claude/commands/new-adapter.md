@@ -143,8 +143,7 @@ impl <Name>Backend for AltBackend { /* ... */ }
 
 This pattern is used by the ZMQ adapter: `zmq` works standalone for direct TCP addresses, but
 when the `etcd` feature is also enabled, `EtcdRegistry` becomes available as a `ZmqRegistry`
-backend for service discovery. The FIX adapter similarly declares `fefix` as an optional
-dependency reserved for future dictionary-driven validation alongside the hand-rolled codec.
+backend for service discovery.
 
 ## 3. Module registration — `wingfoil/src/adapters/mod.rs`
 
