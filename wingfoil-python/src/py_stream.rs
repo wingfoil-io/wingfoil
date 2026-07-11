@@ -2,7 +2,7 @@ use log::Level;
 use pyo3::BoundObject;
 use std::any::type_name;
 
-use ::wingfoil::adapters::statistics::{StatisticsOperators, Weighting};
+use ::wingfoil::adapters::statistics::{StatisticsOperators, Weighting, Window};
 use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators};
 
 use pyo3::conversion::IntoPyObject;
@@ -203,7 +203,9 @@ impl PyStream {
     }
 
     fn average(&self) -> PyStream {
-        self.extract::<f64>().mean(Weighting::Count).as_py_stream()
+        self.extract::<f64>()
+            .mean(Window::Unbounded, Weighting::Count)
+            .as_py_stream()
     }
 
     fn buffer(&self, capacity: usize) -> PyStream {
@@ -330,7 +332,7 @@ impl PyStream {
 
     /// sum the stream (extracts f64 values before summing)
     fn sum(&self) -> PyStream {
-        self.extract::<f64>().sum().as_py_stream()
+        self.extract::<f64>().sum(Window::Unbounded).as_py_stream()
     }
 
     fn count(&self) -> PyStream {

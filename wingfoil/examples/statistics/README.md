@@ -2,14 +2,14 @@
 
 Demonstrates the `StatisticsOperators` trait — streaming numeric aggregations
 that chain onto any `Stream<T: ToPrimitive>` and emit `f64`. It covers
-exponential smoothing (`ewma`, taking an `EwmaSpan` of `PerTick` or `HalfLife`),
-cumulative moments (`mean`, `variance`, `std`), and rolling operators
-(`rolling_mean`/`std`/`min`/`max`/`median`/`sum`). Each rolling operator takes a
-`Window` — `Count(n)` (the last `n` samples) or `Time(duration)` (the last
-`duration` of graph time) — mirroring how `ewma` takes an `EwmaSpan`. Every
-moment operator additionally takes a `Weighting`: `Count` (every sample equal)
-or `Time` (each sample weighted by how long it was in effect), so irregular tick
-spacing is handled correctly.
+exponential smoothing (`ewma`, taking an `EwmaSpan` of `PerTick` or `HalfLife`)
+and the aggregates `mean`/`variance`/`std`/`sum`/`min`/`max`/`median`. Each
+aggregate takes a `Window` — `Count(n)` (the last `n` samples), `Time(duration)`
+(the last `duration` of graph time), or `Unbounded` (cumulative, the whole
+stream) — so one method serves both the rolling and cumulative cases. The moment
+operators additionally take a `Weighting`: `Count` (every sample equal) or `Time`
+(each sample weighted by how long it was in effect), so irregular tick spacing is
+handled correctly.
 
 One synthetic price stream feeds a spread of statistics, which are `combine`d
 into a row, sampled twice a second, and printed live as a table with `for_each`.
@@ -38,11 +38,11 @@ fn main() {
     let columns: Vec<Rc<dyn Stream<f64>>> = vec![
         price.clone(),
         price.ewma(EwmaSpan::PerTick(0.3)),
-        price.rolling_mean(Window::Count(10), Weighting::Count),
-        price.rolling_std(Window::Count(10), Weighting::Count),
-        price.rolling_min(Window::Count(10)),
-        price.rolling_max(Window::Count(10)),
-        price.mean(Weighting::Time),
+        price.mean(Window::Count(10), Weighting::Count),
+        price.std(Window::Count(10), Weighting::Count),
+        price.min(Window::Count(10)),
+        price.max(Window::Count(10)),
+        price.mean(Window::Unbounded, Weighting::Time),
     ];
 
     // Header first, then stream: `combine` collects the columns (in order) into

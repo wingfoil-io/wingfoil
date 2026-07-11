@@ -37,7 +37,7 @@ impl MutableNode for TickNode {
 #[cfg(test)]
 mod tests {
 
-    use crate::adapters::statistics::{StatisticsOperators, Weighting};
+    use crate::adapters::statistics::{StatisticsOperators, Weighting, Window};
     use crate::graph::*;
     use crate::nodes::*;
 
@@ -53,7 +53,7 @@ mod tests {
                 let t: u64 = time.into();
                 t
             })
-            .mean(Weighting::Count);
+            .mean(Window::Unbounded, Weighting::Count);
         let average = average.clone().collect();
         average.run(run_mode, run_to).unwrap();
         let average = average.peek_value();

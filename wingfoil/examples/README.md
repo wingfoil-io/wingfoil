@@ -379,7 +379,7 @@ prices.augurs_seasons(AugursSeasonsConfig::new(240));
 
 ### Statistics
 
-Streaming numeric aggregations via the `StatisticsOperators` trait — no external service, but an explicit import (it lives under `adapters`, not the prelude). Weightable operators take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect), and each rolling operator takes a `Window` — `Count(n)` (last `n` samples) or `Time(duration)` (last `duration` of graph time), mirroring how `ewma` takes an `EwmaSpan`:
+Streaming numeric aggregations via the `StatisticsOperators` trait — no external service, but an explicit import (it lives under `adapters`, not the prelude). Every aggregate takes a `Window` — `Count(n)` (last `n` samples), `Time(duration)` (last `duration` of graph time), or `Unbounded` (cumulative) — so one method serves both rolling and cumulative; the moment operators also take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect):
 
 ```rust,ignore
 use wingfoil::*;
@@ -390,13 +390,13 @@ prices.ewma(EwmaSpan::PerTick(0.2));
 prices.ewma(EwmaSpan::HalfLife(Duration::from_secs(30)));
 
 // Cumulative mean — arithmetic vs time-weighted (TWAP).
-prices.mean(Weighting::Count);
-prices.mean(Weighting::Time);
+prices.mean(Window::Unbounded, Weighting::Count);
+prices.mean(Window::Unbounded, Weighting::Time);
 
 // Rolling over the last N samples, or the last N of graph time.
-prices.rolling_std(Window::Count(20), Weighting::Count);
-prices.rolling_median(Window::Count(20), Weighting::Time);
-prices.rolling_mean(Window::Time(Duration::from_secs(5)), Weighting::Time);
+prices.std(Window::Count(20), Weighting::Count);
+prices.median(Window::Count(20), Weighting::Time);
+prices.mean(Window::Time(Duration::from_secs(5)), Weighting::Time);
 ```
 
 [Full example.](statistics/)

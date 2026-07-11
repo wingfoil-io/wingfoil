@@ -31,11 +31,11 @@ fn main() {
     let columns: Vec<Rc<dyn Stream<f64>>> = vec![
         price.clone(),
         price.ewma(EwmaSpan::PerTick(0.3)),
-        price.rolling_mean(Window::Count(10), Weighting::Count),
-        price.rolling_std(Window::Count(10), Weighting::Count),
-        price.rolling_min(Window::Count(10)),
-        price.rolling_max(Window::Count(10)),
-        price.mean(Weighting::Time),
+        price.mean(Window::Count(10), Weighting::Count),
+        price.std(Window::Count(10), Weighting::Count),
+        price.min(Window::Count(10)),
+        price.max(Window::Count(10)),
+        price.mean(Window::Unbounded, Weighting::Time),
     ];
 
     // Header first, then stream: `combine` collects the columns (in order) into
