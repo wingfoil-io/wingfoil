@@ -5,7 +5,6 @@ use crate::types::{NanoTime, Node};
 use crossbeam::channel::{Receiver, SendError, Sender, select};
 use std::cmp::{max, min};
 use std::collections::HashMap;
-#[cfg(feature = "dynamic-graph")]
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs::File;
@@ -48,6 +47,37 @@ struct NodeData {
     downstreams: Vec<Edge>,
     layer: usize,
     active: bool,
+}
+
+/// A frame on the explicit work stack used by [`Graph::initialise_node`] to wire
+/// the graph iteratively (in place of recursion). Holds a node whose upstreams
+/// are being processed one at a time.
+struct WiringFrame {
+    node: Rc<dyn Node>,
+    /// `(upstream, is_active)` pairs — active upstreams first, then passive.
+    upstreams: Vec<(Rc<dyn Node>, bool)>,
+    /// Index of the next upstream to process.
+    next: usize,
+    /// Accumulated layer, `max(upstream.layer + 1)` over processed upstreams.
+    layer: usize,
+    /// Accumulated upstream edges for this node.
+    edges: Vec<Edge>,
+}
+
+impl WiringFrame {
+    fn new(node: Rc<dyn Node>) -> Self {
+        let ups = node.upstreams();
+        let mut upstreams = Vec::with_capacity(ups.active.len() + ups.passive.len());
+        upstreams.extend(ups.active.into_iter().map(|u| (u, true)));
+        upstreams.extend(ups.passive.into_iter().map(|u| (u, false)));
+        Self {
+            node,
+            upstreams,
+            next: 0,
+            layer: 0,
+            edges: Vec::new(),
+        }
+    }
 }
 
 /// Whether the [Graph] should run RealTime or Historical mode.
@@ -170,6 +200,9 @@ pub struct GraphState {
     nodes: Vec<NodeData>,
     dirty_nodes_by_layer: Vec<Vec<usize>>,
     node_dirty: Vec<bool>,
+    /// A wiring error (e.g. a cycle) detected during `initialise`. `Graph::new`
+    /// is infallible, so the error is stashed here and surfaced from `run()`.
+    wiring_error: Option<anyhow::Error>,
     #[cfg(feature = "dynamic-graph")]
     pending_additions: Vec<PendingAddition>,
     #[cfg(feature = "dynamic-graph")]
@@ -201,6 +234,7 @@ impl GraphState {
             nodes: Vec::new(),
             dirty_nodes_by_layer: Vec::new(),
             node_dirty: Vec::new(),
+            wiring_error: None,
             #[cfg(feature = "dynamic-graph")]
             pending_additions: Vec::new(),
             #[cfg(feature = "dynamic-graph")]
@@ -614,6 +648,11 @@ impl Graph {
 
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self) -> anyhow::Result<()> {
+        // Surface any wiring error (e.g. a cycle) detected during construction
+        // before touching the partially-built graph.
+        if let Some(e) = self.state.wiring_error.take() {
+            return Err(e);
+        }
         // `setup` pairs with `teardown`, `start` with `stop`. Once `setup`
         // succeeds we must always run `teardown`, and once `start` is attempted
         // we must always run `stop` — even if `start` or `run_nodes` errors — so
@@ -641,8 +680,14 @@ impl Graph {
     fn initialise(&mut self, root_nodes: Vec<Rc<dyn Node>>) -> &mut Graph {
         let timer = Instant::now();
         for node in root_nodes {
-            if !self.state.seen(node.clone()) {
-                self.initialise_node(&node);
+            // `initialise_node` is a no-op for an already-seen node, so it can be
+            // called unconditionally.
+            if let Err(e) = self.initialise_node(&node) {
+                // Wiring failed (e.g. a cycle). `Graph::new` is infallible, so
+                // stash the error and skip the rest of wiring; `run()` surfaces
+                // it before touching the partially-built graph.
+                self.state.wiring_error.get_or_insert(e);
+                return self;
             }
         }
         let mut max_layer: i32 = -1;
@@ -674,49 +719,86 @@ impl Graph {
         self
     }
 
-    fn initialise_upstreams(
-        &mut self,
-        upstreams: &[Rc<dyn Node>],
-        is_active: bool,
-        layer: &mut usize,
-        upstream_edges: &mut Vec<Edge>,
-    ) {
-        for upstream_node in upstreams {
-            let upstream_index = self.initialise_node(upstream_node);
-            upstream_edges.push(Edge {
-                node_index: upstream_index,
-                active: is_active,
-            });
-            *layer = max(*layer, self.state.nodes[upstream_index].layer + 1);
+    /// Crawl the sub-graph reachable from `root`, registering each unseen node
+    /// (in post-order, so a node is pushed only after all its upstreams) and
+    /// returning `root`'s index.
+    ///
+    /// Uses an explicit work stack rather than recursion: a linear chain of tens
+    /// of thousands of nodes would otherwise overflow the call stack at wiring
+    /// time (this mirrors why `fix_layers` is iterative). An in-progress set
+    /// detects a wiring cycle — reachable via interior mutability on an upstream
+    /// field — and reports it as an error instead of recursing forever.
+    fn initialise_node(&mut self, root: &Rc<dyn Node>) -> anyhow::Result<usize> {
+        if self.state.seen(root.clone()) {
+            return Ok(self
+                .state
+                .node_index(root.clone())
+                .expect("seen() returned true but node_index lookup failed"));
         }
-    }
 
-    fn initialise_node(&mut self, node: &Rc<dyn Node>) -> usize {
-        // recursively crawl through graph defined by node
-        // constructing NodeData wrapper for each node and pushing
-        // onto self.nodes returns index of new NodeData in self.nodes
-        if self.state.seen(node.clone()) {
-            self.state
-                .node_index(node.clone())
-                .expect("seen() returned true but node_index lookup failed")
-        } else {
-            let mut layer = 0;
-            let mut upstream_edges = vec![];
-            let upstreams = node.upstreams();
-            self.initialise_upstreams(&upstreams.active, true, &mut layer, &mut upstream_edges);
-            self.initialise_upstreams(&upstreams.passive, false, &mut layer, &mut upstream_edges);
-            let node_data = NodeData {
-                node: node.clone(),
-                upstreams: upstream_edges,
-                downstreams: vec![],
-                layer,
-                active: true,
+        let mut in_progress: HashSet<HashByRef<dyn Node>> = HashSet::new();
+        in_progress.insert(HashByRef::new(root.clone()));
+        let mut stack: Vec<WiringFrame> = vec![WiringFrame::new(root.clone())];
+
+        while !stack.is_empty() {
+            // Peek the current frame's next unprocessed upstream, if any.
+            let next_upstream = {
+                let frame = stack.last().expect("stack non-empty");
+                frame.upstreams.get(frame.next).cloned()
             };
-            let index = self.state.nodes.len();
-            self.state.push_node(node.clone());
-            self.state.nodes.push(node_data);
-            index
+
+            match next_upstream {
+                Some((up, is_active)) => {
+                    if self.state.seen(up.clone()) {
+                        // Already registered: record the edge and advance.
+                        let idx = self
+                            .state
+                            .node_index(up.clone())
+                            .expect("seen() returned true but node_index lookup failed");
+                        let up_layer = self.state.nodes[idx].layer;
+                        let frame = stack.last_mut().expect("stack non-empty");
+                        frame.edges.push(Edge {
+                            node_index: idx,
+                            active: is_active,
+                        });
+                        frame.layer = max(frame.layer, up_layer + 1);
+                        frame.next += 1;
+                    } else if in_progress.contains(&HashByRef::new(up.clone())) {
+                        // Back-edge to a node still being wired → a cycle.
+                        anyhow::bail!(
+                            "cycle detected in graph wiring: node `{}` is (transitively) \
+                             its own upstream",
+                            up.type_name()
+                        );
+                    } else {
+                        // Descend into the upstream first; do NOT advance `next`
+                        // — when we return, `up` will be `seen` and the branch
+                        // above records the edge.
+                        in_progress.insert(HashByRef::new(up.clone()));
+                        stack.push(WiringFrame::new(up));
+                    }
+                }
+                None => {
+                    // All upstreams processed — finalise this node.
+                    let frame = stack.pop().expect("stack non-empty");
+                    in_progress.remove(&HashByRef::new(frame.node.clone()));
+                    let node_data = NodeData {
+                        node: frame.node.clone(),
+                        upstreams: frame.edges,
+                        downstreams: vec![],
+                        layer: frame.layer,
+                        active: true,
+                    };
+                    self.state.push_node(frame.node);
+                    self.state.nodes.push(node_data);
+                }
+            }
         }
+
+        Ok(self
+            .state
+            .node_index(root.clone())
+            .expect("root registered after wiring"))
     }
 
     fn mark_dirty(&mut self, index: usize) {
@@ -901,11 +983,10 @@ impl Graph {
         }
         let start_index = self.state.nodes.len();
 
-        // Recurse through each new subgraph; seen() prevents re-registering existing nodes.
+        // Wire each new subgraph; seen() prevents re-registering existing nodes,
+        // and a cycle in a dynamically-added subgraph propagates as an error.
         for addition in &additions {
-            if !self.state.seen(addition.node.clone()) {
-                self.initialise_node(&addition.node);
-            }
+            self.initialise_node(&addition.node)?;
         }
 
         // Indices of truly new nodes
@@ -1146,6 +1227,75 @@ mod tests {
         assert!(
             err.contains("synthetic cycle failure") || err.contains("Error in node"),
             "expected error to mention the cycle failure, got: {err}"
+        );
+    }
+
+    // ── Graph wiring (iterative) ─────────────────────────────────────────────
+
+    #[test]
+    fn deep_chain_wires_without_stack_overflow() {
+        // A linear chain far deeper than recursive wiring could tolerate: at
+        // 50k nodes the old recursion (two frames per level) overflowed the
+        // stack during `Graph::new`. The iterative walk uses O(1) stack, so it
+        // wires and runs fine.
+        //
+        // Run in a thread with a fixed, generous stack so the result doesn't
+        // depend on the test harness's default stack size. (Dropping a chain
+        // this deep also recurses through the nested `Rc`s — a separate concern
+        // from wiring — which the same generous stack absorbs.)
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                use std::time::Duration;
+                let mut s = ticker(Duration::from_nanos(1)).count();
+                for _ in 0..50_000 {
+                    s = s.map(|x: u64| x);
+                }
+                s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+                    .unwrap();
+            })
+            .expect("spawn wiring thread")
+            .join()
+            .expect("deep chain wired, ran, and dropped without overflow");
+    }
+
+    /// A node whose (settable) upstream can be pointed back at itself, to build a
+    /// wiring cycle via interior mutability.
+    struct SelfCycleNode {
+        upstream: RefCell<Option<Rc<dyn Node>>>,
+    }
+
+    impl MutableNode for SelfCycleNode {
+        fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        fn upstreams(&self) -> UpStreams {
+            match &*self.upstream.borrow() {
+                Some(u) => UpStreams::new(vec![u.clone()], vec![]),
+                None => UpStreams::none(),
+            }
+        }
+    }
+
+    #[test]
+    fn cyclic_wiring_is_reported_as_error_not_overflow() {
+        let node = Rc::new(RefCell::new(SelfCycleNode {
+            upstream: RefCell::new(None),
+        }));
+        let dyn_node: Rc<dyn Node> = node.clone().as_node();
+        // Point the node's upstream at itself → a wiring cycle.
+        node.borrow().upstream.replace(Some(dyn_node.clone()));
+
+        let result = Graph::new(
+            vec![dyn_node],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(1),
+        )
+        .run();
+        let err = result.expect_err("a self-referential wiring must be a cycle error");
+        assert!(
+            format!("{err:#}").contains("cycle"),
+            "expected a cycle error, got: {err:#}"
         );
     }
 
