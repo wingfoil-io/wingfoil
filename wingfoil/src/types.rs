@@ -237,11 +237,21 @@ impl<NODE: MutableNode> MutableNode for RefCell<NODE> {
     fn upstreams(&self) -> UpStreams {
         self.borrow().upstreams()
     }
+    // `setup`/`teardown` are forwarded (not left to the trait defaults) so this
+    // impl stays symmetric with `Node for RefCell` above. Otherwise a
+    // doubly-wrapped node — `RefCell<RefCell<T>>`, which the blanket `IntoNode`
+    // can produce — would silently skip the inner node's `setup`/`teardown`.
+    fn setup(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.borrow_mut().setup(state)
+    }
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().start(state)
     }
     fn stop(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().stop(state)
+    }
+    fn teardown(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
+        self.borrow_mut().teardown(state)
     }
     fn type_name(&self) -> String {
         self.borrow().type_name()
@@ -409,6 +419,53 @@ mod tests {
         let v: Vec<Rc<dyn Stream<u64>>> = vec![s1, s2];
         let ups = v.as_upstream_nodes();
         assert_eq!(ups.len(), 2);
+    }
+
+    // ── RefCell lifecycle forwarding ─────────────────────────────────────────
+
+    #[test]
+    fn double_wrapped_refcell_forwards_setup_and_teardown() {
+        use std::cell::Cell;
+
+        struct LifecycleProbe {
+            setup_ran: Rc<Cell<bool>>,
+            teardown_ran: Rc<Cell<bool>>,
+        }
+        impl MutableNode for LifecycleProbe {
+            fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+                Ok(false)
+            }
+            fn setup(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+                self.setup_ran.set(true);
+                Ok(())
+            }
+            fn teardown(&mut self, _state: &mut GraphState) -> anyhow::Result<()> {
+                self.teardown_ran.set(true);
+                Ok(())
+            }
+        }
+
+        let setup_ran = Rc::new(Cell::new(false));
+        let teardown_ran = Rc::new(Cell::new(false));
+        let probe = LifecycleProbe {
+            setup_ran: setup_ran.clone(),
+            teardown_ran: teardown_ran.clone(),
+        };
+        // Double-wrap: `RefCell<RefCell<T>>`. The outer `Node::{setup,teardown}`
+        // forward to the inner `RefCell<T>`'s `MutableNode::{setup,teardown}`,
+        // which used to fall through to the no-op trait defaults.
+        let inner = RefCell::new(probe);
+        let node: Rc<dyn Node> = Rc::new(RefCell::new(inner));
+        node.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap();
+        assert!(
+            setup_ran.get(),
+            "inner setup() must be forwarded through the double wrap"
+        );
+        assert!(
+            teardown_ran.get(),
+            "inner teardown() must be forwarded through the double wrap"
+        );
     }
 
     // ── IntoNode / IntoStream ────────────────────────────────────────────────
