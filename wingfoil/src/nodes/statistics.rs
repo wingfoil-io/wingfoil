@@ -606,6 +606,25 @@ mod tests {
     }
 
     #[test]
+    fn rolling_std_of_constant_window_is_zero_not_nan() {
+        // A constant window has zero variance; floating-point cancellation in the
+        // revert-based variance can make it a hair negative, so std must clamp at
+        // zero rather than emit NaN.
+        let std = ticker(Duration::from_nanos(100))
+            .count()
+            .map(|_: u64| 7u64)
+            .rolling_std(3);
+        std.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+            .unwrap();
+        let v = std.peek_value();
+        assert!(!v.is_nan(), "rolling_std must not be NaN");
+        assert!(
+            v.abs() < 1e-10,
+            "constant window std should be 0.0, got {v}"
+        );
+    }
+
+    #[test]
     fn rolling_var_is_zero_with_single_sample() {
         // watermill's Variance returns 0.0 (not NaN) while n <= ddof.
         let var = counter().rolling_var(3);

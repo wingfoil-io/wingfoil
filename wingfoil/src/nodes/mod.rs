@@ -782,7 +782,10 @@ where
     where
         T: ToPrimitive,
     {
-        self.rolling_var(window).map(|v: f64| v.sqrt())
+        // Clamp at zero: watermill's revert-based variance can dip a hair below
+        // zero from floating-point cancellation on a near-constant window, and
+        // `sqrt` of a negative is NaN.
+        self.rolling_var(window).map(|v: f64| v.max(0.0).sqrt())
     }
 
     fn rolling_median(self: &Rc<Self>, window: usize) -> Rc<dyn Stream<f64>>
