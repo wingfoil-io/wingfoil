@@ -1,8 +1,16 @@
 # Handover — Codebase Review & Improvement Plan
 
 *Session date: 2026-07-08/10. Branch: `claude/codebase-review-plan-qrp8m4`,
-based on `main` at `6be91d4` ("bump: major version to 7.0.0"). No product code
-was changed — this branch adds documentation only.*
+originally based on `main` at `6be91d4` (v7.0.0); rebased onto `461c750`
+(v7.0.1).*
+
+> **Update.** Since the review, four of the four hand-verified findings below
+> were fixed directly on `main` (not by merging this branch): the iterator
+> last-row drop, the PyPI-target release bug, the monotonic `NanoTime::now()`,
+> and the async-channel panics (#428). This branch now also carries a fix for
+> the Postgres credential leak (finding 0.5 / §"Caveats") — `PostgresConnection::redacted()`,
+> used at all three `connect()` error sites. The still-open Phase 0 item is
+> the kdb q-injection in `kdb_write` (0.4).
 
 ## What this branch contains
 

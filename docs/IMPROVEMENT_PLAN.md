@@ -24,6 +24,14 @@ copy-pasted CI workflows).
 The plan is organized into five phases, ordered by risk-adjusted value. Each
 item cites the evidence so it can be turned into an issue directly.
 
+> **Status update (as of `main` @ `461c750`, v7.0.1).** Several Phase 0 items
+> have since landed on `main` (independently of this branch) and are struck
+> through below: iterator last-row drop (0.2), monotonic `NanoTime` (0.3),
+> the PyPI-target release bug (0.1), and the async-channel panics (0.6, via
+> #428). Postgres credential redaction (0.5) was fixed on **this** branch.
+> Still open from Phase 0: kdb q-injection (0.4). Line references in later
+> phases are to the original `6be91d4` and may have shifted.
+
 ---
 
 ## Phase 0 — Release-blocking and data-loss bugs (do first)
