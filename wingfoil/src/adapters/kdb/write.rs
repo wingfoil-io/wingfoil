@@ -128,33 +128,18 @@ where
         let naive: NaiveDateTime = time.into();
         let ts_str = naive.format("%Y.%m.%dD%H:%M:%S%.9f").to_string();
 
-        // Serialize every record in the burst (time prepended, business fields appended).
-        let serialized: Vec<Vec<K>> = batch
+        // Serialize every record in the burst, then transpose to column-major.
+        // Time is tracked separately as a string; to_kdb_row() has business fields.
+        let rows: Vec<K> = batch
             .into_iter()
-            .map(|record| {
-                // Timestamp is tracked separately as a string; to_kdb_row() has business fields.
-                record
-                    .to_kdb_row()
-                    .as_vec::<K>()
-                    .map(|v| v.to_vec())
-                    .unwrap_or_default()
-            })
+            .map(|record| record.to_kdb_row())
             .collect();
-
-        if serialized.is_empty() {
+        let columns = k_rows_to_columns(rows)?;
+        if columns.is_empty() {
+            // Empty burst, or rows carried no business columns — nothing to insert.
             continue;
         }
-
-        // Transpose to column-major and format as q string column fragments.
-        // Time column is pre-formatted; business columns come from KdbSerialize.
-        let n = serialized.len(); // number of rows (1 per burst in typical usage)
-        let n_cols = serialized[0].len();
-        let mut columns: Vec<Vec<K>> = (0..n_cols).map(|_| Vec::with_capacity(n)).collect();
-        for row in serialized {
-            for (col_idx, val) in row.into_iter().enumerate() {
-                columns[col_idx].push(val);
-            }
-        }
+        let n = columns[0].len(); // number of rows (1 per burst in typical usage)
 
         // Build column q-string fragments with explicit type suffixes.
         let ts_frag = if n == 1 {
@@ -184,6 +169,83 @@ where
         }
     }
     Ok(())
+}
+
+/// Transpose a burst of serialized rows (each the compound-list output of
+/// [`KdbSerialize::to_kdb_row`]) into column-major K atoms.
+///
+/// Every row must be a compound list of the same width — the KDB table schema is
+/// fixed, so a row that is not a compound list (a `KdbSerialize` impl returning a
+/// bare atom) or a row of a different width than the first (a ragged burst) is a
+/// programming error that would otherwise corrupt the insert or panic on an
+/// out-of-bounds column index. Both are surfaced as errors here instead.
+///
+/// Returns an empty `Vec` when there are no rows, or when the rows carry no
+/// columns (an empty compound list) — the caller skips the burst in that case.
+fn k_rows_to_columns(rows: Vec<K>) -> anyhow::Result<Vec<Vec<K>>> {
+    let serialized: Vec<Vec<K>> = rows
+        .into_iter()
+        .map(|row| {
+            let row_type = row.get_type();
+            row.as_vec::<K>().map(|v| v.to_vec()).map_err(|_| {
+                anyhow::anyhow!(
+                    "kdb_write: KdbSerialize::to_kdb_row must return a compound list, \
+                     got K type {row_type}"
+                )
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    if serialized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let n_cols = serialized[0].len();
+    if let Some(bad) = serialized.iter().position(|r| r.len() != n_cols) {
+        anyhow::bail!(
+            "kdb_write: ragged burst — row {bad} has {} columns, expected {n_cols} \
+             (all rows must share the table schema)",
+            serialized[bad].len()
+        );
+    }
+
+    let n = serialized.len();
+    let mut columns: Vec<Vec<K>> = (0..n_cols).map(|_| Vec::with_capacity(n)).collect();
+    for row in serialized {
+        for (col_idx, val) in row.into_iter().enumerate() {
+            columns[col_idx].push(val);
+        }
+    }
+    Ok(columns)
+}
+
+/// q token for a `float` (64-bit) value, mapping non-finite values to q's native
+/// null/infinity literals (`0n`, `0w`, `-0w`) instead of Rust's `NaN`/`inf`,
+/// which are not valid q.
+fn q_float64_token(v: f64) -> String {
+    if v.is_nan() {
+        "0n".to_string()
+    } else if v == f64::INFINITY {
+        "0w".to_string()
+    } else if v == f64::NEG_INFINITY {
+        "-0w".to_string()
+    } else {
+        format!("{v}")
+    }
+}
+
+/// q token for a `real` (32-bit) value, mapping non-finite values to q's native
+/// null/infinity literals (`0Ne`, `0we`, `-0we`).
+fn q_float32_token(v: f32) -> String {
+    if v.is_nan() {
+        "0Ne".to_string()
+    } else if v == f32::INFINITY {
+        "0we".to_string()
+    } else if v == f32::NEG_INFINITY {
+        "-0we".to_string()
+    } else {
+        format!("{v}")
+    }
 }
 
 /// Quote a symbol's text as a q string literal (`"..."`), escaping backslash and
@@ -226,11 +288,25 @@ fn format_kdb_column_q(atoms: &[K]) -> anyhow::Result<String> {
         qtype::FLOAT_ATOM => {
             let vals: anyhow::Result<Vec<f64>> = atoms.iter().map(|k| Ok(k.get_float()?)).collect();
             let vals = vals?;
-            if vals.len() == 1 {
-                Ok(format!("enlist {}f", vals[0]))
+            if vals.iter().all(|v| v.is_finite()) {
+                if vals.len() == 1 {
+                    Ok(format!("enlist {}f", vals[0]))
+                } else {
+                    let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                    Ok(format!("{}f", parts.join(" ")))
+                }
             } else {
-                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
-                Ok(format!("{}f", parts.join(" ")))
+                // A non-finite value is present. `0n`/`0w`/`-0w` are already float
+                // atoms, so a single value needs no suffix; multi-value columns are
+                // wrapped in an explicit `float$(...) cast so the null/infinity
+                // tokens parse unambiguously as one vector rather than via a
+                // trailing type suffix.
+                let parts: Vec<String> = vals.iter().map(|v| q_float64_token(*v)).collect();
+                if parts.len() == 1 {
+                    Ok(format!("enlist {}", parts[0]))
+                } else {
+                    Ok(format!("`float$({})", parts.join(";")))
+                }
             }
         }
         qtype::LONG_ATOM => {
@@ -269,11 +345,23 @@ fn format_kdb_column_q(atoms: &[K]) -> anyhow::Result<String> {
         qtype::REAL_ATOM => {
             let vals: anyhow::Result<Vec<f32>> = atoms.iter().map(|k| Ok(k.get_real()?)).collect();
             let vals = vals?;
-            if vals.len() == 1 {
-                Ok(format!("enlist {}e", vals[0]))
+            if vals.iter().all(|v| v.is_finite()) {
+                if vals.len() == 1 {
+                    Ok(format!("enlist {}e", vals[0]))
+                } else {
+                    let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
+                    Ok(format!("{}e", parts.join(" ")))
+                }
             } else {
-                let parts: Vec<_> = vals.iter().map(|v| format!("{v}")).collect();
-                Ok(format!("{}e", parts.join(" ")))
+                // Non-finite present — `0Ne`/`0we`/`-0we` are real atoms; wrap
+                // multi-value columns in an explicit `real$(...) cast (see the
+                // float arm for the rationale).
+                let parts: Vec<String> = vals.iter().map(|v| q_float32_token(*v)).collect();
+                if parts.len() == 1 {
+                    Ok(format!("enlist {}", parts[0]))
+                } else {
+                    Ok(format!("`real$({})", parts.join(";")))
+                }
             }
         }
         other => anyhow::bail!("unsupported KDB column type {other} in kdb_write"),
@@ -360,6 +448,89 @@ mod tests {
             format_kdb_column_q(&[K::new_symbol("AAPL".to_string())]).unwrap(),
             "enlist `$\"AAPL\""
         );
+    }
+
+    #[test]
+    fn non_finite_floats_use_q_null_and_infinity() {
+        // NaN/±inf must become q's native tokens, never Rust's "NaN"/"inf",
+        // which are invalid q and would make the whole insert fail.
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(f64::NAN)]).unwrap(),
+            "enlist 0n"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(f64::INFINITY)]).unwrap(),
+            "enlist 0w"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(f64::NEG_INFINITY)]).unwrap(),
+            "enlist -0w"
+        );
+        // A mixed finite/non-finite column casts explicitly.
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(1.5), K::new_float(f64::NAN)]).unwrap(),
+            "`float$(1.5;0n)"
+        );
+        // Finite-only columns are unchanged.
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(2.5)]).unwrap(),
+            "enlist 2.5f"
+        );
+    }
+
+    #[test]
+    fn non_finite_reals_use_q_null_and_infinity() {
+        assert_eq!(
+            format_kdb_column_q(&[K::new_real(f32::NAN)]).unwrap(),
+            "enlist 0Ne"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_real(f32::INFINITY)]).unwrap(),
+            "enlist 0we"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_real(1.0), K::new_real(f32::NEG_INFINITY)]).unwrap(),
+            "`real$(1;-0we)"
+        );
+    }
+
+    #[test]
+    fn non_compound_row_is_an_error_not_a_silent_drop() {
+        // A KdbSerialize impl that returns a bare atom instead of a compound
+        // list must fail loudly rather than serialize an empty row.
+        let err =
+            k_rows_to_columns(vec![K::new_float(1.0)]).expect_err("a bare atom is not a valid row");
+        assert!(
+            format!("{err}").contains("must return a compound list"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ragged_burst_is_an_error_not_a_panic() {
+        // Rows of differing widths previously panicked on an out-of-bounds
+        // column index; now they surface as an error.
+        let rows = vec![
+            K::new_compound_list(vec![K::new_symbol("A".to_string()), K::new_float(1.0)]),
+            K::new_compound_list(vec![K::new_symbol("B".to_string())]),
+        ];
+        let err = k_rows_to_columns(rows).expect_err("ragged rows must error");
+        assert!(
+            format!("{err}").contains("ragged burst"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn well_formed_burst_transposes_to_columns() {
+        let rows = vec![
+            K::new_compound_list(vec![K::new_symbol("A".to_string()), K::new_float(1.0)]),
+            K::new_compound_list(vec![K::new_symbol("B".to_string()), K::new_float(2.0)]),
+        ];
+        let columns = k_rows_to_columns(rows).unwrap();
+        assert_eq!(columns.len(), 2); // two columns
+        assert_eq!(columns[0].len(), 2); // two rows each
+        assert_eq!(columns[1].len(), 2);
     }
 
     #[test]
