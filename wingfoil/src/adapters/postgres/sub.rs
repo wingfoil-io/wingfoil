@@ -104,7 +104,7 @@ where
             let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
                 .await
                 .with_context(|| {
-                    format!("postgres_sub: failed to connect: {}", connection.conn_str)
+                    format!("postgres_sub: failed to connect: {}", connection.redacted())
                 })?;
 
             // Drive the connection and forward notification wake-ups. Polling
