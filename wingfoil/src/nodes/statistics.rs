@@ -18,6 +18,7 @@ use crate::types::*;
 use num_traits::ToPrimitive;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::time::Duration;
 use watermill::stats::{RollableUnivariate, Univariate};
 
 /// How samples are weighted when aggregating a stream.
@@ -319,6 +320,132 @@ impl<T: Element, R> WindowStatStream<T, R> {
     }
 }
 
+/// Which statistic a [TimeWindowStream] computes over its time window.
+#[derive(Clone, Copy)]
+pub(crate) enum WindowStat {
+    Sum,
+    Mean,
+    Min,
+    Max,
+    Median,
+    Var,
+    Std,
+}
+
+/// Rolling statistic over all samples seen in the last `duration` of graph
+/// time (as opposed to the last `n` samples).
+///
+/// Samples older than `duration` are evicted each tick and the statistic is
+/// recomputed over what remains — O(window) per tick, which is fine for the
+/// window sizes these operators target.  Under [`Weighting::Time`] each sample
+/// is weighted by the gap until the next sample (the most recent by the gap to
+/// `now`); the window's leading edge uses only retained samples, so a value
+/// that was in effect *before* the window opened is not carried in.
+pub(crate) struct TimeWindowStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    stat: WindowStat,
+    weighting: Weighting,
+    duration: u64,
+    buffer: VecDeque<(f64, NanoTime)>,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for TimeWindowStream<T> {
+    fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
+        let now = state.time();
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        self.buffer.push_back((sample, now));
+        // Evict samples whose age now exceeds the window (time is monotonic,
+        // so `now >= t` and the subtraction never underflows).
+        while let Some(&(_, t)) = self.buffer.front() {
+            if u64::from(now) - u64::from(t) > self.duration {
+                self.buffer.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.value = self.compute(now);
+        Ok(true)
+    }
+}
+
+impl<T: Element> TimeWindowStream<T> {
+    pub fn new(
+        upstream: Rc<dyn Stream<T>>,
+        stat: WindowStat,
+        weighting: Weighting,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            upstream,
+            stat,
+            weighting,
+            duration: duration.as_nanos() as u64,
+            buffer: VecDeque::new(),
+            value: f64::NAN,
+        }
+    }
+
+    fn compute(&self, now: NanoTime) -> f64 {
+        let n = self.buffer.len();
+        if n == 0 {
+            return f64::NAN;
+        }
+        match self.stat {
+            WindowStat::Sum => self.buffer.iter().map(|&(v, _)| v).sum(),
+            WindowStat::Min => self
+                .buffer
+                .iter()
+                .map(|&(v, _)| v)
+                .fold(f64::INFINITY, f64::min),
+            WindowStat::Max => self
+                .buffer
+                .iter()
+                .map(|&(v, _)| v)
+                .fold(f64::NEG_INFINITY, f64::max),
+            WindowStat::Median => {
+                let mut vals: Vec<f64> = self.buffer.iter().map(|&(v, _)| v).collect();
+                vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let mid = n / 2;
+                if n % 2 == 1 {
+                    vals[mid]
+                } else {
+                    (vals[mid - 1] + vals[mid]) / 2.0
+                }
+            }
+            WindowStat::Mean | WindowStat::Var | WindowStat::Std => {
+                let mut moments = WeightedMoments::default();
+                match self.weighting {
+                    Weighting::Count => {
+                        for &(v, _) in &self.buffer {
+                            moments.push(v, 1.0);
+                        }
+                    }
+                    Weighting::Time => {
+                        for i in 0..n {
+                            let (v, t) = self.buffer[i];
+                            let next_t = if i + 1 < n { self.buffer[i + 1].1 } else { now };
+                            moments.push(v, f64::from(next_t - t));
+                        }
+                    }
+                }
+                match self.stat {
+                    WindowStat::Mean if moments.is_empty() => {
+                        // Only reachable under time weighting when every retained
+                        // sample has zero in-effect duration; fall back to latest.
+                        self.buffer.back().expect("invariant: buffer non-empty").0
+                    }
+                    WindowStat::Mean => moments.mean(),
+                    WindowStat::Var => moments.variance(self.weighting),
+                    WindowStat::Std => moments.variance(self.weighting).max(0.0).sqrt(),
+                    _ => unreachable!("outer match limits stat to Mean/Var/Std"),
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::graph::*;
@@ -494,5 +621,66 @@ mod tests {
         med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
             .unwrap();
         assert!((med.peek_value() - 4.0).abs() < 1e-10);
+    }
+
+    // ── time-windowed operators ──────────────────────────────────────────────
+    //
+    // Ticks are 100ns apart, so a 250ns window retains the three most recent
+    // samples (ages 0, 100, 200) and drops the rest — i.e. {3, 4, 5}.
+    const WIN: Duration = Duration::from_nanos(250);
+
+    #[test]
+    fn rolling_sum_over_time_window() {
+        let s = counter().rolling_sum_over(WIN);
+        s.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((s.peek_value() - 12.0).abs() < 1e-10); // {3,4,5}
+    }
+
+    #[test]
+    fn rolling_mean_over_time_window_count_and_time() {
+        // Count: mean{3,4,5} = 4.0
+        let mean_c = counter().rolling_mean_over(WIN, Weighting::Count);
+        mean_c
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mean_c.peek_value() - 4.0).abs() < 1e-10);
+
+        // Time: 3 and 4 each held for 100ns, 5 held for 0 (it is "now").
+        // TWA = (3*100 + 4*100) / 200 = 3.5
+        let mean_t = counter().rolling_mean_over(WIN, Weighting::Time);
+        mean_t
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mean_t.peek_value() - 3.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_min_max_over_time_window() {
+        let mn = counter().rolling_min_over(WIN);
+        let mx = counter().rolling_max_over(WIN);
+        mn.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        mx.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((mn.peek_value() - 3.0).abs() < 1e-10);
+        assert!((mx.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_var_over_time_window_count() {
+        // Count sample variance of {3,4,5}: mean 4, m2 = 2, var = 2/2 = 1.0
+        let var = counter().rolling_var_over(WIN, Weighting::Count);
+        var.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((var.peek_value() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_median_over_time_window() {
+        let med = counter().rolling_median_over(WIN);
+        med.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+            .unwrap();
+        assert!((med.peek_value() - 4.0).abs() < 1e-10); // median{3,4,5}
     }
 }
