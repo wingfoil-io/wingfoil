@@ -1,23 +1,19 @@
 //! Streaming statistics operators.
 //!
-//! Two families live here:
+//! Everything here is hand-rolled — no external statistics crate — and falls
+//! into three groups:
 //!
-//! * **Weighted moments and EWMA** ([MomentStream], [EwmaStream]) — rolled by
-//!   hand so they can be *time weighted* (each sample weighted by how long it
-//!   was in effect, read from the graph clock) as well as count weighted.  See
-//!   [Weighting].
-//! * **Rolling moments** ([RollingMomentStream]) — incremental weighted
-//!   `mean`/`var`/`std` over a sliding window (count- or time-bounded, under
-//!   either weighting), maintained by adding each sample's contribution on
-//!   arrival and removing it on eviction, so a tick is O(1) rather than
-//!   O(window).
+//! * **Weighted moments and EWMA** ([MomentStream], [EwmaStream]) — cumulative
+//!   mean/variance/std and exponential smoothing, *time weighted* (each sample
+//!   weighted by how long it was in effect, read from the graph clock) as well
+//!   as count weighted.  See [Weighting].
+//! * **Incremental rolling operators** ([RollingMomentStream], [RollingSumStream],
+//!   [RollingExtremeStream]) — sliding-window `mean`/`var`/`std` (either
+//!   weighting), `sum`, and `min`/`max` (monotonic deque), each maintained in
+//!   O(1) per tick by updating as samples enter and leave the window.
 //! * **Windowed order statistics** ([WindowStream]) — a sliding window
-//!   recomputed each tick for `min`/`max`/`median` and time-windowed `sum`,
+//!   recomputed each tick for `median` and the time-windowed `sum`/`min`/`max`,
 //!   which have no cheap incremental form here.
-//! * **watermill adapters** ([StatStream], [WindowStatStream]) — thin wrappers
-//!   over the [`watermill`] crate (generic serializable online statistics, a
-//!   Rust port of Python `river.stats`) used for the count-based rolling
-//!   `sum`/`min`/`max` operators.
 //!
 //! All operators consume `T: Element + ToPrimitive` and emit `f64`.
 
@@ -27,10 +23,6 @@ use num_traits::ToPrimitive;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
-use watermill::maximum::RollingMax;
-use watermill::minimum::RollingMin;
-use watermill::stats::{RollableUnivariate, Univariate};
-use watermill::sum::Sum;
 
 /// How samples are weighted when aggregating a stream.
 ///
@@ -177,9 +169,9 @@ impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T
 
     fn rolling_sum(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
         match window {
-            // A count window has a fixed size, so watermill's incremental `Sum`
-            // (O(1) per tick) beats recomputing over the buffer.
-            Window::Count(n) => WindowStatStream::new(self.clone(), Sum::new(), n).into_stream(),
+            // A count window keeps a running total (O(1) per tick); a time window
+            // recomputes over the retained buffer.
+            Window::Count(n) => RollingSumStream::new(self.clone(), n).into_stream(),
             Window::Time(_) => {
                 WindowStream::new(self.clone(), WindowStat::Sum, Weighting::Count, window)
                     .into_stream()
@@ -193,10 +185,10 @@ impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T
 
     fn rolling_min(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
         match window {
-            // watermill's monotonic-deque `RollingMin` is O(1) amortised over a
-            // fixed count window; a time window recomputes over the buffer.
+            // A count window uses a monotonic deque (O(1) amortised); a time
+            // window recomputes over the buffer.
             Window::Count(n) => {
-                StatStream::new(self.clone(), RollingMin::new(n.max(1))).into_stream()
+                RollingExtremeStream::new(self.clone(), Extreme::Min, n).into_stream()
             }
             Window::Time(_) => {
                 WindowStream::new(self.clone(), WindowStat::Min, Weighting::Count, window)
@@ -208,7 +200,7 @@ impl<T: Element + ToPrimitive + 'static> StatisticsOperators<T> for dyn Stream<T
     fn rolling_max(self: &Rc<Self>, window: Window) -> Rc<dyn Stream<f64>> {
         match window {
             Window::Count(n) => {
-                StatStream::new(self.clone(), RollingMax::new(n.max(1))).into_stream()
+                RollingExtremeStream::new(self.clone(), Extreme::Max, n).into_stream()
             }
             Window::Time(_) => {
                 WindowStream::new(self.clone(), WindowStat::Max, Weighting::Count, window)
@@ -517,15 +509,14 @@ pub(crate) enum EwmaDecay {
 
 /// Exponentially weighted moving average.
 ///
-/// We implement this rather than use `watermill::ewmean::EWMean` for two
-/// reasons.  First, watermill (0.1.2) uses `if self.mean == 0.0 { self.mean = x }`
-/// as its "not yet initialised" sentinel (see `src/ewmean.rs`), which mis-fires
-/// whenever the average legitimately reaches exactly `0.0` — e.g. a
-/// difference/returns stream crossing zero — and re-seeds to the next raw
-/// sample instead of decaying.  An explicit `initialised` flag avoids that.
-/// (No upstream issue tracks this as of watermill 0.1.2.)  Second, owning the
-/// node lets us support time-based decay ([`EwmaDecay::HalfLife`]) using the
-/// graph clock, which watermill's count-based `EWMean` cannot express.
+/// Two implementation notes.  First, initialisation is tracked with an explicit
+/// `initialised` flag rather than a `mean == 0.0` sentinel: a value-based
+/// sentinel mis-fires whenever the average legitimately reaches exactly `0.0`
+/// (e.g. a difference/returns stream crossing zero) and re-seeds to the next raw
+/// sample instead of decaying.  (This is a real bug in the `watermill` crate's
+/// `EWMean`, one reason we roll our own here.)  Second, owning the node lets us
+/// support time-based decay ([`EwmaDecay::HalfLife`]) off the graph clock, which
+/// a count-based EWMA cannot express.
 pub(crate) struct EwmaStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
     decay: EwmaDecay,
@@ -580,91 +571,128 @@ impl<T: Element> EwmaStream<T> {
     }
 }
 
-/// Feeds each upstream sample into a watermill [`Univariate`] statistic and
-/// emits `stat.get()`.  Works for any statistic that owns its own state —
-/// self-windowing (`RollingMin`, `RollingMax`) or cumulative.
-pub(crate) struct StatStream<T: Element, S> {
-    upstream: Rc<dyn Stream<T>>,
-    stat: S,
-    value: f64,
-}
-
-#[node(active = [upstream], output = value: f64)]
-impl<T: Element + ToPrimitive, S: Univariate<f64> + 'static> MutableNode for StatStream<T, S> {
-    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
-        self.stat.update(sample);
-        self.value = self.stat.get();
-        Ok(true)
-    }
-}
-
-impl<T: Element, S> StatStream<T, S> {
-    pub fn new(upstream: Rc<dyn Stream<T>>, stat: S) -> Self {
-        Self {
-            upstream,
-            stat,
-            value: f64::NAN,
-        }
-    }
-}
-
-/// Rolling window of the most recent `window` samples over a watermill
-/// [`RollableUnivariate`] statistic (used here for `Sum`).
+/// Incremental rolling sum over the most recent `window` samples.
 ///
-/// watermill's own `Rolling` wrapper borrows the statistic `&mut`, which cannot
-/// be embedded in a long-lived node without self-referential lifetimes, so we
-/// own both the statistic and the window here and replicate its
-/// evict-then-update logic: when the window is full the oldest sample is
-/// reverted out before the newest is folded in.
-pub(crate) struct WindowStatStream<T: Element, R> {
+/// Maintains a running total: each sample is added on arrival and the evicted
+/// oldest is subtracted, so a tick is O(1).
+pub(crate) struct RollingSumStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
-    stat: R,
     window: usize,
     buffer: VecDeque<f64>,
+    sum: f64,
     value: f64,
 }
 
 #[node(active = [upstream], output = value: f64)]
-impl<T: Element + ToPrimitive, R: RollableUnivariate<f64> + 'static> MutableNode
-    for WindowStatStream<T, R>
-{
+impl<T: Element + ToPrimitive> MutableNode for RollingSumStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
-        if self.buffer.len() == self.window {
-            // The window is full and its size is >= 1, so the buffer is non-empty.
+        self.buffer.push_back(sample);
+        self.sum += sample;
+        if self.buffer.len() > self.window {
             let oldest = self
                 .buffer
                 .pop_front()
-                .expect("invariant: full window is non-empty");
-            self.stat
-                .revert(oldest)
-                .map_err(|e| anyhow::anyhow!("rolling statistic revert failed: {e}"))?;
+                .expect("invariant: len > window >= 1 implies non-empty");
+            self.sum -= oldest;
         }
-        self.buffer.push_back(sample);
-        self.stat.update(sample);
-        self.value = self.stat.get();
+        self.value = self.sum;
         Ok(true)
     }
 }
 
-impl<T: Element, R> WindowStatStream<T, R> {
-    pub fn new(upstream: Rc<dyn Stream<T>>, stat: R, window: usize) -> Self {
-        // A window of zero is meaningless; clamp to at least one sample.
+impl<T: Element> RollingSumStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, window: usize) -> Self {
         let window = window.max(1);
         Self {
             upstream,
-            stat,
             window,
             buffer: VecDeque::with_capacity(window),
+            sum: 0.0,
             value: f64::NAN,
         }
     }
 }
 
-/// Which order statistic (or time-windowed sum) a [WindowStream] recomputes
-/// over its window.  Rolling `mean`/`var`/`std` use the incremental
-/// [RollingMomentStream] instead.
+/// Which extreme a [RollingExtremeStream] tracks.
+#[derive(Clone, Copy)]
+pub(crate) enum Extreme {
+    Min,
+    Max,
+}
+
+/// Incremental rolling minimum / maximum over the most recent `window` samples,
+/// via a monotonic deque — O(1) amortised per tick.
+///
+/// The deque holds `(index, value)` candidates, monotonic in value (increasing
+/// front-to-back for [`Extreme::Min`], decreasing for [`Extreme::Max`]).  A new
+/// sample evicts every back candidate it dominates (they can never again be the
+/// extreme while it is in the window), and stale candidates fall off the front
+/// once their index leaves the window, so the front is always the answer.
+pub(crate) struct RollingExtremeStream<T: Element> {
+    upstream: Rc<dyn Stream<T>>,
+    extreme: Extreme,
+    window: u64,
+    deque: VecDeque<(u64, f64)>,
+    index: u64,
+    value: f64,
+}
+
+#[node(active = [upstream], output = value: f64)]
+impl<T: Element + ToPrimitive> MutableNode for RollingExtremeStream<T> {
+    fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        let sample = self.upstream.peek_value().to_f64().unwrap_or(f64::NAN);
+        let i = self.index;
+        self.index += 1;
+
+        // Drop back candidates the new sample dominates.
+        while let Some(&(_, back)) = self.deque.back() {
+            let dominated = match self.extreme {
+                Extreme::Min => back >= sample,
+                Extreme::Max => back <= sample,
+            };
+            if dominated {
+                self.deque.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.deque.push_back((i, sample));
+
+        // Drop the front once it falls outside the last `window` indices. The
+        // just-pushed `i` is always in window, so the deque never empties.
+        while let Some(&(idx, _)) = self.deque.front() {
+            if i - idx >= self.window {
+                self.deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.value = self
+            .deque
+            .front()
+            .expect("invariant: deque holds the current sample")
+            .1;
+        Ok(true)
+    }
+}
+
+impl<T: Element> RollingExtremeStream<T> {
+    pub fn new(upstream: Rc<dyn Stream<T>>, extreme: Extreme, window: usize) -> Self {
+        Self {
+            upstream,
+            extreme,
+            window: window.max(1) as u64,
+            deque: VecDeque::new(),
+            index: 0,
+            value: f64::NAN,
+        }
+    }
+}
+
+/// Which statistic a [WindowStream] recomputes over its window (the median in
+/// any window, or `sum`/`min`/`max` over a *time* window; the count-windowed and
+/// moment operators have incremental nodes instead).
 #[derive(Clone, Copy)]
 pub(crate) enum WindowStat {
     Sum,
@@ -673,14 +701,14 @@ pub(crate) enum WindowStat {
     Median,
 }
 
-/// Rolling `min`/`max`/`median` (and time-windowed `sum`) over a sliding
-/// [Window] of the stream — either the last `n` samples ([`Window::Count`]) or
-/// the last `duration` of graph time ([`Window::Time`]).
+/// Recompute-per-tick rolling statistic over a sliding [Window] — used for
+/// `median` (count or time) and the time-windowed `sum`/`min`/`max`, none of
+/// which have a cheap incremental form here.  (Count-windowed `sum`/`min`/`max`
+/// use [RollingSumStream]/[RollingExtremeStream]; rolling `mean`/`var`/`std` use
+/// [RollingMomentStream].)
 ///
-/// These are order statistics (plus `sum`) with no cheap incremental form, so
-/// the statistic is recomputed over the retained samples each tick — O(window)
-/// per tick, which is fine for the window sizes these operators target.  Rolling
-/// `mean`/`var`/`std` use the incremental [RollingMomentStream] instead.  Under
+/// The statistic is recomputed over the retained samples each tick — O(window)
+/// per tick, which is fine for the window sizes these operators target.  Under
 /// [`Weighting::Time`] the median weights each sample by the gap until the next
 /// sample (the most recent by the gap to `now`); the window's leading edge uses
 /// only retained samples, so a value that was in effect *before* the window
@@ -865,7 +893,7 @@ mod tests {
     #[test]
     fn ewma_does_not_reset_at_zero() {
         // Inputs 0, 0, 5 with alpha 0.5. Our EWMA seeds once (to 0) and then
-        // decays: 0 -> 0 -> 2.5. watermill's `mean == 0` sentinel would instead
+        // decays: 0 -> 0 -> 2.5. A naive `mean == 0` sentinel would instead
         // re-seed on the 5 and jump to 5.0 — this guards against that.
         let ewma = counter()
             .map(|n: u64| if n <= 2 { 0.0 } else { 5.0 })
@@ -941,7 +969,7 @@ mod tests {
         assert!((var.peek_value() - 1.25).abs() < 1e-10);
     }
 
-    // ── watermill-backed rolling operators ───────────────────────────────────
+    // ── count-windowed rolling operators ─────────────────────────────────────
 
     #[test]
     fn rolling_sum_over_window() {
@@ -972,6 +1000,50 @@ mod tests {
         // last window {4,5}
         assert!((mn.peek_value() - 4.0).abs() < 1e-10);
         assert!((mx.peek_value() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_min_max_match_brute_force_every_tick() {
+        // A non-monotonic sequence so the monotonic deque actually evicts from
+        // both ends; check every tick against a brute-force window scan.
+        const N: u64 = 60;
+        const W: usize = 5;
+        let seq = |n: u64| ((n * 7) % 13) as f64;
+
+        let mn = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .rolling_min(Window::Count(W))
+            .collect();
+        let mx = ticker(Duration::from_nanos(100))
+            .count()
+            .map(seq)
+            .rolling_max(Window::Count(W))
+            .collect();
+        mn.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+        mx.run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(N as u32),
+        )
+        .unwrap();
+
+        let got_min = mn.peek_value();
+        let got_max = mx.peek_value();
+        for k in 0..got_min.len() {
+            // After tick k (0-based) the stream has emitted seq(1..=k+1); the
+            // count window retains the last min(W, k+1) of them.
+            let n = (k + 1) as u64;
+            let start = if n > W as u64 { n - W as u64 + 1 } else { 1 };
+            let window: Vec<f64> = (start..=n).map(seq).collect();
+            let emin = window.iter().copied().fold(f64::INFINITY, f64::min);
+            let emax = window.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(got_min[k].value, emin, "min mismatch at tick {k}");
+            assert_eq!(got_max[k].value, emax, "max mismatch at tick {k}");
+        }
     }
 
     #[test]
