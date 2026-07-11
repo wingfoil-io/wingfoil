@@ -91,6 +91,11 @@ log = {workspace=true}
 
 # project
 itertools = "0.14.0"
+# Pointer-identity keys for `Rc<dyn Node>` in the graph's node→index map.
+# `ByThinAddress` hashes and compares on the data-pointer address only
+# (ignoring the vtable), so hashing stays consistent with equality for trait
+# objects.
+by_address = "1.2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 crossbeam = "0.8.4"
