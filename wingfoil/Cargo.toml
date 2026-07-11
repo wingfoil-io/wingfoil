@@ -46,7 +46,7 @@ prometheus = ["dep:arc-swap"]
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
 otlp-integration-test = ["otlp", "dep:testcontainers"]
-fix = ["dep:fefix", "dep:rustls", "dep:webpki-roots"]
+fix = ["dep:rustls", "dep:webpki-roots"]
 fix-integration-test = ["fix"]
 web = ["async", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite", "dep:wingfoil-wire-types", "dep:bincode", "tokio/net", "tokio/sync"]
 web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
@@ -150,7 +150,6 @@ arc-swap = { version = "1.7", optional = true }
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["metrics", "trace", "rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"], optional = true }
-fefix = { version = "0.7", optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rusteron-client = { version = "0.1", optional = true }

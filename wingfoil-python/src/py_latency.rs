@@ -202,7 +202,7 @@ impl PyLatency {
 // PyTracedBytes — (payload: bytes, latency: Latency)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "TracedBytes")]
+#[pyclass(name = "TracedBytes", from_py_object)]
 pub struct PyTracedBytes {
     #[pyo3(get)]
     pub payload: Py<PyAny>,

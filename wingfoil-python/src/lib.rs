@@ -31,7 +31,7 @@ use pyo3::prelude::*;
 use std::rc::Rc;
 use std::time::Duration;
 
-#[pyclass(unsendable, name = "Node")]
+#[pyclass(unsendable, name = "Node", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyNode(Rc<dyn Node>);
 
@@ -126,7 +126,7 @@ fn bimap(a: Py<PyAny>, b: Py<PyAny>, func: Py<PyAny>) -> PyResult<PyStream> {
     })
 }
 
-#[pyclass(unsendable, name = "Graph")]
+#[pyclass(unsendable, name = "Graph", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyGraph(Vec<Rc<dyn Node>>);
 

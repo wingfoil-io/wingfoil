@@ -60,8 +60,9 @@ London Demo (free account required) and are gated behind environment variables.
 ### Custom FIX codec
 
 The adapter includes a hand-written FIX 4.4 tag-value codec (`encode_message`, `decode_fields`,
-`build_message`, `find_message`) rather than using the `fefix` crate's codec. The `fefix`
-dependency is declared but currently only used for potential future dictionary-driven validation.
+`build_message`, `find_message`). No third-party FIX codec crate is used. If dictionary-driven
+validation is wanted later, evaluate and add a maintained crate at that point — do not carry an
+unused dependency for it.
 
 ## Pre-commit Requirements
 

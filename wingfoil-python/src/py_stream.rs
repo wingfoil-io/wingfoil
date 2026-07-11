@@ -24,7 +24,7 @@ pub(crate) fn py_callback_error(err: PyErr) -> anyhow::Error {
 }
 
 #[derive(Clone)]
-#[pyclass(subclass, unsendable, name = "Stream")]
+#[pyclass(subclass, unsendable, name = "Stream", from_py_object)]
 pub struct PyStream(pub Rc<dyn Stream<PyElement>>);
 
 impl PyStream {

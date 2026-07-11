@@ -23,7 +23,7 @@ use wingfoil::adapters::aeron::{
 use wingfoil::{Burst, Node, Stream, StreamOperators};
 
 /// Polling strategy for the Aeron subscriber.
-#[pyclass(eq, eq_int, name = "AeronMode")]
+#[pyclass(eq, eq_int, name = "AeronMode", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyAeronMode {
     /// Poll inside the graph `cycle()` on the graph thread — lowest latency.
