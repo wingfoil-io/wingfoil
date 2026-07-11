@@ -13,7 +13,7 @@ use wingfoil::adapters::iceoryx2::{
 };
 use wingfoil::{Node, Stream, StreamOperators};
 
-#[pyclass(eq, eq_int, name = "Iceoryx2ServiceVariant")]
+#[pyclass(eq, eq_int, name = "Iceoryx2ServiceVariant", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyIceoryx2ServiceVariant {
     Ipc,
@@ -29,7 +29,7 @@ impl From<PyIceoryx2ServiceVariant> for Iceoryx2ServiceVariant {
     }
 }
 
-#[pyclass(eq, eq_int, name = "Iceoryx2Mode")]
+#[pyclass(eq, eq_int, name = "Iceoryx2Mode", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyIceoryx2Mode {
     Spin,
