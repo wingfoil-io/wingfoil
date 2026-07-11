@@ -407,7 +407,7 @@ where
             Iceoryx2Mode::Threaded | Iceoryx2Mode::Signaled => {
                 state.always_callback();
 
-                let (sender, receiver) = channel_pair(None);
+                let (sender, receiver) = channel_pair(None, None);
                 self.receiver = Some(receiver);
                 self.running.store(true, Ordering::SeqCst);
 
@@ -593,7 +593,7 @@ impl crate::MutableNode for Iceoryx2SliceReceiverStream {
             }
             Iceoryx2Mode::Threaded | Iceoryx2Mode::Signaled => {
                 state.always_callback();
-                let (sender, receiver) = channel_pair(None);
+                let (sender, receiver) = channel_pair(None, None);
                 self.receiver = Some(receiver);
                 self.running.store(true, Ordering::SeqCst);
 

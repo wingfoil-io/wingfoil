@@ -1072,7 +1072,7 @@ struct FixThreadedSource {
 
 impl FixThreadedSource {
     fn new_initiator(host: &str, port: u16, sender: &str, target: &str) -> Self {
-        let (chan_sender, receiver) = channel_pair(None);
+        let (chan_sender, receiver) = channel_pair(None, None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
@@ -1100,7 +1100,7 @@ impl FixThreadedSource {
         target: &str,
         logon: FixLogon,
     ) -> Self {
-        let (chan_sender, receiver) = channel_pair(None);
+        let (chan_sender, receiver) = channel_pair(None, None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
@@ -1122,7 +1122,7 @@ impl FixThreadedSource {
     }
 
     fn new_acceptor(port: u16, sender: &str, target: &str) -> Self {
-        let (chan_sender, receiver) = channel_pair(None);
+        let (chan_sender, receiver) = channel_pair(None, None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let (inject_sender, inject_receiver) = kanal::bounded(INJECT_QUEUE_CAPACITY);
         Self {
@@ -1439,9 +1439,9 @@ impl MutableNode for FixSubNode {
 //
 // Shape-wise this is the direct-write equivalent of `AsyncConsumerNode` in
 // nodes/async_io.rs, which instead puts a kanal `ChannelSender` between the
-// graph thread and the sink. If `channel_pair` ever grows a bounded+blocking
-// mode (see comment there), the two could be unified behind a generic
-// "sink node" abstraction parameterised by the actual write call.
+// graph thread and the sink. Wiring that consumer's channel to a bounded
+// `buffer_size` (see comment there) would let the two be unified behind a
+// generic "sink node" abstraction parameterised by the actual write call.
 struct FixSenderNode {
     src: Rc<dyn Stream<FixMessage>>,
     host: String,

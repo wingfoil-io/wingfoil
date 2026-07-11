@@ -145,7 +145,7 @@ impl<T: Element + Send> ReceiverStream<T> {
         f: impl Fn(ChannelSender<T>, Arc<AtomicBool>) -> anyhow::Result<()> + Send + 'static,
         assert_realtime: bool,
     ) -> Self {
-        let (sender, receiver) = channel_pair(None);
+        let (sender, receiver) = channel_pair(None, None);
         let inner = ChannelReceiverStream::new(receiver, None, None);
         let sender = Some(sender);
         let stop = Arc::new(AtomicBool::new(false));

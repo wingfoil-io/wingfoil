@@ -28,7 +28,7 @@ fn main() {
         Ok(())
     };
 
-    produce_async(producer)
+    produce_async(producer, None)
         .logged("on-graph", log::Level::Info)
         .collapse()
         .consume_async(Box::new(consumer))

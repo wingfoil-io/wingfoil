@@ -44,13 +44,16 @@ impl<STRM, T> FutStream<T> for STRM where STRM: futures::Stream<Item = (NanoTime
 type ConsumerFunc<T, FUT> = Box<dyn FnOnce(RunParams, Pin<Box<dyn FutStream<T>>>) -> FUT + Send>;
 
 // Routes the source stream into a user-supplied async consumer via a kanal
-// `ChannelSender`. The channel is currently unbounded (see `channel_pair`), so
-// a slow consumer grows memory rather than back-pressuring the graph.
+// `ChannelSender`. This consumer channel is unbounded — it passes `None` to
+// `channel_pair` — so a slow consumer grows memory rather than back-pressuring
+// the graph. (`channel_pair` supports a bounded mode via `Some(n)`, as the
+// async producer exposes through `produce_async`'s `buffer_size`; the consumer
+// side just doesn't wire it up yet.)
 //
 // Shape-wise this is the channel-backed equivalent of `FixSenderNode` in
 // adapters/fix/mod.rs, which writes directly from `cycle` and gets back-
-// pressure for free from the kernel TCP buffer. If `channel_pair` grows a
-// bounded+blocking mode, the two could share a single "sink node"
+// pressure for free from the kernel TCP buffer. Threading a bounded
+// `buffer_size` through here too would let the two share a single "sink node"
 // abstraction parameterised by the actual write call.
 pub(crate) struct AsyncConsumerNode<T, FUT>
 where
@@ -70,7 +73,7 @@ where
     FUT: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     pub fn new(source: Rc<dyn Stream<T>>, func: ConsumerFunc<T, FUT>) -> Self {
-        let (sender, receiver) = channel_pair(None);
+        let (sender, receiver) = channel_pair(None, None);
         let rx = Some(receiver);
         let handle = None;
 
@@ -182,8 +185,8 @@ where
     FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
     FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
-    pub fn new(func: FUNC) -> Self {
-        let (sender, receiver) = channel_pair(None);
+    pub fn new(func: FUNC, buffer_size: Option<usize>) -> Self {
+        let (sender, receiver) = channel_pair(None, buffer_size);
         let receiver_stream = ChannelReceiverStream::new(receiver, None, None);
         let handle = None;
         let func = Some(func);
@@ -294,6 +297,13 @@ where
 /// The closure receives an [`RunParams`] with `run_mode`, `run_for`, and `start_time`,
 /// allowing producers to adapt their behavior (e.g., derive time ranges for queries).
 ///
+/// `buffer_size` bounds the channel between the async producer and the graph:
+/// `None` uses an unbounded channel (the producer never blocks, but a fast
+/// producer feeding a slower graph can accumulate an arbitrarily large backlog),
+/// while `Some(n)` bounds the channel to `n` items so the producer applies
+/// back-pressure — it blocks once the buffer is full rather than growing memory
+/// without limit.
+///
 /// # Example
 /// ```ignore
 /// produce_async(|ctx| async move {
@@ -302,17 +312,20 @@ where
 ///     Ok(async_stream::stream! {
 ///         // Use start, end in async code...
 ///     })
-/// })
+/// }, None)
 /// ```
 #[must_use]
-pub fn produce_async<T, S, FUT, FUNC>(func: FUNC) -> Rc<dyn Stream<Burst<T>>>
+pub fn produce_async<T, S, FUT, FUNC>(
+    func: FUNC,
+    buffer_size: Option<usize>,
+) -> Rc<dyn Stream<Burst<T>>>
 where
     T: Element + Send,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
     FUT: Future<Output = anyhow::Result<S>> + Send + 'static,
     FUNC: FnOnce(RunParams) -> FUT + Send + 'static,
 {
-    AsyncProducerStream::new(func).into_stream()
+    AsyncProducerStream::new(func, buffer_size).into_stream()
 }
 
 trait StreamMessageSource<T: Element + Send> {
@@ -464,7 +477,7 @@ mod tests {
             })
         };
 
-        let collected = produce_async(producer).collect();
+        let collected = produce_async(producer, None).collect();
 
         collected
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -498,7 +511,7 @@ mod tests {
             })
         };
 
-        let result = produce_async(producer)
+        let result = produce_async(producer, None)
             .collapse()
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
 
@@ -547,13 +560,48 @@ mod tests {
                         Ok(())
                     };
 
-                produce_async(example_producer)
+                produce_async(example_producer, None)
                     .collapse()
                     .logged("on-graph", log::Level::Info)
                     .consume_async(Box::new(example_consumer))
                     .run(run_mode, run_for)
                     .unwrap();
             }
+        }
+    }
+
+    /// A bounded channel (`Some(n)`) applies back-pressure but must not drop or
+    /// reorder data: every value the producer emits still reaches the graph, in
+    /// order, exactly as the unbounded (`None`) case does. We assert this across
+    /// buffer sizes, including `Some(1)` — maximum back-pressure, where the
+    /// producer blocks after every single item.
+    #[test]
+    fn produce_async_bounded_buffer_delivers_all_values_in_order() {
+        let _ = env_logger::try_init();
+        let period = Duration::from_nanos(10);
+        let n = 10u32;
+        let expected: Vec<u32> = (0..n).collect();
+
+        for buffer_size in [None, Some(1usize), Some(3), Some(100)] {
+            let producer = move |ctx: RunParams| async move {
+                Ok(async_stream::stream! {
+                    for i in 0..n {
+                        let time = ctx.start_time + period * i;
+                        yield Ok((time, i));
+                    }
+                })
+            };
+
+            let collected = produce_async(producer, buffer_size).collapse().collect();
+            collected
+                .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+                .expect("bounded producer must complete without error");
+
+            let delivered: Vec<u32> = collected.peek_value().iter().map(|v| v.value).collect();
+            assert_eq!(
+                delivered, expected,
+                "buffer_size {buffer_size:?} must deliver all values in order"
+            );
         }
     }
 }

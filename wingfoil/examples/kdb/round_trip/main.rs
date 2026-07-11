@@ -100,6 +100,7 @@ fn main() -> Result<()> {
                 t1.to_kdb_timestamp()
             )
         },
+        None,
     );
     // tie-out
     let check = validate(baseline, read);

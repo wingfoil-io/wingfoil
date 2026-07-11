@@ -45,6 +45,7 @@ fn main() -> Result<()> {
                 t1.to_kdb_timestamp(),
             )
         },
+        None,
     )
     .logged("prices", Info)
     .run(

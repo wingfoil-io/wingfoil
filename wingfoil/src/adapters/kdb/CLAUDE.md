@@ -201,6 +201,7 @@ let stream = kdb_read::<Trade>(
             date, t0.to_kdb_timestamp(), t1.to_kdb_timestamp()
         )
     },
+    None, // buffer_size: None = unbounded; Some(n) bounds the channel for back-pressure
 );
 stream
     // Each tick is a `Burst<Trade>` (all trades at one timestamp). Iterate the

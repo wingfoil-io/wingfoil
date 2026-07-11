@@ -52,21 +52,24 @@ pub fn web_sub<T: Element + Send + DeserializeOwned>(
         Some(rx)
     };
 
-    produce_async(move |ctx: RunParams| async move {
-        Ok(async_stream::stream! {
-            // A historical run replays deterministically from its sources;
-            // an open client listener would never yield and would block the
-            // run from completing, so treat web_sub as an empty source here.
-            if matches!(ctx.run_mode, crate::RunMode::HistoricalFrom(_)) {
-                return;
-            }
-            let Some(mut rx) = rx_opt else { return; };
-            while let Some(payload) = rx.recv().await {
-                match codec.decode::<T>(&payload) {
-                    Ok(v) => yield Ok((NanoTime::now(), v)),
-                    Err(e) => yield Err(anyhow::anyhow!("web_sub '{topic}': {e}")),
+    produce_async(
+        move |ctx: RunParams| async move {
+            Ok(async_stream::stream! {
+                // A historical run replays deterministically from its sources;
+                // an open client listener would never yield and would block the
+                // run from completing, so treat web_sub as an empty source here.
+                if matches!(ctx.run_mode, crate::RunMode::HistoricalFrom(_)) {
+                    return;
                 }
-            }
-        })
-    })
+                let Some(mut rx) = rx_opt else { return; };
+                while let Some(payload) = rx.recv().await {
+                    match codec.decode::<T>(&payload) {
+                        Ok(v) => yield Ok((NanoTime::now(), v)),
+                        Err(e) => yield Err(anyhow::anyhow!("web_sub '{topic}': {e}")),
+                    }
+                }
+            })
+        },
+        None,
+    )
 }

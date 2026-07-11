@@ -61,93 +61,96 @@ where
 {
     let table = table.into();
     let symbols = symbols.into();
-    produce_async(move |ctx| {
-        let run_mode = ctx.run_mode;
-        let connection = connection;
-        let table = table;
-        let symbols = symbols;
+    produce_async(
+        move |ctx| {
+            let run_mode = ctx.run_mode;
+            let connection = connection;
+            let table = table;
+            let symbols = symbols;
 
-        async move {
-            if !matches!(run_mode, RunMode::RealTime) {
-                anyhow::bail!(
-                    "kdb_sub requires RunMode::RealTime; use kdb_read for historical replay"
-                );
-            }
-
-            let creds = connection.credentials_string();
-            let mut socket = QStream::connect(
-                ConnectionMethod::TCP,
-                &connection.host,
-                connection.port,
-                &creds,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "kdb_sub: failed to connect to {}:{}",
-                    connection.host, connection.port
-                )
-            })?;
-
-            // Subscribe synchronously; the reply is `(`table; schema)`, from which
-            // we capture the column names for positional row decoding.
-            let sub_query = format!(".u.sub[`{table};{symbols}]");
-            info!("kdb_sub: {sub_query}");
-            let sub_reply = socket
-                .send_sync_message(&sub_query.as_str())
-                .await
-                .with_context(|| format!("kdb_sub: subscription `{sub_query}` failed"))?;
-            let columns: Vec<String> = sub_reply
-                .element_at(1)
-                .ok()
-                .and_then(|schema| schema.column_names().ok())
-                .unwrap_or_default();
-
-            Ok(async_stream::stream! {
-                let mut interner = SymbolInterner::default();
-                loop {
-                    let (_msg_type, msg) = match socket.receive_message().await {
-                        Ok(m) => m,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("kdb_sub: receive failed"));
-                            break;
-                        }
-                    };
-
-                    // A tickerplant update is `(`upd; `table; data)` — a 3-element
-                    // compound list whose first element is the symbol `upd`. Skip
-                    // anything else (heartbeats, `.u.end`, etc.).
-                    if msg.get_type() != qtype::COMPOUND_LIST || msg.len() < 3 {
-                        continue;
-                    }
-                    match msg.element_at(0).ok().as_ref().and_then(|f| f.get_symbol().ok()) {
-                        Some("upd") => {}
-                        _ => continue,
-                    }
-
-                    let data = match msg.element_at(2) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("kdb_sub: upd message has no data"));
-                            break;
-                        }
-                    };
-
-                    let rows = match upd_payload_rows(&data) {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(e); break; }
-                    };
-
-                    for row in &rows {
-                        match T::from_kdb_row(row, &columns, &mut interner) {
-                            Ok((time, record)) => yield Ok((time, record)),
-                            Err(e) => { yield Err(anyhow::Error::new(e)); return; }
-                        }
-                    }
+            async move {
+                if !matches!(run_mode, RunMode::RealTime) {
+                    anyhow::bail!(
+                        "kdb_sub requires RunMode::RealTime; use kdb_read for historical replay"
+                    );
                 }
-            })
-        }
-    })
+
+                let creds = connection.credentials_string();
+                let mut socket = QStream::connect(
+                    ConnectionMethod::TCP,
+                    &connection.host,
+                    connection.port,
+                    &creds,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "kdb_sub: failed to connect to {}:{}",
+                        connection.host, connection.port
+                    )
+                })?;
+
+                // Subscribe synchronously; the reply is `(`table; schema)`, from which
+                // we capture the column names for positional row decoding.
+                let sub_query = format!(".u.sub[`{table};{symbols}]");
+                info!("kdb_sub: {sub_query}");
+                let sub_reply = socket
+                    .send_sync_message(&sub_query.as_str())
+                    .await
+                    .with_context(|| format!("kdb_sub: subscription `{sub_query}` failed"))?;
+                let columns: Vec<String> = sub_reply
+                    .element_at(1)
+                    .ok()
+                    .and_then(|schema| schema.column_names().ok())
+                    .unwrap_or_default();
+
+                Ok(async_stream::stream! {
+                    let mut interner = SymbolInterner::default();
+                    loop {
+                        let (_msg_type, msg) = match socket.receive_message().await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                yield Err(anyhow::Error::new(e).context("kdb_sub: receive failed"));
+                                break;
+                            }
+                        };
+
+                        // A tickerplant update is `(`upd; `table; data)` — a 3-element
+                        // compound list whose first element is the symbol `upd`. Skip
+                        // anything else (heartbeats, `.u.end`, etc.).
+                        if msg.get_type() != qtype::COMPOUND_LIST || msg.len() < 3 {
+                            continue;
+                        }
+                        match msg.element_at(0).ok().as_ref().and_then(|f| f.get_symbol().ok()) {
+                            Some("upd") => {}
+                            _ => continue,
+                        }
+
+                        let data = match msg.element_at(2) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                yield Err(anyhow::Error::new(e).context("kdb_sub: upd message has no data"));
+                                break;
+                            }
+                        };
+
+                        let rows = match upd_payload_rows(&data) {
+                            Ok(rows) => rows,
+                            Err(e) => { yield Err(e); break; }
+                        };
+
+                        for row in &rows {
+                            match T::from_kdb_row(row, &columns, &mut interner) {
+                                Ok((time, record)) => yield Ok((time, record)),
+                                Err(e) => { yield Err(anyhow::Error::new(e)); return; }
+                            }
+                        }
+                    }
+                })
+            }
+        },
+        None,
+    )
 }
 
 #[cfg(test)]

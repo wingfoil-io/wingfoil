@@ -24,29 +24,32 @@ pub fn redis_sub(
 ) -> Rc<dyn Stream<Burst<RedisEvent>>> {
     let connection = connection.into();
     let channel = channel.into();
-    produce_async(move |_ctx: RunParams| async move {
-        let client = redis::Client::open(connection.url.as_str())
-            .map_err(|e| anyhow::anyhow!("redis client open failed: {e}"))?;
-        let mut pubsub = client
-            .get_async_pubsub()
-            .await
-            .map_err(|e| anyhow::anyhow!("redis connect failed: {e}"))?;
-        pubsub
-            .subscribe(channel.as_str())
-            .await
-            .map_err(|e| anyhow::anyhow!("redis subscribe to {channel:?} failed: {e}"))?;
+    produce_async(
+        move |_ctx: RunParams| async move {
+            let client = redis::Client::open(connection.url.as_str())
+                .map_err(|e| anyhow::anyhow!("redis client open failed: {e}"))?;
+            let mut pubsub = client
+                .get_async_pubsub()
+                .await
+                .map_err(|e| anyhow::anyhow!("redis connect failed: {e}"))?;
+            pubsub
+                .subscribe(channel.as_str())
+                .await
+                .map_err(|e| anyhow::anyhow!("redis subscribe to {channel:?} failed: {e}"))?;
 
-        Ok(async_stream::stream! {
-            let mut messages = pubsub.on_message();
-            while let Some(msg) = messages.next().await {
-                let event = RedisEvent {
-                    channel: msg.get_channel_name().to_string(),
-                    payload: msg.get_payload_bytes().to_vec(),
-                };
-                yield Ok((NanoTime::now(), event));
-            }
-            // `on_message` ends only when the connection drops.
-            yield Err(anyhow::anyhow!("redis subscription stream closed unexpectedly"));
-        })
-    })
+            Ok(async_stream::stream! {
+                let mut messages = pubsub.on_message();
+                while let Some(msg) = messages.next().await {
+                    let event = RedisEvent {
+                        channel: msg.get_channel_name().to_string(),
+                        payload: msg.get_payload_bytes().to_vec(),
+                    };
+                    yield Ok((NanoTime::now(), event));
+                }
+                // `on_message` ends only when the connection drops.
+                yield Err(anyhow::anyhow!("redis subscription stream closed unexpectedly"));
+            })
+        },
+        None,
+    )
 }

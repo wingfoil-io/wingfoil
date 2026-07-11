@@ -295,6 +295,7 @@ fn test_kdb_sorted_data() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
+            None,
         );
         let collected = stream.collapse().collect();
         collected.clone().run(
@@ -342,6 +343,7 @@ fn test_kdb_bad_query() -> Result<()> {
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| "select from nonexistent_table_xyz".to_string(),
+        None,
     );
     let collected = stream.collapse().collect();
     let result = collected.run(
@@ -360,6 +362,7 @@ fn test_kdb_deserialization_error() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
+            None,
         );
         let collected = stream.collapse().collect();
         collected.run(
@@ -397,9 +400,12 @@ fn test_read_read_perf() -> Result<()> {
 
         for &period in &periods {
             let start = std::time::Instant::now();
-            let stream = kdb_read::<TestTrade>(conn.clone(), period, |within, date, _| {
-                slice_query(date, within.0, within.1)
-            });
+            let stream = kdb_read::<TestTrade>(
+                conn.clone(),
+                period,
+                |within, date, _| slice_query(date, within.0, within.1),
+                None,
+            );
             let counter = stream.collapse().count();
             counter.clone().run(
                 RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
@@ -421,6 +427,7 @@ fn test_kdb_connection_refused() -> Result<()> {
         conn,
         std::time::Duration::from_secs(24 * 3600),
         |_, _, _| format!("select from {TABLE_NAME}"),
+        None,
     );
     let collected = stream.collapse().collect();
     let result = collected.run(
@@ -439,6 +446,7 @@ fn test_kdb_empty_table_returns_zero_rows() -> Result<()> {
             conn,
             std::time::Duration::from_secs(24 * 3600),
             |within, date, _| slice_query(date, within.0, within.1),
+            None,
         );
         let collected = stream.collapse().collect();
         collected.clone().run(
@@ -478,6 +486,7 @@ fn test_kdb_read_works() -> Result<()> {
             move |(slice_start, slice_end), date, _iteration| {
                 slice_query(date, slice_start, slice_end)
             },
+            None,
         );
 
         let collected = stream.collapse().collect();
@@ -504,18 +513,21 @@ fn write_and_verify(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<usize
 
     // Build a produce_async stream that yields each trade at a distinct timestamp
     let write_conn = conn.clone();
-    let stream = produce_async(move |_ctx| {
-        let trades = trades;
-        async move {
-            Ok(async_stream::stream! {
-                for (i, trade) in trades.into_iter().enumerate() {
-                    // Use KDB epoch + i seconds as timestamp
-                    let time = NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000);
-                    yield Ok((time, trade));
-                }
-            })
-        }
-    });
+    let stream = produce_async(
+        move |_ctx| {
+            let trades = trades;
+            async move {
+                Ok(async_stream::stream! {
+                    for (i, trade) in trades.into_iter().enumerate() {
+                        // Use KDB epoch + i seconds as timestamp
+                        let time = NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000);
+                        yield Ok((time, trade));
+                    }
+                })
+            }
+        },
+        None,
+    );
 
     // Write to KDB
     let writer = kdb_write(write_conn, WRITE_TABLE_NAME, &stream);
@@ -577,6 +589,7 @@ fn test_kdb_write_round_trip() -> Result<()> {
                     t1.to_kdb_timestamp(),
                 )
             },
+            None,
         );
         let collected = read_stream
             .collapse()
@@ -618,18 +631,21 @@ fn test_kdb_write_append() -> Result<()> {
 
         // Write 2 more trades via the graph - use timestamps after existing data
         let write_conn = conn.clone();
-        let stream = produce_async(move |_ctx| {
-            let trades = new_trades;
-            async move {
-                Ok(async_stream::stream! {
-                    for (i, trade) in trades.into_iter().enumerate() {
-                        // Use timestamps after the existing 3 rows (which use 0..3 seconds)
-                        let time = NanoTime::from_kdb_timestamp((10 + i as i64) * 1_000_000_000);
-                        yield Ok((time, trade));
-                    }
-                })
-            }
-        });
+        let stream = produce_async(
+            move |_ctx| {
+                let trades = new_trades;
+                async move {
+                    Ok(async_stream::stream! {
+                        for (i, trade) in trades.into_iter().enumerate() {
+                            // Use timestamps after the existing 3 rows (which use 0..3 seconds)
+                            let time = NanoTime::from_kdb_timestamp((10 + i as i64) * 1_000_000_000);
+                            yield Ok((time, trade));
+                        }
+                    })
+                }
+            },
+            None,
+        );
 
         let writer = kdb_write(write_conn, WRITE_TABLE_NAME, &stream);
         writer.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
@@ -897,13 +913,18 @@ fn test_kdb_read_drops_rows_outside_window() -> Result<()> {
     // 90s past the epoch — deliberately NOT aligned to the 60s period.
     let start = NanoTime::from_kdb_timestamp(90 * 1_000_000_000);
     let period = std::time::Duration::from_secs(60);
-    let stream = kdb_read::<TestTick>(conn.clone(), period, move |(t0, t1), _date, _| {
-        format!(
-            "select from {TBL} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
-            t0.to_kdb_timestamp(),
-            t1.to_kdb_timestamp(),
-        )
-    });
+    let stream = kdb_read::<TestTick>(
+        conn.clone(),
+        period,
+        move |(t0, t1), _date, _| {
+            format!(
+                "select from {TBL} where time >= (`timestamp$){}j, time < (`timestamp$){}j",
+                t0.to_kdb_timestamp(),
+                t1.to_kdb_timestamp(),
+            )
+        },
+        None,
+    );
     let collected = stream.collapse().collect();
     // Run through 270s (start + 180s), covering the 90s/150s/210s rows.
     let run_result = collected.clone().run(
