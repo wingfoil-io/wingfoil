@@ -1,0 +1,91 @@
+name: security.audit
+
+# Fails CI when a dependency with a known security advisory enters the tree,
+# mirroring the advisory databases GitHub Dependabot uses (RustSec for Cargo,
+# the GitHub Advisory Database for npm). Runs on every push/PR to main and on a
+# weekly schedule so advisories disclosed against *existing* deps (how the
+# hickory/pyo3 alerts arose) are caught even without a code change.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Mondays 06:00 UTC — catch newly disclosed advisories against pinned deps.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  # Rust: scan Cargo.lock against the RustSec advisory DB. `cargo audit` exits
+  # non-zero on vulnerabilities only; informational "unmaintained"/"unsound"
+  # warnings (which have no fixed version) are reported but do not fail CI.
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # No build needed — cargo-audit only reads Cargo.lock.
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+  # JavaScript: audit the wingfoil-js dependency tree. Fails on moderate+
+  # advisories, matching the severities Dependabot surfaced for this package.
+  pnpm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: wingfoil-js
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit JS dependencies
+        working-directory: wingfoil-js
+        run: pnpm audit --audit-level moderate
+
+  # PR-only: block a pull request that *introduces* a dependency with a known
+  # vulnerability, using the same GitHub Advisory Database as Dependabot.
+  # Requires the repository's dependency graph to be enabled (default for
+  # public repos).
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate

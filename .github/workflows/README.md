@@ -4,6 +4,10 @@
 
 * `rust-test.yml` — Rust build, test, clippy, coverage upload.
 * `python-test.yml` — Python (`wingfoil-python`) build + pytest with coverage.
+* `security-audit.yml` — fails on dependencies with known advisories
+  (`cargo audit` for Cargo, `pnpm audit` for `wingfoil-js`, and
+  `dependency-review` to block newly introduced vulnerable deps on PRs).
+  Also runs weekly to catch advisories disclosed against pinned deps.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
 
 ## Integration tests
