@@ -16,6 +16,7 @@
 
 use std::rc::Rc;
 use std::time::Duration;
+use wingfoil::adapters::statistics::*;
 use wingfoil::*;
 
 fn main() {

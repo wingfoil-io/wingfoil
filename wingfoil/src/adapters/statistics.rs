@@ -63,11 +63,13 @@ pub enum EwmaSpan {
 ///
 /// Chain these onto any `Stream<T>` whose values are numeric
 /// (`T: Element + ToPrimitive`); every operator emits an `f64`.  Bring the
-/// trait into scope with `use wingfoil::*` (or `use wingfoil::StatisticsOperators`)
-/// to use the fluent form:
+/// trait into scope with `use wingfoil::adapters::statistics::*` (or
+/// `use wingfoil::adapters::statistics::StatisticsOperators`) to use the fluent
+/// form:
 ///
 /// ```
 /// use wingfoil::*;
+/// use wingfoil::adapters::statistics::*;
 /// use std::time::Duration;
 ///
 /// let smoothed = ticker(Duration::from_millis(10)).count().ewma(EwmaSpan::PerTick(0.1));
@@ -754,6 +756,7 @@ impl<T: Element> WindowStream<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::graph::*;
     use crate::nodes::*;
 

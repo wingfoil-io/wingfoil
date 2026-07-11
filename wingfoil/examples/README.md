@@ -379,10 +379,11 @@ prices.augurs_seasons(AugursSeasonsConfig::new(240));
 
 ### Statistics
 
-Streaming numeric aggregations via the `StatisticsOperators` trait — no external service. Weightable operators take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect), and windows come in count-based (`rolling_*(n)`) and time-based (`rolling_*_over(duration)`) forms:
+Streaming numeric aggregations via the `StatisticsOperators` trait — no external service, but an explicit import (it lives under `adapters`, not the prelude). Weightable operators take a `Weighting` (`Count` = every sample equal, `Time` = weighted by how long each value was in effect), and windows come in count-based (`rolling_*(n)`) and time-based (`rolling_*_over(duration)`) forms:
 
 ```rust,ignore
 use wingfoil::*;
+use wingfoil::adapters::statistics::*;
 
 // Exponential smoothing: per-tick alpha, or a time-based half-life.
 prices.ewma(EwmaSpan::PerTick(0.2));

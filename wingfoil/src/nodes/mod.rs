@@ -41,7 +41,6 @@ mod producer;
 #[cfg(any(feature = "zmq", feature = "aeron", feature = "aeron-rs"))]
 pub(crate) mod receiver;
 mod sample;
-mod statistics;
 mod throttle;
 mod tick;
 mod timed;
@@ -88,7 +87,6 @@ use node_flow::*;
 use print::*;
 use producer::*;
 use sample::*;
-pub use statistics::{EwmaSpan, StatisticsOperators, Weighting};
 use throttle::*;
 use tick::*;
 use timed::*;

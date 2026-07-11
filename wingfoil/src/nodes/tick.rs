@@ -37,6 +37,7 @@ impl MutableNode for TickNode {
 #[cfg(test)]
 mod tests {
 
+    use crate::adapters::statistics::{StatisticsOperators, Weighting};
     use crate::graph::*;
     use crate::nodes::*;
 
