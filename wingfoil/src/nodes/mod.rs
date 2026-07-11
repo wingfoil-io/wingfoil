@@ -88,7 +88,7 @@ use node_flow::*;
 use print::*;
 use producer::*;
 use sample::*;
-pub use statistics::{StatisticsOperators, Weighting};
+pub use statistics::{EwmaSpan, StatisticsOperators, Weighting};
 use throttle::*;
 use tick::*;
 use timed::*;

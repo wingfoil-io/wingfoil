@@ -6,8 +6,9 @@
 //! time-weighted one (via [`Weighting`]) so irregular tick spacing is handled
 //! correctly.
 //!
-//! One price stream feeds a spread of statistics; each is sampled twice a
-//! second, collected, and printed as a table.
+//! One price stream feeds a spread of statistics.  [`combine`] bundles them into
+//! a single `Stream<Burst<f64>>` — one row of values per tick — which we sample
+//! twice a second and print as a table row as it ticks.
 //!
 //! ```bash
 //! cargo run --example statistics
@@ -24,47 +25,41 @@ fn main() {
         .count()
         .map(|n: u64| 100.0 + ((n as f64) * 0.6).sin() * 5.0);
 
-    // One labelled statistic per column, all derived from the shared price.
-    let columns: Vec<(&str, Rc<dyn Stream<f64>>)> = vec![
-        ("price", price.clone()),
-        ("ewma", price.ewma(0.3)),
-        ("sma", price.rolling_mean(10)),
-        ("std", price.rolling_std(10)),
-        ("min", price.rolling_min(10)),
-        ("max", price.rolling_max(10)),
-        ("twap", price.average(Weighting::Time)),
+    // One statistic per column, all derived from the shared price stream.
+    let labels = ["price", "ewma", "sma", "std", "min", "max", "twap"];
+    let columns: Vec<Rc<dyn Stream<f64>>> = vec![
+        price.clone(),
+        price.ewma(EwmaSpan::PerTick(0.3)),
+        price.rolling_mean(10, Weighting::Count),
+        price.rolling_std(10, Weighting::Count),
+        price.rolling_min(10),
+        price.rolling_max(10),
+        price.average(Weighting::Time),
     ];
 
-    // Sample each column twice a second and collect it for reading after the run.
-    let trigger = ticker(Duration::from_millis(500));
-    let collected: Vec<Rc<dyn Stream<Vec<ValueAt<f64>>>>> = columns
-        .iter()
-        .map(|(_, stat)| stat.sample(trigger.clone()).collect())
-        .collect();
+    // Header first, then stream: `combine` collects the columns (in order) into
+    // one Stream<Burst<f64>> whose value each tick is a row holding every
+    // column's latest value. Sample that row twice a second and print it live.
+    print!("{:>6}", "time");
+    for label in labels {
+        print!(" {label:>7}");
+    }
+    println!();
 
-    let nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
+    let trigger = ticker(Duration::from_millis(500));
+    let table = combine(columns).sample(trigger).for_each(|row, time| {
+        print!("{:>5.1}s", f64::from(time) / 1e9);
+        for value in &row {
+            print!(" {value:>7.2}");
+        }
+        println!();
+    });
+
     Graph::new(
-        nodes,
+        vec![table],
         RunMode::HistoricalFrom(NanoTime::ZERO),
         RunFor::Duration(Duration::from_secs(5)),
     )
     .run()
     .unwrap();
-
-    // Transpose the per-column series into rows and print the table. Every
-    // column was sampled on the same trigger, so they line up index-for-index.
-    print!("{:>6}", "time");
-    for (label, _) in &columns {
-        print!(" {label:>7}");
-    }
-    println!();
-
-    let series: Vec<Vec<ValueAt<f64>>> = collected.iter().map(|c| c.peek_value()).collect();
-    for i in 0..series[0].len() {
-        print!("{:>5.1}s", f64::from(series[0][i].time) / 1e9);
-        for column in &series {
-            print!(" {:>7.2}", column[i].value);
-        }
-        println!();
-    }
 }

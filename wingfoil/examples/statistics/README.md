@@ -2,15 +2,16 @@
 
 Demonstrates the `StatisticsOperators` trait — streaming numeric aggregations
 that chain onto any `Stream<T: ToPrimitive>` and emit `f64`. It covers
-exponential smoothing (`ewma`, `ewma_decay`), cumulative moments
-(`average`, `variance`, `std`), count-windowed rolling operators
-(`rolling_mean`/`std`/`min`/`max`/`median`), and time-windowed ones
-(`rolling_*_over`). Weightable operators take a `Weighting` — `Count` (every
-sample equal) or `Time` (each sample weighted by how long it was in effect), so
-irregular tick spacing is handled correctly.
+exponential smoothing (`ewma`, taking an `EwmaSpan` of `PerTick` or `HalfLife`),
+cumulative moments (`average`, `variance`, `std`), count-windowed rolling
+operators (`rolling_mean`/`std`/`min`/`max`/`median`), and time-windowed ones
+(`rolling_*_over`). Every moment operator — cumulative, count-windowed, and
+time-windowed — takes a `Weighting`: `Count` (every sample equal) or `Time`
+(each sample weighted by how long it was in effect), so irregular tick spacing
+is handled correctly.
 
 One synthetic price stream feeds a spread of statistics, which are `combine`d
-into a row, sampled twice a second, and logged as a table.
+into a row, sampled twice a second, and printed live as a table with `for_each`.
 
 ## Run
 
@@ -30,44 +31,39 @@ fn main() {
         .count()
         .map(|n: u64| 100.0 + ((n as f64) * 0.6).sin() * 5.0);
 
-    // One labelled statistic per column, all derived from the shared price.
-    let columns: Vec<(&str, Rc<dyn Stream<f64>>)> = vec![
-        ("price", price.clone()),
-        ("ewma", price.ewma(0.3)),
-        ("sma", price.rolling_mean(10)),
-        ("std", price.rolling_std(10)),
-        ("min", price.rolling_min(10)),
-        ("max", price.rolling_max(10)),
-        ("twap", price.average(Weighting::Time)),
+    // One statistic per column, all derived from the shared price stream.
+    let labels = ["price", "ewma", "sma", "std", "min", "max", "twap"];
+    let columns: Vec<Rc<dyn Stream<f64>>> = vec![
+        price.clone(),
+        price.ewma(EwmaSpan::PerTick(0.3)),
+        price.rolling_mean(10, Weighting::Count),
+        price.rolling_std(10, Weighting::Count),
+        price.rolling_min(10),
+        price.rolling_max(10),
+        price.average(Weighting::Time),
     ];
 
-    // Sample each column twice a second and collect it for reading after the run.
-    let trigger = ticker(Duration::from_millis(500));
-    let collected: Vec<Rc<dyn Stream<Vec<ValueAt<f64>>>>> = columns
-        .iter()
-        .map(|(_, stat)| stat.sample(trigger.clone()).collect())
-        .collect();
-
-    let nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
-    Graph::new(nodes, RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Duration(Duration::from_secs(5)))
-        .run()
-        .unwrap();
-
-    // Transpose the per-column series into rows and print the table.
+    // Header first, then stream: `combine` collects the columns (in order) into
+    // one Stream<Burst<f64>> whose value each tick is a row holding every
+    // column's latest value. Sample that row twice a second and print it live.
     print!("{:>6}", "time");
-    for (label, _) in &columns {
+    for label in labels {
         print!(" {label:>7}");
     }
     println!();
 
-    let series: Vec<Vec<ValueAt<f64>>> = collected.iter().map(|c| c.peek_value()).collect();
-    for i in 0..series[0].len() {
-        print!("{:>5.1}s", f64::from(series[0][i].time) / 1e9);
-        for column in &series {
-            print!(" {:>7.2}", column[i].value);
+    let trigger = ticker(Duration::from_millis(500));
+    let table = combine(columns).sample(trigger).for_each(|row, time| {
+        print!("{:>5.1}s", f64::from(time) / 1e9);
+        for value in &row {
+            print!(" {value:>7.2}");
         }
         println!();
-    }
+    });
+
+    Graph::new(vec![table], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Duration(Duration::from_secs(5)))
+        .run()
+        .unwrap();
 }
 ```
 

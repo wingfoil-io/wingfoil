@@ -385,16 +385,16 @@ Streaming numeric aggregations via the `StatisticsOperators` trait — no extern
 use wingfoil::*;
 
 // Exponential smoothing: per-tick alpha, or a time-based half-life.
-prices.ewma(0.2);
-prices.ewma_decay(Duration::from_secs(30));
+prices.ewma(EwmaSpan::PerTick(0.2));
+prices.ewma(EwmaSpan::HalfLife(Duration::from_secs(30)));
 
 // Cumulative mean — arithmetic vs time-weighted (TWAP).
 prices.average(Weighting::Count);
 prices.average(Weighting::Time);
 
 // Rolling over the last N samples, or the last N of graph time.
-prices.rolling_std(20);
-prices.rolling_median(20);
+prices.rolling_std(20, Weighting::Count);
+prices.rolling_median(20, Weighting::Time);
 prices.rolling_mean_over(Duration::from_secs(5), Weighting::Time);
 ```
 
