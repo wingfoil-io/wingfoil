@@ -743,10 +743,9 @@ cargo run --example $ARGUMENTS --features $ARGUMENTS
 
 ### Register in the examples index
 
-The example-index tables live in **two** files. The adapters table is headed
-**`### Adapters`** in the top-level `/README.md` and **`## I/O adapters`** in
-`wingfoil/examples/README.md` — the two files use different headings, so match
-whichever one the file already has:
+The example-index tables live in **two** files, both under an **`Adapters`**
+heading (`### Adapters` in the top-level `/README.md`, `## Adapters` in
+`wingfoil/examples/README.md`):
 
 - `/README.md` (top-level project README) — tables only, with absolute
   `https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/...`
@@ -769,7 +768,7 @@ Three edits are required:
    | [`$ARGUMENTS`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/$ARGUMENTS/) | <one-line description — what the adapter does and what the example demonstrates>. |
    ```
 
-2. **Add the same row to the `## I/O adapters` table in
+2. **Add the same row to the `## Adapters` table in
    `wingfoil/examples/README.md`** with a **relative** link:
 
    ```markdown
