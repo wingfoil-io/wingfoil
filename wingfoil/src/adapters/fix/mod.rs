@@ -65,6 +65,10 @@ const SOH: u8 = 0x01;
 const BEGIN_STRING: &str = "FIX.4.4";
 const HEARTBEAT_INTERVAL: u32 = 30;
 const READ_BUF_SIZE: usize = 4096;
+/// Pause before an initiator re-connects after an established session dropped, so
+/// a flapping venue isn't hammered. (Connect *failures* still give up — this
+/// covers only a session that logged in and later disconnected.)
+const RECONNECT_DELAY: Duration = Duration::from_millis(500);
 
 /// Header/trailer tags excluded from the application-level `fields` list.
 const HEADER_TAGS: &[u32] = &[
@@ -1299,9 +1303,18 @@ impl MutableNode for FixThreadedSource {
                     break;
                 }
 
-                // Initiators don't auto-reconnect; acceptors loop to re-accept.
+                // Reconnect after an established session dropped: acceptors loop
+                // to re-accept, and initiators now re-connect too (rather than
+                // giving up — a dropped session used to kill the feed for the life
+                // of the process). Connect *failures* above still give up for
+                // initiators; this covers only a session that logged in and later
+                // disconnected. Pause first so a flapping venue isn't hammered; the
+                // fresh `FixSession` on the next iteration re-logs-in (and status
+                // consumers, e.g. a market-data resubscribe keyed on `LoggedIn`,
+                // re-arm on the new login). The stop flag is checked at the loop
+                // top, so `stop()` still ends the thread promptly.
                 if !is_acceptor {
-                    break;
+                    std::thread::sleep(RECONNECT_DELAY);
                 }
             }
 
@@ -1783,6 +1796,61 @@ mod tests {
                 .iter()
                 .any(|s| matches!(s, FixSessionStatus::Error(_))),
             "Expected an Error status from connection refusal, got: {statuses:?}"
+        );
+    }
+
+    /// An initiator whose *established* session drops must reconnect, not give up
+    /// for the life of the process (a dropped session used to kill the feed
+    /// permanently). A mock server that accepts a connection then immediately
+    /// closes it drives the initiator through connect → session → EOF → reconnect;
+    /// the test asserts the server is connected to more than once in the window.
+    #[test]
+    fn initiator_reconnects_after_a_session_drop() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+
+        let _ = env_logger::try_init();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let accepts_srv = accepts.clone();
+        let stop_srv = stop.clone();
+        // Accept then immediately drop each connection: the initiator connects,
+        // starts the session, sees EOF, and — with reconnect — connects again.
+        let server = std::thread::spawn(move || {
+            while !stop_srv.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((sock, _)) => {
+                        accepts_srv.fetch_add(1, Ordering::Relaxed);
+                        drop(sock);
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let (data, status) = fix_connect("127.0.0.1", port, "INIT", "ACC", FixPollMode::Threaded);
+        let status_collected = status.collect();
+        Graph::new(
+            vec![data.as_node(), status_collected.clone().as_node()],
+            RunMode::RealTime,
+            RunFor::Duration(Duration::from_secs(3)),
+        )
+        .run()
+        .unwrap();
+
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let n = accepts.load(Ordering::Relaxed);
+        assert!(
+            n >= 2,
+            "an initiator must reconnect after a session drop; server saw {n} connection(s)"
         );
     }
 
