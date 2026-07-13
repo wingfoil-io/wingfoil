@@ -244,6 +244,10 @@ name = "nanotime"
 harness = false
 
 [[bench]]
+name = "dyn_vs_generic"
+harness = false
+
+[[bench]]
 name = "bfs_vs_dfs_wingfoil"
 path = "benches/bfs_vs_dfs/wingfoil.rs"
 harness = false
