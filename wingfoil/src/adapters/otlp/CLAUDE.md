@@ -74,5 +74,5 @@ automatically — no manual Docker setup required. The container is stopped when
   short-running tests. Decrease if tests become flaky; increase if the backend is slow.
 - Non-numeric stream values are parsed as f64 via `.to_string().parse()`. Values that fail
   parsing are recorded as `0.0` and a warning is logged.
-- The collector image version is pinned (`0.116.0`) to avoid unexpected API changes.
+- The collector image version is pinned (`0.149.0`) to avoid unexpected API changes.
   Update the pin deliberately and re-run integration tests.

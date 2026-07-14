@@ -20,8 +20,9 @@ prometheus/
 - `PrometheusExporter` spawns its own OS thread (same pattern as the ZMQ publisher).
   `serve()` binds synchronously so bind errors surface before the graph starts.
 - Metric nodes are regular `MutableNode` sinks; they read `peek_value()` each tick and publish the
-  stringified value into a per-metric `Arc<ArcSwap<String>>` slot with a lock-free atomic pointer
-  swap. The exporter holds a `Mutex<Vec<(name, slot)>>` registry that is locked only at
+  stringified value into a per-metric `Arc<ArcSwapOption<String>>` slot with a lock-free atomic
+  pointer swap (the `None` state is a never-ticked sentinel, skipped on scrape). The exporter holds
+  a `Mutex<Vec<(name, slot)>>` registry that is locked only at
   `register()` time and once per HTTP scrape (off the graph thread) — never from `cycle()`. On
   scrape the HTTP thread snapshots the registry, drops the lock, then `.load()`s each slot to
   render the response.
