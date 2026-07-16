@@ -13,19 +13,27 @@ wingfoil/           # Core Rust library
   src/
     lib.rs          # Public API re-exports
     types.rs        # Core traits: Element, Node, MutableNode, Stream
-    graph.rs        # Graph execution engine
+    graph.rs        # Graph execution engine (RunMode, RunFor)
     time.rs         # NanoTime (nanoseconds from UNIX epoch)
-    nodes/          # 37 node implementations (map, filter, fold, etc.)
-    adapters/       # I/O adapters (CSV, sockets, KDB+, iterators)
+    nodes/          # 40+ node implementations (map, filter, fold, delay, feedback, etc.)
+    adapters/       # I/O adapters (CSV, ZMQ, Kafka, KDB+, Redis, Postgres, etcd,
+                    #   FIX, web, Aeron, iceoryx2, Fluvio, augurs, Prometheus, OTLP)
+                    #   — each adapter directory has its own CLAUDE.md
     channel/        # Inter-node communication (kanal)
-    queue/          # Data structures (TimeQueue, HashByRef)
-  examples/         # Usage examples (order_book, rfq, async, breadth_first, circuit_breaker, threading)
+    queue/          # Data structures (TimeQueue, ValueAt)
+  examples/         # Usage examples (order_book, async, breadth_first, dynamic,
+                    #   feedback, threading, plus one per adapter)
   benches/          # Criterion benchmarks
 
-wingfoil-python/    # PyO3 Python bindings
+wingfoil-derive/    # Proc macros (#[node] attribute)
+wingfoil-python/    # PyO3 Python bindings (built with maturin)
   src/
   python/           # Python package
   tests/            # pytest tests
+wingfoil-wire-types/ # Wire-format types shared by the web adapter and wingfoil-wasm
+wingfoil-wasm/      # Browser-side WASM codec (excluded from the default workspace)
+wingfoil-js/        # TypeScript client for the web adapter (@wingfoil/client)
+scripts/            # Dev helpers (setup-dev.sh, ci-logs.sh)
 ```
 
 ## System Dependencies
@@ -57,6 +65,9 @@ cargo test -p wingfoil-python
 
 # Python tests
 cd wingfoil-python && maturin develop && pytest
+
+# TypeScript client tests
+cd wingfoil-js && pnpm test
 
 # Benchmarks
 cargo bench
