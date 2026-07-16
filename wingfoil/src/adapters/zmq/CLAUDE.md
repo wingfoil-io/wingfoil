@@ -9,7 +9,7 @@ optional registry-based service discovery (`EtcdRegistry`).
 zmq/
   mod.rs               # ZmqStatus, ZmqEvent, public re-exports, module doc
   read.rs              # zmq_sub() — subscriber producer
-  write.rs             # ZeroMqSenderNode, ZeroMqPub trait — publisher consumer
+  write.rs             # ZeroMqSenderNode, ZeroMqPub trait (zmq_pub / zmq_pub_on) — publisher consumer
   registry.rs          # ZmqRegistry/ZmqHandle traits, ZmqPubRegistration/ZmqSubConfig,
                        #   EtcdRegistry (cfg-gated)
   integration_tests.rs # All tests (gated by feature flags)
@@ -40,6 +40,11 @@ the graph emit `ZmqStatus::Connected` / `ZmqStatus::Disconnected` events without
 polling or external state. Monitor events are delivered on an `inproc://` socket
 polled in the same thread as the data socket.
 
+The publisher also opens a monitor socket (watching `ACCEPTED` events) and
+buffers outgoing messages until the first subscriber connects — up to 500 ms
+(`BUFFER_TIMEOUT`), plus a 50 ms subscription-propagation delay after the TCP
+accept — so messages published before the subscriber is ready are not lost.
+
 ## Registry-Based Discovery
 
 ### `ZmqRegistry` / `ZmqHandle` traits
@@ -57,7 +62,7 @@ pub trait ZmqHandle: Send {
 ### `ZmqPubRegistration` / `ZmqSubConfig` config types
 
 These wrapper types use `From` impls to enable a single `zmq_pub` / `zmq_sub`
-method that works for all three use cases without overloading:
+method that works for all the use cases without overloading:
 
 ```rust
 // ZmqPubRegistration
@@ -69,13 +74,18 @@ zmq_sub::<T>("tcp://host:5556")?                   // direct address
 zmq_sub::<T>(("quotes", etcd_registry))?           // discovery
 ```
 
+`zmq_pub` binds on `127.0.0.1`; use `zmq_pub_on(address, port, registration)`
+to bind a routable address for multi-host deployments (otherwise the address
+stored in the registry is unreachable from other machines).
+
 ### `EtcdRegistry` (requires `etcd` feature)
 
 Stores the address in etcd under a 30 s lease. A dedicated `std::thread` runs a
 keepalive loop every 10 s using its own `new_current_thread` tokio runtime.
 `ZmqHandle::revoke()`:
-1. Sets the shutdown `AtomicBool` to stop the keepalive thread.
-2. Joins the keepalive thread (may block up to 10 s).
+1. Signals a shutdown `tokio::sync::Notify`, which wakes the keepalive loop
+   immediately (it `select!`s on the notify vs. the 10 s sleep).
+2. Joins the keepalive thread.
 3. Calls `lease_revoke` so the key disappears immediately.
 
 ### When to use etcd discovery vs direct address
@@ -92,7 +102,8 @@ keepalive loop every 10 s using its own `new_current_thread` tokio runtime.
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+cargo lint        # default features
+cargo lint-all    # all features
 
 # ZMQ tests (no Docker needed)
 cargo test --features zmq-integration-test -p wingfoil \

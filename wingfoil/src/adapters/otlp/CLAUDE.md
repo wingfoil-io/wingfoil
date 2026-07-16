@@ -15,11 +15,13 @@ Wingfoil adapter for OpenTelemetry export. Two independent pathways:
 ```
 otlp/
   mod.rs               # Public API re-exports, module-level docs
-  push.rs              # OtlpPush trait + push_consumer async fn (metrics)
-  traces.rs            # OtlpSpans trait + spans_consumer async fn (traces)
+  push.rs              # OtlpConfig, OtlpPush trait + push_consumer async fn (metrics)
+  traces.rs            # OtlpAttributeBuffer, OtlpSpans trait + spans_consumer async fn (traces)
   integration_tests.rs # Integration tests (testcontainers — no external setup needed)
   CLAUDE.md            # This file
 ```
+
+Runnable example: `wingfoil/examples/telemetry/otlp/` (see its `run.sh`).
 
 ## Key Design Decisions
 
@@ -27,7 +29,9 @@ otlp/
   Metrics are exported via HTTP/protobuf (`http-proto` feature) to the OTLP `/v1/metrics` endpoint.
   Traces are exported via the HTTP span exporter.
 - A `SdkMeterProvider` with a 500 ms `PeriodicReader` is created per consumer invocation so that
-  the final batch of metrics is flushed before the function returns.
+  the final batch of metrics is flushed before the function returns. The flush happens by
+  **dropping** the provider — explicit `shutdown()` is deliberately avoided (its timeout can fail
+  when the async runtime is unavailable; see opentelemetry-rust issue #3137).
 - The metric name must be a `&'static str` (static string literal) to satisfy the OTel SDK's
   `f64_gauge` builder requirements.
 - **Historical / backtesting mode**: the consumer checks `ctx.run_mode` via `RunParams` and
@@ -43,15 +47,17 @@ otlp/
 ## Feature Flags
 
 - `otlp` — enables the adapter (pulls in `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`,
-  `reqwest`).
+  plus the `async` feature; `reqwest` comes in transitively via `opentelemetry-otlp`'s
+  `reqwest-blocking-client` feature).
 - `otlp-integration-test` — enables `otlp` + `testcontainers` for self-contained integration tests.
 
 ## Pre-Commit Requirements
 
 ```bash
-# 1. Standard checks
+# 1. Standard checks (the lint aliases live in .cargo/config.toml and mirror CI)
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+cargo lint        # default features
+cargo lint-all    # all features
 
 # 2. Unit / doc tests (no external dependencies)
 cargo test --features otlp -p wingfoil -- adapters::otlp
@@ -74,5 +80,5 @@ automatically — no manual Docker setup required. The container is stopped when
   short-running tests. Decrease if tests become flaky; increase if the backend is slow.
 - Non-numeric stream values are parsed as f64 via `.to_string().parse()`. Values that fail
   parsing are recorded as `0.0` and a warning is logged.
-- The collector image version is pinned (`0.116.0`) to avoid unexpected API changes.
+- The collector image version is pinned (`0.149.0`) to avoid unexpected API changes.
   Update the pin deliberately and re-run integration tests.

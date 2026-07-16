@@ -26,11 +26,14 @@ etcd/
 
 ### Writing to etcd — `etcd_pub`
 
-- `etcd_pub(conn, upstream, lease_ttl)` — consumes `Burst<EtcdEntry>`, issues one PUT per entry
-- `EtcdPubOperators::etcd_pub(conn, lease_ttl)` — fluent API on `Rc<dyn Stream<Burst<EtcdEntry>>>`
+- `etcd_pub(conn, upstream, lease_ttl, force)` — consumes `Burst<EtcdEntry>`, issues one PUT per entry
+- `EtcdPubOperators::etcd_pub(conn, lease_ttl, force)` — fluent API, implemented for both
+  `Rc<dyn Stream<Burst<EtcdEntry>>>` and `Rc<dyn Stream<EtcdEntry>>` (single entries are auto-wrapped)
 - Pass `lease_ttl: None` for plain writes (keys persist until deleted)
 - Pass `lease_ttl: Some(Duration)` to attach an etcd lease with automatic keepalive renewal;
   the lease is revoked on clean shutdown so keys vanish immediately
+- `force: true` silently overwrites existing keys; `force: false` issues a conditional
+  transaction (`create_revision == 0`) and errors if the key already exists
 
 ### Types
 
@@ -64,8 +67,8 @@ out as a duplicate.
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
-   cargo test -p wingfoil
+   cargo lint        # default features
+   cargo lint-all    # all features
    ```
 
 ## Integration Test Details
@@ -89,13 +92,17 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 | `test_pub_lease_keys_expire_after_revoke` | Leased keys vanish immediately when consumer stops |
 | `test_pub_lease_keepalive_extends_ttl` | Keepalive renews lease so keys survive past raw TTL |
 | `test_pub_no_lease_keys_persist` | `None` lease: keys remain after consumer stops |
+| `test_pub_force_true_overwrites` | `force: true` silently overwrites an existing key |
+| `test_pub_force_false_fails_if_exists` | `force: false` errors (naming the key) and leaves the original value |
+| `test_pub_force_false_succeeds_if_absent` | `force: false` writes normally when the key is absent |
 | `test_sub_delete_events` | `EtcdEventKind::Delete` is emitted correctly |
 | `test_sub_no_race_between_snapshot_and_watch` | Concurrent write not missed or duplicated |
+| `test_etcd_kv_value_str` | `EtcdEntry::value_str()` UTF-8 accessor (no container needed) |
 
 ## Notes
 
 - `etcd-client` is pinned to `"0.18"`. The API changed significantly between versions.
-- `testcontainers-modules` 0.15 does not include an etcd module; we use `GenericImage`
-  with `gcr.io/etcd-development/etcd` directly.
+- There is no ready-made etcd testcontainers module; tests use `testcontainers` (0.27,
+  `blocking` feature) with `GenericImage` and `gcr.io/etcd-development/etcd` directly.
 - `etcd_sub` is designed for `RunMode::RealTime`. Using it in `HistoricalFrom` mode is
   technically valid but timestamps will be wall-clock `NanoTime::now()`, not historical.

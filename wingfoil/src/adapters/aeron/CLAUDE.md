@@ -24,6 +24,9 @@ aeron/
   CLAUDE.md            # This file
 ```
 
+Runnable demos (`--features aeron`, need a live media driver):
+`examples/aeron/main.rs` and `examples/aeron/status_circuit_breaker.rs`.
+
 ## Backends
 
 Enable **exactly one** backend feature:
@@ -117,12 +120,12 @@ from the `full` feature set.
    bind-mounting `/dev/shm` so the host client shares the CNC file over
    `aeron:ipc`.
 
-2. **Format and lint both backends:**
+2. **Format and lint:**
 
    ```bash
    cargo fmt --all
-   cargo clippy -p wingfoil --features aeron,aeron-driver --all-targets -- -D warnings
-   cargo clippy -p wingfoil --features aeron-rs   --all-targets -- -D warnings
+   cargo lint        # default features
+   cargo lint-all    # all features (covers both aeron backends)
    ```
 
 ## Gotchas

@@ -6,8 +6,8 @@ Zero-copy inter-process communication (IPC) via shared memory using iceoryx2.
 
 ```
 iceoryx2/
-  mod.rs               # Config types (ServiceContract, SubOpts, PubOpts, Mode, Variant),
-                       #   FixedBytes<N>, Iceoryx2Error, unit tests
+  mod.rs               # Config types (ServiceContract, SliceContract, SubOpts, PubOpts,
+                       #   PubSliceOpts, Mode, Variant), FixedBytes<N>, Iceoryx2Error, unit tests
   read.rs              # iceoryx2_sub*, Iceoryx2ReceiverStream — subscriber (producer)
   write.rs             # iceoryx2_pub* — publisher (consumer)
   local_tests.rs       # in-process Local-variant tests (run with default test suite)
@@ -31,17 +31,18 @@ All participants on the same service must use compatible `Iceoryx2ServiceContrac
 ### Typed vs Slice APIs
 
 - **Typed** (`iceoryx2_sub<T>` / `iceoryx2_pub<T>`) — `T` must be `#[repr(C)]`, `ZeroCopySend`, and self-contained (no heap pointers).
-- **Slice** (`iceoryx2_sub_slice` / `iceoryx2_pub_slice`) — transfers `Vec<u8>` via `[u8]` shared memory slices. Used by Python bindings via `FixedBytes<N>`.
+- **Slice** (`iceoryx2_sub_slice` / `iceoryx2_pub_slice`) — transfers `Vec<u8>` via `[u8]` shared memory slices. Used by the Python bindings (`wingfoil-python/src/py_iceoryx2.rs` calls `iceoryx2_sub_slice_opts` / `iceoryx2_pub_slice_opts`).
 
 ### FixedBytes<N>
 
-A `#[repr(C)]` fixed-size byte buffer implementing `ZeroCopySend`. Bridges the gap between variable-length Python bytes and iceoryx2's fixed-layout shared memory.
+A `#[repr(C)]` fixed-size byte buffer implementing `ZeroCopySend`, for carrying variable-length bytes through the typed API. Currently only defined/tested in `mod.rs` — the Python bindings use the slice API instead.
 
 ## Pre-Commit Requirements
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
+cargo lint        # default features
+cargo lint-all    # all features
 cargo test -p wingfoil --features iceoryx2
 cargo test -p wingfoil --features iceoryx2-integration-test -- --test-threads=1
 ```

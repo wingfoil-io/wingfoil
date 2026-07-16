@@ -18,7 +18,7 @@ The `Vec<f64>` operators take one reading per series per tick.
 
 ```
 augurs/
-  mod.rs         # Module doc, value types, transpose_window() helper
+  mod.rs         # Module doc, value types, transpose_window() + push_windowed() helpers
   forecast.rs    # ETS + MSTL forecasting
   outlier.rs     # MAD + DBSCAN outlier detection
   changepoint.rs # Bayesian online changepoint detection
@@ -27,6 +27,9 @@ augurs/
   cluster.rs     # DBSCAN clustering over the DTW distance matrix
   CLAUDE.md      # This file
 ```
+
+Runnable demo: `cargo run --example augurs --features augurs`
+(`examples/augurs/main.rs`).
 
 ## Key Design Decisions
 
@@ -56,8 +59,9 @@ augurs/
 - **Model / detector choice via config, not new operators.** `augurs_forecast`
   takes an `AugursForecastModel` (`Ets` | `Mstl{periods}`) and `augurs_outlier`
   an `AugursOutlierDetector` (`Mad` | `Dbscan`), keeping one operator per
-  concern. `AugursForecastConfig::mstl(periods)` and
-  `AugursOutlierConfig::dbscan(...)` are the ergonomic constructors.
+  concern. The ergonomic spellings are the `.mstl(periods)` builder method
+  (`AugursForecastConfig::new(w, h).mstl(vec![24])`) and the
+  `AugursOutlierConfig::dbscan(...)` constructor.
 
 - **Warm-up floors.** ETS needs >~8 points (floored at 12). MSTL/STL cannot
   decompose fewer than **two full seasonal periods**, so the forecast floor
@@ -94,6 +98,7 @@ augurs/
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+cargo lint        # default features
+cargo lint-all    # all features
 cargo test -p wingfoil --features augurs adapters::augurs
 ```

@@ -9,10 +9,13 @@ allowing Grafana (or any Prometheus-compatible system) to scrape stream values.
 prometheus/
   mod.rs               # Public API re-exports, module-level docs
   exporter.rs          # PrometheusExporter — hand-rolled HTTP server + MutableNode sink
-  integration_tests.rs # Integration tests (requires running Prometheus; see below)
+  integration_tests.rs # Integration tests (two are self-contained; the scrape test needs
+                       # the Docker stack and skips itself if Prometheus is unreachable)
   docker/              # Docker Compose stack (Prometheus + Grafana) for integration tests
   CLAUDE.md            # This file
 ```
+
+Runnable example: `wingfoil/examples/telemetry/prometheus/` (see its `run.sh`).
 
 ## Key Design Decisions
 
@@ -20,8 +23,8 @@ prometheus/
 - `PrometheusExporter` spawns its own OS thread (same pattern as the ZMQ publisher).
   `serve()` binds synchronously so bind errors surface before the graph starts.
 - Metric nodes are regular `MutableNode` sinks; they read `peek_value()` each tick and publish the
-  stringified value into a per-metric `Arc<ArcSwap<String>>` slot with a lock-free atomic pointer
-  swap. The exporter holds a `Mutex<Vec<(name, slot)>>` registry that is locked only at
+  stringified value into a per-metric `Arc<ArcSwapOption<String>>` slot with a lock-free atomic
+  pointer swap (`None` = never ticked; such slots are omitted from the scrape response). The exporter holds a `Mutex<Vec<(name, slot)>>` registry that is locked only at
   `register()` time and once per HTTP scrape (off the graph thread) — never from `cycle()`. On
   scrape the HTTP thread snapshots the registry, drops the lock, then `.load()`s each slot to
   render the response.
@@ -33,15 +36,16 @@ prometheus/
 
 ## Feature Flags
 
-- `prometheus` — enables the adapter (no external client crate; HTTP server is hand-rolled with `std::net`).
+- `prometheus` — enables the adapter (pulls in `arc-swap` only; no Prometheus client crate — the HTTP server is hand-rolled with `std::net`).
 - `prometheus-integration-test` — enables `prometheus` + `reqwest` (blocking) for the integration tests.
 
 ## Pre-Commit Requirements
 
 ```bash
-# 1. Standard checks
+# 1. Standard checks (the lint aliases live in .cargo/config.toml and mirror CI)
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features
+cargo lint        # default features
+cargo lint-all    # all features
 
 # 2. Unit tests (no external dependencies)
 cargo test --features prometheus -p wingfoil -- adapters::prometheus
@@ -64,5 +68,6 @@ docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml dow
 
 - The Prometheus scrape interval in `docker/provisioning/prometheus/prometheus.yml` is 5 s.
   The integration test polls for up to 60 s to account for scrape lag.
-- All tests (unit and integration) use port `0` so the OS assigns a free port. Never hardcode a port
-  number in tests.
+- Self-contained tests bind port `0` so the OS assigns a free port — never hardcode a port number
+  in them. The one exception is the Prometheus scrape test, which must bind a port Prometheus is
+  configured to scrape (`WINGFOIL_METRICS_PORT`, default `9091`).
