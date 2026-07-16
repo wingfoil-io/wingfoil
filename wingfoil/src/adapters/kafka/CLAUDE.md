@@ -23,11 +23,14 @@ kafka/
   - Subscribes to the topic and streams messages as they arrive
   - Each message becomes a `KafkaEvent` with topic, partition, offset, key, and value
   - Uses `auto.offset.reset = earliest` to read from the beginning for new groups
+  - Uses `enable.auto.commit = true` — at-most-once delivery; disable auto-commit
+    and manage offsets via the rdkafka API if you need at-least-once
 
 ### Writing to Kafka — `kafka_pub`
 
-- `kafka_pub(conn, upstream)` — consumes `Burst<KafkaRecord>`, produces every record in the burst concurrently
-- `KafkaPubOperators::kafka_pub(conn)` — fluent API on `Rc<dyn Stream<Burst<KafkaRecord>>>`
+- `kafka_pub(conn, &upstream)` — consumes `Burst<KafkaRecord>`, produces every record in the burst concurrently
+- `KafkaPubOperators::kafka_pub(conn)` — fluent API on both `Rc<dyn Stream<Burst<KafkaRecord>>>`
+  and `Rc<dyn Stream<KafkaRecord>>` (single records are wrapped in a burst automatically)
 - Each `KafkaRecord` specifies its target topic, allowing multi-topic writes from a single consumer
 - All records in a burst are handed to the producer up front and their delivery futures drained
   together via `FuturesUnordered`, so per-burst latency is one broker roundtrip rather than N
@@ -59,7 +62,8 @@ kafka/
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
+   cargo lint        # default features
+   cargo lint-all    # all features
    cargo test -p wingfoil
    ```
 

@@ -9,9 +9,12 @@ kdb/
   mod.rs               # Public API, connection types, error handling, Sym
   read.rs              # kdb_read() and helpers (KdbExt, upd_payload_rows, etc.); time slicing lives in adapters::common
   read_cached.rs       # kdb_read_cached() — file-cached variant of kdb_read
+                       #   (cache machinery — CacheConfig, FileCache — lives in adapters::cache)
   sub.rs               # kdb_sub() — real-time tickerplant subscription
   write.rs             # kdb_write() - writing stream data to KDB+ tables
   integration_tests.rs # Integration tests (requires running KDB+ instance)
+  cache_integration_tests.rs # Integration tests for kdb_read_cached (same gating)
+  docker/              # Dockerfile + q binary for running a KDB+ test instance on port 5000
 ```
 
 ## Key Components
@@ -34,9 +37,14 @@ kdb/
     avoid it when multiple rows can share a timestamp
   - Terminates automatically when all slices are exhausted
 - `kdb_read_cached()` - Cached variant of `kdb_read`
-  - Same signature as `kdb_read` plus a `cache_dir: impl Into<PathBuf>` parameter
-  - Checks `<cache_dir>/<hash>.cache` before each slice query; writes on miss
-  - Cache files persist until manually deleted — no TTL, no eviction
+  - Signature: `(connection, period, cache_config: CacheConfig, query_fn)` — takes a
+    `CacheConfig` (re-exported from `adapters::cache`) instead of `kdb_read`'s
+    `buffer_size` parameter
+  - `CacheConfig::new(folder, max_size_bytes)` — checks `<folder>/<hash>.cache`
+    before each slice query; writes on miss
+  - LRU eviction: oldest `.cache` files (by mtime) are deleted once the total on-disk
+    size would exceed `max_size_bytes`; use `u64::MAX` for an unbounded cache and
+    `CacheConfig::clear()` to delete all cached files
   - Lazy TCP connection: if all slices are cache hits, no KDB connection is opened
   - `T` must additionally implement `serde::Serialize + serde::Deserialize`; `Sync` is also required
   - `Sym` is fully supported — it serializes as a plain string (interning not restored on load)
@@ -44,7 +52,8 @@ kdb/
   - Drops rows outside the run window `[start_time, end_time)` like `kdb_read`, but the
     **cache stores the full `[t0, t1)` slice** (the key is the query string, which does not
     encode start/end); the clamp is applied on emit, on both cache hits and misses
-  - **Schema evolution:** `bincode` is not self-describing — delete the cache dir if `T` changes
+  - **Schema evolution:** `bincode` is not self-describing — call `CacheConfig::clear()`
+    (or delete the cache dir) if `T` changes
 - `kdb_sub()` - Real-time subscription to a tickerplant (the live counterpart to `kdb_read`)
   - `kdb_sub(conn, table, symbols)` — `table` is the tickerplant table name (no backtick),
     `symbols` a q symbol-list literal (`` "`" `` = all, `` "`AAPL`MSFT" `` to filter)
@@ -93,14 +102,15 @@ Before committing changes to the KDB adapter, you MUST:
    q -p 5000
 
    # Then run integration tests:
-   cargo test --features kdb-integration-test -p wingfoil
+   cargo test --features kdb-integration-test -p wingfoil -- --test-threads=1
    ```
 
 2. **Run standard formatting and linting:**
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
+   cargo lint        # default features
+   cargo lint-all    # all features
    ```
 
 3. **Run unit tests:**
@@ -171,12 +181,12 @@ impl KdbSerialize for Trade {
 ### Reading with kdb_read_cached
 
 ```rust
-// Same query closure as kdb_read, plus a cache directory.
+// Same query closure as kdb_read, plus a CacheConfig (no buffer_size parameter).
 // T must also implement serde::Serialize + serde::Deserialize + Sync.
 let stream = kdb_read_cached::<Trade>(
     conn,
     std::time::Duration::from_secs(3600),
-    "/tmp/my-backtest-cache",
+    CacheConfig::new("/tmp/my-backtest-cache", 512 * 1024 * 1024),
     |(t0, t1), date, _| {
         format!(
             "select from trades where date=2000.01.01+{}, \

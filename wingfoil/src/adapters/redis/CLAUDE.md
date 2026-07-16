@@ -99,8 +99,8 @@ persist, so unlike Pub/Sub the integration tests need no subscribe-before-write 
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
-   cargo test -p wingfoil
+   cargo lint        # default features
+   cargo lint-all    # all features
    ```
 
 ## Integration Test Details
@@ -140,7 +140,8 @@ Tests must be run with `--test-threads=1` to avoid port conflicts between contai
 
 ## Python bindings
 
-- Binding module: `wingfoil-python/src/py_redis.rs` (`py_redis_sub` + `py_redis_pub_inner`).
+- Binding module: `wingfoil-python/src/py_redis.rs` (`py_redis_sub`, `py_redis_pub_inner`,
+  `py_redis_stream_read`, `py_redis_stream_write_inner`).
 - Integration tests live in `wingfoil-python/tests/test_redis.py`, gated by the
   `requires_redis` pytest marker (registered in `pyproject.toml` and deselected by
   default). Unit-level construction/marshaling tests in the same file run by default.

@@ -29,7 +29,8 @@ fluvio/
 ### Writing to Fluvio — `fluvio_pub`
 
 - `fluvio_pub(conn, topic, upstream)` — consumes `Burst<FluvioRecord>`, sends one record per entry
-- `FluvioPubOperators::fluvio_pub(conn, topic)` — fluent API on `Rc<dyn Stream<Burst<FluvioRecord>>>`
+- `FluvioPubOperators::fluvio_pub(conn, topic)` — fluent API, implemented for both
+  `Rc<dyn Stream<Burst<FluvioRecord>>>` and `Rc<dyn Stream<FluvioRecord>>` (single records are auto-wrapped)
 - Records are flushed **once per burst** (after all records in a burst are sent) for batching efficiency
 - `FluvioRecord::new(value)` — keyless record (`RecordKey::NULL`)
 - `FluvioRecord::with_key(key, value)` — record with a string key
@@ -71,23 +72,32 @@ admin.create::<TopicSpec>("my-topic", false, TopicSpec::new_computed(1, 1, None)
 ## Integration Test Details
 
 Tests use `testcontainers` (`SyncRunner`) to start an `infinyon/fluvio:0.18.1`
-container running the SC in local mode. Docker must be running.
+container with **host networking**, running a full local cluster (SC + SPU).
+Docker must be running. `start_fluvio()` in `integration_tests.rs`:
 
-Feature flag: `fluvio-integration-test` (implies `fluvio`).
+1. Starts the SC and waits for the log line `"Streaming Controller started successfully"`,
+   then probes port 9003 until it accepts (the log line races the listener bind).
+2. Registers a `CustomSpuSpec` via `FluvioAdmin` — the SC must know about the SPU
+   before the SPU process connects, otherwise the SC closes the connection.
+3. Execs the SPU process (`/fluvio-run spu`) into the running container.
+4. Sleeps 3 s for the SPU to complete registration.
+
+Host networking is required so the SPU public endpoint (`127.0.0.1:9010`), which
+the SC hands to clients, is reachable from the test process.
+
+Feature flag: `fluvio-integration-test` (implies `fluvio`; also pulls in
+`testcontainers` and `fluvio-controlplane-metadata`).
 
 Tests must be run with `--test-threads=1` to avoid port conflicts.
 
 ### Known gotchas
 
-1. **Container wait time**: The integration tests use `WaitFor::millis(8_000)` for
-   container startup. If tests fail due to the SC not being ready in time, increase
-   this value. The exact log message emitted by the SC on startup is
-   implementation-dependent and may vary across Fluvio versions.
+1. **SC startup race**: the SC logs "started successfully" *before* binding its 9003
+   listener; without the port probe, back-to-back tests fail with `ECONNREFUSED`.
 
-2. **SPU not registered**: The SC container alone does not automatically start an SPU.
-   Producer/consumer operations require a registered SPU. If tests fail with "no SPU
-   registered", the container setup needs to include SPU startup. Consider using
-   `fluvio cluster start --local` inside the container to start both SC and SPU.
+2. **SPU must be pre-registered**: producer/consumer operations require a registered
+   SPU. If tests fail with "no SPU registered", the SPU registration/exec sequence
+   above did not complete — check the 3 s registration sleep is long enough.
 
 3. **Topic must exist**: Fluvio will return an error (`TopicNotFound`) if you try to
    produce to or consume from a topic that does not exist. Always call `create_topic`
@@ -107,7 +117,7 @@ Tests must be run with `--test-threads=1` to avoid port conflicts.
 
 ## Pre-Commit Requirements
 
-1. **Run integration tests (requires Docker + running Fluvio cluster):**
+1. **Run integration tests (requires Docker; tests start their own cluster):**
 
    ```bash
    cargo test --features fluvio-integration-test -p wingfoil \
@@ -118,8 +128,8 @@ Tests must be run with `--test-threads=1` to avoid port conflicts.
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features
-   cargo test -p wingfoil
+   cargo lint        # default features
+   cargo lint-all    # all features
    ```
 
 ### Test Coverage

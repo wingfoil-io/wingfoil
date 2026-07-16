@@ -9,7 +9,8 @@ frames as a wingfoil source stream (`web_sub`).
 ```
 web/
   mod.rs               # Re-exports, module-level //! docs, example usage
-  codec.rs             # Envelope + bincode/JSON encoding (backed by wingfoil-wire-types)
+  codec.rs             # Re-exports Envelope/CodecKind/ControlMessage from wingfoil-wire-types
+                       #   (all encode/decode logic lives there) + codec round-trip tests
   server.rs            # WebServer + axum router + per-connection task
   write.rs             # web_pub() sink + WebPubOperators fluent trait
   read.rs              # web_sub() source
@@ -124,7 +125,8 @@ handler.
 ```bash
 # 1. Standard checks
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo lint        # default features
+cargo lint-all    # all features
 
 # 2. Unit + integration tests (no external service required)
 cargo test --features web -p wingfoil \
@@ -163,4 +165,4 @@ default workspace because it targets `wasm32-unknown-unknown`) provides a
 Rust-compiled-to-wasm decoder/encoder so JS / TS apps can consume and emit
 frames without maintaining hand-written schemas. The `wingfoil-js` npm
 package wraps that wasm module and provides reactive-framework adapters
-(Solid.js, Svelte).
+(Solid.js, Svelte, Vue).

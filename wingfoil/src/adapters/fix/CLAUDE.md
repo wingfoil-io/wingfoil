@@ -28,11 +28,25 @@ This avoids the overhead of an async runtime for a protocol where microsecond la
 ### FixConnection and fix_sub
 
 `fix_connect_tls` returns a `FixConnection` bundling the data/status streams and session handle.
-`FixConnection::fix_sub(&["4001"])` creates a graph node that watches the status stream and
-automatically sends `MarketDataRequest` messages once the session reaches `LoggedIn`.
+`FixConnection::fix_sub(symbols)` takes a `Rc<dyn Stream<Vec<String>>>` of symbol IDs (e.g.
+`constant(vec!["4001".into()])`) and creates a graph node that watches the status stream and
+automatically sends `MarketDataRequest` messages once the session reaches `LoggedIn`; symbols
+arriving before logon are queued and subscribed on login.
 `FixConnection::send(msg)` and `FixConnection::sender()` provide raw access for advanced
-use cases (e.g. throttled sweeps, custom message types). `FixSenderNode` is a separate sink for
-cases where a dedicated outbound connection is needed (e.g. order routing).
+use cases (e.g. throttled sweeps, custom message types). `FixOperators::fix_send` (backed by the
+private `FixSenderNode`) is a separate sink for cases where a dedicated outbound connection is
+needed (e.g. order routing).
+
+### Initiator reconnect after a session drop
+
+In `Threaded` mode (which `fix_connect_tls`/`fix_connect_tls_logon` always use), an initiator
+whose *established* session drops reconnects instead of giving up: the session thread pauses
+`RECONNECT_DELAY` (500 ms) so a flapping venue isn't hammered, then re-connects with a fresh
+`FixSession` that re-logs-in. Status consumers see `Disconnected` then a new `LoggedIn` —
+`fix_sub` does not re-send subscriptions on relogin, so resubscription logic must key off
+`LoggedIn` itself if needed. Initial connect *failures* still give up (an `Error` status is
+emitted); acceptors loop to re-accept. `AlwaysSpin` initiators do not reconnect. Covered by the
+`initiator_reconnects_after_a_session_drop` unit test.
 
 ### Pluggable Logon authentication (`FixLogon`)
 
@@ -68,8 +82,9 @@ unused dependency for it.
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --exclude wingfoil-python -- -D warnings
-cargo test -p wingfoil -- fix::tests    # unit tests (no network)
+cargo lint        # default features
+cargo lint-all    # all features
+cargo test -p wingfoil --features fix -- fix::tests    # unit tests (no network)
 ```
 
 Integration tests (requires LMAX credentials):
