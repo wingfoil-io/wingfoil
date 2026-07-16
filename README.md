@@ -96,6 +96,7 @@ Short code snippets for each adapter live in the [examples README](https://githu
 | [`async`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async/) | Integrate Tokio async/await at graph edges (adapters) while keeping the core graph synchronous. |
 | [`threading`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading/) | Distribute graph execution across worker threads with `producer()` / `mapper()`. |
 | [`dynamic`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic/) | Add and remove nodes at runtime. Includes `demux`, `dynamic-group`, and `dynamic-manual` variants. |
+| [`feedback`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/feedback/) | Close a loop between two nodes with a `feedback` channel — a proportional control loop where the plant's output feeds back into the controller's input, which a plain DAG can't express. |
 | [`tracing`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
 | [`latency`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
 
