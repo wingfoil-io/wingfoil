@@ -25,9 +25,9 @@ use anyhow::Result;
 
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold, Inspect, Join,
-    Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, Ticker, TryMap, Window,
-    WindowState,
+    Buffer, Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold,
+    Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, Ticker,
+    TryMap, Window, WindowState,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -586,6 +586,105 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
+    /// (and once more on the last cycle).
+    pub fn buffer<T: Clone + Default + 'static>(
+        &mut self,
+        src: Handle<T>,
+        capacity: usize,
+    ) -> Handle<Vec<T>> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(Vec::<T>::new());
+        let cs = Self::cell(capacity, Vec::<T>::new());
+        self.push_node(
+            vec![src.idx],
+            Buffer::<T>::CAPS,
+            "buffer",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Buffer::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// The classic `trimap`: combine three streams, each independently active
+    /// or passive. All three values are read; only active inputs trigger.
+    #[allow(clippy::too_many_arguments)]
+    pub fn trimap<A, B, C, D, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        c: Handle<C>,
+        c_active: bool,
+        f: F,
+    ) -> Handle<D>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&A, &B, &C) -> D + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let c_slot = self.slot(c);
+        let out = self.new_slot(D::default());
+        let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(3);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
+        if c_active {
+            active.push(c.idx);
+        }
+        self.push_node(
+            active,
+            Join3::<A, B, C, D, F>::CAPS,
+            "trimap",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                let vc = c_slot.borrow();
+                match Join3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,

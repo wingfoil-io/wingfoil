@@ -334,6 +334,62 @@ impl<T: Clone + 'static> Op for Window<T> {
     }
 }
 
+/// Buffers values and flushes them as a `Vec` once `capacity` accumulate,
+/// plus a final flush on the last cycle. The count-based counterpart to
+/// [`Window`]. `Cfg` = capacity, `State` = pending buffer.
+pub struct Buffer<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Buffer<T> {
+    type Cfg = usize;
+    type State = Vec<T>;
+    type In<'a> = (&'a T,);
+    type Out = Vec<T>;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut Vec<T>,
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Vec<T>>> {
+        state.push(input.0.clone());
+        if state.len() >= *cfg || (!state.is_empty() && ctx.is_last_cycle()) {
+            Ok(Tick::Value(std::mem::take(state)))
+        } else {
+            Ok(Tick::Quiet)
+        }
+    }
+}
+
+/// Combines three streams with a closure — the classic `trimap`. Ticks when
+/// any active input ticks (active/passive is an engine dispatch concern);
+/// all three values are read. `Fn`, like [`Join`].
+pub struct Join3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
+
+impl<A, B, C, D, F> Op for Join3<A, B, C, D, F>
+where
+    A: 'static,
+    B: 'static,
+    C: 'static,
+    D: Clone + 'static,
+    F: Fn(&A, &B, &C) -> D + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B, &'a C);
+    type Out = D;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut F,
+        _state: &mut (),
+        input: (&A, &B, &C),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<D>> {
+        Ok(Tick::Value(cfg(input.0, input.1, input.2)))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
