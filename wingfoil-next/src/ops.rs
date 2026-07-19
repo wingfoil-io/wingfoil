@@ -5,6 +5,7 @@
 //! engine, interpreted or compiled.
 
 use std::marker::PhantomData;
+use std::ops::Sub;
 
 use anyhow::Result;
 
@@ -110,6 +111,112 @@ where
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         Ok(Tick::Value(cfg(input.0)?))
+    }
+}
+
+/// Emits a value with a per-value tick decision: the closure returns
+/// `(value, emit?)`, so it maps and filters in one pass. The `filter_map` of
+/// the catalog. `Fn`, like [`Map`].
+pub struct MapFilter<A, B, F>(PhantomData<(A, B, F)>);
+
+impl<A, B, F> Op for MapFilter<A, B, F>
+where
+    A: 'static,
+    B: Clone + 'static,
+    F: Fn(&A) -> (B, bool) + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A,);
+    type Out = B;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
+        let (value, emit) = cfg(input.0);
+        Ok(if emit {
+            Tick::Value(value)
+        } else {
+            Tick::Quiet
+        })
+    }
+}
+
+/// Suppresses consecutive duplicate values: emits the first value, then only
+/// when it changes. State is `Option<T>` (not the default-initialised output)
+/// so a genuine first value equal to `T::default()` still ticks.
+pub struct Distinct<T>(PhantomData<T>);
+
+impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
+    type Cfg = ();
+    type State = Option<T>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Option<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let curr = input.0;
+        if state.as_ref() == Some(curr) {
+            Ok(Tick::Quiet)
+        } else {
+            *state = Some(curr.clone());
+            Ok(Tick::Value(curr.clone()))
+        }
+    }
+}
+
+/// Emits the successive difference `value - previous`. Quiet on the first
+/// value (no previous to subtract).
+pub struct Difference<T>(PhantomData<T>);
+
+impl<T> Op for Difference<T>
+where
+    T: Clone + Sub<Output = T> + 'static,
+{
+    type Cfg = ();
+    type State = Option<T>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Option<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let value = input.0.clone();
+        let out = match state.take() {
+            Some(prev) => Tick::Value(value.clone() - prev),
+            None => Tick::Quiet,
+        };
+        *state = Some(value);
+        Ok(out)
+    }
+}
+
+/// Passes through the first `limit` values, then stays quiet. `Cfg` is the
+/// limit; `State` the count emitted so far.
+pub struct Limit<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Limit<T> {
+    type Cfg = u32;
+    type State = u32;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut u32, state: &mut u32, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if *state >= *cfg {
+            Ok(Tick::Quiet)
+        } else {
+            *state += 1;
+            Ok(Tick::Value(input.0.clone()))
+        }
     }
 }
 

@@ -152,8 +152,8 @@ Inventory (classic `nodes/` → target), grouped by effort:
 
 | Group | Nodes | Notes |
 |---|---|---|
-| Done in prototype | map, filter, fold, constant, sample, merge (2-ary), delay, tick(er), producer(→poll), consumer(→for_each) | parity-tested |
-| Trivial state/closure | distinct, difference, limit, buffer, window, map_filter (filter_map), inspect, print, timed, with_time, graph_state (ticked_at/-elapsed), not/split/combine/collapse (in mod.rs) | afternoons each |
+| Done in prototype | map, filter, fold, constant, sample, merge (2-ary), delay, tick(er), producer(→poll), consumer(→for_each), try_map, finally, feedback | parity-tested |
+| Trivial state/closure | ✅ distinct, difference, limit, map_filter (`tests/catalog.rs`); ⬜ buffer, window, inspect, print, timed, with_time, graph_state (ticked_at/-elapsed), not/split/combine/collapse (in mod.rs) | recipe proven; the rest follow the same op→builder→fluent→parity shape |
 | Scheduling | throttle, delay_with_reset, node_flow (node-level delay/filter/limit/throttle) | `SCHEDULES`; pattern proven by delay |
 | Multi-input | bimap(→join, done), trimap(→join3), try_* variants | needs Phase 1 variadics + fallibility |
 | Engine-touching | always (→`ALWAYS`, done), never, finally (needs teardown), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
