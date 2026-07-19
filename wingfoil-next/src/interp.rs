@@ -626,15 +626,43 @@ impl Builder {
         C: Clone + Default + 'static,
         F: Fn(&A, &B) -> C + 'static,
     {
+        self.bimap(a, true, b, true, f)
+    }
+
+    /// The classic `bimap`: combine two streams, each independently *active*
+    /// (triggers the node when it ticks) or *passive* (read but not
+    /// triggering). Both values are always read; only the active inputs
+    /// appear in the dispatch condition. `join` is `bimap(_, true, _, true)`.
+    pub fn bimap<A, B, C, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        f: F,
+    ) -> Handle<C>
+    where
+        A: 'static,
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&A, &B) -> C + 'static,
+    {
         let idx = self.nodes.len();
         let a_slot = self.slot(a);
         let b_slot = self.slot(b);
         let out = self.new_slot(C::default());
         let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(2);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
         self.push_node(
-            vec![a.idx, b.idx],
+            active,
             Join::<A, B, C, F>::CAPS,
-            "join",
+            "bimap",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
