@@ -46,3 +46,15 @@ pub mod fluent;
 pub mod interp;
 pub mod op;
 pub mod ops;
+
+/// One wiring definition, two engines: expands to a module with
+/// `interpreted()` (fluent wiring) and `compiled(run_mode, run_for)` (fully
+/// monomorphized runner) emitted from the same tokens. See
+/// [`wingfoil_next_macros`] for the DSL.
+pub use wingfoil_next_macros::graph;
+
+// Re-exported so `graph!`-generated code can reach the kernel and run types
+// through `::wingfoil_next::wingfoil::...` without the caller depending on
+// the `wingfoil` crate directly.
+#[doc(hidden)]
+pub use wingfoil;

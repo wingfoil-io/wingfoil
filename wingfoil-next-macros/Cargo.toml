@@ -1,0 +1,18 @@
+[package]
+name = "wingfoil-next-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "graph! proc macro for wingfoil-next: one wiring definition, interpreted and compiled execution"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

@@ -124,3 +124,18 @@ pub trait Op: 'static {
     #[allow(unused_variables)]
     fn start(cfg: &mut Self::Cfg, state: &mut Self::State, ctx: &mut Ctx<'_>) {}
 }
+
+/// [`Op::cycle`] with the config taken by value — for callers (the `graph!`
+/// macro's compiled expansion) that rebuild a zero-capture closure config per
+/// call. Taking the closure as a *direct* argument lets rustc defer its
+/// signature inference until the sibling `input` argument has resolved the
+/// op's value types; behind `&mut` that deferral does not apply.
+#[doc(hidden)]
+pub fn cycle_owned_cfg<O: Op>(
+    mut cfg: O::Cfg,
+    state: &mut O::State,
+    input: O::In<'_>,
+    ctx: &mut Ctx<'_>,
+) -> Tick<O::Out> {
+    O::cycle(&mut cfg, state, input, ctx)
+}
