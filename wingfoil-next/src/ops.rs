@@ -4,6 +4,7 @@
 //! the logic is identical, but here it is written once and executed by every
 //! engine, interpreted or compiled.
 
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::Sub;
 
@@ -524,6 +525,82 @@ impl Op for Ewma {
         };
         state.value += alpha * (sample - state.value);
         Ok(Tick::Value(state.value))
+    }
+}
+
+/// Shared ring-buffer state for the rolling-window statistics ops: the most
+/// recent `window` samples and their running sum (maintained in O(1) per
+/// tick).
+pub struct RollingWindowState {
+    buffer: VecDeque<f64>,
+    sum: f64,
+}
+
+impl Default for RollingWindowState {
+    fn default() -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            sum: 0.0,
+        }
+    }
+}
+
+impl RollingWindowState {
+    /// Push a sample, evicting the oldest once the window is full. Returns the
+    /// current window length.
+    fn push(&mut self, sample: f64, window: usize) -> usize {
+        self.buffer.push_back(sample);
+        self.sum += sample;
+        if self.buffer.len() > window {
+            let oldest = self
+                .buffer
+                .pop_front()
+                .expect("invariant: len > window >= 1 implies non-empty");
+            self.sum -= oldest;
+        }
+        self.buffer.len()
+    }
+}
+
+/// Rolling sum over the most recent `window` `f64` samples. `Cfg` = window.
+pub struct RollingSum;
+
+impl Op for RollingSum {
+    type Cfg = usize;
+    type State = RollingWindowState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingWindowState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.sum))
+    }
+}
+
+/// Rolling arithmetic mean over the most recent `window` `f64` samples.
+pub struct RollingMean;
+
+impl Op for RollingMean {
+    type Cfg = usize;
+    type State = RollingWindowState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingWindowState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let len = state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.sum / len as f64))
     }
 }
 

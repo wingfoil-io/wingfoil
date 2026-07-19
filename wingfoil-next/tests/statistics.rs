@@ -56,6 +56,28 @@ fn ewma_does_not_reset_at_zero() {
     assert!((r.value(&ewma) - 2.5).abs() < 1e-10);
 }
 
+/// Rolling mean over a sliding window — mirrors classic
+/// `rolling_mean_over_window`. Window 3 over 1,2,3,4,5: 1, 1.5, 2, 3, 4.
+#[test]
+fn rolling_mean_over_window() {
+    let g = GraphBuilder::new();
+    let acc = counter_f64(&g).rolling_mean(3).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![1.0, 1.5, 2.0, 3.0, 4.0], r.value(&acc));
+}
+
+/// Rolling sum over a sliding window — mirrors classic
+/// `rolling_sum_over_window`. Window 3 over 1,2,3,4,5: 1, 3, 6, 9, 12.
+#[test]
+fn rolling_sum_over_window() {
+    let g = GraphBuilder::new();
+    let acc = counter_f64(&g).rolling_sum(3).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![1.0, 3.0, 6.0, 9.0, 12.0], r.value(&acc));
+}
+
 /// Half-life decay of a constant stream stays at the seed (mirrors
 /// `ewma_decay_constant_stream_is_constant`) — exercises the clock-driven
 /// decay path.
