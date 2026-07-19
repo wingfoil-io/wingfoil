@@ -13,7 +13,13 @@
 //! - `compiled(run_mode, run_for)` — a fully monomorphized runner derived
 //!   from the same tokens: node state in locals, tick propagation as
 //!   `bool`s, every `Op::cycle` call (closures included) visible to the
-//!   compiler.
+//!   compiler;
+//! - `nested(g, inputs...)` — the whole graph mounted as a **single
+//!   compiled node** (an "island") inside an interpreted graph under
+//!   construction. One closure owns all inner state; the outer engine pays
+//!   one dyn call per activation for the entire sub-graph. Inner schedules
+//!   (tickers, delays) are demultiplexed through a private queue, with only
+//!   the earliest forwarded to the outer kernel.
 //!
 //! ```ignore
 //! wingfoil_next::graph! {
@@ -28,9 +34,15 @@
 //! let (sum2,) = evens_sum::compiled(run_mode, run_for);
 //! ```
 //!
-//! The function must take exactly one parameter (the builder, any name) and
-//! return `Stream<T>` — or a tuple `(Stream<A>, Stream<B>, ...)` with a
-//! matching tuple of bound names as the tail expression. Supported chain
+//! The function takes the builder (any name) as its first parameter, then
+//! optionally input streams (`name: &Stream<T>`) — the graph's edges in,
+//! usable as chain roots. It returns `Stream<T>` — or a tuple
+//! `(Stream<A>, Stream<B>, ...)` with a matching tuple of bound names as
+//! the tail expression. A graph with inputs cannot run standalone, so it
+//! expands to `wire` + `nested` only, and must have exactly one output
+//! (a composite is one node with one output); `nested` is likewise only
+//! emitted for single-output graphs. A passively read input (sample's data
+//! edge) does not activate the island. Supported chain
 //! methods mirror the fluent API: sources `.ticker(period)` /
 //! `.constant(value)` on the builder; combinators `.map(f)`,
 //! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
@@ -60,6 +72,10 @@ use syn::{Expr, Ident, ItemFn, Pat, ReturnType, Stmt, Type, parse_macro_input, p
 
 #[derive(Clone, Copy, PartialEq)]
 enum OpKind {
+    /// A stream parameter of the wiring fn — an edge into the graph, not an
+    /// op. Only valid in the `nested` expansion, where its value and tick
+    /// flag are read from the *outer* graph.
+    Input,
     Ticker,
     Constant,
     Map,
@@ -111,6 +127,10 @@ struct GraphDef {
     wire_fn: ItemFn,
     /// Whether the builder parameter is taken by reference.
     builder_by_ref: bool,
+    /// Stream parameters after the builder — the graph's input edges — and
+    /// their value types. Present only in the `wire` + `nested` expansions
+    /// (a graph with inputs cannot run standalone).
+    inputs: Vec<(Ident, Type)>,
     /// Output bindings (from the tail expression) and their value types
     /// (from the `Stream<T>` return type), in order.
     outs: Vec<(Ident, Type)>,
@@ -245,7 +265,9 @@ impl ChainWalker {
             })
     }
 
-    /// A `&name` argument referencing another stream.
+    /// An argument referencing another stream: `&name` for a stream bound
+    /// by a `let`, or bare `name` for an input parameter (which is already
+    /// a `&Stream<T>`, so re-borrowing it would be a needless borrow).
     fn stream_ref_arg(&self, arg: &Expr) -> syn::Result<usize> {
         if let Expr::Reference(r) = arg
             && let Expr::Path(p) = &*r.expr
@@ -253,9 +275,14 @@ impl ChainWalker {
         {
             return self.lookup(ident);
         }
+        if let Expr::Path(p) = arg
+            && let Some(ident) = p.path.get_ident()
+        {
+            return self.lookup(ident);
+        }
         Err(syn::Error::new(
             arg.span(),
-            "expected `&name` referencing a stream bound by an earlier `let`",
+            "expected `&name` (or a bare input parameter name) referencing a stream",
         ))
     }
 
@@ -459,12 +486,14 @@ impl Parse for GraphDef {
             ));
         }
 
-        // The single parameter is the builder; its name roots source chains.
+        // The first parameter is the builder; its name roots source chains.
+        // Any further parameters are input streams (`name: &Stream<T>`) —
+        // the graph's edges in, roots for combinator chains.
         let mut params = sig.inputs.iter();
-        let (Some(syn::FnArg::Typed(builder_param)), None) = (params.next(), params.next()) else {
+        let Some(syn::FnArg::Typed(builder_param)) = params.next() else {
             return Err(syn::Error::new(
                 sig.inputs.span(),
-                "graph functions take exactly one parameter: the builder, e.g. \
+                "graph functions take the builder as their first parameter, e.g. \
                  `g: &GraphBuilder`",
             ));
         };
@@ -476,6 +505,30 @@ impl Parse for GraphDef {
         };
         let builder = builder_pat.ident.clone();
         let builder_by_ref = matches!(&*builder_param.ty, Type::Reference(_));
+
+        let mut inputs: Vec<(Ident, Type)> = Vec::new();
+        for param in params {
+            let syn::FnArg::Typed(param) = param else {
+                return Err(syn::Error::new(
+                    param.span(),
+                    "graph functions take no self",
+                ));
+            };
+            let Pat::Ident(pat) = &*param.pat else {
+                return Err(syn::Error::new(
+                    param.pat.span(),
+                    "stream parameters must be plain names",
+                ));
+            };
+            let Type::Reference(reference) = &*param.ty else {
+                return Err(syn::Error::new(
+                    param.ty.span(),
+                    "stream parameters must be taken by reference: `name: &Stream<T>`",
+                ));
+            };
+            let value_ty = stream_value_type(&reference.elem)?;
+            inputs.push((pat.ident.clone(), value_ty));
+        }
 
         // Output value types from the return type.
         let ReturnType::Type(_, ret_ty) = &sig.output else {
@@ -500,6 +553,12 @@ impl Parse for GraphDef {
         // touch graph identifiers (wiring hidden in arbitrary code would
         // build nodes `compiled()` cannot see).
         let mut walker = ChainWalker::new();
+        // Input streams are pseudo-nodes: chains may root at them, and the
+        // `nested` expansion reads their value/tick from the outer graph.
+        for (name, _) in &inputs {
+            let ix = walker.push(name.clone(), OpKind::Input, vec![], vec![]);
+            walker.index_of.insert(name.to_string(), ix);
+        }
         let mut passthrough: Vec<(usize, Stmt)> = Vec::new();
         let mut passthrough_names = std::collections::HashSet::new();
         let mut tail: Option<&Expr> = None;
@@ -600,17 +659,34 @@ impl Parse for GraphDef {
             ));
         }
         for name in &out_names {
-            if !walker.index_of.contains_key(&name.to_string()) {
+            let Some(&ix) = walker.index_of.get(&name.to_string()) else {
                 return Err(syn::Error::new(
                     name.span(),
                     format!("`{name}` is not a stream bound by a `let` in this body"),
                 ));
+            };
+            if walker.nodes[ix].op == OpKind::Input {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!(
+                        "`{name}` is an input parameter — outputs must be streams built \
+                             in this body"
+                    ),
+                ));
             }
+        }
+        if !inputs.is_empty() && out_names.len() != 1 {
+            return Err(syn::Error::new(
+                tail.span(),
+                "a graph with input streams must return exactly one `Stream<T>` — it expands \
+                 to a single `nested` node, which has one output",
+            ));
         }
 
         Ok(GraphDef {
             name: sig.ident.clone(),
             builder_by_ref,
+            inputs,
             outs: out_names.into_iter().zip(out_types).collect(),
             nodes: walker.nodes,
             passthrough,
@@ -623,12 +699,30 @@ impl Parse for GraphDef {
 #[proc_macro]
 pub fn graph(input: TokenStream) -> TokenStream {
     let def = parse_macro_input!(input as GraphDef);
-    expand(&def).into()
+    let out = expand(&def);
+    if std::env::var_os("GRAPH_DEBUG").is_some() {
+        eprintln!("=== graph! {} ===\n{}", def.name, out);
+    }
+    out.into()
 }
 
 fn expand(def: &GraphDef) -> TokenStream2 {
-    let interpreted = expand_interpreted(def);
-    let compiled = expand_compiled(def);
+    // A graph with input streams cannot run standalone — it expands to
+    // `wire` + `nested` only. A self-contained graph gets all four.
+    let standalone = if def.inputs.is_empty() {
+        let interpreted = expand_interpreted(def);
+        let compiled = expand_compiled(def);
+        quote! { #interpreted #compiled }
+    } else {
+        quote! {}
+    };
+    let nested = if def.outs.len() == 1 {
+        expand_nested(def)
+    } else {
+        // A multi-output graph is not nestable (a composite is one node
+        // with one output); parsing guarantees this case has no inputs.
+        quote! {}
+    };
     let vis = &def.wire_fn.vis;
     let name = &def.name;
     // The user's function, verbatim, renamed `wire` and made pub within the
@@ -636,14 +730,16 @@ fn expand(def: &GraphDef) -> TokenStream2 {
     let mut wire_fn = def.wire_fn.clone();
     wire_fn.sig.ident = Ident::new("wire", def.wire_fn.sig.ident.span());
     wire_fn.vis = parse_quote!(pub);
+    // An input-only graph's wire fn never touches the builder parameter.
+    wire_fn.attrs.push(parse_quote!(#[allow(unused_variables)]));
     quote! {
         #vis mod #name {
             #![allow(clippy::redundant_closure_call, clippy::let_and_return)]
             use super::*;
             use ::wingfoil_next::fluent::*;
             #wire_fn
-            #interpreted
-            #compiled
+            #standalone
+            #nested
         }
     }
 }
@@ -677,145 +773,210 @@ fn expand_interpreted(def: &GraphDef) -> TokenStream2 {
     }
 }
 
-fn expand_compiled(def: &GraphDef) -> TokenStream2 {
-    let n = def.nodes.len();
-    let mut has_active_downstream = vec![false; n];
+/// Which monomorphized expansion a per-node snippet is emitted into. The
+/// two differ only in where an op's engine context comes from: `compiled`
+/// owns the kernel; `nested` runs inside a composite closure whose
+/// schedules land in a private queue (`__q`) keyed by inner node index.
+#[derive(Clone, Copy)]
+enum Target {
+    Compiled,
+    Nested,
+}
+
+fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
+    match target {
+        Target::Compiled => quote! { ::wingfoil_next::op::Ctx::new(&mut __k, #idx) },
+        Target::Nested => {
+            quote! { ::wingfoil_next::op::Ctx::nested(__now, __start_time, &mut __q, #idx) }
+        }
+    }
+}
+
+/// cfg + state + value slot declarations for one node.
+fn node_decl(node: &NodeDef) -> TokenStream2 {
+    let name = &node.name;
+    let cfg = format_ident!("__cfg_{}", name);
+    let state = format_ident!("__state_{}", name);
+    let value = format_ident!("__v_{}", name);
+    let exprs = &node.exprs;
+    match node.op {
+        // Inputs have no storage here — their value/tick are read from the
+        // outer graph in the `nested` prologue.
+        OpKind::Input => quote! {},
+        OpKind::Ticker => {
+            let period = &exprs[0];
+            quote! {
+                let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#period);
+                let mut #state: Option<::wingfoil_next::wingfoil::NanoTime> = None;
+            }
+        }
+        OpKind::Constant => {
+            let value_expr = &exprs[0];
+            quote! {
+                let mut #cfg = #value_expr;
+                let mut #value = Default::default();
+            }
+        }
+        // Closure-carrying ops keep no cfg local: the closure is inlined
+        // at the cycle call (via `cycle_owned_cfg`) so direct-argument
+        // deferral drives its signature inference.
+        OpKind::Map | OpKind::Join => quote! {
+            let mut #value = Default::default();
+        },
+        OpKind::Fold => {
+            let init = &exprs[0];
+            quote! {
+                let mut #state = #init;
+                let mut #value = Default::default();
+            }
+        }
+        OpKind::Filter | OpKind::Sample | OpKind::Merge => quote! {
+            let mut #value = Default::default();
+        },
+        OpKind::Delay => {
+            let dur = &exprs[0];
+            quote! {
+                let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#dur);
+                let mut #state = ::wingfoil_next::ops::DelayState::default();
+                let mut #value = Default::default();
+            }
+        }
+    }
+}
+
+/// Passthrough statements interleaved with node declarations in source
+/// order: a config expression must see exactly the passthrough bindings
+/// that preceded its wiring statement in `wire()` (shadowing included).
+fn interleaved_setup(def: &GraphDef) -> Vec<TokenStream2> {
+    let mut setup: Vec<TokenStream2> = Vec::new();
+    let mut passthrough = def.passthrough.iter().peekable();
+    for (i, node) in def.nodes.iter().enumerate() {
+        while let Some((_, stmt)) = passthrough.next_if(|(pos, _)| *pos <= i) {
+            setup.push(quote! { #stmt });
+        }
+        setup.push(node_decl(node));
+    }
+    for (_, stmt) in passthrough {
+        setup.push(quote! { #stmt });
+    }
+    setup
+}
+
+/// Which nodes need a named `__t_x` tick flag (someone consumes it) rather
+/// than a bare `if`.
+fn tick_flags_needed(def: &GraphDef) -> Vec<bool> {
+    let mut has_active_downstream = vec![false; def.nodes.len()];
     for node in &def.nodes {
         for u in node.active_ups() {
             has_active_downstream[u] = true;
         }
     }
+    def.nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| has_active_downstream[i] || def.outs.iter().any(|(o, _)| o == &node.name))
+        .collect()
+}
 
-    let mut decls = Vec::new();
+fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
+    let cfg = format_ident!("__cfg_{}", node.name);
+    let state = format_ident!("__state_{}", node.name);
+    let op_path = op_path(node.op);
+    let state_arg = start_state_arg(node, &state);
+    let ctx = ctx_expr(target, idx);
+    quote! {
+        {
+            let mut __ctx = #ctx;
+            #op_path::start(&mut #cfg, #state_arg, &mut __ctx);
+        }
+    }
+}
+
+/// The dispatch line for one node: condition, `Op::cycle` call, tick flag.
+fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> TokenStream2 {
+    let node = &def.nodes[i];
+    let name = &node.name;
+    let cfg = format_ident!("__cfg_{}", name);
+    let state = format_ident!("__state_{}", name);
+    let value = format_ident!("__v_{}", name);
+    let ticked = format_ident!("__t_{}", name);
+    let idx = i;
+
+    let mut cond_parts: Vec<TokenStream2> = node
+        .active_ups()
+        .iter()
+        .map(|&u| {
+            let t = format_ident!("__t_{}", def.nodes[u].name);
+            quote! { #t }
+        })
+        .collect();
+    if node.op.callback_activated() {
+        cond_parts.push(quote! { __dirty[#idx] });
+    }
+    let cond = quote! { #(#cond_parts)||* };
+
+    let op_path = op_path(node.op);
+    let input = cycle_input(def, node);
+    let cfg_arg = cycle_cfg_arg(node, &cfg);
+    let state_arg = cycle_state_arg(node, &state);
+    let on_value = if node.op == OpKind::Ticker {
+        // Unit output: no value slot to store.
+        quote! { ::wingfoil_next::op::Tick::Value(()) => true, }
+    } else {
+        quote! {
+            ::wingfoil_next::op::Tick::Value(__val) => {
+                #value = __val;
+                true
+            }
+        }
+    };
+    let cycle_call = match node.op {
+        // Closure configs go by value as a DIRECT argument so rustc
+        // defers their signature inference until the input argument has
+        // resolved the op's value types (a closure behind `&mut` loses
+        // that deferral and fails E0282).
+        OpKind::Map | OpKind::Join | OpKind::Fold => {
+            let f = if node.op == OpKind::Fold {
+                &node.exprs[1]
+            } else {
+                &node.exprs[0]
+            };
+            let ty = op_type(node.op);
+            quote! {
+                ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+            }
+        }
+        _ => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
+    };
+    let ctx = ctx_expr(target, idx);
+    let call = quote! {
+        {
+            let mut __ctx = #ctx;
+            match #cycle_call {
+                #on_value
+                ::wingfoil_next::op::Tick::Quiet => false,
+            }
+        }
+    };
+
+    if needs_flag {
+        quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
+    } else {
+        quote! { if #cond { let _ = #call; } }
+    }
+}
+
+fn expand_compiled(def: &GraphDef) -> TokenStream2 {
+    let n = def.nodes.len();
+    let flags = tick_flags_needed(def);
+    let setup = interleaved_setup(def);
     let mut starts = Vec::new();
     let mut body = Vec::new();
-
     for (i, node) in def.nodes.iter().enumerate() {
-        let name = &node.name;
-        let cfg = format_ident!("__cfg_{}", name);
-        let state = format_ident!("__state_{}", name);
-        let value = format_ident!("__v_{}", name);
-        let ticked = format_ident!("__t_{}", name);
-        let exprs = &node.exprs;
-        let idx = i;
-
-        // cfg + state + value slot declarations.
-        decls.push(match node.op {
-            OpKind::Ticker => {
-                let period = &exprs[0];
-                quote! {
-                    let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#period);
-                    let mut #state: Option<::wingfoil_next::wingfoil::NanoTime> = None;
-                }
-            }
-            OpKind::Constant => {
-                let value_expr = &exprs[0];
-                quote! {
-                    let mut #cfg = #value_expr;
-                    let mut #value = Default::default();
-                }
-            }
-            // Closure-carrying ops keep no cfg local: the closure is inlined
-            // at the cycle call (via `cycle_owned_cfg`) so direct-argument
-            // deferral drives its signature inference.
-            OpKind::Map | OpKind::Join => quote! {
-                let mut #value = Default::default();
-            },
-            OpKind::Fold => {
-                let init = &exprs[0];
-                quote! {
-                    let mut #state = #init;
-                    let mut #value = Default::default();
-                }
-            }
-            OpKind::Filter | OpKind::Sample | OpKind::Merge => quote! {
-                let mut #value = Default::default();
-            },
-            OpKind::Delay => {
-                let dur = &exprs[0];
-                quote! {
-                    let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#dur);
-                    let mut #state = ::wingfoil_next::ops::DelayState::default();
-                    let mut #value = Default::default();
-                }
-            }
-        });
-
         if node.op.has_start() {
-            let op_path = op_path(node.op);
-            let state_arg = start_state_arg(node, &state);
-            starts.push(quote! {
-                {
-                    let mut __ctx = ::wingfoil_next::op::Ctx::new(&mut __k, #idx);
-                    #op_path::start(&mut #cfg, #state_arg, &mut __ctx);
-                }
-            });
+            starts.push(node_start(Target::Compiled, i, node));
         }
-
-        // Dispatch condition.
-        let mut cond_parts: Vec<TokenStream2> = node
-            .active_ups()
-            .iter()
-            .map(|&u| {
-                let t = format_ident!("__t_{}", def.nodes[u].name);
-                quote! { #t }
-            })
-            .collect();
-        if node.op.callback_activated() {
-            cond_parts.push(quote! { __dirty[#idx] });
-        }
-        let cond = quote! { #(#cond_parts)||* };
-
-        // The Op::cycle call with engine-supplied input.
-        let op_path = op_path(node.op);
-        let input = cycle_input(def, node);
-        let cfg_arg = cycle_cfg_arg(node, &cfg);
-        let state_arg = cycle_state_arg(node, &state);
-        let on_value = if node.op == OpKind::Ticker {
-            // Unit output: no value slot to store.
-            quote! { ::wingfoil_next::op::Tick::Value(()) => true, }
-        } else {
-            quote! {
-                ::wingfoil_next::op::Tick::Value(__val) => {
-                    #value = __val;
-                    true
-                }
-            }
-        };
-        let cycle_call = match node.op {
-            // Closure configs go by value as a DIRECT argument so rustc
-            // defers their signature inference until the input argument has
-            // resolved the op's value types (a closure behind `&mut` loses
-            // that deferral and fails E0282).
-            OpKind::Map | OpKind::Join | OpKind::Fold => {
-                let f = if node.op == OpKind::Fold {
-                    &node.exprs[1]
-                } else {
-                    &node.exprs[0]
-                };
-                let ty = op_type(node.op);
-                quote! {
-                    ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
-                }
-            }
-            _ => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
-        };
-        let call = quote! {
-            {
-                let mut __ctx = ::wingfoil_next::op::Ctx::new(&mut __k, #idx);
-                match #cycle_call {
-                    #on_value
-                    ::wingfoil_next::op::Tick::Quiet => false,
-                }
-            }
-        };
-
-        let is_out = def.outs.iter().any(|(o, _)| o == name);
-        body.push(if has_active_downstream[i] || is_out {
-            quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
-        } else {
-            quote! { if #cond { let _ = #call; } }
-        });
+        body.push(node_dispatch(def, Target::Compiled, i, flags[i]));
     }
 
     let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
@@ -827,21 +988,6 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
             quote! { #v }
         })
         .collect();
-
-    // Interleave passthrough statements with node declarations in source
-    // order: a config expression must see exactly the passthrough bindings
-    // that preceded its wiring statement in `wire()` (shadowing included).
-    let mut setup: Vec<TokenStream2> = Vec::new();
-    let mut passthrough = def.passthrough.iter().peekable();
-    for (i, decl) in decls.into_iter().enumerate() {
-        while let Some((_, stmt)) = passthrough.next_if(|(pos, _)| *pos <= i) {
-            setup.push(quote! { #stmt });
-        }
-        setup.push(decl);
-    }
-    for (_, stmt) in passthrough {
-        setup.push(quote! { #stmt });
-    }
 
     quote! {
         /// The same graph, fully monomorphized: node state in locals, tick
@@ -865,9 +1011,134 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     }
 }
 
+/// The whole graph as a single node ("compiled island") mounted in an
+/// interpreted graph. One closure owns all inner state; inner dispatch is
+/// the same monomorphized straight-line code `compiled` emits, with inner
+/// schedules demultiplexed through a private `TimeQueue` — only the
+/// earliest is forwarded to the outer kernel.
+fn expand_nested(def: &GraphDef) -> TokenStream2 {
+    let n = def.nodes.len();
+    let (out_name, out_ty) = &def.outs[0];
+    let out_t = format_ident!("__t_{}", out_name);
+    let out_v = format_ident!("__v_{}", out_name);
+    let callback_activated = def.nodes.iter().any(|node| node.op.callback_activated());
+    let flags = tick_flags_needed(def);
+    let setup = interleaved_setup(def);
+    let mut starts = Vec::new();
+    let mut body = Vec::new();
+    for (i, node) in def.nodes.iter().enumerate() {
+        if node.op == OpKind::Input {
+            continue;
+        }
+        if node.op.has_start() {
+            starts.push(node_start(Target::Nested, i, node));
+        }
+        body.push(node_dispatch(def, Target::Nested, i, flags[i]));
+    }
+
+    // Only inputs that are an *active* upstream of some inner node activate
+    // the composite; a passively read input (sample's data edge) must not.
+    let mut input_active = vec![false; n];
+    for node in &def.nodes {
+        for u in node.active_ups() {
+            if def.nodes[u].op == OpKind::Input {
+                input_active[u] = true;
+            }
+        }
+    }
+
+    let in_names: Vec<&Ident> = def.inputs.iter().map(|(name, _)| name).collect();
+    let in_tys: Vec<&Type> = def.inputs.iter().map(|(_, ty)| ty).collect();
+    let slot_ids: Vec<Ident> = in_names
+        .iter()
+        .map(|name| format_ident!("__slot_{}", name))
+        .collect();
+    let ix_ids: Vec<Ident> = in_names
+        .iter()
+        .map(|name| format_ident!("__ix_{}", name))
+        .collect();
+    let t_ids: Vec<Ident> = in_names
+        .iter()
+        .map(|name| format_ident!("__t_{}", name))
+        .collect();
+    let v_ids: Vec<Ident> = in_names
+        .iter()
+        .map(|name| format_ident!("__v_{}", name))
+        .collect();
+    let active_ix_ids: Vec<&Ident> = def
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| input_active[*i])
+        .map(|(i, _)| &ix_ids[i])
+        .collect();
+    let ticked_bind = if def.inputs.is_empty() {
+        quote! {}
+    } else {
+        quote! { let __ticked = __g.__ticked(); }
+    };
+
+    quote! {
+        /// The whole graph mounted as a **single compiled node** in an
+        /// interpreted graph under construction. The outer engine pays one
+        /// dyn call per activation for the entire sub-graph; inside, state
+        /// lives in one closure and dispatch is monomorphized straight-line
+        /// code — the same code `compiled` emits. Inner schedules (tickers,
+        /// delays) are demultiplexed through a private queue; only the
+        /// earliest is forwarded to the outer kernel.
+        #[allow(unused_mut, unused_variables)]
+        pub fn nested(
+            __g: &::wingfoil_next::fluent::GraphBuilder,
+            #(#in_names: &::wingfoil_next::fluent::Stream<#in_tys>,)*
+        ) -> ::wingfoil_next::fluent::Stream<#out_ty> {
+            #(#setup)*
+            #ticked_bind
+            #(
+                let #slot_ids = #in_names.__slot();
+                let #ix_ids = #in_names.handle().index();
+            )*
+            let mut __q = ::wingfoil_next::wingfoil::TimeQueue::<usize>::new();
+            let mut __dirty = [false; #n];
+            let __active: ::std::vec::Vec<usize> =
+                ::std::vec::Vec::from([#(#active_ix_ids),*]);
+            __g.__composite(__active, #callback_activated, move |__ctx, __is_start| {
+                let __now = __ctx.time();
+                let __start_time = __ctx.start_time();
+                if __is_start {
+                    #(#starts)*
+                    if let Some(__t) = __q.next_time() {
+                        __ctx.schedule(__t);
+                    }
+                    return ::wingfoil_next::op::Tick::Quiet;
+                }
+                for __d in __dirty.iter_mut() {
+                    *__d = false;
+                }
+                while let Some(__ix) = __q.pop_if_pending(__now) {
+                    __dirty[__ix] = true;
+                }
+                #(
+                    let #t_ids = __ticked.borrow()[#ix_ids];
+                    let #v_ids = #slot_ids.borrow();
+                )*
+                #(#body)*
+                if let Some(__t) = __q.next_time() {
+                    __ctx.schedule(__t);
+                }
+                if #out_t {
+                    ::wingfoil_next::op::Tick::Value(::core::clone::Clone::clone(&#out_v))
+                } else {
+                    ::wingfoil_next::op::Tick::Quiet
+                }
+            })
+        }
+    }
+}
+
 /// The concrete (inference-holed) op type.
 fn op_type(op: OpKind) -> TokenStream2 {
     match op {
+        OpKind::Input => unreachable!("inputs are not ops"),
         OpKind::Ticker => quote! { ::wingfoil_next::ops::Ticker },
         OpKind::Constant => quote! { ::wingfoil_next::ops::Const<_> },
         OpKind::Map => quote! { ::wingfoil_next::ops::Map<_, _, _> },
@@ -909,18 +1180,22 @@ fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
 }
 
 /// The `Op::In` tuple for one cycle, built from upstream value/tick locals.
-/// A ticker upstream has no value slot — its value is the unit literal.
+/// A ticker upstream has no value slot — its value is the unit literal. An
+/// input upstream's local is a borrow guard on the outer graph's slot, so
+/// it is re-borrowed rather than referenced.
 fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
     let v = |ix: usize| -> TokenStream2 {
-        if def.nodes[ix].op == OpKind::Ticker {
-            quote! { &() }
-        } else {
-            let ident = format_ident!("__v_{}", def.nodes[ix].name);
-            quote! { &#ident }
+        let up = &def.nodes[ix];
+        let ident = format_ident!("__v_{}", up.name);
+        match up.op {
+            OpKind::Ticker => quote! { &() },
+            OpKind::Input => quote! { &*#ident },
+            _ => quote! { &#ident },
         }
     };
     let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
     match node.op {
+        OpKind::Input => unreachable!("inputs are not dispatched"),
         OpKind::Ticker | OpKind::Constant => quote! { () },
         OpKind::Map | OpKind::Fold | OpKind::Sample => {
             let src = v(node.refs[0]);
