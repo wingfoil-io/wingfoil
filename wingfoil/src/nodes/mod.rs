@@ -61,6 +61,10 @@ pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
 #[doc(hidden)]
 pub use constant::ConstantStream;
+#[doc(hidden)]
+pub use delay::DelayStream;
+#[doc(hidden)]
+pub use delay_with_reset::DelayWithResetStream;
 pub use demux::*;
 #[cfg(feature = "dynamic-graph")]
 pub use dynamic_group::*;
@@ -80,13 +84,17 @@ pub use map_filter::MapFilterStream;
 pub use merge::MergeStream;
 pub use never::*;
 #[doc(hidden)]
+pub use print::PrintStream;
+#[doc(hidden)]
 pub use sample::SampleStream;
+#[doc(hidden)]
+pub use throttle::ThrottleStream;
+#[doc(hidden)]
+pub use tick::TickNode;
 
 use bimap::*;
 use buffer::BufferStream;
 use consumer::*;
-use delay::*;
-use delay_with_reset::*;
 use difference::*;
 use distinct::*;
 use finally::*;
@@ -94,10 +102,7 @@ use graph_state::*;
 use inspect::*;
 use limit::*;
 use node_flow::*;
-use print::*;
 use producer::*;
-use throttle::*;
-use tick::*;
 use timed::*;
 use trimap::*;
 use try_bimap::*;

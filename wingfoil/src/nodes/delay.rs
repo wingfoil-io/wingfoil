@@ -6,7 +6,7 @@ use derive_new::new;
 
 /// Emits it's source delayed by the specified time
 #[derive(new)]
-pub(crate) struct DelayStream<T: Element + PartialEq> {
+pub struct DelayStream<T: Element + PartialEq> {
     #[new(default)]
     value: T,
     #[new(default)]

@@ -32,6 +32,7 @@ pub fn run(
 ) -> wingfoil::codegen::Result<()> {
     let mut rt = StaticRuntime::new(roots, run_mode, run_for)?;
     rt.check_topology(12, 0x900368043eb4bb44)?;
+    let n0: Rc<RefCell<wingfoil::TickNode>> = rt.typed(0)?;
     let n1: Rc<RefCell<wingfoil::ConstantStream<u64>>> = rt.typed(1)?;
     let n2: Rc<RefCell<wingfoil::SampleStream<u64>>> = rt.typed(2)?;
     let n3: Rc<RefCell<wingfoil::FoldStream<u64, u64>>> = rt.typed(3)?;
@@ -45,7 +46,7 @@ pub fn run(
     let n11: Rc<RefCell<wingfoil::FoldStream<String, Vec<String>>>> = rt.typed(11)?;
     rt.run(|rt| {
         while rt.begin_cycle()? {
-            let ticked_0 = rt.is_dirty(0) && rt.cycle_node(0)?;                                                                                  // [00] TickNode
+            let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;                                                                            // [00] TickNode
             if rt.is_dirty(1) { rt.did_tick(1, n1.borrow_mut().cycle_inline()); }                                                                // [01] ConstantStream
             let ticked_2 = (ticked_0 || rt.is_dirty(2)) && rt.did_tick(2, n2.borrow_mut().cycle_inline());                                       // [02] SampleStream
             let ticked_3 = (ticked_2 || rt.is_dirty(3)) && rt.did_tick(3, n3.borrow_mut().cycle_inline());                                       // [03] FoldStream

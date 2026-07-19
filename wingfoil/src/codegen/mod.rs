@@ -85,11 +85,14 @@ pub type Result<T> = anyhow::Result<T>;
 pub struct CodegenOptions {
     /// Name of the generated entry-point function. Default: `"run"`.
     pub function_name: String,
-    /// Statically dispatch (inline) core node kinds — `map`, `filter`, `fold`,
-    /// `constant`, `sample`, `merge` — via typed downcast handles instead of
-    /// dynamic `cycle_node` calls, when their value types are nameable in
-    /// generated source. Other nodes (and non-nameable types) fall back to
-    /// dynamic dispatch. Default: `true`.
+    /// Statically dispatch core node kinds via typed downcast handles instead
+    /// of dynamic `cycle_node` calls, when their value types are nameable in
+    /// generated source. Stateless kinds (`map`, `filter`, `fold`,
+    /// `constant`, `sample`, `merge`) go through `cycle_inline` (no
+    /// `GraphState`); state-needing kinds (`ticker`, `delay`,
+    /// `delay_with_reset`, `throttle`, `print`) go through `cycle_typed`
+    /// (concrete `cycle` with the real `GraphState`). Other nodes (and
+    /// non-nameable types) fall back to dynamic dispatch. Default: `true`.
     pub inline: bool,
 }
 
@@ -152,6 +155,48 @@ impl NodeInfo {
             self.generics.join(", ")
         ))
     }
+
+    /// Full source path for a typed handle used with
+    /// [`StaticRuntime::cycle_typed`]: state-needing kinds whose `cycle` is
+    /// dispatched statically on the concrete type (the trait method stays the
+    /// single source of truth — the handle just bypasses the `dyn Node`
+    /// vtable). `None` when the kind is not in the typed-dispatch set or a
+    /// generic argument is not nameable.
+    fn typed_dispatch_type(&self) -> Option<String> {
+        const TYPED: &[&str] = &[
+            "TickNode",
+            "DelayStream",
+            "DelayWithResetStream",
+            "ThrottleStream",
+            "PrintStream",
+        ];
+        if !TYPED.contains(&self.short.as_str()) {
+            return None;
+        }
+        if !self.generics.iter().all(|g| type_is_nameable(g)) {
+            return None;
+        }
+        if self.generics.is_empty() {
+            Some(format!("wingfoil::{}", self.short))
+        } else {
+            Some(format!(
+                "wingfoil::{}<{}>",
+                self.short,
+                self.generics.join(", ")
+            ))
+        }
+    }
+}
+
+/// How the generated schedule executes one node.
+enum DispatchTier {
+    /// Stateless static dispatch through `cycle_inline` (no `GraphState`).
+    Inline(String),
+    /// Static dispatch of the trait `cycle` on the concrete type, with the
+    /// real `GraphState` (delay, ticker, throttle, ...).
+    Typed(String),
+    /// Dynamic dispatch through `StaticRuntime::cycle_node`.
+    Dynamic,
 }
 
 pub(crate) fn classify(short: &str) -> NodeKind {
@@ -371,6 +416,19 @@ impl StaticRuntime {
         })
     }
 
+    /// Cycle a state-needing node through its typed handle: identical engine
+    /// bookkeeping to [`cycle_node`](Self::cycle_node) (current-node index so
+    /// `add_callback` works, tick recording, error context), but the `cycle`
+    /// call is dispatched statically on the concrete type instead of through
+    /// the `dyn Node` vtable.
+    pub fn cycle_typed<T: MutableNode + 'static>(
+        &mut self,
+        index: usize,
+        node: &Rc<RefCell<T>>,
+    ) -> Result<bool> {
+        self.graph.cycle_typed_inner(index, node)
+    }
+
     /// Record the tick outcome of a statically-dispatched (inlined) node on
     /// the graph state — keeping [`GraphState::ticked`] correct for fallback
     /// nodes that consult it — and pass the outcome through.
@@ -488,17 +546,29 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
     let fn_name = &options.function_name;
 
     let infos = node_infos(&graph);
-    let inline_types: Vec<Option<String>> = infos
+    let tiers: Vec<DispatchTier> = infos
         .iter()
         .map(|info| {
-            if options.inline {
-                info.inline_type()
+            if !options.inline {
+                return DispatchTier::Dynamic;
+            }
+            if let Some(ty) = info.inline_type() {
+                DispatchTier::Inline(ty)
+            } else if let Some(ty) = info.typed_dispatch_type() {
+                DispatchTier::Typed(ty)
             } else {
-                None
+                DispatchTier::Dynamic
             }
         })
         .collect();
-    let any_inline = inline_types.iter().any(Option::is_some);
+    let handle_types: Vec<Option<&String>> = tiers
+        .iter()
+        .map(|tier| match tier {
+            DispatchTier::Inline(ty) | DispatchTier::Typed(ty) => Some(ty),
+            DispatchTier::Dynamic => None,
+        })
+        .collect();
+    let any_inline = handle_types.iter().any(Option::is_some);
 
     let mut out = String::new();
     let w = &mut out;
@@ -526,7 +596,7 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
     }
     writeln!(w, "use std::rc::Rc;")?;
     writeln!(w, "use wingfoil::codegen::StaticRuntime;")?;
-    let inline_source: String = inline_types.iter().flatten().cloned().collect();
+    let inline_source: String = handle_types.iter().flatten().map(|s| s.as_str()).collect();
     let mut wingfoil_imports = vec!["Node", "RunFor", "RunMode"];
     for extra in ["NanoTime", "ValueAt"] {
         if inline_source.contains(extra) {
@@ -555,17 +625,19 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
     // One dispatch line per node, in wiring (topological) order. Ticks
     // propagate through `ticked_*` locals along active edges; `is_dirty`
     // covers callback-driven activation (tickers, delay, feedback, threaded
-    // sources). Passive edges generate nothing. Inlined kinds go through a
-    // typed handle (`cycle_inline`, static dispatch); everything else falls
-    // back to dynamic dispatch via `cycle_node`.
+    // sources). Passive edges generate nothing. Stateless kinds go through a
+    // typed handle's `cycle_inline` (no GraphState); state-needing kinds in
+    // the typed-dispatch set go through `cycle_typed` (real GraphState,
+    // concrete `cycle`); everything else falls back to dynamic dispatch via
+    // `cycle_node`.
     let mut lines: Vec<(String, String)> = Vec::with_capacity(n);
     for (i, info) in infos.iter().enumerate() {
         let mut cond_parts: Vec<String> =
             info.actives.iter().map(|u| format!("ticked_{u}")).collect();
         cond_parts.push(format!("rt.is_dirty({i})"));
         let cond = cond_parts.join(" || ");
-        let call = match &inline_types[i] {
-            Some(_) => {
+        let call = match &tiers[i] {
+            DispatchTier::Inline(_) => {
                 let call = if info.kind == NodeKind::Merge {
                     let flags: Vec<String> =
                         info.actives.iter().map(|u| format!("ticked_{u}")).collect();
@@ -575,7 +647,8 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
                 };
                 format!("rt.did_tick({i}, {call})")
             }
-            None => format!("rt.cycle_node({i})?"),
+            DispatchTier::Typed(_) => format!("rt.cycle_typed({i}, &n{i})?"),
+            DispatchTier::Dynamic => format!("rt.cycle_node({i})?"),
         };
         let code = if info.has_active_downstream {
             if info.actives.is_empty() {
@@ -592,7 +665,7 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
 
     if any_inline {
         // Typed handles + the schedule as a closure so the handles stay in scope.
-        for (i, ty) in inline_types.iter().enumerate() {
+        for (i, ty) in handle_types.iter().enumerate() {
             if let Some(ty) = ty {
                 writeln!(w, "    let n{i}: Rc<RefCell<{ty}>> = rt.typed({i})?;")?;
             }
@@ -809,7 +882,15 @@ mod tests {
         assert!(src.contains("rt.check_topology("));
         assert!(src.contains("while rt.begin_cycle()? {"));
         assert!(src.contains("rt.end_cycle()?;"));
-        // Sources have no propagation inputs.
+        // Sources have no propagation inputs; the ticker is typed-dispatched.
+        assert!(src.contains("let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;"));
+        // Dynamic-dispatch mode keeps everything on cycle_node.
+        let (root, _) = wire_pipeline();
+        let opts = CodegenOptions {
+            inline: false,
+            ..Default::default()
+        };
+        let src = generate(vec![root], &opts).unwrap();
         assert!(src.contains("let ticked_0 = rt.is_dirty(0) && rt.cycle_node(0)?;"));
     }
 

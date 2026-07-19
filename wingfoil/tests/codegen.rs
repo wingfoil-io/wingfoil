@@ -8,6 +8,9 @@
 //! - `odds_evens.rs` — inline mode (static dispatch via typed handles)
 //! - `odds_evens_dispatch.rs` — dynamic-dispatch mode (`inline: false`)
 //! - `odds_evens_standalone.rs` — fully monomorphized standalone runner
+//!
+//! Plus `delayed.rs`, an inline-mode runner for a graph with state-needing
+//! nodes (`ticker`/`delay` via `cycle_typed` static dispatch).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,6 +25,9 @@ mod odds_evens_dispatch;
 
 #[path = "generated/odds_evens_standalone.rs"]
 mod odds_evens_standalone;
+
+#[path = "generated/delayed.rs"]
+mod delayed_generated;
 
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/generated");
 
@@ -90,6 +96,43 @@ fn golden_dispatch_runner_is_up_to_date() {
         ..Default::default()
     };
     check_golden("odds_evens_dispatch.rs", generate(roots, &opts).unwrap());
+}
+
+/// A graph whose interesting nodes need `GraphState` — `delay` schedules
+/// itself at t+delay and checks its upstream's tick, `ticker` drives the
+/// clock. Both run through `cycle_typed` (static dispatch, real state) in the
+/// generated inline runner.
+fn wire_delayed() -> (Vec<Rc<dyn Node>>, Rc<dyn Stream<Vec<u64>>>) {
+    let acc = ticker(Duration::from_nanos(10))
+        .count()
+        .delay(Duration::from_nanos(100))
+        .accumulate();
+    (vec![acc.clone().as_node()], acc)
+}
+
+#[test]
+fn golden_delayed_runner_is_up_to_date() {
+    let (roots, _) = wire_delayed();
+    check_golden(
+        "delayed.rs",
+        generate(roots, &CodegenOptions::default()).unwrap(),
+    );
+}
+
+#[test]
+fn delayed_runner_matches_interpreted_engine() {
+    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+    let run_for = RunFor::Duration(Duration::from_nanos(120));
+
+    let (roots, values) = wire_delayed();
+    Graph::new(roots, run_mode, run_for).run().unwrap();
+    let expected = values.peek_value();
+    // Delayed emissions land from t=100 (see delay.rs long_delay_works).
+    assert_eq!(vec![1, 2, 3, 4], expected);
+
+    let (roots, values) = wire_delayed();
+    delayed_generated::run(roots, run_mode, run_for).unwrap();
+    assert_eq!(expected, values.peek_value());
 }
 
 #[test]

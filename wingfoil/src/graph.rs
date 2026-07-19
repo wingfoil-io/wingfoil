@@ -1,5 +1,5 @@
 use crate::queue::TimeQueue;
-use crate::types::{NanoTime, Node};
+use crate::types::{MutableNode, NanoTime, Node};
 use by_address::ByThinAddress;
 
 use crossbeam::channel::{Receiver, SendError, Sender, select};
@@ -949,6 +949,35 @@ impl Graph {
             }
         }
         Ok(())
+    }
+
+    /// Like [`cycle_node_inner`](Graph::cycle_node_inner) but dispatches
+    /// statically on a concrete node type: same engine bookkeeping
+    /// (`current_node_index` so `add_callback` works, tick recording, error
+    /// context), but the `cycle` call is monomorphized instead of going
+    /// through the `dyn Node` vtable. Used by generated static runners for
+    /// state-needing nodes (`delay`, `ticker`, `throttle`, ...).
+    pub(crate) fn cycle_typed_inner<NODE: MutableNode>(
+        &mut self,
+        index: usize,
+        node: &std::cell::RefCell<NODE>,
+    ) -> anyhow::Result<bool> {
+        if !self.state.nodes[index].active {
+            return Ok(false);
+        }
+        self.state.current_node_index = Some(index);
+        let result = node.borrow_mut().cycle(&mut self.state);
+        self.state.current_node_index = None;
+
+        let ticked = result.map_err(|e| {
+            let context = self.format_context(index, 3);
+            e.context(format!("Error in node [{index}]:\n{context}"))
+        })?;
+
+        if ticked {
+            self.state.set_ticked(index);
+        }
+        Ok(ticked)
     }
 
     /// Cycle a single node without propagating its tick downstream. Records
