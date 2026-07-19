@@ -24,10 +24,22 @@ use crate::ops::{Const, Delay, DelayState, Filter, Fold, Join, Map, Merge2, Samp
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
+/// Anything that identifies a node's typed output — a raw [`Handle`] or a
+/// fluent [`Stream`](crate::fluent::Stream).
+pub trait AsHandle<T> {
+    fn as_handle(&self) -> Handle<T>;
+}
+
 /// A typed reference to a node's output within a [`Builder`] / [`Runner`].
 pub struct Handle<T> {
     idx: usize,
     _t: PhantomData<T>,
+}
+
+impl<T> AsHandle<T> for Handle<T> {
+    fn as_handle(&self) -> Handle<T> {
+        *self
+    }
 }
 
 impl<T> Clone for Handle<T> {
@@ -456,7 +468,8 @@ impl Runner {
     }
 
     /// Current value of a node's output slot.
-    pub fn value<T: Clone + 'static>(&self, h: Handle<T>) -> T {
+    pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
+        let h = h.as_handle();
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()

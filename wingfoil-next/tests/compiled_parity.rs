@@ -14,32 +14,27 @@ use std::time::Duration;
 
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::interp::Builder;
+use wingfoil_next::fluent::GraphBuilder;
 use wingfoil_next::op::{Ctx, Op, Tick};
 use wingfoil_next::ops::{Filter, Fold, Map, Merge2, Ticker};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const PERIOD: Duration = Duration::from_millis(10);
 
-/// Interpreted wiring: ticker → count → even/odd classification → two
-/// filtered format branches → merge → accumulate. (Ten nodes.)
+/// Interpreted wiring (fluent): ticker → count → even/odd classification →
+/// two filtered format branches → merge → accumulate. (Ten nodes — the
+/// wiring order below must match the compiled expansion's node indices.)
 fn interpreted_odds_evens(run_for: RunFor) -> Vec<String> {
-    let mut g = Builder::new();
-    let tick = g.ticker(PERIOD);
-    let count = g.fold(tick, 0u64, |acc, _: &()| *acc += 1);
-    let is_even = g.map(count, |i: &u64| i.is_multiple_of(2));
-    let is_odd = g.map(is_even, |b: &bool| !b);
-    let odds = g.filter(count, is_odd);
-    let odd_str = g.map(odds, |i: &u64| format!("{i} is odd"));
-    let evens = g.filter(count, is_even);
-    let even_str = g.map(evens, |i: &u64| format!("{i} is even"));
-    let merged = g.merge2(odd_str, even_str);
-    let acc = g.fold(merged, Vec::new(), |acc: &mut Vec<String>, v: &String| {
-        acc.push(v.clone())
-    });
+    let g = GraphBuilder::new();
+    let count = g.ticker(PERIOD).count();
+    let is_even = count.map(|i| i.is_multiple_of(2));
+    let is_odd = is_even.map(|b| !b);
+    let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+    let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+    let acc = odd_str.merge(&even_str).accumulate();
     let mut runner = g.build();
     runner.run(HISTORICAL, run_for);
-    runner.value(acc)
+    runner.value(&acc)
 }
 
 /// Compiled runner: the same graph, hand-expanded exactly as a `graph!`

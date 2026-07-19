@@ -22,7 +22,9 @@
 //!   in** by the engine, with a `const CAPS` capability declaration.
 //! - [`interp::Builder`] is the interpreted engine: it owns the value slots
 //!   and the state, adapts each `Op` behind one dyn boundary, and drives the
-//!   shared [`Kernel`](wingfoil::codegen::Kernel).
+//!   shared [`Kernel`](wingfoil::codegen::Kernel). [`fluent`] layers the
+//!   classic chaining style (`ticker(d).count().map(f)`) on top — wiring
+//!   sugar only, identical execution.
 //! - A compiled runner is a plain function with state in locals that calls
 //!   **the same `Op::cycle` functions**, monomorphized — see
 //!   `tests/compiled_parity.rs` for the hand-expanded odds/evens graph. (In
@@ -40,6 +42,7 @@
 //! (`Caps` would grow a `THREADED` flag feeding the Kernel's ready queue),
 //! and error-returning ops.
 
+pub mod fluent;
 pub mod interp;
 pub mod op;
 pub mod ops;

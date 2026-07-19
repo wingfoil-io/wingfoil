@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::interp::Builder;
+use wingfoil_next::fluent::GraphBuilder;
 use wingfoil_next::op::{Ctx, Op, Tick};
 use wingfoil_next::ops::{Filter, Fold, Map, Ticker};
 
@@ -22,15 +22,13 @@ const PERIOD: Duration = Duration::from_micros(1);
 
 /// Graph: ticker → count → is_even → filter evens → running sum.
 fn interpreted() -> u64 {
-    let mut g = Builder::new();
-    let tick = g.ticker(PERIOD);
-    let count = g.fold(tick, 0u64, |acc, _: &()| *acc += 1);
-    let is_even = g.map(count, |i: &u64| i.is_multiple_of(2));
-    let evens = g.filter(count, is_even);
-    let sum = g.fold(evens, 0u64, |acc, v: &u64| *acc += v);
+    let g = GraphBuilder::new();
+    let count = g.ticker(PERIOD).count();
+    let is_even = count.map(|i| i.is_multiple_of(2));
+    let sum = count.filter(&is_even).fold(0u64, |acc, v| *acc += v);
     let mut runner = g.build();
     runner.run(HISTORICAL, RunFor::Cycles(CYCLES));
-    runner.value(sum)
+    runner.value(&sum)
 }
 
 /// The same graph as a compiled runner: state in locals, tick propagation as
