@@ -65,7 +65,10 @@ fn join_combines_current_values() {
 }
 
 /// An external source fed from another thread wakes the realtime kernel;
-/// the run terminates once all producers are gone.
+/// the run terminates once all producers are gone. Sends that land between
+/// cycles coalesce (latest wins), so under scheduler load fewer than five
+/// cycles may fire — the assertions accept any coalescing but require the
+/// values that do arrive to be in order and to include the final send.
 #[test]
 fn external_source_ticks_the_graph() {
     let g = GraphBuilder::new();
@@ -75,13 +78,16 @@ fn external_source_ticks_the_graph() {
     let producer = std::thread::spawn(move || {
         for i in 1..=5 {
             source.send(i);
-            // Space sends out so each arrives in its own cycle.
+            // Space sends out so each usually arrives in its own cycle.
             std::thread::sleep(Duration::from_millis(2));
         }
     });
     r.run(RunMode::RealTime, RunFor::Cycles(5));
     producer.join().expect("producer thread");
-    assert_eq!(vec![1, 2, 3, 4, 5], r.value(&acc));
+    let got = r.value(&acc);
+    assert!(!got.is_empty(), "at least one send must arrive");
+    assert!(got.windows(2).all(|w| w[0] < w[1]), "in order: {got:?}");
+    assert_eq!(Some(&5), got.last(), "final send must arrive: {got:?}");
 }
 
 /// The capability contract is `const`, so it can be checked at compile time
