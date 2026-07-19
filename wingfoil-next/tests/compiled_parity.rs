@@ -33,14 +33,14 @@ fn interpreted_odds_evens(run_for: RunFor) -> Vec<String> {
     let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
     let acc = odd_str.merge(&even_str).accumulate();
     let mut runner = g.build();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     runner.value(&acc)
 }
 
 /// Compiled runner: the same graph, hand-expanded exactly as a `graph!`
 /// macro would emit it. Same node order, same `Op` calls, state in locals.
 #[allow(clippy::useless_format)]
-fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
+fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     // cfg + state per node (the closures are written once, here — there is
     // no second copy to drift out of sync with the interpreted wiring above
     // once the macro emits both from one definition).
@@ -68,7 +68,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
     let mut k = Kernel::new(HISTORICAL, run_for);
     {
         let mut ctx = Ctx::new(&mut k, 0);
-        Ticker::start(&mut tick_cfg, &mut tick_state, &mut ctx);
+        Ticker::start(&mut tick_cfg, &mut tick_state, &mut ctx)?;
     }
     let mut dirty = [false; 10];
     while k.begin_cycle(&mut dirty) {
@@ -76,14 +76,14 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         let t_tick = dirty[0] && {
             let mut ctx = Ctx::new(&mut k, 0);
             matches!(
-                Ticker::cycle(&mut tick_cfg, &mut tick_state, (), &mut ctx),
+                Ticker::cycle(&mut tick_cfg, &mut tick_state, (), &mut ctx)?,
                 Tick::Value(())
             )
         };
         // [1] count
         let t_count = t_tick && {
             let mut ctx = Ctx::new(&mut k, 1);
-            match <Fold<(), u64, _>>::cycle(&mut count_f, &mut count_acc, (&(),), &mut ctx) {
+            match <Fold<(), u64, _>>::cycle(&mut count_f, &mut count_acc, (&(),), &mut ctx)? {
                 Tick::Value(v) => {
                     v_count = v;
                     true
@@ -94,7 +94,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [2] is_even
         let t_is_even = t_count && {
             let mut ctx = Ctx::new(&mut k, 2);
-            match <Map<u64, bool, _>>::cycle(&mut even_f, &mut (), (&v_count,), &mut ctx) {
+            match <Map<u64, bool, _>>::cycle(&mut even_f, &mut (), (&v_count,), &mut ctx)? {
                 Tick::Value(v) => {
                     v_is_even = v;
                     true
@@ -105,7 +105,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [3] is_odd
         let t_is_odd = t_is_even && {
             let mut ctx = Ctx::new(&mut k, 3);
-            match <Map<bool, bool, _>>::cycle(&mut odd_f, &mut (), (&v_is_even,), &mut ctx) {
+            match <Map<bool, bool, _>>::cycle(&mut odd_f, &mut (), (&v_is_even,), &mut ctx)? {
                 Tick::Value(v) => {
                     v_is_odd = v;
                     true
@@ -116,7 +116,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [4] odds = filter(count, is_odd)
         let t_odds = (t_count || t_is_odd) && {
             let mut ctx = Ctx::new(&mut k, 4);
-            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_odd), &mut ctx) {
+            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_odd), &mut ctx)? {
                 Tick::Value(v) => {
                     v_odds = v;
                     true
@@ -127,7 +127,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [5] odd_str
         let t_odd_str = t_odds && {
             let mut ctx = Ctx::new(&mut k, 5);
-            match <Map<u64, String, _>>::cycle(&mut odd_str_f, &mut (), (&v_odds,), &mut ctx) {
+            match <Map<u64, String, _>>::cycle(&mut odd_str_f, &mut (), (&v_odds,), &mut ctx)? {
                 Tick::Value(v) => {
                     v_odd_str = v;
                     true
@@ -138,7 +138,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [6] evens = filter(count, is_even)
         let t_evens = (t_count || t_is_even) && {
             let mut ctx = Ctx::new(&mut k, 6);
-            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_even), &mut ctx) {
+            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_even), &mut ctx)? {
                 Tick::Value(v) => {
                     v_evens = v;
                     true
@@ -149,7 +149,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [7] even_str
         let t_even_str = t_evens && {
             let mut ctx = Ctx::new(&mut k, 7);
-            match <Map<u64, String, _>>::cycle(&mut even_str_f, &mut (), (&v_evens,), &mut ctx) {
+            match <Map<u64, String, _>>::cycle(&mut even_str_f, &mut (), (&v_evens,), &mut ctx)? {
                 Tick::Value(v) => {
                     v_even_str = v;
                     true
@@ -165,7 +165,7 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
                 &mut (),
                 ((&v_odd_str, t_odd_str), (&v_even_str, t_even_str)),
                 &mut ctx,
-            ) {
+            )? {
                 Tick::Value(v) => {
                     v_merged = v;
                     true
@@ -176,16 +176,16 @@ fn compiled_odds_evens(run_for: RunFor) -> Vec<String> {
         // [9] accumulate
         if t_merged {
             let mut ctx = Ctx::new(&mut k, 9);
-            let _ = <Fold<String, Vec<String>, _>>::cycle(
+            <Fold<String, Vec<String>, _>>::cycle(
                 &mut acc_f,
                 &mut acc_state,
                 (&v_merged,),
                 &mut ctx,
-            );
+            )?;
         }
         k.end_cycle(&mut dirty);
     }
-    acc_state
+    Ok(acc_state)
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn compiled_matches_interpreted() {
     assert_eq!("2 is even", interpreted[1]);
     assert_eq!("12 is even", interpreted[11]);
 
-    let compiled = compiled_odds_evens(run_for);
+    let compiled = compiled_odds_evens(run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -205,7 +205,7 @@ fn compiled_matches_interpreted() {
 fn compiled_matches_interpreted_duration_bound() {
     let run_for = RunFor::Duration(Duration::from_millis(55));
     let interpreted = interpreted_odds_evens(run_for);
-    let compiled = compiled_odds_evens(run_for);
+    let compiled = compiled_odds_evens(run_for).unwrap();
     assert!(!interpreted.is_empty());
     assert_eq!(interpreted, compiled);
 }

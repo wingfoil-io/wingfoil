@@ -66,10 +66,12 @@ fn main() {
     let log = events.accumulate();
 
     let mut runner = g.build();
-    runner.run(
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Cycles(2_000),
-    );
+    runner
+        .run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(2_000),
+        )
+        .unwrap();
 
     let events = runner.value(&log);
     println!(

@@ -68,7 +68,7 @@ fn main() {
 
     // Each quote wakes the kernel for one cycle: 20 quotes, then stop.
     let g_runner = &mut g.build();
-    g_runner.run(RunMode::RealTime, RunFor::Cycles(20));
+    g_runner.run(RunMode::RealTime, RunFor::Cycles(20)).unwrap();
 
     println!("processed {} quotes from the async feed:", 20);
     for line in g_runner.value(&log) {
