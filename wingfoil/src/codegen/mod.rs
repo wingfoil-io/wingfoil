@@ -61,6 +61,13 @@
 //!   cannot change shape. Use the interpreted engine for those graphs.
 //! - The wiring function must produce the same topology as at generation
 //!   time; the fingerprint guard turns a mismatch into an error at startup.
+//! - Each cycle evaluates one dispatch line per node. Quiet nodes cost only
+//!   a predicted register test (`dirty` checks are emitted solely for node
+//!   kinds that can actually receive callbacks), but the floor is still
+//!   O(nodes) per cycle — whereas the interpreted engine's dirty-lists do
+//!   work proportional to *ticking* nodes only. Static runners target
+//!   small-to-medium hot graphs; for very large, sparsely-ticking graphs
+//!   measure both engines.
 
 mod kernel;
 mod standalone;
@@ -197,6 +204,31 @@ enum DispatchTier {
     Typed(String),
     /// Dynamic dispatch through `StaticRuntime::cycle_node`.
     Dynamic,
+}
+
+/// True if a node of this type can be activated by callback processing —
+/// i.e. its dispatch condition needs a `dirty` check in addition to upstream
+/// tick propagation.
+///
+/// Callback activation is always self-inflicted: `add_callback` /
+/// `always_callback` / `ReadyNotifier` bind to the *calling* node's index,
+/// and a feedback sink targets its own paired stream. So a node type that
+/// never registers callbacks can never be marked dirty, and its `dirty` term
+/// is statically dead — the generators drop it, keeping quiet subgraphs on
+/// pure register logic. Unknown kinds conservatively return `true`.
+pub(crate) fn can_receive_callbacks(short: &str) -> bool {
+    // These kinds never call add_callback/always_callback/ready_notifier —
+    // neither in cycle() nor in any lifecycle hook.
+    const CALLBACK_FREE: &[&str] = &[
+        "MapStream",
+        "FilterStream",
+        "FoldStream",
+        "SampleStream",
+        "MergeStream",
+        "ThrottleStream",
+        "PrintStream",
+    ];
+    !CALLBACK_FREE.contains(&short)
 }
 
 pub(crate) fn classify(short: &str) -> NodeKind {
@@ -634,8 +666,12 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
     for (i, info) in infos.iter().enumerate() {
         let mut cond_parts: Vec<String> =
             info.actives.iter().map(|u| format!("ticked_{u}")).collect();
-        cond_parts.push(format!("rt.is_dirty({i})"));
-        let cond = cond_parts.join(" || ");
+        // The dirty check only exists for callback activation; drop it when
+        // the node type provably never registers callbacks, so quiet
+        // subgraphs stay on register-only logic.
+        if can_receive_callbacks(&info.short) {
+            cond_parts.push(format!("rt.is_dirty({i})"));
+        }
         let call = match &tiers[i] {
             DispatchTier::Inline(_) => {
                 let call = if info.kind == NodeKind::Merge {
@@ -650,11 +686,19 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
             DispatchTier::Typed(_) => format!("rt.cycle_typed({i}, &n{i})?"),
             DispatchTier::Dynamic => format!("rt.cycle_node({i})?"),
         };
-        let code = if info.has_active_downstream {
-            if info.actives.is_empty() {
-                format!("let ticked_{i} = {cond} && {call};")
+        let cond = cond_parts.join(" || ");
+        let code = if cond_parts.is_empty() {
+            // No activation source at all: the node can never tick.
+            if info.has_active_downstream {
+                format!("let ticked_{i} = false;")
             } else {
+                continue;
+            }
+        } else if info.has_active_downstream {
+            if cond_parts.len() > 1 {
                 format!("let ticked_{i} = ({cond}) && {call};")
+            } else {
+                format!("let ticked_{i} = {cond} && {call};")
             }
         } else {
             format!("if {cond} {{ {call}; }}")
@@ -892,6 +936,22 @@ mod tests {
         };
         let src = generate(vec![root], &opts).unwrap();
         assert!(src.contains("let ticked_0 = rt.is_dirty(0) && rt.cycle_node(0)?;"));
+    }
+
+    #[test]
+    fn callback_free_nodes_have_no_dirty_check() {
+        // wire_pipeline: [0] TickNode, [1] ConstantStream, then sample /
+        // fold / map / filter / map / fold — all callback-free. Only the two
+        // schedulable sources may carry a dirty check.
+        let (root, _) = wire_pipeline();
+        let src = generate(vec![root], &CodegenOptions::default()).unwrap();
+        assert!(src.contains("rt.is_dirty(0)"));
+        assert!(src.contains("rt.is_dirty(1)"));
+        assert_eq!(
+            2,
+            src.matches("rt.is_dirty").count(),
+            "callback-free nodes must not emit dirty checks:\n{src}"
+        );
     }
 
     #[test]

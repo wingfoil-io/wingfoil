@@ -385,12 +385,17 @@ pub fn generate_standalone(roots: Vec<Rc<dyn Node>>, function_name: &str) -> Res
     for (i, info) in infos.iter().enumerate() {
         let mut cond_parts: Vec<String> =
             info.actives.iter().map(|u| format!("ticked_{u}")).collect();
-        cond_parts.push(format!("dirty[{i}]"));
+        // The dirty check only exists for callback activation; drop it when
+        // the node type provably never registers callbacks, so quiet
+        // subgraphs stay on register-only logic.
+        if super::can_receive_callbacks(&info.short) {
+            cond_parts.push(format!("dirty[{i}]"));
+        }
         let cond = cond_parts.join(" || ");
-        let cond_grouped = if info.actives.is_empty() {
-            cond.clone()
-        } else {
+        let cond_grouped = if cond_parts.len() > 1 {
             format!("({cond})")
+        } else {
+            cond.clone()
         };
         writeln!(w, "        // [{i:02}] {}", info.short)?;
         match body_lines(i, info, !info.has_active_downstream) {

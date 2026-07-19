@@ -37,18 +37,18 @@ pub fn run(
 #[rustfmt::skip]
 fn run_cycles(rt: &mut StaticRuntime) -> wingfoil::codegen::Result<()> {
     while rt.begin_cycle()? {
-        let ticked_0 = rt.is_dirty(0) && rt.cycle_node(0)?;                               // [00] TickNode
-        if rt.is_dirty(1) { rt.cycle_node(1)?; }                                          // [01] ConstantStream
-        let ticked_2 = (ticked_0 || rt.is_dirty(2)) && rt.cycle_node(2)?;                 // [02] SampleStream
-        let ticked_3 = (ticked_2 || rt.is_dirty(3)) && rt.cycle_node(3)?;                 // [03] FoldStream
-        let ticked_4 = (ticked_3 || rt.is_dirty(4)) && rt.cycle_node(4)?;                 // [04] MapStream
-        let ticked_5 = (ticked_4 || rt.is_dirty(5)) && rt.cycle_node(5)?;                 // [05] MapStream
-        let ticked_6 = (ticked_3 || ticked_5 || rt.is_dirty(6)) && rt.cycle_node(6)?;     // [06] FilterStream
-        let ticked_7 = (ticked_6 || rt.is_dirty(7)) && rt.cycle_node(7)?;                 // [07] MapStream
-        let ticked_8 = (ticked_3 || ticked_4 || rt.is_dirty(8)) && rt.cycle_node(8)?;     // [08] FilterStream
-        let ticked_9 = (ticked_8 || rt.is_dirty(9)) && rt.cycle_node(9)?;                 // [09] MapStream
-        let ticked_10 = (ticked_7 || ticked_9 || rt.is_dirty(10)) && rt.cycle_node(10)?;  // [10] MergeStream
-        if ticked_10 || rt.is_dirty(11) { rt.cycle_node(11)?; }                           // [11] FoldStream
+        let ticked_0 = rt.is_dirty(0) && rt.cycle_node(0)?;            // [00] TickNode
+        if rt.is_dirty(1) { rt.cycle_node(1)?; }                       // [01] ConstantStream
+        let ticked_2 = ticked_0 && rt.cycle_node(2)?;                  // [02] SampleStream
+        let ticked_3 = ticked_2 && rt.cycle_node(3)?;                  // [03] FoldStream
+        let ticked_4 = ticked_3 && rt.cycle_node(4)?;                  // [04] MapStream
+        let ticked_5 = ticked_4 && rt.cycle_node(5)?;                  // [05] MapStream
+        let ticked_6 = (ticked_3 || ticked_5) && rt.cycle_node(6)?;    // [06] FilterStream
+        let ticked_7 = ticked_6 && rt.cycle_node(7)?;                  // [07] MapStream
+        let ticked_8 = (ticked_3 || ticked_4) && rt.cycle_node(8)?;    // [08] FilterStream
+        let ticked_9 = ticked_8 && rt.cycle_node(9)?;                  // [09] MapStream
+        let ticked_10 = (ticked_7 || ticked_9) && rt.cycle_node(10)?;  // [10] MergeStream
+        if ticked_10 { rt.cycle_node(11)?; }                           // [11] FoldStream
         rt.end_cycle()?;
     }
     Ok(())

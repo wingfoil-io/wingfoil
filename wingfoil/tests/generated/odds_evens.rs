@@ -46,18 +46,18 @@ pub fn run(
     let n11: Rc<RefCell<wingfoil::FoldStream<String, Vec<String>>>> = rt.typed(11)?;
     rt.run(|rt| {
         while rt.begin_cycle()? {
-            let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;                                                                            // [00] TickNode
-            if rt.is_dirty(1) { rt.did_tick(1, n1.borrow_mut().cycle_inline()); }                                                                // [01] ConstantStream
-            let ticked_2 = (ticked_0 || rt.is_dirty(2)) && rt.did_tick(2, n2.borrow_mut().cycle_inline());                                       // [02] SampleStream
-            let ticked_3 = (ticked_2 || rt.is_dirty(3)) && rt.did_tick(3, n3.borrow_mut().cycle_inline());                                       // [03] FoldStream
-            let ticked_4 = (ticked_3 || rt.is_dirty(4)) && rt.did_tick(4, n4.borrow_mut().cycle_inline());                                       // [04] MapStream
-            let ticked_5 = (ticked_4 || rt.is_dirty(5)) && rt.did_tick(5, n5.borrow_mut().cycle_inline());                                       // [05] MapStream
-            let ticked_6 = (ticked_3 || ticked_5 || rt.is_dirty(6)) && rt.did_tick(6, n6.borrow_mut().cycle_inline());                           // [06] FilterStream
-            let ticked_7 = (ticked_6 || rt.is_dirty(7)) && rt.did_tick(7, n7.borrow_mut().cycle_inline());                                       // [07] MapStream
-            let ticked_8 = (ticked_3 || ticked_4 || rt.is_dirty(8)) && rt.did_tick(8, n8.borrow_mut().cycle_inline());                           // [08] FilterStream
-            let ticked_9 = (ticked_8 || rt.is_dirty(9)) && rt.did_tick(9, n9.borrow_mut().cycle_inline());                                       // [09] MapStream
-            let ticked_10 = (ticked_7 || ticked_9 || rt.is_dirty(10)) && rt.did_tick(10, n10.borrow_mut().cycle_inline(&[ticked_7, ticked_9]));  // [10] MergeStream
-            if ticked_10 || rt.is_dirty(11) { rt.did_tick(11, n11.borrow_mut().cycle_inline()); }                                                // [11] FoldStream
+            let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;                                                         // [00] TickNode
+            if rt.is_dirty(1) { rt.did_tick(1, n1.borrow_mut().cycle_inline()); }                                             // [01] ConstantStream
+            let ticked_2 = ticked_0 && rt.did_tick(2, n2.borrow_mut().cycle_inline());                                        // [02] SampleStream
+            let ticked_3 = ticked_2 && rt.did_tick(3, n3.borrow_mut().cycle_inline());                                        // [03] FoldStream
+            let ticked_4 = ticked_3 && rt.did_tick(4, n4.borrow_mut().cycle_inline());                                        // [04] MapStream
+            let ticked_5 = ticked_4 && rt.did_tick(5, n5.borrow_mut().cycle_inline());                                        // [05] MapStream
+            let ticked_6 = (ticked_3 || ticked_5) && rt.did_tick(6, n6.borrow_mut().cycle_inline());                          // [06] FilterStream
+            let ticked_7 = ticked_6 && rt.did_tick(7, n7.borrow_mut().cycle_inline());                                        // [07] MapStream
+            let ticked_8 = (ticked_3 || ticked_4) && rt.did_tick(8, n8.borrow_mut().cycle_inline());                          // [08] FilterStream
+            let ticked_9 = ticked_8 && rt.did_tick(9, n9.borrow_mut().cycle_inline());                                        // [09] MapStream
+            let ticked_10 = (ticked_7 || ticked_9) && rt.did_tick(10, n10.borrow_mut().cycle_inline(&[ticked_7, ticked_9]));  // [10] MergeStream
+            if ticked_10 { rt.did_tick(11, n11.borrow_mut().cycle_inline()); }                                                // [11] FoldStream
             rt.end_cycle()?;
         }
         Ok(())

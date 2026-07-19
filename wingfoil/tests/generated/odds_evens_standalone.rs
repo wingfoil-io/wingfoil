@@ -84,47 +84,47 @@ where
         };
         // [01] ConstantStream
         // [02] SampleStream
-        let ticked_2 = (ticked_0 || dirty[2]) && {
+        let ticked_2 = ticked_0 && {
             v2 = v1.clone();
             true
         };
         // [03] FoldStream
-        let ticked_3 = (ticked_2 || dirty[3]) && {
+        let ticked_3 = ticked_2 && {
             (inputs.fold_3)(&mut v3, v2.clone());
             true
         };
         // [04] MapStream
-        let ticked_4 = (ticked_3 || dirty[4]) && {
+        let ticked_4 = ticked_3 && {
             v4 = (inputs.map_4)(v3.clone());
             true
         };
         // [05] MapStream
-        let ticked_5 = (ticked_4 || dirty[5]) && {
+        let ticked_5 = ticked_4 && {
             v5 = (inputs.map_5)(v4.clone());
             true
         };
         // [06] FilterStream
-        let ticked_6 = (ticked_3 || ticked_5 || dirty[6]) && {
+        let ticked_6 = (ticked_3 || ticked_5) && {
             if v5 { v6 = v3.clone(); }
             v5
         };
         // [07] MapStream
-        let ticked_7 = (ticked_6 || dirty[7]) && {
+        let ticked_7 = ticked_6 && {
             v7 = (inputs.map_7)(v6.clone());
             true
         };
         // [08] FilterStream
-        let ticked_8 = (ticked_3 || ticked_4 || dirty[8]) && {
+        let ticked_8 = (ticked_3 || ticked_4) && {
             if v4 { v8 = v3.clone(); }
             v4
         };
         // [09] MapStream
-        let ticked_9 = (ticked_8 || dirty[9]) && {
+        let ticked_9 = ticked_8 && {
             v9 = (inputs.map_9)(v8.clone());
             true
         };
         // [10] MergeStream
-        let ticked_10 = (ticked_7 || ticked_9 || dirty[10]) && {
+        let ticked_10 = (ticked_7 || ticked_9) && {
             if ticked_7 {
                 v10 = v7.clone();
                 true
@@ -136,7 +136,7 @@ where
             }
         };
         // [11] FoldStream
-        if ticked_10 || dirty[11] {
+        if ticked_10 {
             (inputs.fold_11)(&mut v11, v10.clone());
         }
         k.end_cycle(&mut dirty);

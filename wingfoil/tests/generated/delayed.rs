@@ -34,12 +34,12 @@ pub fn run(
     let n5: Rc<RefCell<wingfoil::FoldStream<u64, Vec<u64>>>> = rt.typed(5)?;
     rt.run(|rt| {
         while rt.begin_cycle()? {
-            let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;                                       // [00] TickNode
-            if rt.is_dirty(1) { rt.did_tick(1, n1.borrow_mut().cycle_inline()); }                           // [01] ConstantStream
-            let ticked_2 = (ticked_0 || rt.is_dirty(2)) && rt.did_tick(2, n2.borrow_mut().cycle_inline());  // [02] SampleStream
-            let ticked_3 = (ticked_2 || rt.is_dirty(3)) && rt.did_tick(3, n3.borrow_mut().cycle_inline());  // [03] FoldStream
-            let ticked_4 = (ticked_3 || rt.is_dirty(4)) && rt.cycle_typed(4, &n4)?;                         // [04] DelayStream
-            if ticked_4 || rt.is_dirty(5) { rt.did_tick(5, n5.borrow_mut().cycle_inline()); }               // [05] FoldStream
+            let ticked_0 = rt.is_dirty(0) && rt.cycle_typed(0, &n0)?;                   // [00] TickNode
+            if rt.is_dirty(1) { rt.did_tick(1, n1.borrow_mut().cycle_inline()); }       // [01] ConstantStream
+            let ticked_2 = ticked_0 && rt.did_tick(2, n2.borrow_mut().cycle_inline());  // [02] SampleStream
+            let ticked_3 = ticked_2 && rt.did_tick(3, n3.borrow_mut().cycle_inline());  // [03] FoldStream
+            let ticked_4 = (ticked_3 || rt.is_dirty(4)) && rt.cycle_typed(4, &n4)?;     // [04] DelayStream
+            if ticked_4 { rt.did_tick(5, n5.borrow_mut().cycle_inline()); }             // [05] FoldStream
             rt.end_cycle()?;
         }
         Ok(())
