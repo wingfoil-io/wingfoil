@@ -20,7 +20,9 @@ fn main() {
         .map(|i| format!("tick {i}"))
         .accumulate();
     let mut runner = g.build();
-    runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5));
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+        .unwrap();
     println!("historical run (instant):");
     for msg in runner.value(&msgs) {
         println!("  {msg}");
@@ -32,6 +34,6 @@ fn main() {
     let count = g.ticker(Duration::from_millis(50)).count();
     let mut runner = g.build();
     println!("realtime run (3 ticks, 50ms apart):");
-    runner.run(RunMode::RealTime, RunFor::Cycles(3));
+    runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
     println!("  counted {} ticks", runner.value(&count));
 }

@@ -36,11 +36,18 @@
 //! not per-kind emitter strings, not `cycle_inline` twins — so the engines
 //! cannot drift.
 //!
-//! Deliberately out of scope for the prototype (documented, not forgotten):
-//! variadic-input ops (merge is fixed at two inputs), the `graph!` macro,
-//! an arena/SoA value store for the interpreted engine, threaded/IO sources
-//! (`Caps` would grow a `THREADED` flag feeding the Kernel's ready queue),
-//! and error-returning ops.
+//! Since built out from that prototype: the `graph!` macro (one wiring
+//! function, both engines), threaded/IO sources (`Caps::THREADED` +
+//! busy-spin `Caps::ALWAYS`), compiled islands nested in interpreted graphs,
+//! and — as the first step of the full port — **fallible lifecycle**: every
+//! `Op` function returns `anyhow::Result`, and the interpreted [`Runner`]
+//! reports the first `start`/`cycle`/`stop`/`teardown` error with node
+//! context while still running cleanup afterwards.
+//!
+//! Still out of scope for the prototype (documented, not forgotten):
+//! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA
+//! value store for the interpreted engine, feedback edges, and dynamic
+//! (runtime-mutated) graphs.
 
 pub mod fluent;
 pub mod interp;
@@ -58,3 +65,9 @@ pub use wingfoil_next_macros::graph;
 // the `wingfoil` crate directly.
 #[doc(hidden)]
 pub use wingfoil;
+
+// Re-exported so `graph!`-generated code (the fallible `compiled()` /
+// `nested()` expansions) can name `Result` without the caller depending on
+// `anyhow` directly.
+#[doc(hidden)]
+pub use anyhow;
