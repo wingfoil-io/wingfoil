@@ -119,17 +119,21 @@ impl RunFor {
 ///
 /// `end_time` / `end_cycle` default to their `MAX` sentinel when the
 /// corresponding bound does not apply (e.g. `end_cycle` for `RunFor::Duration`).
-struct RunBounds {
-    start_time: NanoTime,
-    end_time: NanoTime,
-    end_cycle: u32,
+///
+/// `pub(crate)` so the generated static runner ([`crate::codegen`]) can drive
+/// the same [`Graph::advance`] loop head as the interpreted engine.
+#[derive(Clone, Copy)]
+pub(crate) struct RunBounds {
+    pub(crate) start_time: NanoTime,
+    pub(crate) end_time: NanoTime,
+    pub(crate) end_cycle: u32,
 }
 
 /// Return the first `Err` in `results`, attaching any subsequent errors as
 /// context so that a failure in a later lifecycle phase (e.g. `teardown`) is
 /// preserved rather than dropped when an earlier phase (e.g. the run loop) has
 /// already failed. Returns `Ok(())` when every result is `Ok`.
-fn first_error<const N: usize>(results: [anyhow::Result<()>; N]) -> anyhow::Result<()> {
+pub(crate) fn first_error<const N: usize>(results: [anyhow::Result<()>; N]) -> anyhow::Result<()> {
     let mut errors = results.into_iter().filter_map(Result::err);
     let primary = match errors.next() {
         Some(e) => e,
@@ -567,6 +571,16 @@ impl Graph {
         Ok(())
     }
 
+    /// Resolve the run bounds and record the run's start time on the graph
+    /// state. Called once at the top of a run — by the interpreted run loop
+    /// ([`run_nodes`](Graph::run_nodes)) and by the generated static runner
+    /// ([`crate::codegen::StaticRuntime`]).
+    pub(crate) fn begin_run(&mut self) -> RunBounds {
+        let bounds = self.resolve_start_end();
+        self.state.start_time = bounds.start_time;
+        bounds
+    }
+
     fn resolve_start_end(&self) -> RunBounds {
         let start_time = match self.state.run_mode() {
             RunMode::RealTime => NanoTime::now(),
@@ -596,57 +610,14 @@ impl Graph {
     pub(crate) fn run_nodes(&mut self) -> anyhow::Result<()> {
         let run_timer = Instant::now();
         let mut cycles: u32 = 0;
-        let mut empty_cycles: u32 = 0;
-        let RunBounds {
-            start_time,
-            end_time,
-            end_cycle,
-        } = self.resolve_start_end();
+        let bounds = self.begin_run();
         let is_realtime = matches!(self.state.run_mode(), RunMode::RealTime);
-        self.state.start_time = start_time;
-        loop {
-            // Single source of truth for whether we have reached the configured
-            // bound: the duration elapsed or the cycle count was hit.
-            // Comparisons stay `>=` to preserve historical behavior (see #374).
-            let cycles_done = cycles >= end_cycle;
-            let time_done = self.state.time >= end_time;
-            // Break once the bound has been reached. The cycle-count bound can
-            // terminate immediately (it requires no final cycle to run), which
-            // gives `Cycles(0)` a clean zero-cycle exit; the time bound is gated
-            // on `is_last_cycle` so the final scheduled cycle still executes.
-            if cycles_done || (self.state.is_last_cycle && time_done) {
-                debug!(
-                    "Finished. {:}, {:}, {:}, {:}",
-                    time_done, cycles_done, self.state.time, end_time
-                );
-                break;
-            }
-            // One-cycle lookahead: flag the upcoming cycle as the last. The
-            // `cycles + 1 >= end_cycle` form avoids the `end_cycle - 1`
-            // underflow that previously wrapped to `u32::MAX` for `Cycles(0)`.
-            if !self.state.is_last_cycle && (cycles + 1 >= end_cycle || time_done) {
-                debug!("last cycle");
-                self.state.is_last_cycle = true;
-            }
-            if is_realtime {
-                let progressed = self.process_callbacks_realtime(end_time);
-                if !progressed {
-                    empty_cycles += 1;
-                    continue;
-                }
-            } else {
-                let progressed = self.process_callbacks_historical()?;
-                if !progressed {
-                    debug!("Terminating early.");
-                    break;
-                }
-            }
+        while self.advance(cycles, &bounds, is_realtime)? {
             self.cycle()?;
             cycles += 1;
             debug!("cycles={cycles}");
         }
         let elapsed = run_timer.elapsed();
-        debug!("{empty_cycles} empty cycles");
         debug!(
             "Completed {:} cycles  in {:?}. {:?} average.",
             cycles,
@@ -654,6 +625,60 @@ impl Graph {
             average_duration(elapsed, cycles)
         );
         Ok(())
+    }
+
+    /// The run-loop head shared by the interpreted engine and the generated
+    /// static runner ([`crate::codegen::StaticRuntime`]): check the configured
+    /// bounds, flag the last cycle, advance time, process due callbacks
+    /// (marking the affected nodes dirty) and snap the per-cycle wall clock.
+    ///
+    /// Returns `Ok(true)` when a cycle should run, `Ok(false)` when the run is
+    /// complete (bounds reached, or a historical run with no further work).
+    pub(crate) fn advance(
+        &mut self,
+        cycles: u32,
+        bounds: &RunBounds,
+        is_realtime: bool,
+    ) -> anyhow::Result<bool> {
+        loop {
+            // Single source of truth for whether we have reached the configured
+            // bound: the duration elapsed or the cycle count was hit.
+            // Comparisons stay `>=` to preserve historical behavior (see #374).
+            let cycles_done = cycles >= bounds.end_cycle;
+            let time_done = self.state.time >= bounds.end_time;
+            // Stop once the bound has been reached. The cycle-count bound can
+            // terminate immediately (it requires no final cycle to run), which
+            // gives `Cycles(0)` a clean zero-cycle exit; the time bound is gated
+            // on `is_last_cycle` so the final scheduled cycle still executes.
+            if cycles_done || (self.state.is_last_cycle && time_done) {
+                debug!(
+                    "Finished. {:}, {:}, {:}, {:}",
+                    time_done, cycles_done, self.state.time, bounds.end_time
+                );
+                return Ok(false);
+            }
+            // One-cycle lookahead: flag the upcoming cycle as the last. The
+            // `cycles + 1 >= end_cycle` form avoids the `end_cycle - 1`
+            // underflow that previously wrapped to `u32::MAX` for `Cycles(0)`.
+            if !self.state.is_last_cycle && (cycles + 1 >= bounds.end_cycle || time_done) {
+                debug!("last cycle");
+                self.state.is_last_cycle = true;
+            }
+            if is_realtime {
+                if !self.process_callbacks_realtime(bounds.end_time) {
+                    // Empty realtime cycle: loop to re-check bounds and wait again.
+                    continue;
+                }
+            } else if !self.process_callbacks_historical()? {
+                debug!("Terminating early.");
+                return Ok(false);
+            }
+            // Snap wall-clock time once per cycle for latency / perf telemetry.
+            // Separate from `state.time` so historical mode still has
+            // deterministic logical time for business logic.
+            self.state.wall_time = NanoTime::now();
+            return Ok(true);
+        }
     }
 
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
@@ -899,10 +924,7 @@ impl Graph {
 
     #[cfg_attr(feature = "instrument-cycle", tracing::instrument(skip_all))]
     fn cycle(&mut self) -> anyhow::Result<()> {
-        // Snap wall-clock time once per cycle for latency / perf telemetry.
-        // Separate from `state.time` so historical mode still has deterministic
-        // logical time for business logic.
-        self.state.wall_time = NanoTime::now();
+        // Wall-clock time for this cycle was already snapped in `advance`.
         for lyr in 0..self.state.dirty_nodes_by_layer.len() {
             for i in 0..self.state.dirty_nodes_by_layer[lyr].len() {
                 let ix = self.state.dirty_nodes_by_layer[lyr][i];
@@ -917,13 +939,31 @@ impl Graph {
         Ok(())
     }
 
+    fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
+        if self.cycle_node_inner(index)? {
+            for i in 0..self.state.nodes[index].downstreams.len() {
+                let edge = self.state.nodes[index].downstreams[i];
+                if edge.active {
+                    self.mark_dirty(edge.node_index)
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Cycle a single node without propagating its tick downstream. Records
+    /// the tick on the graph state (so [`GraphState::ticked`] works) and
+    /// returns whether the node ticked. The interpreted engine propagates via
+    /// [`cycle_node`](Graph::cycle_node); the generated static runner
+    /// ([`crate::codegen::StaticRuntime`]) propagates through its compiled
+    /// schedule instead.
     #[cfg_attr(
         feature = "instrument-cycle-node",
         tracing::instrument(skip(self), fields(node = tracing::field::Empty))
     )]
-    fn cycle_node(&mut self, index: usize) -> anyhow::Result<()> {
+    pub(crate) fn cycle_node_inner(&mut self, index: usize) -> anyhow::Result<bool> {
         if !self.state.nodes[index].active {
-            return Ok(());
+            return Ok(false);
         }
         #[cfg(feature = "instrument-cycle-node")]
         tracing::Span::current().record("node", self.state.nodes[index].node.type_name());
@@ -939,17 +979,11 @@ impl Graph {
 
         if ticked {
             self.state.set_ticked(index);
-            for i in 0..self.state.nodes[index].downstreams.len() {
-                let edge = self.state.nodes[index].downstreams[i];
-                if edge.active {
-                    self.mark_dirty(edge.node_index)
-                }
-            }
         }
-        Ok(())
+        Ok(ticked)
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.state.reset();
         for layer in self.state.dirty_nodes_by_layer.iter_mut() {
             layer.clear();
@@ -959,6 +993,58 @@ impl Graph {
         for i in self.state.node_dirty.iter_mut() {
             *i = false;
         }
+    }
+
+    // ── accessors for the static-runner codegen (`crate::codegen`) ──────────
+
+    /// Surface any wiring error (e.g. a cycle) stashed during construction.
+    pub(crate) fn take_wiring_error(&mut self) -> Option<anyhow::Error> {
+        self.state.wiring_error.take()
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.state.nodes.len()
+    }
+
+    pub(crate) fn node_type_name(&self, index: usize) -> String {
+        self.state.nodes[index].node.type_name()
+    }
+
+    pub(crate) fn node_layer(&self, index: usize) -> usize {
+        self.state.nodes[index].layer
+    }
+
+    /// Indices of `index`'s upstreams over *active* edges, in wiring order.
+    pub(crate) fn active_upstream_indices(&self, index: usize) -> Vec<usize> {
+        self.state.nodes[index]
+            .upstreams
+            .iter()
+            .filter(|e| e.active)
+            .map(|e| e.node_index)
+            .collect()
+    }
+
+    /// Indices of `index`'s upstreams over *passive* edges, in wiring order.
+    pub(crate) fn passive_upstream_indices(&self, index: usize) -> Vec<usize> {
+        self.state.nodes[index]
+            .upstreams
+            .iter()
+            .filter(|e| !e.active)
+            .map(|e| e.node_index)
+            .collect()
+    }
+
+    /// True if a node was marked dirty by callback processing this cycle.
+    pub(crate) fn is_node_dirty(&self, index: usize) -> bool {
+        self.state.node_dirty[index]
+    }
+
+    /// True if a node requested a dynamic graph change (`add_upstream` /
+    /// `remove_node`) during the cycle just executed. The static runner
+    /// rejects these — a compiled schedule cannot change shape.
+    #[cfg(feature = "dynamic-graph")]
+    pub(crate) fn has_pending_dynamic_changes(&self) -> bool {
+        !self.state.pending_additions.is_empty() || !self.state.pending_removals.is_empty()
     }
 
     #[cfg(feature = "dynamic-graph")]

@@ -14,6 +14,7 @@ wingfoil/           # Core Rust library
     lib.rs          # Public API re-exports
     types.rs        # Core traits: Element, Node, MutableNode, Stream
     graph.rs        # Graph execution engine (RunMode, RunFor)
+    codegen.rs      # Ahead-of-time codegen: emit a static-schedule Rust runner for a wired graph
     time.rs         # NanoTime (nanoseconds from UNIX epoch)
     nodes/          # 40+ node implementations (map, filter, fold, delay, feedback, etc.)
     adapters/       # I/O adapters (CSV, ZMQ, Kafka, KDB+, Redis, Postgres, etcd,
