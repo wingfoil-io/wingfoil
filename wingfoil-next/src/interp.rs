@@ -20,7 +20,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::op::{Ctx, Op, Tick};
-use crate::ops::{Const, Delay, DelayState, Filter, Fold, Map, Merge2, Sample, Ticker};
+use crate::ops::{Const, Delay, DelayState, Filter, Fold, Join, Map, Merge2, Sample, Ticker};
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -282,6 +282,45 @@ impl Builder {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;
+                        true
+                    }
+                    Tick::Quiet => false,
+                }
+            }),
+            Box::new(|_| {}),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Join two streams with a closure; ticks when either input ticks.
+    pub fn join<A, B, C, F>(&mut self, a: Handle<A>, b: Handle<B>, f: F) -> Handle<C>
+    where
+        A: 'static,
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: FnMut(&A, &B) -> C + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let out = self.new_slot(C::default());
+        let cs = Self::cell(f, ());
+        self.push_node(
+            vec![a.idx, b.idx],
+            Join::<A, B, C, F>::CAPS.schedules,
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx) {
+                    Tick::Value(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
                         true
                     }
                     Tick::Quiet => false,

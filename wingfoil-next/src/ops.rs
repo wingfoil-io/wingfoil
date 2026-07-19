@@ -140,6 +140,28 @@ impl<T: Clone + 'static> Op for Sample<T> {
     }
 }
 
+/// Joins two streams with a closure — the classic `bimap` with two active
+/// upstreams: ticks when either input ticks, reading both current values.
+pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
+
+impl<A, B, C, F> Op for Join<A, B, C, F>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: FnMut(&A, &B) -> C + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B);
+    type Out = C;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Tick<C> {
+        Tick::Value(cfg(input.0, input.1))
+    }
+}
+
 /// Delays its source by a fixed interval. The op that forced the retrofit's
 /// `cycle_typed` tier — here it needs nothing special: `SCHEDULES` grants it
 /// `Ctx::schedule`, its queue is ordinary `State`, and the upstream tick
