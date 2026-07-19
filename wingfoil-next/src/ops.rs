@@ -390,6 +390,67 @@ where
     }
 }
 
+/// Pairs each value with the current engine time: emits `(time, value)`.
+pub struct WithTime<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for WithTime<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = (NanoTime, T);
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<(NanoTime, T)>> {
+        Ok(Tick::Value((ctx.time(), input.0.clone())))
+    }
+}
+
+/// Emits the current engine time whenever the upstream ticks (the upstream's
+/// value is ignored). The `ticked_at` of the catalog.
+pub struct TickedAt<T>(PhantomData<T>);
+
+impl<T: 'static> Op for TickedAt<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = NanoTime;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        _input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<NanoTime>> {
+        Ok(Tick::Value(ctx.time()))
+    }
+}
+
+/// Emits elapsed engine time (`now - start`) whenever the upstream ticks.
+pub struct TickedAtElapsed<T>(PhantomData<T>);
+
+impl<T: 'static> Op for TickedAtElapsed<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = NanoTime;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        _input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<NanoTime>> {
+        Ok(Tick::Value(ctx.time() - ctx.start_time()))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
