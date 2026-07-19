@@ -74,9 +74,21 @@ fn teardown(..) -> anyhow::Result<()> {}   // new
   islands (composite adapter propagates inner errors outward — falls out
   naturally), `cycle_owned_cfg`, all tests.
 
-### 0.2 Feedback
+### 0.2 Feedback  ✅ **landed**
 
-The only true DAG-breaker. Sketch: an engine-level edge —
+Done: `Builder::feedback::<T>()` / fluent `g.feedback()` return a source
+stream (no upstreams — the graph stays acyclic) plus a clonable
+`FeedbackSink<T>`. `stream.feedback(&sink)` wires a pass-through send node
+that pushes each value onto a shared `TimeQueue` at `time + 1` and schedules
+the source node directly on the kernel (`Kernel::schedule(index, at)` — the
+engine-level edge the narrow `Ctx` can't express). The source pops due
+values on the next cycle. `tests/feedback.rs` reproduces classic
+`feedback_active_works` (1, 11, 111, …) plus a self-sustaining loop and sink
+cloning. Fluent-only, as planned. Passive feedback (a `bimap` whose feedback
+input is read but doesn't trigger) waits on the passive-input node in
+Phase 2 — noted in the test.
+
+Original design notes (retained for reference):
 
 ```rust
 let (fb_out, fb_sink) = g.feedback::<T>();       // source usable immediately
