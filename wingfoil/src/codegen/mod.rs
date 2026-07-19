@@ -555,6 +555,54 @@ fn topology_table(graph: &Graph) -> String {
     out
 }
 
+/// Generate a static runner (as [`generate`]) and write it into the build
+/// script output directory (`$OUT_DIR/<file_name>`), for build-time code
+/// generation from a `build.rs`. Returns the written path.
+///
+/// The wiring must be visible to both the build script and the crate; keep it
+/// in a shared file that `build.rs` pulls in with `include!` and the crate
+/// declares as a module:
+///
+/// ```text
+/// // build.rs
+/// include!("src/wiring.rs");
+/// fn main() -> wingfoil::codegen::Result<()> {
+///     println!("cargo:rerun-if-changed=src/wiring.rs");
+///     wingfoil::codegen::emit_to_out_dir("graph.rs", vec![wire()], &Default::default())?;
+///     Ok(())
+/// }
+///
+/// // src/main.rs
+/// #[path = "wiring.rs"]
+/// mod wiring;
+/// mod generated {
+///     include!(concat!(env!("OUT_DIR"), "/graph.rs"));
+/// }
+/// // generated::run(vec![wiring::wire()], run_mode, run_for)?
+/// ```
+///
+/// Cargo re-runs the build script (and therefore regenerates the runner)
+/// whenever the wiring file changes, so the schedule can never go stale. See
+/// the `wingfoil-codegen-build-example` workspace crate for a complete,
+/// tested setup.
+pub fn emit_to_out_dir(
+    file_name: &str,
+    roots: Vec<Rc<dyn Node>>,
+    options: &CodegenOptions,
+) -> Result<std::path::PathBuf> {
+    let out_dir = std::env::var_os("OUT_DIR").ok_or_else(|| {
+        anyhow::anyhow!(
+            "OUT_DIR is not set — emit_to_out_dir is intended to be called from a build script \
+             (build.rs); elsewhere, use generate() and write the source wherever you need it"
+        )
+    })?;
+    let path = std::path::Path::new(&out_dir).join(file_name);
+    let source = generate(roots, options)?;
+    std::fs::write(&path, source)
+        .map_err(|e| anyhow::anyhow!("failed to write generated runner to {path:?}: {e}"))?;
+    Ok(path)
+}
+
 /// Generate a standalone Rust source file containing a static runner for the
 /// graph reachable from `roots`.
 ///

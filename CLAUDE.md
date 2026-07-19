@@ -27,6 +27,8 @@ wingfoil/           # Core Rust library
                     #   feedback, threading, plus one per adapter)
   benches/          # Criterion benchmarks
 
+wingfoil-codegen-build-example/  # Build-time codegen: build.rs generates the static
+                    #   runner into OUT_DIR from a wiring file shared with the app
 wingfoil-derive/    # Proc macros (#[node] attribute)
 wingfoil-python/    # PyO3 Python bindings (built with maturin)
   src/
