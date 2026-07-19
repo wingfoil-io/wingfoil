@@ -25,9 +25,9 @@ use anyhow::Result;
 
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Buffer, Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold,
-    Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, TickedAt,
-    TickedAtElapsed, Ticker, TryMap, Window, WindowState, WithTime,
+    Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, External,
+    Filter, Finally, Fold, Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, Sample, Sink,
+    Throttle, TickedAt, TickedAtElapsed, Ticker, TryMap, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -586,6 +586,37 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Exponentially weighted moving average of an `f64` stream.
+    pub fn ewma(&mut self, src: Handle<f64>, decay: EwmaDecay) -> Handle<f64> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(0.0f64);
+        let cs = Self::cell(decay, EwmaState::default());
+        self.push_node(
+            vec![src.idx],
+            Ewma::CAPS,
+            "ewma",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Ewma::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,

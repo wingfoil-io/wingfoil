@@ -451,6 +451,82 @@ impl<T: 'static> Op for TickedAtElapsed<T> {
     }
 }
 
+/// How an [`Ewma`] decays older observations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EwmaDecay {
+    /// Fixed smoothing factor `alpha` applied once per tick (count weighting).
+    PerTick(f64),
+    /// Time decay with the given half-life in nanoseconds: a sample's weight
+    /// halves every `half_life` of elapsed engine time, independent of tick
+    /// rate. `alpha = 1 - 2^(-Δt / half_life)`.
+    HalfLife(f64),
+}
+
+/// Pending state for an [`Ewma`] op.
+pub struct EwmaState {
+    value: f64,
+    initialised: bool,
+    last_time: Option<NanoTime>,
+}
+
+impl Default for EwmaState {
+    fn default() -> Self {
+        Self {
+            value: f64::NAN,
+            initialised: false,
+            last_time: None,
+        }
+    }
+}
+
+/// Exponentially weighted moving average of an `f64` stream — a
+/// representative statistics-adapter operator: stateful, clock-aware
+/// (`HalfLife` decays off engine time), and seeded with an explicit
+/// `initialised` flag rather than a `value == 0.0` sentinel (so an average
+/// that legitimately reaches `0.0` does not re-seed).
+pub struct Ewma;
+
+impl Op for Ewma {
+    type Cfg = EwmaDecay;
+    type State = EwmaState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut EwmaDecay,
+        state: &mut EwmaState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        if !state.initialised {
+            state.value = sample;
+            state.initialised = true;
+            state.last_time = Some(ctx.time());
+            return Ok(Tick::Value(sample));
+        }
+        let alpha = match *cfg {
+            EwmaDecay::PerTick(alpha) => alpha,
+            EwmaDecay::HalfLife(half_life) => {
+                let now = ctx.time();
+                let prev = state
+                    .last_time
+                    .expect("invariant: last_time set once initialised");
+                state.last_time = Some(now);
+                if half_life <= 0.0 {
+                    1.0
+                } else {
+                    let dt = f64::from(now - prev);
+                    1.0 - (-(dt / half_life) * std::f64::consts::LN_2).exp()
+                }
+            }
+        };
+        state.value += alpha * (sample - state.value);
+        Ok(Tick::Value(state.value))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 

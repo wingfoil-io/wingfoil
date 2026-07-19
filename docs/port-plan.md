@@ -183,6 +183,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 
 1. **statistics** — pure computation, the largest single chunk, huge test
    suite, zero IO. Best stress test of engine-owned state; do it first.
+   🟡 *started*: EWMA (`Ewma` op, both PerTick and clock-driven HalfLife
+   decay) ported with parity tests (`tests/statistics.rs`) — proves the
+   adapter-porting recipe (stateful clock-aware numeric operator as an Op).
+   Remaining: rolling mean/median/var/std/min/max, cumulative, moments.
 2. **cache**, **common** (WindowFilter) — small, pure.
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +
