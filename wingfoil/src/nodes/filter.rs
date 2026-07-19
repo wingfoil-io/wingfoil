@@ -17,18 +17,15 @@ pub struct FilterStream<T: Element> {
 #[node(active = [source, condition], output = value: T)]
 impl<T: Element> MutableNode for FilterStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        let val = self.source.peek_value();
-        let ticked = self.condition.peek_value();
-        if ticked {
-            self.value = val;
-        }
-        Ok(ticked)
+        Ok(self.cycle_inline())
     }
 }
 
 impl<T: Element> FilterStream<T> {
-    /// Statically-dispatched equivalent of `cycle` for generated runners
-    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
+    /// here, and generated static runners ([`crate::codegen`]) call it
+    /// directly for static dispatch without the `GraphState`/`Result`
+    /// plumbing.
     #[doc(hidden)]
     pub fn cycle_inline(&mut self) -> bool {
         let val = self.source.peek_value();

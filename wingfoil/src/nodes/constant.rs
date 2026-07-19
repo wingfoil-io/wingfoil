@@ -10,7 +10,7 @@ pub struct ConstantStream<T: Element> {
 #[node(output = value: T)]
 impl<T: Element> MutableNode for ConstantStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        Ok(true)
+        Ok(self.cycle_inline())
     }
 
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
@@ -20,8 +20,10 @@ impl<T: Element> MutableNode for ConstantStream<T> {
 }
 
 impl<T: Element> ConstantStream<T> {
-    /// Statically-dispatched equivalent of `cycle` for generated runners
-    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
+    /// here, and generated static runners ([`crate::codegen`]) call it
+    /// directly for static dispatch without the `GraphState`/`Result`
+    /// plumbing.
     #[doc(hidden)]
     pub fn cycle_inline(&mut self) -> bool {
         true

@@ -18,14 +18,15 @@ pub struct FoldStream<IN: Element, OUT: Element> {
 #[node(active = [upstream], output = value: OUT)]
 impl<IN: Element, OUT: Element> MutableNode for FoldStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
-        (self.func)(&mut self.value, self.upstream.peek_value());
-        Ok(true)
+        Ok(self.cycle_inline())
     }
 }
 
 impl<IN: Element, OUT: Element> FoldStream<IN, OUT> {
-    /// Statically-dispatched equivalent of `cycle` for generated runners
-    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
+    /// here, and generated static runners ([`crate::codegen`]) call it
+    /// directly for static dispatch without the `GraphState`/`Result`
+    /// plumbing.
     #[doc(hidden)]
     pub fn cycle_inline(&mut self) -> bool {
         (self.func)(&mut self.value, self.upstream.peek_value());
