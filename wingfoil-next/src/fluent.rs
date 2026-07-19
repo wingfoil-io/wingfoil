@@ -204,6 +204,16 @@ impl<T: 'static> Stream<T> {
         self.lift(h)
     }
 
+    /// Map and filter in one pass: `f` returns `(value, emit?)`.
+    pub fn map_filter<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> (B, bool) + 'static,
+    {
+        let h = self.inner.borrow_mut().map_filter(self.handle, f);
+        self.lift(h)
+    }
+
     /// Fold values into an accumulator, emitting it after each fold.
     pub fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
@@ -248,9 +258,31 @@ impl<T: Clone + Default + 'static> Stream<T> {
         self.lift(h)
     }
 
+    /// Pass through the first `limit` values, then stay quiet.
+    pub fn limit(&self, limit: u32) -> Stream<T> {
+        let h = self.inner.borrow_mut().limit(self.handle, limit);
+        self.lift(h)
+    }
+
     /// Collect every emitted value into a `Vec`.
     pub fn accumulate(&self) -> Stream<Vec<T>> {
         self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))
+    }
+}
+
+impl<T: Clone + Default + PartialEq + 'static> Stream<T> {
+    /// Suppress consecutive duplicate values (emit on change only).
+    pub fn distinct(&self) -> Stream<T> {
+        let h = self.inner.borrow_mut().distinct(self.handle);
+        self.lift(h)
+    }
+}
+
+impl<T: Clone + Default + std::ops::Sub<Output = T> + 'static> Stream<T> {
+    /// Emit the successive difference `value - previous`; quiet on the first.
+    pub fn difference(&self) -> Stream<T> {
+        let h = self.inner.borrow_mut().difference(self.handle);
+        self.lift(h)
     }
 }
 

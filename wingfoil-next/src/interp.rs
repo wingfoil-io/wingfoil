@@ -25,8 +25,8 @@ use anyhow::Result;
 
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, External, Filter, Finally, Fold, Join, Map, Merge2, Poll, Sample,
-    Sink, Ticker, TryMap,
+    Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold, Join, Limit,
+    Map, MapFilter, Merge2, Poll, Sample, Sink, Ticker, TryMap,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -365,6 +365,141 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
                 match TryMap::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Map + filter in one pass: `f` returns `(value, emit?)`.
+    pub fn map_filter<A, B, F>(&mut self, src: Handle<A>, f: F) -> Handle<B>
+    where
+        A: 'static,
+        B: Clone + Default + 'static,
+        F: Fn(&A) -> (B, bool) + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(B::default());
+        let cs = Self::cell(f, ());
+        self.push_node(
+            vec![src.idx],
+            MapFilter::<A, B, F>::CAPS,
+            "map_filter",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match MapFilter::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Suppress consecutive duplicate values.
+    pub fn distinct<T: Clone + Default + PartialEq + 'static>(
+        &mut self,
+        src: Handle<T>,
+    ) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), None::<T>);
+        self.push_node(
+            vec![src.idx],
+            Distinct::<T>::CAPS,
+            "distinct",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Distinct::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Successive difference `value - previous`; quiet on the first value.
+    pub fn difference<T>(&mut self, src: Handle<T>) -> Handle<T>
+    where
+        T: Clone + Default + std::ops::Sub<Output = T> + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), None::<T>);
+        self.push_node(
+            vec![src.idx],
+            Difference::<T>::CAPS,
+            "difference",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Difference::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    pub fn limit<T: Clone + Default + 'static>(&mut self, src: Handle<T>, limit: u32) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell(limit, 0u32);
+        self.push_node(
+            vec![src.idx],
+            Limit::<T>::CAPS,
+            "limit",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Limit::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
