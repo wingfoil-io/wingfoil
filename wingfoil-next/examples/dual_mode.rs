@@ -16,16 +16,16 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const CYCLES: u32 = 200_000;
 const PERIOD: Duration = Duration::from_micros(1);
 
-// One definition. `evens_sum::interpreted()` and `evens_sum::compiled()`
-// are both generated from these tokens.
+// One definition, in ordinary fluent style — the macro parses these chains
+// to derive the DAG. `evens_sum::interpreted()` re-emits the statements
+// verbatim; `evens_sum::compiled()` is the monomorphized schedule derived
+// from the same tokens.
 wingfoil_next::graph! {
     mod evens_sum;
     out sum: u64;
-    tick = ticker(PERIOD);
-    count = fold(tick, 0u64, |acc, _| *acc += 1);
-    is_even = map(count, |i| i.is_multiple_of(2));
-    evens = filter(count, is_even);
-    sum = fold(evens, 0u64, |acc, v| *acc += v);
+    let count = g.ticker(PERIOD).count();
+    let is_even = count.map(|i| i.is_multiple_of(2));
+    let sum = count.filter(&is_even).fold(0u64, |acc, v| *acc += v);
 }
 
 fn main() {
