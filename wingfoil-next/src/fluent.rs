@@ -281,6 +281,29 @@ impl<T: Clone + Default + 'static> Stream<T> {
         self.lift(h)
     }
 
+    /// Rate-limit: emit at most once per `interval`.
+    pub fn throttle(&self, interval: Duration) -> Stream<T> {
+        let h = self.inner.borrow_mut().throttle(self.handle, interval);
+        self.lift(h)
+    }
+
+    /// Buffer values and flush them as a `Vec` on each `interval` boundary
+    /// (and once more on the last cycle).
+    pub fn window(&self, interval: Duration) -> Stream<Vec<T>> {
+        let h = self.inner.borrow_mut().window(self.handle, interval);
+        self.lift(h)
+    }
+
+    /// Observe each value with a side-effecting closure, passing it through
+    /// unchanged (a debug tap).
+    pub fn inspect<F>(&self, f: F) -> Stream<T>
+    where
+        F: Fn(&T) + 'static,
+    {
+        let h = self.inner.borrow_mut().inspect(self.handle, f);
+        self.lift(h)
+    }
+
     /// Collect every emitted value into a `Vec`.
     pub fn accumulate(&self) -> Stream<Vec<T>> {
         self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))

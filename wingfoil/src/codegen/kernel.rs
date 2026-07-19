@@ -145,6 +145,13 @@ impl Kernel {
         self.time
     }
 
+    /// Whether this is the final cycle of the run (the run bound is about to
+    /// stop it). Ops that buffer and flush on a boundary (window, buffer) use
+    /// this to flush their pending contents before the run ends.
+    pub fn is_last_cycle(&self) -> bool {
+        self.is_last_cycle
+    }
+
     /// Schedule node `index` to be marked dirty at `at`.
     pub fn schedule(&mut self, index: usize, at: NanoTime) {
         self.scheduled.push(index, at);
