@@ -29,7 +29,7 @@ use crate::ops::{
     Sink, Ticker, TryMap,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
 /// Anything that identifies a node's typed output — a raw [`Handle`] or a
 /// fluent [`Stream`](crate::fluent::Stream).
@@ -105,6 +105,29 @@ impl<T> ExternalSource<T> {
     /// the runner is gone — producers can use this to stop.
     pub fn send(&self, value: T) -> bool {
         self.data.send(value).is_ok() && self.waker.wake(self.index)
+    }
+}
+
+/// The write end of a [`feedback`](Builder::feedback) edge. Wiring
+/// `stream.feedback(&sink)` (fluent) forwards `stream` unchanged while also
+/// pushing each value onto the shared queue and scheduling the paired source
+/// node to emit it on the *next* engine cycle (`+1`), which is what breaks
+/// the dependency cycle: the source node has no upstreams, so the graph sees
+/// no loop. Clone-able so one source can be fed from several sites.
+pub struct FeedbackSink<T> {
+    queue: Rc<RefCell<TimeQueue<T>>>,
+    /// The paired source node's index, scheduled directly on the kernel — an
+    /// engine-level edge the narrow `Ctx` (self-scheduling only) can't
+    /// express.
+    source: usize,
+}
+
+impl<T> Clone for FeedbackSink<T> {
+    fn clone(&self) -> Self {
+        Self {
+            queue: self.queue.clone(),
+            source: self.source,
+        }
     }
 }
 
@@ -696,6 +719,77 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Finally::<A, F>::teardown(cfg, state, &mut ctx)
         });
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Open a feedback edge: returns a source stream (no upstreams, so the
+    /// graph stays acyclic) plus the [`FeedbackSink`] that feeds it. Values
+    /// sent through the sink are emitted by the source on the *next* cycle.
+    /// The source reads a shared time-queue and ticks when the sink has
+    /// scheduled it — `Caps::SCHEDULES` for the callback-driven dispatch,
+    /// though it is the sink (not the op) that does the scheduling.
+    pub fn feedback<T>(&mut self) -> (Handle<T>, FeedbackSink<T>)
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        let queue: Rc<RefCell<TimeQueue<T>>> = Rc::new(RefCell::new(TimeQueue::new()));
+        let q = queue.clone();
+        self.push_node(
+            Vec::new(),
+            Caps::SCHEDULES,
+            "feedback",
+            Box::new(move |k| {
+                let now = k.time();
+                let mut ticked = false;
+                while let Some(v) = q.borrow_mut().pop_if_pending(now) {
+                    *out.borrow_mut() = v;
+                    ticked = true;
+                }
+                Ok(ticked)
+            }),
+            Box::new(|_| Ok(())),
+        );
+        (
+            Handle {
+                idx,
+                _t: PhantomData,
+            },
+            FeedbackSink { queue, source: idx },
+        )
+    }
+
+    /// Wire the write end of a feedback edge: a pass-through of `src` that
+    /// also pushes each value onto `sink`'s queue at `time + 1` and schedules
+    /// the paired source node to emit it then. Returns the pass-through
+    /// stream (identical values to `src`).
+    pub fn feedback_send<T>(&mut self, src: Handle<T>, sink: &FeedbackSink<T>) -> Handle<T>
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let queue = sink.queue.clone();
+        let source = sink.source;
+        self.push_node(
+            vec![src.idx],
+            Caps::NONE,
+            "feedback_send",
+            Box::new(move |k| {
+                let at = k.time() + 1;
+                let v = src_slot.borrow().clone();
+                queue.borrow_mut().push(v.clone(), at);
+                k.schedule(source, at);
+                *out.borrow_mut() = v;
+                Ok(true)
+            }),
+            Box::new(|_| Ok(())),
+        );
         Handle {
             idx,
             _t: PhantomData,

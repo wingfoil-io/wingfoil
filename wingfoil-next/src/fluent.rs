@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::interp::{AsHandle, Builder, ExternalSource, Handle, Runner};
+use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -103,6 +103,23 @@ impl GraphBuilder {
             inner: self.inner.clone(),
             handle,
         }
+    }
+
+    /// Open a feedback edge: a source stream (no upstreams — the graph stays
+    /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
+    /// [`Stream::feedback`]; values arrive on the source one cycle later.
+    pub fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        let (handle, sink) = self.inner.borrow_mut().feedback::<T>();
+        (
+            Stream {
+                inner: self.inner.clone(),
+                handle,
+            },
+            sink,
+        )
     }
 
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
@@ -258,6 +275,15 @@ impl<T: Clone + Default + 'static> Stream<T> {
         F: Fn(&T) -> Result<()> + 'static,
     {
         let h = self.inner.borrow_mut().finally(self.handle, f);
+        self.lift(h)
+    }
+}
+
+impl<T: Clone + Default + PartialEq + 'static> Stream<T> {
+    /// Close a feedback loop: a pass-through of this stream that also sends
+    /// each value to `sink`, to arrive on the paired source one cycle later.
+    pub fn feedback(&self, sink: &FeedbackSink<T>) -> Stream<T> {
+        let h = self.inner.borrow_mut().feedback_send(self.handle, sink);
         self.lift(h)
     }
 }
