@@ -21,6 +21,16 @@ impl<T: Element> MutableNode for SampleStream<T> {
     }
 }
 
+impl<T: Element> SampleStream<T> {
+    /// Statically-dispatched equivalent of `cycle` for generated runners
+    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self) -> bool {
+        self.value = self.upstream.peek_value();
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

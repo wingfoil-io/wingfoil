@@ -3,7 +3,7 @@ use derive_new::new;
 
 /// Only ticks once (on the first [Graph](crate::graph::Graph) cycle).
 #[derive(new)]
-pub(crate) struct ConstantStream<T: Element> {
+pub struct ConstantStream<T: Element> {
     value: T,
 }
 
@@ -16,6 +16,15 @@ impl<T: Element> MutableNode for ConstantStream<T> {
     fn start(&mut self, state: &mut GraphState) -> anyhow::Result<()> {
         state.add_callback(state.start_time());
         Ok(())
+    }
+}
+
+impl<T: Element> ConstantStream<T> {
+    /// Statically-dispatched equivalent of `cycle` for generated runners
+    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self) -> bool {
+        true
     }
 }
 

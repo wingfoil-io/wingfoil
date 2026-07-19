@@ -7,7 +7,7 @@ use crate::types::*;
 /// Filter's it source based on the supplied predicate.  Used by
 /// [filter](crate::nodes::StreamOperators::filter).
 #[derive(new)]
-pub(crate) struct FilterStream<T: Element> {
+pub struct FilterStream<T: Element> {
     source: Rc<dyn Stream<T>>,
     condition: Rc<dyn Stream<bool>>,
     #[new(default)]
@@ -23,6 +23,20 @@ impl<T: Element> MutableNode for FilterStream<T> {
             self.value = val;
         }
         Ok(ticked)
+    }
+}
+
+impl<T: Element> FilterStream<T> {
+    /// Statically-dispatched equivalent of `cycle` for generated runners
+    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self) -> bool {
+        let val = self.source.peek_value();
+        let ticked = self.condition.peek_value();
+        if ticked {
+            self.value = val;
+        }
+        ticked
     }
 }
 

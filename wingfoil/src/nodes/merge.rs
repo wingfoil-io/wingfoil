@@ -17,6 +17,24 @@ pub struct MergeStream<T: Element> {
     value: T,
 }
 
+impl<T: Element> MergeStream<T> {
+    /// Statically-dispatched equivalent of `cycle` for generated runners
+    /// ([`crate::codegen`]). `upstream_ticked` carries the tick flags for
+    /// `upstreams` (same order) from the compiled schedule, replacing the
+    /// `GraphState::node_index_ticked` lookups in `cycle`. Must mirror
+    /// `cycle`'s semantics exactly: earliest-supplied ticked upstream wins.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self, upstream_ticked: &[bool]) -> bool {
+        for (stream, &ticked) in self.upstreams.iter().zip(upstream_ticked) {
+            if ticked {
+                self.value = stream.peek_value();
+                return true;
+            }
+        }
+        false
+    }
+}
+
 #[node(active = [upstreams], output = value: T)]
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {

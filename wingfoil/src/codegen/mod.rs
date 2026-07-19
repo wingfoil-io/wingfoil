@@ -40,6 +40,20 @@
 //! fingerprint of the topology (node types, edges, active flags) and fails
 //! with a "regenerate" error if it no longer matches the compiled schedule.
 //!
+//! # Two generators
+//!
+//! - [`generate`] (this page) — compiles the *schedule*. Core node kinds
+//!   (`map`, `filter`, `fold`, `constant`, `sample`, `merge`) are executed
+//!   through typed handles with static dispatch (`inline: true`, the
+//!   default); every other node falls back to dynamic dispatch. Works with
+//!   **any** graph, and node state stays in the wired nodes (so `peek_value`
+//!   handles keep working after the run).
+//! - [`generate_standalone`] — compiles the *whole graph*: no executor, no
+//!   nodes, state in monomorphized locals, and the user's closures supplied
+//!   via a generated `Inputs` struct so the compiler inlines their bodies
+//!   into the schedule. Restricted to the core node kinds above plus
+//!   `ticker`; see [`standalone`](self) module docs for details.
+//!
 //! # Limitations
 //!
 //! - Dynamic graph changes (`add_upstream` / `remove_node`, behind the
@@ -48,11 +62,18 @@
 //! - The wiring function must produce the same topology as at generation
 //!   time; the fingerprint guard turns a mismatch into an error at startup.
 
+mod kernel;
+mod standalone;
+
+pub use kernel::Kernel;
+pub use standalone::generate_standalone;
+
+use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
 use crate::graph::{Graph, RunBounds, first_error};
-use crate::types::{NanoTime, Node};
+use crate::types::{MutableNode, NanoTime, Node};
 use crate::{RunFor, RunMode};
 
 /// Result alias used by generated code, so consuming crates don't need a
@@ -64,14 +85,174 @@ pub type Result<T> = anyhow::Result<T>;
 pub struct CodegenOptions {
     /// Name of the generated entry-point function. Default: `"run"`.
     pub function_name: String,
+    /// Statically dispatch (inline) core node kinds — `map`, `filter`, `fold`,
+    /// `constant`, `sample`, `merge` — via typed downcast handles instead of
+    /// dynamic `cycle_node` calls, when their value types are nameable in
+    /// generated source. Other nodes (and non-nameable types) fall back to
+    /// dynamic dispatch. Default: `true`.
+    pub inline: bool,
 }
 
 impl Default for CodegenOptions {
     fn default() -> Self {
         Self {
             function_name: "run".to_string(),
+            inline: true,
         }
     }
+}
+
+/// Node kinds the generators understand structurally. `Opaque` nodes are
+/// driven through dynamic dispatch ([`StaticRuntime::cycle_node`]) by
+/// [`generate`], and rejected by [`generate_standalone`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NodeKind {
+    Tick,
+    Constant,
+    Sample,
+    Map,
+    Filter,
+    Fold,
+    Merge,
+    Opaque,
+}
+
+/// Structural facts about one wired node, shared by both generators.
+pub(crate) struct NodeInfo {
+    pub(crate) kind: NodeKind,
+    /// Sanitized type name, e.g. `MapStream`.
+    pub(crate) short: String,
+    /// Generic argument source strings, e.g. `["u64", "bool"]`.
+    pub(crate) generics: Vec<String>,
+    pub(crate) actives: Vec<usize>,
+    pub(crate) passives: Vec<usize>,
+    pub(crate) has_active_downstream: bool,
+}
+
+impl NodeInfo {
+    /// Full source path for a typed downcast handle (`wingfoil::MapStream<u64,
+    /// bool>`), if this node's kind is inlinable and every generic argument is
+    /// nameable in generated source.
+    fn inline_type(&self) -> Option<String> {
+        match self.kind {
+            NodeKind::Map
+            | NodeKind::Filter
+            | NodeKind::Fold
+            | NodeKind::Constant
+            | NodeKind::Sample
+            | NodeKind::Merge => {}
+            NodeKind::Tick | NodeKind::Opaque => return None,
+        }
+        if !self.generics.iter().all(|g| type_is_nameable(g)) {
+            return None;
+        }
+        Some(format!(
+            "wingfoil::{}<{}>",
+            self.short,
+            self.generics.join(", ")
+        ))
+    }
+}
+
+pub(crate) fn classify(short: &str) -> NodeKind {
+    match short {
+        "TickNode" => NodeKind::Tick,
+        "ConstantStream" => NodeKind::Constant,
+        "SampleStream" => NodeKind::Sample,
+        "MapStream" => NodeKind::Map,
+        "FilterStream" => NodeKind::Filter,
+        "FoldStream" => NodeKind::Fold,
+        "MergeStream" => NodeKind::Merge,
+        _ => NodeKind::Opaque,
+    }
+}
+
+/// Split `MapStream<u64, Vec<String>>` into (`MapStream`, `["u64",
+/// "Vec<String>"]`), honouring nested generics.
+pub(crate) fn split_generics(full: &str) -> (&str, Vec<String>) {
+    let Some(open) = full.find('<') else {
+        return (full.trim(), Vec::new());
+    };
+    let name = full[..open].trim();
+    let Some(inner) = full[open + 1..].strip_suffix('>') else {
+        return (name, Vec::new());
+    };
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                args.push(inner[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < inner.len() {
+        args.push(inner[start..].trim().to_string());
+    }
+    (name, args)
+}
+
+/// Conservative check that a sanitized type string resolves in generated
+/// source: every identifier must be a primitive, a prelude type, or a
+/// wingfoil export the generated file imports. User-defined types (whose
+/// paths were stripped by `tynm`) fail this check and force dynamic-dispatch
+/// fallback rather than emitting unresolvable source.
+pub(crate) fn type_is_nameable(ty: &str) -> bool {
+    const ALLOWED: &[&str] = &[
+        "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+        "f32", "f64", "bool", "char", "String", "Vec", "Option", "NanoTime", "ValueAt",
+    ];
+    if ty.trim().is_empty() {
+        return false;
+    }
+    let mut ident = String::new();
+    for c in ty.chars().chain(std::iter::once(' ')) {
+        if c.is_alphanumeric() || c == '_' {
+            ident.push(c);
+            continue;
+        }
+        if !ident.is_empty() {
+            if !ALLOWED.contains(&ident.as_str()) {
+                return false;
+            }
+            ident.clear();
+        }
+        match c {
+            '<' | '>' | ',' | '(' | ')' | ' ' => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Gather structural info for every node of a wired graph.
+pub(crate) fn node_infos(graph: &Graph) -> Vec<NodeInfo> {
+    let n = graph.node_count();
+    let mut infos: Vec<NodeInfo> = (0..n)
+        .map(|i| {
+            let full = graph.node_type_name(i);
+            let (short, generics) = split_generics(&full);
+            NodeInfo {
+                kind: classify(short),
+                short: short.to_string(),
+                generics,
+                actives: graph.active_upstream_indices(i),
+                passives: graph.passive_upstream_indices(i),
+                has_active_downstream: false,
+            }
+        })
+        .collect();
+    for i in 0..n {
+        for u in infos[i].actives.clone() {
+            infos[u].has_active_downstream = true;
+        }
+    }
+    infos
 }
 
 /// The runtime shim driven by generated static runners.
@@ -172,6 +353,34 @@ impl StaticRuntime {
     /// the tick — the generated schedule does that statically.
     pub fn cycle_node(&mut self, index: usize) -> Result<bool> {
         self.graph.cycle_node_inner(index)
+    }
+
+    /// Obtain a typed handle to node `index` for static dispatch (the
+    /// `cycle_inline` fast path in generated runners). Fails with a
+    /// "regenerate" error if the wired node is not the expected concrete type.
+    pub fn typed<T: MutableNode + 'static>(&self, index: usize) -> Result<Rc<RefCell<T>>> {
+        let node = self.graph.node_rc(index);
+        let wired = node.type_name();
+        node.as_any_rc().downcast::<RefCell<T>>().map_err(|_| {
+            anyhow::anyhow!(
+                "generated static runner expected node [{index}] to be `{}` but the wired graph \
+                 has `{wired}` — the wiring has changed since the runner was generated; \
+                 regenerate it with wingfoil::codegen::generate",
+                tynm::type_name::<T>(),
+            )
+        })
+    }
+
+    /// Record the tick outcome of a statically-dispatched (inlined) node on
+    /// the graph state — keeping [`GraphState::ticked`] correct for fallback
+    /// nodes that consult it — and pass the outcome through.
+    ///
+    /// [`GraphState::ticked`]: crate::GraphState::ticked
+    pub fn did_tick(&mut self, index: usize, ticked: bool) -> bool {
+        if ticked {
+            self.graph.set_node_ticked(index);
+        }
+        ticked
     }
 
     /// Finish the current cycle: clear per-cycle tick/dirty state.
@@ -278,16 +487,18 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
     let fp = fingerprint(&graph);
     let fn_name = &options.function_name;
 
-    let names: Vec<String> = (0..n)
-        .map(|i| short_type_name(&graph.node_type_name(i)).to_string())
+    let infos = node_infos(&graph);
+    let inline_types: Vec<Option<String>> = infos
+        .iter()
+        .map(|info| {
+            if options.inline {
+                info.inline_type()
+            } else {
+                None
+            }
+        })
         .collect();
-    let active_ups: Vec<Vec<usize>> = (0..n).map(|i| graph.active_upstream_indices(i)).collect();
-    let mut has_active_downstream = vec![false; n];
-    for ups in &active_ups {
-        for &u in ups {
-            has_active_downstream[u] = true;
-        }
-    }
+    let any_inline = inline_types.iter().any(Option::is_some);
 
     let mut out = String::new();
     let w = &mut out;
@@ -310,9 +521,20 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
         writeln!(w, "// {line}")?;
     }
     writeln!(w)?;
+    if any_inline {
+        writeln!(w, "use std::cell::RefCell;")?;
+    }
     writeln!(w, "use std::rc::Rc;")?;
     writeln!(w, "use wingfoil::codegen::StaticRuntime;")?;
-    writeln!(w, "use wingfoil::{{Node, RunFor, RunMode}};")?;
+    let inline_source: String = inline_types.iter().flatten().cloned().collect();
+    let mut wingfoil_imports = vec!["Node", "RunFor", "RunMode"];
+    for extra in ["NanoTime", "ValueAt"] {
+        if inline_source.contains(extra) {
+            wingfoil_imports.push(extra);
+        }
+    }
+    wingfoil_imports.sort_unstable();
+    writeln!(w, "use wingfoil::{{{}}};", wingfoil_imports.join(", "))?;
     writeln!(w)?;
     writeln!(
         w,
@@ -329,48 +551,80 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
         "    let mut rt = StaticRuntime::new(roots, run_mode, run_for)?;"
     )?;
     writeln!(w, "    rt.check_topology({n}, {fp:#018x})?;")?;
-    writeln!(w, "    rt.run({fn_name}_cycles)")?;
-    writeln!(w, "}}")?;
-    writeln!(w)?;
-    writeln!(w, "#[rustfmt::skip]")?;
-    writeln!(
-        w,
-        "fn {fn_name}_cycles(rt: &mut StaticRuntime) -> wingfoil::codegen::Result<()> {{"
-    )?;
-    writeln!(w, "    while rt.begin_cycle()? {{")?;
 
     // One dispatch line per node, in wiring (topological) order. Ticks
     // propagate through `ticked_*` locals along active edges; `is_dirty`
     // covers callback-driven activation (tickers, delay, feedback, threaded
-    // sources). Passive edges generate nothing.
+    // sources). Passive edges generate nothing. Inlined kinds go through a
+    // typed handle (`cycle_inline`, static dispatch); everything else falls
+    // back to dynamic dispatch via `cycle_node`.
     let mut lines: Vec<(String, String)> = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut cond_parts: Vec<String> = active_ups[i]
-            .iter()
-            .map(|u| format!("ticked_{u}"))
-            .collect();
+    for (i, info) in infos.iter().enumerate() {
+        let mut cond_parts: Vec<String> =
+            info.actives.iter().map(|u| format!("ticked_{u}")).collect();
         cond_parts.push(format!("rt.is_dirty({i})"));
         let cond = cond_parts.join(" || ");
-        let code = if has_active_downstream[i] {
-            if active_ups[i].is_empty() {
-                format!("let ticked_{i} = {cond} && rt.cycle_node({i})?;")
+        let call = match &inline_types[i] {
+            Some(_) => {
+                let call = if info.kind == NodeKind::Merge {
+                    let flags: Vec<String> =
+                        info.actives.iter().map(|u| format!("ticked_{u}")).collect();
+                    format!("n{i}.borrow_mut().cycle_inline(&[{}])", flags.join(", "))
+                } else {
+                    format!("n{i}.borrow_mut().cycle_inline()")
+                };
+                format!("rt.did_tick({i}, {call})")
+            }
+            None => format!("rt.cycle_node({i})?"),
+        };
+        let code = if info.has_active_downstream {
+            if info.actives.is_empty() {
+                format!("let ticked_{i} = {cond} && {call};")
             } else {
-                format!("let ticked_{i} = ({cond}) && rt.cycle_node({i})?;")
+                format!("let ticked_{i} = ({cond}) && {call};")
             }
         } else {
-            format!("if {cond} {{ rt.cycle_node({i})?; }}")
+            format!("if {cond} {{ {call}; }}")
         };
-        lines.push((code, format!("// [{i:02}] {}", names[i])));
+        lines.push((code, format!("// [{i:02}] {}", info.short)));
     }
     let code_width = lines.iter().map(|(code, _)| code.len()).max().unwrap_or(0);
-    for (code, comment) in &lines {
-        writeln!(w, "        {code:code_width$}  {comment}")?;
-    }
 
-    writeln!(w, "        rt.end_cycle()?;")?;
-    writeln!(w, "    }}")?;
-    writeln!(w, "    Ok(())")?;
-    writeln!(w, "}}")?;
+    if any_inline {
+        // Typed handles + the schedule as a closure so the handles stay in scope.
+        for (i, ty) in inline_types.iter().enumerate() {
+            if let Some(ty) = ty {
+                writeln!(w, "    let n{i}: Rc<RefCell<{ty}>> = rt.typed({i})?;")?;
+            }
+        }
+        writeln!(w, "    rt.run(|rt| {{")?;
+        writeln!(w, "        while rt.begin_cycle()? {{")?;
+        for (code, comment) in &lines {
+            writeln!(w, "            {code:code_width$}  {comment}")?;
+        }
+        writeln!(w, "            rt.end_cycle()?;")?;
+        writeln!(w, "        }}")?;
+        writeln!(w, "        Ok(())")?;
+        writeln!(w, "    }})")?;
+        writeln!(w, "}}")?;
+    } else {
+        writeln!(w, "    rt.run({fn_name}_cycles)")?;
+        writeln!(w, "}}")?;
+        writeln!(w)?;
+        writeln!(w, "#[rustfmt::skip]")?;
+        writeln!(
+            w,
+            "fn {fn_name}_cycles(rt: &mut StaticRuntime) -> wingfoil::codegen::Result<()> {{"
+        )?;
+        writeln!(w, "    while rt.begin_cycle()? {{")?;
+        for (code, comment) in &lines {
+            writeln!(w, "        {code:code_width$}  {comment}")?;
+        }
+        writeln!(w, "        rt.end_cycle()?;")?;
+        writeln!(w, "    }}")?;
+        writeln!(w, "    Ok(())")?;
+        writeln!(w, "}}")?;
+    }
     Ok(out)
 }
 
@@ -564,6 +818,16 @@ mod tests {
         let (root, _) = wire_pipeline();
         let opts = CodegenOptions {
             function_name: "run_pricing".to_string(),
+            ..Default::default()
+        };
+        let src = generate(vec![root], &opts).unwrap();
+        // Inline mode (the default) keeps the whole schedule in one function.
+        assert!(src.contains("pub fn run_pricing("));
+
+        let (root, _) = wire_pipeline();
+        let opts = CodegenOptions {
+            function_name: "run_pricing".to_string(),
+            inline: false,
         };
         let src = generate(vec![root], &opts).unwrap();
         assert!(src.contains("pub fn run_pricing("));

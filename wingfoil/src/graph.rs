@@ -1039,6 +1039,18 @@ impl Graph {
         self.state.node_dirty[index]
     }
 
+    pub(crate) fn node_rc(&self, index: usize) -> Rc<dyn Node> {
+        self.state.nodes[index].node.clone()
+    }
+
+    /// Record a tick for `index` on the graph state. Used by generated static
+    /// runners for statically-dispatched (inlined) nodes, which bypass
+    /// [`cycle_node_inner`](Graph::cycle_node_inner) — so `GraphState::ticked`
+    /// stays correct for any fallback node that consults it.
+    pub(crate) fn set_node_ticked(&mut self, index: usize) {
+        self.state.set_ticked(index);
+    }
+
     /// True if a node requested a dynamic graph change (`add_upstream` /
     /// `remove_node`) during the cycle just executed. The static runner
     /// rejects these — a compiled schedule cannot change shape.

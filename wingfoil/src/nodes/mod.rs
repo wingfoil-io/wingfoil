@@ -52,41 +52,50 @@ mod window;
 mod with_time;
 
 pub use always::*;
+// Concrete node types used by generated static runners (`crate::codegen`)
+// for typed downcast handles. `#[doc(hidden)]` where newly exposed — they are
+// implementation detail, reachable by name only from generated code.
 #[cfg(feature = "async")]
 pub use async_io::*;
 pub use callback::CallBackStream;
 pub use channel::ChannelReceiverStream;
+#[doc(hidden)]
+pub use constant::ConstantStream;
 pub use demux::*;
 #[cfg(feature = "dynamic-graph")]
 pub use dynamic_group::*;
 use feedback::FeedbackSendStream;
 pub use feedback::{FeedbackSink, feedback, feedback_node};
+#[doc(hidden)]
+pub use filter::FilterStream;
+#[doc(hidden)]
+pub use fold::FoldStream;
 #[cfg(feature = "async")]
 pub use graph_node::*;
 pub use iterator_stream::{IteratorStream, SimpleIteratorStream, TryIteratorStream};
+#[doc(hidden)]
+pub use map::MapStream;
 pub use map_filter::MapFilterStream;
+#[doc(hidden)]
+pub use merge::MergeStream;
 pub use never::*;
+#[doc(hidden)]
+pub use sample::SampleStream;
 
 use bimap::*;
 use buffer::BufferStream;
-use constant::*;
 use consumer::*;
 use delay::*;
 use delay_with_reset::*;
 use difference::*;
 use distinct::*;
-use filter::*;
 use finally::*;
-use fold::*;
 use graph_state::*;
 use inspect::*;
 use limit::*;
-use map::*;
-use merge::*;
 use node_flow::*;
 use print::*;
 use producer::*;
-use sample::*;
 use throttle::*;
 use tick::*;
 use timed::*;

@@ -4,8 +4,11 @@ use derive_new::new;
 
 use std::rc::Rc;
 
+/// Folds upstream values into an accumulator with the supplied closure.
+/// Used by [fold](crate::nodes::StreamOperators::fold) (and everything built
+/// on it: `reduce`, `count`, `accumulate`, `collect`).
 #[derive(new)]
-pub(crate) struct FoldStream<IN: Element, OUT: Element> {
+pub struct FoldStream<IN: Element, OUT: Element> {
     upstream: Rc<dyn Stream<IN>>,
     func: Box<dyn Fn(&mut OUT, IN)>,
     #[new(default)]
@@ -17,6 +20,16 @@ impl<IN: Element, OUT: Element> MutableNode for FoldStream<IN, OUT> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
         (self.func)(&mut self.value, self.upstream.peek_value());
         Ok(true)
+    }
+}
+
+impl<IN: Element, OUT: Element> FoldStream<IN, OUT> {
+    /// Statically-dispatched equivalent of `cycle` for generated runners
+    /// ([`crate::codegen`]). Must mirror `cycle` exactly.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self) -> bool {
+        (self.func)(&mut self.value, self.upstream.peek_value());
+        true
     }
 }
 
