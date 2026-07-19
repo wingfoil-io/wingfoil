@@ -16,8 +16,19 @@ pub struct SampleStream<T: Element> {
 #[node(passive = [upstream], active = [trigger], output = value: T)]
 impl<T: Element> MutableNode for SampleStream<T> {
     fn cycle(&mut self, _state: &mut GraphState) -> anyhow::Result<bool> {
+        Ok(self.cycle_inline())
+    }
+}
+
+impl<T: Element> SampleStream<T> {
+    /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
+    /// here, and generated static runners ([`crate::codegen`]) call it
+    /// directly for static dispatch without the `GraphState`/`Result`
+    /// plumbing.
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self) -> bool {
         self.value = self.upstream.peek_value();
-        Ok(true)
+        true
     }
 }
 

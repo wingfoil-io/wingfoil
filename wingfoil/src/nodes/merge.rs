@@ -17,6 +17,30 @@ pub struct MergeStream<T: Element> {
     value: T,
 }
 
+impl<T: Element> MergeStream<T> {
+    /// The merge semantics, single-sourced for both execution paths: emit the
+    /// value of the *earliest-supplied* upstream whose position is ticked.
+    fn emit_first_ticked(&mut self, ticked_at: impl Fn(usize) -> bool) -> bool {
+        for pos in 0..self.upstreams.len() {
+            if ticked_at(pos) {
+                self.value = self.upstreams[pos].peek_value();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Statically-dispatched cycle for generated runners ([`crate::codegen`]).
+    /// `upstream_ticked` carries the tick flags for `upstreams` (same order)
+    /// from the compiled schedule — the interpreted path derives the same
+    /// flags from `GraphState` in `cycle`; both feed
+    /// [`emit_first_ticked`](Self::emit_first_ticked).
+    #[doc(hidden)]
+    pub fn cycle_inline(&mut self, upstream_ticked: &[bool]) -> bool {
+        self.emit_first_ticked(|pos| upstream_ticked.get(pos).copied().unwrap_or(false))
+    }
+}
+
 #[node(active = [upstreams], output = value: T)]
 impl<T: Element> MutableNode for MergeStream<T> {
     fn cycle(&mut self, state: &mut GraphState) -> anyhow::Result<bool> {
@@ -31,14 +55,9 @@ impl<T: Element> MutableNode for MergeStream<T> {
                 })
                 .collect();
         }
-        let mut ticked = false;
-        for (stream, &index) in self.upstreams.iter().zip(&self.upstream_indices) {
-            if state.node_index_ticked(index) {
-                self.value = stream.peek_value();
-                ticked = true;
-                break;
-            }
-        }
+        let indices = std::mem::take(&mut self.upstream_indices);
+        let ticked = self.emit_first_ticked(|pos| state.node_index_ticked(indices[pos]));
+        self.upstream_indices = indices;
         Ok(ticked)
     }
 }

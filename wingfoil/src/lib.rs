@@ -228,6 +228,7 @@ pub mod adapters;
 #[cfg(feature = "bench")]
 mod bencher;
 mod channel;
+pub mod codegen;
 mod graph;
 mod latency;
 mod nodes;

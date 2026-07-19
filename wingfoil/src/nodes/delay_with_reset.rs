@@ -8,7 +8,7 @@ use derive_new::new;
 /// When the trigger fires, the output snaps to the current upstream value and
 /// the pending queue is cleared.
 #[derive(new)]
-pub(crate) struct DelayWithResetStream<T: Element + PartialEq> {
+pub struct DelayWithResetStream<T: Element + PartialEq> {
     #[new(default)]
     value: T,
     #[new(default)]
