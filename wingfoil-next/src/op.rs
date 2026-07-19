@@ -6,8 +6,8 @@
 //! only through the narrow [`Ctx`] — with a `const` capability declaration
 //! ([`Caps`]) that tells engines statically whether it ever will.
 
-use wingfoil::NanoTime;
 use wingfoil::codegen::Kernel;
+use wingfoil::{NanoTime, TimeQueue};
 
 /// Static capability declaration for an op type.
 ///
@@ -62,31 +62,70 @@ pub enum Tick<T> {
 ///
 /// Deliberately narrow — time and self-scheduling only. This is the entire
 /// surface area an op has on the engine, which is what makes ops executable
-/// by any engine.
+/// by any engine — including a *composite* engine: a compiled sub-graph
+/// mounted as one node inside an interpreted graph hands its inner ops a
+/// [`nested`](Ctx::nested) context whose schedules land in the composite's
+/// private queue instead of the outer kernel.
 pub struct Ctx<'a> {
-    kernel: &'a mut Kernel,
-    node: usize,
+    time: NanoTime,
+    start_time: NanoTime,
+    sink: Sink<'a>,
+}
+
+enum Sink<'a> {
+    /// Schedules go straight to the run's kernel, keyed by graph node index.
+    Kernel { kernel: &'a mut Kernel, node: usize },
+    /// Schedules go to a composite's private queue, keyed by *inner* node
+    /// index. The composite demultiplexes them on its next activation and
+    /// forwards only the earliest time to the outer kernel.
+    Queue {
+        queue: &'a mut TimeQueue<usize>,
+        node: usize,
+    },
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
-        Self { kernel, node }
+        Self {
+            time: kernel.time(),
+            start_time: kernel.start_time(),
+            sink: Sink::Kernel { kernel, node },
+        }
+    }
+
+    /// A context for an op nested inside a composite node: time comes from
+    /// the outer run, schedules go to the composite's private queue.
+    #[doc(hidden)]
+    pub fn nested(
+        time: NanoTime,
+        start_time: NanoTime,
+        queue: &'a mut TimeQueue<usize>,
+        node: usize,
+    ) -> Self {
+        Self {
+            time,
+            start_time,
+            sink: Sink::Queue { queue, node },
+        }
     }
 
     /// Current engine time.
     pub fn time(&self) -> NanoTime {
-        self.kernel.time()
+        self.time
     }
 
     /// The run's start time.
     pub fn start_time(&self) -> NanoTime {
-        self.kernel.start_time()
+        self.start_time
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops
     /// declaring [`Caps::SCHEDULES`].
     pub fn schedule(&mut self, at: NanoTime) {
-        self.kernel.schedule(self.node, at);
+        match &mut self.sink {
+            Sink::Kernel { kernel, node } => kernel.schedule(*node, at),
+            Sink::Queue { queue, node } => queue.push(*node, at),
+        }
     }
 }
 

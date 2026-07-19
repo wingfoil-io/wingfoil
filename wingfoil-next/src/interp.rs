@@ -51,6 +51,14 @@ impl<T> Clone for Handle<T> {
 }
 impl<T> Copy for Handle<T> {}
 
+impl<T> Handle<T> {
+    /// The node index this handle refers to.
+    #[doc(hidden)]
+    pub fn index(&self) -> usize {
+        self.idx
+    }
+}
+
 type CycleFn = Box<dyn FnMut(&mut Kernel) -> bool>;
 type StartFn = Box<dyn FnMut(&mut Kernel)>;
 
@@ -162,7 +170,7 @@ impl Builder {
         )
     }
 
-    fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+    pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()
@@ -508,6 +516,57 @@ impl Builder {
             idx,
             _t: PhantomData,
         }
+    }
+
+    /// Mount a *composite* node: an entire compiled sub-graph behaving as a
+    /// single node of this graph (the `graph!` macro's `nested` expansion).
+    ///
+    /// The closure owns the sub-graph's state and is called once with
+    /// `is_start = true` before the first cycle (to run inner `start` hooks
+    /// and forward the earliest inner schedule), then once per activation.
+    /// It reads its inputs through slot references captured at wiring time,
+    /// so the engine only needs the active upstream indices for dispatch.
+    /// This is the one dyn boundary the whole sub-graph pays per cycle.
+    pub fn composite<T, F>(
+        &mut self,
+        active_ups: Vec<usize>,
+        callback_activated: bool,
+        node: F,
+    ) -> Handle<T>
+    where
+        T: Clone + Default + 'static,
+        F: FnMut(&mut Ctx, bool) -> Tick<T> + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        let cell = Rc::new(RefCell::new(node));
+        let cell2 = cell.clone();
+        self.push_node(
+            active_ups,
+            callback_activated,
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                match (cell.borrow_mut())(&mut ctx, false) {
+                    Tick::Value(v) => {
+                        *out.borrow_mut() = v;
+                        true
+                    }
+                    Tick::Quiet => false,
+                }
+            }),
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                let _ = (cell2.borrow_mut())(&mut ctx, true);
+            }),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    pub(crate) fn ticked_rc(&self) -> Rc<RefCell<Vec<bool>>> {
+        self.ticked.clone()
     }
 
     pub fn build(self) -> Runner {

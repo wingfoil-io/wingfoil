@@ -59,6 +59,33 @@ impl GraphBuilder {
         )
     }
 
+    /// Mount a composite node (see [`Builder::composite`]). Used by the
+    /// `graph!` macro's `nested` expansion; not intended to be called by
+    /// hand.
+    #[doc(hidden)]
+    pub fn __composite<T: Clone + Default + 'static>(
+        &self,
+        active_ups: Vec<usize>,
+        callback_activated: bool,
+        node: impl FnMut(&mut crate::op::Ctx, bool) -> crate::op::Tick<T> + 'static,
+    ) -> Stream<T> {
+        let handle = self
+            .inner
+            .borrow_mut()
+            .composite(active_ups, callback_activated, node);
+        Stream {
+            inner: self.inner.clone(),
+            handle,
+        }
+    }
+
+    /// The shared per-cycle tick flags. Used by the `graph!` macro's
+    /// `nested` expansion.
+    #[doc(hidden)]
+    pub fn __ticked(&self) -> Rc<RefCell<Vec<bool>>> {
+        self.inner.borrow().ticked_rc()
+    }
+
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`); wiring further nodes from
     /// them afterwards is a logic error — they would target an empty builder.
@@ -99,6 +126,16 @@ impl<T> Stream<T> {
     /// The underlying engine handle (for [`Runner::value`]).
     pub fn handle(&self) -> Handle<T> {
         self.handle
+    }
+
+    /// The shared value slot backing this stream. Used by the `graph!`
+    /// macro's `nested` expansion to read composite inputs.
+    #[doc(hidden)]
+    pub fn __slot(&self) -> Rc<RefCell<T>>
+    where
+        T: 'static,
+    {
+        self.inner.borrow().slot(self.handle)
     }
 
     fn lift<B>(&self, handle: Handle<B>) -> Stream<B> {
