@@ -86,6 +86,23 @@ impl GraphBuilder {
         self.inner.borrow().ticked_rc()
     }
 
+    /// A busy-poll source: `f` runs once per engine cycle, ticking on
+    /// `Some`. Lossless and ordered — one value per cycle, no coalescing
+    /// (contrast [`external`](Self::external), which collapses to
+    /// latest-wins). The graph becomes a busy-spin loop: the kernel never
+    /// parks. Realtime runs only.
+    pub fn poll<T, F>(&self, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn() -> Option<T> + 'static,
+    {
+        let handle = self.inner.borrow_mut().poll(f);
+        Stream {
+            inner: self.inner.clone(),
+            handle,
+        }
+    }
+
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`); wiring further nodes from
     /// them afterwards is a logic error — they would target an empty builder.
@@ -151,7 +168,7 @@ impl<T: 'static> Stream<T> {
     pub fn map<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
-        F: FnMut(&T) -> B + 'static,
+        F: Fn(&T) -> B + 'static,
     {
         let h = self.inner.borrow_mut().map(self.handle, f);
         self.lift(h)
@@ -161,7 +178,7 @@ impl<T: 'static> Stream<T> {
     pub fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
         B: Clone + 'static,
-        F: FnMut(&mut B, &T) + 'static,
+        F: Fn(&mut B, &T) + 'static,
     {
         let h = self.inner.borrow_mut().fold(self.handle, init, f);
         self.lift(h)
@@ -172,7 +189,7 @@ impl<T: 'static> Stream<T> {
     where
         B: 'static,
         C: Clone + Default + 'static,
-        F: FnMut(&T, &B) -> C + 'static,
+        F: Fn(&T, &B) -> C + 'static,
     {
         let h = self.inner.borrow_mut().join(self.handle, other.handle, f);
         self.lift(h)
@@ -204,6 +221,18 @@ impl<T: Clone + Default + 'static> Stream<T> {
     /// Collect every emitted value into a `Vec`.
     pub fn accumulate(&self) -> Stream<Vec<T>> {
         self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))
+    }
+}
+
+impl<T: 'static> Stream<T> {
+    /// Run a side-effecting closure on each tick — the graph's outbound
+    /// edge (print, send, record). Emits `()` per tick.
+    pub fn for_each<F>(&self, f: F) -> Stream<()>
+    where
+        F: Fn(&T) + 'static,
+    {
+        let h = self.inner.borrow_mut().for_each(self.handle, f);
+        self.lift(h)
     }
 }
 

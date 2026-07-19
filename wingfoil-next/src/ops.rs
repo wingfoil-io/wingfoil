@@ -62,13 +62,19 @@ impl<T: Clone + 'static> Op for Const<T> {
 /// Applies a closure to its input. The closure *is* the config — a type
 /// parameter, never boxed, so compiled engines monomorphize straight through
 /// it.
+///
+/// The bound is `Fn`, not `FnMut`, and that is a correctness contract, not a
+/// convenience: compiled expansions re-create closure configs per cycle, so
+/// a closure mutating its captures would silently reset there while
+/// persisting interpreted — the engines would drift. `Fn` makes that a
+/// compile error in both. Per-node state belongs in [`Fold`]'s accumulator.
 pub struct Map<A, B, F>(PhantomData<(A, B, F)>);
 
 impl<A, B, F> Op for Map<A, B, F>
 where
     A: 'static,
     B: Clone + 'static,
-    F: FnMut(&A) -> B + 'static,
+    F: Fn(&A) -> B + 'static,
 {
     type Cfg = F;
     type State = ();
@@ -102,14 +108,16 @@ impl<T: Clone + 'static> Op for Filter<T> {
 
 /// Folds inputs into an accumulator; emits the accumulator after each fold.
 /// The accumulator is the state — initialised by the engine, so `fold` can
-/// start from any value, not just `Default`.
+/// start from any value, not just `Default`. The closure is `Fn` (see
+/// [`Map`]); all mutation goes through the `&mut B` accumulator argument,
+/// which the engine owns.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
 impl<A, B, F> Op for Fold<A, B, F>
 where
     A: 'static,
     B: Clone + 'static,
-    F: FnMut(&mut B, &A) + 'static,
+    F: Fn(&mut B, &A) + 'static,
 {
     type Cfg = F;
     type State = B;
@@ -171,6 +179,59 @@ impl<T: Clone + 'static> Op for External<T> {
     }
 }
 
+/// A busy-poll source: the closure is called once on **every** engine cycle
+/// (`Caps::ALWAYS`), ticking when it returns `Some`. This is the busy-spin
+/// ingestion pattern — polling a ring buffer, socket, or channel via
+/// `try_recv` — and it is *lossless and ordered*: one value per cycle, no
+/// coalescing (contrast [`External`], which collapses to latest-wins).
+/// A realtime run containing a poll source never parks. Realtime only.
+///
+/// The closure is `Fn`: poll external resources through `&self` receivers
+/// (e.g. `mpsc::Receiver::try_recv`) or interior mutability, not by
+/// mutating captures (see [`Map`] for why).
+pub struct Poll<T, F>(PhantomData<(T, F)>);
+
+impl<T, F> Op for Poll<T, F>
+where
+    T: Clone + 'static,
+    F: Fn() -> Option<T> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = ();
+    type Out = T;
+    const CAPS: Caps = Caps::ALWAYS;
+
+    fn cycle(cfg: &mut F, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Tick<T> {
+        match cfg() {
+            Some(v) => Tick::Value(v),
+            None => Tick::Quiet,
+        }
+    }
+}
+
+/// A sink: runs a side-effecting closure on each source tick — the graph's
+/// outbound edge (print, send, record). Emits `()` per tick so downstream
+/// nodes can still observe its cadence.
+pub struct Sink<A, F>(PhantomData<(A, F)>);
+
+impl<A, F> Op for Sink<A, F>
+where
+    A: 'static,
+    F: Fn(&A) + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A,);
+    type Out = ();
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Tick<()> {
+        cfg(input.0);
+        Tick::Value(())
+    }
+}
+
 /// Joins two streams with a closure — the classic `bimap` with two active
 /// upstreams: ticks when either input ticks, reading both current values.
 pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
@@ -180,7 +241,7 @@ where
     A: 'static,
     B: 'static,
     C: Clone + 'static,
-    F: FnMut(&A, &B) -> C + 'static,
+    F: Fn(&A, &B) -> C + 'static,
 {
     type Cfg = F;
     type State = ();

@@ -65,6 +65,11 @@ pub struct Kernel {
     /// External wake-ups from [`KernelWaker`]s, realtime mode only. Mirrors
     /// the interpreted engine's ready-callback channel.
     ready: Option<Receiver<usize>>,
+    /// Busy-spin mode: realtime `begin_cycle` never parks — it drains
+    /// wake-ups non-blockingly, advances time to now, and starts a cycle
+    /// unconditionally. Set by engines running graphs with always-active
+    /// (busy-poll) ops, which need every cycle regardless of callbacks.
+    spin: bool,
 }
 
 impl Kernel {
@@ -103,7 +108,15 @@ impl Kernel {
             cycles: 0,
             scheduled: TimeQueue::new(),
             ready,
+            spin: false,
         }
+    }
+
+    /// Enable busy-spin mode (see the `spin` field). Meaningful for
+    /// realtime runs only; a historical run ignores it (there is nothing to
+    /// poll in a replay — engines reject always-active ops there).
+    pub fn set_spin(&mut self, spin: bool) {
+        self.spin = spin;
     }
 
     /// Drain pending external wake-ups into `dirty`. Out-of-range indices
@@ -183,6 +196,16 @@ impl Kernel {
                 RunMode::RealTime => {
                     // External wake-ups first — they cost no waiting.
                     let mut progressed = self.drain_ready(dirty);
+                    if self.spin {
+                        // Busy-spin: never park. Advance to now, mark due
+                        // callbacks, and start the cycle unconditionally —
+                        // always-active ops need it even with nothing due.
+                        self.time = NanoTime::now().max(self.time + 1);
+                        while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
+                            dirty[ix] = true;
+                        }
+                        return true;
+                    }
                     if !progressed {
                         match self.scheduled.next_time() {
                             Some(next) => {
