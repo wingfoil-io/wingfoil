@@ -62,6 +62,25 @@ fn limit_caps_ticks() {
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
+/// A passive `join` input is read but does not trigger — mirrors classic
+/// `bimap::bimap_passive_does_not_trigger`. The combine fires only when the
+/// active (slow) input ticks, reading the passive (fast) input's current
+/// value at that instant.
+#[test]
+fn join_passive_reads_without_triggering() {
+    let g = GraphBuilder::new();
+    let slow = g.ticker(Duration::from_nanos(100)).count(); // 1,2,3 at 0,100,200
+    let fast = g.ticker(Duration::from_nanos(10)).count(); // ticks 10x as often
+    let combined = slow.join_passive(&fast, |s, f| (*s, *f));
+    let acc = combined.accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(205)))
+        .unwrap();
+    // Fires only on the slow ticks (3 of them), reading fast's live value:
+    // t=0 fast=1, t=100 fast=11, t=200 fast=21.
+    assert_eq!(vec![(1, 1), (2, 11), (3, 21)], r.value(&acc));
+}
+
 /// `map_filter` maps and filters in one pass — mirrors classic
 /// `map_filter::emits_when_function_returns_true` (odd inputs squared).
 #[test]

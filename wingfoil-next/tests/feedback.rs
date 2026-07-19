@@ -3,10 +3,33 @@
 //! a shared time-queue and schedules the source to emit one cycle later. This
 //! reproduces the classic engine's `feedback_active_works` behaviour.
 
+use std::time::Duration;
+
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::fluent::GraphBuilder;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
+
+/// Mirrors `feedback_passive_works` (feedback.rs): a counter joined with a
+/// *passively* read feedback value. The feedback input is read but does not
+/// trigger, so the combine advances in step with the counter (once per
+/// period) rather than on every feedback delivery — giving the digit-shift
+/// progression 1, 12, 123, 1234, 12345, 123456.
+#[test]
+fn feedback_passive_matches_classic_engine() {
+    let period = Duration::from_nanos(100);
+    let g = GraphBuilder::new();
+    let (fed_back, sink) = g.feedback::<u64>();
+    let source = g.ticker(period).count();
+    let value = source.join_passive(&fed_back, |src, fb| src + fb * 10);
+    let _loop = value.feedback(&sink);
+    let acc = value.accumulate();
+
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(period * 5)).unwrap();
+
+    assert_eq!(vec![1, 12, 123, 1234, 12345, 123456], r.value(&acc));
+}
 
 /// Mirrors `feedback_active_works` (feedback.rs): `constant(1)` joined with
 /// the fed-back value (`a + b*10`), the result fed back. Each cycle the
