@@ -90,6 +90,44 @@ fn external_source_ticks_the_graph() {
     assert_eq!(Some(&5), got.last(), "final send must arrive: {got:?}");
 }
 
+/// A sink runs its side effect once per source tick, in tick order.
+#[test]
+fn for_each_observes_every_tick() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let _done = count.for_each(move |v| sink.borrow_mut().push(*v));
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3));
+    assert_eq!(vec![1, 2, 3], *seen.borrow());
+}
+
+/// The duration bound must terminate exactly like the classic engine's —
+/// both engines run the same trailing-cycle semantics (a 100ns ticker under
+/// a 305ns bound runs cycles at 0..=500: the bound is checked against the
+/// *previous* cycle's time, then one marked-last cycle still runs).
+#[test]
+fn duration_bound_matches_classic_engine() {
+    use wingfoil::NodeOperators;
+    let period = Duration::from_nanos(100);
+    let bound = Duration::from_nanos(305);
+
+    let classic = wingfoil::ticker(period).count();
+    classic
+        .run(HISTORICAL, RunFor::Duration(bound))
+        .expect("classic run");
+
+    let g = GraphBuilder::new();
+    let next = g.ticker(period).count();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(bound));
+
+    assert_eq!(classic.peek_value(), r.value(&next));
+}
+
 /// The capability contract is `const`, so it can be checked at compile time
 /// — the assertions below are evaluated by rustc, not at runtime. This is
 /// what lets engines specialise on capabilities with zero cost.
@@ -102,7 +140,8 @@ fn caps_are_declared_statically() {
             <Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS,
             Caps {
                 schedules: false,
-                threaded: false
+                threaded: false,
+                always: false,
             }
         ));
     }

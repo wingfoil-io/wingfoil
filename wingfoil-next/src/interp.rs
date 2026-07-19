@@ -19,9 +19,9 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::op::{Ctx, Op, Tick};
+use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, External, Filter, Fold, Join, Map, Merge2, Sample, Ticker,
+    Const, Delay, DelayState, External, Filter, Fold, Join, Map, Merge2, Poll, Sample, Sink, Ticker,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -64,11 +64,10 @@ type StartFn = Box<dyn FnMut(&mut Kernel)>;
 
 struct NodeRt {
     active_ups: Vec<usize>,
-    /// From `Op::CAPS`: whether this node can be activated by a kernel
-    /// callback (scheduled or external wake-up). Nodes without it skip the
-    /// dirty check entirely — the capability contract doing the job of the
-    /// retrofit's name allowlist.
-    callback_activated: bool,
+    /// The op's `CAPS` — the capability contract drives dispatch: nodes
+    /// without `callback_activated()` skip the dirty check entirely, and
+    /// `always` nodes are cycled unconditionally (busy-poll sources).
+    caps: Caps,
     cycle: CycleFn,
     start: StartFn,
 }
@@ -108,6 +107,7 @@ pub struct Builder {
     waker: KernelWaker,
     ready: Option<ReadyReceiver>,
     has_external: bool,
+    has_always: bool,
 }
 
 impl Default for Builder {
@@ -120,6 +120,7 @@ impl Default for Builder {
             waker,
             ready: Some(ready),
             has_external: false,
+            has_always: false,
         }
     }
 }
@@ -142,7 +143,7 @@ impl Builder {
         self.has_external = true;
         self.push_node(
             Vec::new(),
-            External::<T>::CAPS.callback_activated(),
+            External::<T>::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -185,16 +186,10 @@ impl Builder {
 
     /// Register a node: its slot must already have been pushed (so slot and
     /// node indices stay aligned).
-    fn push_node(
-        &mut self,
-        active_ups: Vec<usize>,
-        callback_activated: bool,
-        cycle: CycleFn,
-        start: StartFn,
-    ) {
+    fn push_node(&mut self, active_ups: Vec<usize>, caps: Caps, cycle: CycleFn, start: StartFn) {
         self.nodes.push(NodeRt {
             active_ups,
-            callback_activated,
+            caps,
             cycle,
             start,
         });
@@ -213,7 +208,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Ticker::CAPS.callback_activated(),
+            Ticker::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -244,7 +239,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Const::<T>::CAPS.callback_activated(),
+            Const::<T>::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -272,7 +267,7 @@ impl Builder {
     where
         A: 'static,
         B: Clone + Default + 'static,
-        F: FnMut(&A) -> B + 'static,
+        F: Fn(&A) -> B + 'static,
     {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
@@ -280,7 +275,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            Map::<A, B, F>::CAPS.callback_activated(),
+            Map::<A, B, F>::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -313,7 +308,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![src.idx, condition.idx],
-            Filter::<T>::CAPS.callback_activated(),
+            Filter::<T>::CAPS,
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
@@ -339,7 +334,7 @@ impl Builder {
     where
         A: 'static,
         B: Clone + 'static,
-        F: FnMut(&mut B, &A) + 'static,
+        F: Fn(&mut B, &A) + 'static,
     {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
@@ -347,7 +342,7 @@ impl Builder {
         let cs = Self::cell(f, init);
         self.push_node(
             vec![src.idx],
-            Fold::<A, B, F>::CAPS.callback_activated(),
+            Fold::<A, B, F>::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -380,7 +375,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![trigger.idx],
-            Sample::<T>::CAPS.callback_activated(),
+            Sample::<T>::CAPS,
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
@@ -407,7 +402,7 @@ impl Builder {
         A: 'static,
         B: 'static,
         C: Clone + Default + 'static,
-        F: FnMut(&A, &B) -> C + 'static,
+        F: Fn(&A, &B) -> C + 'static,
     {
         let idx = self.nodes.len();
         let a_slot = self.slot(a);
@@ -416,7 +411,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![a.idx, b.idx],
-            Join::<A, B, C, F>::CAPS.callback_activated(),
+            Join::<A, B, C, F>::CAPS,
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -454,7 +449,7 @@ impl Builder {
         let cs = Self::cell(NanoTime::from(delay), DelayState::<T>::default());
         self.push_node(
             vec![src.idx],
-            Delay::<T>::CAPS.callback_activated(),
+            Delay::<T>::CAPS,
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -491,7 +486,7 @@ impl Builder {
         let (ia, ib) = (a.idx, b.idx);
         self.push_node(
             vec![a.idx, b.idx],
-            Merge2::<T>::CAPS.callback_activated(),
+            Merge2::<T>::CAPS,
             Box::new(move |k| {
                 let (ta, tb) = {
                     let t = ticked.borrow();
@@ -505,6 +500,76 @@ impl Builder {
                         drop(va);
                         drop(vb);
                         *out.borrow_mut() = value;
+                        true
+                    }
+                    Tick::Quiet => false,
+                }
+            }),
+            Box::new(|_| {}),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// A busy-poll source: `f` runs once per engine cycle, ticking on
+    /// `Some`. Lossless and ordered (one value per cycle, no coalescing).
+    /// The graph becomes a busy-spin loop in realtime mode — the kernel
+    /// never parks. Realtime only.
+    pub fn poll<T, F>(&mut self, f: F) -> Handle<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn() -> Option<T> + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        let cs = Self::cell(f, ());
+        self.has_always = true;
+        self.push_node(
+            Vec::new(),
+            Poll::<T, F>::CAPS,
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                match Poll::<T, F>::cycle(cfg, state, (), &mut ctx) {
+                    Tick::Value(v) => {
+                        *out.borrow_mut() = v;
+                        true
+                    }
+                    Tick::Quiet => false,
+                }
+            }),
+            Box::new(|_| {}),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// A sink: run a side-effecting closure on each tick of `src` — the
+    /// graph's outbound edge. Emits `()` per tick.
+    pub fn for_each<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<()>
+    where
+        A: 'static,
+        F: Fn(&A) + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(());
+        let cs = Self::cell(f, ());
+        self.push_node(
+            vec![src.idx],
+            Sink::<A, F>::CAPS,
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Sink::<A, F>::cycle(cfg, state, (&a,), &mut ctx) {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
                         true
                     }
                     Tick::Quiet => false,
@@ -541,9 +606,14 @@ impl Builder {
         let out = self.new_slot(T::default());
         let cell = Rc::new(RefCell::new(node));
         let cell2 = cell.clone();
+        let caps = Caps {
+            schedules: callback_activated,
+            threaded: false,
+            always: false,
+        };
         self.push_node(
             active_ups,
-            callback_activated,
+            caps,
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 match (cell.borrow_mut())(&mut ctx, false) {
@@ -576,6 +646,7 @@ impl Builder {
             ticked: self.ticked,
             ready: self.ready,
             has_external: self.has_external,
+            has_always: self.has_always,
         }
     }
 }
@@ -590,6 +661,7 @@ pub struct Runner {
     ticked: Rc<RefCell<Vec<bool>>>,
     ready: Option<ReadyReceiver>,
     has_external: bool,
+    has_always: bool,
 }
 
 impl Runner {
@@ -608,6 +680,14 @@ impl Runner {
         } else {
             Kernel::new(run_mode, run_for)
         };
+        if self.has_always {
+            assert!(
+                matches!(run_mode, RunMode::RealTime),
+                "graphs with poll sources require RunMode::RealTime — there is nothing to \
+                 busy-poll in a deterministic historical replay"
+            );
+            kernel.set_spin(true);
+        }
         for node in self.nodes.iter_mut() {
             (node.start)(&mut kernel);
         }
@@ -615,7 +695,7 @@ impl Runner {
         let mut dirty = vec![false; n];
         while kernel.begin_cycle(&mut dirty) {
             for (i, node) in self.nodes.iter_mut().enumerate() {
-                let due = (node.callback_activated && dirty[i]) || {
+                let due = node.caps.always || (node.caps.callback_activated() && dirty[i]) || {
                     let t = self.ticked.borrow();
                     node.active_ups.iter().any(|&u| t[u])
                 };

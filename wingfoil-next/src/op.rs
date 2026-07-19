@@ -26,24 +26,42 @@ pub struct Caps {
     /// Realtime mode only — external events have no place in a deterministic
     /// historical replay, and engines reject the combination.
     pub threaded: bool,
+    /// The op must be cycled on *every* engine cycle, with no activation —
+    /// a busy-poll source (ring buffer, socket, channel drained by
+    /// `try_recv`). A realtime run containing such an op becomes a
+    /// busy-spin loop: the kernel never parks, cycles run back-to-back,
+    /// and each cycle polls the op once. Realtime mode only — in a
+    /// historical replay there is no external resource to poll, and
+    /// engines reject the combination.
+    pub always: bool,
 }
 
 impl Caps {
     pub const NONE: Caps = Caps {
         schedules: false,
         threaded: false,
+        always: false,
     };
     pub const SCHEDULES: Caps = Caps {
         schedules: true,
         threaded: false,
+        always: false,
     };
     pub const THREADED: Caps = Caps {
         schedules: false,
         threaded: true,
+        always: false,
+    };
+    pub const ALWAYS: Caps = Caps {
+        schedules: false,
+        threaded: false,
+        always: true,
     };
 
     /// True if this op can be activated by kernel callbacks (scheduled or
     /// external) — i.e. its dispatch condition needs a dirty check.
+    /// (An `always` op needs no dirty check either — it runs
+    /// unconditionally.)
     pub const fn callback_activated(&self) -> bool {
         self.schedules || self.threaded
     }

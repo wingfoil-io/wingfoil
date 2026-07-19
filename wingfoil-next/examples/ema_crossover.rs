@@ -13,7 +13,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::fluent::GraphBuilder;
 
 /// EMA update, seeded by the first observation instead of decaying from 0.
-fn ema(alpha: f64) -> impl FnMut(&mut (f64, bool), &f64) {
+fn ema(alpha: f64) -> impl Fn(&mut (f64, bool), &f64) {
     move |state, price| {
         if state.1 {
             state.0 += alpha * (price - state.0);
