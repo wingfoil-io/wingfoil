@@ -37,11 +37,19 @@
 //! `.join(&other, f)`, `.delay(duration)`; sugar `.count()` and
 //! `.accumulate()`.
 //!
-//! Limitations (v1): the body must be straight-line `let` statements plus the
-//! tail expression (no loops/conditionals — the DAG must be static); graphs
-//! live at module scope so closures can reference items but not runtime
-//! locals; `external` sources are not expressible (use the fluent API
-//! directly for those graphs).
+//! Arbitrary non-wiring statements are allowed anywhere in the body —
+//! computing configs, declaring locals that closures capture, helper calls.
+//! They are re-emitted into `compiled()` in source order (and are already
+//! part of `wire()`), so both engines see them. Two rules, both enforced at
+//! compile time: the builder and stream names may only appear in wiring
+//! statements (`let name = <chain>;`) and the tail — wiring hidden inside
+//! other code would build nodes `compiled()` cannot see; and passthrough
+//! bindings may not shadow one another — `compiled()` inlines closures after
+//! all statements run, so a shadowed capture would let the engines disagree.
+//!
+//! Limitations (v1): wiring itself must be straight-line (no wiring inside
+//! loops/conditionals — the DAG must be static); `external` sources are not
+//! expressible (use the fluent API directly for those graphs).
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -107,6 +115,72 @@ struct GraphDef {
     /// (from the `Stream<T>` return type), in order.
     outs: Vec<(Ident, Type)>,
     nodes: Vec<NodeDef>,
+    /// Non-wiring statements (config computation etc.), re-emitted into
+    /// `compiled()` (and present verbatim in `wire()`). Each is paired with
+    /// the number of nodes defined before it so `compiled()` can interleave
+    /// them with node declarations in source order — a passthrough `let` that
+    /// shadows an earlier one must not affect configs evaluated before it.
+    passthrough: Vec<(usize, Stmt)>,
+}
+
+/// The root identifier of a method-call chain, if the expression is one.
+fn chain_root(expr: &Expr) -> Option<&Ident> {
+    let mut cur = expr;
+    loop {
+        match cur {
+            Expr::MethodCall(mc) => cur = &mc.receiver,
+            Expr::Path(p) => return p.path.get_ident(),
+            _ => return None,
+        }
+    }
+}
+
+/// True if any identifier in `tokens` names the builder or a known stream —
+/// used to reject graph wiring hidden inside arbitrary (passthrough) code,
+/// which `wire()` would execute but `compiled()` could not see.
+fn mentions_graph_ident(
+    tokens: TokenStream2,
+    builder: &Ident,
+    streams: &std::collections::HashMap<String, usize>,
+) -> bool {
+    use proc_macro2::TokenTree;
+    for tt in tokens {
+        match tt {
+            TokenTree::Ident(i) => {
+                if i == *builder || streams.contains_key(&i.to_string()) {
+                    return true;
+                }
+            }
+            TokenTree::Group(gp) => {
+                if mentions_graph_ident(gp.stream(), builder, streams) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Collect the identifiers a pattern binds (`let (a, b) = ..` → a, b).
+fn pattern_idents(pat: &Pat, out: &mut Vec<Ident>) {
+    match pat {
+        Pat::Ident(p) => {
+            out.push(p.ident.clone());
+            if let Some((_, sub)) = &p.subpat {
+                pattern_idents(sub, out);
+            }
+        }
+        Pat::Type(p) => pattern_idents(&p.pat, out),
+        Pat::Reference(p) => pattern_idents(&p.pat, out),
+        Pat::Paren(p) => pattern_idents(&p.pat, out),
+        Pat::Tuple(p) => p.elems.iter().for_each(|e| pattern_idents(e, out)),
+        Pat::Slice(p) => p.elems.iter().for_each(|e| pattern_idents(e, out)),
+        Pat::TupleStruct(p) => p.elems.iter().for_each(|e| pattern_idents(e, out)),
+        Pat::Struct(p) => p.fields.iter().for_each(|f| pattern_idents(&f.pat, out)),
+        Pat::Or(p) => p.cases.iter().for_each(|c| pattern_idents(c, out)),
+        _ => {}
+    }
 }
 
 /// Extract `T` from a `Stream<T>`-shaped type (any path ending in
@@ -419,37 +493,68 @@ impl Parse for GraphDef {
             other => vec![stream_value_type(other)?],
         };
 
-        // Walk the body: `let` chains, then a tail expression naming the
-        // returned stream binding(s).
+        // Walk the body. A `let` whose initialiser is a method chain rooted
+        // at the builder or a known stream is graph wiring; every other
+        // statement is arbitrary passthrough code (config computation,
+        // helpers) — re-emitted into both expansions — provided it does not
+        // touch graph identifiers (wiring hidden in arbitrary code would
+        // build nodes `compiled()` cannot see).
         let mut walker = ChainWalker::new();
+        let mut passthrough: Vec<(usize, Stmt)> = Vec::new();
+        let mut passthrough_names = std::collections::HashSet::new();
         let mut tail: Option<&Expr> = None;
         let n_stmts = wire_fn.block.stmts.len();
         for (i, stmt) in wire_fn.block.stmts.iter().enumerate() {
-            match stmt {
-                Stmt::Local(local) => {
-                    let Pat::Ident(pat) = &local.pat else {
-                        return Err(syn::Error::new(
-                            local.pat.span(),
-                            "bind each chain to a plain name",
-                        ));
-                    };
-                    let Some(init) = &local.init else {
-                        return Err(syn::Error::new(
-                            local.span(),
-                            "each `let` must initialise a fluent chain",
-                        ));
-                    };
-                    walker.walk_statement(&pat.ident, &init.expr, &builder)?;
-                }
-                Stmt::Expr(expr, None) if i + 1 == n_stmts => tail = Some(expr),
-                other => {
+            // Is this a wiring statement?
+            if let Stmt::Local(local) = stmt
+                && let Some(init) = &local.init
+                && let Some(root) = chain_root(&init.expr)
+                && (*root == builder || walker.index_of.contains_key(&root.to_string()))
+            {
+                let Pat::Ident(pat) = &local.pat else {
                     return Err(syn::Error::new(
-                        other.span(),
-                        "graph bodies are straight-line `let name = <fluent chain>;` \
-                         statements followed by the returned stream name(s)",
+                        local.pat.span(),
+                        "bind each stream chain to a plain name",
                     ));
+                };
+                walker.walk_statement(&pat.ident, &init.expr, &builder)?;
+                continue;
+            }
+            // The tail expression names the returned stream binding(s).
+            if let Stmt::Expr(expr, None) = stmt
+                && i + 1 == n_stmts
+            {
+                tail = Some(expr);
+                continue;
+            }
+            // Passthrough: arbitrary non-wiring code.
+            let tokens = quote! { #stmt };
+            if mentions_graph_ident(tokens, &builder, &walker.index_of) {
+                return Err(syn::Error::new(
+                    stmt.span(),
+                    "graph wiring must be straight-line `let name = <chain>;` statements — \
+                     the builder and stream names cannot appear inside other code (compiled() \
+                     could not see nodes built there)",
+                ));
+            }
+            if let Stmt::Local(local) = stmt {
+                let mut bound = Vec::new();
+                pattern_idents(&local.pat, &mut bound);
+                for ident in bound {
+                    if !passthrough_names.insert(ident.to_string()) {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            format!(
+                                "`{ident}` shadows an earlier binding — shadowing is not \
+                                 supported inside graph! (compiled() inlines closures after \
+                                 all statements run, so the engines would disagree on which \
+                                 binding a closure captures)"
+                            ),
+                        ));
+                    }
                 }
             }
+            passthrough.push((walker.nodes.len(), stmt.clone()));
         }
         let Some(tail) = tail else {
             return Err(syn::Error::new(
@@ -508,6 +613,7 @@ impl Parse for GraphDef {
             builder_by_ref,
             outs: out_names.into_iter().zip(out_types).collect(),
             nodes: walker.nodes,
+            passthrough,
             wire_fn,
         })
     }
@@ -722,6 +828,21 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
         })
         .collect();
 
+    // Interleave passthrough statements with node declarations in source
+    // order: a config expression must see exactly the passthrough bindings
+    // that preceded its wiring statement in `wire()` (shadowing included).
+    let mut setup: Vec<TokenStream2> = Vec::new();
+    let mut passthrough = def.passthrough.iter().peekable();
+    for (i, decl) in decls.into_iter().enumerate() {
+        while let Some((_, stmt)) = passthrough.next_if(|(pos, _)| *pos <= i) {
+            setup.push(quote! { #stmt });
+        }
+        setup.push(decl);
+    }
+    for (_, stmt) in passthrough {
+        setup.push(quote! { #stmt });
+    }
+
     quote! {
         /// The same graph, fully monomorphized: node state in locals, tick
         /// propagation as bools, every `Op::cycle` (closures included)
@@ -732,7 +853,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
             run_for: ::wingfoil_next::wingfoil::RunFor,
         ) -> ( #(#out_types,)* ) {
             let mut __k = ::wingfoil_next::wingfoil::codegen::Kernel::new(run_mode, run_for);
-            #(#decls)*
+            #(#setup)*
             #(#starts)*
             let mut __dirty = [false; #n];
             while __k.begin_cycle(&mut __dirty) {
