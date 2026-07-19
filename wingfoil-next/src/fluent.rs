@@ -214,6 +214,27 @@ impl<T: 'static> Stream<T> {
         self.lift(h)
     }
 
+    /// Pair each value with the current engine time: `(time, value)`.
+    pub fn with_time(&self) -> Stream<(wingfoil::NanoTime, T)>
+    where
+        T: Clone,
+    {
+        let h = self.inner.borrow_mut().with_time(self.handle);
+        self.lift(h)
+    }
+
+    /// Emit the current engine time whenever this stream ticks.
+    pub fn ticked_at(&self) -> Stream<wingfoil::NanoTime> {
+        let h = self.inner.borrow_mut().ticked_at(self.handle);
+        self.lift(h)
+    }
+
+    /// Emit elapsed engine time (`now - start`) whenever this stream ticks.
+    pub fn ticked_at_elapsed(&self) -> Stream<wingfoil::NanoTime> {
+        let h = self.inner.borrow_mut().ticked_at_elapsed(self.handle);
+        self.lift(h)
+    }
+
     /// Fold values into an accumulator, emitting it after each fold.
     pub fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
@@ -345,6 +366,13 @@ impl<T: Clone + Default + std::ops::Sub<Output = T> + 'static> Stream<T> {
     pub fn difference(&self) -> Stream<T> {
         let h = self.inner.borrow_mut().difference(self.handle);
         self.lift(h)
+    }
+}
+
+impl<T: Clone + Default + std::ops::Not<Output = T> + 'static> Stream<T> {
+    /// Negate each value (`!value`) — sugar over `map`.
+    pub fn not(&self) -> Stream<T> {
+        self.map(|v| !v.clone())
     }
 }
 

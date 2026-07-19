@@ -159,6 +159,52 @@ fn join3_combines_three_streams() {
     assert_eq!(vec![6, 12, 18], r.value(&acc));
 }
 
+/// `with_time` pairs each value with the engine time — mirrors classic
+/// `with_time::timestamps_match_graph_time`.
+#[test]
+fn with_time_pairs_value_with_engine_time() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    let items = r.value(&acc);
+    let expected = vec![
+        (NanoTime::new(0), 1),
+        (NanoTime::new(100), 2),
+        (NanoTime::new(200), 3),
+        (NanoTime::new(300), 4),
+    ];
+    assert_eq!(expected, items);
+}
+
+/// `ticked_at` emits the engine time on each tick — mirrors classic
+/// `graph_state::ticked_at_emits_graph_time`.
+#[test]
+fn ticked_at_emits_engine_time() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.ticked_at().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(
+        vec![NanoTime::new(0), NanoTime::new(100), NanoTime::new(200)],
+        r.value(&acc)
+    );
+}
+
+/// `not` negates a bool stream — mirrors classic `not_inverts_bool_stream`.
+#[test]
+fn not_inverts_bool_stream() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let is_even = count.map(|i| i.is_multiple_of(2)); // false,true,false
+    let acc = is_even.not().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![true, false, true], r.value(&acc));
+}
+
 /// `inspect` observes each value and passes it through unchanged — mirrors
 /// classic `inspect::inspect_observes_and_passes_through`.
 #[test]
