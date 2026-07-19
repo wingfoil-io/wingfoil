@@ -1,26 +1,28 @@
-//! The `graph!` macro closes the dual-mode loop: the macro body is ordinary
-//! **fluent wiring code**, which the macro parses to derive the DAG. The
-//! same tokens expand to `interpreted()` (the statements re-emitted
-//! verbatim) and `compiled()` (fully monomorphized) — so the engines cannot
-//! drift. These tests assert the two expansions agree, and match the values
-//! the hand-written engines produced.
+//! The `graph!` macro closes the dual-mode loop: its input is a single
+//! **valid fluent wiring function**, which the macro parses to derive the
+//! DAG. The same tokens expand to `wire()` (the function verbatim),
+//! `interpreted()` (built through `wire`), and `compiled()` (fully
+//! monomorphized) — so the engines cannot drift. These tests assert the two
+//! expansions agree, and match the values the hand-written engines produced.
 
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::fluent::{GraphBuilder, Stream};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const PERIOD: Duration = Duration::from_millis(10);
 
 wingfoil_next::graph! {
-    mod odds_evens;
-    out acc: Vec<String>;
-    let count = g.ticker(PERIOD).count();
-    let is_even = count.map(|i| i.is_multiple_of(2));
-    let is_odd = is_even.map(|b| !b);
-    let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
-    let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
-    let acc = odd_str.merge(&even_str).accumulate();
+    fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
+        let count = g.ticker(PERIOD).count();
+        let is_even = count.map(|i| i.is_multiple_of(2));
+        let is_odd = is_even.map(|b| !b);
+        let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+        let acc = odd_str.merge(&even_str).accumulate();
+        acc
+    }
 }
 
 #[test]
@@ -49,14 +51,27 @@ fn macro_engines_agree_on_duration_bound() {
     assert_eq!(interpreted, compiled);
 }
 
+/// The wiring function itself is exported verbatim as `wire` — usable as
+/// ordinary fluent code, composed with manual wiring.
+#[test]
+fn macro_exports_the_wiring_fn_verbatim() {
+    let g = GraphBuilder::new();
+    let acc = odds_evens::wire(&g);
+    let extra = acc.map(|v| v.len() as u64);
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(3));
+    assert_eq!(3, runner.value(&extra));
+}
+
 wingfoil_next::graph! {
-    mod delayed_counts;
-    out acc: Vec<u64>;
-    let acc = g
-        .ticker(Duration::from_nanos(10))
-        .count()
-        .delay(Duration::from_nanos(100))
-        .accumulate();
+    fn delayed_counts(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let acc = g
+            .ticker(Duration::from_nanos(10))
+            .count()
+            .delay(Duration::from_nanos(100))
+            .accumulate();
+        acc
+    }
 }
 
 /// Delay — state + self-scheduling — through the macro (as one chain with
@@ -76,10 +91,11 @@ fn macro_handles_delay_on_both_engines() {
 }
 
 wingfoil_next::graph! {
-    mod sampled;
-    out acc: Vec<u64>;
-    let tick = g.ticker(Duration::from_nanos(100));
-    let acc = g.constant(7u64).sample(&tick).accumulate();
+    fn sampled(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let tick = g.ticker(Duration::from_nanos(100));
+        let acc = g.constant(7u64).sample(&tick).accumulate();
+        acc
+    }
 }
 
 /// Sample's passive data edge + constant, both engines.
@@ -95,21 +111,25 @@ fn macro_handles_sample_and_constant() {
 }
 
 wingfoil_next::graph! {
-    mod joined;
-    out acc: Vec<u64>;
-    let count = g.ticker(Duration::from_nanos(100)).count();
-    let doubled = count.map(|i| i * 2);
-    let acc = count.join(&doubled, |a, b| a + b).accumulate();
+    fn joined(g: &GraphBuilder) -> (Stream<Vec<u64>>, Stream<u64>) {
+        let count = g.ticker(Duration::from_nanos(100)).count();
+        let doubled = count.map(|i| i * 2);
+        let acc = count.join(&doubled, |a, b| a + b).accumulate();
+        (acc, doubled)
+    }
 }
 
-/// Join through the macro, both engines.
+/// Join + multiple outputs (tuple return), both engines.
 #[test]
-fn macro_handles_join() {
+fn macro_handles_join_and_multiple_outputs() {
     let run_for = RunFor::Cycles(3);
-    let (mut runner, acc) = joined::interpreted();
+    let (mut runner, acc, doubled) = joined::interpreted();
     runner.run(HISTORICAL, run_for);
     let interpreted = runner.value(acc);
     assert_eq!(vec![3, 6, 9], interpreted);
-    let (compiled,) = joined::compiled(HISTORICAL, run_for);
-    assert_eq!(interpreted, compiled);
+    assert_eq!(6, runner.value(doubled));
+
+    let (compiled_acc, compiled_doubled) = joined::compiled(HISTORICAL, run_for);
+    assert_eq!(interpreted, compiled_acc);
+    assert_eq!(6, compiled_doubled);
 }

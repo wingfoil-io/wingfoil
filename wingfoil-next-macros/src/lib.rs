@@ -1,12 +1,15 @@
-//! The `graph!` macro: **fluent wiring in, both engines out**.
+//! The `graph!` macro: **a fluent wiring function in, both engines out**.
 //!
-//! The macro body is ordinary fluent wiring code — the same `let` chains you
-//! would write against [`GraphBuilder`] — with a small header naming the
-//! module and its outputs. The macro *parses the fluent source*, derives the
-//! DAG from the method chains, and emits a module containing:
+//! The macro body is a single, *valid Rust* function written against the
+//! fluent API: it takes the builder as a parameter, wires streams with
+//! ordinary `let` chains, and returns its output stream(s). The macro parses
+//! the function, derives the DAG from the method chains, and expands to a
+//! module (named after the function) containing:
 //!
-//! - `interpreted()` — your statements **re-emitted verbatim** against a
-//!   `GraphBuilder`, returning a `Runner` plus a typed handle per output;
+//! - `wire(g)` — your function, **verbatim** (renamed `wire`), reusable as
+//!   ordinary fluent wiring;
+//! - `interpreted()` — the graph built through `wire`, returning a `Runner`
+//!   plus a typed handle per output;
 //! - `compiled(run_mode, run_for)` — a fully monomorphized runner derived
 //!   from the same tokens: node state in locals, tick propagation as
 //!   `bool`s, every `Op::cycle` call (closures included) visible to the
@@ -14,37 +17,38 @@
 //!
 //! ```ignore
 //! wingfoil_next::graph! {
-//!     pub mod evens_sum;
-//!     out sum: u64;
-//!     let count = g.ticker(PERIOD).count();
-//!     let is_even = count.map(|i| i.is_multiple_of(2));
-//!     let sum = count.filter(&is_even).fold(0u64, |acc, v| *acc += v);
+//!     pub fn evens_sum(g: &GraphBuilder) -> Stream<u64> {
+//!         let count = g.ticker(PERIOD).count();
+//!         let is_even = count.map(|i| i.is_multiple_of(2));
+//!         count.filter(&is_even).fold(0u64, |acc, v| *acc += v)
+//!     }
 //! }
 //!
 //! let (mut runner, sum) = evens_sum::interpreted();
 //! let (sum2,) = evens_sum::compiled(run_mode, run_for);
 //! ```
 //!
-//! The builder is always named `g`. Supported chain methods mirror the
-//! fluent API: sources `g.ticker(period)` / `g.constant(value)`; combinators
-//! `.map(f)`, `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`,
-//! `.merge(&other)`, `.join(&other, f)`, `.delay(duration)`; sugar
-//! `.count()` and `.accumulate()`.
+//! The function must take exactly one parameter (the builder, any name) and
+//! return `Stream<T>` — or a tuple `(Stream<A>, Stream<B>, ...)` with a
+//! matching tuple of bound names as the tail expression. Supported chain
+//! methods mirror the fluent API: sources `.ticker(period)` /
+//! `.constant(value)` on the builder; combinators `.map(f)`,
+//! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
+//! `.join(&other, f)`, `.delay(duration)`; sugar `.count()` and
+//! `.accumulate()`.
 //!
-//! Limitations (v1): the body must be straight-line `let name = <chain>;`
-//! statements (no loops/conditionals — the DAG must be static); graphs live
-//! at module scope so closures can reference items but not runtime locals;
-//! `external` sources are not expressible (use the fluent API directly for
-//! those graphs).
-//!
-//! [`GraphBuilder`]: ../wingfoil_next/fluent/struct.GraphBuilder.html
+//! Limitations (v1): the body must be straight-line `let` statements plus the
+//! tail expression (no loops/conditionals — the DAG must be static); graphs
+//! live at module scope so closures can reference items but not runtime
+//! locals; `external` sources are not expressible (use the fluent API
+//! directly for those graphs).
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, Token, Type, Visibility, parse_macro_input, parse_quote};
+use syn::{Expr, Ident, ItemFn, Pat, ReturnType, Stmt, Type, parse_macro_input, parse_quote};
 
 #[derive(Clone, Copy, PartialEq)]
 enum OpKind {
@@ -93,12 +97,34 @@ impl NodeDef {
 }
 
 struct GraphDef {
-    vis: Visibility,
+    /// The module name (= the wiring function's name).
     name: Ident,
+    /// The wiring function, re-emitted verbatim as `wire` in the module.
+    wire_fn: ItemFn,
+    /// Whether the builder parameter is taken by reference.
+    builder_by_ref: bool,
+    /// Output bindings (from the tail expression) and their value types
+    /// (from the `Stream<T>` return type), in order.
     outs: Vec<(Ident, Type)>,
     nodes: Vec<NodeDef>,
-    /// The user's fluent statements, re-emitted verbatim in `interpreted()`.
-    verbatim: Vec<TokenStream2>,
+}
+
+/// Extract `T` from a `Stream<T>`-shaped type (any path ending in
+/// `Stream<T>`).
+fn stream_value_type(ty: &Type) -> syn::Result<Type> {
+    if let Type::Path(p) = ty
+        && let Some(seg) = p.path.segments.last()
+        && seg.ident == "Stream"
+        && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
+        && args.args.len() == 1
+        && let Some(syn::GenericArgument::Type(inner)) = args.args.first()
+    {
+        return Ok(inner.clone());
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        "graph functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
+    ))
 }
 
 /// Builds the node list while walking fluent chains.
@@ -160,7 +186,12 @@ impl ChainWalker {
     }
 
     /// Flatten one `let name = <chain>;` statement into nodes.
-    fn walk_statement(&mut self, bound_name: &Ident, expr: &Expr) -> syn::Result<()> {
+    fn walk_statement(
+        &mut self,
+        bound_name: &Ident,
+        expr: &Expr,
+        builder: &Ident,
+    ) -> syn::Result<()> {
         // Collect the chain: innermost receiver first.
         let mut calls: Vec<(&Ident, Vec<&Expr>)> = Vec::new();
         let mut cur = expr;
@@ -174,16 +205,16 @@ impl ChainWalker {
                     let Some(root) = p.path.get_ident() else {
                         return Err(syn::Error::new(
                             p.span(),
-                            "chain root must be `g` or a bound stream name",
+                            "chain root must be the builder or a bound stream name",
                         ));
                     };
                     calls.reverse();
-                    return self.walk_chain(bound_name, root, &calls, expr.span());
+                    return self.walk_chain(bound_name, root, builder, &calls, expr.span());
                 }
                 other => {
                     return Err(syn::Error::new(
                         other.span(),
-                        "expected a fluent method chain rooted at `g` or a bound stream",
+                        "expected a fluent method chain rooted at the builder or a bound stream",
                     ));
                 }
             }
@@ -194,18 +225,19 @@ impl ChainWalker {
         &mut self,
         bound_name: &Ident,
         root: &Ident,
+        builder: &Ident,
         calls: &[(&Ident, Vec<&Expr>)],
         span: proc_macro2::Span,
     ) -> syn::Result<()> {
         let mut calls = calls.iter().peekable();
 
-        // Resolve the chain's starting node: either a source call on `g`, or
-        // a previously bound stream.
-        let mut cur: usize = if root == "g" {
+        // Resolve the chain's starting node: either a source call on the
+        // builder, or a previously bound stream.
+        let mut cur: usize = if root == builder {
             let Some((method, args)) = calls.next() else {
                 return Err(syn::Error::new(
                     span,
-                    "`g` must be followed by a source call",
+                    "the builder must be followed by a source call",
                 ));
             };
             let name = if calls.peek().is_none() {
@@ -227,8 +259,8 @@ impl ChainWalker {
                     return Err(syn::Error::new(
                         method.span(),
                         format!(
-                            "unknown source `g.{other}`; expected `g.ticker(..)` or \
-                             `g.constant(..)` (external sources are not supported in graph! — \
+                            "unknown source `.{other}(..)` on the builder; expected `.ticker(..)` \
+                             or `.constant(..)` (external sources are not supported in graph! — \
                              use the fluent API directly)"
                         ),
                     ));
@@ -335,58 +367,148 @@ fn expect_arity(method: &Ident, args: &[&Expr], want: usize) -> syn::Result<()> 
 
 impl Parse for GraphDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let vis: Visibility = input.parse()?;
-        input.parse::<Token![mod]>()?;
-        let name: Ident = input.parse()?;
-        input.parse::<Token![;]>()?;
-
-        let mut outs: Vec<(Ident, Type)> = Vec::new();
-        let mut walker = ChainWalker::new();
-        let mut verbatim: Vec<TokenStream2> = Vec::new();
-
-        while !input.is_empty() {
-            if input.peek(Token![let]) {
-                input.parse::<Token![let]>()?;
-                let bound: Ident = input.parse()?;
-                input.parse::<Token![=]>()?;
-                let expr: Expr = input.parse()?;
-                input.parse::<Token![;]>()?;
-                walker.walk_statement(&bound, &expr)?;
-                verbatim.push(quote! { let #bound = #expr; });
-                continue;
-            }
-            let kw: Ident = input.parse()?;
-            if kw == "out" {
-                let out_name: Ident = input.parse()?;
-                input.parse::<Token![:]>()?;
-                let ty: Type = input.parse()?;
-                input.parse::<Token![;]>()?;
-                outs.push((out_name, ty));
-                continue;
-            }
+        let wire_fn: ItemFn = input.parse()?;
+        if !input.is_empty() {
+            return Err(input.error("graph! takes exactly one function definition"));
+        }
+        let sig = &wire_fn.sig;
+        if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
             return Err(syn::Error::new(
-                kw.span(),
-                "expected `out name: Type;` or `let name = <fluent chain>;`",
+                sig.generics.span(),
+                "graph functions cannot be generic",
+            ));
+        }
+        if sig.asyncness.is_some() || sig.constness.is_some() || sig.unsafety.is_some() {
+            return Err(syn::Error::new(
+                sig.span(),
+                "graph functions must be plain `fn`s",
             ));
         }
 
-        if outs.is_empty() {
-            return Err(input.error("at least one `out name: Type;` is required"));
+        // The single parameter is the builder; its name roots source chains.
+        let mut params = sig.inputs.iter();
+        let (Some(syn::FnArg::Typed(builder_param)), None) = (params.next(), params.next()) else {
+            return Err(syn::Error::new(
+                sig.inputs.span(),
+                "graph functions take exactly one parameter: the builder, e.g. \
+                 `g: &GraphBuilder`",
+            ));
+        };
+        let Pat::Ident(builder_pat) = &*builder_param.pat else {
+            return Err(syn::Error::new(
+                builder_param.pat.span(),
+                "the builder parameter must be a plain name",
+            ));
+        };
+        let builder = builder_pat.ident.clone();
+        let builder_by_ref = matches!(&*builder_param.ty, Type::Reference(_));
+
+        // Output value types from the return type.
+        let ReturnType::Type(_, ret_ty) = &sig.output else {
+            return Err(syn::Error::new(
+                sig.span(),
+                "graph functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
+            ));
+        };
+        let out_types: Vec<Type> = match &**ret_ty {
+            Type::Tuple(t) => t
+                .elems
+                .iter()
+                .map(stream_value_type)
+                .collect::<syn::Result<_>>()?,
+            other => vec![stream_value_type(other)?],
+        };
+
+        // Walk the body: `let` chains, then a tail expression naming the
+        // returned stream binding(s).
+        let mut walker = ChainWalker::new();
+        let mut tail: Option<&Expr> = None;
+        let n_stmts = wire_fn.block.stmts.len();
+        for (i, stmt) in wire_fn.block.stmts.iter().enumerate() {
+            match stmt {
+                Stmt::Local(local) => {
+                    let Pat::Ident(pat) = &local.pat else {
+                        return Err(syn::Error::new(
+                            local.pat.span(),
+                            "bind each chain to a plain name",
+                        ));
+                    };
+                    let Some(init) = &local.init else {
+                        return Err(syn::Error::new(
+                            local.span(),
+                            "each `let` must initialise a fluent chain",
+                        ));
+                    };
+                    walker.walk_statement(&pat.ident, &init.expr, &builder)?;
+                }
+                Stmt::Expr(expr, None) if i + 1 == n_stmts => tail = Some(expr),
+                other => {
+                    return Err(syn::Error::new(
+                        other.span(),
+                        "graph bodies are straight-line `let name = <fluent chain>;` \
+                         statements followed by the returned stream name(s)",
+                    ));
+                }
+            }
         }
-        for (out_name, _) in &outs {
-            if !walker.index_of.contains_key(&out_name.to_string()) {
+        let Some(tail) = tail else {
+            return Err(syn::Error::new(
+                wire_fn.block.span(),
+                "the body must end with the returned stream name(s), e.g. `sum` or `(a, b)`",
+            ));
+        };
+        let out_names: Vec<Ident> = match tail {
+            Expr::Path(p) if p.path.get_ident().is_some() => {
+                vec![p.path.get_ident().cloned().expect("checked above")]
+            }
+            Expr::Tuple(t) => t
+                .elems
+                .iter()
+                .map(|e| {
+                    if let Expr::Path(p) = e
+                        && let Some(ident) = p.path.get_ident()
+                    {
+                        Ok(ident.clone())
+                    } else {
+                        Err(syn::Error::new(
+                            e.span(),
+                            "tail tuple elements must be bound stream names",
+                        ))
+                    }
+                })
+                .collect::<syn::Result<_>>()?,
+            other => {
                 return Err(syn::Error::new(
-                    out_name.span(),
-                    format!("output `{out_name}` is not bound by a `let` in this graph"),
+                    other.span(),
+                    "the tail expression must be a bound stream name or a tuple of them",
+                ));
+            }
+        };
+        if out_names.len() != out_types.len() {
+            return Err(syn::Error::new(
+                tail.span(),
+                format!(
+                    "the return type declares {} output stream(s) but the tail names {}",
+                    out_types.len(),
+                    out_names.len()
+                ),
+            ));
+        }
+        for name in &out_names {
+            if !walker.index_of.contains_key(&name.to_string()) {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("`{name}` is not a stream bound by a `let` in this body"),
                 ));
             }
         }
+
         Ok(GraphDef {
-            vis,
-            name,
-            outs,
+            name: sig.ident.clone(),
+            builder_by_ref,
+            outs: out_names.into_iter().zip(out_types).collect(),
             nodes: walker.nodes,
-            verbatim,
+            wire_fn,
         })
     }
 }
@@ -401,12 +523,19 @@ pub fn graph(input: TokenStream) -> TokenStream {
 fn expand(def: &GraphDef) -> TokenStream2 {
     let interpreted = expand_interpreted(def);
     let compiled = expand_compiled(def);
-    let vis = &def.vis;
+    let vis = &def.wire_fn.vis;
     let name = &def.name;
+    // The user's function, verbatim, renamed `wire` and made pub within the
+    // module — reusable as ordinary fluent wiring.
+    let mut wire_fn = def.wire_fn.clone();
+    wire_fn.sig.ident = Ident::new("wire", def.wire_fn.sig.ident.span());
+    wire_fn.vis = parse_quote!(pub);
     quote! {
         #vis mod #name {
-            #![allow(clippy::redundant_closure_call)]
+            #![allow(clippy::redundant_closure_call, clippy::let_and_return)]
             use super::*;
+            use ::wingfoil_next::fluent::*;
+            #wire_fn
             #interpreted
             #compiled
         }
@@ -414,27 +543,30 @@ fn expand(def: &GraphDef) -> TokenStream2 {
 }
 
 fn expand_interpreted(def: &GraphDef) -> TokenStream2 {
-    // The user's fluent statements, verbatim — the interpreted graph IS the
-    // code they wrote.
-    let stmts = &def.verbatim;
     let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
-    let out_handles: Vec<TokenStream2> = def
-        .outs
-        .iter()
-        .map(|(n, _)| quote! { #n.handle() })
-        .collect();
+    let out_names: Vec<&Ident> = def.outs.iter().map(|(n, _)| n).collect();
+    let call = if def.builder_by_ref {
+        quote! { wire(&__g) }
+    } else {
+        quote! { wire(__g.clone()) }
+    };
+    let bind = if out_names.len() == 1 {
+        let o = out_names[0];
+        quote! { let #o = #call; }
+    } else {
+        quote! { let (#(#out_names),*) = #call; }
+    };
     quote! {
-        /// The graph wired through the fluent API — the macro body's
-        /// statements, verbatim. Returns the runner plus a typed handle per
-        /// declared output.
+        /// The graph built through [`wire`] — the function as written.
+        /// Returns the runner plus a typed handle per output stream.
         pub fn interpreted() -> (
             ::wingfoil_next::interp::Runner,
             #(::wingfoil_next::interp::Handle<#out_types>,)*
         ) {
-            let g = ::wingfoil_next::fluent::GraphBuilder::new();
-            #(#stmts)*
-            let __runner = g.build();
-            (__runner, #(#out_handles,)*)
+            let __g = ::wingfoil_next::fluent::GraphBuilder::new();
+            #bind
+            let __runner = __g.build();
+            (__runner, #(#out_names.handle(),)*)
         }
     }
 }
