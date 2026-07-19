@@ -6,7 +6,7 @@ use std::rc::Rc;
 /// Passes the first value through, then ignores subsequent values until the
 /// interval elapses.
 #[derive(new)]
-pub(crate) struct ThrottleStream<T: Element> {
+pub struct ThrottleStream<T: Element> {
     upstream: Rc<dyn Stream<T>>,
     interval: NanoTime,
     #[new(default)]

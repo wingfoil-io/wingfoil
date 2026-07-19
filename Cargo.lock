@@ -7624,8 +7624,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "wingfoil-codegen-build-example"
+version = "8.0.0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "wingfoil",
+]
+
+[[package]]
 name = "wingfoil-derive"
 version = "8.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "wingfoil-next"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "wingfoil",
+ "wingfoil-next-macros",
+]
+
+[[package]]
+name = "wingfoil-next-macros"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",

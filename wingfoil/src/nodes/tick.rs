@@ -5,7 +5,7 @@ use derive_new::new;
 /// A [Node] that ticks at a specified interval.
 /// Used by [ticker](crate::nodes::ticker).
 #[derive(new)]
-pub(crate) struct TickNode {
+pub struct TickNode {
     interval: NanoTime,
     #[new(default)]
     at_time: Option<NanoTime>,

@@ -1,0 +1,23 @@
+[package]
+name = "wingfoil-next"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "Design prototype: dual-mode (interpreted + compiled) stream graphs with single-sourced op semantics"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Reuses the clock/scheduler core (`codegen::Kernel`), `NanoTime` and the
+# run-mode types. Everything else — the Op trait, ops, and engines — is
+# from-scratch.
+wingfoil = { path = "../wingfoil" }
+wingfoil-next-macros = { path = "../wingfoil-next-macros" }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+# Used only by the async_source example: an async task producing values
+# into an external source.
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
