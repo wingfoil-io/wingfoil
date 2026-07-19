@@ -111,6 +111,54 @@ fn macro_handles_sample_and_constant() {
 }
 
 wingfoil_next::graph! {
+    fn configured(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let base = Duration::from_nanos(50);
+        let period = base * 2;
+        let threshold: u64 = 2;
+        let count = g.ticker(period).count();
+        let acc = count.map(move |i| i.saturating_sub(threshold)).accumulate();
+        acc
+    }
+}
+
+/// Arbitrary non-wiring statements in the body: config computed from locals,
+/// and a closure capturing a local. Both engines run them identically.
+#[test]
+fn macro_allows_passthrough_statements() {
+    let run_for = RunFor::Cycles(5);
+    let (mut runner, acc) = configured::interpreted();
+    runner.run(HISTORICAL, run_for);
+    let interpreted = runner.value(acc);
+    assert_eq!(vec![0, 0, 1, 2, 3], interpreted);
+
+    let (compiled,) = configured::compiled(HISTORICAL, run_for);
+    assert_eq!(interpreted, compiled);
+}
+
+wingfoil_next::graph! {
+    fn staged(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let count = g.ticker(Duration::from_nanos(50)).count();
+        let step: u64 = 3;
+        let acc = count.map(move |i| i * step).accumulate();
+        acc
+    }
+}
+
+/// Passthrough statements may appear *between* wiring statements —
+/// `compiled()` re-emits them interleaved in source order.
+#[test]
+fn macro_interleaves_passthrough_with_wiring() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, acc) = staged::interpreted();
+    runner.run(HISTORICAL, run_for);
+    let interpreted = runner.value(acc);
+    assert_eq!(vec![3, 6, 9], interpreted);
+
+    let (compiled,) = staged::compiled(HISTORICAL, run_for);
+    assert_eq!(interpreted, compiled);
+}
+
+wingfoil_next::graph! {
     fn joined(g: &GraphBuilder) -> (Stream<Vec<u64>>, Stream<u64>) {
         let count = g.ticker(Duration::from_nanos(100)).count();
         let doubled = count.map(|i| i * 2);
