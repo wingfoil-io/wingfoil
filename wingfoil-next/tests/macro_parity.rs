@@ -1,8 +1,9 @@
-//! The `graph!` macro closes the dual-mode loop: **one** wiring definition
-//! expands to both `interpreted()` and `compiled()`, so the two engines
-//! cannot drift — no fingerprints, no re-supplied closures, no hand-kept
-//! expansions. These tests assert the two expansions agree, and match the
-//! values the hand-written engines produced.
+//! The `graph!` macro closes the dual-mode loop: the macro body is ordinary
+//! **fluent wiring code**, which the macro parses to derive the DAG. The
+//! same tokens expand to `interpreted()` (the statements re-emitted
+//! verbatim) and `compiled()` (fully monomorphized) — so the engines cannot
+//! drift. These tests assert the two expansions agree, and match the values
+//! the hand-written engines produced.
 
 use std::time::Duration;
 
@@ -14,16 +15,12 @@ const PERIOD: Duration = Duration::from_millis(10);
 wingfoil_next::graph! {
     mod odds_evens;
     out acc: Vec<String>;
-    tick = ticker(PERIOD);
-    count = fold(tick, 0u64, |acc, _| *acc += 1);
-    is_even = map(count, |i| i.is_multiple_of(2));
-    is_odd = map(is_even, |b| !b);
-    odds = filter(count, is_odd);
-    odd_str = map(odds, |i| format!("{i} is odd"));
-    evens = filter(count, is_even);
-    even_str = map(evens, |i| format!("{i} is even"));
-    merged = merge(odd_str, even_str);
-    acc = fold(merged, Vec::new(), |acc, v: &String| acc.push(v.clone()));
+    let count = g.ticker(PERIOD).count();
+    let is_even = count.map(|i| i.is_multiple_of(2));
+    let is_odd = is_even.map(|b| !b);
+    let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+    let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+    let acc = odd_str.merge(&even_str).accumulate();
 }
 
 #[test]
@@ -55,14 +52,16 @@ fn macro_engines_agree_on_duration_bound() {
 wingfoil_next::graph! {
     mod delayed_counts;
     out acc: Vec<u64>;
-    tick = ticker(Duration::from_nanos(10));
-    count = fold(tick, 0u64, |acc, _| *acc += 1);
-    delayed = delay(count, Duration::from_nanos(100));
-    acc = fold(delayed, Vec::new(), |acc, v: &u64| acc.push(*v));
+    let acc = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .delay(Duration::from_nanos(100))
+        .accumulate();
 }
 
-/// Delay — state + self-scheduling — through the macro, matching the classic
-/// engine's `long_delay_works` timing on both expansions.
+/// Delay — state + self-scheduling — through the macro (as one chain with
+/// anonymous intermediates), matching the classic engine's
+/// `long_delay_works` timing on both expansions.
 #[test]
 fn macro_handles_delay_on_both_engines() {
     let run_for = RunFor::Duration(Duration::from_nanos(120));
@@ -79,13 +78,11 @@ fn macro_handles_delay_on_both_engines() {
 wingfoil_next::graph! {
     mod sampled;
     out acc: Vec<u64>;
-    tick = ticker(Duration::from_nanos(100));
-    value = constant(7u64);
-    sampled_value = sample(value, tick);
-    acc = fold(sampled_value, Vec::new(), |acc, v: &u64| acc.push(*v));
+    let tick = g.ticker(Duration::from_nanos(100));
+    let acc = g.constant(7u64).sample(&tick).accumulate();
 }
 
-/// Sample's passive data edge + join-free constant, both engines.
+/// Sample's passive data edge + constant, both engines.
 #[test]
 fn macro_handles_sample_and_constant() {
     let run_for = RunFor::Cycles(3);
@@ -94,5 +91,25 @@ fn macro_handles_sample_and_constant() {
     let interpreted = runner.value(acc);
     assert_eq!(vec![7, 7, 7], interpreted);
     let (compiled,) = sampled::compiled(HISTORICAL, run_for);
+    assert_eq!(interpreted, compiled);
+}
+
+wingfoil_next::graph! {
+    mod joined;
+    out acc: Vec<u64>;
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let doubled = count.map(|i| i * 2);
+    let acc = count.join(&doubled, |a, b| a + b).accumulate();
+}
+
+/// Join through the macro, both engines.
+#[test]
+fn macro_handles_join() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, acc) = joined::interpreted();
+    runner.run(HISTORICAL, run_for);
+    let interpreted = runner.value(acc);
+    assert_eq!(vec![3, 6, 9], interpreted);
+    let (compiled,) = joined::compiled(HISTORICAL, run_for);
     assert_eq!(interpreted, compiled);
 }
