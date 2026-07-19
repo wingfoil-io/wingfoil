@@ -3,6 +3,8 @@
 //! classic nodes' own unit tests (`distinct`, `difference`, `limit`,
 //! `map_filter`) — same values, same tick suppression.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -93,4 +95,54 @@ fn map_filter_maps_and_filters() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
     assert_eq!(vec![1, 9, 25], r.value(&acc));
+}
+
+/// `throttle` suppresses ticks that arrive within `interval` of the last
+/// emit — mirrors classic `throttle::throttle_suppresses_fast_ticks`
+/// (source every 10ns, interval 25ns → emit at 0, 30, 60, ...).
+#[test]
+fn throttle_suppresses_fast_ticks() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count(); // ticks at 0,10,20,30,...
+    let acc = count.throttle(Duration::from_nanos(25)).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(65)))
+        .unwrap();
+    // t=0 emit(1); 10,20 suppressed; t=30 emit(4); 40,50 suppressed; t=60 emit(7).
+    assert_eq!(vec![1, 4, 7], r.value(&acc));
+}
+
+/// `window` buffers values and flushes them on each time boundary — mirrors
+/// classic `window::window_stream_works` (100/250 grouping: [1,2,3], [4,5],
+/// [6,7,8], …). Exercises the `Ctx::is_last_cycle` engine service and a
+/// `start` hook that sets the first boundary.
+#[test]
+fn window_flushes_on_time_boundaries() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.window(Duration::from_nanos(250)).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(9)).unwrap();
+    assert_eq!(
+        vec![vec![1, 2, 3], vec![4, 5], vec![6, 7, 8]],
+        r.value(&acc)
+    );
+}
+
+/// `inspect` observes each value and passes it through unchanged — mirrors
+/// classic `inspect::inspect_observes_and_passes_through`.
+#[test]
+fn inspect_observes_and_passes_through() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let tap = seen.clone();
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let acc = count
+        .inspect(move |v| tap.borrow_mut().push(*v))
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    // Observed and passed through identically.
+    assert_eq!(vec![1, 2, 3], *seen.borrow());
+    assert_eq!(vec![1, 2, 3], r.value(&acc));
 }

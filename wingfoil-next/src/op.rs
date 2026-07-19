@@ -88,6 +88,7 @@ pub enum Tick<T> {
 pub struct Ctx<'a> {
     time: NanoTime,
     start_time: NanoTime,
+    is_last_cycle: bool,
     sink: Sink<'a>,
 }
 
@@ -108,12 +109,17 @@ impl<'a> Ctx<'a> {
         Self {
             time: kernel.time(),
             start_time: kernel.start_time(),
+            is_last_cycle: kernel.is_last_cycle(),
             sink: Sink::Kernel { kernel, node },
         }
     }
 
     /// A context for an op nested inside a composite node: time comes from
     /// the outer run, schedules go to the composite's private queue.
+    /// `is_last_cycle` is not propagated into islands (the composite runs its
+    /// own inner schedule), so a boundary-flush op inside an island flushes
+    /// only on window boundaries, not at the outer run's end — a documented
+    /// island limitation.
     #[doc(hidden)]
     pub fn nested(
         time: NanoTime,
@@ -124,6 +130,7 @@ impl<'a> Ctx<'a> {
         Self {
             time,
             start_time,
+            is_last_cycle: false,
             sink: Sink::Queue { queue, node },
         }
     }
@@ -136,6 +143,12 @@ impl<'a> Ctx<'a> {
     /// The run's start time.
     pub fn start_time(&self) -> NanoTime {
         self.start_time
+    }
+
+    /// Whether this is the final cycle of the run. Buffering ops flush their
+    /// pending contents when true.
+    pub fn is_last_cycle(&self) -> bool {
+        self.is_last_cycle
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops

@@ -25,8 +25,9 @@ use anyhow::Result;
 
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold, Join, Limit,
-    Map, MapFilter, Merge2, Poll, Sample, Sink, Ticker, TryMap,
+    Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold, Inspect, Join,
+    Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, Ticker, TryMap, Window,
+    WindowState,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -500,6 +501,118 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
                 match Limit::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Rate-limit: emit at most once per `interval`.
+    pub fn throttle<T: Clone + Default + 'static>(
+        &mut self,
+        src: Handle<T>,
+        interval: Duration,
+    ) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell(NanoTime::from(interval), None::<NanoTime>);
+        self.push_node(
+            vec![src.idx],
+            Throttle::<T>::CAPS,
+            "throttle",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Throttle::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Buffer values and flush them as a `Vec` on each `interval` boundary
+    /// (and once more on the last cycle).
+    pub fn window<T: Clone + Default + 'static>(
+        &mut self,
+        src: Handle<T>,
+        interval: Duration,
+    ) -> Handle<Vec<T>> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(Vec::<T>::new());
+        let cs = Self::cell(NanoTime::from(interval), WindowState::<T>::default());
+        let cs2 = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Window::<T>::CAPS,
+            "window",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Window::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs2.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                Window::<T>::start(cfg, state, &mut ctx)
+            }),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Observe each value with a side-effecting closure, passing it through
+    /// unchanged (a debug tap).
+    pub fn inspect<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<A>
+    where
+        A: Clone + Default + 'static,
+        F: Fn(&A) + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(A::default());
+        let cs = Self::cell(f, ());
+        self.push_node(
+            vec![src.idx],
+            Inspect::<A, F>::CAPS,
+            "inspect",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Inspect::<A, F>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
