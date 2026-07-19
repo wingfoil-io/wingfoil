@@ -220,6 +220,120 @@ impl<T: Clone + 'static> Op for Limit<T> {
     }
 }
 
+/// Rate-limits: emits the first value, then suppresses until at least
+/// `interval` has passed since the last emit. `Cfg` = interval, `State` =
+/// last emit time.
+pub struct Throttle<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Throttle<T> {
+    type Cfg = NanoTime;
+    type State = Option<NanoTime>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut Option<NanoTime>,
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let now = ctx.time();
+        let emit = match *state {
+            None => true,
+            Some(last) => now - last >= *cfg,
+        };
+        Ok(if emit {
+            *state = Some(now);
+            Tick::Value(input.0.clone())
+        } else {
+            Tick::Quiet
+        })
+    }
+}
+
+/// Observes each value with a side-effecting closure and passes it through
+/// unchanged (always ticks). The debug-tap of the catalog; the observer is
+/// infallible `Fn` (contrast [`Sink`], the fallible outbound edge).
+pub struct Inspect<A, F>(PhantomData<(A, F)>);
+
+impl<A, F> Op for Inspect<A, F>
+where
+    A: Clone + 'static,
+    F: Fn(&A) + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A,);
+    type Out = A;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<A>> {
+        cfg(input.0);
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
+/// Buffers values and flushes them as a `Vec` on each fixed time boundary
+/// (`interval`), plus a final flush on the last cycle. `Cfg` = interval;
+/// `State` holds the next boundary and the pending buffer.
+pub struct Window<T>(PhantomData<T>);
+
+/// Pending state for a [`Window`] op.
+pub struct WindowState<T> {
+    next_window: NanoTime,
+    buffer: Vec<T>,
+}
+
+impl<T> Default for WindowState<T> {
+    fn default() -> Self {
+        Self {
+            next_window: NanoTime::ZERO,
+            buffer: Vec::new(),
+        }
+    }
+}
+
+impl<T: Clone + 'static> Op for Window<T> {
+    type Cfg = NanoTime;
+    type State = WindowState<T>;
+    type In<'a> = (&'a T,);
+    type Out = Vec<T>;
+    const CAPS: Caps = Caps::NONE;
+
+    fn start(cfg: &mut NanoTime, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
+        state.next_window = ctx.time() + *cfg;
+        Ok(())
+    }
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut WindowState<T>,
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Vec<T>>> {
+        let now = ctx.time();
+        let mut out = None;
+        if now >= state.next_window {
+            if !state.buffer.is_empty() {
+                out = Some(std::mem::take(&mut state.buffer));
+            }
+            // Advance the boundary past `now`, regardless of data.
+            while state.next_window <= now {
+                state.next_window = state.next_window + *cfg;
+            }
+        }
+        state.buffer.push(input.0.clone());
+        if out.is_none() && ctx.is_last_cycle() && !state.buffer.is_empty() {
+            out = Some(std::mem::take(&mut state.buffer));
+        }
+        Ok(match out {
+            Some(v) => Tick::Value(v),
+            None => Tick::Quiet,
+        })
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
