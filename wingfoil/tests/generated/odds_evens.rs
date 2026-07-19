@@ -31,14 +31,7 @@ pub fn run(
 ) -> wingfoil::codegen::Result<()> {
     let mut rt = StaticRuntime::new(roots, run_mode, run_for)?;
     rt.check_topology(12, 0x900368043eb4bb44)?;
-    rt.setup()?;
-    let start_result = rt.start();
-    let run_result = if start_result.is_ok() {
-        run_cycles(&mut rt)
-    } else {
-        Ok(())
-    };
-    rt.finalize(start_result, run_result)
+    rt.run(run_cycles)
 }
 
 #[rustfmt::skip]

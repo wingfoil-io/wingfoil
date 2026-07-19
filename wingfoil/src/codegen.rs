@@ -110,7 +110,7 @@ impl StaticRuntime {
     }
 
     /// Verify the wired topology still matches the one the calling schedule
-    /// was generated from. Generated runners call this before `setup`.
+    /// was generated from. Generated runners call this before [`run`](Self::run).
     pub fn check_topology(&self, expected_nodes: usize, expected_fingerprint: u64) -> Result<()> {
         let actual_nodes = self.graph.node_count();
         let actual_fingerprint = fingerprint(&self.graph);
@@ -127,14 +127,27 @@ impl StaticRuntime {
         Ok(())
     }
 
-    /// Run `setup` on every node, in wiring order.
-    pub fn setup(&mut self) -> Result<()> {
-        self.graph.setup_nodes()
-    }
-
-    /// Run `start` on every node, in wiring order.
-    pub fn start(&mut self) -> Result<()> {
-        self.graph.start_nodes()
+    /// Execute a full run with `run_cycles` as the schedule: the generated
+    /// `*_cycles` function (or any closure driving `begin_cycle` /
+    /// `cycle_node` / `end_cycle`).
+    ///
+    /// Owns the whole lifecycle with the same guarantees as [`Graph::run`]:
+    /// once `start` is attempted, `stop` and `teardown` always run — even if
+    /// `start` or the run loop errors — and the first failure in lifecycle
+    /// order is primary with later ones attached.
+    pub fn run(&mut self, run_cycles: impl FnOnce(&mut StaticRuntime) -> Result<()>) -> Result<()> {
+        self.graph.setup_nodes()?;
+        let start_result = self.graph.start_nodes();
+        // Skip the run loop if any node failed to start, but still stop and
+        // tear down so partially-started nodes get cleaned up.
+        let run_result = if start_result.is_ok() {
+            run_cycles(self)
+        } else {
+            Ok(())
+        };
+        let stop_result = self.graph.stop_nodes();
+        let teardown_result = self.graph.teardown_nodes();
+        first_error([start_result, run_result, stop_result, teardown_result])
     }
 
     /// Advance to the next cycle: process due callbacks (marking their nodes
@@ -177,15 +190,6 @@ impl StaticRuntime {
         self.graph.reset();
         self.cycles += 1;
         Ok(())
-    }
-
-    /// Run `stop` and `teardown` on every node and fold the given `start` /
-    /// run-loop results together, mirroring [`Graph::run`]'s error handling:
-    /// the first failure in lifecycle order is primary, later ones attach.
-    pub fn finalize(&mut self, start_result: Result<()>, run_result: Result<()>) -> Result<()> {
-        let stop_result = self.graph.stop_nodes();
-        let teardown_result = self.graph.teardown_nodes();
-        first_error([start_result, run_result, stop_result, teardown_result])
     }
 }
 
@@ -328,14 +332,7 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
         "    let mut rt = StaticRuntime::new(roots, run_mode, run_for)?;"
     );
     let _ = writeln!(w, "    rt.check_topology({n}, {fp:#018x})?;");
-    let _ = writeln!(w, "    rt.setup()?;");
-    let _ = writeln!(w, "    let start_result = rt.start();");
-    let _ = writeln!(w, "    let run_result = if start_result.is_ok() {{");
-    let _ = writeln!(w, "        {fn_name}_cycles(&mut rt)");
-    let _ = writeln!(w, "    }} else {{");
-    let _ = writeln!(w, "        Ok(())");
-    let _ = writeln!(w, "    }};");
-    let _ = writeln!(w, "    rt.finalize(start_result, run_result)");
+    let _ = writeln!(w, "    rt.run({fn_name}_cycles)");
     let _ = writeln!(w, "}}");
     let _ = writeln!(w);
     let _ = writeln!(w, "#[rustfmt::skip]");
@@ -402,24 +399,17 @@ mod tests {
         drop(probe);
 
         let mut rt = StaticRuntime::new(roots, run_mode, run_for)?;
-        rt.setup()?;
-        let start_result = rt.start();
-        let run_result = if start_result.is_ok() {
-            (|| {
-                let mut ticked = vec![false; n];
-                while rt.begin_cycle()? {
-                    for i in 0..n {
-                        let due = rt.is_dirty(i) || ups[i].iter().any(|&u| ticked[u]);
-                        ticked[i] = due && rt.cycle_node(i)?;
-                    }
-                    rt.end_cycle()?;
+        rt.run(|rt| {
+            let mut ticked = vec![false; n];
+            while rt.begin_cycle()? {
+                for i in 0..n {
+                    let due = rt.is_dirty(i) || ups[i].iter().any(|&u| ticked[u]);
+                    ticked[i] = due && rt.cycle_node(i)?;
                 }
-                Ok(())
-            })()
-        } else {
+                rt.end_cycle()?;
+            }
             Ok(())
-        };
-        rt.finalize(start_result, run_result)
+        })
     }
 
     /// Delay where the delay (100ns) far exceeds the tick period (10ns), so
