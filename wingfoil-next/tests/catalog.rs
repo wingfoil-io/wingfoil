@@ -129,6 +129,36 @@ fn window_flushes_on_time_boundaries() {
     );
 }
 
+/// `buffer` flushes a `Vec` every `capacity` values, plus a final partial
+/// flush — mirrors classic `buffer::buffer_stream_works`.
+#[test]
+fn buffer_flushes_by_capacity() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count(); // 1..=7
+    let acc = count.buffer(3).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
+    // [1,2,3], [4,5,6], then the final partial [7] on the last cycle.
+    assert_eq!(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7]], r.value(&acc));
+}
+
+/// `join3` (trimap) combines three streams — mirrors classic
+/// `trimap::trimap_all_active`.
+#[test]
+fn join3_combines_three_streams() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let doubled = count.map(|i| i * 2);
+    let tripled = count.map(|i| i * 3);
+    let acc = count
+        .join3(&doubled, &tripled, |a, b, c| a + b + c)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    // n + 2n + 3n = 6n for n = 1, 2, 3.
+    assert_eq!(vec![6, 12, 18], r.value(&acc));
+}
+
 /// `inspect` observes each value and passes it through unchanged — mirrors
 /// classic `inspect::inspect_observes_and_passes_through`.
 #[test]
