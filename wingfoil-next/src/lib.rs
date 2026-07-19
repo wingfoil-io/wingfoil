@@ -1,0 +1,45 @@
+//! **Design prototype**: what wingfoil's core abstractions look like if
+//! designed from scratch to support dual execution — interpreted *and*
+//! compiled — from one definition of node semantics.
+//!
+//! The retrofit on the main crate (`wingfoil::codegen`) hit three walls, all
+//! caused by `MutableNode` fusing three concerns into one object:
+//!
+//! 1. **Semantics trapped in objects** — `cycle(&mut self, &mut GraphState)`
+//!    couples the computation to its storage (fields behind `RefCell`) and
+//!    its feeding (peeking upstream `Rc<dyn Stream>`s), so compiled runners
+//!    had to *re-implement* node semantics as emitted source.
+//! 2. **Types and closures erased at wiring time** — codegen had to
+//!    reverse-engineer types from name strings and could never recover
+//!    closures (hence the `Inputs` re-supply and its drift risk).
+//! 3. **Capabilities invisible** — nothing declared "this node schedules
+//!    callbacks", forcing name-based allowlists.
+//!
+//! This crate inverts all three:
+//!
+//! - [`Op`](op::Op) defines node semantics as a pure, monomorphizable
+//!   associated function over **external** state and **typed inputs passed
+//!   in** by the engine, with a `const CAPS` capability declaration.
+//! - [`interp::Builder`] is the interpreted engine: it owns the value slots
+//!   and the state, adapts each `Op` behind one dyn boundary, and drives the
+//!   shared [`Kernel`](wingfoil::codegen::Kernel).
+//! - A compiled runner is a plain function with state in locals that calls
+//!   **the same `Op::cycle` functions**, monomorphized — see
+//!   `tests/compiled_parity.rs` for the hand-expanded odds/evens graph. (In
+//!   the full design this expansion is produced by a `graph!` proc macro so
+//!   wiring is written once; the macro is mechanical once this shape works.)
+//!
+//! The load-bearing property demonstrated here: **both engines execute the
+//! identical semantics code**. There is no duplicated cycle logic anywhere —
+//! not per-kind emitter strings, not `cycle_inline` twins — so the engines
+//! cannot drift.
+//!
+//! Deliberately out of scope for the prototype (documented, not forgotten):
+//! variadic-input ops (merge is fixed at two inputs), the `graph!` macro,
+//! an arena/SoA value store for the interpreted engine, threaded/IO sources
+//! (`Caps` would grow a `THREADED` flag feeding the Kernel's ready queue),
+//! and error-returning ops.
+
+pub mod interp;
+pub mod op;
+pub mod ops;

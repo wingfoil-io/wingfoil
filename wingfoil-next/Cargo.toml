@@ -1,0 +1,17 @@
+[package]
+name = "wingfoil-next"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "Design prototype: dual-mode (interpreted + compiled) stream graphs with single-sourced op semantics"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Reuses the clock/scheduler core (`codegen::Kernel`), `NanoTime` and the
+# run-mode types. Everything else — the Op trait, ops, and engines — is
+# from-scratch.
+wingfoil = { path = "../wingfoil" }
+anyhow = { workspace = true }

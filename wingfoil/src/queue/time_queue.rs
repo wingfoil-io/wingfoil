@@ -67,7 +67,7 @@ impl<T> Ord for Entry<T> {
 /// hold only a handful of not-yet-due items at a time, so this is not a hot-path
 /// concern in practice.
 #[derive(Debug)]
-pub(crate) struct TimeQueue<T> {
+pub struct TimeQueue<T> {
     // `BinaryHeap` is a max-heap; `Reverse` turns it into a min-heap on
     // `(time, seq)`, i.e. earliest time first, ties broken by insertion order.
     heap: BinaryHeap<Reverse<Entry<T>>>,

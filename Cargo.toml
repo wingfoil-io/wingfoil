@@ -4,6 +4,7 @@ members = [
     "wingfoil",
     "wingfoil-codegen-build-example",
     "wingfoil-derive",
+    "wingfoil-next",
     "wingfoil-python",
     "wingfoil-wire-types",
 ]
