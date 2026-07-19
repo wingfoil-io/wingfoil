@@ -6,6 +6,7 @@
 //! only through the narrow [`Ctx`] — with a `const` capability declaration
 //! ([`Caps`]) that tells engines statically whether it ever will.
 
+use anyhow::Result;
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, TimeQueue};
 
@@ -158,10 +159,19 @@ impl<'a> Ctx<'a> {
 ///   reach upstream themselves.
 /// - `Out` — the produced value type.
 ///
-/// `cycle` and `start` are associated functions, not methods: an `Op` type
-/// is a *witness* for semantics, never instantiated. Engines monomorphize
-/// these functions directly, which is what makes the compiled path possible
-/// without duplicating any logic.
+/// `cycle`, `start`, `stop` and `teardown` are associated functions, not
+/// methods: an `Op` type is a *witness* for semantics, never instantiated.
+/// Engines monomorphize these functions directly, which is what makes the
+/// compiled path possible without duplicating any logic.
+///
+/// Every lifecycle function is fallible (`anyhow::Result`) — an op doing IO
+/// (a socket read, a codec decode) must be able to abort the run with
+/// context rather than panic. `cycle` returns `Result<Tick<Out>>`, keeping
+/// the two axes distinct: `Tick::Quiet` is ordinary control flow (a quiet
+/// cycle, the hot path), `Err` is failure (cold, aborts the run). Merging
+/// them would cost `?` and the anyhow chain for no gain; for an infallible
+/// op the `Ok(..)` is constant-folded away after monomorphization, leaving
+/// no branch in the binary.
 pub trait Op: 'static {
     type Cfg: 'static;
     type State: 'static;
@@ -174,12 +184,31 @@ pub trait Op: 'static {
         state: &mut Self::State,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
-    ) -> Tick<Self::Out>;
+    ) -> Result<Tick<Self::Out>>;
 
     /// Called once before the first cycle. Sources use this to schedule
-    /// their first activation.
+    /// their first activation; IO ops open resources here.
     #[allow(unused_variables)]
-    fn start(cfg: &mut Self::Cfg, state: &mut Self::State, ctx: &mut Ctx<'_>) {}
+    fn start(cfg: &mut Self::Cfg, state: &mut Self::State, ctx: &mut Ctx<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called once after the last cycle, before [`teardown`](Op::teardown).
+    /// Runs even if a cycle aborted the run, so ops can flush or unwind
+    /// cleanly. A `stop` error is reported but does not mask an earlier
+    /// cycle error.
+    #[allow(unused_variables)]
+    fn stop(cfg: &mut Self::Cfg, state: &mut Self::State, ctx: &mut Ctx<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called once at the very end of the run, after [`stop`](Op::stop).
+    /// The place to release resources (close sockets, files). Also runs
+    /// after a cycle error.
+    #[allow(unused_variables)]
+    fn teardown(cfg: &mut Self::Cfg, state: &mut Self::State, ctx: &mut Ctx<'_>) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// [`Op::cycle`] with the config taken by value — for callers (the `graph!`
@@ -193,6 +222,6 @@ pub fn cycle_owned_cfg<O: Op>(
     state: &mut O::State,
     input: O::In<'_>,
     ctx: &mut Ctx<'_>,
-) -> Tick<O::Out> {
+) -> Result<Tick<O::Out>> {
     O::cycle(&mut cfg, state, input, ctx)
 }

@@ -24,7 +24,8 @@ fn delay_matches_classic_engine() {
         .delay(Duration::from_nanos(100))
         .accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(120)));
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(120)))
+        .unwrap();
     assert_eq!(vec![1, 2, 3, 4], r.value(&acc));
 }
 
@@ -36,7 +37,7 @@ fn constant_and_sample_match_classic_engine() {
     let tick = g.ticker(Duration::from_nanos(100));
     let acc = g.constant(7u64).sample(&tick).accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(3));
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![7, 7, 7], r.value(&acc));
 }
 
@@ -48,7 +49,7 @@ fn filter_suppresses_like_classic_engine() {
     let is_even = count.map(|i| i.is_multiple_of(2));
     let acc = count.filter(&is_even).accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(6));
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
     assert_eq!(vec![2, 4, 6], r.value(&acc));
 }
 
@@ -60,7 +61,7 @@ fn join_combines_current_values() {
     let doubled = count.map(|i| i * 2);
     let acc = count.join(&doubled, |a, b| a + b).accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(3));
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![3, 6, 9], r.value(&acc));
 }
 
@@ -82,7 +83,7 @@ fn external_source_ticks_the_graph() {
             std::thread::sleep(Duration::from_millis(2));
         }
     });
-    r.run(RunMode::RealTime, RunFor::Cycles(5));
+    r.run(RunMode::RealTime, RunFor::Cycles(5)).unwrap();
     producer.join().expect("producer thread");
     let got = r.value(&acc);
     assert!(!got.is_empty(), "at least one send must arrive");
@@ -99,9 +100,12 @@ fn for_each_observes_every_tick() {
     let sink = seen.clone();
     let g = GraphBuilder::new();
     let count = g.ticker(Duration::from_nanos(100)).count();
-    let _done = count.for_each(move |v| sink.borrow_mut().push(*v));
+    let _done = count.for_each(move |v| {
+        sink.borrow_mut().push(*v);
+        Ok(())
+    });
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(3));
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![1, 2, 3], *seen.borrow());
 }
 
@@ -123,7 +127,7 @@ fn duration_bound_matches_classic_engine() {
     let g = GraphBuilder::new();
     let next = g.ticker(period).count();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Duration(bound));
+    r.run(HISTORICAL, RunFor::Duration(bound)).unwrap();
 
     assert_eq!(classic.peek_value(), r.value(&next));
 }

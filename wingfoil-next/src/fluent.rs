@@ -12,6 +12,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use anyhow::Result;
+
 use crate::interp::{AsHandle, Builder, ExternalSource, Handle, Runner};
 
 /// A graph under construction. Cheap to clone; all clones share the same
@@ -67,7 +69,7 @@ impl GraphBuilder {
         &self,
         active_ups: Vec<usize>,
         callback_activated: bool,
-        node: impl FnMut(&mut crate::op::Ctx, bool) -> crate::op::Tick<T> + 'static,
+        node: impl FnMut(&mut crate::op::Ctx, bool) -> Result<crate::op::Tick<T>> + 'static,
     ) -> Stream<T> {
         let handle = self
             .inner
@@ -174,6 +176,17 @@ impl<T: 'static> Stream<T> {
         self.lift(h)
     }
 
+    /// Apply a fallible closure to each value; a returned `Err` aborts the
+    /// run with context.
+    pub fn try_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Result<B> + 'static,
+    {
+        let h = self.inner.borrow_mut().try_map(self.handle, f);
+        self.lift(h)
+    }
+
     /// Fold values into an accumulator, emitting it after each fold.
     pub fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
@@ -225,13 +238,26 @@ impl<T: Clone + Default + 'static> Stream<T> {
 }
 
 impl<T: 'static> Stream<T> {
-    /// Run a side-effecting closure on each tick — the graph's outbound
-    /// edge (print, send, record). Emits `()` per tick.
+    /// Run a side-effecting (fallible) closure on each tick — the graph's
+    /// outbound edge (print, send, record). A returned `Err` aborts the run
+    /// with context. Emits `()` per tick.
     pub fn for_each<F>(&self, f: F) -> Stream<()>
     where
-        F: Fn(&T) + 'static,
+        F: Fn(&T) -> Result<()> + 'static,
     {
         let h = self.inner.borrow_mut().for_each(self.handle, f);
+        self.lift(h)
+    }
+}
+
+impl<T: Clone + Default + 'static> Stream<T> {
+    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
+    /// it. Observes this stream's last value; emits nothing.
+    pub fn finally<F>(&self, f: F) -> Stream<()>
+    where
+        F: Fn(&T) -> Result<()> + 'static,
+    {
+        let h = self.inner.borrow_mut().finally(self.handle, f);
         self.lift(h)
     }
 }

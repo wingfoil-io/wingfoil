@@ -946,7 +946,7 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     quote! {
         {
             let mut __ctx = #ctx;
-            #op_path::start(&mut #cfg, #state_arg, &mut __ctx);
+            #op_path::start(&mut #cfg, #state_arg, &mut __ctx)?;
         }
     }
 }
@@ -1004,10 +1004,12 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
         None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
     };
     let ctx = ctx_expr(target, idx);
+    // `?` propagates an op error out of the enclosing `compiled()` fn or the
+    // `nested()` composite closure — both return `anyhow::Result`.
     let call = quote! {
         {
             let mut __ctx = #ctx;
-            match #cycle_call {
+            match #cycle_call? {
                 #on_value
                 ::wingfoil_next::op::Tick::Quiet => false,
             }
@@ -1052,7 +1054,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
         pub fn compiled(
             run_mode: ::wingfoil_next::wingfoil::RunMode,
             run_for: ::wingfoil_next::wingfoil::RunFor,
-        ) -> ( #(#out_types,)* ) {
+        ) -> ::wingfoil_next::anyhow::Result<( #(#out_types,)* )> {
             let mut __k = ::wingfoil_next::wingfoil::codegen::Kernel::new(run_mode, run_for);
             #(#setup)*
             #(#starts)*
@@ -1061,7 +1063,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
                 #(#body)*
                 __k.end_cycle(&mut __dirty);
             }
-            ( #(#out_values,)* )
+            Ok(( #(#out_values,)* ))
         }
     }
 }
@@ -1167,7 +1169,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
                     if let Some(__t) = __q.next_time() {
                         __ctx.schedule(__t);
                     }
-                    return ::wingfoil_next::op::Tick::Quiet;
+                    return ::core::result::Result::Ok(::wingfoil_next::op::Tick::Quiet);
                 }
                 for __d in __dirty.iter_mut() {
                     *__d = false;
@@ -1183,11 +1185,11 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
                 if let Some(__t) = __q.next_time() {
                     __ctx.schedule(__t);
                 }
-                if #out_t {
+                ::core::result::Result::Ok(if #out_t {
                     ::wingfoil_next::op::Tick::Value(::core::clone::Clone::clone(&#out_v))
                 } else {
                     ::wingfoil_next::op::Tick::Quiet
-                }
+                })
             })
         }
     }

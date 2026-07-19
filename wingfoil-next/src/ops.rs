@@ -6,6 +6,8 @@
 
 use std::marker::PhantomData;
 
+use anyhow::Result;
+
 use crate::op::{Caps, Ctx, Op, Tick};
 use wingfoil::{NanoTime, TimeQueue};
 
@@ -25,18 +27,19 @@ impl Op for Ticker {
         state: &mut Option<NanoTime>,
         _input: (),
         ctx: &mut Ctx<'_>,
-    ) -> Tick<()> {
+    ) -> Result<Tick<()>> {
         let next = match *state {
             Some(t) => t + *cfg,
             None => ctx.time() + *cfg,
         };
         *state = Some(next);
         ctx.schedule(next);
-        Tick::Value(())
+        Ok(Tick::Value(()))
     }
 
-    fn start(_cfg: &mut NanoTime, _state: &mut Option<NanoTime>, ctx: &mut Ctx<'_>) {
+    fn start(_cfg: &mut NanoTime, _state: &mut Option<NanoTime>, ctx: &mut Ctx<'_>) -> Result<()> {
         ctx.schedule(ctx.start_time());
+        Ok(())
     }
 }
 
@@ -50,12 +53,13 @@ impl<T: Clone + 'static> Op for Const<T> {
     type Out = T;
     const CAPS: Caps = Caps::SCHEDULES;
 
-    fn cycle(cfg: &mut T, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Tick<T> {
-        Tick::Value(cfg.clone())
+    fn cycle(cfg: &mut T, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        Ok(Tick::Value(cfg.clone()))
     }
 
-    fn start(_cfg: &mut T, _state: &mut (), ctx: &mut Ctx<'_>) {
+    fn start(_cfg: &mut T, _state: &mut (), ctx: &mut Ctx<'_>) -> Result<()> {
         ctx.schedule(ctx.start_time());
+        Ok(())
     }
 }
 
@@ -82,8 +86,30 @@ where
     type Out = B;
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Tick<B> {
-        Tick::Value(cfg(input.0))
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
+        Ok(Tick::Value(cfg(input.0)))
+    }
+}
+
+/// Applies a *fallible* closure to its input, propagating any error to abort
+/// the run with context. The `try_` counterpart to [`Map`]; the closure is
+/// `Fn` for the same drift-safety reason (see [`Map`]).
+pub struct TryMap<A, B, F>(PhantomData<(A, B, F)>);
+
+impl<A, B, F> Op for TryMap<A, B, F>
+where
+    A: 'static,
+    B: Clone + 'static,
+    F: Fn(&A) -> Result<B> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A,);
+    type Out = B;
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
+        Ok(Tick::Value(cfg(input.0)?))
     }
 }
 
@@ -97,11 +123,16 @@ impl<T: Clone + 'static> Op for Filter<T> {
     type Out = T;
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T, &bool), _ctx: &mut Ctx<'_>) -> Tick<T> {
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T, &bool),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
         if *input.1 {
-            Tick::Value(input.0.clone())
+            Ok(Tick::Value(input.0.clone()))
         } else {
-            Tick::Quiet
+            Ok(Tick::Quiet)
         }
     }
 }
@@ -125,9 +156,9 @@ where
     type Out = B;
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(cfg: &mut F, state: &mut B, input: (&A,), _ctx: &mut Ctx<'_>) -> Tick<B> {
+    fn cycle(cfg: &mut F, state: &mut B, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         cfg(state, input.0);
-        Tick::Value(state.clone())
+        Ok(Tick::Value(state.clone()))
     }
 }
 
@@ -143,8 +174,8 @@ impl<T: Clone + 'static> Op for Sample<T> {
     type Out = T;
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Tick<T> {
-        Tick::Value(input.0.clone())
+    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        Ok(Tick::Value(input.0.clone()))
     }
 }
 
@@ -167,15 +198,15 @@ impl<T: Clone + 'static> Op for External<T> {
         _state: &mut (),
         _input: (),
         _ctx: &mut Ctx<'_>,
-    ) -> Tick<T> {
+    ) -> Result<Tick<T>> {
         let mut latest = None;
         while let Ok(v) = cfg.try_recv() {
             latest = Some(v);
         }
-        match latest {
+        Ok(match latest {
             Some(v) => Tick::Value(v),
             None => Tick::Quiet,
-        }
+        })
     }
 }
 
@@ -202,23 +233,24 @@ where
     type Out = T;
     const CAPS: Caps = Caps::ALWAYS;
 
-    fn cycle(cfg: &mut F, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Tick<T> {
-        match cfg() {
+    fn cycle(cfg: &mut F, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        Ok(match cfg() {
             Some(v) => Tick::Value(v),
             None => Tick::Quiet,
-        }
+        })
     }
 }
 
-/// A sink: runs a side-effecting closure on each source tick — the graph's
-/// outbound edge (print, send, record). Emits `()` per tick so downstream
-/// nodes can still observe its cadence.
+/// A sink: runs a side-effecting (fallible) closure on each source tick — the
+/// graph's outbound edge (print, send, record). Emits `()` per tick so
+/// downstream nodes can still observe its cadence. The closure returns
+/// `Result` so an IO write failure aborts the run with context.
 pub struct Sink<A, F>(PhantomData<(A, F)>);
 
 impl<A, F> Op for Sink<A, F>
 where
     A: 'static,
-    F: Fn(&A) + 'static,
+    F: Fn(&A) -> Result<()> + 'static,
 {
     type Cfg = F;
     type State = ();
@@ -226,9 +258,39 @@ where
     type Out = ();
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Tick<()> {
-        cfg(input.0);
-        Tick::Value(())
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<()>> {
+        cfg(input.0)?;
+        Ok(Tick::Value(()))
+    }
+}
+
+/// Runs a closure once at [`teardown`](Op::teardown), after the run ends —
+/// even if a cycle aborted it. The classic `finally` node: cleanup that must
+/// happen regardless of how the run terminated. Passively observes its
+/// source (so it never itself triggers a cycle); the closure sees the
+/// source's last value. Emits nothing during the run.
+pub struct Finally<A, F>(PhantomData<(A, F)>);
+
+impl<A, F> Op for Finally<A, F>
+where
+    A: Clone + Default + 'static,
+    F: Fn(&A) -> Result<()> + 'static,
+{
+    type Cfg = F;
+    /// Holds the source's last-seen value, replayed to the closure at
+    /// teardown.
+    type State = A;
+    type In<'a> = (&'a A,);
+    type Out = ();
+    const CAPS: Caps = Caps::NONE;
+
+    fn cycle(_cfg: &mut F, state: &mut A, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<()>> {
+        *state = input.0.clone();
+        Ok(Tick::Quiet)
+    }
+
+    fn teardown(cfg: &mut F, state: &mut A, _ctx: &mut Ctx<'_>) -> Result<()> {
+        cfg(state)
     }
 }
 
@@ -249,8 +311,8 @@ where
     type Out = C;
     const CAPS: Caps = Caps::NONE;
 
-    fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Tick<C> {
-        Tick::Value(cfg(input.0, input.1))
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
+        Ok(Tick::Value(cfg(input.0, input.1)))
     }
 }
 
@@ -287,7 +349,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
         state: &mut DelayState<T>,
         input: (&T, bool),
         ctx: &mut Ctx<'_>,
-    ) -> Tick<T> {
+    ) -> Result<Tick<T>> {
         let (value, src_ticked) = input;
         if src_ticked {
             let at = ctx.time() + *cfg;
@@ -298,7 +360,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
         while let Some(due) = state.queue.pop_if_pending(ctx.time()) {
             out = Tick::Value(due);
         }
-        out
+        Ok(out)
     }
 }
 
@@ -318,14 +380,14 @@ impl<T: Clone + 'static> Op for Merge2<T> {
         _state: &mut (),
         input: ((&T, bool), (&T, bool)),
         _ctx: &mut Ctx<'_>,
-    ) -> Tick<T> {
+    ) -> Result<Tick<T>> {
         let ((a, a_ticked), (b, b_ticked)) = input;
-        if a_ticked {
+        Ok(if a_ticked {
             Tick::Value(a.clone())
         } else if b_ticked {
             Tick::Value(b.clone())
         } else {
             Tick::Quiet
-        }
+        })
     }
 }

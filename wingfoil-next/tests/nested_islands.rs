@@ -41,7 +41,7 @@ fn island_with_input_matches_flat_wiring() {
         .accumulate();
 
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(4));
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
     let flat_values = r.value(&flat);
     assert_eq!(vec![2, 6, 12, 20], flat_values);
     assert_eq!(flat_values, r.value(&island));
@@ -67,7 +67,8 @@ fn island_delay_schedules_through_outer_kernel() {
     let flat = count.delay(Duration::from_nanos(100)).accumulate();
 
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(120)));
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(120)))
+        .unwrap();
     let flat_values = r.value(&flat);
     assert!(!flat_values.is_empty());
     assert_eq!(flat_values, r.value(&island));
@@ -88,7 +89,7 @@ fn source_island_drives_the_outer_graph() {
     let g = GraphBuilder::new();
     let acc = pulse::nested(&g).accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(3));
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![10, 20, 30], r.value(&acc));
 }
 
@@ -99,16 +100,16 @@ fn source_island_agrees_with_standalone_expansions() {
     let run_for = RunFor::Cycles(5);
 
     let (mut runner, scaled) = pulse::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(scaled);
 
-    let (compiled,) = pulse::compiled(HISTORICAL, run_for);
+    let (compiled,) = pulse::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 
     let g = GraphBuilder::new();
     let island = pulse::nested(&g);
     let mut r = g.build();
-    r.run(HISTORICAL, run_for);
+    r.run(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, r.value(&island));
 }
 
@@ -133,7 +134,8 @@ fn passive_input_does_not_activate_the_island() {
     let flat = data.sample(&trigger).accumulate();
 
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(305)));
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(305)))
+        .unwrap();
     let flat_values = r.value(&flat);
     assert_eq!(vec![1, 11, 21, 31], flat_values);
     assert_eq!(flat_values, r.value(&island));

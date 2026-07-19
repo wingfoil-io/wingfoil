@@ -9,9 +9,11 @@
 //! semantics by construction.
 //!
 //! Prototype simplifications (a production version would differ): value
-//! slots are individual `Rc<RefCell<T>>`s rather than a contiguous arena,
+//! slots are individual `Rc<RefCell<T>>`s rather than a contiguous arena, and
 //! dispatch walks nodes in wiring (topological) order rather than using
-//! dirty-lists, and `run` is infallible because the prototype ops are.
+//! dirty-lists. `run` is fallible — it returns the first
+//! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
+//! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -19,9 +21,12 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
+use anyhow::Result;
+
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, External, Filter, Fold, Join, Map, Merge2, Poll, Sample, Sink, Ticker,
+    Const, Delay, DelayState, External, Filter, Finally, Fold, Join, Map, Merge2, Poll, Sample,
+    Sink, Ticker, TryMap,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -59,8 +64,9 @@ impl<T> Handle<T> {
     }
 }
 
-type CycleFn = Box<dyn FnMut(&mut Kernel) -> bool>;
-type StartFn = Box<dyn FnMut(&mut Kernel)>;
+type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
+/// Start / stop / teardown all share this shape.
+type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 
 struct NodeRt {
     active_ups: Vec<usize>,
@@ -68,8 +74,12 @@ struct NodeRt {
     /// without `callback_activated()` skip the dirty check entirely, and
     /// `always` nodes are cycled unconditionally (busy-poll sources).
     caps: Caps,
+    /// The op kind, for error context ("node 3 (try_map) cycle: ...").
+    label: &'static str,
     cycle: CycleFn,
-    start: StartFn,
+    start: LifecycleFn,
+    stop: LifecycleFn,
+    teardown: LifecycleFn,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -144,18 +154,19 @@ impl Builder {
         self.push_node(
             Vec::new(),
             External::<T>::CAPS,
+            "external",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match External::<T>::cycle(cfg, state, (), &mut ctx) {
+                match External::<T>::cycle(cfg, state, (), &mut ctx)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         let source = ExternalSource {
             data: tx,
@@ -185,13 +196,24 @@ impl Builder {
     }
 
     /// Register a node: its slot must already have been pushed (so slot and
-    /// node indices stay aligned).
-    fn push_node(&mut self, active_ups: Vec<usize>, caps: Caps, cycle: CycleFn, start: StartFn) {
+    /// node indices stay aligned). `stop`/`teardown` default to no-ops; a node
+    /// that needs them (e.g. `finally`) overwrites the field after pushing.
+    fn push_node(
+        &mut self,
+        active_ups: Vec<usize>,
+        caps: Caps,
+        label: &'static str,
+        cycle: CycleFn,
+        start: LifecycleFn,
+    ) {
         self.nodes.push(NodeRt {
             active_ups,
             caps,
+            label,
             cycle,
             start,
+            stop: Box::new(|_| Ok(())),
+            teardown: Box::new(|_| Ok(())),
         });
         self.ticked.borrow_mut().push(false);
     }
@@ -209,21 +231,22 @@ impl Builder {
         self.push_node(
             Vec::new(),
             Ticker::CAPS,
+            "ticker",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match Ticker::cycle(cfg, state, (), &mut ctx) {
+                match Ticker::cycle(cfg, state, (), &mut ctx)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs2.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                Ticker::start(cfg, state, &mut ctx);
+                Ticker::start(cfg, state, &mut ctx)
             }),
         );
         Handle {
@@ -240,21 +263,22 @@ impl Builder {
         self.push_node(
             Vec::new(),
             Const::<T>::CAPS,
+            "constant",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match Const::<T>::cycle(cfg, state, (), &mut ctx) {
+                match Const::<T>::cycle(cfg, state, (), &mut ctx)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs2.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                Const::<T>::start(cfg, state, &mut ctx);
+                Const::<T>::start(cfg, state, &mut ctx)
             }),
         );
         Handle {
@@ -276,20 +300,57 @@ impl Builder {
         self.push_node(
             vec![src.idx],
             Map::<A, B, F>::CAPS,
+            "map",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx) {
+                match Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Apply a fallible closure; a returned `Err` aborts the run with context.
+    pub fn try_map<A, B, F>(&mut self, src: Handle<A>, f: F) -> Handle<B>
+    where
+        A: 'static,
+        B: Clone + Default + 'static,
+        F: Fn(&A) -> Result<B> + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(B::default());
+        let cs = Self::cell(f, ());
+        self.push_node(
+            vec![src.idx],
+            TryMap::<A, B, F>::CAPS,
+            "try_map",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match TryMap::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -309,20 +370,21 @@ impl Builder {
         self.push_node(
             vec![src.idx, condition.idx],
             Filter::<T>::CAPS,
+            "filter",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
                 let c = cond_slot.borrow();
-                match Filter::<T>::cycle(&mut (), &mut (), (&v, &c), &mut ctx) {
+                match Filter::<T>::cycle(&mut (), &mut (), (&v, &c), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -343,20 +405,21 @@ impl Builder {
         self.push_node(
             vec![src.idx],
             Fold::<A, B, F>::CAPS,
+            "fold",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match Fold::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx) {
+                match Fold::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -376,19 +439,20 @@ impl Builder {
         self.push_node(
             vec![trigger.idx],
             Sample::<T>::CAPS,
+            "sample",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Sample::<T>::cycle(&mut (), &mut (), (&v,), &mut ctx) {
+                match Sample::<T>::cycle(&mut (), &mut (), (&v,), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -412,22 +476,23 @@ impl Builder {
         self.push_node(
             vec![a.idx, b.idx],
             Join::<A, B, C, F>::CAPS,
+            "join",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
-                match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx) {
+                match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(va);
                         drop(vb);
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -450,21 +515,22 @@ impl Builder {
         self.push_node(
             vec![src.idx],
             Delay::<T>::CAPS,
+            "delay",
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx) {
+                match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -487,6 +553,7 @@ impl Builder {
         self.push_node(
             vec![a.idx, b.idx],
             Merge2::<T>::CAPS,
+            "merge",
             Box::new(move |k| {
                 let (ta, tb) = {
                     let t = ticked.borrow();
@@ -495,17 +562,17 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
-                match Merge2::<T>::cycle(&mut (), &mut (), ((&va, ta), (&vb, tb)), &mut ctx) {
+                match Merge2::<T>::cycle(&mut (), &mut (), ((&va, ta), (&vb, tb)), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(va);
                         drop(vb);
                         *out.borrow_mut() = value;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -529,18 +596,19 @@ impl Builder {
         self.push_node(
             Vec::new(),
             Poll::<T, F>::CAPS,
+            "poll",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match Poll::<T, F>::cycle(cfg, state, (), &mut ctx) {
+                match Poll::<T, F>::cycle(cfg, state, (), &mut ctx)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
@@ -548,12 +616,13 @@ impl Builder {
         }
     }
 
-    /// A sink: run a side-effecting closure on each tick of `src` — the
-    /// graph's outbound edge. Emits `()` per tick.
+    /// A sink: run a side-effecting (fallible) closure on each tick of `src`
+    /// — the graph's outbound edge. A returned `Err` (e.g. an IO write
+    /// failure) aborts the run with context. Emits `()` per tick.
     pub fn for_each<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<()>
     where
         A: 'static,
-        F: Fn(&A) + 'static,
+        F: Fn(&A) -> Result<()> + 'static,
     {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
@@ -562,21 +631,71 @@ impl Builder {
         self.push_node(
             vec![src.idx],
             Sink::<A, F>::CAPS,
+            "for_each",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match Sink::<A, F>::cycle(cfg, state, (&a,), &mut ctx) {
+                match Sink::<A, F>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
-            Box::new(|_| {}),
+            Box::new(|_| Ok(())),
         );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
+    /// it. Observes `src` (recording its last value) but emits nothing and
+    /// never triggers downstream. Cleanup that must happen regardless of how
+    /// the run terminated.
+    pub fn finally<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<()>
+    where
+        A: Clone + Default + 'static,
+        F: Fn(&A) -> Result<()> + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(());
+        let cs = Self::cell(f, A::default());
+        let cs2 = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Finally::<A, F>::CAPS,
+            "finally",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Finally::<A, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        // Finally's whole purpose is its teardown hook.
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: finally node just pushed");
+        node.teardown = Box::new(move |k| {
+            let (cfg, state) = &mut *cs2.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            Finally::<A, F>::teardown(cfg, state, &mut ctx)
+        });
         Handle {
             idx,
             _t: PhantomData,
@@ -600,7 +719,7 @@ impl Builder {
     ) -> Handle<T>
     where
         T: Clone + Default + 'static,
-        F: FnMut(&mut Ctx, bool) -> Tick<T> + 'static,
+        F: FnMut(&mut Ctx, bool) -> Result<Tick<T>> + 'static,
     {
         let idx = self.nodes.len();
         let out = self.new_slot(T::default());
@@ -614,19 +733,21 @@ impl Builder {
         self.push_node(
             active_ups,
             caps,
+            "graph",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                match (cell.borrow_mut())(&mut ctx, false) {
+                match (cell.borrow_mut())(&mut ctx, false)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
-                        true
+                        Ok(true)
                     }
-                    Tick::Quiet => false,
+                    Tick::Quiet => Ok(false),
                 }
             }),
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                let _ = (cell2.borrow_mut())(&mut ctx, true);
+                (cell2.borrow_mut())(&mut ctx, true)?;
+                Ok(())
             }),
         );
         Handle {
@@ -665,7 +786,9 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) {
+    /// Run the graph to its bound. Returns the first error from any node's
+    /// `start`/`cycle`/`stop`/`teardown` (with node context), or `Ok(())`.
+    pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
         let mut kernel = if self.has_external {
             assert!(
                 matches!(run_mode, RunMode::RealTime),
@@ -688,24 +811,65 @@ impl Runner {
             );
             kernel.set_spin(true);
         }
-        for node in self.nodes.iter_mut() {
-            (node.start)(&mut kernel);
+        // First error (from start or a cycle) wins; `stop`/`teardown` still
+        // run afterwards regardless, matching the classic engine.
+        let mut first_err: Option<anyhow::Error> = None;
+
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.start)(&mut kernel) {
+                first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
+                break;
+            }
         }
-        let n = self.nodes.len();
-        let mut dirty = vec![false; n];
-        while kernel.begin_cycle(&mut dirty) {
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                let due = node.caps.always || (node.caps.callback_activated() && dirty[i]) || {
-                    let t = self.ticked.borrow();
-                    node.active_ups.iter().any(|&u| t[u])
-                };
-                let did = due && (node.cycle)(&mut kernel);
-                self.ticked.borrow_mut()[i] = did;
+
+        if first_err.is_none() {
+            let n = self.nodes.len();
+            let mut dirty = vec![false; n];
+            'run: while kernel.begin_cycle(&mut dirty) {
+                for (i, node) in self.nodes.iter_mut().enumerate() {
+                    let due = node.caps.always || (node.caps.callback_activated() && dirty[i]) || {
+                        let t = self.ticked.borrow();
+                        node.active_ups.iter().any(|&u| t[u])
+                    };
+                    let did = if due {
+                        match (node.cycle)(&mut kernel) {
+                            Ok(did) => did,
+                            Err(e) => {
+                                first_err =
+                                    Some(e.context(format!("node {i} ({}) cycle", node.label)));
+                                break 'run;
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    self.ticked.borrow_mut()[i] = did;
+                }
+                for t in self.ticked.borrow_mut().iter_mut() {
+                    *t = false;
+                }
+                kernel.end_cycle(&mut dirty);
             }
-            for t in self.ticked.borrow_mut().iter_mut() {
-                *t = false;
+        }
+
+        // Cleanup always runs; a stop/teardown error only surfaces if no
+        // earlier error already won.
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.stop)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) stop", node.label));
+                first_err.get_or_insert(e);
             }
-            kernel.end_cycle(&mut dirty);
+        }
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.teardown)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) teardown", node.label));
+                first_err.get_or_insert(e);
+            }
+        }
+
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 

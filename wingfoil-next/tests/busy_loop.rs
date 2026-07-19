@@ -32,7 +32,8 @@ fn poll_source_is_lossless_and_ordered() {
     r.run(
         RunMode::RealTime,
         RunFor::Duration(Duration::from_millis(50)),
-    );
+    )
+    .unwrap();
     producer.join().expect("producer thread");
 
     // The spin loop polls far faster than the producer sends: every value
@@ -48,7 +49,7 @@ fn spin_run_honours_cycle_bound() {
     let values = g.poll(|| None::<u64>);
     let count = values.map(|v| *v).accumulate();
     let mut r = g.build();
-    r.run(RunMode::RealTime, RunFor::Cycles(10_000));
+    r.run(RunMode::RealTime, RunFor::Cycles(10_000)).unwrap();
     assert!(r.value(&count).is_empty());
 }
 
@@ -66,7 +67,8 @@ fn spin_run_still_fires_scheduled_callbacks() {
     r.run(
         RunMode::RealTime,
         RunFor::Duration(Duration::from_millis(24)),
-    );
+    )
+    .unwrap();
     let n = r.value(&ticks);
     assert!(n >= 4, "expected >= 4 ticker fires in 24ms at 5ms, got {n}");
 }
@@ -91,5 +93,6 @@ fn poll_rejects_historical_mode() {
     r.run(
         RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
         RunFor::Cycles(1),
-    );
+    )
+    .unwrap();
 }

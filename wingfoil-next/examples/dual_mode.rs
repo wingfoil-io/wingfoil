@@ -35,12 +35,12 @@ fn main() {
 
     let t = Instant::now();
     let (mut runner, sum) = evens_sum::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let a: u64 = runner.value(sum);
     let interp_time = t.elapsed();
 
     let t = Instant::now();
-    let (b,) = evens_sum::compiled(HISTORICAL, run_for);
+    let (b,) = evens_sum::compiled(HISTORICAL, run_for).unwrap();
     let compiled_time = t.elapsed();
 
     assert_eq!(a, b, "engines must agree");

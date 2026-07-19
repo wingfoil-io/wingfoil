@@ -35,7 +35,19 @@ guarantees.
 Four contract questions, each resolved with a spike + parity test before any
 mechanical porting. Order matters: fallibility first (widest blast radius).
 
-### 0.1 Fallible cycle + lifecycle hooks  *(decision made, needs landing)*
+### 0.1 Fallible cycle + lifecycle hooks  ✅ **landed**
+
+Done: `Op::cycle` returns `anyhow::Result<Tick<Out>>`; `start`/`stop`/
+`teardown` are fallible lifecycle hooks (defaults `Ok(())`). The interpreted
+`Runner::run` returns `Result<()>`, reporting the first
+start/cycle/stop/teardown error with node context (`node 2 (try_map)
+cycle: boom …`) and running cleanup regardless. The `graph!` macro threads
+`?` through `compiled()`/`nested()` (both now return `Result`). New ops:
+`TryMap` (fallible map), `Sink`/`for_each` (fallible sink), `Finally`
+(teardown hook). Parity tests in `tests/fallibility.rs` cover
+abort-with-context, teardown-runs-on-error, and clean-run teardown.
+
+Original design notes (retained for reference):
 
 ```rust
 fn cycle(cfg: &mut Self::Cfg, state: &mut Self::State,

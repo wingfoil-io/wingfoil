@@ -30,13 +30,13 @@ fn macro_interpreted_matches_macro_compiled() {
     let run_for = RunFor::Cycles(12);
 
     let (mut runner, acc) = odds_evens::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(12, interpreted.len());
     assert_eq!("1 is odd", interpreted[0]);
     assert_eq!("2 is even", interpreted[1]);
 
-    let (compiled,) = odds_evens::compiled(HISTORICAL, run_for);
+    let (compiled,) = odds_evens::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -44,10 +44,10 @@ fn macro_interpreted_matches_macro_compiled() {
 fn macro_engines_agree_on_duration_bound() {
     let run_for = RunFor::Duration(Duration::from_millis(55));
     let (mut runner, acc) = odds_evens::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert!(!interpreted.is_empty());
-    let (compiled,) = odds_evens::compiled(HISTORICAL, run_for);
+    let (compiled,) = odds_evens::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -59,7 +59,7 @@ fn macro_exports_the_wiring_fn_verbatim() {
     let acc = odds_evens::wire(&g);
     let extra = acc.map(|v| v.len() as u64);
     let mut runner = g.build();
-    runner.run(HISTORICAL, RunFor::Cycles(3));
+    runner.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(3, runner.value(&extra));
 }
 
@@ -82,11 +82,11 @@ fn macro_handles_delay_on_both_engines() {
     let run_for = RunFor::Duration(Duration::from_nanos(120));
 
     let (mut runner, acc) = delayed_counts::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(vec![1, 2, 3, 4], interpreted);
 
-    let (compiled,) = delayed_counts::compiled(HISTORICAL, run_for);
+    let (compiled,) = delayed_counts::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -103,10 +103,10 @@ wingfoil_next::graph! {
 fn macro_handles_sample_and_constant() {
     let run_for = RunFor::Cycles(3);
     let (mut runner, acc) = sampled::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(vec![7, 7, 7], interpreted);
-    let (compiled,) = sampled::compiled(HISTORICAL, run_for);
+    let (compiled,) = sampled::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -127,11 +127,11 @@ wingfoil_next::graph! {
 fn macro_allows_passthrough_statements() {
     let run_for = RunFor::Cycles(5);
     let (mut runner, acc) = configured::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(vec![0, 0, 1, 2, 3], interpreted);
 
-    let (compiled,) = configured::compiled(HISTORICAL, run_for);
+    let (compiled,) = configured::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -150,11 +150,11 @@ wingfoil_next::graph! {
 fn macro_interleaves_passthrough_with_wiring() {
     let run_for = RunFor::Cycles(3);
     let (mut runner, acc) = staged::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(vec![3, 6, 9], interpreted);
 
-    let (compiled,) = staged::compiled(HISTORICAL, run_for);
+    let (compiled,) = staged::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
 
@@ -172,12 +172,12 @@ wingfoil_next::graph! {
 fn macro_handles_join_and_multiple_outputs() {
     let run_for = RunFor::Cycles(3);
     let (mut runner, acc, doubled) = joined::interpreted();
-    runner.run(HISTORICAL, run_for);
+    runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
     assert_eq!(vec![3, 6, 9], interpreted);
     assert_eq!(6, runner.value(doubled));
 
-    let (compiled_acc, compiled_doubled) = joined::compiled(HISTORICAL, run_for);
+    let (compiled_acc, compiled_doubled) = joined::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled_acc);
     assert_eq!(6, compiled_doubled);
 }
