@@ -15,3 +15,8 @@ workspace = true
 # from-scratch.
 wingfoil = { path = "../wingfoil" }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+# Used only by the async_source example: an async task producing values
+# into an external source.
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }

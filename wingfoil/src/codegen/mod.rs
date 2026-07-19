@@ -72,7 +72,7 @@
 mod kernel;
 mod standalone;
 
-pub use kernel::Kernel;
+pub use kernel::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 pub use standalone::generate_standalone;
 
 use std::cell::RefCell;

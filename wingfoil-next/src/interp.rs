@@ -20,8 +20,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::op::{Ctx, Op, Tick};
-use crate::ops::{Const, Delay, DelayState, Filter, Fold, Join, Map, Merge2, Sample, Ticker};
-use wingfoil::codegen::Kernel;
+use crate::ops::{
+    Const, Delay, DelayState, External, Filter, Fold, Join, Map, Merge2, Sample, Ticker,
+};
+use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 /// Anything that identifies a node's typed output — a raw [`Handle`] or a
@@ -54,26 +56,110 @@ type StartFn = Box<dyn FnMut(&mut Kernel)>;
 
 struct NodeRt {
     active_ups: Vec<usize>,
-    /// From `Op::CAPS`: whether this node can be activated by a scheduled
-    /// callback. Nodes without it skip the dirty check entirely — the
-    /// capability contract doing the job of the retrofit's name allowlist.
-    schedules: bool,
+    /// From `Op::CAPS`: whether this node can be activated by a kernel
+    /// callback (scheduled or external wake-up). Nodes without it skip the
+    /// dirty check entirely — the capability contract doing the job of the
+    /// retrofit's name allowlist.
+    callback_activated: bool,
     cycle: CycleFn,
     start: StartFn,
 }
 
+/// The producer half of an [`external`](Builder::external) source: send a
+/// value from any thread (or async task) and the kernel wakes to process it.
+pub struct ExternalSource<T> {
+    data: std::sync::mpsc::Sender<T>,
+    waker: KernelWaker,
+    index: usize,
+}
+
+impl<T> Clone for ExternalSource<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            waker: self.waker.clone(),
+            index: self.index,
+        }
+    }
+}
+
+impl<T> ExternalSource<T> {
+    /// Send a value into the graph and wake the kernel. Returns false once
+    /// the runner is gone — producers can use this to stop.
+    pub fn send(&self, value: T) -> bool {
+        self.data.send(value).is_ok() && self.waker.wake(self.index)
+    }
+}
+
 /// Wires a graph of [`Op`]s. Combinators mirror the classic fluent API but
 /// the engine — not the node — owns state, config and values.
-#[derive(Default)]
 pub struct Builder {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
     ticked: Rc<RefCell<Vec<bool>>>,
+    waker: KernelWaker,
+    ready: Option<ReadyReceiver>,
+    has_external: bool,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        let (waker, ready) = waker_channel();
+        Self {
+            nodes: Vec::new(),
+            slots: Vec::new(),
+            ticked: Rc::default(),
+            waker,
+            ready: Some(ready),
+            has_external: false,
+        }
+    }
 }
 
 impl Builder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An external source: values sent through the returned
+    /// [`ExternalSource`] (from any thread or async task) tick this stream.
+    /// If several values arrive between cycles the latest wins. Graphs with
+    /// external sources run in [`RunMode::RealTime`] only, and support a
+    /// single [`Runner::run`].
+    pub fn external<T: Clone + Default + 'static>(&mut self) -> (Handle<T>, ExternalSource<T>) {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cs = Self::cell(rx, ());
+        self.has_external = true;
+        self.push_node(
+            Vec::new(),
+            External::<T>::CAPS.callback_activated(),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                match External::<T>::cycle(cfg, state, (), &mut ctx) {
+                    Tick::Value(v) => {
+                        *out.borrow_mut() = v;
+                        true
+                    }
+                    Tick::Quiet => false,
+                }
+            }),
+            Box::new(|_| {}),
+        );
+        let source = ExternalSource {
+            data: tx,
+            waker: self.waker.clone(),
+            index: idx,
+        };
+        (
+            Handle {
+                idx,
+                _t: PhantomData,
+            },
+            source,
+        )
     }
 
     fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
@@ -94,13 +180,13 @@ impl Builder {
     fn push_node(
         &mut self,
         active_ups: Vec<usize>,
-        schedules: bool,
+        callback_activated: bool,
         cycle: CycleFn,
         start: StartFn,
     ) {
         self.nodes.push(NodeRt {
             active_ups,
-            schedules,
+            callback_activated,
             cycle,
             start,
         });
@@ -119,7 +205,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Ticker::CAPS.schedules,
+            Ticker::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -150,7 +236,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Const::<T>::CAPS.schedules,
+            Const::<T>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -186,7 +272,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            Map::<A, B, F>::CAPS.schedules,
+            Map::<A, B, F>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -219,7 +305,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![src.idx, condition.idx],
-            Filter::<T>::CAPS.schedules,
+            Filter::<T>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
@@ -253,7 +339,7 @@ impl Builder {
         let cs = Self::cell(f, init);
         self.push_node(
             vec![src.idx],
-            Fold::<A, B, F>::CAPS.schedules,
+            Fold::<A, B, F>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -286,7 +372,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![trigger.idx],
-            Sample::<T>::CAPS.schedules,
+            Sample::<T>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
@@ -322,7 +408,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![a.idx, b.idx],
-            Join::<A, B, C, F>::CAPS.schedules,
+            Join::<A, B, C, F>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
@@ -360,7 +446,7 @@ impl Builder {
         let cs = Self::cell(NanoTime::from(delay), DelayState::<T>::default());
         self.push_node(
             vec![src.idx],
-            Delay::<T>::CAPS.schedules,
+            Delay::<T>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -397,7 +483,7 @@ impl Builder {
         let (ia, ib) = (a.idx, b.idx);
         self.push_node(
             vec![a.idx, b.idx],
-            Merge2::<T>::CAPS.schedules,
+            Merge2::<T>::CAPS.callback_activated(),
             Box::new(move |k| {
                 let (ta, tb) = {
                     let t = ticked.borrow();
@@ -429,6 +515,8 @@ impl Builder {
             nodes: self.nodes,
             slots: self.slots,
             ticked: self.ticked,
+            ready: self.ready,
+            has_external: self.has_external,
         }
     }
 }
@@ -441,11 +529,26 @@ pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
     ticked: Rc<RefCell<Vec<bool>>>,
+    ready: Option<ReadyReceiver>,
+    has_external: bool,
 }
 
 impl Runner {
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) {
-        let mut kernel = Kernel::new(run_mode, run_for);
+        let mut kernel = if self.has_external {
+            assert!(
+                matches!(run_mode, RunMode::RealTime),
+                "graphs with external sources require RunMode::RealTime — external events \
+                 have no place in a deterministic historical replay"
+            );
+            let ready = self
+                .ready
+                .take()
+                .expect("a Runner with external sources supports a single run");
+            Kernel::with_ready(run_mode, run_for, ready)
+        } else {
+            Kernel::new(run_mode, run_for)
+        };
         for node in self.nodes.iter_mut() {
             (node.start)(&mut kernel);
         }
@@ -453,7 +556,7 @@ impl Runner {
         let mut dirty = vec![false; n];
         while kernel.begin_cycle(&mut dirty) {
             for (i, node) in self.nodes.iter_mut().enumerate() {
-                let due = (node.schedules && dirty[i]) || {
+                let due = (node.callback_activated && dirty[i]) || {
                     let t = self.ticked.borrow();
                     node.active_ups.iter().any(|&u| t[u])
                 };

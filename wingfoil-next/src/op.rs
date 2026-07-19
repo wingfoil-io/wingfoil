@@ -21,11 +21,32 @@ pub struct Caps {
     /// The op registers time callbacks (via [`Ctx::schedule`]) in `cycle` or
     /// `start`, and can therefore be activated without an upstream tick.
     pub schedules: bool,
+    /// The op is fed by an external thread or async task that wakes the
+    /// kernel (via a [`KernelWaker`](wingfoil::codegen::KernelWaker)).
+    /// Realtime mode only — external events have no place in a deterministic
+    /// historical replay, and engines reject the combination.
+    pub threaded: bool,
 }
 
 impl Caps {
-    pub const NONE: Caps = Caps { schedules: false };
-    pub const SCHEDULES: Caps = Caps { schedules: true };
+    pub const NONE: Caps = Caps {
+        schedules: false,
+        threaded: false,
+    };
+    pub const SCHEDULES: Caps = Caps {
+        schedules: true,
+        threaded: false,
+    };
+    pub const THREADED: Caps = Caps {
+        schedules: false,
+        threaded: true,
+    };
+
+    /// True if this op can be activated by kernel callbacks (scheduled or
+    /// external) — i.e. its dispatch condition needs a dirty check.
+    pub const fn callback_activated(&self) -> bool {
+        self.schedules || self.threaded
+    }
 }
 
 /// The outcome of one op cycle: either the op ticked and produced a value,

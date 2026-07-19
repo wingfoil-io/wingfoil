@@ -14,9 +14,40 @@
 
 use std::time::Duration;
 
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
+
 use crate::queue::TimeQueue;
 use crate::time::NanoTime;
 use crate::{RunFor, RunMode};
+
+/// Wakes a realtime [`Kernel`] from another thread, marking a node dirty —
+/// the kernel-level equivalent of the interpreted engine's `ReadyNotifier`.
+/// Cheap to clone; hand one to each producer thread / async task.
+#[derive(Clone)]
+pub struct KernelWaker {
+    sender: Sender<usize>,
+}
+
+impl KernelWaker {
+    /// Mark `node` dirty and wake the kernel if it is waiting. Returns false
+    /// if the kernel (and its receiver) are gone — producers can use this to
+    /// stop.
+    pub fn wake(&self, node: usize) -> bool {
+        self.sender.send(node).is_ok()
+    }
+}
+
+/// The receiving half of a [`waker_channel`], to be handed to
+/// [`Kernel::with_ready`].
+pub type ReadyReceiver = Receiver<usize>;
+
+/// Create a waker/receiver pair for external (threaded/async) sources. Hand
+/// the [`KernelWaker`] to producers and the receiver to
+/// [`Kernel::with_ready`].
+pub fn waker_channel() -> (KernelWaker, ReadyReceiver) {
+    let (sender, receiver) = unbounded();
+    (KernelWaker { sender }, receiver)
+}
 
 /// Clock, scheduled-callback queue and run bounds for a standalone generated
 /// runner. See the [module docs](self) for how this relates to the
@@ -31,10 +62,26 @@ pub struct Kernel {
     is_last_cycle: bool,
     cycles: u32,
     scheduled: TimeQueue<usize>,
+    /// External wake-ups from [`KernelWaker`]s, realtime mode only. Mirrors
+    /// the interpreted engine's ready-callback channel.
+    ready: Option<Receiver<usize>>,
 }
 
 impl Kernel {
     pub fn new(run_mode: RunMode, run_for: RunFor) -> Self {
+        Self::build(run_mode, run_for, None)
+    }
+
+    /// A kernel that can also be woken by external threads through the
+    /// receiver from [`waker_channel`]. Realtime mode only — external
+    /// wake-ups have no place in a deterministic historical replay (the
+    /// interpreted engine errors on them; callers of this API should reject
+    /// historical runs for graphs with external sources).
+    pub fn with_ready(run_mode: RunMode, run_for: RunFor, ready: Receiver<usize>) -> Self {
+        Self::build(run_mode, run_for, Some(ready))
+    }
+
+    fn build(run_mode: RunMode, run_for: RunFor, ready: Option<Receiver<usize>>) -> Self {
         let start_time = run_mode.start_time();
         // Mirrors `Graph::resolve_start_end`: MAX sentinels for bounds that
         // don't apply.
@@ -55,7 +102,24 @@ impl Kernel {
             is_last_cycle: false,
             cycles: 0,
             scheduled: TimeQueue::new(),
+            ready,
         }
+    }
+
+    /// Drain pending external wake-ups into `dirty`. Out-of-range indices
+    /// (a misbehaving waker) are ignored.
+    fn drain_ready(&mut self, dirty: &mut [bool]) -> bool {
+        let Some(rx) = &self.ready else {
+            return false;
+        };
+        let mut any = false;
+        while let Ok(ix) = rx.try_recv() {
+            if let Some(d) = dirty.get_mut(ix) {
+                *d = true;
+                any = true;
+            }
+        }
+        any
     }
 
     /// The run's start time (wall clock for realtime runs).
@@ -117,21 +181,76 @@ impl Kernel {
                     return true;
                 }
                 RunMode::RealTime => {
-                    let Some(next) = self.scheduled.next_time() else {
-                        // A standalone graph's only wake-up source is the
-                        // scheduled queue; with it empty no work can ever
-                        // arrive, so terminate rather than spin.
-                        return false;
-                    };
-                    // Wait for the next callback (or the end bound), like the
-                    // interpreted engine's bounded wait.
-                    let target = next.min(self.end_time);
-                    let now = NanoTime::now();
-                    if target > now {
-                        std::thread::sleep(Duration::from_nanos(u64::from(target - now)));
+                    // External wake-ups first — they cost no waiting.
+                    let mut progressed = self.drain_ready(dirty);
+                    if !progressed {
+                        match self.scheduled.next_time() {
+                            Some(next) => {
+                                // Wait for the next callback, the end bound,
+                                // or an external wake-up — whichever first.
+                                let target = next.min(self.end_time);
+                                let now = NanoTime::now();
+                                if target > now {
+                                    let timeout = Duration::from_nanos(u64::from(target - now));
+                                    match &self.ready {
+                                        Some(rx) => match rx.recv_timeout(timeout) {
+                                            Ok(ix) => {
+                                                if let Some(d) = dirty.get_mut(ix) {
+                                                    *d = true;
+                                                    progressed = true;
+                                                }
+                                            }
+                                            Err(RecvTimeoutError::Timeout)
+                                            | Err(RecvTimeoutError::Disconnected) => {}
+                                        },
+                                        None => std::thread::sleep(timeout),
+                                    }
+                                }
+                            }
+                            None => {
+                                // Nothing scheduled: only external wake-ups
+                                // can produce work. Without a ready channel,
+                                // terminate rather than spin.
+                                let Some(rx) = &self.ready else {
+                                    return false;
+                                };
+                                let woken = if self.end_time == NanoTime::MAX {
+                                    rx.recv().ok()
+                                } else {
+                                    let now = NanoTime::now();
+                                    if self.end_time <= now {
+                                        None
+                                    } else {
+                                        let timeout =
+                                            Duration::from_nanos(u64::from(self.end_time - now));
+                                        match rx.recv_timeout(timeout) {
+                                            Ok(ix) => Some(ix),
+                                            Err(RecvTimeoutError::Timeout) => None,
+                                            // All wakers dropped and nothing
+                                            // scheduled: no work can ever
+                                            // arrive.
+                                            Err(RecvTimeoutError::Disconnected) => {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                };
+                                match woken {
+                                    Some(ix) => {
+                                        if let Some(d) = dirty.get_mut(ix) {
+                                            *d = true;
+                                            progressed = true;
+                                        }
+                                    }
+                                    // All wakers dropped (recv Err) or the
+                                    // end bound passed with nothing queued.
+                                    None if self.end_time == NanoTime::MAX => return false,
+                                    None => {}
+                                }
+                            }
+                        }
                     }
                     self.time = NanoTime::now().max(self.time + 1);
-                    let mut progressed = false;
                     while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
                         dirty[ix] = true;
                         progressed = true;
@@ -243,6 +362,28 @@ mod tests {
             ],
             times
         );
+    }
+
+    #[test]
+    fn realtime_kernel_wakes_on_external_events_and_terminates() {
+        // One wake, then the waker drops: exactly one cycle fires, then the
+        // kernel sees the disconnected channel with nothing scheduled and
+        // terminates (even under RunFor::Forever).
+        let (waker, ready) = waker_channel();
+        let mut k = Kernel::with_ready(RunMode::RealTime, RunFor::Forever, ready);
+        let mut dirty = [false; 1];
+        let producer = std::thread::spawn(move || {
+            waker.wake(0);
+        });
+        let mut fires = 0;
+        while k.begin_cycle(&mut dirty) {
+            if dirty[0] {
+                fires += 1;
+            }
+            k.end_cycle(&mut dirty);
+        }
+        producer.join().expect("producer thread");
+        assert_eq!(1, fires);
     }
 
     #[test]

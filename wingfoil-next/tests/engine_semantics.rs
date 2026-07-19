@@ -64,6 +64,26 @@ fn join_combines_current_values() {
     assert_eq!(vec![3, 6, 9], r.value(&acc));
 }
 
+/// An external source fed from another thread wakes the realtime kernel;
+/// the run terminates once all producers are gone.
+#[test]
+fn external_source_ticks_the_graph() {
+    let g = GraphBuilder::new();
+    let (values, source) = g.external::<u64>();
+    let acc = values.accumulate();
+    let mut r = g.build();
+    let producer = std::thread::spawn(move || {
+        for i in 1..=5 {
+            source.send(i);
+            // Space sends out so each arrives in its own cycle.
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    r.run(RunMode::RealTime, RunFor::Cycles(5));
+    producer.join().expect("producer thread");
+    assert_eq!(vec![1, 2, 3, 4, 5], r.value(&acc));
+}
+
 /// The capability contract is `const`, so it can be checked at compile time
 /// — the assertions below are evaluated by rustc, not at runtime. This is
 /// what lets engines specialise on capabilities with zero cost.
@@ -71,10 +91,13 @@ fn join_combines_current_values() {
 fn caps_are_declared_statically() {
     const {
         assert!(Ticker::CAPS.schedules);
-        assert!(!<Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS.schedules);
+        assert!(!<Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS.callback_activated());
         assert!(matches!(
             <Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS,
-            Caps { schedules: false }
+            Caps {
+                schedules: false,
+                threaded: false
+            }
         ));
     }
 }

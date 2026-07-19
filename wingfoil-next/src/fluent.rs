@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::interp::{AsHandle, Builder, Handle, Runner};
+use crate::interp::{AsHandle, Builder, ExternalSource, Handle, Runner};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -42,6 +42,21 @@ impl GraphBuilder {
             inner: self.inner.clone(),
             handle,
         }
+    }
+
+    /// An external source: values sent through the returned
+    /// [`ExternalSource`] (from any thread or async task) tick the stream.
+    /// If several values arrive between cycles the latest wins. Graphs with
+    /// external sources run in realtime mode only.
+    pub fn external<T: Clone + Default + 'static>(&self) -> (Stream<T>, ExternalSource<T>) {
+        let (handle, source) = self.inner.borrow_mut().external();
+        (
+            Stream {
+                inner: self.inner.clone(),
+                handle,
+            },
+            source,
+        )
     }
 
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
