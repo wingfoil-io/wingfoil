@@ -376,6 +376,26 @@ impl<T: Clone + Default + std::ops::Not<Output = T> + 'static> Stream<T> {
     }
 }
 
+impl Stream<f64> {
+    /// Exponentially weighted moving average (statistics adapter).
+    pub fn ewma(&self, decay: crate::ops::EwmaDecay) -> Stream<f64> {
+        let h = self.inner.borrow_mut().ewma(self.handle, decay);
+        self.lift(h)
+    }
+
+    /// EWMA with a fixed per-tick smoothing factor `alpha`.
+    pub fn ewma_per_tick(&self, alpha: f64) -> Stream<f64> {
+        self.ewma(crate::ops::EwmaDecay::PerTick(alpha))
+    }
+
+    /// EWMA decaying by `half_life` of elapsed engine time (tick-rate
+    /// independent).
+    pub fn ewma_half_life(&self, half_life: Duration) -> Stream<f64> {
+        let hl = wingfoil::NanoTime::from(half_life);
+        self.ewma(crate::ops::EwmaDecay::HalfLife(f64::from(hl)))
+    }
+}
+
 impl<T: 'static> Stream<T> {
     /// Run a side-effecting (fallible) closure on each tick — the graph's
     /// outbound edge (print, send, record). A returned `Err` aborts the run
