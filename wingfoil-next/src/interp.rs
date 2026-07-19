@@ -26,8 +26,8 @@ use anyhow::Result;
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
     Buffer, Const, Delay, DelayState, Difference, Distinct, External, Filter, Finally, Fold,
-    Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, Ticker,
-    TryMap, Window, WindowState,
+    Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, Sample, Sink, Throttle, TickedAt,
+    TickedAtElapsed, Ticker, TryMap, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -586,6 +586,93 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Pair each value with the current engine time: `(time, value)`.
+    pub fn with_time<T: Clone + 'static>(&mut self, src: Handle<T>) -> Handle<(NanoTime, T)> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot((NanoTime::ZERO, src_slot.borrow().clone()));
+        self.push_node(
+            vec![src.idx],
+            WithTime::<T>::CAPS,
+            "with_time",
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match WithTime::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Emit the current engine time whenever `src` ticks.
+    pub fn ticked_at<T: 'static>(&mut self, src: Handle<T>) -> Handle<NanoTime> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(NanoTime::ZERO);
+        self.push_node(
+            vec![src.idx],
+            TickedAt::<T>::CAPS,
+            "ticked_at",
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match TickedAt::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
+    /// Emit elapsed engine time (`now - start`) whenever `src` ticks.
+    pub fn ticked_at_elapsed<T: 'static>(&mut self, src: Handle<T>) -> Handle<NanoTime> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(NanoTime::ZERO);
+        self.push_node(
+            vec![src.idx],
+            TickedAtElapsed::<T>::CAPS,
+            "ticked_at_elapsed",
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match TickedAtElapsed::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
         );
         Handle {
             idx,
