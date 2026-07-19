@@ -234,6 +234,23 @@ impl<T: 'static> Stream<T> {
         let h = self.inner.borrow_mut().join(self.handle, other.handle, f);
         self.lift(h)
     }
+
+    /// Combine with another stream read *passively*: this stream triggers the
+    /// combine, `other`'s current value is read but does not trigger. The
+    /// `bimap(Active, Passive)` of the classic engine — the shape a feedback
+    /// input takes so the loop advances in step with the active source.
+    pub fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> C + 'static,
+    {
+        let h = self
+            .inner
+            .borrow_mut()
+            .bimap(self.handle, true, other.handle, false, f);
+        self.lift(h)
+    }
 }
 
 impl<T: Clone + Default + 'static> Stream<T> {
