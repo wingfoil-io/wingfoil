@@ -394,6 +394,18 @@ impl Stream<f64> {
         let hl = wingfoil::NanoTime::from(half_life);
         self.ewma(crate::ops::EwmaDecay::HalfLife(f64::from(hl)))
     }
+
+    /// Rolling sum over the most recent `window` samples.
+    pub fn rolling_sum(&self, window: usize) -> Stream<f64> {
+        let h = self.inner.borrow_mut().rolling_sum(self.handle, window);
+        self.lift(h)
+    }
+
+    /// Rolling arithmetic mean over the most recent `window` samples.
+    pub fn rolling_mean(&self, window: usize) -> Stream<f64> {
+        let h = self.inner.borrow_mut().rolling_mean(self.handle, window);
+        self.lift(h)
+    }
 }
 
 impl<T: 'static> Stream<T> {
