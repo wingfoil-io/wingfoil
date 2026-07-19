@@ -15,3 +15,10 @@ anyhow = { workspace = true }
 
 [build-dependencies]
 wingfoil = { path = "../wingfoil" }
+
+[dev-dependencies]
+criterion = "0.8.1"
+
+[[bench]]
+name = "tiers"
+harness = false
