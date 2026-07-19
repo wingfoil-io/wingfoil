@@ -251,6 +251,21 @@ impl<T: 'static> Stream<T> {
             .bimap(self.handle, true, other.handle, false, f);
         self.lift(h)
     }
+
+    /// Combine three streams (all active); ticks when any input ticks.
+    pub fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> D + 'static,
+    {
+        let h =
+            self.inner
+                .borrow_mut()
+                .trimap(self.handle, true, b.handle, true, c.handle, true, f);
+        self.lift(h)
+    }
 }
 
 impl<T: Clone + Default + 'static> Stream<T> {
@@ -291,6 +306,13 @@ impl<T: Clone + Default + 'static> Stream<T> {
     /// (and once more on the last cycle).
     pub fn window(&self, interval: Duration) -> Stream<Vec<T>> {
         let h = self.inner.borrow_mut().window(self.handle, interval);
+        self.lift(h)
+    }
+
+    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
+    /// (and once more on the last cycle).
+    pub fn buffer(&self, capacity: usize) -> Stream<Vec<T>> {
+        let h = self.inner.borrow_mut().buffer(self.handle, capacity);
         self.lift(h)
     }
 

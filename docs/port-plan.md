@@ -153,9 +153,9 @@ Inventory (classic `nodes/` → target), grouped by effort:
 | Group | Nodes | Notes |
 |---|---|---|
 | Done in prototype | map, filter, fold, constant, sample, merge (2-ary), delay, tick(er), producer(→poll), consumer(→for_each), try_map, finally, feedback | parity-tested |
-| Trivial state/closure | ✅ distinct, difference, limit, map_filter, throttle, inspect, window (`tests/catalog.rs`); ⬜ buffer, print, timed, with_time, graph_state (ticked_at/-elapsed), not/split/combine/collapse (in mod.rs) | recipe proven; `window` added `Ctx::is_last_cycle` (also unblocks `buffer`) |
+| Trivial state/closure | ✅ distinct, difference, limit, map_filter, throttle, inspect, window, buffer (`tests/catalog.rs`); ⬜ print, timed, with_time, graph_state (ticked_at/-elapsed), not/split/combine/collapse (in mod.rs) | recipe proven; `window`/`buffer` use `Ctx::is_last_cycle` |
 | Scheduling | ✅ throttle; ⬜ delay_with_reset, node_flow (node-level delay/filter/limit/throttle) | `SCHEDULES`/time-gated; pattern proven by delay + throttle |
-| Multi-input | ✅ bimap (active/passive) + join; ⬜ trimap(→join3), try_* variants | passive `bimap` landed (unlocked passive feedback) |
+| Multi-input | ✅ bimap (active/passive) + join, trimap + join3; ⬜ try_* variants | passive `bimap` unlocked passive feedback; `trimap` is the 3-ary combine |
 | Engine-touching | always (→`ALWAYS`, done), never, finally (needs teardown), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
 | Structural / deferred | demux, dynamic_group, graph_node | multi-output + dynamic-graph decisions below |
 
