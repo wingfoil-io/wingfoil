@@ -60,8 +60,9 @@
 //! all statements run, so a shadowed capture would let the engines disagree.
 //!
 //! Limitations (v1): wiring itself must be straight-line (no wiring inside
-//! loops/conditionals — the DAG must be static); `external` sources are not
-//! expressible (use the fluent API directly for those graphs).
+//! loops/conditionals — the DAG must be static); IO-edge sources and sinks
+//! (`external`, `poll`, `for_each`) are not expressible — IO lives at the
+//! fluent layer, feeding compiled islands through their inputs.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -87,15 +88,73 @@ enum OpKind {
     Delay,
 }
 
-impl OpKind {
-    /// Can this op be activated by a kernel callback (needs a dirty check)?
-    fn callback_activated(self) -> bool {
-        matches!(self, Self::Ticker | Self::Constant | Self::Delay)
-    }
+/// Everything the emitters need to know about an op, single-sourced per
+/// kind. Parsing (arity, which args are stream refs, desugarings) stays in
+/// the walker, and declaration/input *shapes* stay in `node_decl` /
+/// `cycle_input` — those differ structurally per op — but every boolean
+/// fact consulted at emission time lives here.
+struct OpSpec {
+    /// Can be activated by a kernel callback → dispatch needs a dirty check.
+    callback_activated: bool,
+    /// Has a `start` hook to run before the first cycle.
+    has_start: bool,
+    /// Keeps a `__cfg_x` local (non-closure config: period, value, delay).
+    cfg_local: bool,
+    /// Keeps a `__state_x` local passed to `cycle`.
+    state_local: bool,
+    /// `start` receives the state local too (only the ticker's start does).
+    state_in_start: bool,
+    /// Index in `exprs` of a closure config inlined at the cycle call via
+    /// `cycle_owned_cfg` (direct-argument closure inference).
+    owned_closure: Option<usize>,
+}
 
-    /// Does this op have a `start` hook to run before the first cycle?
-    fn has_start(self) -> bool {
-        matches!(self, Self::Ticker | Self::Constant)
+impl OpKind {
+    fn spec(self) -> OpSpec {
+        let base = OpSpec {
+            callback_activated: false,
+            has_start: false,
+            cfg_local: false,
+            state_local: false,
+            state_in_start: false,
+            owned_closure: None,
+        };
+        match self {
+            OpKind::Input | OpKind::Filter | OpKind::Sample | OpKind::Merge => base,
+            OpKind::Ticker => OpSpec {
+                callback_activated: true,
+                has_start: true,
+                cfg_local: true,
+                state_local: true,
+                state_in_start: true,
+                ..base
+            },
+            OpKind::Constant => OpSpec {
+                callback_activated: true,
+                has_start: true,
+                cfg_local: true,
+                ..base
+            },
+            OpKind::Map => OpSpec {
+                owned_closure: Some(0),
+                ..base
+            },
+            OpKind::Join => OpSpec {
+                owned_closure: Some(0),
+                ..base
+            },
+            OpKind::Fold => OpSpec {
+                state_local: true,
+                owned_closure: Some(1),
+                ..base
+            },
+            OpKind::Delay => OpSpec {
+                callback_activated: true,
+                cfg_local: true,
+                state_local: true,
+                ..base
+            },
+        }
     }
 }
 
@@ -910,7 +969,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             quote! { #t }
         })
         .collect();
-    if node.op.callback_activated() {
+    if node.op.spec().callback_activated {
         cond_parts.push(quote! { __dirty[#idx] });
     }
     let cond = quote! { #(#cond_parts)||* };
@@ -930,23 +989,19 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             }
         }
     };
-    let cycle_call = match node.op {
-        // Closure configs go by value as a DIRECT argument so rustc
-        // defers their signature inference until the input argument has
-        // resolved the op's value types (a closure behind `&mut` loses
-        // that deferral and fails E0282).
-        OpKind::Map | OpKind::Join | OpKind::Fold => {
-            let f = if node.op == OpKind::Fold {
-                &node.exprs[1]
-            } else {
-                &node.exprs[0]
-            };
+    // Closure configs go by value as a DIRECT argument so rustc defers
+    // their signature inference until the input argument has resolved the
+    // op's value types (a closure behind `&mut` loses that deferral and
+    // fails E0282).
+    let cycle_call = match node.op.spec().owned_closure {
+        Some(ix) => {
+            let f = &node.exprs[ix];
             let ty = op_type(node.op);
             quote! {
                 ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
             }
         }
-        _ => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
+        None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
     };
     let ctx = ctx_expr(target, idx);
     let call = quote! {
@@ -973,7 +1028,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let mut starts = Vec::new();
     let mut body = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
-        if node.op.has_start() {
+        if node.op.spec().has_start {
             starts.push(node_start(Target::Compiled, i, node));
         }
         body.push(node_dispatch(def, Target::Compiled, i, flags[i]));
@@ -1021,7 +1076,10 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
     let out_v = format_ident!("__v_{}", out_name);
-    let callback_activated = def.nodes.iter().any(|node| node.op.callback_activated());
+    let callback_activated = def
+        .nodes
+        .iter()
+        .any(|node| node.op.spec().callback_activated);
     let flags = tick_flags_needed(def);
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
@@ -1030,7 +1088,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
         if node.op == OpKind::Input {
             continue;
         }
-        if node.op.has_start() {
+        if node.op.spec().has_start {
             starts.push(node_start(Target::Nested, i, node));
         }
         body.push(node_dispatch(def, Target::Nested, i, flags[i]));
@@ -1159,23 +1217,26 @@ fn op_path(op: OpKind) -> TokenStream2 {
 }
 
 fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
-    match node.op {
-        OpKind::Filter | OpKind::Sample | OpKind::Merge => quote! { &mut () },
-        _ => quote! { &mut #cfg },
+    if node.op.spec().cfg_local {
+        quote! { &mut #cfg }
+    } else {
+        quote! { &mut () }
     }
 }
 
 fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    match node.op {
-        OpKind::Ticker | OpKind::Fold | OpKind::Delay => quote! { &mut #state },
-        _ => quote! { &mut () },
+    if node.op.spec().state_local {
+        quote! { &mut #state }
+    } else {
+        quote! { &mut () }
     }
 }
 
 fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    match node.op {
-        OpKind::Ticker => quote! { &mut #state },
-        _ => quote! { &mut () },
+    if node.op.spec().state_in_start {
+        quote! { &mut #state }
+    } else {
+        quote! { &mut () }
     }
 }
 
