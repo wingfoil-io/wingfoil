@@ -383,6 +383,7 @@ pub fn generate(roots: Vec<Rc<dyn Node>>, options: &CodegenOptions) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ValueAt;
     use crate::nodes::*;
     use crate::types::*;
     use std::time::Duration;
@@ -419,6 +420,61 @@ mod tests {
             Ok(())
         };
         rt.finalize(start_result, run_result)
+    }
+
+    /// Delay where the delay (100ns) far exceeds the tick period (10ns), so
+    /// most delayed emissions happen on cycles where the delay node's
+    /// upstream did NOT tick — activation comes purely from its scheduled
+    /// callback (`is_dirty`), the interesting path for a static schedule.
+    fn wire_delay() -> (Vec<Rc<dyn Node>>, Rc<dyn Stream<Vec<ValueAt<u64>>>>) {
+        let delayed = ticker(Duration::from_nanos(10))
+            .count()
+            .delay(Duration::from_nanos(100))
+            .collect();
+        (vec![delayed.clone().as_node()], delayed)
+    }
+
+    #[test]
+    fn static_runtime_matches_interpreted_delay() {
+        let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+        let run_for = RunFor::Duration(Duration::from_nanos(120));
+
+        let (roots, values) = wire_delay();
+        Graph::new(roots, run_mode, run_for).run().unwrap();
+        let expected = values.peek_value();
+        // Sanity-check against the known behaviour (see delay.rs tests): the
+        // first delayed value lands at t=100 despite sourcing from t=0.
+        assert_eq!(1, expected[0].value);
+        assert_eq!(NanoTime::new(100), expected[0].time);
+        assert!(expected.len() >= 4);
+
+        let (roots, values) = wire_delay();
+        drive_static(roots, run_mode, run_for).unwrap();
+        assert_eq!(expected, values.peek_value());
+    }
+
+    /// Passive read of a delayed stream (`delay_initializes_to_first_value`
+    /// from delay.rs, run through the static runtime).
+    #[test]
+    fn static_runtime_matches_interpreted_delay_passive() {
+        fn wire() -> (Vec<Rc<dyn Node>>, Rc<dyn Stream<Vec<i64>>>) {
+            let source = ticker(Duration::from_secs(1)).count().map(|x| x as i64 + 4);
+            let delayed = source.delay(Duration::from_secs(5));
+            let diff = bimap(Dep::Active(source), Dep::Passive(delayed), |a, b| a - b);
+            let acc = diff.accumulate();
+            (vec![acc.clone().as_node()], acc)
+        }
+        let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
+        let run_for = RunFor::Duration(Duration::from_secs(8));
+
+        let (roots, values) = wire();
+        Graph::new(roots, run_mode, run_for).run().unwrap();
+        let expected = values.peek_value();
+        assert_eq!(vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5], expected);
+
+        let (roots, values) = wire();
+        drive_static(roots, run_mode, run_for).unwrap();
+        assert_eq!(expected, values.peek_value());
     }
 
     fn wire_pipeline() -> (Rc<dyn Node>, Rc<dyn Stream<Vec<u64>>>) {
