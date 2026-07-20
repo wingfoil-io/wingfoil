@@ -19,6 +19,88 @@ rules require `Result`. The plan's "the engines cannot drift" claim holds for
 `Op::cycle` semantics but **not for engine-owned initialization and
 evaluation timing**, which is where every confirmed divergence sits.
 
+## Resolution status (PR #469)
+
+The findings below were worked on branch `claude/fable-review-issues-przi5i`
+(PR #469). Every semantic fix keeps interpreted == compiled == nested and is
+guarded by a parity test in `wingfoil-next/tests/parity_bugs.rs` unless noted.
+`cargo build`/`test` (default + `async`), `cargo fmt --check`, and
+`cargo lint` pass; all-features clippy is clean for `wingfoil-next` /
+`wingfoil-next-macros` (the full-workspace `lint-all` is blocked only by the
+Aeron adapter's CMake system dep, unrelated to these changes).
+
+**Highest-priority bugs** — all fixed:
+
+1. ✅ **Fold seeding** — `ValueSeed` added to the macro's `OpInfo`; Fold seeds
+   its slot with a clone of `init`, not `Default`. Test: non-default init (100)
+   read via a passive edge, 3-way parity.
+2. ✅ **`delay(0)`** — emits inline in the same cycle on all three paths;
+   classic `zero_delay_works` ported (`Cycles(4)` → 1,2,3,4).
+3. ✅ **Delay first-value seeding** — delay stores its first upstream value
+   without ticking. Implemented at the engine level (interp + macro in
+   lockstep) because `Op::cycle` cannot express "update value without ticking";
+   the `Tick::Silent` **contract gap is documented in `op.rs`** and moved into
+   Phase 1 of the plan rather than adding the enum variant unilaterally.
+   Classic `delay_initializes_to_first_value` ported.
+4. ✅ **Historical channel start** — pre-start and out-of-order timestamps are
+   now rejected (matching classic's error policy). ⚠️ The blocking whole-stream
+   collect / unbounded-memory behaviour is **documented, not changed**.
+5. ✅ **Realtime `close()`** — a shared `finished` flag ends the run even with a
+   live sender clone. ⚠️ `Checkpoint` remains a documented no-op on both receive
+   paths (not wired through).
+6. ✅ **Panics → errors** — `Runner::run`'s asserts/`.expect` and `compat::Signal`
+   (double-run, peek-before-run) now `bail!`/carry documented preconditions.
+7. ✅ **Closure re-eval** — compiled/nested hoist non-literal closure configs
+   into a once-evaluated setup local. Test: side-effecting factory runs once.
+8. ✅ **Macro accepts broken inputs** — bare-alias output, bare-ticker return,
+   and generated-vs-user name collisions (`wf_anon_` reserved prefix) fixed;
+   `trybuild` compile-fail tests added.
+9. ✅ **`produce_async` RunParams** — `start_time` validated against the real
+   run (aborts on mismatch); bounded `produce_async_bounded` with permit-pool
+   backpressure added. ⚠️ `run_mode`/`run_for` are not validated at this layer
+   (not reachable from the op `Ctx`) — documented; the graph→producer channel
+   itself stays unbounded (permit pool caps in-flight backlog instead).
+
+**Documentation drift** — all fixed: `channel.rs:15-17`/`:30` corrected
+(both-modes bursts, `Value` delivered at `start_time`), `busy_loop.rs` comments
+corrected (`external` drains to a `Burst`), and `..base` dropped from every
+`OpKind::info()` arm (all fields spelled per arm).
+
+**Design concerns:**
+
+- ✅ Sample passive edge moved into `OpInfo` (single-sourced).
+- ✅ Cross-graph `Handle` misuse guarded with a builder id + `debug_assert`.
+- ✅ `GraphBuilder::build` double-build / wire-after-build poisoned via a shared
+   `built` flag (signature kept `&self` to avoid rippling into callers).
+- ✅ EWMA alpha `[0,1]` `debug_assert` added (mirrors classic).
+- ✅ `mentions_graph_ident` now names the offending identifier in its error.
+- ⏭️ **`FeedbackSink` public `send` — DEFERRED.** next's op-facing `Ctx` is
+   self-scheduling-only and cannot schedule the paired *source* node like
+   classic's `GraphState::add_callback_for_node`; a real `send` needs a wider
+   `Ctx` (against the current design). Documented in code, left for a contract
+   follow-up.
+- ⏭️ **`register_op0`/`register_op2` collapse — NOT DONE.** Pure cleanup that
+   spans `interp.rs` + `ops.rs`; deferred to keep this change set scoped to the
+   bugs.
+- ⏭️ **`#[op]` crate-internal doc note — NOT DONE** (minor).
+- ➖ `Window::start` anchoring at ZERO left **intentionally unchanged** — it is
+   bug-for-bug identical to classic (parity holds); per the review it is a
+   shared quirk both engines should fix together, not unilaterally.
+
+**Test-suite blind spots** — added: fold non-default init, merge tie-break with
+both inputs ticking, ported `zero_delay`/`delay_initializes_to_first_value`,
+EWMA real-decay (3.125), dual-scheduler island, `compiled_parity.rs`
+cross-asserts against the macro's `compiled()`, realtime-`close`/pre-start/
+out-of-order channel tests, `ticked_at_elapsed`, `rolling_sum(0)`/`rolling_mean(0)`
+clamp, non-zero-start `window`, compat double-run/peek-before-run, and `trybuild`
+compile-fail tests. ⚠️ A dedicated `Checkpoint`-semantics test is not added
+(Checkpoint stays a documented no-op).
+
+**Plan-level improvements** — all six applied to `docs/port-plan.md` (stale
+status header, Phase 4.5 coupling/rework-trap, single-run vs Gate 6 + reset hook
+into Phase 1, engine-owned-drift risk register + table-driven parity strategy,
+completeness test committed, `Tick::Silent` question into Phase 1).
+
 ## Highest-priority implementation bugs
 
 1. **Fold value-slot seeding drifts between engines.** Interpreted seeds the
