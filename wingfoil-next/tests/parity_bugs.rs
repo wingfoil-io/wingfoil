@@ -80,6 +80,40 @@ fn external_source_historical_run_is_an_error_not_a_panic() {
     );
 }
 
+// ===========================================================================
+// BUG 5: realtime close() must end the run even with a live sender clone.
+//
+// The kernel alone only ends a realtime run when *every* waker clone is
+// dropped. A `finished` flag set by the channel node on `EndOfStream` lets
+// `close()` terminate the run while a producer keeps a live `ChannelSender`.
+// ===========================================================================
+
+#[test]
+fn realtime_close_ends_run_with_live_sender_clone() {
+    let g = GraphBuilder::new();
+    let (values, sender) = g.channel::<u64>();
+    let acc = values.collapse_accumulate();
+    let mut r = g.build();
+
+    // A live clone kept in *this* thread across the whole run: the waker
+    // channel never disconnects on its own, so only `close()` can end the
+    // `Forever` run.
+    let keep_alive = sender.clone();
+    let producer = std::thread::spawn(move || {
+        sender.send(1);
+        sender.send(2);
+        std::thread::sleep(Duration::from_millis(5));
+        sender.close();
+    });
+
+    r.run(RunMode::RealTime, RunFor::Forever)
+        .expect("run terminates on close()");
+    producer.join().expect("producer thread");
+    drop(keep_alive);
+
+    assert_eq!(vec![1, 2], r.value(&acc), "all pre-close values delivered");
+}
+
 #[test]
 fn poll_source_historical_run_is_an_error_not_a_panic() {
     let g = GraphBuilder::new();

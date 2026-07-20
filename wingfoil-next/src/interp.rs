@@ -27,7 +27,7 @@
 //! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -187,6 +187,13 @@ pub struct Builder {
     /// `channel` sources carry timestamps, so they run in **both** modes:
     /// realtime (waker-driven) and historical (schedule-driven replay).
     has_channel: bool,
+    /// Set by a channel node when it receives [`Message::EndOfStream`]
+    /// (`close()`), so a realtime run ends even while a producer keeps a live
+    /// [`ChannelSender`] clone — the kernel alone only ends the run when
+    /// *every* waker clone is dropped. Mirrors classic's per-receiver
+    /// `finished` flag (here one shared flag ends the run on any channel
+    /// close, which is the single-channel realtime case the fix targets).
+    finished: Rc<Cell<bool>>,
 }
 
 impl Default for Builder {
@@ -201,6 +208,7 @@ impl Default for Builder {
             has_external: false,
             has_always: false,
             has_channel: false,
+            finished: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -282,6 +290,7 @@ impl Builder {
         // time-grouped bursts the historical `start` fills.
         let cs = Self::cell(rx, VecDeque::<(NanoTime, Burst<T>)>::new());
         let cs2 = cs.clone();
+        let finished = self.finished.clone();
         self.push_node(
             Vec::new(),
             Activation {
@@ -316,7 +325,19 @@ impl Builder {
                                     return Err(anyhow::anyhow!("{e:#}")
                                         .context("channel receiver: producer sent an error"));
                                 }
-                                Ok(Message::EndOfStream | Message::Checkpoint(_)) => {}
+                                // `close()` ends the run even while a producer
+                                // keeps a live sender clone (the kernel alone
+                                // waits for every waker to drop). We keep
+                                // draining so any values queued *before* the
+                                // close still ride this final burst.
+                                Ok(Message::EndOfStream) => finished.set(true),
+                                // A progress marker with no value: nothing to
+                                // add to the burst. Realtime dispatch is
+                                // waker-driven, so it needs no clock nudge —
+                                // documented as a no-op here (contrast the
+                                // historical receiver, which could schedule a
+                                // wakeup at the checkpoint time).
+                                Ok(Message::Checkpoint(_)) => {}
                                 Err(_) => break,
                             }
                         }
@@ -1181,6 +1202,7 @@ impl Builder {
             has_external: self.has_external,
             has_always: self.has_always,
             has_channel: self.has_channel,
+            finished: self.finished,
         }
     }
 }
@@ -1197,6 +1219,7 @@ pub struct Runner {
     has_external: bool,
     has_always: bool,
     has_channel: bool,
+    finished: Rc<Cell<bool>>,
 }
 
 impl Runner {
@@ -1256,7 +1279,11 @@ impl Runner {
         if first_err.is_none() {
             let n = self.nodes.len();
             let mut dirty = vec![false; n];
-            'run: while kernel.begin_cycle(&mut dirty) {
+            // Check `finished` *before* `begin_cycle` parks: a channel that
+            // received `EndOfStream` in the previous cycle ends the run now,
+            // rather than waiting for the bound while a live sender clone keeps
+            // the waker channel connected.
+            'run: while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
                 for (i, node) in self.nodes.iter_mut().enumerate() {
                     let due = node.activation.always
                         || (node.activation.callback_activated() && dirty[i])
