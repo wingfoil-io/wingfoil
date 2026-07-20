@@ -188,6 +188,34 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     Ok(acc_state)
 }
 
+/// The *same* odds/evens graph, expanded by the `graph!` macro. Cross-asserted
+/// against the hand-written `compiled_odds_evens` above so the hand expansion
+/// can't silently diverge from what the macro actually emits — if the macro's
+/// emission changes semantics, this test goes red.
+wingfoil_next::graph! {
+    fn macro_odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
+        let count = g.ticker(PERIOD).count();
+        let is_even = count.map(|i| i.is_multiple_of(2));
+        let is_odd = is_even.map(|b| !b);
+        let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+        let acc = odd_str.merge(&even_str).accumulate();
+        acc
+    }
+}
+
+#[test]
+fn hand_expansion_matches_macro_emission() {
+    let run_for = RunFor::Cycles(12);
+    let hand = compiled_odds_evens(run_for).unwrap();
+    let (macro_compiled,) = macro_odds_evens::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(
+        hand, macro_compiled,
+        "hand-written compiled expansion must match the macro's compiled()"
+    );
+    assert_eq!(interpreted_odds_evens(run_for), macro_compiled);
+}
+
 #[test]
 fn compiled_matches_interpreted() {
     let run_for = RunFor::Cycles(12);

@@ -1424,7 +1424,17 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
             }
         }
     };
-    quote! { #cfg_decl #closure_cfg_decl #state_decl #value_decl }
+    // Delay keeps an extra engine-level `__seeded` flag so it can store its
+    // first upstream value into the slot *without ticking* (classic parity —
+    // passive readers see the real first value, not `T::default()`, before the
+    // delay elapses). See the Delay branch in `node_dispatch`.
+    let delay_seed_decl = if node.op == OpKind::Delay {
+        let seeded = format_ident!("__seeded_{}", name);
+        quote! { let mut #seeded = false; }
+    } else {
+        quote! {}
+    };
+    quote! { #cfg_decl #closure_cfg_decl #state_decl #value_decl #delay_seed_decl }
 }
 
 /// Passthrough statements interleaved with node declarations in source
@@ -1537,12 +1547,54 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     let ctx = ctx_expr(target, idx);
     // `?` propagates an op error out of the enclosing `compiled()` fn or the
     // `nested()` composite closure — both return `anyhow::Result`.
-    let call = quote! {
-        {
-            let mut __ctx = #ctx;
-            match #cycle_call? {
-                #on_value
-                ::wingfoil_next::op::Tick::Quiet => false,
+    let call = if node.op == OpKind::Delay {
+        // Delay carries two engine-level behaviours classic has that `Op::cycle`
+        // cannot express, applied here in every emission path (and mirrored in
+        // interp.rs):
+        //   1. zero delay emits inline in the *same* cycle (classic special-
+        //      cases it; scheduling `time + 0` would instead pop next cycle);
+        //   2. the first upstream value is stored into the slot *without*
+        //      ticking, so passive readers see it (not `T::default()`) before
+        //      the delay elapses.
+        // `Op::cycle` still owns the queue/scheduling for the non-zero case.
+        let src_v = upstream_value_expr(def, node.refs[0]);
+        let src_t = format_ident!("__t_{}", def.nodes[node.refs[0]].name);
+        let seeded = format_ident!("__seeded_{}", name);
+        quote! {
+            {
+                if #cfg == ::wingfoil_next::wingfoil::NanoTime::ZERO {
+                    if #src_t {
+                        #value = ::core::clone::Clone::clone(#src_v);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    let mut __ctx = #ctx;
+                    match #op_path::cycle(&mut #cfg, &mut #state, (#src_v, #src_t), &mut __ctx)? {
+                        ::wingfoil_next::op::Tick::Value(__val) => {
+                            #value = __val;
+                            true
+                        }
+                        ::wingfoil_next::op::Tick::Quiet => {
+                            if #src_t && !#seeded {
+                                #value = ::core::clone::Clone::clone(#src_v);
+                                #seeded = true;
+                            }
+                            false
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            {
+                let mut __ctx = #ctx;
+                match #cycle_call? {
+                    #on_value
+                    ::wingfoil_next::op::Tick::Quiet => false,
+                }
             }
         }
     };
@@ -1776,20 +1828,23 @@ fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
     }
 }
 
+/// A `&`-expression for reading an upstream's current value. A ticker upstream
+/// has no value slot — its value is the unit literal. An input upstream's local
+/// is a borrow guard on the outer graph's slot, so it is re-borrowed rather
+/// than referenced.
+fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
+    let up = &def.nodes[ix];
+    let ident = format_ident!("__v_{}", up.name);
+    match up.op {
+        OpKind::Ticker => quote! { &() },
+        OpKind::Input => quote! { &*#ident },
+        _ => quote! { &#ident },
+    }
+}
+
 /// The `Op::In` tuple for one cycle, built from upstream value/tick locals.
-/// A ticker upstream has no value slot — its value is the unit literal. An
-/// input upstream's local is a borrow guard on the outer graph's slot, so
-/// it is re-borrowed rather than referenced.
 fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
-    let v = |ix: usize| -> TokenStream2 {
-        let up = &def.nodes[ix];
-        let ident = format_ident!("__v_{}", up.name);
-        match up.op {
-            OpKind::Ticker => quote! { &() },
-            OpKind::Input => quote! { &*#ident },
-            _ => quote! { &#ident },
-        }
-    };
+    let v = |ix: usize| upstream_value_expr(def, ix);
     let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
     match node.op.info().inputs {
         Inputs::Unit => quote! { () },

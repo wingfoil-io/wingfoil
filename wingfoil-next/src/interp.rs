@@ -939,24 +939,49 @@ impl Builder {
         let out = self.new_slot(T::default());
         let ticked = self.ticked.clone();
         let is = src.idx;
-        let cs = Self::cell(NanoTime::from(delay), DelayState::<T>::default());
+        // State carries an extra `seeded` flag alongside the op's `DelayState`
+        // (the op's state stays in ops.rs): it records whether the first
+        // upstream value has been stored into the slot.
+        let cs = Self::cell(NanoTime::from(delay), (DelayState::<T>::default(), false));
         self.push_node(
             vec![src.idx],
             Delay::<T>::ACTIVATION,
             "delay",
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
-                let (cfg, state) = &mut *cs.borrow_mut();
+                let (cfg, (state, seeded)) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
-                    Tick::Value(value) => {
-                        drop(v);
-                        *out.borrow_mut() = value;
-                        Ok(true)
+                // Two engine-level behaviours classic has that `Op::cycle`
+                // cannot express (mirrored in the `graph!` macro's Delay
+                // emission so all three paths agree):
+                //   1. zero delay emits inline this cycle;
+                //   2. the first upstream value seeds the slot *without*
+                //      ticking, so passive readers never see `T::default()`.
+                let (write, did): (Option<T>, bool) = if *cfg == NanoTime::ZERO {
+                    if src_ticked {
+                        (Some(v.clone()), true)
+                    } else {
+                        (None, false)
                     }
-                    Tick::Quiet => Ok(false),
+                } else {
+                    match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
+                        Tick::Value(value) => (Some(value), true),
+                        Tick::Quiet => {
+                            if src_ticked && !*seeded {
+                                *seeded = true;
+                                (Some(v.clone()), false)
+                            } else {
+                                (None, false)
+                            }
+                        }
+                    }
+                };
+                drop(v);
+                if let Some(w) = write {
+                    *out.borrow_mut() = w;
                 }
+                Ok(did)
             }),
             Box::new(|_| Ok(())),
         );

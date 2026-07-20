@@ -387,3 +387,92 @@ fn island_with_two_inner_schedulers() {
     assert_eq!(interpreted, island_last, "interpreted == nested");
     assert_eq!(r.value(&flat), island_last, "nested == flat wiring");
 }
+
+// ===========================================================================
+// BUG 2: delay(0) must emit inline in the same cycle (classic parity).
+// BUG 3: delay must seed its first upstream value without ticking, so passive
+//        readers see it (not T::default()) before the delay elapses.
+//
+// The clean single-source fix would live in `Delay::cycle`/`DelayState`
+// (ops.rs). Since these are engine-owned init/timing behaviours classic keeps
+// at the node level, they are applied at the engine level here — in interp.rs
+// and in the macro's Delay emission — kept in lockstep across all three paths.
+// ===========================================================================
+
+wingfoil_next::graph! {
+    fn zero_delay(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let acc = g
+            .ticker(Duration::from_nanos(10))
+            .count()
+            .delay(Duration::from_nanos(0))
+            .accumulate();
+        acc
+    }
+}
+
+/// Port of classic `delay::zero_delay_works` under `RunFor::Cycles` — a zero
+/// delay emits inline, so Cycles(4) yields 1,2,3,4 (not 1,2).
+#[test]
+fn zero_delay_emits_inline_all_paths() {
+    let run_for = RunFor::Cycles(4);
+    let (mut runner, acc) = zero_delay::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(acc);
+    assert_eq!(vec![1, 2, 3, 4], interpreted);
+
+    let (compiled,) = zero_delay::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled);
+
+    let g = GraphBuilder::new();
+    let island = zero_delay::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, r.value(&island));
+}
+
+wingfoil_next::graph! {
+    fn delay_seed(g: &GraphBuilder) -> Stream<Vec<i64>> {
+        // Source 5,6,7,… delayed by 5s; a 1s trigger samples the delayed slot
+        // at t=0,1,2,3,4 — before the delay elapses — so it observes the seeded
+        // first value (5), not i64::default() = 0.
+        let trig = g.ticker(Duration::from_secs(1));
+        let src = g.ticker(Duration::from_secs(1)).count().map(|c| *c as i64 + 4);
+        let delayed = src.delay(Duration::from_secs(5));
+        let sampled = delayed.sample(&trig).accumulate();
+        sampled
+    }
+}
+
+#[test]
+fn delay_seeds_first_value_all_paths() {
+    let run_for = RunFor::Cycles(5);
+    let (mut runner, sampled) = delay_seed::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(sampled);
+    assert_eq!(5, interpreted[0], "passive read before delay elapses sees the seed");
+
+    let (compiled,) = delay_seed::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled, "interpreted == compiled");
+
+    let g = GraphBuilder::new();
+    let island = delay_seed::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, r.value(&island), "interpreted == nested");
+}
+
+/// Direct port of classic `delay::delay_initializes_to_first_value` (fluent):
+/// `bimap(Active source, Passive delayed, a - b)` reads the first value 5 while
+/// the delay is pending, so the difference starts at 0,1,2,3,4 then settles to
+/// 5,5,5,5,5 — not 5,6,7,8,9,… (the default-seeded behaviour before the fix).
+#[test]
+fn delay_initializes_to_first_value_classic_port() {
+    let g = GraphBuilder::new();
+    let source = g.ticker(Duration::from_secs(1)).count().map(|x| *x as i64 + 4);
+    let delayed = source.delay(Duration::from_secs(5));
+    let diff = source.join_passive(&delayed, |a, b| a - b).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_secs(8)))
+        .unwrap();
+    assert_eq!(vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5], r.value(&diff));
+}
