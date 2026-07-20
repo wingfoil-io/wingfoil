@@ -3,6 +3,13 @@
 //! `cycle` body with the corresponding `MutableNode` impl in the main crate:
 //! the logic is identical, but here it is written once and executed by every
 //! engine, interpreted or compiled.
+//!
+//! Single-input ops carry `#[op(build = name)]`, which also generates their
+//! interpreted [`Builder`](crate::interp::Builder) wiring method (over
+//! `register_op1`), with the node label derived from `type_name`. Ops that
+//! don't fit that shape (multi-input, passive edges, tick-flag inputs, sources,
+//! custom state seeds, lifecycle hooks) keep hand-written `Builder` methods.
+//! See `docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
