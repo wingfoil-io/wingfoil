@@ -51,9 +51,10 @@
 //! - **Sources in every activation mode**: `Activation::THREADED`
 //!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`
 //!   [`poll`](fluent::SourceOps::poll), the both-modes
-//!   [`channel`](fluent::SourceOps::channel), and [`feedback`] edges. All
+//!   [`channel`](fluent::SourceOps::channel), and
+//!   [`feedback`](fluent::SourceOps::feedback) edges. All
 //!   non-coalescing: same-instant values ride one [`Burst`], never latest-wins.
-//! - **[`channel`]** — the `Message` envelope and senders; **[`async_source`]**
+//! - **[`channel`]** — the `Message` envelope and senders; **`async_source`**
 //!   (the `async` feature) wraps it as `produce_async`, an async producer of
 //!   timestamped values that replays deterministically in historical mode.
 //! - **Fallible lifecycle** — every `Op` function returns `anyhow::Result`;

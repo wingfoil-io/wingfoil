@@ -1,7 +1,7 @@
 //! The channel layer: cross-thread / cross-process value transport with a
 //! typed [`Message`] envelope, ported onto the Op model (Phase 3).
 //!
-//! A channel is opened with [`GraphBuilder::channel`](crate::fluent::GraphBuilder::channel),
+//! A channel is opened with [`channel`](crate::fluent::SourceOps::channel),
 //! which returns a source [`Stream`](crate::fluent::Stream) plus a clonable
 //! [`ChannelSender`]. The sender is moved to another thread (or async task);
 //! each `send` wakes the realtime kernel, so the graph ticks on arrival —
@@ -66,7 +66,7 @@ impl<T: PartialEq> PartialEq for Message<T> {
     }
 }
 
-/// The write end of a [`channel`](crate::fluent::GraphBuilder::channel).
+/// The write end of a [`channel`](crate::fluent::SourceOps::channel).
 /// Clone-able and `Send`, so it can be moved to any thread or async task.
 /// Every method wakes the paired receiver's kernel.
 pub struct ChannelSender<T> {
@@ -108,7 +108,7 @@ impl<T> ChannelSender<T> {
     /// run the receiver replays it deterministically at `time` on the graph
     /// clock (the timestamped `(NanoTime, T)` shape of classic
     /// `produce_async`); in realtime the timestamp is ignored. Producers
-    /// driving a historical replay send timestamped values, then [`close`].
+    /// driving a historical replay send timestamped values, then [`close`](Self::close).
     pub fn send_at(&self, value: T, time: NanoTime) -> bool {
         self.deliver(Message::ValueAt(value, time))
     }
