@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::channel::ChannelSender;
 use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner};
 
 /// A graph under construction. Cheap to clone; all clones share the same
@@ -103,6 +104,21 @@ impl GraphBuilder {
             inner: self.inner.clone(),
             handle,
         }
+    }
+
+    /// Open a channel: a source stream fed by the returned [`ChannelSender`]
+    /// (moved to another thread). Carries the message envelope, so a producer
+    /// can also close the stream or propagate an error into the graph.
+    /// Realtime runs only.
+    pub fn channel<T: Clone + Default + 'static>(&self) -> (Stream<T>, ChannelSender<T>) {
+        let (handle, sender) = self.inner.borrow_mut().channel::<T>();
+        (
+            Stream {
+                inner: self.inner.clone(),
+                handle,
+            },
+            sender,
+        )
     }
 
     /// Open a feedback edge: a source stream (no upstreams — the graph stays

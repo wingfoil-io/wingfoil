@@ -103,7 +103,22 @@ layer only — not expressible inside `graph!`/islands (a cycle in the island
 DAG breaks straight-line emission). Oracle: classic `feedback_works`,
 `feedback_active_works`, `feedback_passive_works`, `feedback_sink_clone_works`.
 
-### 0.3 Bursts & channel messages
+### 0.3 Bursts & channel messages  ✅ **decided + channel layer landed**
+
+Decision made and implemented (Phase 3): the `Message` envelope is ported
+(`wingfoil_next::channel::Message` — Value/ValueAt/Checkpoint/EndOfStream/
+Error), and the receiver endpoint is a threaded source op. Same-time bursts
+are **not** delivered as an atomic `Burst<T>`; instead the engine's
+one-value-per-cycle model handles them via the kernel's monotonic time bump
+(the fallback named below), keeping every op burst-free. Realtime channels
+coalesce latest-wins (like `external`); `Message::Error` propagates into the
+graph and aborts the run through the Phase 0.1 fallible cycle. Cross-process
+serde/burst framing returns with the zmq/kafka adapters. `tests/channel.rs`
+covers cross-thread delivery, error-propagation-aborts-run, clean close, and
+envelope equality. Historical channel *replay* (scheduled `ValueAt`
+delivery) is the remaining piece, noted for when a replay adapter needs it.
+
+Original design notes (retained for reference):
 
 Classic's channel envelope (`HistoricalValue` bursts, `Checkpoint`,
 `EndOfStream`, error variants) vs next's one-value-per-cycle. Decision to
@@ -171,11 +186,13 @@ values and tick times.
 
 ## Phase 3 — channel layer, threading, async
 
-- Port `channel/` endpoints (kanal transport stays) onto ops per the 0.3
-  decision; checkpoint/EndOfStream semantics preserved.
-- `produce_async` (bounded-buffer bursts, tokio bridge) on the waker
-  channel.
-- Re-implement classic `threading` and `async` examples on next.
+- ✅ Channel endpoints on ops: `channel::Message` envelope +
+  `GraphBuilder::channel()` threaded receiver source + `ChannelSender`
+  (send / send_error / checkpoint / close), with error propagation through
+  the fallible cycle. `tests/channel.rs`.
+- ⬜ `produce_async` (bounded-buffer bursts, tokio bridge) on the waker
+  channel; re-implement classic `threading`/`async` examples on next;
+  historical channel replay (scheduled `ValueAt`).
 
 ## Phase 4 — adapters, easiest-first
 
