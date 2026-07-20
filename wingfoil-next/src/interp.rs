@@ -354,6 +354,15 @@ impl Builder {
                 // Historical: block-collect the whole timestamped stream up
                 // front (producer sends values then closes), group same-time
                 // values into bursts, and schedule one delivery per timestamp.
+                //
+                // KNOWN DEVIATION from classic (`wingfoil/src/nodes/channel.rs`),
+                // which reads incrementally and non-blocking once caught up:
+                // this `start` hook *blocks* until the producer closes and holds
+                // the entire feed in memory. It therefore (a) uses unbounded
+                // memory for large feeds, and (b) would deadlock a producer that
+                // depends on this graph's output (it never gets to run). Fine
+                // for the finite offline-replay case; a streaming/back-pressured
+                // variant is future work.
                 if let RunMode::HistoricalFrom(_) = k.run_mode() {
                     let start_time = k.start_time();
                     let mut collected: Vec<(NanoTime, T)> = Vec::new();
@@ -361,7 +370,36 @@ impl Builder {
                         let (rx, _) = &mut *cs2.borrow_mut();
                         loop {
                             match rx.recv() {
-                                Ok(Message::ValueAt(v, t)) => collected.push((t, v)),
+                                Ok(Message::ValueAt(v, t)) => {
+                                    // Reject a pre-start timestamp: the kernel
+                                    // schedules callbacks verbatim, so a time
+                                    // before `start_time` would rewind the run
+                                    // clock (the first cycle firing before
+                                    // `HistoricalFrom(start)`). Classic errors on
+                                    // any time behind the graph clock; we mirror
+                                    // that.
+                                    if t < start_time {
+                                        return Err(anyhow::anyhow!(
+                                            "channel receiver: historical send_at time {t} is \
+                                             before the run start time {start_time} — timestamps \
+                                             must be at or after the start of the replay"
+                                        ));
+                                    }
+                                    // Enforce non-decreasing send order (classic
+                                    // errors on a message stamped behind the graph
+                                    // clock; here the graph clock only advances,
+                                    // so out-of-order sends are the equivalent).
+                                    if let Some((prev, _)) = collected.last()
+                                        && t < *prev
+                                    {
+                                        return Err(anyhow::anyhow!(
+                                            "channel receiver: historical send_at time {t} is \
+                                             out of order (after {prev}) — timestamped sends must \
+                                             be non-decreasing (classic errors on out-of-order)"
+                                        ));
+                                    }
+                                    collected.push((t, v));
+                                }
                                 Ok(Message::Value(v)) => collected.push((start_time, v)),
                                 Ok(Message::Checkpoint(_)) => {}
                                 Ok(Message::EndOfStream) => break,
@@ -374,9 +412,8 @@ impl Builder {
                             }
                         }
                     }
-                    // Stable sort by time keeps same-time values in send order,
-                    // then group consecutive equal timestamps into one burst.
-                    collected.sort_by_key(|(t, _)| *t);
+                    // Order is already validated non-decreasing above; group
+                    // consecutive equal timestamps into one burst.
                     let (_, groups) = &mut *cs2.borrow_mut();
                     for (t, v) in collected {
                         match groups.back_mut() {

@@ -81,6 +81,58 @@ fn external_source_historical_run_is_an_error_not_a_panic() {
 }
 
 // ===========================================================================
+// BUG 4: historical channel timestamp policy.
+//
+// A `send_at` before `start_time` used to rewind the run clock (the kernel
+// schedules callbacks verbatim); out-of-order timestamps were silently sorted
+// where classic errors. Both are now rejected at the channel's `start` hook.
+// ===========================================================================
+
+#[test]
+fn historical_channel_rejects_pre_start_timestamp() {
+    let start = NanoTime::new(100);
+    let g = GraphBuilder::new();
+    let (values, sender) = g.channel::<u64>();
+    let _acc = values.collapse_accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        sender.send_at(1, NanoTime::new(50)); // before start = 100
+        sender.close();
+    });
+    let err = r
+        .run(RunMode::HistoricalFrom(start), RunFor::Forever)
+        .expect_err("a pre-start timestamp must error");
+    producer.join().expect("producer thread");
+    assert!(
+        format!("{err:#}").contains("before the run start"),
+        "error explains pre-start rejection: {err:#}"
+    );
+}
+
+#[test]
+fn historical_channel_rejects_out_of_order_timestamps() {
+    let g = GraphBuilder::new();
+    let (values, sender) = g.channel::<u64>();
+    let _acc = values.collapse_accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        sender.send_at(1, NanoTime::new(200));
+        sender.send_at(2, NanoTime::new(100)); // out of order
+        sender.close();
+    });
+    let err = r
+        .run(HISTORICAL, RunFor::Forever)
+        .expect_err("out-of-order timestamps must error (classic parity)");
+    producer.join().expect("producer thread");
+    assert!(
+        format!("{err:#}").contains("out of order"),
+        "error explains out-of-order rejection: {err:#}"
+    );
+}
+
+// ===========================================================================
 // BUG 5: realtime close() must end the run even with a live sender clone.
 //
 // The kernel alone only ends a realtime run when *every* waker clone is
