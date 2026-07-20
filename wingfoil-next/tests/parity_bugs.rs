@@ -3,6 +3,7 @@
 //! for a case that previously drifted between the three execution paths, or
 //! pins next's behaviour against classic wingfoil.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -179,4 +180,54 @@ fn poll_source_historical_run_is_an_error_not_a_panic() {
         format!("{err:#}").contains("busy-poll"),
         "error explains the poll/realtime requirement: {err:#}"
     );
+}
+
+// ===========================================================================
+// BUG 7: the compiled path must evaluate a non-literal closure arg once.
+//
+// `count.map(make_f())` ran its factory once at wiring (interpreted) but once
+// per due cycle (compiled), because the emission inlined the factory call into
+// the cycle loop. Non-literal closure configs are now hoisted into a setup
+// local evaluated once.
+// ===========================================================================
+
+static FACTORY_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// A side-effecting factory: each call increments a global counter and returns
+/// a fresh (stateless) doubling closure.
+fn make_scale() -> impl Fn(&u64) -> u64 {
+    FACTORY_CALLS.fetch_add(1, Ordering::SeqCst);
+    |v| v * 2
+}
+
+wingfoil_next::graph! {
+    fn factory_graph(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let acc = g
+            .ticker(Duration::from_nanos(10))
+            .count()
+            .map(make_scale())
+            .accumulate();
+        acc
+    }
+}
+
+#[test]
+fn compiled_evaluates_closure_factory_once() {
+    let run_for = RunFor::Cycles(5);
+
+    FACTORY_CALLS.store(0, Ordering::SeqCst);
+    let (compiled,) = factory_graph::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(vec![2, 4, 6, 8, 10], compiled);
+    assert_eq!(
+        1,
+        FACTORY_CALLS.load(Ordering::SeqCst),
+        "factory runs once, not once per cycle"
+    );
+
+    // Interpreted evaluates it once at wiring, too — and the values agree.
+    FACTORY_CALLS.store(0, Ordering::SeqCst);
+    let (mut runner, acc) = factory_graph::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(compiled, runner.value(acc));
+    assert_eq!(1, FACTORY_CALLS.load(Ordering::SeqCst));
 }

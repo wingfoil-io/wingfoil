@@ -1363,6 +1363,23 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
         StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
         StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
     };
+    // A **non-literal** closure config (map/fold/join) — e.g. `make_f()` or a
+    // named local — is evaluated **once** here into a setup local, not inline
+    // in the cycle loop: otherwise its factory re-runs every due cycle
+    // (drifting from the interpreted engine, which evaluates it once at
+    // wiring). The cycle then calls the ordinary `Op::cycle(&mut __cfg, …)`
+    // (its concrete factory type needs no inference help). A *literal* closure
+    // (`|i| ...`, `move |i| ...`) is left inline and passed by value directly
+    // through `cycle_owned_cfg`: hoisting it to a `let` would strip the context
+    // rustc needs to infer its argument types (E0282), and its construction is
+    // a zero-cost ZST each cycle anyway.
+    let closure_cfg_decl = match info.owned_closure {
+        Some(ix) if !matches!(&exprs[ix], Expr::Closure(_)) => {
+            let e = &exprs[ix];
+            quote! { let mut #cfg = #e; }
+        }
+        _ => quote! {},
+    };
     // A unit-output op (ticker) has no value slot to declare. Otherwise seed
     // the slot per the op's `value_seed`: `Default` for most, or a clone of
     // the `__state` local for fold (so pre-first-tick reads see `init`).
@@ -1376,7 +1393,7 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
             }
         }
     };
-    quote! { #cfg_decl #state_decl #value_decl }
+    quote! { #cfg_decl #closure_cfg_decl #state_decl #value_decl }
 }
 
 /// Passthrough statements interleaved with node declarations in source
@@ -1465,16 +1482,23 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             }
         }
     };
-    // Closure configs go by value as a DIRECT argument so rustc defers
-    // their signature inference until the input argument has resolved the
-    // op's value types (a closure behind `&mut` loses that deferral and
-    // fails E0282).
+    // A *literal* closure config goes by value as a DIRECT argument so rustc
+    // defers its signature inference until `input` has resolved the op's value
+    // types (a closure behind `&mut` loses that deferral and fails E0282); it
+    // is a zero-cost ZST rebuilt each cycle. A *non-literal* config (`make_f()`,
+    // a named local) was evaluated once into `__cfg_<name>` by `node_decl` and
+    // is passed here via the ordinary `Op::cycle(&mut __cfg, …)` — its concrete
+    // type needs no inference help — so the factory runs once, not per cycle.
     let cycle_call = match node.op.info().owned_closure {
         Some(ix) => {
-            let f = &node.exprs[ix];
-            let ty = op_type(node.op);
-            quote! {
-                ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+            if matches!(&node.exprs[ix], Expr::Closure(_)) {
+                let f = &node.exprs[ix];
+                let ty = op_type(node.op);
+                quote! {
+                    ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+                }
+            } else {
+                quote! { #op_path::cycle(&mut #cfg, #state_arg, #input, &mut __ctx) }
             }
         }
         None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
