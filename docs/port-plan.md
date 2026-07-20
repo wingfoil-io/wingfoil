@@ -211,9 +211,15 @@ values and tick times.
   replay of timestamped sends), + `ChannelSender` (send / send_at /
   send_error / checkpoint / close), with error propagation through the
   fallible cycle. `external` also emits bursts. `tests/channel.rs`.
-- ⬜ A `produce_async`-shaped ergonomic wrapper (async closure → timestamped
-  burst stream) over the channel; re-implement classic `threading`/`async`
-  examples on next; bounded-buffer back-pressure.
+- ✅ `produce_async` ergonomic (async closure → timestamped burst stream)
+  over the channel, gated behind the `async` feature (tokio + futures):
+  `async_source::produce_async(&g, handle, params, |p| async {...})` matching
+  classic. `tests/produce_async.rs` (deterministic historical replay,
+  same-time-one-burst, mid-stream error abort) + `produce_async_feed`
+  example.
+- ⬜ Re-implement classic `threading`/`async` examples on next; bounded-buffer
+  back-pressure; the `RunParams` are snapshotted at wiring (classic passes
+  them at setup) — align if a producer needs run-time bounds.
 
 ## Phase 4 — adapters, easiest-first
 

@@ -49,6 +49,8 @@
 //! value store for the interpreted engine, feedback edges, and dynamic
 //! (runtime-mutated) graphs.
 
+#[cfg(feature = "async")]
+pub mod async_source;
 pub mod burst;
 pub mod channel;
 pub mod compat;
