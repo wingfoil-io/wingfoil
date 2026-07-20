@@ -1,6 +1,6 @@
 //! [`produce_async`]: the classic `produce_async` ergonomic — an async
 //! closure that yields *timestamped* values driving a graph source — over the
-//! [`channel`](crate::fluent::GraphBuilder::channel) layer.
+//! [`channel`](crate::fluent::SourceOps::channel) layer.
 //!
 //! The closure returns a [`futures::Stream`] of `Result<(NanoTime, T)>`. A
 //! task spawned on the caller's tokio runtime drives it, forwarding each
