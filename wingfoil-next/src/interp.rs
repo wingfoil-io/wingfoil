@@ -35,9 +35,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::burst::Burst;
+use crate::Burst;
 use crate::channel::{ChannelSender, Message};
-use crate::op::{Caps, Ctx, Op, Tick};
+use crate::op::{Activation, Ctx, Op, Tick};
 use crate::ops::{
     Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, Filter,
     Finally, Fold, Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, RollingMean,
@@ -86,10 +86,10 @@ type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 
 struct NodeRt {
     active_ups: Vec<usize>,
-    /// The op's `CAPS` — the capability contract drives dispatch: nodes
-    /// without `callback_activated()` skip the dirty check entirely, and
-    /// `always` nodes are cycled unconditionally (busy-poll sources).
-    caps: Caps,
+    /// The op's `ACTIVATION` — this contract drives dispatch: nodes without
+    /// `callback_activated()` skip the dirty check entirely, and `always`
+    /// nodes are cycled unconditionally (busy-poll sources).
+    activation: Activation,
     /// The op kind, for error context ("node 3 (try_map) cycle: ...").
     label: &'static str,
     cycle: CycleFn,
@@ -198,7 +198,7 @@ impl Builder {
         self.has_external = true;
         self.push_node(
             Vec::new(),
-            Caps::THREADED,
+            Activation::THREADED,
             "external",
             Box::new(move |_k| {
                 // Drain everything pending into one burst — no coalescing.
@@ -258,7 +258,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Caps {
+            Activation {
                 schedules: true,
                 threaded: true,
                 always: false,
@@ -373,14 +373,14 @@ impl Builder {
     fn push_node(
         &mut self,
         active_ups: Vec<usize>,
-        caps: Caps,
+        activation: Activation,
         label: &'static str,
         cycle: CycleFn,
         start: LifecycleFn,
     ) {
         self.nodes.push(NodeRt {
             active_ups,
-            caps,
+            activation,
             label,
             cycle,
             start,
@@ -402,7 +402,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Ticker::CAPS,
+            Ticker::ACTIVATION,
             "ticker",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -434,7 +434,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Const::<T>::CAPS,
+            Const::<T>::ACTIVATION,
             "constant",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -471,7 +471,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            Map::<A, B, F>::CAPS,
+            Map::<A, B, F>::ACTIVATION,
             "map",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -507,7 +507,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            TryMap::<A, B, F>::CAPS,
+            TryMap::<A, B, F>::ACTIVATION,
             "try_map",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -543,7 +543,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            MapFilter::<A, B, F>::CAPS,
+            MapFilter::<A, B, F>::ACTIVATION,
             "map_filter",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -577,7 +577,7 @@ impl Builder {
         let cs = Self::cell((), None::<T>);
         self.push_node(
             vec![src.idx],
-            Distinct::<T>::CAPS,
+            Distinct::<T>::ACTIVATION,
             "distinct",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -611,7 +611,7 @@ impl Builder {
         let cs = Self::cell((), None::<T>);
         self.push_node(
             vec![src.idx],
-            Difference::<T>::CAPS,
+            Difference::<T>::ACTIVATION,
             "difference",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -642,7 +642,7 @@ impl Builder {
         let cs = Self::cell(limit, 0u32);
         self.push_node(
             vec![src.idx],
-            Limit::<T>::CAPS,
+            Limit::<T>::ACTIVATION,
             "limit",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -677,7 +677,7 @@ impl Builder {
         let cs = Self::cell(NanoTime::from(interval), None::<NanoTime>);
         self.push_node(
             vec![src.idx],
-            Throttle::<T>::CAPS,
+            Throttle::<T>::ACTIVATION,
             "throttle",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -714,7 +714,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             vec![src.idx],
-            Window::<T>::CAPS,
+            Window::<T>::ACTIVATION,
             "window",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -749,7 +749,7 @@ impl Builder {
         let cs = Self::cell(decay, EwmaState::default());
         self.push_node(
             vec![src.idx],
-            Ewma::CAPS,
+            Ewma::ACTIVATION,
             "ewma",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -780,7 +780,7 @@ impl Builder {
         let cs = Self::cell(window, RollingWindowState::default());
         self.push_node(
             vec![src.idx],
-            RollingSum::CAPS,
+            RollingSum::ACTIVATION,
             "rolling_sum",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -811,7 +811,7 @@ impl Builder {
         let cs = Self::cell(window, RollingWindowState::default());
         self.push_node(
             vec![src.idx],
-            RollingMean::CAPS,
+            RollingMean::ACTIVATION,
             "rolling_mean",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -841,7 +841,7 @@ impl Builder {
         let out = self.new_slot((NanoTime::ZERO, src_slot.borrow().clone()));
         self.push_node(
             vec![src.idx],
-            WithTime::<T>::CAPS,
+            WithTime::<T>::ACTIVATION,
             "with_time",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -870,7 +870,7 @@ impl Builder {
         let out = self.new_slot(NanoTime::ZERO);
         self.push_node(
             vec![src.idx],
-            TickedAt::<T>::CAPS,
+            TickedAt::<T>::ACTIVATION,
             "ticked_at",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -899,7 +899,7 @@ impl Builder {
         let out = self.new_slot(NanoTime::ZERO);
         self.push_node(
             vec![src.idx],
-            TickedAtElapsed::<T>::CAPS,
+            TickedAtElapsed::<T>::ACTIVATION,
             "ticked_at_elapsed",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -934,7 +934,7 @@ impl Builder {
         let cs = Self::cell(capacity, Vec::<T>::new());
         self.push_node(
             vec![src.idx],
-            Buffer::<T>::CAPS,
+            Buffer::<T>::ACTIVATION,
             "buffer",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -995,7 +995,7 @@ impl Builder {
         }
         self.push_node(
             active,
-            Join3::<A, B, C, D, F>::CAPS,
+            Join3::<A, B, C, D, F>::ACTIVATION,
             "trimap",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1033,7 +1033,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            Inspect::<A, F>::CAPS,
+            Inspect::<A, F>::ACTIVATION,
             "inspect",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1067,7 +1067,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![src.idx, condition.idx],
-            Filter::<T>::CAPS,
+            Filter::<T>::ACTIVATION,
             "filter",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -1102,7 +1102,7 @@ impl Builder {
         let cs = Self::cell(f, init);
         self.push_node(
             vec![src.idx],
-            Fold::<A, B, F>::CAPS,
+            Fold::<A, B, F>::ACTIVATION,
             "fold",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1136,7 +1136,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         self.push_node(
             vec![trigger.idx],
-            Sample::<T>::CAPS,
+            Sample::<T>::ACTIVATION,
             "sample",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -1201,7 +1201,7 @@ impl Builder {
         }
         self.push_node(
             active,
-            Join::<A, B, C, F>::CAPS,
+            Join::<A, B, C, F>::ACTIVATION,
             "bimap",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1240,7 +1240,7 @@ impl Builder {
         let cs = Self::cell(NanoTime::from(delay), DelayState::<T>::default());
         self.push_node(
             vec![src.idx],
-            Delay::<T>::CAPS,
+            Delay::<T>::ACTIVATION,
             "delay",
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
@@ -1278,7 +1278,7 @@ impl Builder {
         let (ia, ib) = (a.idx, b.idx);
         self.push_node(
             vec![a.idx, b.idx],
-            Merge2::<T>::CAPS,
+            Merge2::<T>::ACTIVATION,
             "merge",
             Box::new(move |k| {
                 let (ta, tb) = {
@@ -1321,7 +1321,7 @@ impl Builder {
         self.has_always = true;
         self.push_node(
             Vec::new(),
-            Poll::<T, F>::CAPS,
+            Poll::<T, F>::ACTIVATION,
             "poll",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1356,7 +1356,7 @@ impl Builder {
         let cs = Self::cell(f, ());
         self.push_node(
             vec![src.idx],
-            Sink::<A, F>::CAPS,
+            Sink::<A, F>::ACTIVATION,
             "for_each",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1395,7 +1395,7 @@ impl Builder {
         let cs2 = cs.clone();
         self.push_node(
             vec![src.idx],
-            Finally::<A, F>::CAPS,
+            Finally::<A, F>::ACTIVATION,
             "finally",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
@@ -1432,7 +1432,7 @@ impl Builder {
     /// graph stays acyclic) plus the [`FeedbackSink`] that feeds it. Values
     /// sent through the sink are emitted by the source on the *next* cycle.
     /// The source reads a shared time-queue and ticks when the sink has
-    /// scheduled it — `Caps::SCHEDULES` for the callback-driven dispatch,
+    /// scheduled it — `Activation::SCHEDULES` for the callback-driven dispatch,
     /// though it is the sink (not the op) that does the scheduling.
     pub fn feedback<T>(&mut self) -> (Handle<T>, FeedbackSink<T>)
     where
@@ -1444,7 +1444,7 @@ impl Builder {
         let q = queue.clone();
         self.push_node(
             Vec::new(),
-            Caps::SCHEDULES,
+            Activation::SCHEDULES,
             "feedback",
             Box::new(move |k| {
                 let now = k.time();
@@ -1481,7 +1481,7 @@ impl Builder {
         let source = sink.source;
         self.push_node(
             vec![src.idx],
-            Caps::NONE,
+            Activation::NONE,
             "feedback_send",
             Box::new(move |k| {
                 let at = k.time() + 1;
@@ -1522,7 +1522,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         let cell = Rc::new(RefCell::new(node));
         let cell2 = cell.clone();
-        let caps = Caps {
+        let caps = Activation {
             schedules: callback_activated,
             threaded: false,
             always: false,
@@ -1572,7 +1572,7 @@ impl Builder {
 
 /// Executes a wired graph. Dispatch walks nodes in wiring (topological)
 /// order each cycle: a node runs when an active upstream ticked, or — only
-/// for ops that declared [`Caps::schedules`](crate::op::Caps) — when the
+/// for ops that declared [`Activation::schedules`](crate::op::Activation) — when the
 /// kernel marked it dirty.
 pub struct Runner {
     nodes: Vec<NodeRt>,
@@ -1634,10 +1634,12 @@ impl Runner {
             let mut dirty = vec![false; n];
             'run: while kernel.begin_cycle(&mut dirty) {
                 for (i, node) in self.nodes.iter_mut().enumerate() {
-                    let due = node.caps.always || (node.caps.callback_activated() && dirty[i]) || {
-                        let t = self.ticked.borrow();
-                        node.active_ups.iter().any(|&u| t[u])
-                    };
+                    let due = node.activation.always
+                        || (node.activation.callback_activated() && dirty[i])
+                        || {
+                            let t = self.ticked.borrow();
+                            node.active_ups.iter().any(|&u| t[u])
+                        };
                     let did = if due {
                         match (node.cycle)(&mut kernel) {
                             Ok(did) => did,

@@ -10,7 +10,7 @@ use std::ops::Sub;
 
 use anyhow::Result;
 
-use crate::op::{Caps, Ctx, Op, Tick};
+use crate::op::{Activation, Ctx, Op, Tick};
 use wingfoil::{NanoTime, TimeQueue};
 
 /// Ticks at a fixed interval, anchored to its first activation to avoid
@@ -22,7 +22,7 @@ impl Op for Ticker {
     type State = Option<NanoTime>;
     type In<'a> = ();
     type Out = ();
-    const CAPS: Caps = Caps::SCHEDULES;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
         cfg: &mut NanoTime,
@@ -53,7 +53,7 @@ impl<T: Clone + 'static> Op for Const<T> {
     type State = ();
     type In<'a> = ();
     type Out = T;
-    const CAPS: Caps = Caps::SCHEDULES;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(cfg: &mut T, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
         Ok(Tick::Value(cfg.clone()))
@@ -86,7 +86,7 @@ where
     type State = ();
     type In<'a> = (&'a A,);
     type Out = B;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         Ok(Tick::Value(cfg(input.0)))
@@ -108,7 +108,7 @@ where
     type State = ();
     type In<'a> = (&'a A,);
     type Out = B;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         Ok(Tick::Value(cfg(input.0)?))
@@ -130,7 +130,7 @@ where
     type State = ();
     type In<'a> = (&'a A,);
     type Out = B;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         let (value, emit) = cfg(input.0);
@@ -152,7 +152,7 @@ impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
     type State = Option<T>;
     type In<'a> = (&'a T,);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -182,7 +182,7 @@ where
     type State = Option<T>;
     type In<'a> = (&'a T,);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -209,7 +209,7 @@ impl<T: Clone + 'static> Op for Limit<T> {
     type State = u32;
     type In<'a> = (&'a T,);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut u32, state: &mut u32, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
         if *state >= *cfg {
@@ -231,7 +231,7 @@ impl<T: Clone + 'static> Op for Throttle<T> {
     type State = Option<NanoTime>;
     type In<'a> = (&'a T,);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut NanoTime,
@@ -267,7 +267,7 @@ where
     type State = ();
     type In<'a> = (&'a A,);
     type Out = A;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<A>> {
         cfg(input.0);
@@ -300,7 +300,7 @@ impl<T: Clone + 'static> Op for Window<T> {
     type State = WindowState<T>;
     type In<'a> = (&'a T,);
     type Out = Vec<T>;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn start(cfg: &mut NanoTime, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
         state.next_window = ctx.time() + *cfg;
@@ -345,7 +345,7 @@ impl<T: Clone + 'static> Op for Buffer<T> {
     type State = Vec<T>;
     type In<'a> = (&'a T,);
     type Out = Vec<T>;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut usize,
@@ -379,7 +379,7 @@ where
     type State = ();
     type In<'a> = (&'a A, &'a B, &'a C);
     type Out = D;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut F,
@@ -399,7 +399,7 @@ impl<T: Clone + 'static> Op for WithTime<T> {
     type State = ();
     type In<'a> = (&'a T,);
     type Out = (NanoTime, T);
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -420,7 +420,7 @@ impl<T: 'static> Op for TickedAt<T> {
     type State = ();
     type In<'a> = (&'a T,);
     type Out = NanoTime;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -440,7 +440,7 @@ impl<T: 'static> Op for TickedAtElapsed<T> {
     type State = ();
     type In<'a> = (&'a T,);
     type Out = NanoTime;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -492,7 +492,7 @@ impl Op for Ewma {
     type State = EwmaState;
     type In<'a> = (&'a f64,);
     type Out = f64;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut EwmaDecay,
@@ -570,7 +570,7 @@ impl Op for RollingSum {
     type State = RollingWindowState;
     type In<'a> = (&'a f64,);
     type Out = f64;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut usize,
@@ -591,7 +591,7 @@ impl Op for RollingMean {
     type State = RollingWindowState;
     type In<'a> = (&'a f64,);
     type Out = f64;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         cfg: &mut usize,
@@ -612,7 +612,7 @@ impl<T: Clone + 'static> Op for Filter<T> {
     type State = ();
     type In<'a> = (&'a T, &'a bool);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
@@ -645,7 +645,7 @@ where
     type State = B;
     type In<'a> = (&'a A,);
     type Out = B;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, state: &mut B, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         cfg(state, input.0);
@@ -663,7 +663,7 @@ impl<T: Clone + 'static> Op for Sample<T> {
     type State = ();
     type In<'a> = (&'a T,);
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
         Ok(Tick::Value(input.0.clone()))
@@ -671,7 +671,7 @@ impl<T: Clone + 'static> Op for Sample<T> {
 }
 
 /// A busy-poll source: the closure is called once on **every** engine cycle
-/// (`Caps::ALWAYS`), ticking when it returns `Some`. This is the busy-spin
+/// (`Activation::ALWAYS`), ticking when it returns `Some`. This is the busy-spin
 /// ingestion pattern — polling a ring buffer, socket, or channel via
 /// `try_recv` — and it is *lossless and ordered*: one value per cycle, no
 /// coalescing. A realtime run containing a poll source never parks. Realtime
@@ -693,7 +693,7 @@ where
     type State = ();
     type In<'a> = ();
     type Out = T;
-    const CAPS: Caps = Caps::ALWAYS;
+    const ACTIVATION: Activation = Activation::ALWAYS;
 
     fn cycle(cfg: &mut F, _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
         Ok(match cfg() {
@@ -718,7 +718,7 @@ where
     type State = ();
     type In<'a> = (&'a A,);
     type Out = ();
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<()>> {
         cfg(input.0)?;
@@ -744,7 +744,7 @@ where
     type State = A;
     type In<'a> = (&'a A,);
     type Out = ();
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(_cfg: &mut F, state: &mut A, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<()>> {
         *state = input.0.clone();
@@ -771,7 +771,7 @@ where
     type State = ();
     type In<'a> = (&'a A, &'a B);
     type Out = C;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         Ok(Tick::Value(cfg(input.0, input.1)))
@@ -804,7 +804,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     /// Source value plus whether the source ticked this cycle.
     type In<'a> = (&'a T, bool);
     type Out = T;
-    const CAPS: Caps = Caps::SCHEDULES;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
         cfg: &mut NanoTime,
@@ -835,7 +835,7 @@ impl<T: Clone + 'static> Op for Merge2<T> {
     type State = ();
     type In<'a> = ((&'a T, bool), (&'a T, bool));
     type Out = T;
-    const CAPS: Caps = Caps::NONE;
+    const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),

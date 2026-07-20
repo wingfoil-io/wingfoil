@@ -28,7 +28,7 @@ use std::time::Duration;
 use anyhow::Result;
 use wingfoil::NanoTime;
 
-use crate::burst::Burst;
+use crate::Burst;
 use crate::channel::ChannelSender;
 use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner};
 

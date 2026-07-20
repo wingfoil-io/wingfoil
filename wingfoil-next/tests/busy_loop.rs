@@ -1,5 +1,5 @@
 //! The busy-spin ingestion pattern: a `poll` source is cycled on **every**
-//! engine cycle (`Caps::ALWAYS`), and a realtime run containing one never
+//! engine cycle (`Activation::ALWAYS`), and a realtime run containing one never
 //! parks — the kernel spins cycles back-to-back, polling each time. This is
 //! the latency-critical pattern (ring buffers, sockets, `try_recv`), and it
 //! is lossless and ordered — one value per cycle, no coalescing — in
@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use wingfoil::{RunFor, RunMode};
-use wingfoil_next::op::{Caps, Op};
+use wingfoil_next::op::{Activation, Op};
 use wingfoil_next::ops::Poll;
 use wingfoil_next::prelude::*;
 
@@ -73,13 +73,13 @@ fn spin_run_still_fires_scheduled_callbacks() {
     assert!(n >= 4, "expected >= 4 ticker fires in 24ms at 5ms, got {n}");
 }
 
-/// The capability is declared statically, like every other cap.
+/// The activation is declared statically, like every other op.
 #[test]
-fn poll_caps_are_always() {
+fn poll_activation_is_always() {
     const {
-        assert!(<Poll<u64, fn() -> Option<u64>> as Op>::CAPS.always);
-        assert!(!<Poll<u64, fn() -> Option<u64>> as Op>::CAPS.callback_activated());
-        assert!(!Caps::SCHEDULES.always);
+        assert!(<Poll<u64, fn() -> Option<u64>> as Op>::ACTIVATION.always);
+        assert!(!<Poll<u64, fn() -> Option<u64>> as Op>::ACTIVATION.callback_activated());
+        assert!(!Activation::SCHEDULES.always);
     }
 }
 

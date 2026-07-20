@@ -7,7 +7,7 @@
 //! value to the channel (timestamped, so it works in **both** run modes —
 //! deterministic historical replay on the graph clock, or live realtime) and
 //! closing at end-of-stream. A producer error propagates into the graph and
-//! aborts the run. The graph source emits [`Burst<T>`](crate::burst::Burst),
+//! aborts the run. The graph source emits [`Burst<T>`](crate::Burst),
 //! never latest-wins.
 //!
 //! Gated behind the `async` feature (it pulls in `tokio` + `futures`); the
@@ -29,7 +29,7 @@ use std::future::Future;
 use futures::StreamExt;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-use crate::burst::Burst;
+use crate::Burst;
 use crate::fluent::{GraphBuilder, SourceOps, Stream};
 
 /// The run parameters handed to a producer closure (mirrors classic
