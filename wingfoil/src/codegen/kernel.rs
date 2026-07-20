@@ -145,6 +145,12 @@ impl Kernel {
         self.time
     }
 
+    /// The run mode (realtime vs historical) — lets a source op choose
+    /// wall-clock (waker-driven) or graph-clock (schedule-driven) behaviour.
+    pub fn run_mode(&self) -> RunMode {
+        self.run_mode
+    }
+
     /// Whether this is the final cycle of the run (the run bound is about to
     /// stop it). Ops that buffer and flush on a boundary (window, buffer) use
     /// this to flush their pending contents before the run ends.

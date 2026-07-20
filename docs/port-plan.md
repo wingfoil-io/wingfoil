@@ -103,20 +103,30 @@ layer only — not expressible inside `graph!`/islands (a cycle in the island
 DAG breaks straight-line emission). Oracle: classic `feedback_works`,
 `feedback_active_works`, `feedback_passive_works`, `feedback_sink_clone_works`.
 
-### 0.3 Bursts & channel messages  ✅ **decided + channel layer landed**
+### 0.3 Bursts & channel messages  ✅ **burst pattern, both modes, landed**
 
-Decision made and implemented (Phase 3): the `Message` envelope is ported
-(`wingfoil_next::channel::Message` — Value/ValueAt/Checkpoint/EndOfStream/
-Error), and the receiver endpoint is a threaded source op. Same-time bursts
-are **not** delivered as an atomic `Burst<T>`; instead the engine's
-one-value-per-cycle model handles them via the kernel's monotonic time bump
-(the fallback named below), keeping every op burst-free. Realtime channels
-coalesce latest-wins (like `external`); `Message::Error` propagates into the
-graph and aborts the run through the Phase 0.1 fallible cycle. Cross-process
-serde/burst framing returns with the zmq/kafka adapters. `tests/channel.rs`
-covers cross-thread delivery, error-propagation-aborts-run, clean close, and
-envelope equality. Historical channel *replay* (scheduled `ValueAt`
-delivery) is the remaining piece, noted for when a replay adapter needs it.
+Decision (corrected) and implemented (Phase 3): **the burst pattern
+throughout — never latest-wins, never a dropped value.** A source emits
+`Stream<Burst<T>>` (`wingfoil_next::burst::Burst<T>`), where a burst is every
+value occurring at one instant, grouped and delivered atomically in a single
+cycle. Same-time values ride *one* burst — they are not coalesced (the
+latest-wins bug of my first cut) and not split across the clock by
+monotonic bump (the earlier fallback, also wrong). This matches classic
+`Burst<T>` / `HistoricalValue(ValueAt<Burst<T>>)`.
+
+Channel sources (`GraphBuilder::channel`) run in **both** modes:
+- **Realtime**: waker-driven; a cycle drains all arrived values into one
+  burst.
+- **Historical**: the producer sends timestamped values
+  ([`ChannelSender::send_at`]) then closes; the receiver groups same-time
+  values into bursts at `start` and schedules delivery on the graph clock,
+  so a wall-clock-arriving async feed replays **deterministically** at its
+  timestamps — the classic `produce_async` model. `external` likewise emits
+  bursts (realtime-only, no timestamps). `Message::Error` aborts the run via
+  the Phase 0.1 fallible cycle. `tests/channel.rs` covers all of it (lossless
+  cross-thread delivery, deterministic historical replay, same-time-one-burst,
+  error abort, envelope equality). Cross-process serde framing returns with
+  the zmq/kafka adapters.
 
 Original design notes (retained for reference):
 
@@ -196,12 +206,14 @@ values and tick times.
 ## Phase 3 — channel layer, threading, async
 
 - ✅ Channel endpoints on ops: `channel::Message` envelope +
-  `GraphBuilder::channel()` threaded receiver source + `ChannelSender`
-  (send / send_error / checkpoint / close), with error propagation through
-  the fallible cycle. `tests/channel.rs`.
-- ⬜ `produce_async` (bounded-buffer bursts, tokio bridge) on the waker
-  channel; re-implement classic `threading`/`async` examples on next;
-  historical channel replay (scheduled `ValueAt`).
+  `GraphBuilder::channel()` receiver source emitting `Stream<Burst<T>>`,
+  running in **both** modes (realtime waker-driven, historical deterministic
+  replay of timestamped sends), + `ChannelSender` (send / send_at /
+  send_error / checkpoint / close), with error propagation through the
+  fallible cycle. `external` also emits bursts. `tests/channel.rs`.
+- ⬜ A `produce_async`-shaped ergonomic wrapper (async closure → timestamped
+  burst stream) over the channel; re-implement classic `threading`/`async`
+  examples on next; bounded-buffer back-pressure.
 
 ## Phase 4 — adapters, easiest-first
 
