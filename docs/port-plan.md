@@ -30,6 +30,60 @@ generate_standalone}` + fingerprints + the build-example crate) is retired
 at the end — `compiled()` and islands supersede it with strictly better
 guarantees.
 
+## Capability matrix
+
+What each execution path supports, per wingfoil pattern. Legend: ✅ works ·
+🟡 partial · 📅 planned · ❌ not supported **by design** (not a missing
+feature — the path's value depends on the constraint).
+
+| Pattern / capability | Interpreted (today) | Interpreted + dirty-list (4.5) | Compiled `compiled()` | Island `nested()` |
+|---|:--:|:--:|:--:|:--:|
+| Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ |
+| Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ |
+| Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ |
+| Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ |
+| Feedback / cycles | ✅¹ | ✅ | ❌ | ❌ |
+| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ❌ | ❌ |
+| External / channel / async sources (`THREADED`) | ✅ | ✅ | ❌ | ❌ |
+| Bursts (never latest-wins) | ✅ | ✅ | ❌² | ❌² |
+| Historical replay | ✅ | ✅ | ✅³ | ✅ |
+| Realtime | ✅ | ✅ | 🟡³ | ✅ |
+| Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
+| Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
+| Stateful `FnMut` closures | 🟡⁷ | 🟡⁷ | ❌⁷ | ❌⁷ |
+| Re-run (independent repeated runs) | ❌⁸ | 📅⁸ | ✅⁹ | ✅⁹ |
+| Dynamic graph (runtime add/remove) | ❌ | 📅 | ❌ | 🟡¹⁰ |
+| Sparse-graph efficiency (work ∝ *active* nodes) | ❌¹¹ | ✅ | 🟡¹² | ✅¹³ |
+| Dense hot-path speed (measured) | 1× | ~1× | 3–4×¹⁴ | interior 3–4×¹⁴ |
+
+¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
+² No burst *sources* exist in the macro vocabulary; the pattern is about IO
+  ingestion, which the compiled path excludes anyway.
+³ Compiled runs its own loop with no external wake, so realtime is
+  timer-driven only; historical/timer + data-via-consts is full.
+⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
+  needs them (none do yet).
+⁵ Only the declared output tuple is returned — no runner, no peeking
+  intermediate nodes; an island exposes only its single output.
+⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
+  locals (compile-time), not values threaded in at the call. Interpreted
+  wiring captures any runtime local.
+⁷ Bound is `Fn`, deliberately — a mutating capture would drift between
+  engines (compiled re-creates the closure per cycle). Per-node state goes in
+  `fold`.
+⁸ v1 Runner is single-run (spike 0.4); well-defined re-run needs a per-node
+  reset hook (planned).
+⁹ `compiled()` is a plain fn — each call is a fresh independent run.
+¹⁰ Island interior is fixed at compile time, but the island *itself* can be
+  wired dynamically into the interpreted graph once 4.5 lands.
+¹¹ `O(N)` topological sweep every cycle — the Phase 4.5 gap.
+¹² Straight-line per-node `if cond` checks (cheap, but every node); region
+  gating (skip quiet sub-graphs) is the planned compiled counterpart.
+¹³ A quiet island isn't cycled — islands already give coarse region gating.
+¹⁴ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
+
 ## Phase 0 — design spikes
 
 Four contract questions, each resolved with a spike + parity test before any
@@ -295,9 +349,22 @@ not the graph size. Concretely:
   sparse workloads is only achievable **after** this phase; until then next's
   interpreted engine is knowingly slower on large sparse graphs.
 
+**Dynamism rides on this.** A dirty-list engine that already maintains a
+mutable frontier of active nodes is the natural home for **runtime graph
+mutation** — classic's `graph_node` / `dynamic_group` (add/remove nodes and
+sub-graphs mid-run) live on exactly this machinery, which the topological
+all-nodes sweep cannot cleanly express. So the dynamic-graph capability
+(previously fenced out of v1) folds in here: once the engine propagates from
+a mutable ready-set instead of scanning a fixed node vector, appending nodes
++ slots and splicing edges at runtime becomes tractable, with layer/dirty
+bookkeeping updated for the affected region. The compiled and island paths
+stay static by design (their whole value is a fixed monomorphized schedule);
+dynamism is an interpreted-engine capability, matching classic.
+
 Sequencing: independent of the catalog/adapter volume (Phases 2/4) — it can
 land any time before the Phase 6 benchmark gate, and should land before
-claiming interpreted-engine performance parity with classic.
+claiming interpreted-engine performance parity with classic. Dynamic-graph
+support can be a follow-on increment once the dirty-list core is in.
 
 ## Phase 5 — infrastructure
 
@@ -362,14 +429,15 @@ claiming interpreted-engine performance parity with classic.
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
-| Dynamic graph expectations | `graph_node` users | explicit decision in Phase 2; islands cover static composition today |
+| Dynamic graph expectations | `graph_node` users | **Phase 4.5** dirty-list engine is the enabler (mutable frontier); islands cover static composition today |
 | Python API drift | downstream breakage | facade keeps bindings stable; pytest as gate |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
 ## Explicitly out of scope (v1)
 
 - Feedback inside `graph!` / islands (fluent only).
-- Runtime graph mutation (pending Phase 2 decision).
+- Runtime graph mutation — now targeted at **Phase 4.5** (the dirty-list
+  engine is its enabler), not a permanent exclusion.
 - Arena value store for the interpreted engine — now folded into **Phase
   4.5** (the dirty-list rework is the right moment to land it), no longer
   indefinitely deferred.
