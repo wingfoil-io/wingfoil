@@ -503,27 +503,30 @@ fn chain_root(expr: &Expr) -> Option<&Ident> {
     }
 }
 
-/// True if any identifier in `tokens` names the builder or a known stream —
-/// used to reject graph wiring hidden inside arbitrary (passthrough) code,
-/// which `wire()` would execute but `compiled()` could not see.
-fn mentions_graph_ident(
+/// The first identifier in `tokens` that names the builder or a known stream,
+/// if any — used to reject graph wiring hidden inside arbitrary (passthrough)
+/// code, which `wire()` would execute but `compiled()` could not see. Returns
+/// the offending [`Ident`] (with its span) so the error can name it precisely.
+fn offending_graph_ident(
     tokens: TokenStream2,
     builder: &Ident,
     streams: &std::collections::HashMap<String, usize>,
-) -> bool {
+) -> Option<Ident> {
     use proc_macro2::TokenTree;
     for tt in tokens {
         match tt {
             TokenTree::Ident(i) if i == *builder || streams.contains_key(&i.to_string()) => {
-                return true;
+                return Some(i);
             }
-            TokenTree::Group(gp) if mentions_graph_ident(gp.stream(), builder, streams) => {
-                return true;
+            TokenTree::Group(gp) => {
+                if let Some(found) = offending_graph_ident(gp.stream(), builder, streams) {
+                    return Some(found);
+                }
             }
             _ => {}
         }
     }
-    false
+    None
 }
 
 /// Collect the identifiers a pattern binds (`let (a, b) = ..` → a, b).
@@ -565,6 +568,11 @@ fn stream_value_type(ty: &Type) -> syn::Result<Type> {
     ))
 }
 
+/// Prefix for macro-generated intermediate node names. User stream bindings
+/// starting with it are rejected (see [`ChainWalker::walk_chain`]), so a
+/// generated name can never collide with a user identifier in the emission.
+const RESERVED_PREFIX: &str = "__wf_anon";
+
 /// Builds the node list while walking fluent chains.
 struct ChainWalker {
     nodes: Vec<NodeDef>,
@@ -594,7 +602,11 @@ impl ChainWalker {
 
     fn anon_name(&mut self, span: proc_macro2::Span) -> Ident {
         self.anon += 1;
-        Ident::new(&format!("anon{}", self.anon), span)
+        // `RESERVED_PREFIX` (rejected for user bindings in `walk_chain`) makes
+        // these intermediate node names un-collidable with user stream names —
+        // a user stream `anon1` no longer shares the emitted `__v_anon1` slot
+        // with a generated intermediate.
+        Ident::new(&format!("{RESERVED_PREFIX}{}", self.anon), span)
     }
 
     fn lookup(&self, ident: &Ident) -> syn::Result<usize> {
@@ -815,6 +827,15 @@ impl ChainWalker {
             };
         }
 
+        if bound_name.to_string().starts_with(RESERVED_PREFIX) {
+            return Err(syn::Error::new(
+                bound_name.span(),
+                format!(
+                    "`{bound_name}` uses the reserved `{RESERVED_PREFIX}` prefix — it is used for \
+                     macro-generated intermediate node names; pick another name"
+                ),
+            ));
+        }
         if self.index_of.insert(bound_name.to_string(), cur).is_some() {
             return Err(syn::Error::new(
                 bound_name.span(),
@@ -961,12 +982,14 @@ impl Parse for GraphDef {
             }
             // Passthrough: arbitrary non-wiring code.
             let tokens = quote! { #stmt };
-            if mentions_graph_ident(tokens, &builder, &walker.index_of) {
+            if let Some(bad) = offending_graph_ident(tokens, &builder, &walker.index_of) {
                 return Err(syn::Error::new(
-                    stmt.span(),
-                    "graph wiring must be straight-line `let name = <chain>;` statements — \
-                     the builder and stream names cannot appear inside other code (compiled() \
-                     could not see nodes built there)",
+                    bad.span(),
+                    format!(
+                        "`{bad}` (the builder or a bound stream name) may only appear in \
+                         straight-line wiring `let name = <chain>;` statements, not inside other \
+                         code — compiled() could not see nodes built there"
+                    ),
                 ));
             }
             if let Stmt::Local(local) = stmt {
@@ -1031,6 +1054,12 @@ impl Parse for GraphDef {
                 ),
             ));
         }
+        // Resolve each tail name to the *actual node* it names, then use that
+        // node's own name for the value/tick slots. A bare alias (`let out =
+        // acc;`) makes `out` an alias for `acc`'s node with no node of its own,
+        // so `__v_out` would be undefined compiled/nested — resolving to the
+        // node name (`acc`) makes it reference the real slot in all three paths.
+        let mut resolved_out_names: Vec<Ident> = Vec::with_capacity(out_names.len());
         for name in &out_names {
             let Some(&ix) = walker.index_of.get(&name.to_string()) else {
                 return Err(syn::Error::new(
@@ -1047,7 +1076,9 @@ impl Parse for GraphDef {
                     ),
                 ));
             }
+            resolved_out_names.push(walker.nodes[ix].name.clone());
         }
+        let out_names = resolved_out_names;
         if !inputs.is_empty() && out_names.len() != 1 {
             return Err(syn::Error::new(
                 tail.span(),
@@ -1540,10 +1571,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let out_values: Vec<TokenStream2> = def
         .outs
         .iter()
-        .map(|(o, _)| {
-            let v = format_ident!("__v_{}", o);
-            quote! { #v }
-        })
+        .map(|(o, _)| output_value_expr(def, o))
         .collect();
 
     quote! {
@@ -1577,7 +1605,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let n = def.nodes.len();
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
-    let out_v = format_ident!("__v_{}", out_name);
+    let out_v = output_value_expr(def, out_name);
     let callback_activated = def
         .nodes
         .iter()
@@ -1698,6 +1726,23 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
 /// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
 fn op_type(op: OpKind) -> TokenStream2 {
     op.info().op_type
+}
+
+/// The value expression for an output node (`o` is a resolved node name): its
+/// `__v_<name>` slot, or the unit literal `()` for a unit-output op (a bare
+/// ticker returned directly), which declares no value slot.
+fn output_value_expr(def: &GraphDef, o: &Ident) -> TokenStream2 {
+    let is_unit = def
+        .nodes
+        .iter()
+        .find(|n| &n.name == o)
+        .is_some_and(|n| n.op.info().unit_output);
+    if is_unit {
+        quote! { () }
+    } else {
+        let v = format_ident!("__v_{}", o);
+        quote! { #v }
+    }
 }
 
 /// The op type wrapped as `<Type as Op>` so trait items resolve without

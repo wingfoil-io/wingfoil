@@ -231,3 +231,85 @@ fn compiled_evaluates_closure_factory_once() {
     assert_eq!(compiled, runner.value(acc));
     assert_eq!(1, FACTORY_CALLS.load(Ordering::SeqCst));
 }
+
+// ===========================================================================
+// BUG 8: the macro must not accept inputs it emits broken code for.
+//
+// A bare alias output (`let out = acc;`), a bare-ticker return (`Stream<()>`),
+// and a user stream named like a generated intermediate (`anon1`) all worked
+// interpreted but emitted `__v_*`-not-found / collision errors compiled/nested.
+// ===========================================================================
+
+wingfoil_next::graph! {
+    fn aliased_output(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let acc = g.ticker(Duration::from_nanos(10)).count().accumulate();
+        // A bare alias used as the returned output.
+        let out = acc;
+        out
+    }
+}
+
+#[test]
+fn bare_alias_output_works_in_all_paths() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, out) = aliased_output::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert_eq!(vec![1u64, 2, 3], interpreted);
+
+    let (compiled,) = aliased_output::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled);
+
+    let g = GraphBuilder::new();
+    let island = aliased_output::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, r.value(&island));
+}
+
+wingfoil_next::graph! {
+    fn bare_ticker(g: &GraphBuilder) -> Stream<()> {
+        let tick = g.ticker(Duration::from_nanos(10));
+        tick
+    }
+}
+
+#[test]
+fn bare_ticker_return_works_in_all_paths() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, tick) = bare_ticker::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    // Unit output: the value is `()`; the point is that all three paths compile
+    // and run to the same bound.
+    let _: () = runner.value(tick);
+
+    let ((),) = bare_ticker::compiled(HISTORICAL, run_for).unwrap();
+
+    let g = GraphBuilder::new();
+    let island = bare_ticker::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    let _: () = r.value(&island);
+}
+
+wingfoil_next::graph! {
+    // A user stream literally named `anon1` — previously collided with the
+    // macro's generated intermediate names (now reserved-prefixed).
+    fn anon_collision(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let anon1 = g.ticker(Duration::from_nanos(10)).count().map(|i| i * 2);
+        let out = anon1.accumulate();
+        out
+    }
+}
+
+#[test]
+fn user_stream_named_anon1_does_not_collide() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, out) = anon_collision::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert_eq!(vec![2u64, 4, 6], interpreted);
+
+    let (compiled,) = anon_collision::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled);
+}
