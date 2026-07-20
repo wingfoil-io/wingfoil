@@ -86,6 +86,18 @@ cargo fmt --all -- --check
 transitive dependencies builds proto files). On Debian/Ubuntu:
 `sudo apt-get install -y protobuf-compiler`.
 
+**Toolchain gap (clippy):** CI runs clippy on the current **stable** rustc,
+which can be *newer* than the toolchain in a dev sandbox. Newer clippy adds
+lints (e.g. `collapsible_match`) that the older one doesn't emit, so a local
+`cargo lint` can pass while CI fails with `-D warnings`. If CI's clippy step is
+red but local is green, reproduce with CI's version explicitly:
+
+```bash
+rustup toolchain install <ci-version>   # e.g. 1.97.0 — see the failing log's clippy URL
+cargo +<ci-version> clippy --workspace --all-targets -- -D warnings
+cargo +<ci-version> clippy --workspace --all-targets --all-features -- -D warnings
+```
+
 ## Development Workflow Rules
 
 ### Branch Management
