@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::channel::{ChannelSender, Message};
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
     Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, External,
@@ -204,6 +205,54 @@ impl Builder {
                 _t: PhantomData,
             },
             source,
+        )
+    }
+
+    /// Open a channel: a source stream fed by the returned [`ChannelSender`]
+    /// (moved to another thread). Carries the [`Message`] envelope, so a
+    /// producer can also close the stream or propagate an error — a
+    /// `Message::Error` makes the receiver's next cycle fail, aborting the
+    /// run. Realtime only, latest-wins between cycles (like `external`).
+    pub fn channel<T: Clone + Default + 'static>(&mut self) -> (Handle<T>, ChannelSender<T>) {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+        self.has_external = true;
+        self.push_node(
+            Vec::new(),
+            Caps::THREADED,
+            "channel",
+            Box::new(move |_k| {
+                // Drain everything pending; latest value wins; an error aborts.
+                let mut latest = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(Message::Value(v) | Message::ValueAt(v, _)) => latest = Some(v),
+                        Ok(Message::Error(e)) => {
+                            return Err(anyhow::anyhow!("{e:#}")
+                                .context("channel receiver: producer sent an error"));
+                        }
+                        Ok(Message::EndOfStream | Message::Checkpoint(_)) => {}
+                        Err(_) => break,
+                    }
+                }
+                match latest {
+                    Some(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    None => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        let sender = ChannelSender::new(tx, self.waker.clone(), idx);
+        (
+            Handle {
+                idx,
+                _t: PhantomData,
+            },
+            sender,
         )
     }
 
