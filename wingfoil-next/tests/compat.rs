@@ -49,3 +49,37 @@ fn classic_constant_and_delay() {
     // constant ticks once at t=0; delayed re-emits it at t=50.
     assert_eq!(vec![7], delayed.peek_value());
 }
+
+/// Peeking before the graph has run is a reachable user error. `peek_value`
+/// mirrors the classic infallible signature (`-> T`), so it enforces the
+/// precondition with an explanatory panic rather than an out-of-bounds one.
+#[test]
+#[should_panic(expected = "Signal::run must be called before Signal::peek_value")]
+fn peek_before_run_panics_with_a_clear_message() {
+    let counted = ticker(Duration::from_nanos(100)).count();
+    // No `run` — this must panic with the documented precondition message,
+    // never a bare index-out-of-bounds.
+    let _ = counted.peek_value();
+}
+
+/// Re-running is deferred: the builder is consumed by the first run, so a
+/// second `run` must surface a clear error instead of silently running an
+/// empty graph and then panicking out-of-bounds in `peek_value`. The first
+/// run's result stays readable afterwards.
+#[test]
+fn second_run_errors_and_leaves_first_result_intact() {
+    let counted = ticker(Duration::from_nanos(100)).count();
+    counted.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(5, counted.peek_value());
+
+    let err = counted
+        .run(HISTORICAL, RunFor::Cycles(5))
+        .expect_err("a second run must error, not silently run an empty graph");
+    assert!(
+        err.to_string().contains("called more than once"),
+        "unexpected error message: {err}"
+    );
+
+    // The first run's runner is untouched, so peek still returns its value.
+    assert_eq!(5, counted.peek_value());
+}
