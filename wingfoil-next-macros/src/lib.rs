@@ -183,11 +183,38 @@ enum StateInit {
     OptionNone(TokenStream2),
 }
 
+/// How `node_decl` seeds a node's `__v_<name>` output value slot — the value
+/// a passive/sample/join reader sees *before* the node's first tick. This must
+/// match what the interpreted engine seeds its slot with (`interp.rs`), or the
+/// engines drift on pre-first-tick reads.
+enum ValueSeed {
+    /// `let mut v = Default::default();` — the output type's default.
+    Default,
+    /// `let mut v = Clone::clone(&state);` — a clone of the op's `__state`
+    /// local (fold seeds its slot with `init`, matching `interp.rs` which does
+    /// `new_slot(init.clone())`). Requires the op to keep a `__state` local.
+    CloneState,
+}
+
+/// Which of an op's upstream `refs` are *active* (propagate ticks / appear in
+/// the dispatch condition). Single-sourced here so the interpreted engine, the
+/// compiled emission, and the nested emission cannot disagree — previously
+/// Sample's passive data edge was a hard-coded special case in three places.
+enum Edges {
+    /// Every `ref` is an active upstream.
+    AllActive,
+    /// Only the `ref` at this index is active; the rest are passive (read by
+    /// value but do not trigger). Sample is `OneActive(1)`: its data source
+    /// (`refs[0]`) is passive, its trigger (`refs[1]`) is the sole active edge.
+    OneActive(usize),
+}
+
 /// Everything the emitters need to know about an op, **single-sourced** in one
 /// [`OpKind::info`] arm per op: its type, the boolean facts dispatch consults,
 /// and the structural shapes `node_decl`/`cycle_input`/`op_type` build from.
 /// Adding an op is one `info` arm (plus its parse arm and enum variant); the
-/// named fields make a half-filled entry a compile error, not a silent gap.
+/// named fields — spelled in full per arm, with no `..base` fill — make a
+/// half-filled entry a compile error, not a silent gap.
 struct OpInfo {
     /// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
     op_type: TokenStream2,
@@ -205,6 +232,10 @@ struct OpInfo {
     inputs: Inputs,
     cfg_init: CfgInit,
     state_init: StateInit,
+    /// How the output value slot is seeded before the first tick.
+    value_seed: ValueSeed,
+    /// Which upstream `refs` are active (drive dispatch).
+    edges: Edges,
 }
 
 impl OpInfo {
@@ -221,107 +252,195 @@ impl OpInfo {
 impl OpKind {
     fn info(self) -> OpInfo {
         let nanotime = quote! { ::wingfoil_next::wingfoil::NanoTime };
-        let base = OpInfo {
-            op_type: quote! {},
-            callback_activated: false,
-            has_start: false,
-            state_in_start: false,
-            owned_closure: None,
-            unit_output: false,
-            inputs: Inputs::One,
-            cfg_init: CfgInit::None,
-            state_init: StateInit::None,
-        };
+        // Every field is spelled out per arm — no `..base` fill — so adding a
+        // field (or a new op) that omits it is a compile error, not a silent
+        // gap that never fires compiled/nested.
         match self {
             // A graph edge, not a real op: it declares no storage and is never
             // dispatched (the `nested` expansion reads its value/tick from the
             // outer graph). A benign all-false `info` keeps whole-graph scans
             // like the callback-activation check from special-casing it.
-            OpKind::Input => base,
+            OpKind::Input => OpInfo {
+                op_type: quote! {},
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
             OpKind::Ticker => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Ticker },
                 callback_activated: true,
                 has_start: true,
                 state_in_start: true,
+                owned_closure: None,
                 unit_output: true,
                 inputs: Inputs::Unit,
                 cfg_init: CfgInit::NanoTimeFrom(0),
                 state_init: StateInit::OptionNone(nanotime),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Constant => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Const<_> },
                 callback_activated: true,
                 has_start: true,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::Unit,
                 cfg_init: CfgInit::Expr { arg: 0, ty: None },
-                ..base
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Map => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Map<_, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(0),
-                ..base
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Filter => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Filter<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::Two,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Fold => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Fold<_, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(1),
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
                 state_init: StateInit::Expr(0),
-                ..base
+                // Seed the slot with a clone of the accumulator (init), so a
+                // passive/sample/join read before the first tick sees `init`,
+                // not `Default` — matching interp.rs `new_slot(init.clone())`.
+                value_seed: ValueSeed::CloneState,
+                edges: Edges::AllActive,
             },
             OpKind::Sample => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Sample<_> },
-                ..base
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                // refs = [data, trigger]; only the trigger is active.
+                edges: Edges::OneActive(1),
             },
             OpKind::Merge => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Merge2<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::TwoTickPairs,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Join => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(0),
+                unit_output: false,
                 inputs: Inputs::Two,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Delay => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Delay<_> },
                 callback_activated: true,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::OneTick,
                 cfg_init: CfgInit::NanoTimeFrom(0),
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::DelayState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Ewma => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Ewma },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { ::wingfoil_next::ops::EwmaDecay }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::EwmaState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::RollingSum => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::RollingSum },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::RollingMean => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::RollingMean },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
         }
     }
@@ -338,12 +457,13 @@ struct NodeDef {
 
 impl NodeDef {
     /// Active upstream node indices (what propagates ticks to this node).
-    /// Sample is the one op with a passive edge: its data source is read by
-    /// value slot only; the trigger is its sole active edge.
+    /// The active/passive edge shape is single-sourced in [`OpInfo::edges`]
+    /// (e.g. Sample's data edge is passive, its trigger active) so the three
+    /// emission paths cannot disagree.
     fn active_ups(&self) -> Vec<usize> {
-        match self.op {
-            OpKind::Sample => vec![self.refs[1]],
-            _ => self.refs.clone(),
+        match self.op.info().edges {
+            Edges::AllActive => self.refs.clone(),
+            Edges::OneActive(i) => vec![self.refs[i]],
         }
     }
 }
@@ -1243,11 +1363,18 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
         StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
         StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
     };
-    // A unit-output op (ticker) has no value slot to declare.
+    // A unit-output op (ticker) has no value slot to declare. Otherwise seed
+    // the slot per the op's `value_seed`: `Default` for most, or a clone of
+    // the `__state` local for fold (so pre-first-tick reads see `init`).
     let value_decl = if info.unit_output {
         quote! {}
     } else {
-        quote! { let mut #value = Default::default(); }
+        match info.value_seed {
+            ValueSeed::Default => quote! { let mut #value = Default::default(); },
+            ValueSeed::CloneState => {
+                quote! { let mut #value = ::core::clone::Clone::clone(&#state); }
+            }
+        }
     };
     quote! { #cfg_decl #state_decl #value_decl }
 }
