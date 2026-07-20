@@ -4,10 +4,15 @@
 //! Python bindings — keep working on the new engine. Classic code is written
 //! against free source functions and *runs the stream directly*:
 //!
-//! ```ignore
+//! ```
+//! use std::time::Duration;
+//! use wingfoil::{NanoTime, RunFor, RunMode};
+//! use wingfoil_next::compat::ticker;
+//!
 //! let counted = ticker(Duration::from_nanos(100)).count();
 //! counted.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;
 //! assert_eq!(5, counted.peek_value());
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
 //! This module reproduces that shape over the [`Builder`](crate::interp)
