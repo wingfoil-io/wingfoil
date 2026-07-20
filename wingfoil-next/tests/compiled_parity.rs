@@ -72,7 +72,7 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     }
     let mut dirty = [false; 10];
     while k.begin_cycle(&mut dirty) {
-        // [0] ticker — the only op with Caps::SCHEDULES, so the only dirty check.
+        // [0] ticker — the only op with Activation::SCHEDULES, so the only dirty check.
         let t_tick = dirty[0] && {
             let mut ctx = Ctx::new(&mut k, 0);
             matches!(

@@ -3,22 +3,23 @@
 //! An op is *only* semantics. It owns no storage (state is an associated
 //! type the engine instantiates wherever it likes), holds no upstream
 //! pointers (inputs are passed in, typed, per cycle), and touches the engine
-//! only through the narrow [`Ctx`] — with a `const` capability declaration
-//! ([`Caps`]) that tells engines statically whether it ever will.
+//! only through the narrow [`Ctx`] — with a `const` activation declaration
+//! ([`Activation`]) that tells engines statically whether it ever will.
 
 use anyhow::Result;
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, TimeQueue};
 
-/// Static capability declaration for an op type.
+/// Static declaration of how the engine must activate an op — beyond a plain
+/// upstream data-tick.
 ///
-/// Because capabilities are `const`, engines can specialise on them at
+/// Because the activation is `const`, engines can specialise on it at
 /// compile time: an op with `schedules: false` can never be activated by a
 /// callback, so a compiled schedule emits no dirty check for it and an
 /// interpreted engine can skip its callback bookkeeping. This replaces the
 /// retrofit's name-based `can_receive_callbacks` allowlist with a contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Caps {
+pub struct Activation {
     /// The op registers time callbacks (via [`Ctx::schedule`]) in `cycle` or
     /// `start`, and can therefore be activated without an upstream tick.
     pub schedules: bool,
@@ -37,23 +38,23 @@ pub struct Caps {
     pub always: bool,
 }
 
-impl Caps {
-    pub const NONE: Caps = Caps {
+impl Activation {
+    pub const NONE: Activation = Activation {
         schedules: false,
         threaded: false,
         always: false,
     };
-    pub const SCHEDULES: Caps = Caps {
+    pub const SCHEDULES: Activation = Activation {
         schedules: true,
         threaded: false,
         always: false,
     };
-    pub const THREADED: Caps = Caps {
+    pub const THREADED: Activation = Activation {
         schedules: false,
         threaded: true,
         always: false,
     };
-    pub const ALWAYS: Caps = Caps {
+    pub const ALWAYS: Activation = Activation {
         schedules: false,
         threaded: false,
         always: true,
@@ -152,7 +153,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops
-    /// declaring [`Caps::SCHEDULES`].
+    /// declaring [`Activation::SCHEDULES`].
     pub fn schedule(&mut self, at: NanoTime) {
         match &mut self.sink {
             Sink::Kernel { kernel, node } => kernel.schedule(*node, at),
@@ -190,7 +191,7 @@ pub trait Op: 'static {
     type State: 'static;
     type In<'a>;
     type Out: Clone + 'static;
-    const CAPS: Caps;
+    const ACTIVATION: Activation;
 
     fn cycle(
         cfg: &mut Self::Cfg,

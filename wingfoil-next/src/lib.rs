@@ -12,14 +12,14 @@
 //! 2. **Types and closures erased at wiring time** — codegen had to
 //!    reverse-engineer types from name strings and could never recover
 //!    closures (hence the `Inputs` re-supply and its drift risk).
-//! 3. **Capabilities invisible** — nothing declared "this node schedules
+//! 3. **Activation invisible** — nothing declared "this node schedules
 //!    callbacks", forcing name-based allowlists.
 //!
 //! This crate inverts all three:
 //!
 //! - [`Op`](op::Op) defines node semantics as a pure, monomorphizable
 //!   associated function over **external** state and **typed inputs passed
-//!   in** by the engine, with a `const CAPS` capability declaration.
+//!   in** by the engine, with a `const ACTIVATION` declaration.
 //! - [`interp::Builder`] is the interpreted engine: it owns the value slots
 //!   and the state, adapts each `Op` behind one dyn boundary, and drives the
 //!   shared [`Kernel`](wingfoil::codegen::Kernel). [`fluent`] layers the
@@ -37,8 +37,8 @@
 //! cannot drift.
 //!
 //! Since built out from that prototype: the `graph!` macro (one wiring
-//! function, both engines), threaded/IO sources (`Caps::THREADED` +
-//! busy-spin `Caps::ALWAYS`), compiled islands nested in interpreted graphs,
+//! function, both engines), threaded/IO sources (`Activation::THREADED` +
+//! busy-spin `Activation::ALWAYS`), compiled islands nested in interpreted graphs,
 //! and — as the first step of the full port — **fallible lifecycle**: every
 //! `Op` function returns `anyhow::Result`, and the interpreted [`Runner`]
 //! reports the first `start`/`cycle`/`stop`/`teardown` error with node
@@ -51,7 +51,6 @@
 
 #[cfg(feature = "async")]
 pub mod async_source;
-pub mod burst;
 pub mod channel;
 pub mod compat;
 pub mod fluent;
@@ -68,9 +67,16 @@ pub mod stats;
 /// without naming each trait. Adapter-specific op traits stay opt-in — pull
 /// them in alongside, e.g. `use wingfoil_next::stats::StatisticsOps;`.
 pub mod prelude {
-    pub use crate::burst::{Burst, burst};
     pub use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
+    pub use crate::{Burst, burst};
 }
+
+/// A group of same-instant values, delivered atomically in one cycle (never
+/// coalesced / latest-wins). The **same type** as the classic engine's
+/// `Burst<T>` — a `tinyvec::TinyVec<[T; 1]>` — re-exported (with its
+/// [`burst!`] constructor macro) so both engines share the grouping type.
+#[doc(inline)]
+pub use wingfoil::{Burst, burst};
 
 /// One wiring definition, two engines: expands to a module with
 /// `interpreted()` (fluent wiring) and `compiled(run_mode, run_for)` (fully
