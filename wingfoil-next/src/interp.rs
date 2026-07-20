@@ -33,7 +33,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message};
@@ -1205,27 +1205,36 @@ impl Runner {
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
-        // timestamps and runs in both modes.
-        assert!(
-            realtime || !self.has_external,
-            "graphs with external sources require RunMode::RealTime — untimestamped external \
-             events have no place in a deterministic historical replay (use a channel with \
-             timestamped sends for historical)"
-        );
-        assert!(
-            realtime || !self.has_always,
-            "graphs with poll sources require RunMode::RealTime — there is nothing to \
-             busy-poll in a deterministic historical replay"
-        );
+        // timestamps and runs in both modes. These are reachable user errors
+        // (a caller choosing the wrong `RunMode`), so per CLAUDE.md's
+        // error-handling rules they `bail!` rather than `assert!`.
+        if !realtime && self.has_external {
+            bail!(
+                "graphs with external sources require RunMode::RealTime — untimestamped \
+                 external events have no place in a deterministic historical replay (use a \
+                 channel with timestamped sends for historical)"
+            );
+        }
+        if !realtime && self.has_always {
+            bail!(
+                "graphs with poll sources require RunMode::RealTime — there is nothing to \
+                 busy-poll in a deterministic historical replay"
+            );
+        }
         // The waker/ready channel is only used by realtime sources
         // (external, poll, realtime channel). A historical channel is
         // schedule-driven and needs no waker.
         let needs_waker = self.has_external || (self.has_channel && realtime);
         let mut kernel = if needs_waker {
-            let ready = self
-                .ready
-                .take()
-                .expect("a Runner with realtime sources supports a single run");
+            // The ready receiver is consumed by the first realtime run; a
+            // second run of a graph with realtime sources is a reachable user
+            // error, not an invariant, so `bail!` rather than `expect`.
+            let Some(ready) = self.ready.take() else {
+                bail!(
+                    "a Runner with realtime sources (external/poll/realtime channel) supports \
+                     only a single run — the waker/ready channel is consumed by the first run"
+                );
+            };
             Kernel::with_ready(run_mode, run_for, ready)
         } else {
             Kernel::new(run_mode, run_for)

@@ -55,3 +55,42 @@ fn fold_non_default_init_seed_parity() {
     r.run(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, r.value(&island), "interpreted == nested");
 }
+
+// ===========================================================================
+// BUG 6: reachable user errors must `bail!`, not panic.
+//
+// Running a graph with external/poll sources historically, or running a
+// realtime-source graph twice, is a reachable caller mistake — it must return
+// an `Err`, not `assert!`/`.expect()`-panic.
+// ===========================================================================
+
+#[test]
+fn external_source_historical_run_is_an_error_not_a_panic() {
+    let g = GraphBuilder::new();
+    let (values, _src) = g.external::<u64>();
+    let _acc = values.collapse_accumulate();
+    let mut r = g.build();
+
+    let err = r
+        .run(HISTORICAL, RunFor::Cycles(3))
+        .expect_err("external source in a historical run must error");
+    assert!(
+        format!("{err:#}").contains("RunMode::RealTime"),
+        "error explains the realtime requirement: {err:#}"
+    );
+}
+
+#[test]
+fn poll_source_historical_run_is_an_error_not_a_panic() {
+    let g = GraphBuilder::new();
+    let _p = g.poll(|| Some(1u64)).accumulate();
+    let mut r = g.build();
+
+    let err = r
+        .run(HISTORICAL, RunFor::Cycles(3))
+        .expect_err("poll source in a historical run must error");
+    assert!(
+        format!("{err:#}").contains("busy-poll"),
+        "error explains the poll/realtime requirement: {err:#}"
+    );
+}
