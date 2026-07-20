@@ -17,7 +17,25 @@ wingfoil = { path = "../wingfoil" }
 wingfoil-next-macros = { path = "../wingfoil-next-macros" }
 anyhow = { workspace = true }
 
-[dev-dependencies]
-# Used only by the async_source example: an async task producing values
-# into an external source.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+# `async` feature: the `produce_async` ergonomic source (async closure →
+# timestamped burst stream) over the channel. Optional so the core engine
+# stays executor-free.
+futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "macros",
+], optional = true }
+
+[features]
+default = []
+async = ["dep:tokio", "dep:futures"]
+
+[[example]]
+name = "async_source"
+required-features = ["async"]
+
+[[example]]
+name = "produce_async_feed"
+required-features = ["async"]
