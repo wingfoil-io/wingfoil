@@ -34,6 +34,51 @@
 //! let (sum2,) = evens_sum::compiled(run_mode, run_for);
 //! ```
 //!
+//! # `compiled()` vs `nested()` — the graph *is* the program vs a *component*
+//!
+//! Both are generated from the same tokens and call the same `Op::cycle`
+//! code, so they are semantically identical. They differ only in **who owns
+//! the run loop**:
+//!
+//! - **`compiled()` — the whole program.** A standalone function that owns
+//!   its own `Kernel`, keeps every node's state
+//!   in local variables, runs the entire cycle loop to completion, and
+//!   returns the declared output values. It is the top-level driver; nothing
+//!   else runs it. Because LLVM sees the whole graph as one function it fuses
+//!   across node boundaries and constant-folds (the dense speed-up). The
+//!   price of being the whole program is that it is a closed box: static
+//!   topology, outputs-only (no runner, no observing internals), and no IO,
+//!   feedback, or live inputs.
+//!
+//! - **`nested()` — a component.** The same graph packed into a **single
+//!   node** mounted inside a larger interpreted graph. It does *not* own a
+//!   run loop — the outer interpreted engine drives it once per activation,
+//!   like any node — but inside that node the dispatch is the *same*
+//!   monomorphized straight-line code `compiled()` emits, so the interior
+//!   runs at compiled speed. Inner tickers/delays can't touch the outer
+//!   kernel directly, so the island keeps a private
+//!   `TimeQueue` and forwards only its earliest
+//!   pending time outward; on activation it pops the inner callbacks now due
+//!   into its own dirty flags (a mini `begin_cycle`) and runs the interior.
+//!   Time stays globally consistent because the island reads the outer
+//!   engine's clock rather than keeping its own. The cost is one dyn call per
+//!   activation at the boundary; the gain is composability — the island is
+//!   one node, so the graph *around* it can be dynamic, IO-driven, observed,
+//!   or itself contain other islands.
+//!
+//! This is the "islands of static in a sea of dynamic" pattern: reach for
+//! `compiled()` when the whole computation is static and self-driving (a
+//! backtest kernel, a build-time pipeline — run it, read the outputs); reach
+//! for `nested()` when a mostly-dynamic or IO-driven graph has a hot inner
+//! sub-computation worth compiling.
+//!
+//! Which expansions you get is a syntactic tell: a **self-contained** graph
+//! (sources inside, no stream parameters) emits `compiled()` **and**
+//! `nested()` — it can run as a whole program *or* mount as a source-island.
+//! An **input-taking** graph (`fn ema(g, price: &Stream<f64>) -> Stream<f64>`)
+//! emits **only** `nested()` — it inherently needs its inputs fed, so it is a
+//! component, never a standalone program.
+//!
 //! The function takes the builder (any name) as its first parameter, then
 //! optionally input streams (`name: &Stream<T>`) — the graph's edges in,
 //! usable as chain roots. It returns `Stream<T>` — or a tuple
