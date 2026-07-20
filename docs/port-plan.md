@@ -171,7 +171,7 @@ DAG breaks straight-line emission). Oracle: classic `feedback_works`,
 
 Decision (corrected) and implemented (Phase 3): **the burst pattern
 throughout — never latest-wins, never a dropped value.** A source emits
-`Stream<Burst<T>>` (`wingfoil_next::burst::Burst<T>`), where a burst is every
+`Stream<Burst<T>>` (`wingfoil_next::Burst<T>`), where a burst is every
 value occurring at one instant, grouped and delivered atomically in a single
 cycle. Same-time values ride *one* burst — they are not coalesced (the
 latest-wins bug of my first cut) and not split across the clock by
@@ -238,7 +238,7 @@ machinery when it does. This closes the last Phase-0 spike by decision.
 
 Recipe per node, in this order, no exceptions:
 
-1. identify `Cfg` / `State` / `In<'a>` / `Out` / `CAPS`;
+1. identify `Cfg` / `State` / `In<'a>` / `Out` / `ACTIVATION`;
 2. move the classic `cycle` body verbatim into the op (same logic, inputs
    passed in instead of read from upstream `Rc`s);
 3. builder method → fluent method → macro `OpSpec` row (where the op is
@@ -339,7 +339,7 @@ not the graph size. Concretely:
   (`schedules`/`threaded`/`always` sources) and the tick-propagation frontier,
   then expand breadth-first through active downstream edges only.
 - Preserve everything already correct: burst delivery, feedback's `+1`
-  scheduled edge, `Caps`-driven dispatch (callback-activated / always),
+  scheduled edge, `Activation`-driven dispatch (callback-activated / always),
   passive edges (read-not-triggering), and the `is_last_cycle` boundary flush.
 
 **Scope notes:**
