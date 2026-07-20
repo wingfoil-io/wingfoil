@@ -31,9 +31,15 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+
+/// Process-unique id stamped on every [`Builder`] (and its [`Handle`]s) so a
+/// handle used with a *different* builder's [`Runner`] is caught by a
+/// `debug_assert` rather than silently returning the wrong node's value.
+static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message};
@@ -54,6 +60,11 @@ pub trait AsHandle<T> {
 /// A typed reference to a node's output within a [`Builder`] / [`Runner`].
 pub struct Handle<T> {
     idx: usize,
+    /// The id of the [`Builder`] that minted this handle (see
+    /// [`NEXT_BUILDER_ID`]). Guards against using a handle with a different
+    /// builder's runner (a colliding index + type would otherwise return the
+    /// wrong node's value).
+    builder_id: u64,
     _t: PhantomData<T>,
 }
 
@@ -81,6 +92,17 @@ impl<T> Handle<T> {
     #[doc(hidden)]
     pub fn index(&self) -> usize {
         self.idx
+    }
+}
+
+impl Builder {
+    /// Mint a [`Handle`] stamped with this builder's id.
+    fn make_handle<T>(&self, idx: usize) -> Handle<T> {
+        Handle {
+            idx,
+            builder_id: self.id,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -194,6 +216,10 @@ pub struct Builder {
     /// `finished` flag (here one shared flag ends the run on any channel
     /// close, which is the single-channel realtime case the fix targets).
     finished: Rc<Cell<bool>>,
+    /// Process-unique id (see [`NEXT_BUILDER_ID`]), stamped on every [`Handle`]
+    /// this builder mints and carried into its [`Runner`], so a handle used
+    /// with a *different* runner is caught by a `debug_assert`.
+    id: u64,
 }
 
 impl Default for Builder {
@@ -209,6 +235,7 @@ impl Default for Builder {
             has_always: false,
             has_channel: false,
             finished: Rc::new(Cell::new(false)),
+            id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 }
@@ -255,10 +282,7 @@ impl Builder {
             index: idx,
         };
         (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
+            self.make_handle(idx),
             source,
         )
     }
@@ -430,15 +454,16 @@ impl Builder {
         );
         let sender = ChannelSender::new(tx, self.waker.clone(), idx);
         (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
+            self.make_handle(idx),
             sender,
         )
     }
 
     pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+        debug_assert_eq!(
+            h.builder_id, self.id,
+            "Handle used with a different Builder than the one that minted it"
+        );
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()
@@ -526,10 +551,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
@@ -558,10 +580,7 @@ impl Builder {
                 Ticker::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn constant<T: Clone + Default + 'static>(&mut self, value: T) -> Handle<T> {
@@ -590,10 +609,7 @@ impl Builder {
                 Const::<T>::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Pair each value with the current engine time: `(time, value)`. Kept
@@ -621,10 +637,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Rate-limit: emit at most once per `interval`.
@@ -656,10 +669,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Buffer values and flush them as a `Vec` on each `interval` boundary
@@ -697,10 +707,7 @@ impl Builder {
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// The classic `trimap`: combine three streams, each independently active
@@ -760,10 +767,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn filter<T: Clone + Default + 'static>(
@@ -794,10 +798,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn fold<A, B, F>(&mut self, src: Handle<A>, init: B, f: F) -> Handle<B>
@@ -829,10 +830,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Sample `src` (passively) whenever `trigger` ticks.
@@ -862,10 +860,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Join two streams with a closure; ticks when either input ticks.
@@ -930,10 +925,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Delay `src` by a fixed interval.
@@ -968,10 +960,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Merge two streams; the earliest-supplied ticked input wins.
@@ -1010,10 +999,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// A busy-poll source: `f` runs once per engine cycle, ticking on
@@ -1046,10 +1032,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Run `f` once at teardown — after the run ends, even if a cycle aborted
@@ -1095,10 +1078,7 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Finally::<A, F>::teardown(cfg, state, &mut ctx)
         });
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Open a feedback edge: returns a source stream (no upstreams, so the
@@ -1131,10 +1111,7 @@ impl Builder {
             Box::new(|_| Ok(())),
         );
         (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
+            self.make_handle(idx),
             FeedbackSink { queue, source: idx },
         )
     }
@@ -1166,10 +1143,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Mount a *composite* node: an entire compiled sub-graph behaving as a
@@ -1220,10 +1194,7 @@ impl Builder {
                 Ok(())
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub(crate) fn ticked_rc(&self) -> Rc<RefCell<Vec<bool>>> {
@@ -1240,6 +1211,7 @@ impl Builder {
             has_always: self.has_always,
             has_channel: self.has_channel,
             finished: self.finished,
+            id: self.id,
         }
     }
 }
@@ -1257,6 +1229,7 @@ pub struct Runner {
     has_always: bool,
     has_channel: bool,
     finished: Rc<Cell<bool>>,
+    id: u64,
 }
 
 impl Runner {
@@ -1373,6 +1346,10 @@ impl Runner {
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
+        debug_assert_eq!(
+            h.builder_id, self.id,
+            "Handle used with a different Runner than the Builder that minted it"
+        );
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()
