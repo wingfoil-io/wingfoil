@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use wingfoil_next::op::{Caps, Op};
+use wingfoil_next::op::{Activation, Op};
 use wingfoil_next::ops::{Map, Ticker};
 use wingfoil_next::prelude::*;
 
@@ -128,17 +128,17 @@ fn duration_bound_matches_classic_engine() {
     assert_eq!(classic.peek_value(), r.value(&next));
 }
 
-/// The capability contract is `const`, so it can be checked at compile time
+/// The activation contract is `const`, so it can be checked at compile time
 /// — the assertions below are evaluated by rustc, not at runtime. This is
-/// what lets engines specialise on capabilities with zero cost.
+/// what lets engines specialise on activation with zero cost.
 #[test]
-fn caps_are_declared_statically() {
+fn activation_is_declared_statically() {
     const {
-        assert!(Ticker::CAPS.schedules);
-        assert!(!<Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS.callback_activated());
+        assert!(Ticker::ACTIVATION.schedules);
+        assert!(!<Map<u64, bool, fn(&u64) -> bool> as Op>::ACTIVATION.callback_activated());
         assert!(matches!(
-            <Map<u64, bool, fn(&u64) -> bool> as Op>::CAPS,
-            Caps {
+            <Map<u64, bool, fn(&u64) -> bool> as Op>::ACTIVATION,
+            Activation {
                 schedules: false,
                 threaded: false,
                 always: false,
