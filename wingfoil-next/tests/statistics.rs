@@ -6,7 +6,8 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::fluent::GraphBuilder;
+use wingfoil_next::prelude::*;
+use wingfoil_next::stats::StatisticsOps;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 

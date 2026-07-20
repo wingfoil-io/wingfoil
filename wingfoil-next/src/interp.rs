@@ -202,7 +202,7 @@ impl Builder {
             "external",
             Box::new(move |_k| {
                 // Drain everything pending into one burst — no coalescing.
-                let mut burst = Burst::new();
+                let mut burst: Burst<T> = Burst::new();
                 while let Ok(v) = rx.try_recv() {
                     burst.push(v);
                 }
@@ -282,7 +282,7 @@ impl Builder {
                     // Realtime: drain everything pending into one burst.
                     RunMode::RealTime => {
                         let (rx, _) = &mut *cs.borrow_mut();
-                        let mut burst = Burst::new();
+                        let mut burst: Burst<T> = Burst::new();
                         loop {
                             match rx.try_recv() {
                                 Ok(Message::Value(v) | Message::ValueAt(v, _)) => burst.push(v),
@@ -334,7 +334,7 @@ impl Builder {
                     for (t, v) in collected {
                         match groups.back_mut() {
                             Some((bt, burst)) if *bt == t => burst.push(v),
-                            _ => groups.push_back((t, Burst::one(v))),
+                            _ => groups.push_back((t, Burst::from([v]))),
                         }
                     }
                     for (t, _) in groups.iter() {

@@ -2,17 +2,31 @@
 //! (`ticker(d).count().map(f).filter(&cond)`) over the explicit
 //! [`Builder`](crate::interp::Builder) core.
 //!
-//! A [`Stream<T>`] is a typed handle that also carries a shared reference to
-//! the graph under construction, so combinators can be methods. This layer
-//! is *wiring-time only* — it adds nothing to execution (the built
-//! [`Runner`] is identical), and a future `graph!` macro or recording engine
-//! sits at exactly this surface.
+//! Combinators are **extension traits**, not inherent methods, so the op set
+//! is modular and open:
+//!
+//! - [`SourceOps`] — source constructors on [`GraphBuilder`]
+//!   (`ticker`/`constant`/`external`/`channel`/`poll`/`feedback`);
+//! - [`StreamOps`] — the core combinators on [`Stream<T>`] (`map`/`fold`/
+//!   `filter`/`join`/…);
+//! - [`StatisticsOps`](crate::stats::StatisticsOps) — a *separate* trait in
+//!   `crate::stats`, brought into scope only when you want EWMA / rolling ops.
+//!
+//! Bring in what you need (`use wingfoil_next::prelude::*` for the common
+//! two, plus any extra trait), and add your own: a third-party op trait just
+//! implements methods over the public [`Stream::wire`] / [`GraphBuilder::source`]
+//! extension primitives — the same way `StreamOps` and `StatisticsOps` do.
+//!
+//! This layer is *wiring-time only* — it adds nothing to execution (the built
+//! [`Runner`] is identical).
 
 use std::cell::RefCell;
+use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
+use wingfoil::NanoTime;
 
 use crate::burst::Burst;
 use crate::channel::ChannelSender;
@@ -30,37 +44,32 @@ impl GraphBuilder {
         Self::default()
     }
 
-    /// A source that ticks at a fixed interval.
-    pub fn ticker(&self, period: Duration) -> Stream<()> {
-        let handle = self.inner.borrow_mut().ticker(period);
+    /// Extension point for source traits ([`SourceOps`] and third-party):
+    /// wire a source from the builder and wrap the resulting handle as a
+    /// [`Stream`]. Single-output sources are one-liners over this.
+    pub fn source<T, F>(&self, f: F) -> Stream<T>
+    where
+        F: FnOnce(&mut Builder) -> Handle<T>,
+    {
+        let handle = f(&mut self.inner.borrow_mut());
+        self.wrap(handle)
+    }
+
+    /// Run a closure with the underlying builder — for sources that return
+    /// extra handles alongside the stream (external/channel/feedback).
+    pub fn with_builder<R, F>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Builder) -> R,
+    {
+        f(&mut self.inner.borrow_mut())
+    }
+
+    /// Wrap a handle from this builder as a [`Stream`].
+    pub fn wrap<T>(&self, handle: Handle<T>) -> Stream<T> {
         Stream {
             inner: self.inner.clone(),
             handle,
         }
-    }
-
-    /// A source that ticks once with `value` on the first cycle.
-    pub fn constant<T: Clone + Default + 'static>(&self, value: T) -> Stream<T> {
-        let handle = self.inner.borrow_mut().constant(value);
-        Stream {
-            inner: self.inner.clone(),
-            handle,
-        }
-    }
-
-    /// An external source: values sent through the returned
-    /// [`ExternalSource`] (from any thread or async task) tick the stream.
-    /// Emits a [`Burst`] of every value that arrived since the last cycle —
-    /// never latest-wins. Realtime mode only.
-    pub fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>) {
-        let (handle, source) = self.inner.borrow_mut().external();
-        (
-            Stream {
-                inner: self.inner.clone(),
-                handle,
-            },
-            source,
-        )
     }
 
     /// Mount a composite node (see [`Builder::composite`]). Used by the
@@ -77,10 +86,7 @@ impl GraphBuilder {
             .inner
             .borrow_mut()
             .composite(active_ups, callback_activated, node);
-        Stream {
-            inner: self.inner.clone(),
-            handle,
-        }
+        self.wrap(handle)
     }
 
     /// The shared per-cycle tick flags. Used by the `graph!` macro's
@@ -88,56 +94,6 @@ impl GraphBuilder {
     #[doc(hidden)]
     pub fn __ticked(&self) -> Rc<RefCell<Vec<bool>>> {
         self.inner.borrow().ticked_rc()
-    }
-
-    /// A busy-poll source: `f` runs once per engine cycle, ticking on
-    /// `Some`. Lossless and ordered — one value per cycle, no coalescing
-    /// (contrast [`external`](Self::external), which collapses to
-    /// latest-wins). The graph becomes a busy-spin loop: the kernel never
-    /// parks. Realtime runs only.
-    pub fn poll<T, F>(&self, f: F) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-        F: Fn() -> Option<T> + 'static,
-    {
-        let handle = self.inner.borrow_mut().poll(f);
-        Stream {
-            inner: self.inner.clone(),
-            handle,
-        }
-    }
-
-    /// Open a channel: a source stream fed by the returned [`ChannelSender`]
-    /// (moved to another thread). Emits a [`Burst`] (never latest-wins) and
-    /// runs in **both** modes — realtime (waker-driven) and historical
-    /// (timestamped sends replayed deterministically on the graph clock; see
-    /// [`Builder::channel`](crate::interp::Builder::channel)).
-    pub fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>) {
-        let (handle, sender) = self.inner.borrow_mut().channel::<T>();
-        (
-            Stream {
-                inner: self.inner.clone(),
-                handle,
-            },
-            sender,
-        )
-    }
-
-    /// Open a feedback edge: a source stream (no upstreams — the graph stays
-    /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
-    /// [`Stream::feedback`]; values arrive on the source one cycle later.
-    pub fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
-    where
-        T: Clone + Default + PartialEq + 'static,
-    {
-        let (handle, sink) = self.inner.borrow_mut().feedback::<T>();
-        (
-            Stream {
-                inner: self.inner.clone(),
-                handle,
-            },
-            sink,
-        )
     }
 
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
@@ -148,8 +104,84 @@ impl GraphBuilder {
     }
 }
 
-/// A typed stream in a graph under construction. Combinators are methods, so
-/// wiring chains: `g.ticker(p).count().map(|i| i * 2)`.
+/// Source constructors — the graph's entry points. An extension trait on
+/// [`GraphBuilder`] so the source vocabulary is open the same way the
+/// combinator vocabulary is.
+pub trait SourceOps {
+    /// A source that ticks at a fixed interval.
+    fn ticker(&self, period: Duration) -> Stream<()>;
+
+    /// A source that ticks once with `value` on the first cycle.
+    fn constant<T: Clone + Default + 'static>(&self, value: T) -> Stream<T>;
+
+    /// An external source: values sent through the returned [`ExternalSource`]
+    /// (from any thread or async task) tick the stream. Emits a [`Burst`] of
+    /// every value that arrived since the last cycle — never latest-wins.
+    /// Realtime mode only.
+    fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>);
+
+    /// A channel source fed by the returned [`ChannelSender`] (moved to
+    /// another thread). Emits a [`Burst`] (never latest-wins) and runs in
+    /// **both** modes — realtime (waker-driven) and historical (timestamped
+    /// sends replayed deterministically on the graph clock; see
+    /// [`Builder::channel`](crate::interp::Builder::channel)).
+    fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
+
+    /// A busy-poll source: `f` runs once per engine cycle, ticking on `Some`.
+    /// Lossless and ordered — one value per cycle, no coalescing. The graph
+    /// becomes a busy-spin loop: the kernel never parks. Realtime runs only.
+    fn poll<T, F>(&self, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn() -> Option<T> + 'static;
+
+    /// Open a feedback edge: a source stream (no upstreams — the graph stays
+    /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
+    /// [`StreamOps::feedback`]; values arrive on the source one cycle later.
+    fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
+    where
+        T: Clone + Default + PartialEq + 'static;
+}
+
+impl SourceOps for GraphBuilder {
+    fn ticker(&self, period: Duration) -> Stream<()> {
+        self.source(|b| b.ticker(period))
+    }
+
+    fn constant<T: Clone + Default + 'static>(&self, value: T) -> Stream<T> {
+        self.source(|b| b.constant(value))
+    }
+
+    fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>) {
+        let (handle, source) = self.with_builder(|b| b.external());
+        (self.wrap(handle), source)
+    }
+
+    fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>) {
+        let (handle, sender) = self.with_builder(|b| b.channel::<T>());
+        (self.wrap(handle), sender)
+    }
+
+    fn poll<T, F>(&self, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn() -> Option<T> + 'static,
+    {
+        self.source(|b| b.poll(f))
+    }
+
+    fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        let (handle, sink) = self.with_builder(|b| b.feedback::<T>());
+        (self.wrap(handle), sink)
+    }
+}
+
+/// A typed stream in a graph under construction. Combinators live in the
+/// [`StreamOps`] extension trait (and others), so `use`ing the trait enables
+/// chaining: `g.ticker(p).count().map(|i| i * 2)`.
 pub struct Stream<T> {
     inner: Rc<RefCell<Builder>>,
     handle: Handle<T>,
@@ -182,6 +214,23 @@ impl<T> Stream<T> {
         self.handle
     }
 
+    /// Extension point for combinator traits ([`StreamOps`],
+    /// [`StatisticsOps`](crate::stats::StatisticsOps), and third-party op
+    /// traits): run a wiring closure with the [`Builder`] and this stream's
+    /// handle, wrapping the produced handle as a new stream. Every combinator
+    /// is a one-liner over this — e.g. `self.wire(|b, h| b.map(h, f))` — so an
+    /// op trait never touches the builder's internals.
+    pub fn wire<B, F>(&self, f: F) -> Stream<B>
+    where
+        F: FnOnce(&mut Builder, Handle<T>) -> Handle<B>,
+    {
+        let handle = f(&mut self.inner.borrow_mut(), self.handle);
+        Stream {
+            inner: self.inner.clone(),
+            handle,
+        }
+    }
+
     /// The shared value slot backing this stream. Used by the `graph!`
     /// macro's `nested` expansion to read composite inputs.
     #[doc(hidden)]
@@ -191,290 +240,362 @@ impl<T> Stream<T> {
     {
         self.inner.borrow().slot(self.handle)
     }
-
-    fn lift<B>(&self, handle: Handle<B>) -> Stream<B> {
-        Stream {
-            inner: self.inner.clone(),
-            handle,
-        }
-    }
 }
 
-impl<T: 'static> Stream<T> {
+/// The core stream combinators — an extension trait on [`Stream<T>`]. `use`
+/// it (or `wingfoil_next::prelude::*`) to chain. Adapter-specific ops live in
+/// their own traits (e.g. [`StatisticsOps`](crate::stats::StatisticsOps)).
+pub trait StreamOps<T>: Sized {
     /// Apply a closure to each value.
-    pub fn map<B, F>(&self, f: F) -> Stream<B>
+    fn map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> B + 'static;
+
+    /// Apply a fallible closure to each value; a returned `Err` aborts the
+    /// run with context.
+    fn try_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Result<B> + 'static;
+
+    /// Map and filter in one pass: `f` returns `(value, emit?)`.
+    fn map_filter<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> (B, bool) + 'static;
+
+    /// Pair each value with the current engine time: `(time, value)`.
+    fn with_time(&self) -> Stream<(NanoTime, T)>
+    where
+        T: Clone + 'static;
+
+    /// Emit the current engine time whenever this stream ticks.
+    fn ticked_at(&self) -> Stream<NanoTime>
+    where
+        T: 'static;
+
+    /// Emit elapsed engine time (`now - start`) whenever this stream ticks.
+    fn ticked_at_elapsed(&self) -> Stream<NanoTime>
+    where
+        T: 'static;
+
+    /// Fold values into an accumulator, emitting it after each fold.
+    fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
+    where
+        B: Clone + 'static,
+        F: Fn(&mut B, &T) + 'static;
+
+    /// Collect every emitted value into a `Vec`.
+    fn accumulate(&self) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static;
+
+    /// Combine with another stream; ticks when either input ticks.
+    fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> C + 'static;
+
+    /// Combine with another stream read *passively*: this stream triggers the
+    /// combine, `other`'s current value is read but does not trigger — the
+    /// `bimap(Active, Passive)` shape a feedback input takes.
+    fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> C + 'static;
+
+    /// Combine three streams (all active); ticks when any input ticks.
+    fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> D + 'static;
+
+    /// Emit only when `condition`'s current value is true.
+    fn filter(&self, condition: &Stream<bool>) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
+    /// Emit the current value whenever `trigger` ticks (passive read).
+    fn sample(&self, trigger: &Stream<()>) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
+    /// Merge with another stream; the earliest-supplied ticked input wins.
+    fn merge(&self, other: &Stream<T>) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
+    /// Pass through the first `limit` values, then stay quiet.
+    fn limit(&self, limit: u32) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
+    /// Rate-limit: emit at most once per `interval`.
+    fn throttle(&self, interval: Duration) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
+    /// Buffer values and flush them as a `Vec` on each `interval` boundary
+    /// (and once more on the last cycle).
+    fn window(&self, interval: Duration) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static;
+
+    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
+    /// (and once more on the last cycle).
+    fn buffer(&self, capacity: usize) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static;
+
+    /// Observe each value with a side-effecting closure, passing it through
+    /// unchanged (a debug tap).
+    fn inspect<F>(&self, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) + 'static;
+
+    /// Suppress consecutive duplicate values (emit on change only).
+    fn distinct(&self) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static;
+
+    /// Emit the successive difference `value - previous`; quiet on the first.
+    fn difference(&self) -> Stream<T>
+    where
+        T: Clone + Default + Sub<Output = T> + 'static;
+
+    /// Negate each value (`!value`) — sugar over `map`.
+    fn not(&self) -> Stream<T>
+    where
+        T: Clone + Default + Not<Output = T> + 'static;
+
+    /// Re-emit each value `delay` later.
+    fn delay(&self, delay: Duration) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static;
+
+    /// Run a side-effecting (fallible) closure on each tick — the graph's
+    /// outbound edge (print, send, record). A returned `Err` aborts the run
+    /// with context. Emits `()` per tick.
+    fn for_each<F>(&self, f: F) -> Stream<()>
+    where
+        T: 'static,
+        F: Fn(&T) -> Result<()> + 'static;
+
+    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
+    /// it. Observes this stream's last value; emits nothing.
+    fn finally<F>(&self, f: F) -> Stream<()>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> Result<()> + 'static;
+
+    /// Close a feedback loop: a pass-through of this stream that also sends
+    /// each value to `sink`, to arrive on the paired source one cycle later.
+    fn feedback(&self, sink: &FeedbackSink<T>) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static;
+}
+
+impl<T: 'static> StreamOps<T> for Stream<T> {
+    fn map<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> B + 'static,
     {
-        let h = self.inner.borrow_mut().map(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.map(h, f))
     }
 
-    /// Apply a fallible closure to each value; a returned `Err` aborts the
-    /// run with context.
-    pub fn try_map<B, F>(&self, f: F) -> Stream<B>
+    fn try_map<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> Result<B> + 'static,
     {
-        let h = self.inner.borrow_mut().try_map(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.try_map(h, f))
     }
 
-    /// Map and filter in one pass: `f` returns `(value, emit?)`.
-    pub fn map_filter<B, F>(&self, f: F) -> Stream<B>
+    fn map_filter<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> (B, bool) + 'static,
     {
-        let h = self.inner.borrow_mut().map_filter(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.map_filter(h, f))
     }
 
-    /// Pair each value with the current engine time: `(time, value)`.
-    pub fn with_time(&self) -> Stream<(wingfoil::NanoTime, T)>
+    fn with_time(&self) -> Stream<(NanoTime, T)>
     where
-        T: Clone,
+        T: Clone + 'static,
     {
-        let h = self.inner.borrow_mut().with_time(self.handle);
-        self.lift(h)
+        self.wire(|b, h| b.with_time(h))
     }
 
-    /// Emit the current engine time whenever this stream ticks.
-    pub fn ticked_at(&self) -> Stream<wingfoil::NanoTime> {
-        let h = self.inner.borrow_mut().ticked_at(self.handle);
-        self.lift(h)
+    fn ticked_at(&self) -> Stream<NanoTime> {
+        self.wire(|b, h| b.ticked_at(h))
     }
 
-    /// Emit elapsed engine time (`now - start`) whenever this stream ticks.
-    pub fn ticked_at_elapsed(&self) -> Stream<wingfoil::NanoTime> {
-        let h = self.inner.borrow_mut().ticked_at_elapsed(self.handle);
-        self.lift(h)
+    fn ticked_at_elapsed(&self) -> Stream<NanoTime> {
+        self.wire(|b, h| b.ticked_at_elapsed(h))
     }
 
-    /// Fold values into an accumulator, emitting it after each fold.
-    pub fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
+    fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
         B: Clone + 'static,
         F: Fn(&mut B, &T) + 'static,
     {
-        let h = self.inner.borrow_mut().fold(self.handle, init, f);
-        self.lift(h)
+        self.wire(|b, h| b.fold(h, init, f))
     }
 
-    /// Combine with another stream; ticks when either input ticks.
-    pub fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    fn accumulate(&self) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))
+    }
+
+    fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
         C: Clone + Default + 'static,
         F: Fn(&T, &B) -> C + 'static,
     {
-        let h = self.inner.borrow_mut().join(self.handle, other.handle, f);
-        self.lift(h)
+        let other = other.handle();
+        self.wire(|b, h| b.join(h, other, f))
     }
 
-    /// Combine with another stream read *passively*: this stream triggers the
-    /// combine, `other`'s current value is read but does not trigger. The
-    /// `bimap(Active, Passive)` of the classic engine — the shape a feedback
-    /// input takes so the loop advances in step with the active source.
-    pub fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
         C: Clone + Default + 'static,
         F: Fn(&T, &B) -> C + 'static,
     {
-        let h = self
-            .inner
-            .borrow_mut()
-            .bimap(self.handle, true, other.handle, false, f);
-        self.lift(h)
+        let other = other.handle();
+        self.wire(|b, h| b.bimap(h, true, other, false, f))
     }
 
-    /// Combine three streams (all active); ticks when any input ticks.
-    pub fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
+    fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
         B: 'static,
         C: 'static,
         D: Clone + Default + 'static,
         F: Fn(&T, &B, &C) -> D + 'static,
     {
-        let h =
-            self.inner
-                .borrow_mut()
-                .trimap(self.handle, true, b.handle, true, c.handle, true, f);
-        self.lift(h)
-    }
-}
-
-impl<T: Clone + 'static> Stream<Burst<T>> {
-    /// Accumulate every value from every burst into one `Vec`, losslessly and
-    /// in order — the burst-aware counterpart to [`accumulate`](Self::accumulate).
-    pub fn collapse_accumulate(&self) -> Stream<Vec<T>> {
-        self.fold(Vec::new(), |acc, burst: &Burst<T>| {
-            acc.extend(burst.iter().cloned())
-        })
-    }
-}
-
-impl<T: Clone + Default + 'static> Stream<T> {
-    /// Emit only when `condition`'s current value is true.
-    pub fn filter(&self, condition: &Stream<bool>) -> Stream<T> {
-        let h = self
-            .inner
-            .borrow_mut()
-            .filter(self.handle, condition.handle);
-        self.lift(h)
+        let (bh, ch) = (b.handle(), c.handle());
+        self.wire(|bld, h| bld.trimap(h, true, bh, true, ch, true, f))
     }
 
-    /// Emit the current value whenever `trigger` ticks (passive read).
-    pub fn sample(&self, trigger: &Stream<()>) -> Stream<T> {
-        let h = self.inner.borrow_mut().sample(self.handle, trigger.handle);
-        self.lift(h)
-    }
-
-    /// Merge with another stream; the earliest-supplied ticked input wins.
-    pub fn merge(&self, other: &Stream<T>) -> Stream<T> {
-        let h = self.inner.borrow_mut().merge2(self.handle, other.handle);
-        self.lift(h)
-    }
-
-    /// Pass through the first `limit` values, then stay quiet.
-    pub fn limit(&self, limit: u32) -> Stream<T> {
-        let h = self.inner.borrow_mut().limit(self.handle, limit);
-        self.lift(h)
-    }
-
-    /// Rate-limit: emit at most once per `interval`.
-    pub fn throttle(&self, interval: Duration) -> Stream<T> {
-        let h = self.inner.borrow_mut().throttle(self.handle, interval);
-        self.lift(h)
-    }
-
-    /// Buffer values and flush them as a `Vec` on each `interval` boundary
-    /// (and once more on the last cycle).
-    pub fn window(&self, interval: Duration) -> Stream<Vec<T>> {
-        let h = self.inner.borrow_mut().window(self.handle, interval);
-        self.lift(h)
-    }
-
-    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
-    /// (and once more on the last cycle).
-    pub fn buffer(&self, capacity: usize) -> Stream<Vec<T>> {
-        let h = self.inner.borrow_mut().buffer(self.handle, capacity);
-        self.lift(h)
-    }
-
-    /// Observe each value with a side-effecting closure, passing it through
-    /// unchanged (a debug tap).
-    pub fn inspect<F>(&self, f: F) -> Stream<T>
+    fn filter(&self, condition: &Stream<bool>) -> Stream<T>
     where
+        T: Clone + Default + 'static,
+    {
+        let cond = condition.handle();
+        self.wire(|b, h| b.filter(h, cond))
+    }
+
+    fn sample(&self, trigger: &Stream<()>) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        let trigger = trigger.handle();
+        self.wire(|b, h| b.sample(h, trigger))
+    }
+
+    fn merge(&self, other: &Stream<T>) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        let other = other.handle();
+        self.wire(|b, h| b.merge2(h, other))
+    }
+
+    fn limit(&self, limit: u32) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.wire(|b, h| b.limit(h, limit))
+    }
+
+    fn throttle(&self, interval: Duration) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.wire(|b, h| b.throttle(h, interval))
+    }
+
+    fn window(&self, interval: Duration) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.wire(|b, h| b.window(h, interval))
+    }
+
+    fn buffer(&self, capacity: usize) -> Stream<Vec<T>>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.wire(|b, h| b.buffer(h, capacity))
+    }
+
+    fn inspect<F>(&self, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
         F: Fn(&T) + 'static,
     {
-        let h = self.inner.borrow_mut().inspect(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.inspect(h, f))
     }
 
-    /// Collect every emitted value into a `Vec`.
-    pub fn accumulate(&self) -> Stream<Vec<T>> {
-        self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))
+    fn distinct(&self) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        self.wire(|b, h| b.distinct(h))
     }
-}
 
-impl<T: Clone + Default + PartialEq + 'static> Stream<T> {
-    /// Suppress consecutive duplicate values (emit on change only).
-    pub fn distinct(&self) -> Stream<T> {
-        let h = self.inner.borrow_mut().distinct(self.handle);
-        self.lift(h)
+    fn difference(&self) -> Stream<T>
+    where
+        T: Clone + Default + Sub<Output = T> + 'static,
+    {
+        self.wire(|b, h| b.difference(h))
     }
-}
 
-impl<T: Clone + Default + std::ops::Sub<Output = T> + 'static> Stream<T> {
-    /// Emit the successive difference `value - previous`; quiet on the first.
-    pub fn difference(&self) -> Stream<T> {
-        let h = self.inner.borrow_mut().difference(self.handle);
-        self.lift(h)
-    }
-}
-
-impl<T: Clone + Default + std::ops::Not<Output = T> + 'static> Stream<T> {
-    /// Negate each value (`!value`) — sugar over `map`.
-    pub fn not(&self) -> Stream<T> {
+    fn not(&self) -> Stream<T>
+    where
+        T: Clone + Default + Not<Output = T> + 'static,
+    {
         self.map(|v| !v.clone())
     }
-}
 
-impl Stream<f64> {
-    /// Exponentially weighted moving average (statistics adapter).
-    pub fn ewma(&self, decay: crate::ops::EwmaDecay) -> Stream<f64> {
-        let h = self.inner.borrow_mut().ewma(self.handle, decay);
-        self.lift(h)
-    }
-
-    /// EWMA with a fixed per-tick smoothing factor `alpha`.
-    pub fn ewma_per_tick(&self, alpha: f64) -> Stream<f64> {
-        self.ewma(crate::ops::EwmaDecay::PerTick(alpha))
-    }
-
-    /// EWMA decaying by `half_life` of elapsed engine time (tick-rate
-    /// independent).
-    pub fn ewma_half_life(&self, half_life: Duration) -> Stream<f64> {
-        let hl = wingfoil::NanoTime::from(half_life);
-        self.ewma(crate::ops::EwmaDecay::HalfLife(f64::from(hl)))
-    }
-
-    /// Rolling sum over the most recent `window` samples.
-    pub fn rolling_sum(&self, window: usize) -> Stream<f64> {
-        let h = self.inner.borrow_mut().rolling_sum(self.handle, window);
-        self.lift(h)
-    }
-
-    /// Rolling arithmetic mean over the most recent `window` samples.
-    pub fn rolling_mean(&self, window: usize) -> Stream<f64> {
-        let h = self.inner.borrow_mut().rolling_mean(self.handle, window);
-        self.lift(h)
-    }
-}
-
-impl<T: 'static> Stream<T> {
-    /// Run a side-effecting (fallible) closure on each tick — the graph's
-    /// outbound edge (print, send, record). A returned `Err` aborts the run
-    /// with context. Emits `()` per tick.
-    pub fn for_each<F>(&self, f: F) -> Stream<()>
+    fn delay(&self, delay: Duration) -> Stream<T>
     where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        self.wire(|b, h| b.delay(h, delay))
+    }
+
+    fn for_each<F>(&self, f: F) -> Stream<()>
+    where
+        T: 'static,
         F: Fn(&T) -> Result<()> + 'static,
     {
-        let h = self.inner.borrow_mut().for_each(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.for_each(h, f))
     }
-}
 
-impl<T: Clone + Default + 'static> Stream<T> {
-    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
-    /// it. Observes this stream's last value; emits nothing.
-    pub fn finally<F>(&self, f: F) -> Stream<()>
+    fn finally<F>(&self, f: F) -> Stream<()>
     where
+        T: Clone + Default + 'static,
         F: Fn(&T) -> Result<()> + 'static,
     {
-        let h = self.inner.borrow_mut().finally(self.handle, f);
-        self.lift(h)
+        self.wire(|b, h| b.finally(h, f))
     }
-}
 
-impl<T: Clone + Default + PartialEq + 'static> Stream<T> {
-    /// Close a feedback loop: a pass-through of this stream that also sends
-    /// each value to `sink`, to arrive on the paired source one cycle later.
-    pub fn feedback(&self, sink: &FeedbackSink<T>) -> Stream<T> {
-        let h = self.inner.borrow_mut().feedback_send(self.handle, sink);
-        self.lift(h)
-    }
-}
-
-impl<T: Clone + Default + PartialEq + 'static> Stream<T> {
-    /// Re-emit each value `delay` later.
-    pub fn delay(&self, delay: Duration) -> Stream<T> {
-        let h = self.inner.borrow_mut().delay(self.handle, delay);
-        self.lift(h)
+    fn feedback(&self, sink: &FeedbackSink<T>) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static,
+    {
+        self.wire(|b, h| b.feedback_send(h, sink))
     }
 }
 
@@ -482,5 +603,16 @@ impl Stream<()> {
     /// Running count of ticks: 1, 2, 3, ...
     pub fn count(&self) -> Stream<u64> {
         self.fold(0u64, |acc, _| *acc += 1)
+    }
+}
+
+impl<T: Clone + Default + 'static> Stream<Burst<T>> {
+    /// Accumulate every value from every burst into one `Vec`, losslessly and
+    /// in order — the burst-aware counterpart to
+    /// [`accumulate`](StreamOps::accumulate).
+    pub fn collapse_accumulate(&self) -> Stream<Vec<T>> {
+        self.fold(Vec::new(), |acc, burst: &Burst<T>| {
+            acc.extend(burst.iter().cloned())
+        })
     }
 }

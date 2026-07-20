@@ -30,7 +30,7 @@ use futures::StreamExt;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::burst::Burst;
-use crate::fluent::{GraphBuilder, Stream};
+use crate::fluent::{GraphBuilder, SourceOps, Stream};
 
 /// The run parameters handed to a producer closure (mirrors classic
 /// `RunParams`), so a producer can choose a historical vs live data source.
