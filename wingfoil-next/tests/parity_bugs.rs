@@ -313,3 +313,77 @@ fn user_stream_named_anon1_does_not_collide() {
     let (compiled,) = anon_collision::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);
 }
+
+// ===========================================================================
+// TEST BLIND SPOTS (fable-review "Test-suite blind spots").
+// ===========================================================================
+
+wingfoil_next::graph! {
+    // Both inputs tick on the *same* cycle (two tickers of equal period), so
+    // the merge tie-break actually fires — the earliest-supplied input (`a`)
+    // must win. The existing odds/evens merge test uses disjoint streams, so a
+    // swapped tick-pair order would stay green there but flip this.
+    fn merge_tie(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let a = g.ticker(Duration::from_nanos(10)).count();
+        let b = g.ticker(Duration::from_nanos(10)).count().map(|i| i + 100);
+        let m = a.merge(&b).accumulate();
+        m
+    }
+}
+
+#[test]
+fn merge_tie_break_when_both_inputs_tick() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, m) = merge_tie::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(m);
+    // `a` (the first-supplied input) wins every tie: 1, 2, 3 — not 101, 102, 103.
+    assert_eq!(vec![1, 2, 3], interpreted);
+
+    let (compiled,) = merge_tie::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled);
+
+    let g = GraphBuilder::new();
+    let island = merge_tie::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, r.value(&island));
+}
+
+wingfoil_next::graph! {
+    // Two inner scheduling ops (ticker + delay) inside one island, so the
+    // private queue demux must juggle multiple pending keys, then merge the
+    // live and delayed streams.
+    fn two_schedulers(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let live = g.ticker(Duration::from_nanos(10)).count();
+        let delayed = live.delay(Duration::from_nanos(20));
+        let m = live.merge(&delayed).accumulate();
+        m
+    }
+}
+
+#[test]
+fn island_with_two_inner_schedulers() {
+    let run_for = RunFor::Duration(Duration::from_nanos(55));
+    let (mut runner, m) = two_schedulers::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(m);
+    assert!(!interpreted.is_empty());
+
+    let (compiled,) = two_schedulers::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled, "interpreted == compiled");
+
+    let g = GraphBuilder::new();
+    let island = two_schedulers::nested(&g).accumulate();
+    let flat = {
+        let live = g.ticker(Duration::from_nanos(10)).count();
+        let delayed = live.delay(Duration::from_nanos(20));
+        live.merge(&delayed).accumulate()
+    };
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    // The island's last accumulate value is the full merged sequence.
+    let island_last = r.value(&island).into_iter().last().unwrap_or_default();
+    assert_eq!(interpreted, island_last, "interpreted == nested");
+    assert_eq!(r.value(&flat), island_last, "nested == flat wiring");
+}
