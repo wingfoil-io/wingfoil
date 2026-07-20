@@ -178,6 +178,17 @@ impl<T> ExternalSource<T> {
 /// node to emit it on the *next* engine cycle (`+1`), which is what breaks
 /// the dependency cycle: the source node has no upstreams, so the graph sees
 /// no loop. Clone-able so one source can be fed from several sites.
+///
+/// Unlike classic's `FeedbackSink::send(value, &mut GraphState)`, this type
+/// exposes **no** public `send`: sending requires scheduling the paired source
+/// node (`source`), which is a *different* node than the caller's. Classic does
+/// this through `GraphState::add_callback_for_node`, but next's op-facing
+/// [`Ctx`](crate::op::Ctx) is deliberately narrow — self-scheduling only — and
+/// cannot schedule an arbitrary node. Exposing a user-callable `send` would
+/// need either a wider `Ctx` (against the design) or a kernel handle on the
+/// sink; deferred until a concrete need arises. The `feedback_send` wiring
+/// (fluent `stream.feedback(&sink)`) covers the pass-through case and does the
+/// scheduling with direct kernel access.
 pub struct FeedbackSink<T> {
     queue: Rc<RefCell<TimeQueue<T>>>,
     /// The paired source node's index, scheduled directly on the kernel — an
