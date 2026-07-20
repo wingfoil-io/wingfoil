@@ -9,9 +9,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use wingfoil::{RunFor, RunMode};
-use wingfoil_next::fluent::GraphBuilder;
 use wingfoil_next::op::{Caps, Op};
 use wingfoil_next::ops::Poll;
+use wingfoil_next::prelude::*;
 
 /// A producer thread feeds a channel; the graph busy-polls it with
 /// `try_recv`. Every value arrives, in order — the lossless contrast to

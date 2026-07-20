@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::Result;
 use wingfoil::{RunFor, RunMode};
 
-use crate::fluent::{GraphBuilder, Stream};
+use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;
 
 /// A stream in an implicit graph, with the classic `run` / `peek_value`

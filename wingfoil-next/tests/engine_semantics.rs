@@ -5,9 +5,9 @@
 
 use std::time::Duration;
 
-use wingfoil_next::fluent::GraphBuilder;
 use wingfoil_next::op::{Caps, Op};
 use wingfoil_next::ops::{Map, Ticker};
+use wingfoil_next::prelude::*;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
 
