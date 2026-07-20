@@ -36,18 +36,35 @@
 //! not per-kind emitter strings, not `cycle_inline` twins — so the engines
 //! cannot drift.
 //!
-//! Since built out from that prototype: the `graph!` macro (one wiring
-//! function, both engines), threaded/IO sources (`Activation::THREADED` +
-//! busy-spin `Activation::ALWAYS`), compiled islands nested in interpreted graphs,
-//! and — as the first step of the full port — **fallible lifecycle**: every
-//! `Op` function returns `anyhow::Result`, and the interpreted [`Runner`]
-//! reports the first `start`/`cycle`/`stop`/`teardown` error with node
-//! context while still running cleanup afterwards.
+//! Built out from that prototype, and what each module now holds:
+//!
+//! - **[`graph!`](macro@graph)** — one wiring function, three execution paths
+//!   from the same tokens: `interpreted()`, fully-monomorphized `compiled()`,
+//!   and `nested()` (a compiled island as one node of an interpreted graph).
+//! - **[`fluent`]** — the chaining API as *extension traits*
+//!   ([`SourceOps`](fluent::SourceOps) for sources,
+//!   [`StreamOps`](fluent::StreamOps) for combinators), so the op vocabulary
+//!   is open; [`prelude`] brings the common set into scope.
+//! - **[`ops`]** — the op catalog (map/filter/fold/join/delay/window/… plus
+//!   the sources), and **[`stats`]** — EWMA and rolling-window statistics as a
+//!   separate opt-in [`StatisticsOps`](stats::StatisticsOps) trait.
+//! - **Sources in every activation mode**: `Activation::THREADED`
+//!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`
+//!   [`poll`](fluent::SourceOps::poll), the both-modes
+//!   [`channel`](fluent::SourceOps::channel), and [`feedback`] edges. All
+//!   non-coalescing: same-instant values ride one [`Burst`], never latest-wins.
+//! - **[`channel`]** — the `Message` envelope and senders; **[`async_source`]**
+//!   (the `async` feature) wraps it as `produce_async`, an async producer of
+//!   timestamped values that replays deterministically in historical mode.
+//! - **Fallible lifecycle** — every `Op` function returns `anyhow::Result`;
+//!   the interpreted [`Runner`](interp::Runner) reports the first
+//!   `start`/`cycle`/`stop`/`teardown` error with node context and still runs
+//!   cleanup. **[`compat`]** offers a classic-style `Signal` facade over it.
 //!
 //! Still out of scope for the prototype (documented, not forgotten):
-//! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA
-//! value store for the interpreted engine, and dynamic (runtime-mutated)
-//! graphs.
+//! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA value
+//! store and breadth-first dirty-list scheduling for the interpreted engine
+//! (see `docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
 
 #[cfg(feature = "async")]
 pub mod async_source;

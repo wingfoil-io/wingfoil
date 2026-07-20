@@ -91,7 +91,9 @@
 //! methods mirror the fluent API: sources `.ticker(period)` /
 //! `.constant(value)` on the builder; combinators `.map(f)`,
 //! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
-//! `.join(&other, f)`, `.delay(duration)`; sugar `.count()` and
+//! `.join(&other, f)`, `.delay(duration)`; statistics (on `f64` streams)
+//! `.ewma(decay)` / `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)`,
+//! `.rolling_sum(window)`, `.rolling_mean(window)`; sugar `.count()` and
 //! `.accumulate()`.
 //!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
@@ -131,6 +133,9 @@ enum OpKind {
     Merge,
     Join,
     Delay,
+    Ewma,
+    RollingSum,
+    RollingMean,
 }
 
 /// Everything the emitters need to know about an op, single-sourced per
@@ -195,6 +200,14 @@ impl OpKind {
             },
             OpKind::Delay => OpSpec {
                 callback_activated: true,
+                cfg_local: true,
+                state_local: true,
+                ..base
+            },
+            // Statistics ops: a non-closure `Cfg` (decay policy / window) plus
+            // Default-seeded state; no callback, no start. Structurally the
+            // simplest stateful single-input shape.
+            OpKind::Ewma | OpKind::RollingSum | OpKind::RollingMean => OpSpec {
                 cfg_local: true,
                 state_local: true,
                 ..base
@@ -534,12 +547,41 @@ impl ChainWalker {
                         parse_quote!(|__acc, __v| __acc.push(::core::clone::Clone::clone(__v)));
                     self.push(name, OpKind::Fold, vec![cur], vec![init, f])
                 }
+                // Statistics ops (f64 → f64). The three `ewma*` spellings share
+                // one op, differing only in the `EwmaDecay` config they build.
+                "ewma" => {
+                    expect_arity(method, args, 1)?;
+                    self.push(name, OpKind::Ewma, vec![cur], vec![args[0].clone()])
+                }
+                "ewma_per_tick" => {
+                    expect_arity(method, args, 1)?;
+                    let alpha = args[0];
+                    let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::PerTick(#alpha));
+                    self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
+                }
+                "ewma_half_life" => {
+                    expect_arity(method, args, 1)?;
+                    let half_life = args[0];
+                    let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::HalfLife(
+                        (#half_life).as_nanos() as f64
+                    ));
+                    self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
+                }
+                "rolling_sum" => {
+                    expect_arity(method, args, 1)?;
+                    self.push(name, OpKind::RollingSum, vec![cur], vec![args[0].clone()])
+                }
+                "rolling_mean" => {
+                    expect_arity(method, args, 1)?;
+                    self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
+                }
                 other => {
                     return Err(syn::Error::new(
                         method.span(),
                         format!(
                             "unknown combinator `.{other}(..)`; expected one of: map, filter, \
-                             fold, sample, merge, join, delay, count, accumulate"
+                             fold, sample, merge, join, delay, count, accumulate, ewma, \
+                             ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
                         ),
                     ));
                 }
@@ -841,6 +883,7 @@ fn expand(def: &GraphDef) -> TokenStream2 {
             #![allow(clippy::redundant_closure_call, clippy::let_and_return)]
             use super::*;
             use ::wingfoil_next::fluent::*;
+            use ::wingfoil_next::stats::*;
             #wire_fn
             #standalone
             #nested
@@ -942,6 +985,22 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
             quote! {
                 let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#dur);
                 let mut #state = ::wingfoil_next::ops::DelayState::default();
+                let mut #value = Default::default();
+            }
+        }
+        OpKind::Ewma => {
+            let decay = &exprs[0];
+            quote! {
+                let mut #cfg: ::wingfoil_next::ops::EwmaDecay = #decay;
+                let mut #state = ::wingfoil_next::ops::EwmaState::default();
+                let mut #value = Default::default();
+            }
+        }
+        OpKind::RollingSum | OpKind::RollingMean => {
+            let window = &exprs[0];
+            quote! {
+                let mut #cfg: usize = #window;
+                let mut #state = ::wingfoil_next::ops::RollingWindowState::default();
                 let mut #value = Default::default();
             }
         }
@@ -1253,6 +1312,9 @@ fn op_type(op: OpKind) -> TokenStream2 {
         OpKind::Merge => quote! { ::wingfoil_next::ops::Merge2<_> },
         OpKind::Join => quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
         OpKind::Delay => quote! { ::wingfoil_next::ops::Delay<_> },
+        OpKind::Ewma => quote! { ::wingfoil_next::ops::Ewma },
+        OpKind::RollingSum => quote! { ::wingfoil_next::ops::RollingSum },
+        OpKind::RollingMean => quote! { ::wingfoil_next::ops::RollingMean },
     }
 }
 
@@ -1305,7 +1367,12 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
     match node.op {
         OpKind::Input => unreachable!("inputs are not dispatched"),
         OpKind::Ticker | OpKind::Constant => quote! { () },
-        OpKind::Map | OpKind::Fold | OpKind::Sample => {
+        OpKind::Map
+        | OpKind::Fold
+        | OpKind::Sample
+        | OpKind::Ewma
+        | OpKind::RollingSum
+        | OpKind::RollingMean => {
             let src = v(node.refs[0]);
             quote! { (#src,) }
         }
