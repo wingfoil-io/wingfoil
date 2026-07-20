@@ -49,6 +49,7 @@
 //! value store for the interpreted engine, feedback edges, and dynamic
 //! (runtime-mutated) graphs.
 
+pub mod channel;
 pub mod fluent;
 pub mod interp;
 pub mod op;
