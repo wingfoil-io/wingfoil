@@ -130,13 +130,22 @@ time bump — assert against classic's
 burst tests. If parity fails, fall back to a burst payload
 (`Tick<Burst<T>>`-style) — decide here, not later.
 
-### 0.4 Re-run / runner lifecycle
+### 0.4 Re-run / runner lifecycle  ✅ **decided (single-run v1)**
 
-Classic streams can be run and inspected repeatedly; next's `Runner::run`
-consumes bounds per call and external/poll graphs support a single run.
-Decide: multiple sequential `run` calls on one `Runner` (classic parity) vs
-documented single-run. Leaning: support sequential runs for
-historical/timer graphs, single-run for external/poll (already asserted).
+Investigated: a second `Runner::run` *continues* accumulator state (a
+counter goes 3 → 6) but each call builds a fresh `Kernel` from t=0, so a
+self-scheduling source carries stale scheduling state — a ticker re-runs
+with polluted timing (fires at 0, 400, 500 instead of 0, 100, 200).
+Accumulators-continue + clocks-restart is not a coherent contract.
+
+**Decision for v1: a `Runner` is single-run** (external/poll already assert
+this; timer graphs get the same expectation, documented). Well-defined
+re-run — classic's setup-per-run *reset* semantics — needs a per-node
+`reset`/`setup` hook (same shape as the `stop`/`teardown` plumbing from
+0.1) that restores each op's state to its wiring-time initial value,
+including re-seeding schedules. Deferred until a use case (backtest sweep,
+parameter scan) demands it; the hook slots into the existing lifecycle
+machinery when it does. This closes the last Phase-0 spike by decision.
 
 **Gate 0:** all four spikes land with classic-parity tests green.
 
