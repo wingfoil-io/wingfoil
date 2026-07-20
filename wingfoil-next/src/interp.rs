@@ -8,10 +8,21 @@
 //! monomorphized function* a compiled runner calls; the engines share
 //! semantics by construction.
 //!
-//! Prototype simplifications (a production version would differ): value
-//! slots are individual `Rc<RefCell<T>>`s rather than a contiguous arena, and
-//! dispatch walks nodes in wiring (topological) order rather than using
-//! dirty-lists. `run` is fallible — it returns the first
+//! Execution model (and a known gap): each cycle this engine sweeps **all**
+//! nodes in wiring (topological) order and runs those whose active upstream
+//! ticked (or which the kernel marked dirty). Insertion order is always a
+//! valid topological order — the fluent API forces a stream to exist before
+//! it can be referenced — so this is glitch-free and fires each node exactly
+//! once after its upstreams, giving results **identical** to classic
+//! wingfoil. But classic instead propagates **breadth-first from the ticked
+//! sources through a dirty-list**, touching only nodes that can fire; the
+//! `O(N)`-per-cycle sweep here does not match that on large, sparsely-ticking
+//! graphs. Closing that (breadth-first dirty-list + arena value store) is a
+//! planned engine phase — see `docs/port-plan.md` "Phase 4.5"; it is a
+//! mechanism/performance change only, results stay identical.
+//!
+//! Value slots are individual `Rc<RefCell<T>>`s (the arena is part of that
+//! same phase). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the classic engine.
 
