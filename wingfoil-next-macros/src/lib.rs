@@ -141,78 +141,186 @@ enum OpKind {
     RollingMean,
 }
 
-/// Everything the emitters need to know about an op, single-sourced per
-/// kind. Parsing (arity, which args are stream refs, desugarings) stays in
-/// the walker, and declaration/input *shapes* stay in `node_decl` /
-/// `cycle_input` — those differ structurally per op — but every boolean
-/// fact consulted at emission time lives here.
-struct OpSpec {
+/// The shape of an op's `Op::In` tuple — how the cycle call assembles its
+/// inputs from upstream value/tick locals. Adding an op picks an existing
+/// shape; a genuinely novel shape adds one arm to [`cycle_input`].
+enum Inputs {
+    /// `()` — sources (ticker/constant).
+    Unit,
+    /// `(&v0,)` — one input read by value (map/fold/sample-data/ewma/…).
+    One,
+    /// `(&v0, &v1)` — two inputs by value (filter/join).
+    Two,
+    /// `(&v0, t0)` — one input plus its tick flag (delay).
+    OneTick,
+    /// `((&v0, t0), (&v1, t1))` — two `(value, tick)` pairs (merge).
+    TwoTickPairs,
+}
+
+/// How `node_decl` initialises a node's `__cfg` local (the non-closure config;
+/// closure configs keep no local and go through `cycle_owned_cfg` instead).
+enum CfgInit {
+    /// No `__cfg` local.
+    None,
+    /// `let __cfg [: ty] = exprs[arg];`
+    Expr {
+        arg: usize,
+        ty: Option<TokenStream2>,
+    },
+    /// `let __cfg = NanoTime::from(exprs[arg]);`
+    NanoTimeFrom(usize),
+}
+
+/// How `node_decl` initialises a node's `__state` local.
+enum StateInit {
+    /// No `__state` local.
+    None,
+    /// `let __state = exprs[arg];` (fold's accumulator seed).
+    Expr(usize),
+    /// `let __state = <ty>::default();`
+    Default(TokenStream2),
+    /// `let __state: Option<ty> = None;` (ticker's last-scheduled-time).
+    OptionNone(TokenStream2),
+}
+
+/// Everything the emitters need to know about an op, **single-sourced** in one
+/// [`OpKind::info`] arm per op: its type, the boolean facts dispatch consults,
+/// and the structural shapes `node_decl`/`cycle_input`/`op_type` build from.
+/// Adding an op is one `info` arm (plus its parse arm and enum variant); the
+/// named fields make a half-filled entry a compile error, not a silent gap.
+struct OpInfo {
+    /// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
+    op_type: TokenStream2,
     /// Can be activated by a kernel callback → dispatch needs a dirty check.
     callback_activated: bool,
     /// Has a `start` hook to run before the first cycle.
     has_start: bool,
-    /// Keeps a `__cfg_x` local (non-closure config: period, value, delay).
-    cfg_local: bool,
-    /// Keeps a `__state_x` local passed to `cycle`.
-    state_local: bool,
     /// `start` receives the state local too (only the ticker's start does).
     state_in_start: bool,
     /// Index in `exprs` of a closure config inlined at the cycle call via
     /// `cycle_owned_cfg` (direct-argument closure inference).
     owned_closure: Option<usize>,
+    /// Unit output (ticker) → no value slot to declare or store into.
+    unit_output: bool,
+    inputs: Inputs,
+    cfg_init: CfgInit,
+    state_init: StateInit,
+}
+
+impl OpInfo {
+    /// Keeps a `__cfg` local passed to `cycle` by `&mut`.
+    fn cfg_local(&self) -> bool {
+        !matches!(self.cfg_init, CfgInit::None)
+    }
+    /// Keeps a `__state` local passed to `cycle` by `&mut`.
+    fn state_local(&self) -> bool {
+        !matches!(self.state_init, StateInit::None)
+    }
 }
 
 impl OpKind {
-    fn spec(self) -> OpSpec {
-        let base = OpSpec {
+    fn info(self) -> OpInfo {
+        let nanotime = quote! { ::wingfoil_next::wingfoil::NanoTime };
+        let base = OpInfo {
+            op_type: quote! {},
             callback_activated: false,
             has_start: false,
-            cfg_local: false,
-            state_local: false,
             state_in_start: false,
             owned_closure: None,
+            unit_output: false,
+            inputs: Inputs::One,
+            cfg_init: CfgInit::None,
+            state_init: StateInit::None,
         };
         match self {
-            OpKind::Input | OpKind::Filter | OpKind::Sample | OpKind::Merge => base,
-            OpKind::Ticker => OpSpec {
+            // A graph edge, not a real op: it declares no storage and is never
+            // dispatched (the `nested` expansion reads its value/tick from the
+            // outer graph). A benign all-false `info` keeps whole-graph scans
+            // like the callback-activation check from special-casing it.
+            OpKind::Input => base,
+            OpKind::Ticker => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Ticker },
                 callback_activated: true,
                 has_start: true,
-                cfg_local: true,
-                state_local: true,
                 state_in_start: true,
+                unit_output: true,
+                inputs: Inputs::Unit,
+                cfg_init: CfgInit::NanoTimeFrom(0),
+                state_init: StateInit::OptionNone(nanotime),
                 ..base
             },
-            OpKind::Constant => OpSpec {
+            OpKind::Constant => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Const<_> },
                 callback_activated: true,
                 has_start: true,
-                cfg_local: true,
+                inputs: Inputs::Unit,
+                cfg_init: CfgInit::Expr { arg: 0, ty: None },
                 ..base
             },
-            OpKind::Map => OpSpec {
+            OpKind::Map => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Map<_, _, _> },
                 owned_closure: Some(0),
                 ..base
             },
-            OpKind::Join => OpSpec {
-                owned_closure: Some(0),
+            OpKind::Filter => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Filter<_> },
+                inputs: Inputs::Two,
                 ..base
             },
-            OpKind::Fold => OpSpec {
-                state_local: true,
+            OpKind::Fold => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Fold<_, _, _> },
                 owned_closure: Some(1),
+                state_init: StateInit::Expr(0),
                 ..base
             },
-            OpKind::Delay => OpSpec {
+            OpKind::Sample => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Sample<_> },
+                ..base
+            },
+            OpKind::Merge => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Merge2<_> },
+                inputs: Inputs::TwoTickPairs,
+                ..base
+            },
+            OpKind::Join => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
+                owned_closure: Some(0),
+                inputs: Inputs::Two,
+                ..base
+            },
+            OpKind::Delay => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Delay<_> },
                 callback_activated: true,
-                cfg_local: true,
-                state_local: true,
+                inputs: Inputs::OneTick,
+                cfg_init: CfgInit::NanoTimeFrom(0),
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::DelayState }),
                 ..base
             },
-            // Statistics ops: a non-closure `Cfg` (decay policy / window) plus
-            // Default-seeded state; no callback, no start. Structurally the
-            // simplest stateful single-input shape.
-            OpKind::Ewma | OpKind::RollingSum | OpKind::RollingMean => OpSpec {
-                cfg_local: true,
-                state_local: true,
+            OpKind::Ewma => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Ewma },
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { ::wingfoil_next::ops::EwmaDecay }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::EwmaState }),
+                ..base
+            },
+            OpKind::RollingSum => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingSum },
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
+                ..base
+            },
+            OpKind::RollingMean => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingMean },
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
                 ..base
             },
         }
@@ -1097,72 +1205,51 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
     }
 }
 
-/// cfg + state + value slot declarations for one node.
+/// cfg + state + value slot declarations for one node, driven by the op's
+/// [`OpInfo`] (`cfg_init` / `state_init` / `unit_output`).
 fn node_decl(node: &NodeDef) -> TokenStream2 {
+    // Inputs have no storage here — their value/tick are read from the outer
+    // graph in the `nested` prologue.
+    if node.op == OpKind::Input {
+        return quote! {};
+    }
     let name = &node.name;
     let cfg = format_ident!("__cfg_{}", name);
     let state = format_ident!("__state_{}", name);
     let value = format_ident!("__v_{}", name);
     let exprs = &node.exprs;
-    match node.op {
-        // Inputs have no storage here — their value/tick are read from the
-        // outer graph in the `nested` prologue.
-        OpKind::Input => quote! {},
-        OpKind::Ticker => {
-            let period = &exprs[0];
-            quote! {
-                let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#period);
-                let mut #state: Option<::wingfoil_next::wingfoil::NanoTime> = None;
+    let info = node.op.info();
+
+    let cfg_decl = match &info.cfg_init {
+        CfgInit::None => quote! {},
+        CfgInit::Expr { arg, ty } => {
+            let e = &exprs[*arg];
+            match ty {
+                Some(t) => quote! { let mut #cfg: #t = #e; },
+                None => quote! { let mut #cfg = #e; },
             }
         }
-        OpKind::Constant => {
-            let value_expr = &exprs[0];
-            quote! {
-                let mut #cfg = #value_expr;
-                let mut #value = Default::default();
-            }
+        CfgInit::NanoTimeFrom(arg) => {
+            let e = &exprs[*arg];
+            quote! { let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#e); }
         }
-        // Closure-carrying ops keep no cfg local: the closure is inlined
-        // at the cycle call (via `cycle_owned_cfg`) so direct-argument
-        // deferral drives its signature inference.
-        OpKind::Map | OpKind::Join => quote! {
-            let mut #value = Default::default();
-        },
-        OpKind::Fold => {
-            let init = &exprs[0];
-            quote! {
-                let mut #state = #init;
-                let mut #value = Default::default();
-            }
+    };
+    let state_decl = match &info.state_init {
+        StateInit::None => quote! {},
+        StateInit::Expr(arg) => {
+            let e = &exprs[*arg];
+            quote! { let mut #state = #e; }
         }
-        OpKind::Filter | OpKind::Sample | OpKind::Merge => quote! {
-            let mut #value = Default::default();
-        },
-        OpKind::Delay => {
-            let dur = &exprs[0];
-            quote! {
-                let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#dur);
-                let mut #state = ::wingfoil_next::ops::DelayState::default();
-                let mut #value = Default::default();
-            }
-        }
-        OpKind::Ewma => {
-            let decay = &exprs[0];
-            quote! {
-                let mut #cfg: ::wingfoil_next::ops::EwmaDecay = #decay;
-                let mut #state = ::wingfoil_next::ops::EwmaState::default();
-                let mut #value = Default::default();
-            }
-        }
-        OpKind::RollingSum | OpKind::RollingMean => {
-            let window = &exprs[0];
-            quote! {
-                let mut #cfg: usize = #window;
-                let mut #state = ::wingfoil_next::ops::RollingWindowState::default();
-                let mut #value = Default::default();
-            }
-        }
-    }
+        StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
+        StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
+    };
+    // A unit-output op (ticker) has no value slot to declare.
+    let value_decl = if info.unit_output {
+        quote! {}
+    } else {
+        quote! { let mut #value = Default::default(); }
+    };
+    quote! { #cfg_decl #state_decl #value_decl }
 }
 
 /// Passthrough statements interleaved with node declarations in source
@@ -1231,7 +1318,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             quote! { #t }
         })
         .collect();
-    if node.op.spec().callback_activated {
+    if node.op.info().callback_activated {
         cond_parts.push(quote! { __dirty[#idx] });
     }
     let cond = quote! { #(#cond_parts)||* };
@@ -1240,7 +1327,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     let input = cycle_input(def, node);
     let cfg_arg = cycle_cfg_arg(node, &cfg);
     let state_arg = cycle_state_arg(node, &state);
-    let on_value = if node.op == OpKind::Ticker {
+    let on_value = if node.op.info().unit_output {
         // Unit output: no value slot to store.
         quote! { ::wingfoil_next::op::Tick::Value(()) => true, }
     } else {
@@ -1255,7 +1342,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     // their signature inference until the input argument has resolved the
     // op's value types (a closure behind `&mut` loses that deferral and
     // fails E0282).
-    let cycle_call = match node.op.spec().owned_closure {
+    let cycle_call = match node.op.info().owned_closure {
         Some(ix) => {
             let f = &node.exprs[ix];
             let ty = op_type(node.op);
@@ -1292,7 +1379,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let mut starts = Vec::new();
     let mut body = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
-        if node.op.spec().has_start {
+        if node.op.info().has_start {
             starts.push(node_start(Target::Compiled, i, node));
         }
         body.push(node_dispatch(def, Target::Compiled, i, flags[i]));
@@ -1343,7 +1430,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let callback_activated = def
         .nodes
         .iter()
-        .any(|node| node.op.spec().callback_activated);
+        .any(|node| node.op.info().callback_activated);
     let flags = tick_flags_needed(def);
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
@@ -1352,7 +1439,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
         if node.op == OpKind::Input {
             continue;
         }
-        if node.op.spec().has_start {
+        if node.op.info().has_start {
             starts.push(node_start(Target::Nested, i, node));
         }
         body.push(node_dispatch(def, Target::Nested, i, flags[i]));
@@ -1457,23 +1544,9 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     }
 }
 
-/// The concrete (inference-holed) op type.
+/// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
 fn op_type(op: OpKind) -> TokenStream2 {
-    match op {
-        OpKind::Input => unreachable!("inputs are not ops"),
-        OpKind::Ticker => quote! { ::wingfoil_next::ops::Ticker },
-        OpKind::Constant => quote! { ::wingfoil_next::ops::Const<_> },
-        OpKind::Map => quote! { ::wingfoil_next::ops::Map<_, _, _> },
-        OpKind::Filter => quote! { ::wingfoil_next::ops::Filter<_> },
-        OpKind::Fold => quote! { ::wingfoil_next::ops::Fold<_, _, _> },
-        OpKind::Sample => quote! { ::wingfoil_next::ops::Sample<_> },
-        OpKind::Merge => quote! { ::wingfoil_next::ops::Merge2<_> },
-        OpKind::Join => quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
-        OpKind::Delay => quote! { ::wingfoil_next::ops::Delay<_> },
-        OpKind::Ewma => quote! { ::wingfoil_next::ops::Ewma },
-        OpKind::RollingSum => quote! { ::wingfoil_next::ops::RollingSum },
-        OpKind::RollingMean => quote! { ::wingfoil_next::ops::RollingMean },
-    }
+    op.info().op_type
 }
 
 /// The op type wrapped as `<Type as Op>` so trait items resolve without
@@ -1484,7 +1557,7 @@ fn op_path(op: OpKind) -> TokenStream2 {
 }
 
 fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
-    if node.op.spec().cfg_local {
+    if node.op.info().cfg_local() {
         quote! { &mut #cfg }
     } else {
         quote! { &mut () }
@@ -1492,7 +1565,7 @@ fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
 }
 
 fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.op.spec().state_local {
+    if node.op.info().state_local() {
         quote! { &mut #state }
     } else {
         quote! { &mut () }
@@ -1500,7 +1573,7 @@ fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
 }
 
 fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.op.spec().state_in_start {
+    if node.op.info().state_in_start {
         quote! { &mut #state }
     } else {
         quote! { &mut () }
@@ -1522,36 +1595,25 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
         }
     };
     let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
-    match node.op {
-        OpKind::Input => unreachable!("inputs are not dispatched"),
-        OpKind::Ticker | OpKind::Constant => quote! { () },
-        OpKind::Map
-        | OpKind::Fold
-        | OpKind::Sample
-        | OpKind::Ewma
-        | OpKind::RollingSum
-        | OpKind::RollingMean => {
+    match node.op.info().inputs {
+        Inputs::Unit => quote! { () },
+        Inputs::One => {
             let src = v(node.refs[0]);
             quote! { (#src,) }
         }
-        OpKind::Filter => {
-            let src = v(node.refs[0]);
-            let cond = v(node.refs[1]);
-            quote! { (#src, #cond) }
-        }
-        OpKind::Merge => {
-            let (a, b) = (v(node.refs[0]), v(node.refs[1]));
-            let (ta, tb) = (t(node.refs[0]), t(node.refs[1]));
-            quote! { ((#a, #ta), (#b, #tb)) }
-        }
-        OpKind::Join => {
+        Inputs::Two => {
             let (a, b) = (v(node.refs[0]), v(node.refs[1]));
             quote! { (#a, #b) }
         }
-        OpKind::Delay => {
+        Inputs::OneTick => {
             let src = v(node.refs[0]);
             let ts = t(node.refs[0]);
             quote! { (#src, #ts) }
+        }
+        Inputs::TwoTickPairs => {
+            let (a, b) = (v(node.refs[0]), v(node.refs[1]));
+            let (ta, tb) = (t(node.refs[0]), t(node.refs[1]));
+            quote! { ((#a, #ta), (#b, #tb)) }
         }
     }
 }
