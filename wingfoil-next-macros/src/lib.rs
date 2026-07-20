@@ -283,15 +283,11 @@ fn mentions_graph_ident(
     use proc_macro2::TokenTree;
     for tt in tokens {
         match tt {
-            TokenTree::Ident(i) => {
-                if i == *builder || streams.contains_key(&i.to_string()) {
-                    return true;
-                }
+            TokenTree::Ident(i) if i == *builder || streams.contains_key(&i.to_string()) => {
+                return true;
             }
-            TokenTree::Group(gp) => {
-                if mentions_graph_ident(gp.stream(), builder, streams) {
-                    return true;
-                }
+            TokenTree::Group(gp) if mentions_graph_ident(gp.stream(), builder, streams) => {
+                return true;
             }
             _ => {}
         }
