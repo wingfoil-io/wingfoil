@@ -281,10 +281,7 @@ impl Builder {
             waker: self.waker.clone(),
             index: idx,
         };
-        (
-            self.make_handle(idx),
-            source,
-        )
+        (self.make_handle(idx), source)
     }
 
     /// Open a channel: a source stream fed by the returned [`ChannelSender`]
@@ -453,10 +450,7 @@ impl Builder {
             }),
         );
         let sender = ChannelSender::new(tx, self.waker.clone(), idx);
-        (
-            self.make_handle(idx),
-            sender,
-        )
+        (self.make_handle(idx), sender)
     }
 
     pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
@@ -1135,10 +1129,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        (
-            self.make_handle(idx),
-            FeedbackSink { queue, source: idx },
-        )
+        (self.make_handle(idx), FeedbackSink { queue, source: idx })
     }
 
     /// Wire the write end of a feedback edge: a pass-through of `src` that

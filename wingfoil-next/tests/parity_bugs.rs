@@ -45,7 +45,10 @@ fn fold_non_default_init_seed_parity() {
 
     // The fold seeds with init=100 and does not tick until the delay elapses,
     // so the earliest passive reads observe 100 (not Default = 0).
-    assert_eq!(100, interpreted[0], "passive read before first tick sees init");
+    assert_eq!(
+        100, interpreted[0],
+        "passive read before first tick sees init"
+    );
 
     let (compiled,) = fold_seed::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled, "interpreted == compiled");
@@ -449,7 +452,10 @@ fn delay_seeds_first_value_all_paths() {
     let (mut runner, sampled) = delay_seed::interpreted();
     runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(sampled);
-    assert_eq!(5, interpreted[0], "passive read before delay elapses sees the seed");
+    assert_eq!(
+        5, interpreted[0],
+        "passive read before delay elapses sees the seed"
+    );
 
     let (compiled,) = delay_seed::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled, "interpreted == compiled");
@@ -468,7 +474,10 @@ fn delay_seeds_first_value_all_paths() {
 #[test]
 fn delay_initializes_to_first_value_classic_port() {
     let g = GraphBuilder::new();
-    let source = g.ticker(Duration::from_secs(1)).count().map(|x| *x as i64 + 4);
+    let source = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|x| *x as i64 + 4);
     let delayed = source.delay(Duration::from_secs(5));
     let diff = source.join_passive(&delayed, |a, b| a - b).accumulate();
     let mut r = g.build();

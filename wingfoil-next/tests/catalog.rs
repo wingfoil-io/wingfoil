@@ -232,7 +232,8 @@ fn ticked_at_elapsed_emits_elapsed_time() {
     let count = g.ticker(Duration::from_nanos(100)).count();
     let acc = count.ticked_at_elapsed().accumulate();
     let mut r = g.build();
-    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(3)).unwrap();
+    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(3))
+        .unwrap();
     // Ticks at 1000, 1100, 1200; elapsed = 0, 100, 200.
     assert_eq!(
         vec![NanoTime::new(0), NanoTime::new(100), NanoTime::new(200)],
@@ -252,7 +253,8 @@ fn window_from_non_zero_start_anchors_boundaries_at_zero() {
     let count = g.ticker(Duration::from_nanos(100)).count();
     let acc = count.window(Duration::from_nanos(250)).accumulate();
     let mut r = g.build();
-    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(9)).unwrap();
+    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(9))
+        .unwrap();
     assert_eq!(
         vec![vec![1, 2, 3], vec![4, 5], vec![6, 7, 8]],
         r.value(&acc)

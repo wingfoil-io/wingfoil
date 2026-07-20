@@ -571,7 +571,9 @@ fn stream_value_type(ty: &Type) -> syn::Result<Type> {
 /// Prefix for macro-generated intermediate node names. User stream bindings
 /// starting with it are rejected (see [`ChainWalker::walk_chain`]), so a
 /// generated name can never collide with a user identifier in the emission.
-const RESERVED_PREFIX: &str = "__wf_anon";
+/// No leading underscore: the emission concatenates it after `__v_`/`__t_`/…,
+/// and a leading `_` would produce a triple-underscore (non-snake-case) local.
+const RESERVED_PREFIX: &str = "wf_anon_";
 
 /// Builds the node list while walking fluent chains.
 struct ChainWalker {
