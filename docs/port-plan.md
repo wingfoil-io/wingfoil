@@ -36,27 +36,31 @@ What each execution path supports, per wingfoil pattern. Legend: ✅ works ·
 🟡 partial · 📅 planned · ❌ not supported **by design** (not a missing
 feature — the path's value depends on the constraint).
 
-| Pattern / capability | Interpreted (today) | Interpreted + dirty-list (4.5) | Compiled `compiled()` | Island `nested()` |
-|---|:--:|:--:|:--:|:--:|
-| Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ |
-| Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ |
-| Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ |
-| Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ |
-| Feedback / cycles | ✅¹ | ✅ | ❌ | ❌ |
-| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ❌ | ❌ |
-| External / channel / async sources (`THREADED`) | ✅ | ✅ | ❌ | ❌ |
-| Bursts (never latest-wins) | ✅ | ✅ | ❌² | ❌² |
-| Historical replay | ✅ | ✅ | ✅³ | ✅ |
-| Realtime | ✅ | ✅ | 🟡³ | ✅ |
-| Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
-| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
-| Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
-| Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
-| Stateful `FnMut` closures | 🟡⁷ | 🟡⁷ | ❌⁷ | ❌⁷ |
-| Re-run (independent repeated runs) | ❌⁸ | 📅⁸ | ✅⁹ | ✅⁹ |
-| Dynamic graph (runtime add/remove) | ❌ | 📅 | ❌ | 🟡¹⁰ |
-| Sparse-graph efficiency (work ∝ *active* nodes) | ❌¹¹ | ✅ | 🟡¹² | ✅¹³ |
-| Dense hot-path speed (measured) | 1× | ~1× | 3–4×¹⁴ | interior 3–4×¹⁴ |
+Classic is the reference the next engine converges toward: the two
+interpreted columns aim to *match* it, while compiled/island add new fast
+paths that trade generality for speed (the ❌s are by-design, not gaps).
+
+| Pattern / capability | Classic wingfoil | Interpreted (today) | Interpreted + dirty-list (4.5) | Compiled | Island |
+|---|:--:|:--:|:--:|:--:|:--:|
+| Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Feedback / cycles | ✅ | ✅¹ | ✅ | ❌ | ❌ |
+| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| External / channel / async sources (`THREADED`) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Bursts (never latest-wins) | ✅ | ✅ | ✅ | ❌² | ❌² |
+| Historical replay | ✅ | ✅ | ✅ | ✅³ | ✅ |
+| Realtime | ✅ | ✅ | ✅ | 🟡³ | ✅ |
+| Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Observe arbitrary intermediate streams | ✅ | ✅ | ✅ | ❌⁵ | ❌⁵ |
+| Runtime-valued config (params/captures from caller) | ✅ | ✅ | ✅ | ❌⁶ | ❌⁶ |
+| Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
+| Re-run (independent repeated runs) | ✅⁸ | ❌⁸ | 📅⁸ | ✅⁹ | ✅⁹ |
+| Dynamic graph (runtime add/remove) | ✅ | ❌ | 📅 | ❌ | 🟡¹⁰ |
+| Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ❌¹² | ✅ | 🟡¹³ | ✅¹⁴ |
+| Dense hot-path speed (measured) | 1× | 1× | ~1× | 3–4×¹⁵ | interior 3–4×¹⁵ |
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
@@ -64,25 +68,31 @@ feature — the path's value depends on the constraint).
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
 ⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
-  needs them (none do yet).
+  needs them (none do yet). Classic runs the full setup/start/stop/teardown
+  lifecycle.
 ⁵ Only the declared output tuple is returned — no runner, no peeking
   intermediate nodes; an island exposes only its single output.
 ⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
   locals (compile-time), not values threaded in at the call. Interpreted
-  wiring captures any runtime local.
-⁷ Bound is `Fn`, deliberately — a mutating capture would drift between
-  engines (compiled re-creates the closure per cycle). Per-node state goes in
-  `fold`.
-⁸ v1 Runner is single-run (spike 0.4); well-defined re-run needs a per-node
-  reset hook (planned).
+  wiring (and classic) capture any runtime local.
+⁷ Classic holds state in `#[node]` struct fields; next holds it in `fold`
+  accumulators — combinator closures are `Fn`, so a *mutating capture* (which
+  would drift between the interpreted and compiled engines) is a compile
+  error. Both express arbitrary per-node state, by different idioms.
+⁸ Classic is the reference — a fresh `Graph::run` re-initialises via
+  `setup`. next's v1 Runner is single-run (spike 0.4); matching classic's
+  re-run needs the per-node reset hook (planned).
 ⁹ `compiled()` is a plain fn — each call is a fresh independent run.
 ¹⁰ Island interior is fixed at compile time, but the island *itself* can be
   wired dynamically into the interpreted graph once 4.5 lands.
-¹¹ `O(N)` topological sweep every cycle — the Phase 4.5 gap.
-¹² Straight-line per-node `if cond` checks (cheap, but every node); region
+¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
+  nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
+  4.5 arena rework can also improve on.
+¹² `O(N)` topological sweep every cycle — the Phase 4.5 gap.
+¹³ Straight-line per-node `if cond` checks (cheap, but every node); region
   gating (skip quiet sub-graphs) is the planned compiled counterpart.
-¹³ A quiet island isn't cycled — islands already give coarse region gating.
-¹⁴ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
+¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
+¹⁵ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
 
 ## Phase 0 — design spikes
 
