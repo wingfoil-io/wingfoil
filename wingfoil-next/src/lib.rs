@@ -46,8 +46,8 @@
 //!
 //! Still out of scope for the prototype (documented, not forgotten):
 //! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA
-//! value store for the interpreted engine, feedback edges, and dynamic
-//! (runtime-mutated) graphs.
+//! value store for the interpreted engine, and dynamic (runtime-mutated)
+//! graphs.
 
 #[cfg(feature = "async")]
 pub mod async_source;
