@@ -2,8 +2,9 @@
 //!
 //! A tokio task simulates a market data feed, pushing quotes into an
 //! [`external`](wingfoil_next::fluent::GraphBuilder::external) source; each
-//! send wakes the kernel, which runs one graph cycle. The graph maintains a
-//! running mean and flags quotes that deviate from it.
+//! send wakes the kernel. The source emits a *burst* of every quote that
+//! arrived since the last cycle (never latest-wins), and the graph maintains
+//! a running mean and flags quotes that deviate from it.
 //!
 //! The graph thread and the async world touch only at the `ExternalSource`
 //! handle — the graph itself stays single-threaded and lock-free.
@@ -21,18 +22,25 @@ fn main() {
     let g = GraphBuilder::new();
     let (quotes, feed) = g.external::<f64>();
 
+    // Fold over each burst: sum and count every quote it carries.
     let mean = quotes
-        .fold((0.0_f64, 0u64), |st, q| {
-            st.0 += q;
-            st.1 += 1;
+        .fold((0.0_f64, 0u64), |st, burst| {
+            for q in burst.iter() {
+                st.0 += *q;
+                st.1 += 1;
+            }
         })
-        .map(|(sum, n)| sum / *n as f64);
+        .map(|(sum, n)| if *n == 0 { 0.0 } else { sum / *n as f64 });
 
     let log = quotes
-        .join(&mean, |q, m| {
-            let dev = (q - m) / m * 100.0;
+        .join(&mean, |burst, m| {
+            let last = burst.iter().copied().last().unwrap_or(0.0);
+            let dev = (last - m) / m * 100.0;
             let flag = if dev.abs() > 1.0 { "  <-- outlier" } else { "" };
-            format!("quote {q:>7.2}  mean {m:>7.2}  dev {dev:>+5.2}%{flag}")
+            format!(
+                "burst of {:>2}  last {last:>7.2}  mean {m:>7.2}  dev {dev:>+5.2}%{flag}",
+                burst.len()
+            )
         })
         .accumulate();
 
