@@ -12,6 +12,7 @@ use anyhow::Result;
 
 use crate::op::{Activation, Ctx, Op, Tick};
 use wingfoil::{NanoTime, TimeQueue};
+use wingfoil_next_macros::op;
 
 /// Ticks at a fixed interval, anchored to its first activation to avoid
 /// drift. `Cfg` = interval, `State` = the last scheduled time.
@@ -76,6 +77,7 @@ impl<T: Clone + 'static> Op for Const<T> {
 /// compile error in both. Per-node state belongs in [`Fold`]'s accumulator.
 pub struct Map<A, B, F>(PhantomData<(A, B, F)>);
 
+#[op(build = map)]
 impl<A, B, F> Op for Map<A, B, F>
 where
     A: 'static,
@@ -98,6 +100,7 @@ where
 /// `Fn` for the same drift-safety reason (see [`Map`]).
 pub struct TryMap<A, B, F>(PhantomData<(A, B, F)>);
 
+#[op(build = try_map)]
 impl<A, B, F> Op for TryMap<A, B, F>
 where
     A: 'static,
@@ -120,6 +123,7 @@ where
 /// the catalog. `Fn`, like [`Map`].
 pub struct MapFilter<A, B, F>(PhantomData<(A, B, F)>);
 
+#[op(build = map_filter)]
 impl<A, B, F> Op for MapFilter<A, B, F>
 where
     A: 'static,
@@ -147,6 +151,7 @@ where
 /// so a genuine first value equal to `T::default()` still ticks.
 pub struct Distinct<T>(PhantomData<T>);
 
+#[op(build = distinct)]
 impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
     type Cfg = ();
     type State = Option<T>;
@@ -174,6 +179,7 @@ impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
 /// value (no previous to subtract).
 pub struct Difference<T>(PhantomData<T>);
 
+#[op(build = difference)]
 impl<T> Op for Difference<T>
 where
     T: Clone + Sub<Output = T> + 'static,
@@ -204,6 +210,7 @@ where
 /// limit; `State` the count emitted so far.
 pub struct Limit<T>(PhantomData<T>);
 
+#[op(build = limit)]
 impl<T: Clone + 'static> Op for Limit<T> {
     type Cfg = u32;
     type State = u32;
@@ -258,6 +265,7 @@ impl<T: Clone + 'static> Op for Throttle<T> {
 /// infallible `Fn` (contrast [`Sink`], the fallible outbound edge).
 pub struct Inspect<A, F>(PhantomData<(A, F)>);
 
+#[op(build = inspect)]
 impl<A, F> Op for Inspect<A, F>
 where
     A: Clone + 'static,
@@ -340,6 +348,7 @@ impl<T: Clone + 'static> Op for Window<T> {
 /// [`Window`]. `Cfg` = capacity, `State` = pending buffer.
 pub struct Buffer<T>(PhantomData<T>);
 
+#[op(build = buffer)]
 impl<T: Clone + 'static> Op for Buffer<T> {
     type Cfg = usize;
     type State = Vec<T>;
@@ -415,6 +424,7 @@ impl<T: Clone + 'static> Op for WithTime<T> {
 /// value is ignored). The `ticked_at` of the catalog.
 pub struct TickedAt<T>(PhantomData<T>);
 
+#[op(build = ticked_at)]
 impl<T: 'static> Op for TickedAt<T> {
     type Cfg = ();
     type State = ();
@@ -435,6 +445,7 @@ impl<T: 'static> Op for TickedAt<T> {
 /// Emits elapsed engine time (`now - start`) whenever the upstream ticks.
 pub struct TickedAtElapsed<T>(PhantomData<T>);
 
+#[op(build = ticked_at_elapsed)]
 impl<T: 'static> Op for TickedAtElapsed<T> {
     type Cfg = ();
     type State = ();
@@ -487,6 +498,7 @@ impl Default for EwmaState {
 /// that legitimately reaches `0.0` does not re-seed).
 pub struct Ewma;
 
+#[op(build = ewma)]
 impl Op for Ewma {
     type Cfg = EwmaDecay;
     type State = EwmaState;
@@ -565,6 +577,7 @@ impl RollingWindowState {
 /// Rolling sum over the most recent `window` `f64` samples. `Cfg` = window.
 pub struct RollingSum;
 
+#[op(build = rolling_sum)]
 impl Op for RollingSum {
     type Cfg = usize;
     type State = RollingWindowState;
@@ -586,6 +599,7 @@ impl Op for RollingSum {
 /// Rolling arithmetic mean over the most recent `window` `f64` samples.
 pub struct RollingMean;
 
+#[op(build = rolling_mean)]
 impl Op for RollingMean {
     type Cfg = usize;
     type State = RollingWindowState;
@@ -709,6 +723,7 @@ where
 /// `Result` so an IO write failure aborts the run with context.
 pub struct Sink<A, F>(PhantomData<(A, F)>);
 
+#[op(build = for_each)]
 impl<A, F> Op for Sink<A, F>
 where
     A: 'static,
