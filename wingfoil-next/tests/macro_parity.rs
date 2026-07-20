@@ -181,3 +181,30 @@ fn macro_handles_join_and_multiple_outputs() {
     assert_eq!(interpreted, compiled_acc);
     assert_eq!(6, compiled_doubled);
 }
+
+wingfoil_next::graph! {
+    fn stats(g: &GraphBuilder) -> (Stream<Vec<f64>>, Stream<Vec<f64>>) {
+        let x = g.ticker(Duration::from_nanos(10)).count().map(|i| *i as f64);
+        let smoothed = x.ewma_per_tick(0.5).accumulate();
+        let windowed = x.rolling_mean(3).accumulate();
+        (smoothed, windowed)
+    }
+}
+
+/// Statistics ops (EWMA + rolling window) routed through the macro — a
+/// non-closure `Cfg` and Default-seeded state — agree across both engines.
+#[test]
+fn macro_handles_statistics_on_both_engines() {
+    let run_for = RunFor::Cycles(5);
+    let (mut runner, smoothed, windowed) = stats::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let (i_smoothed, i_windowed) = (runner.value(smoothed), runner.value(windowed));
+    // Samples are 1,2,3,4,5. EWMA(0.5) seeds on the first sample.
+    assert_eq!(vec![1.0, 1.5, 2.25, 3.125, 4.0625], i_smoothed);
+    // rolling_mean over a 3-wide window: 1, 1.5, 2, 3, 4.
+    assert_eq!(vec![1.0, 1.5, 2.0, 3.0, 4.0], i_windowed);
+
+    let (c_smoothed, c_windowed) = stats::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(i_smoothed, c_smoothed);
+    assert_eq!(i_windowed, c_windowed);
+}
