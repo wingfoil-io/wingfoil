@@ -50,6 +50,7 @@
 //! (runtime-mutated) graphs.
 
 pub mod channel;
+pub mod compat;
 pub mod fluent;
 pub mod interp;
 pub mod op;

@@ -233,11 +233,14 @@ untouched (still shipping) until Phase 7.
 
 ## Phase 6 — facade, python, examples, benches
 
-- **Facade**: classic `Rc<dyn Stream<T>>` / `NodeOperators` reimplemented
-  over `Builder` + `Handle`. One wrapper type holding
-  `(Rc<RefCell<Builder>>, Handle<T>)` — structurally identical to the
-  fluent `Stream`, so most of the facade is renames + trait plumbing.
-  Classic examples compile unchanged against it.
+- **Facade** 🟡 *started*: `wingfoil_next::compat` proves the thesis — a
+  `Signal<T>` wrapping the fluent `Stream` + the shared graph + a runner
+  slot gives classic-idiom code (free `ticker`/`constant`, `stream.run(..)`,
+  `stream.peek_value()`) running on the new engine. `tests/compat.rs`
+  exercises counter / map-filter-accumulate / fold / constant+delay written
+  exactly as classic code. Remaining: the rest of the ~40-method
+  `StreamOperators`/`NodeOperators` surface (mechanical) and the true
+  `Rc<dyn Stream>` object form if binary-compat with classic is required.
 - **wingfoil-python**: rewire to the facade — should be near-transparent;
   its pytest suite is the gate.
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
