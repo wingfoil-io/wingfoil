@@ -1,0 +1,5 @@
+error: `count` (the builder or a bound stream name) may only appear in straight-line wiring `let name = <chain>;` statements, not inside other code — compiled() could not see nodes built there
+  --> tests/trybuild/wiring_in_passthrough.rs:10:42
+   |
+10 |         let _x = std::convert::identity(&count);
+   |                                          ^^^^^

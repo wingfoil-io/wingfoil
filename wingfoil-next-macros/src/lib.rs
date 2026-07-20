@@ -183,11 +183,38 @@ enum StateInit {
     OptionNone(TokenStream2),
 }
 
+/// How `node_decl` seeds a node's `__v_<name>` output value slot — the value
+/// a passive/sample/join reader sees *before* the node's first tick. This must
+/// match what the interpreted engine seeds its slot with (`interp.rs`), or the
+/// engines drift on pre-first-tick reads.
+enum ValueSeed {
+    /// `let mut v = Default::default();` — the output type's default.
+    Default,
+    /// `let mut v = Clone::clone(&state);` — a clone of the op's `__state`
+    /// local (fold seeds its slot with `init`, matching `interp.rs` which does
+    /// `new_slot(init.clone())`). Requires the op to keep a `__state` local.
+    CloneState,
+}
+
+/// Which of an op's upstream `refs` are *active* (propagate ticks / appear in
+/// the dispatch condition). Single-sourced here so the interpreted engine, the
+/// compiled emission, and the nested emission cannot disagree — previously
+/// Sample's passive data edge was a hard-coded special case in three places.
+enum Edges {
+    /// Every `ref` is an active upstream.
+    AllActive,
+    /// Only the `ref` at this index is active; the rest are passive (read by
+    /// value but do not trigger). Sample is `OneActive(1)`: its data source
+    /// (`refs[0]`) is passive, its trigger (`refs[1]`) is the sole active edge.
+    OneActive(usize),
+}
+
 /// Everything the emitters need to know about an op, **single-sourced** in one
 /// [`OpKind::info`] arm per op: its type, the boolean facts dispatch consults,
 /// and the structural shapes `node_decl`/`cycle_input`/`op_type` build from.
 /// Adding an op is one `info` arm (plus its parse arm and enum variant); the
-/// named fields make a half-filled entry a compile error, not a silent gap.
+/// named fields — spelled in full per arm, with no `..base` fill — make a
+/// half-filled entry a compile error, not a silent gap.
 struct OpInfo {
     /// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
     op_type: TokenStream2,
@@ -205,6 +232,10 @@ struct OpInfo {
     inputs: Inputs,
     cfg_init: CfgInit,
     state_init: StateInit,
+    /// How the output value slot is seeded before the first tick.
+    value_seed: ValueSeed,
+    /// Which upstream `refs` are active (drive dispatch).
+    edges: Edges,
 }
 
 impl OpInfo {
@@ -221,107 +252,195 @@ impl OpInfo {
 impl OpKind {
     fn info(self) -> OpInfo {
         let nanotime = quote! { ::wingfoil_next::wingfoil::NanoTime };
-        let base = OpInfo {
-            op_type: quote! {},
-            callback_activated: false,
-            has_start: false,
-            state_in_start: false,
-            owned_closure: None,
-            unit_output: false,
-            inputs: Inputs::One,
-            cfg_init: CfgInit::None,
-            state_init: StateInit::None,
-        };
+        // Every field is spelled out per arm — no `..base` fill — so adding a
+        // field (or a new op) that omits it is a compile error, not a silent
+        // gap that never fires compiled/nested.
         match self {
             // A graph edge, not a real op: it declares no storage and is never
             // dispatched (the `nested` expansion reads its value/tick from the
             // outer graph). A benign all-false `info` keeps whole-graph scans
             // like the callback-activation check from special-casing it.
-            OpKind::Input => base,
+            OpKind::Input => OpInfo {
+                op_type: quote! {},
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
             OpKind::Ticker => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Ticker },
                 callback_activated: true,
                 has_start: true,
                 state_in_start: true,
+                owned_closure: None,
                 unit_output: true,
                 inputs: Inputs::Unit,
                 cfg_init: CfgInit::NanoTimeFrom(0),
                 state_init: StateInit::OptionNone(nanotime),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Constant => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Const<_> },
                 callback_activated: true,
                 has_start: true,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::Unit,
                 cfg_init: CfgInit::Expr { arg: 0, ty: None },
-                ..base
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Map => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Map<_, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(0),
-                ..base
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Filter => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Filter<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::Two,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Fold => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Fold<_, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(1),
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
                 state_init: StateInit::Expr(0),
-                ..base
+                // Seed the slot with a clone of the accumulator (init), so a
+                // passive/sample/join read before the first tick sees `init`,
+                // not `Default` — matching interp.rs `new_slot(init.clone())`.
+                value_seed: ValueSeed::CloneState,
+                edges: Edges::AllActive,
             },
             OpKind::Sample => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Sample<_> },
-                ..base
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                // refs = [data, trigger]; only the trigger is active.
+                edges: Edges::OneActive(1),
             },
             OpKind::Merge => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Merge2<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::TwoTickPairs,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Join => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
                 owned_closure: Some(0),
+                unit_output: false,
                 inputs: Inputs::Two,
-                ..base
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Delay => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Delay<_> },
                 callback_activated: true,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
                 inputs: Inputs::OneTick,
                 cfg_init: CfgInit::NanoTimeFrom(0),
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::DelayState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::Ewma => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::Ewma },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { ::wingfoil_next::ops::EwmaDecay }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::EwmaState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::RollingSum => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::RollingSum },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
             OpKind::RollingMean => OpInfo {
                 op_type: quote! { ::wingfoil_next::ops::RollingMean },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
                 cfg_init: CfgInit::Expr {
                     arg: 0,
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                ..base
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
             },
         }
     }
@@ -338,12 +457,13 @@ struct NodeDef {
 
 impl NodeDef {
     /// Active upstream node indices (what propagates ticks to this node).
-    /// Sample is the one op with a passive edge: its data source is read by
-    /// value slot only; the trigger is its sole active edge.
+    /// The active/passive edge shape is single-sourced in [`OpInfo::edges`]
+    /// (e.g. Sample's data edge is passive, its trigger active) so the three
+    /// emission paths cannot disagree.
     fn active_ups(&self) -> Vec<usize> {
-        match self.op {
-            OpKind::Sample => vec![self.refs[1]],
-            _ => self.refs.clone(),
+        match self.op.info().edges {
+            Edges::AllActive => self.refs.clone(),
+            Edges::OneActive(i) => vec![self.refs[i]],
         }
     }
 }
@@ -383,27 +503,30 @@ fn chain_root(expr: &Expr) -> Option<&Ident> {
     }
 }
 
-/// True if any identifier in `tokens` names the builder or a known stream —
-/// used to reject graph wiring hidden inside arbitrary (passthrough) code,
-/// which `wire()` would execute but `compiled()` could not see.
-fn mentions_graph_ident(
+/// The first identifier in `tokens` that names the builder or a known stream,
+/// if any — used to reject graph wiring hidden inside arbitrary (passthrough)
+/// code, which `wire()` would execute but `compiled()` could not see. Returns
+/// the offending [`Ident`] (with its span) so the error can name it precisely.
+fn offending_graph_ident(
     tokens: TokenStream2,
     builder: &Ident,
     streams: &std::collections::HashMap<String, usize>,
-) -> bool {
+) -> Option<Ident> {
     use proc_macro2::TokenTree;
     for tt in tokens {
         match tt {
             TokenTree::Ident(i) if i == *builder || streams.contains_key(&i.to_string()) => {
-                return true;
+                return Some(i);
             }
-            TokenTree::Group(gp) if mentions_graph_ident(gp.stream(), builder, streams) => {
-                return true;
+            TokenTree::Group(gp) => {
+                if let Some(found) = offending_graph_ident(gp.stream(), builder, streams) {
+                    return Some(found);
+                }
             }
             _ => {}
         }
     }
-    false
+    None
 }
 
 /// Collect the identifiers a pattern binds (`let (a, b) = ..` → a, b).
@@ -445,6 +568,13 @@ fn stream_value_type(ty: &Type) -> syn::Result<Type> {
     ))
 }
 
+/// Prefix for macro-generated intermediate node names. User stream bindings
+/// starting with it are rejected (see [`ChainWalker::walk_chain`]), so a
+/// generated name can never collide with a user identifier in the emission.
+/// No leading underscore: the emission concatenates it after `__v_`/`__t_`/…,
+/// and a leading `_` would produce a triple-underscore (non-snake-case) local.
+const RESERVED_PREFIX: &str = "wf_anon_";
+
 /// Builds the node list while walking fluent chains.
 struct ChainWalker {
     nodes: Vec<NodeDef>,
@@ -474,7 +604,11 @@ impl ChainWalker {
 
     fn anon_name(&mut self, span: proc_macro2::Span) -> Ident {
         self.anon += 1;
-        Ident::new(&format!("anon{}", self.anon), span)
+        // `RESERVED_PREFIX` (rejected for user bindings in `walk_chain`) makes
+        // these intermediate node names un-collidable with user stream names —
+        // a user stream `anon1` no longer shares the emitted `__v_anon1` slot
+        // with a generated intermediate.
+        Ident::new(&format!("{RESERVED_PREFIX}{}", self.anon), span)
     }
 
     fn lookup(&self, ident: &Ident) -> syn::Result<usize> {
@@ -695,6 +829,15 @@ impl ChainWalker {
             };
         }
 
+        if bound_name.to_string().starts_with(RESERVED_PREFIX) {
+            return Err(syn::Error::new(
+                bound_name.span(),
+                format!(
+                    "`{bound_name}` uses the reserved `{RESERVED_PREFIX}` prefix — it is used for \
+                     macro-generated intermediate node names; pick another name"
+                ),
+            ));
+        }
         if self.index_of.insert(bound_name.to_string(), cur).is_some() {
             return Err(syn::Error::new(
                 bound_name.span(),
@@ -841,12 +984,14 @@ impl Parse for GraphDef {
             }
             // Passthrough: arbitrary non-wiring code.
             let tokens = quote! { #stmt };
-            if mentions_graph_ident(tokens, &builder, &walker.index_of) {
+            if let Some(bad) = offending_graph_ident(tokens, &builder, &walker.index_of) {
                 return Err(syn::Error::new(
-                    stmt.span(),
-                    "graph wiring must be straight-line `let name = <chain>;` statements — \
-                     the builder and stream names cannot appear inside other code (compiled() \
-                     could not see nodes built there)",
+                    bad.span(),
+                    format!(
+                        "`{bad}` (the builder or a bound stream name) may only appear in \
+                         straight-line wiring `let name = <chain>;` statements, not inside other \
+                         code — compiled() could not see nodes built there"
+                    ),
                 ));
             }
             if let Stmt::Local(local) = stmt {
@@ -911,6 +1056,12 @@ impl Parse for GraphDef {
                 ),
             ));
         }
+        // Resolve each tail name to the *actual node* it names, then use that
+        // node's own name for the value/tick slots. A bare alias (`let out =
+        // acc;`) makes `out` an alias for `acc`'s node with no node of its own,
+        // so `__v_out` would be undefined compiled/nested — resolving to the
+        // node name (`acc`) makes it reference the real slot in all three paths.
+        let mut resolved_out_names: Vec<Ident> = Vec::with_capacity(out_names.len());
         for name in &out_names {
             let Some(&ix) = walker.index_of.get(&name.to_string()) else {
                 return Err(syn::Error::new(
@@ -927,7 +1078,9 @@ impl Parse for GraphDef {
                     ),
                 ));
             }
+            resolved_out_names.push(walker.nodes[ix].name.clone());
         }
+        let out_names = resolved_out_names;
         if !inputs.is_empty() && out_names.len() != 1 {
             return Err(syn::Error::new(
                 tail.span(),
@@ -1243,13 +1396,47 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
         StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
         StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
     };
-    // A unit-output op (ticker) has no value slot to declare.
+    // A **non-literal** closure config (map/fold/join) — e.g. `make_f()` or a
+    // named local — is evaluated **once** here into a setup local, not inline
+    // in the cycle loop: otherwise its factory re-runs every due cycle
+    // (drifting from the interpreted engine, which evaluates it once at
+    // wiring). The cycle then calls the ordinary `Op::cycle(&mut __cfg, …)`
+    // (its concrete factory type needs no inference help). A *literal* closure
+    // (`|i| ...`, `move |i| ...`) is left inline and passed by value directly
+    // through `cycle_owned_cfg`: hoisting it to a `let` would strip the context
+    // rustc needs to infer its argument types (E0282), and its construction is
+    // a zero-cost ZST each cycle anyway.
+    let closure_cfg_decl = match info.owned_closure {
+        Some(ix) if !matches!(&exprs[ix], Expr::Closure(_)) => {
+            let e = &exprs[ix];
+            quote! { let mut #cfg = #e; }
+        }
+        _ => quote! {},
+    };
+    // A unit-output op (ticker) has no value slot to declare. Otherwise seed
+    // the slot per the op's `value_seed`: `Default` for most, or a clone of
+    // the `__state` local for fold (so pre-first-tick reads see `init`).
     let value_decl = if info.unit_output {
         quote! {}
     } else {
-        quote! { let mut #value = Default::default(); }
+        match info.value_seed {
+            ValueSeed::Default => quote! { let mut #value = Default::default(); },
+            ValueSeed::CloneState => {
+                quote! { let mut #value = ::core::clone::Clone::clone(&#state); }
+            }
+        }
     };
-    quote! { #cfg_decl #state_decl #value_decl }
+    // Delay keeps an extra engine-level `__seeded` flag so it can store its
+    // first upstream value into the slot *without ticking* (classic parity —
+    // passive readers see the real first value, not `T::default()`, before the
+    // delay elapses). See the Delay branch in `node_dispatch`.
+    let delay_seed_decl = if node.op == OpKind::Delay {
+        let seeded = format_ident!("__seeded_{}", name);
+        quote! { let mut #seeded = false; }
+    } else {
+        quote! {}
+    };
+    quote! { #cfg_decl #closure_cfg_decl #state_decl #value_decl #delay_seed_decl }
 }
 
 /// Passthrough statements interleaved with node declarations in source
@@ -1338,16 +1525,23 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             }
         }
     };
-    // Closure configs go by value as a DIRECT argument so rustc defers
-    // their signature inference until the input argument has resolved the
-    // op's value types (a closure behind `&mut` loses that deferral and
-    // fails E0282).
+    // A *literal* closure config goes by value as a DIRECT argument so rustc
+    // defers its signature inference until `input` has resolved the op's value
+    // types (a closure behind `&mut` loses that deferral and fails E0282); it
+    // is a zero-cost ZST rebuilt each cycle. A *non-literal* config (`make_f()`,
+    // a named local) was evaluated once into `__cfg_<name>` by `node_decl` and
+    // is passed here via the ordinary `Op::cycle(&mut __cfg, …)` — its concrete
+    // type needs no inference help — so the factory runs once, not per cycle.
     let cycle_call = match node.op.info().owned_closure {
         Some(ix) => {
-            let f = &node.exprs[ix];
-            let ty = op_type(node.op);
-            quote! {
-                ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+            if matches!(&node.exprs[ix], Expr::Closure(_)) {
+                let f = &node.exprs[ix];
+                let ty = op_type(node.op);
+                quote! {
+                    ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+                }
+            } else {
+                quote! { #op_path::cycle(&mut #cfg, #state_arg, #input, &mut __ctx) }
             }
         }
         None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
@@ -1355,12 +1549,54 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     let ctx = ctx_expr(target, idx);
     // `?` propagates an op error out of the enclosing `compiled()` fn or the
     // `nested()` composite closure — both return `anyhow::Result`.
-    let call = quote! {
-        {
-            let mut __ctx = #ctx;
-            match #cycle_call? {
-                #on_value
-                ::wingfoil_next::op::Tick::Quiet => false,
+    let call = if node.op == OpKind::Delay {
+        // Delay carries two engine-level behaviours classic has that `Op::cycle`
+        // cannot express, applied here in every emission path (and mirrored in
+        // interp.rs):
+        //   1. zero delay emits inline in the *same* cycle (classic special-
+        //      cases it; scheduling `time + 0` would instead pop next cycle);
+        //   2. the first upstream value is stored into the slot *without*
+        //      ticking, so passive readers see it (not `T::default()`) before
+        //      the delay elapses.
+        // `Op::cycle` still owns the queue/scheduling for the non-zero case.
+        let src_v = upstream_value_expr(def, node.refs[0]);
+        let src_t = format_ident!("__t_{}", def.nodes[node.refs[0]].name);
+        let seeded = format_ident!("__seeded_{}", name);
+        quote! {
+            {
+                if #cfg == ::wingfoil_next::wingfoil::NanoTime::ZERO {
+                    if #src_t {
+                        #value = ::core::clone::Clone::clone(#src_v);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    let mut __ctx = #ctx;
+                    match #op_path::cycle(&mut #cfg, &mut #state, (#src_v, #src_t), &mut __ctx)? {
+                        ::wingfoil_next::op::Tick::Value(__val) => {
+                            #value = __val;
+                            true
+                        }
+                        ::wingfoil_next::op::Tick::Quiet => {
+                            if #src_t && !#seeded {
+                                #value = ::core::clone::Clone::clone(#src_v);
+                                #seeded = true;
+                            }
+                            false
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            {
+                let mut __ctx = #ctx;
+                match #cycle_call? {
+                    #on_value
+                    ::wingfoil_next::op::Tick::Quiet => false,
+                }
             }
         }
     };
@@ -1389,10 +1625,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let out_values: Vec<TokenStream2> = def
         .outs
         .iter()
-        .map(|(o, _)| {
-            let v = format_ident!("__v_{}", o);
-            quote! { #v }
-        })
+        .map(|(o, _)| output_value_expr(def, o))
         .collect();
 
     quote! {
@@ -1426,7 +1659,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let n = def.nodes.len();
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
-    let out_v = format_ident!("__v_{}", out_name);
+    let out_v = output_value_expr(def, out_name);
     let callback_activated = def
         .nodes
         .iter()
@@ -1549,6 +1782,23 @@ fn op_type(op: OpKind) -> TokenStream2 {
     op.info().op_type
 }
 
+/// The value expression for an output node (`o` is a resolved node name): its
+/// `__v_<name>` slot, or the unit literal `()` for a unit-output op (a bare
+/// ticker returned directly), which declares no value slot.
+fn output_value_expr(def: &GraphDef, o: &Ident) -> TokenStream2 {
+    let is_unit = def
+        .nodes
+        .iter()
+        .find(|n| &n.name == o)
+        .is_some_and(|n| n.op.info().unit_output);
+    if is_unit {
+        quote! { () }
+    } else {
+        let v = format_ident!("__v_{}", o);
+        quote! { #v }
+    }
+}
+
 /// The op type wrapped as `<Type as Op>` so trait items resolve without
 /// `Op` being in scope at the expansion site.
 fn op_path(op: OpKind) -> TokenStream2 {
@@ -1580,20 +1830,23 @@ fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
     }
 }
 
+/// A `&`-expression for reading an upstream's current value. A ticker upstream
+/// has no value slot — its value is the unit literal. An input upstream's local
+/// is a borrow guard on the outer graph's slot, so it is re-borrowed rather
+/// than referenced.
+fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
+    let up = &def.nodes[ix];
+    let ident = format_ident!("__v_{}", up.name);
+    match up.op {
+        OpKind::Ticker => quote! { &() },
+        OpKind::Input => quote! { &*#ident },
+        _ => quote! { &#ident },
+    }
+}
+
 /// The `Op::In` tuple for one cycle, built from upstream value/tick locals.
-/// A ticker upstream has no value slot — its value is the unit literal. An
-/// input upstream's local is a borrow guard on the outer graph's slot, so
-/// it is re-borrowed rather than referenced.
 fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
-    let v = |ix: usize| -> TokenStream2 {
-        let up = &def.nodes[ix];
-        let ident = format_ident!("__v_{}", up.name);
-        match up.op {
-            OpKind::Ticker => quote! { &() },
-            OpKind::Input => quote! { &*#ident },
-            _ => quote! { &#ident },
-        }
-    };
+    let v = |ix: usize| upstream_value_expr(def, ix);
     let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
     match node.op.info().inputs {
         Inputs::Unit => quote! { () },

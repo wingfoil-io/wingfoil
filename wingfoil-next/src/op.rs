@@ -72,6 +72,20 @@ impl Activation {
 /// The outcome of one op cycle: either the op ticked and produced a value,
 /// or it stayed quiet. Replaces the `bool` + hidden-value-slot side channel
 /// of the old `MutableNode::cycle`.
+///
+/// # Contract gap: "update the value slot without ticking"
+///
+/// There is deliberately **no** `Silent(T)` variant that would update a node's
+/// value slot while suppressing the downstream tick. Classic wingfoil's
+/// `delay` uses exactly that ("store the first upstream value without
+/// ticking", so passive readers see it before the delay elapses). Because an
+/// op cannot express it, the two ops that need engine-owned init/timing
+/// behaviour — `delay`'s first-value seeding and its zero-delay inline emit —
+/// apply it at the **engine** level instead (see `Builder::delay` in
+/// `interp.rs` and the Delay branch in the `graph!` macro's `node_dispatch`),
+/// kept in lockstep across interpreted/compiled/nested. If a third op ever
+/// needs the same shape, promote it to a real `Tick::Silent(T)` variant here
+/// and teach all three engines to store-without-ticking on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tick<T> {
     Value(T),

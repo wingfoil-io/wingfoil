@@ -104,7 +104,21 @@ impl<T: 'static> Signal<T> {
     }
 
     /// Run the graph to its bound, storing the runner for `peek_value`.
+    ///
+    /// Re-running is not supported: the shared [`GraphBuilder`] is consumed by
+    /// the first `run`, so a second call would build — and silently run — an
+    /// empty graph, then read a now-dangling handle out of bounds. Until re-run
+    /// support lands (deferred — see `docs/fable-review.md`, plan point 3) a
+    /// second call is a *reachable* user error, not an unreachable invariant,
+    /// so it is surfaced as an error rather than a panic. The first run's
+    /// runner is left in place, so `peek_value` keeps working.
     pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
+        if self.runner.borrow().is_some() {
+            anyhow::bail!(
+                "Signal::run called more than once: re-running a graph is not \
+                 supported (the builder is consumed by the first run)"
+            );
+        }
         let mut runner = self.graph.build();
         let result = runner.run(run_mode, run_for);
         *self.runner.borrow_mut() = Some(runner);
@@ -112,6 +126,14 @@ impl<T: 'static> Signal<T> {
     }
 
     /// The stream's current value after a [`run`](Signal::run).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`run`](Signal::run): there is no value to read
+    /// until the graph has run. This mirrors the classic `Stream::peek_value`,
+    /// which is infallible (returns `T`, not `Result<T>`) so the facade stays
+    /// drop-in compatible; the precondition is documented and enforced with an
+    /// explanatory panic rather than a bare out-of-bounds one.
     pub fn peek_value(&self) -> T
     where
         T: Clone + Default,
@@ -119,7 +141,7 @@ impl<T: 'static> Signal<T> {
         self.runner
             .borrow()
             .as_ref()
-            .expect("call run() before peek_value()")
+            .expect("Signal::run must be called before Signal::peek_value")
             .value(&self.stream)
     }
 }

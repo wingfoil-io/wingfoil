@@ -28,6 +28,10 @@ tokio = { version = "1", features = [
     "macros",
 ], optional = true }
 
+[dev-dependencies]
+# Compile-fail tests pinning the `graph!` macro's key error paths.
+trybuild = "1"
+
 [features]
 default = []
 async = ["dep:tokio", "dep:futures"]
