@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::burst::Burst;
 use crate::channel::ChannelSender;
 use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner};
 
@@ -49,9 +50,9 @@ impl GraphBuilder {
 
     /// An external source: values sent through the returned
     /// [`ExternalSource`] (from any thread or async task) tick the stream.
-    /// If several values arrive between cycles the latest wins. Graphs with
-    /// external sources run in realtime mode only.
-    pub fn external<T: Clone + Default + 'static>(&self) -> (Stream<T>, ExternalSource<T>) {
+    /// Emits a [`Burst`] of every value that arrived since the last cycle —
+    /// never latest-wins. Realtime mode only.
+    pub fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>) {
         let (handle, source) = self.inner.borrow_mut().external();
         (
             Stream {
@@ -107,10 +108,11 @@ impl GraphBuilder {
     }
 
     /// Open a channel: a source stream fed by the returned [`ChannelSender`]
-    /// (moved to another thread). Carries the message envelope, so a producer
-    /// can also close the stream or propagate an error into the graph.
-    /// Realtime runs only.
-    pub fn channel<T: Clone + Default + 'static>(&self) -> (Stream<T>, ChannelSender<T>) {
+    /// (moved to another thread). Emits a [`Burst`] (never latest-wins) and
+    /// runs in **both** modes — realtime (waker-driven) and historical
+    /// (timestamped sends replayed deterministically on the graph clock; see
+    /// [`Builder::channel`](crate::interp::Builder::channel)).
+    pub fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>) {
         let (handle, sender) = self.inner.borrow_mut().channel::<T>();
         (
             Stream {
@@ -302,6 +304,16 @@ impl<T: 'static> Stream<T> {
                 .borrow_mut()
                 .trimap(self.handle, true, b.handle, true, c.handle, true, f);
         self.lift(h)
+    }
+}
+
+impl<T: Clone + 'static> Stream<Burst<T>> {
+    /// Accumulate every value from every burst into one `Vec`, losslessly and
+    /// in order — the burst-aware counterpart to [`accumulate`](Self::accumulate).
+    pub fn collapse_accumulate(&self) -> Stream<Vec<T>> {
+        self.fold(Vec::new(), |acc, burst: &Burst<T>| {
+            acc.extend(burst.iter().cloned())
+        })
     }
 }
 

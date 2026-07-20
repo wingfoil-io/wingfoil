@@ -98,9 +98,19 @@ impl<T> ChannelSender<T> {
         self.tx.send(message).is_ok() && self.waker.wake(self.index)
     }
 
-    /// Send a value. Returns false once the receiver is gone.
+    /// Send a value (realtime) or a value at the current time (historical).
+    /// Returns false once the receiver is gone.
     pub fn send(&self, value: T) -> bool {
         self.deliver(Message::Value(value))
+    }
+
+    /// Send a value stamped with an explicit graph time. In a **historical**
+    /// run the receiver replays it deterministically at `time` on the graph
+    /// clock (the timestamped `(NanoTime, T)` shape of classic
+    /// `produce_async`); in realtime the timestamp is ignored. Producers
+    /// driving a historical replay send timestamped values, then [`close`].
+    pub fn send_at(&self, value: T, time: NanoTime) -> bool {
+        self.deliver(Message::ValueAt(value, time))
     }
 
     /// Propagate an error into the receiving graph: the receiver's next cycle

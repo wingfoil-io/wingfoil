@@ -17,17 +17,19 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::burst::Burst;
 use crate::channel::{ChannelSender, Message};
 use crate::op::{Caps, Ctx, Op, Tick};
 use crate::ops::{
-    Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, External,
-    Filter, Finally, Fold, Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, RollingMean,
+    Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, Filter,
+    Finally, Fold, Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, RollingMean,
     RollingSum, RollingWindowState, Sample, Sink, Throttle, TickedAt, TickedAtElapsed, Ticker,
     TryMap, Window, WindowState, WithTime,
 };
@@ -142,8 +144,12 @@ pub struct Builder {
     ticked: Rc<RefCell<Vec<bool>>>,
     waker: KernelWaker,
     ready: Option<ReadyReceiver>,
+    /// `external`/`poll` sources are wall-clock (realtime-only).
     has_external: bool,
     has_always: bool,
+    /// `channel` sources carry timestamps, so they run in **both** modes:
+    /// realtime (waker-driven) and historical (schedule-driven replay).
+    has_channel: bool,
 }
 
 impl Default for Builder {
@@ -157,6 +163,7 @@ impl Default for Builder {
             ready: Some(ready),
             has_external: false,
             has_always: false,
+            has_channel: false,
         }
     }
 }
@@ -168,28 +175,31 @@ impl Builder {
 
     /// An external source: values sent through the returned
     /// [`ExternalSource`] (from any thread or async task) tick this stream.
-    /// If several values arrive between cycles the latest wins. Graphs with
-    /// external sources run in [`RunMode::RealTime`] only, and support a
-    /// single [`Runner::run`].
-    pub fn external<T: Clone + Default + 'static>(&mut self) -> (Handle<T>, ExternalSource<T>) {
+    /// Emits a [`Burst`] — **every** value that arrived since the last cycle,
+    /// in order (never latest-wins, never dropped). Realtime only, single
+    /// [`Runner::run`].
+    pub fn external<T: Clone + Default + 'static>(
+        &mut self,
+    ) -> (Handle<Burst<T>>, ExternalSource<T>) {
         let idx = self.nodes.len();
-        let out = self.new_slot(T::default());
-        let (tx, rx) = std::sync::mpsc::channel();
-        let cs = Self::cell(rx, ());
+        let out = self.new_slot(Burst::<T>::new());
+        let (tx, rx) = std::sync::mpsc::channel::<T>();
         self.has_external = true;
         self.push_node(
             Vec::new(),
-            External::<T>::CAPS,
+            Caps::THREADED,
             "external",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                match External::<T>::cycle(cfg, state, (), &mut ctx)? {
-                    Tick::Value(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
+            Box::new(move |_k| {
+                // Drain everything pending into one burst — no coalescing.
+                let mut burst = Burst::new();
+                while let Ok(v) = rx.try_recv() {
+                    burst.push(v);
+                }
+                if burst.is_empty() {
+                    Ok(false)
+                } else {
+                    *out.borrow_mut() = burst;
+                    Ok(true)
                 }
             }),
             Box::new(|_| Ok(())),
@@ -209,42 +219,119 @@ impl Builder {
     }
 
     /// Open a channel: a source stream fed by the returned [`ChannelSender`]
-    /// (moved to another thread). Carries the [`Message`] envelope, so a
-    /// producer can also close the stream or propagate an error — a
-    /// `Message::Error` makes the receiver's next cycle fail, aborting the
-    /// run. Realtime only, latest-wins between cycles (like `external`).
-    pub fn channel<T: Clone + Default + 'static>(&mut self) -> (Handle<T>, ChannelSender<T>) {
+    /// (moved to another thread or async task). Emits a [`Burst`] — every
+    /// value at a given instant, grouped, never coalesced — and works in
+    /// **both** run modes:
+    ///
+    /// - **Realtime**: each `send` wakes the kernel; a cycle emits a burst of
+    ///   all values that arrived since the last one (wall-clock paced).
+    /// - **Historical**: the producer sends timestamped values
+    ///   ([`ChannelSender::send_at`]) then [`close`](ChannelSender::close);
+    ///   the receiver collects them at `start`, groups same-timestamp values
+    ///   into one burst, and schedules delivery on the graph clock — so they
+    ///   replay **deterministically** at their timestamps regardless of
+    ///   wall-clock arrival (the classic `produce_async` model). Same-time
+    ///   values ride one atomic burst, never split or dropped.
+    ///
+    /// A `Message::Error` propagates into the graph and aborts the run.
+    pub fn channel<T: Clone + Default + 'static>(
+        &mut self,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
         let idx = self.nodes.len();
-        let out = self.new_slot(T::default());
+        let out = self.new_slot(Burst::<T>::new());
         let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
-        self.has_external = true;
+        self.has_channel = true;
+        // Shared between the cycle and start adapters: the receiver, plus the
+        // time-grouped bursts the historical `start` fills.
+        let cs = Self::cell(rx, VecDeque::<(NanoTime, Burst<T>)>::new());
+        let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
-            Caps::THREADED,
+            Caps {
+                schedules: true,
+                threaded: true,
+                always: false,
+            },
             "channel",
-            Box::new(move |_k| {
-                // Drain everything pending; latest value wins; an error aborts.
-                let mut latest = None;
-                loop {
-                    match rx.try_recv() {
-                        Ok(Message::Value(v) | Message::ValueAt(v, _)) => latest = Some(v),
-                        Ok(Message::Error(e)) => {
-                            return Err(anyhow::anyhow!("{e:#}")
-                                .context("channel receiver: producer sent an error"));
+            Box::new(move |k| {
+                match k.run_mode() {
+                    // Historical: emit the burst grouped at the current time.
+                    RunMode::HistoricalFrom(_) => {
+                        let now = k.time();
+                        let (_, groups) = &mut *cs.borrow_mut();
+                        match groups.front() {
+                            Some((t, _)) if *t <= now => {
+                                let (_, burst) = groups.pop_front().expect("front checked");
+                                *out.borrow_mut() = burst;
+                                Ok(true)
+                            }
+                            _ => Ok(false),
                         }
-                        Ok(Message::EndOfStream | Message::Checkpoint(_)) => {}
-                        Err(_) => break,
                     }
-                }
-                match latest {
-                    Some(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
+                    // Realtime: drain everything pending into one burst.
+                    RunMode::RealTime => {
+                        let (rx, _) = &mut *cs.borrow_mut();
+                        let mut burst = Burst::new();
+                        loop {
+                            match rx.try_recv() {
+                                Ok(Message::Value(v) | Message::ValueAt(v, _)) => burst.push(v),
+                                Ok(Message::Error(e)) => {
+                                    return Err(anyhow::anyhow!("{e:#}")
+                                        .context("channel receiver: producer sent an error"));
+                                }
+                                Ok(Message::EndOfStream | Message::Checkpoint(_)) => {}
+                                Err(_) => break,
+                            }
+                        }
+                        if burst.is_empty() {
+                            Ok(false)
+                        } else {
+                            *out.borrow_mut() = burst;
+                            Ok(true)
+                        }
                     }
-                    None => Ok(false),
                 }
             }),
-            Box::new(|_| Ok(())),
+            Box::new(move |k| {
+                // Historical: block-collect the whole timestamped stream up
+                // front (producer sends values then closes), group same-time
+                // values into bursts, and schedule one delivery per timestamp.
+                if let RunMode::HistoricalFrom(_) = k.run_mode() {
+                    let start_time = k.start_time();
+                    let mut collected: Vec<(NanoTime, T)> = Vec::new();
+                    {
+                        let (rx, _) = &mut *cs2.borrow_mut();
+                        loop {
+                            match rx.recv() {
+                                Ok(Message::ValueAt(v, t)) => collected.push((t, v)),
+                                Ok(Message::Value(v)) => collected.push((start_time, v)),
+                                Ok(Message::Checkpoint(_)) => {}
+                                Ok(Message::EndOfStream) => break,
+                                Ok(Message::Error(e)) => {
+                                    return Err(anyhow::anyhow!("{e:#}")
+                                        .context("channel receiver: producer sent an error"));
+                                }
+                                // All senders dropped without an explicit close.
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    // Stable sort by time keeps same-time values in send order,
+                    // then group consecutive equal timestamps into one burst.
+                    collected.sort_by_key(|(t, _)| *t);
+                    let (_, groups) = &mut *cs2.borrow_mut();
+                    for (t, v) in collected {
+                        match groups.back_mut() {
+                            Some((bt, burst)) if *bt == t => burst.push(v),
+                            _ => groups.push_back((t, Burst::one(v))),
+                        }
+                    }
+                    for (t, _) in groups.iter() {
+                        k.schedule(idx, *t);
+                    }
+                }
+                Ok(())
+            }),
         );
         let sender = ChannelSender::new(tx, self.waker.clone(), idx);
         (
@@ -1467,6 +1554,7 @@ impl Builder {
             ready: self.ready,
             has_external: self.has_external,
             has_always: self.has_always,
+            has_channel: self.has_channel,
         }
     }
 }
@@ -1482,32 +1570,41 @@ pub struct Runner {
     ready: Option<ReadyReceiver>,
     has_external: bool,
     has_always: bool,
+    has_channel: bool,
 }
 
 impl Runner {
     /// Run the graph to its bound. Returns the first error from any node's
     /// `start`/`cycle`/`stop`/`teardown` (with node context), or `Ok(())`.
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
-        let mut kernel = if self.has_external {
-            assert!(
-                matches!(run_mode, RunMode::RealTime),
-                "graphs with external sources require RunMode::RealTime — external events \
-                 have no place in a deterministic historical replay"
-            );
+        let realtime = matches!(run_mode, RunMode::RealTime);
+        // `external`/`poll` are wall-clock (realtime-only); `channel` carries
+        // timestamps and runs in both modes.
+        assert!(
+            realtime || !self.has_external,
+            "graphs with external sources require RunMode::RealTime — untimestamped external \
+             events have no place in a deterministic historical replay (use a channel with \
+             timestamped sends for historical)"
+        );
+        assert!(
+            realtime || !self.has_always,
+            "graphs with poll sources require RunMode::RealTime — there is nothing to \
+             busy-poll in a deterministic historical replay"
+        );
+        // The waker/ready channel is only used by realtime sources
+        // (external, poll, realtime channel). A historical channel is
+        // schedule-driven and needs no waker.
+        let needs_waker = self.has_external || (self.has_channel && realtime);
+        let mut kernel = if needs_waker {
             let ready = self
                 .ready
                 .take()
-                .expect("a Runner with external sources supports a single run");
+                .expect("a Runner with realtime sources supports a single run");
             Kernel::with_ready(run_mode, run_for, ready)
         } else {
             Kernel::new(run_mode, run_for)
         };
         if self.has_always {
-            assert!(
-                matches!(run_mode, RunMode::RealTime),
-                "graphs with poll sources require RunMode::RealTime — there is nothing to \
-                 busy-poll in a deterministic historical replay"
-            );
             kernel.set_spin(true);
         }
         // First error (from start or a cycle) wins; `stop`/`teardown` still

@@ -670,43 +670,14 @@ impl<T: Clone + 'static> Op for Sample<T> {
     }
 }
 
-/// An external (threaded/async) source: values arrive on a channel from a
-/// producer thread or async task, which wakes the kernel after sending. If
-/// several values arrive between cycles the *latest wins* (a burst-collapse;
-/// accumulate upstream of the channel if every value matters). Realtime
-/// runs only.
-pub struct External<T>(PhantomData<T>);
-
-impl<T: Clone + 'static> Op for External<T> {
-    type Cfg = std::sync::mpsc::Receiver<T>;
-    type State = ();
-    type In<'a> = ();
-    type Out = T;
-    const CAPS: Caps = Caps::THREADED;
-
-    fn cycle(
-        cfg: &mut std::sync::mpsc::Receiver<T>,
-        _state: &mut (),
-        _input: (),
-        _ctx: &mut Ctx<'_>,
-    ) -> Result<Tick<T>> {
-        let mut latest = None;
-        while let Ok(v) = cfg.try_recv() {
-            latest = Some(v);
-        }
-        Ok(match latest {
-            Some(v) => Tick::Value(v),
-            None => Tick::Quiet,
-        })
-    }
-}
-
 /// A busy-poll source: the closure is called once on **every** engine cycle
 /// (`Caps::ALWAYS`), ticking when it returns `Some`. This is the busy-spin
 /// ingestion pattern — polling a ring buffer, socket, or channel via
 /// `try_recv` — and it is *lossless and ordered*: one value per cycle, no
-/// coalescing (contrast [`External`], which collapses to latest-wins).
-/// A realtime run containing a poll source never parks. Realtime only.
+/// coalescing. A realtime run containing a poll source never parks. Realtime
+/// only. (Threaded/async sources with the burst envelope are the
+/// `external`/`channel` builder methods, which drain to a `Burst` — no
+/// latest-wins.)
 ///
 /// The closure is `Fn`: poll external resources through `&self` receivers
 /// (e.g. `mpsc::Receiver::try_recv`) or interior mutability, not by
