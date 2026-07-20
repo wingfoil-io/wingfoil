@@ -58,6 +58,19 @@ pub mod fluent;
 pub mod interp;
 pub mod op;
 pub mod ops;
+pub mod stats;
+
+/// The common wiring vocabulary, re-exported for `use wingfoil_next::prelude::*`.
+///
+/// Brings in the graph builder, the stream type, and the two core op traits
+/// ([`SourceOps`](crate::fluent::SourceOps) for sources,
+/// [`StreamOps`](crate::fluent::StreamOps) for combinators) so chaining works
+/// without naming each trait. Adapter-specific op traits stay opt-in — pull
+/// them in alongside, e.g. `use wingfoil_next::stats::StatisticsOps;`.
+pub mod prelude {
+    pub use crate::burst::{Burst, burst};
+    pub use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
+}
 
 /// One wiring definition, two engines: expands to a module with
 /// `interpreted()` (fluent wiring) and `compiled(run_mode, run_for)` (fully

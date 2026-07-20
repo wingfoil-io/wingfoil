@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::fluent::GraphBuilder;
+use wingfoil_next::prelude::*;
 
 /// EMA update, seeded by the first observation instead of decaying from 0.
 fn ema(alpha: f64) -> impl Fn(&mut (f64, bool), &f64) {
