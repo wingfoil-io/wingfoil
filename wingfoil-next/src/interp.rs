@@ -39,10 +39,8 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message};
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::ops::{
-    Buffer, Const, Delay, DelayState, Difference, Distinct, Ewma, EwmaDecay, EwmaState, Filter,
-    Finally, Fold, Inspect, Join, Join3, Limit, Map, MapFilter, Merge2, Poll, RollingMean,
-    RollingSum, RollingWindowState, Sample, Sink, Throttle, TickedAt, TickedAtElapsed, Ticker,
-    TryMap, Window, WindowState, WithTime,
+    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Sample, Throttle,
+    Ticker, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -86,6 +84,16 @@ impl<T> Handle<T> {
     }
 }
 
+/// Trim a `type_name` — `wingfoil_next::ops::Map<u64, …, {{closure}}>` — down
+/// to the bare op name (`Map`) for error context: drop everything from the
+/// first `<`, then keep only the final `::` segment. A plain label with no
+/// path or generics passes through unchanged, so hand-written and
+/// `#[op]`-generated nodes read the same in error messages.
+pub(crate) fn short_type_name(s: &'static str) -> &'static str {
+    let head = s.split('<').next().unwrap_or(s);
+    head.rsplit("::").next().unwrap_or(head)
+}
+
 type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
 /// Start / stop / teardown all share this shape.
 type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
@@ -106,7 +114,9 @@ struct NodeRt {
     /// `callback_activated()` skip the dirty check entirely, and `always`
     /// nodes are cycled unconditionally (busy-poll sources).
     activation: Activation,
-    /// The op kind, for error context ("node 3 (try_map) cycle: ...").
+    /// The op kind, for error context ("node 3 (TryMap) cycle: ..."). Derived
+    /// from `type_name` (shortened) for `#[op]` nodes, a literal for the
+    /// remaining hand-written ones.
     label: &'static str,
     cycle: CycleFn,
     start: LifecycleFn,
@@ -411,6 +421,59 @@ impl Builder {
         Rc::new(RefCell::new((cfg, state)))
     }
 
+    /// Register a **single-active-input** op — the shape shared by `map`,
+    /// `fold`, `ewma`, and ~15 others: one upstream read by reference, one
+    /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. This is the
+    /// reusable core the `#[op]` attribute generates a thin wrapper around; the
+    /// per-op `step` closure (which builds the concrete `(&a,)` input tuple and
+    /// calls `Op::cycle`) is the only monomorphic piece, so this primitive
+    /// stays free of the GAT-over-HRTB gymnastics a fully generic version would
+    /// need. `label` is `type_name::<Op>()`; it is shortened for error context.
+    pub(crate) fn register_op1<A, C, S, Out, Step>(
+        &mut self,
+        src: Handle<A>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state: S,
+        mut step: Step,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(Out::default());
+        let cs = Rc::new(RefCell::new((cfg, state)));
+        self.push_node(
+            vec![src.idx],
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match step(cfg, state, &a, &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        Handle {
+            idx,
+            _t: PhantomData,
+        }
+    }
+
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
         let idx = self.nodes.len();
         let out = self.new_slot(());
@@ -475,196 +538,21 @@ impl Builder {
         }
     }
 
-    pub fn map<A, B, F>(&mut self, src: Handle<A>, f: F) -> Handle<B>
-    where
-        A: 'static,
-        B: Clone + Default + 'static,
-        F: Fn(&A) -> B + 'static,
-    {
+    /// Pair each value with the current engine time: `(time, value)`. Kept
+    /// hand-written (not `#[op]`): the output `(NanoTime, T)` is seeded from
+    /// the input's current value, so it never requires `T: Default`.
+    pub fn with_time<T: Clone + 'static>(&mut self, src: Handle<T>) -> Handle<(NanoTime, T)> {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
-        let out = self.new_slot(B::default());
-        let cs = Self::cell(f, ());
+        let out = self.new_slot((NanoTime::ZERO, src_slot.borrow().clone()));
         self.push_node(
             vec![src.idx],
-            Map::<A, B, F>::ACTIVATION,
-            "map",
+            WithTime::<T>::ACTIVATION,
+            "with_time",
             Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Apply a fallible closure; a returned `Err` aborts the run with context.
-    pub fn try_map<A, B, F>(&mut self, src: Handle<A>, f: F) -> Handle<B>
-    where
-        A: 'static,
-        B: Clone + Default + 'static,
-        F: Fn(&A) -> Result<B> + 'static,
-    {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(B::default());
-        let cs = Self::cell(f, ());
-        self.push_node(
-            vec![src.idx],
-            TryMap::<A, B, F>::ACTIVATION,
-            "try_map",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match TryMap::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Map + filter in one pass: `f` returns `(value, emit?)`.
-    pub fn map_filter<A, B, F>(&mut self, src: Handle<A>, f: F) -> Handle<B>
-    where
-        A: 'static,
-        B: Clone + Default + 'static,
-        F: Fn(&A) -> (B, bool) + 'static,
-    {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(B::default());
-        let cs = Self::cell(f, ());
-        self.push_node(
-            vec![src.idx],
-            MapFilter::<A, B, F>::ACTIVATION,
-            "map_filter",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match MapFilter::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Suppress consecutive duplicate values.
-    pub fn distinct<T: Clone + Default + PartialEq + 'static>(
-        &mut self,
-        src: Handle<T>,
-    ) -> Handle<T> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(T::default());
-        let cs = Self::cell((), None::<T>);
-        self.push_node(
-            vec![src.idx],
-            Distinct::<T>::ACTIVATION,
-            "distinct",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Distinct::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Successive difference `value - previous`; quiet on the first value.
-    pub fn difference<T>(&mut self, src: Handle<T>) -> Handle<T>
-    where
-        T: Clone + Default + std::ops::Sub<Output = T> + 'static,
-    {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(T::default());
-        let cs = Self::cell((), None::<T>);
-        self.push_node(
-            vec![src.idx],
-            Difference::<T>::ACTIVATION,
-            "difference",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Difference::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Pass through the first `limit` values, then stay quiet.
-    pub fn limit<T: Clone + Default + 'static>(&mut self, src: Handle<T>, limit: u32) -> Handle<T> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(T::default());
-        let cs = Self::cell(limit, 0u32);
-        self.push_node(
-            vec![src.idx],
-            Limit::<T>::ACTIVATION,
-            "limit",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Limit::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                match WithTime::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
@@ -757,222 +645,6 @@ impl Builder {
         }
     }
 
-    /// Exponentially weighted moving average of an `f64` stream.
-    pub fn ewma(&mut self, src: Handle<f64>, decay: EwmaDecay) -> Handle<f64> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(0.0f64);
-        let cs = Self::cell(decay, EwmaState::default());
-        self.push_node(
-            vec![src.idx],
-            Ewma::ACTIVATION,
-            "ewma",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Ewma::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Rolling sum over the most recent `window` `f64` samples.
-    pub fn rolling_sum(&mut self, src: Handle<f64>, window: usize) -> Handle<f64> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(0.0f64);
-        let cs = Self::cell(window, RollingWindowState::default());
-        self.push_node(
-            vec![src.idx],
-            RollingSum::ACTIVATION,
-            "rolling_sum",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match RollingSum::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Rolling mean over the most recent `window` `f64` samples.
-    pub fn rolling_mean(&mut self, src: Handle<f64>, window: usize) -> Handle<f64> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(0.0f64);
-        let cs = Self::cell(window, RollingWindowState::default());
-        self.push_node(
-            vec![src.idx],
-            RollingMean::ACTIVATION,
-            "rolling_mean",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match RollingMean::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Pair each value with the current engine time: `(time, value)`.
-    pub fn with_time<T: Clone + 'static>(&mut self, src: Handle<T>) -> Handle<(NanoTime, T)> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot((NanoTime::ZERO, src_slot.borrow().clone()));
-        self.push_node(
-            vec![src.idx],
-            WithTime::<T>::ACTIVATION,
-            "with_time",
-            Box::new(move |k| {
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match WithTime::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Emit the current engine time whenever `src` ticks.
-    pub fn ticked_at<T: 'static>(&mut self, src: Handle<T>) -> Handle<NanoTime> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(NanoTime::ZERO);
-        self.push_node(
-            vec![src.idx],
-            TickedAt::<T>::ACTIVATION,
-            "ticked_at",
-            Box::new(move |k| {
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match TickedAt::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Emit elapsed engine time (`now - start`) whenever `src` ticks.
-    pub fn ticked_at_elapsed<T: 'static>(&mut self, src: Handle<T>) -> Handle<NanoTime> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(NanoTime::ZERO);
-        self.push_node(
-            vec![src.idx],
-            TickedAtElapsed::<T>::ACTIVATION,
-            "ticked_at_elapsed",
-            Box::new(move |k| {
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match TickedAtElapsed::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
-    /// (and once more on the last cycle).
-    pub fn buffer<T: Clone + Default + 'static>(
-        &mut self,
-        src: Handle<T>,
-        capacity: usize,
-    ) -> Handle<Vec<T>> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(Vec::<T>::new());
-        let cs = Self::cell(capacity, Vec::<T>::new());
-        self.push_node(
-            vec![src.idx],
-            Buffer::<T>::ACTIVATION,
-            "buffer",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Buffer::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
     /// The classic `trimap`: combine three streams, each independently active
     /// or passive. All three values are read; only active inputs trigger.
     #[allow(clippy::too_many_arguments)]
@@ -1022,42 +694,6 @@ impl Builder {
                 match Join3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
                     Tick::Value(v) => {
                         drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// Observe each value with a side-effecting closure, passing it through
-    /// unchanged (a debug tap).
-    pub fn inspect<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<A>
-    where
-        A: Clone + Default + 'static,
-        F: Fn(&A) + 'static,
-    {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(A::default());
-        let cs = Self::cell(f, ());
-        self.push_node(
-            vec![src.idx],
-            Inspect::<A, F>::ACTIVATION,
-            "inspect",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Inspect::<A, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
@@ -1344,43 +980,6 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 match Poll::<T, F>::cycle(cfg, state, (), &mut ctx)? {
                     Tick::Value(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
-    }
-
-    /// A sink: run a side-effecting (fallible) closure on each tick of `src`
-    /// — the graph's outbound edge. A returned `Err` (e.g. an IO write
-    /// failure) aborts the run with context. Emits `()` per tick.
-    pub fn for_each<A, F>(&mut self, src: Handle<A>, f: F) -> Handle<()>
-    where
-        A: 'static,
-        F: Fn(&A) -> Result<()> + 'static,
-    {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(());
-        let cs = Self::cell(f, ());
-        self.push_node(
-            vec![src.idx],
-            Sink::<A, F>::ACTIVATION,
-            "for_each",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Sink::<A, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
                     }

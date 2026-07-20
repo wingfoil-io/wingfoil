@@ -44,7 +44,8 @@ fn cycle_error_aborts_with_context_and_runs_teardown() {
     let err = result.expect_err("the run must abort when try_map fails");
     let msg = format!("{err:#}");
     // Node context (label + kind) and the op's own message are both present.
-    assert!(msg.contains("try_map"), "error should name the node: {msg}");
+    // Labels are the op type name (via `type_name`), so `try_map` → `TryMap`.
+    assert!(msg.contains("TryMap"), "error should name the node: {msg}");
     assert!(
         msg.contains("boom at count 3"),
         "error should chain the cause: {msg}"
@@ -96,7 +97,8 @@ fn sink_error_aborts_with_context() {
         .expect_err("the run must abort when the sink fails");
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("for_each"),
+        // The `for_each` sink op is `Sink`; labels come from `type_name`.
+        msg.contains("Sink"),
         "error should name the sink: {msg}"
     );
     assert!(msg.contains("sink write failed at 2"), "cause: {msg}");

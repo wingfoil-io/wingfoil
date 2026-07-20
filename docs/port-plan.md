@@ -453,6 +453,17 @@ support can be a follow-on increment once the dirty-list core is in.
   indefinitely deferred.
 - wingfoil-wasm / wingfoil-js changes (protocol-level, engine-agnostic).
 
+### Nice-to-have (post-v1)
+
+- **Emit-by-reference / zero-copy passthrough.** Today an op reads its
+  upstreams by reference (`In<'a> = (&'a A,)`, no clone to inspect) but must
+  *produce* an owned value into its own slot — a passthrough or a big-value
+  forward costs a clone (cheap only if the element is `Rc`/`Arc`). A future
+  optimisation could let a node that provably forwards its input unchanged
+  *alias* the upstream slot instead of owning a copy (or, with the Phase 4.5
+  arena, hand out a slot handle rather than a value). Purely a memory/throughput
+  win — semantics are unchanged — so it stays out of the correctness-first path.
+
 ## Sequencing and parallelism
 
 Phases 0–1 are serial (contract work, ~15% of the effort). Phase 2 groups
