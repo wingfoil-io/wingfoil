@@ -249,6 +249,56 @@ Each adapter: keep its directory CLAUDE.md, port its tests, one PR each.
 **Gate 4:** adapter test suites green on next; classic adapter code paths
 untouched (still shipping) until Phase 7.
 
+## Phase 4.5 — engine execution model: breadth-first dirty-list parity
+
+**Gap (must close):** the interpreted engine currently sweeps **all** nodes in
+wiring (topological) order every cycle, testing each node's dispatch condition.
+Classic wingfoil instead propagates **breadth-first from the ticked source
+nodes through a dirty-list / layered schedule**, touching only nodes that can
+actually fire this cycle. The two are *observably identical* — both are
+glitch-free and fire each node exactly once after its upstreams (macro-parity
+tests confirm byte-identical output) — but the mechanisms differ, and the
+`O(N)`-per-cycle sweep does not match classic's sparse-graph performance: a
+large graph where only a handful of nodes tick still pays for a full node scan
+each cycle.
+
+**Target:** reproduce classic's execution model in the interpreted engine —
+source-driven breadth-first propagation over a dirty-list (or layer-ordered
+work set), so per-cycle work is proportional to the nodes that actually fire,
+not the graph size. Concretely:
+
+- Assign each node a layer (longest path from a source) at `build()`, or keep
+  an explicit ready/dirty set; either way process in an order that preserves
+  the existing glitch-free single-fire guarantee (a recombine node fires once,
+  after every upstream that fires this cycle).
+- Seed each cycle's work set from the kernel's due callbacks
+  (`schedules`/`threaded`/`always` sources) and the tick-propagation frontier,
+  then expand breadth-first through active downstream edges only.
+- Preserve everything already correct: burst delivery, feedback's `+1`
+  scheduled edge, `Caps`-driven dispatch (callback-activated / always),
+  passive edges (read-not-triggering), and the `is_last_cycle` boundary flush.
+
+**Scope notes:**
+- Pure mechanism/performance change — observable results must stay identical,
+  so the full existing parity suite (catalog, macro, feedback, channel) is the
+  regression gate, plus a new large-sparse-graph benchmark asserting per-cycle
+  cost tracks the *active* node count, not `N`.
+- The value store is orthogonal but naturally paired: individual
+  `Rc<RefCell<T>>` slots → a contiguous arena/SoA (the other prototype
+  simplification the interp module doc flags), which the dirty-list rework is
+  the right moment to land.
+- The **compiled**/island path is unaffected in shape (it already emits
+  straight-line per-node dispatch, the static-schedule analogue), but this is
+  where branch-1's *region gating* idea (skip whole quiet sub-graphs) becomes
+  the compiled counterpart of the dirty-list — worth doing in the same pass.
+- Bench gate ties to Phase 6: `next-interpreted ≥ classic-interpreted` on the
+  sparse workloads is only achievable **after** this phase; until then next's
+  interpreted engine is knowingly slower on large sparse graphs.
+
+Sequencing: independent of the catalog/adapter volume (Phases 2/4) — it can
+land any time before the Phase 6 benchmark gate, and should land before
+claiming interpreted-engine performance parity with classic.
+
 ## Phase 5 — infrastructure
 
 - **Latency**: stamps ride values as today (`Traced` is just a payload);
@@ -308,6 +358,7 @@ untouched (still shipping) until Phase 7.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
+| Interpreted engine slower than classic on sparse graphs | perf parity claim; `O(N)`/cycle sweep vs classic's dirty-list | **Phase 4.5** breadth-first dirty-list rework; sparse-graph benchmark as gate; results already parity-identical, so it's mechanism/perf only |
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
@@ -319,8 +370,9 @@ untouched (still shipping) until Phase 7.
 
 - Feedback inside `graph!` / islands (fluent only).
 - Runtime graph mutation (pending Phase 2 decision).
-- Arena value store for the interpreted engine (perf work, orthogonal;
-  slots stay `Rc<RefCell<T>>` until benchmarks demand otherwise).
+- Arena value store for the interpreted engine — now folded into **Phase
+  4.5** (the dirty-list rework is the right moment to land it), no longer
+  indefinitely deferred.
 - wingfoil-wasm / wingfoil-js changes (protocol-level, engine-agnostic).
 
 ## Sequencing and parallelism
