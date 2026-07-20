@@ -2,8 +2,10 @@
 //! engine cycle (`Activation::ALWAYS`), and a realtime run containing one never
 //! parks — the kernel spins cycles back-to-back, polling each time. This is
 //! the latency-critical pattern (ring buffers, sockets, `try_recv`), and it
-//! is lossless and ordered — one value per cycle, no coalescing — in
-//! contrast to `external`, which collapses queued values to latest-wins.
+//! is lossless and ordered — one value per cycle, no coalescing. `external`
+//! is also lossless: it drains every queued value into one `Burst` per cycle
+//! (never latest-wins); the two differ in cadence (per-cycle single value vs
+//! per-cycle burst), not in whether values are dropped.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -14,8 +16,8 @@ use wingfoil_next::ops::Poll;
 use wingfoil_next::prelude::*;
 
 /// A producer thread feeds a channel; the graph busy-polls it with
-/// `try_recv`. Every value arrives, in order — the lossless contrast to
-/// `external`'s latest-wins coalescing.
+/// `try_recv`. Every value arrives, in order — one value per cycle (where
+/// `external` would drain the same values into one `Burst` per cycle).
 #[test]
 fn poll_source_is_lossless_and_ordered() {
     let (tx, rx) = mpsc::channel::<u64>();

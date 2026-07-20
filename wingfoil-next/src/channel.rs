@@ -11,10 +11,14 @@
 //! cycle fail, aborting the run with context (this is why the channel layer
 //! needed fallible `cycle` from Phase 0.1 first).
 //!
-//! Realtime runs only, like external sources — a deterministic historical
-//! replay has no place for wall-clock-arriving messages. Values coalesce
-//! latest-wins between cycles (as external does); a lossless variant is the
-//! busy-poll `poll` source.
+//! Channels run in **both** modes: realtime (each `send` wakes the kernel, and
+//! a cycle emits a [`Burst`](crate::Burst) of every value that arrived since
+//! the last one) and historical (timestamped [`send_at`](ChannelSender::send_at)
+//! values are collected and replayed deterministically at their graph
+//! timestamps, same-instant values grouped into one burst). Delivery is a
+//! **burst** — every value, grouped by instant — never latest-wins and never
+//! dropped; the busy-poll `poll` source is the lossless *one-value-per-cycle*
+//! alternative.
 
 use std::sync::Arc;
 
@@ -26,7 +30,10 @@ use wingfoil::NanoTime;
 /// reintroduce when they land.
 #[derive(Debug)]
 pub enum Message<T> {
-    /// A value (realtime, or a historical value at the current time).
+    /// A value with no explicit timestamp: in realtime it ticks on arrival; in
+    /// a historical replay it is delivered at the run's `start_time` (not "the
+    /// current time"). Use [`ValueAt`](Message::ValueAt) to stamp an explicit
+    /// replay time.
     Value(T),
     /// A value stamped with an explicit time (for a future historical
     /// replay receiver; the realtime receiver treats it as [`Message::Value`]).

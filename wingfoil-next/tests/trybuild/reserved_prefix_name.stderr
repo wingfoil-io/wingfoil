@@ -1,0 +1,5 @@
+error: `wf_anon_1` uses the reserved `wf_anon_` prefix — it is used for macro-generated intermediate node names; pick another name
+ --> tests/trybuild/reserved_prefix_name.rs:7:13
+  |
+7 |         let wf_anon_1 = g.ticker(Duration::from_nanos(10)).count();
+  |             ^^^^^^^^^

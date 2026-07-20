@@ -94,3 +94,33 @@ fn ewma_half_life_of_constant_is_constant() {
     r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert!((r.value(&ewma) - 7.0).abs() < 1e-10);
 }
+
+/// Real decay over a *varying* stream — mirrors classic
+/// `ewma_decay_matches_per_tick_when_dt_equals_half_life`. With Δt (100ns tick)
+/// equal to the half-life, alpha = 1 - 2^-1 = 0.5 every tick, so over 1,2,3,4
+/// the half-life EWMA matches `ewma_per_tick(0.5)`: e1=1, e2=1.5, e3=2.25,
+/// e4=3.125. Unlike the constant-stream case above, this pins the actual decay
+/// math (a constant stream stays at its seed for *any* alpha).
+#[test]
+fn ewma_half_life_matches_per_tick_when_dt_equals_half_life() {
+    let g = GraphBuilder::new();
+    let ewma = counter_f64(&g).ewma_half_life(Duration::from_nanos(100));
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert!((r.value(&ewma) - 3.125).abs() < 1e-10);
+}
+
+/// A window of 0 is meaningless and clamps to `max(1)` (mirrors classic's
+/// `Window::Count(n.max(1))` / `window.max(1)` clamp), so `rolling_sum(0)` and
+/// `rolling_mean(0)` behave as a window of 1: each output is just the latest
+/// value.
+#[test]
+fn rolling_window_zero_clamps_to_one() {
+    let g = GraphBuilder::new();
+    let sum = counter_f64(&g).rolling_sum(0).accumulate();
+    let mean = counter_f64(&g).rolling_mean(0).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![1.0, 2.0, 3.0, 4.0, 5.0], r.value(&sum));
+    assert_eq!(vec![1.0, 2.0, 3.0, 4.0, 5.0], r.value(&mean));
+}

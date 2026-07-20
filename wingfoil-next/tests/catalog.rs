@@ -222,3 +222,41 @@ fn inspect_observes_and_passes_through() {
     assert_eq!(vec![1, 2, 3], *seen.borrow());
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
+
+/// `ticked_at_elapsed` emits elapsed engine time (`now - start`) on each tick.
+/// Tested from a **non-zero** start so it is distinguishable from `ticked_at`.
+#[test]
+fn ticked_at_elapsed_emits_elapsed_time() {
+    let start = NanoTime::new(1000);
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.ticked_at_elapsed().accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(3))
+        .unwrap();
+    // Ticks at 1000, 1100, 1200; elapsed = 0, 100, 200.
+    assert_eq!(
+        vec![NanoTime::new(0), NanoTime::new(100), NanoTime::new(200)],
+        r.value(&acc)
+    );
+}
+
+/// `window` from a **non-zero** start. The boundary is anchored at `ctx.time()`
+/// during `start` (= ZERO, a quirk shared bug-for-bug with classic — see the
+/// fable review), so the 250ns boundaries fall on 250/500/750/… absolute time,
+/// giving the same grouping as a zero-start run even though the data lives at
+/// 1000+. This pins that behaviour so a unilateral "fix" can't drift silently.
+#[test]
+fn window_from_non_zero_start_anchors_boundaries_at_zero() {
+    let start = NanoTime::new(1000);
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.window(Duration::from_nanos(250)).accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(start), RunFor::Cycles(9))
+        .unwrap();
+    assert_eq!(
+        vec![vec![1, 2, 3], vec![4, 5], vec![6, 7, 8]],
+        r.value(&acc)
+    );
+}

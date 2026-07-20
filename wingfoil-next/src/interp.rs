@@ -27,13 +27,19 @@
 //! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+
+/// Process-unique id stamped on every [`Builder`] (and its [`Handle`]s) so a
+/// handle used with a *different* builder's [`Runner`] is caught by a
+/// `debug_assert` rather than silently returning the wrong node's value.
+static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message};
@@ -54,6 +60,11 @@ pub trait AsHandle<T> {
 /// A typed reference to a node's output within a [`Builder`] / [`Runner`].
 pub struct Handle<T> {
     idx: usize,
+    /// The id of the [`Builder`] that minted this handle (see
+    /// [`NEXT_BUILDER_ID`]). Guards against using a handle with a different
+    /// builder's runner (a colliding index + type would otherwise return the
+    /// wrong node's value).
+    builder_id: u64,
     _t: PhantomData<T>,
 }
 
@@ -81,6 +92,17 @@ impl<T> Handle<T> {
     #[doc(hidden)]
     pub fn index(&self) -> usize {
         self.idx
+    }
+}
+
+impl Builder {
+    /// Mint a [`Handle`] stamped with this builder's id.
+    fn make_handle<T>(&self, idx: usize) -> Handle<T> {
+        Handle {
+            idx,
+            builder_id: self.id,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -156,6 +178,17 @@ impl<T> ExternalSource<T> {
 /// node to emit it on the *next* engine cycle (`+1`), which is what breaks
 /// the dependency cycle: the source node has no upstreams, so the graph sees
 /// no loop. Clone-able so one source can be fed from several sites.
+///
+/// Unlike classic's `FeedbackSink::send(value, &mut GraphState)`, this type
+/// exposes **no** public `send`: sending requires scheduling the paired source
+/// node (`source`), which is a *different* node than the caller's. Classic does
+/// this through `GraphState::add_callback_for_node`, but next's op-facing
+/// [`Ctx`](crate::op::Ctx) is deliberately narrow — self-scheduling only — and
+/// cannot schedule an arbitrary node. Exposing a user-callable `send` would
+/// need either a wider `Ctx` (against the design) or a kernel handle on the
+/// sink; deferred until a concrete need arises. The `feedback_send` wiring
+/// (fluent `stream.feedback(&sink)`) covers the pass-through case and does the
+/// scheduling with direct kernel access.
 pub struct FeedbackSink<T> {
     queue: Rc<RefCell<TimeQueue<T>>>,
     /// The paired source node's index, scheduled directly on the kernel — an
@@ -187,6 +220,17 @@ pub struct Builder {
     /// `channel` sources carry timestamps, so they run in **both** modes:
     /// realtime (waker-driven) and historical (schedule-driven replay).
     has_channel: bool,
+    /// Set by a channel node when it receives [`Message::EndOfStream`]
+    /// (`close()`), so a realtime run ends even while a producer keeps a live
+    /// [`ChannelSender`] clone — the kernel alone only ends the run when
+    /// *every* waker clone is dropped. Mirrors classic's per-receiver
+    /// `finished` flag (here one shared flag ends the run on any channel
+    /// close, which is the single-channel realtime case the fix targets).
+    finished: Rc<Cell<bool>>,
+    /// Process-unique id (see [`NEXT_BUILDER_ID`]), stamped on every [`Handle`]
+    /// this builder mints and carried into its [`Runner`], so a handle used
+    /// with a *different* runner is caught by a `debug_assert`.
+    id: u64,
 }
 
 impl Default for Builder {
@@ -201,6 +245,8 @@ impl Default for Builder {
             has_external: false,
             has_always: false,
             has_channel: false,
+            finished: Rc::new(Cell::new(false)),
+            id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 }
@@ -246,13 +292,7 @@ impl Builder {
             waker: self.waker.clone(),
             index: idx,
         };
-        (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
-            source,
-        )
+        (self.make_handle(idx), source)
     }
 
     /// Open a channel: a source stream fed by the returned [`ChannelSender`]
@@ -282,6 +322,7 @@ impl Builder {
         // time-grouped bursts the historical `start` fills.
         let cs = Self::cell(rx, VecDeque::<(NanoTime, Burst<T>)>::new());
         let cs2 = cs.clone();
+        let finished = self.finished.clone();
         self.push_node(
             Vec::new(),
             Activation {
@@ -316,7 +357,19 @@ impl Builder {
                                     return Err(anyhow::anyhow!("{e:#}")
                                         .context("channel receiver: producer sent an error"));
                                 }
-                                Ok(Message::EndOfStream | Message::Checkpoint(_)) => {}
+                                // `close()` ends the run even while a producer
+                                // keeps a live sender clone (the kernel alone
+                                // waits for every waker to drop). We keep
+                                // draining so any values queued *before* the
+                                // close still ride this final burst.
+                                Ok(Message::EndOfStream) => finished.set(true),
+                                // A progress marker with no value: nothing to
+                                // add to the burst. Realtime dispatch is
+                                // waker-driven, so it needs no clock nudge —
+                                // documented as a no-op here (contrast the
+                                // historical receiver, which could schedule a
+                                // wakeup at the checkpoint time).
+                                Ok(Message::Checkpoint(_)) => {}
                                 Err(_) => break,
                             }
                         }
@@ -333,6 +386,15 @@ impl Builder {
                 // Historical: block-collect the whole timestamped stream up
                 // front (producer sends values then closes), group same-time
                 // values into bursts, and schedule one delivery per timestamp.
+                //
+                // KNOWN DEVIATION from classic (`wingfoil/src/nodes/channel.rs`),
+                // which reads incrementally and non-blocking once caught up:
+                // this `start` hook *blocks* until the producer closes and holds
+                // the entire feed in memory. It therefore (a) uses unbounded
+                // memory for large feeds, and (b) would deadlock a producer that
+                // depends on this graph's output (it never gets to run). Fine
+                // for the finite offline-replay case; a streaming/back-pressured
+                // variant is future work.
                 if let RunMode::HistoricalFrom(_) = k.run_mode() {
                     let start_time = k.start_time();
                     let mut collected: Vec<(NanoTime, T)> = Vec::new();
@@ -340,7 +402,36 @@ impl Builder {
                         let (rx, _) = &mut *cs2.borrow_mut();
                         loop {
                             match rx.recv() {
-                                Ok(Message::ValueAt(v, t)) => collected.push((t, v)),
+                                Ok(Message::ValueAt(v, t)) => {
+                                    // Reject a pre-start timestamp: the kernel
+                                    // schedules callbacks verbatim, so a time
+                                    // before `start_time` would rewind the run
+                                    // clock (the first cycle firing before
+                                    // `HistoricalFrom(start)`). Classic errors on
+                                    // any time behind the graph clock; we mirror
+                                    // that.
+                                    if t < start_time {
+                                        return Err(anyhow::anyhow!(
+                                            "channel receiver: historical send_at time {t} is \
+                                             before the run start time {start_time} — timestamps \
+                                             must be at or after the start of the replay"
+                                        ));
+                                    }
+                                    // Enforce non-decreasing send order (classic
+                                    // errors on a message stamped behind the graph
+                                    // clock; here the graph clock only advances,
+                                    // so out-of-order sends are the equivalent).
+                                    if let Some((prev, _)) = collected.last()
+                                        && t < *prev
+                                    {
+                                        return Err(anyhow::anyhow!(
+                                            "channel receiver: historical send_at time {t} is \
+                                             out of order (after {prev}) — timestamped sends must \
+                                             be non-decreasing (classic errors on out-of-order)"
+                                        ));
+                                    }
+                                    collected.push((t, v));
+                                }
                                 Ok(Message::Value(v)) => collected.push((start_time, v)),
                                 Ok(Message::Checkpoint(_)) => {}
                                 Ok(Message::EndOfStream) => break,
@@ -353,9 +444,8 @@ impl Builder {
                             }
                         }
                     }
-                    // Stable sort by time keeps same-time values in send order,
-                    // then group consecutive equal timestamps into one burst.
-                    collected.sort_by_key(|(t, _)| *t);
+                    // Order is already validated non-decreasing above; group
+                    // consecutive equal timestamps into one burst.
                     let (_, groups) = &mut *cs2.borrow_mut();
                     for (t, v) in collected {
                         match groups.back_mut() {
@@ -371,16 +461,14 @@ impl Builder {
             }),
         );
         let sender = ChannelSender::new(tx, self.waker.clone(), idx);
-        (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
-            sender,
-        )
+        (self.make_handle(idx), sender)
     }
 
     pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+        debug_assert_eq!(
+            h.builder_id, self.id,
+            "Handle used with a different Builder than the one that minted it"
+        );
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()
@@ -468,10 +556,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
@@ -500,10 +585,7 @@ impl Builder {
                 Ticker::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn constant<T: Clone + Default + 'static>(&mut self, value: T) -> Handle<T> {
@@ -532,10 +614,7 @@ impl Builder {
                 Const::<T>::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Pair each value with the current engine time: `(time, value)`. Kept
@@ -563,10 +642,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Rate-limit: emit at most once per `interval`.
@@ -598,10 +674,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Buffer values and flush them as a `Vec` on each `interval` boundary
@@ -639,10 +712,7 @@ impl Builder {
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// The classic `trimap`: combine three streams, each independently active
@@ -702,10 +772,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn filter<T: Clone + Default + 'static>(
@@ -736,10 +803,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub fn fold<A, B, F>(&mut self, src: Handle<A>, init: B, f: F) -> Handle<B>
@@ -771,10 +835,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Sample `src` (passively) whenever `trigger` ticks.
@@ -804,10 +865,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Join two streams with a closure; ticks when either input ticks.
@@ -872,10 +930,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Delay `src` by a fixed interval.
@@ -889,31 +944,53 @@ impl Builder {
         let out = self.new_slot(T::default());
         let ticked = self.ticked.clone();
         let is = src.idx;
-        let cs = Self::cell(NanoTime::from(delay), DelayState::<T>::default());
+        // State carries an extra `seeded` flag alongside the op's `DelayState`
+        // (the op's state stays in ops.rs): it records whether the first
+        // upstream value has been stored into the slot.
+        let cs = Self::cell(NanoTime::from(delay), (DelayState::<T>::default(), false));
         self.push_node(
             vec![src.idx],
             Delay::<T>::ACTIVATION,
             "delay",
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
-                let (cfg, state) = &mut *cs.borrow_mut();
+                let (cfg, (state, seeded)) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
-                    Tick::Value(value) => {
-                        drop(v);
-                        *out.borrow_mut() = value;
-                        Ok(true)
+                // Two engine-level behaviours classic has that `Op::cycle`
+                // cannot express (mirrored in the `graph!` macro's Delay
+                // emission so all three paths agree):
+                //   1. zero delay emits inline this cycle;
+                //   2. the first upstream value seeds the slot *without*
+                //      ticking, so passive readers never see `T::default()`.
+                let (write, did): (Option<T>, bool) = if *cfg == NanoTime::ZERO {
+                    if src_ticked {
+                        (Some(v.clone()), true)
+                    } else {
+                        (None, false)
                     }
-                    Tick::Quiet => Ok(false),
+                } else {
+                    match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
+                        Tick::Value(value) => (Some(value), true),
+                        Tick::Quiet => {
+                            if src_ticked && !*seeded {
+                                *seeded = true;
+                                (Some(v.clone()), false)
+                            } else {
+                                (None, false)
+                            }
+                        }
+                    }
+                };
+                drop(v);
+                if let Some(w) = write {
+                    *out.borrow_mut() = w;
                 }
+                Ok(did)
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Merge two streams; the earliest-supplied ticked input wins.
@@ -952,10 +1029,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// A busy-poll source: `f` runs once per engine cycle, ticking on
@@ -988,10 +1062,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Run `f` once at teardown — after the run ends, even if a cycle aborted
@@ -1037,10 +1108,7 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Finally::<A, F>::teardown(cfg, state, &mut ctx)
         });
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Open a feedback edge: returns a source stream (no upstreams, so the
@@ -1072,13 +1140,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        (
-            Handle {
-                idx,
-                _t: PhantomData,
-            },
-            FeedbackSink { queue, source: idx },
-        )
+        (self.make_handle(idx), FeedbackSink { queue, source: idx })
     }
 
     /// Wire the write end of a feedback edge: a pass-through of `src` that
@@ -1108,10 +1170,7 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     /// Mount a *composite* node: an entire compiled sub-graph behaving as a
@@ -1162,10 +1221,7 @@ impl Builder {
                 Ok(())
             }),
         );
-        Handle {
-            idx,
-            _t: PhantomData,
-        }
+        self.make_handle(idx)
     }
 
     pub(crate) fn ticked_rc(&self) -> Rc<RefCell<Vec<bool>>> {
@@ -1181,6 +1237,8 @@ impl Builder {
             has_external: self.has_external,
             has_always: self.has_always,
             has_channel: self.has_channel,
+            finished: self.finished,
+            id: self.id,
         }
     }
 }
@@ -1197,6 +1255,8 @@ pub struct Runner {
     has_external: bool,
     has_always: bool,
     has_channel: bool,
+    finished: Rc<Cell<bool>>,
+    id: u64,
 }
 
 impl Runner {
@@ -1205,27 +1265,36 @@ impl Runner {
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
-        // timestamps and runs in both modes.
-        assert!(
-            realtime || !self.has_external,
-            "graphs with external sources require RunMode::RealTime — untimestamped external \
-             events have no place in a deterministic historical replay (use a channel with \
-             timestamped sends for historical)"
-        );
-        assert!(
-            realtime || !self.has_always,
-            "graphs with poll sources require RunMode::RealTime — there is nothing to \
-             busy-poll in a deterministic historical replay"
-        );
+        // timestamps and runs in both modes. These are reachable user errors
+        // (a caller choosing the wrong `RunMode`), so per CLAUDE.md's
+        // error-handling rules they `bail!` rather than `assert!`.
+        if !realtime && self.has_external {
+            bail!(
+                "graphs with external sources require RunMode::RealTime — untimestamped \
+                 external events have no place in a deterministic historical replay (use a \
+                 channel with timestamped sends for historical)"
+            );
+        }
+        if !realtime && self.has_always {
+            bail!(
+                "graphs with poll sources require RunMode::RealTime — there is nothing to \
+                 busy-poll in a deterministic historical replay"
+            );
+        }
         // The waker/ready channel is only used by realtime sources
         // (external, poll, realtime channel). A historical channel is
         // schedule-driven and needs no waker.
         let needs_waker = self.has_external || (self.has_channel && realtime);
         let mut kernel = if needs_waker {
-            let ready = self
-                .ready
-                .take()
-                .expect("a Runner with realtime sources supports a single run");
+            // The ready receiver is consumed by the first realtime run; a
+            // second run of a graph with realtime sources is a reachable user
+            // error, not an invariant, so `bail!` rather than `expect`.
+            let Some(ready) = self.ready.take() else {
+                bail!(
+                    "a Runner with realtime sources (external/poll/realtime channel) supports \
+                     only a single run — the waker/ready channel is consumed by the first run"
+                );
+            };
             Kernel::with_ready(run_mode, run_for, ready)
         } else {
             Kernel::new(run_mode, run_for)
@@ -1247,7 +1316,11 @@ impl Runner {
         if first_err.is_none() {
             let n = self.nodes.len();
             let mut dirty = vec![false; n];
-            'run: while kernel.begin_cycle(&mut dirty) {
+            // Check `finished` *before* `begin_cycle` parks: a channel that
+            // received `EndOfStream` in the previous cycle ends the run now,
+            // rather than waiting for the bound while a live sender clone keeps
+            // the waker channel connected.
+            'run: while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
                 for (i, node) in self.nodes.iter_mut().enumerate() {
                     let due = node.activation.always
                         || (node.activation.callback_activated() && dirty[i])
@@ -1300,6 +1373,10 @@ impl Runner {
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
+        debug_assert_eq!(
+            h.builder_id, self.id,
+            "Handle used with a different Runner than the Builder that minted it"
+        );
         self.slots[h.idx]
             .clone()
             .downcast::<RefCell<T>>()
