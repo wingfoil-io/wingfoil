@@ -116,7 +116,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, ItemFn, Pat, ReturnType, Stmt, Type, parse_macro_input, parse_quote};
+use syn::{
+    Expr, Ident, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Stmt, Token, Type, parse_macro_input,
+    parse_quote,
+};
 
 #[derive(Clone, Copy, PartialEq)]
 enum OpKind {
@@ -846,6 +849,165 @@ pub fn graph(input: TokenStream) -> TokenStream {
         eprintln!("=== graph! {} ===\n{}", def.name, out);
     }
     out.into()
+}
+
+/// `#[op(build = <name>)]` — attribute on an `impl Op for X` block that also
+/// emits the interpreted engine's `Builder::<name>` wiring method, so an op's
+/// semantics and its interpreted entry point are single-sourced.
+///
+/// Scoped to the **single-active-input** shape: `type In<'a> = (&'a I,)`,
+/// engine-owned `Cfg`/`State` with `State: Default`, and no lifecycle hooks
+/// (the common case — `map`, `distinct`, `ewma`, …). The generated method is a
+/// thin wrapper over [`Builder::register_op1`], with the node label derived
+/// from `type_name::<X>()` rather than a hand-written string. Ops that don't
+/// fit (multiple inputs, passive edges, tick-flag inputs, sources, custom
+/// state seeds, lifecycle hooks) keep their hand-written `Builder` methods.
+#[proc_macro_attribute]
+pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as OpArgs);
+    let imp = parse_macro_input!(item as ItemImpl);
+    match expand_op(&args, &imp) {
+        Ok(extra) => quote! { #imp #extra }.into(),
+        Err(e) => {
+            let e = e.to_compile_error();
+            quote! { #imp #e }.into()
+        }
+    }
+}
+
+/// Parsed `#[op(build = <ident>)]` arguments.
+struct OpArgs {
+    build: Ident,
+}
+
+impl Parse for OpArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let key: Ident = input.parse()?;
+        if key != "build" {
+            return Err(syn::Error::new(
+                key.span(),
+                "expected `build = <method name>`",
+            ));
+        }
+        input.parse::<Token![=]>()?;
+        let build: Ident = input.parse()?;
+        Ok(OpArgs { build })
+    }
+}
+
+/// The `T` of a single-element reference tuple type `(&'a T,)`, or an error if
+/// the type is not that shape (which is how `#[op]` enforces its scope).
+fn single_ref_tuple_elem(ty: &Type) -> syn::Result<Type> {
+    if let Type::Tuple(tup) = ty
+        && tup.elems.len() == 1
+        && let Type::Reference(r) = &tup.elems[0]
+    {
+        return Ok((*r.elem).clone());
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        "#[op] supports only single-input ops: `type In<'a>` must be `(&'a T,)`",
+    ))
+}
+
+/// True for the unit type `()` — a `Cfg = ()` op takes no config argument.
+fn is_unit_type(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
+}
+
+fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
+    let self_ty = &*imp.self_ty;
+
+    // Pull `In` / `Cfg` / `Out` off the impl's associated types.
+    let (mut in_ty, mut cfg_ty, mut out_ty) = (None, None, None);
+    for it in &imp.items {
+        if let ImplItem::Type(t) = it {
+            match t.ident.to_string().as_str() {
+                "In" => in_ty = Some(t.ty.clone()),
+                "Cfg" => cfg_ty = Some(t.ty.clone()),
+                "Out" => out_ty = Some(t.ty.clone()),
+                _ => {}
+            }
+        }
+    }
+    let missing =
+        |what: &str| syn::Error::new(imp.span(), format!("#[op]: impl has no `type {what}`"));
+    let in_ty = in_ty.ok_or_else(|| missing("In"))?;
+    let cfg_ty = cfg_ty.ok_or_else(|| missing("Cfg"))?;
+    let out_ty = out_ty.ok_or_else(|| missing("Out"))?;
+    let input_ty = single_ref_tuple_elem(&in_ty)?;
+
+    let name = &args.build;
+    let has_cfg = !is_unit_type(&cfg_ty);
+    let cfg_param = if has_cfg {
+        quote! { , cfg: #cfg_ty }
+    } else {
+        quote! {}
+    };
+    let cfg_arg = if has_cfg {
+        quote! { cfg }
+    } else {
+        quote! { () }
+    };
+
+    // Emit the impl's generic *parameters* bare (`<A, B, F>`) and route every
+    // bound — inline ones and the impl's own `where` — into a single `where`
+    // clause, so a param is never bounded in two places (`multiple_bound_locations`).
+    // Add the two the slot machinery needs: an indexable input (`'static`) and
+    // a default-able output slot.
+    let mut bare_params: Vec<TokenStream2> = Vec::new();
+    let mut preds: Vec<TokenStream2> = Vec::new();
+    for p in &imp.generics.params {
+        match p {
+            syn::GenericParam::Type(tp) => {
+                let id = &tp.ident;
+                bare_params.push(quote! { #id });
+                if !tp.bounds.is_empty() {
+                    let bounds = &tp.bounds;
+                    preds.push(quote! { #id: #bounds });
+                }
+            }
+            other => bare_params.push(quote! { #other }),
+        }
+    }
+    if let Some(w) = &imp.generics.where_clause {
+        for pr in &w.predicates {
+            preds.push(quote! { #pr });
+        }
+    }
+    preds.push(quote! { #input_ty: 'static });
+    preds.push(quote! { #out_ty: ::core::default::Default });
+    let generics = if bare_params.is_empty() {
+        quote! {}
+    } else {
+        quote! { <#(#bare_params),*> }
+    };
+    let where_tokens = quote! { where #(#preds),* };
+
+    let doc = format!("Interpreted-engine wiring for [`{name}`]. Generated by `#[op]`.");
+    Ok(quote! {
+        impl crate::interp::Builder {
+            #[doc = #doc]
+            pub fn #name #generics (
+                &mut self,
+                src: crate::interp::Handle<#input_ty>
+                #cfg_param
+            ) -> crate::interp::Handle<#out_ty>
+            #where_tokens
+            {
+                self.register_op1(
+                    src,
+                    ::core::any::type_name::<#self_ty>(),
+                    <#self_ty as crate::op::Op>::ACTIVATION,
+                    #cfg_arg,
+                    ::core::default::Default::default(),
+                    |__cfg, __state, __a, __ctx| {
+                        <#self_ty as crate::op::Op>::cycle(__cfg, __state, (__a,), __ctx)
+                    },
+                )
+            }
+        }
+    })
 }
 
 fn expand(def: &GraphDef) -> TokenStream2 {
