@@ -65,6 +65,12 @@ impl<T> AsHandle<T> for Handle<T> {
     }
 }
 
+// Hand-written (not `#[derive]`) on purpose: a `Handle` is only an index +
+// `PhantomData`, so it is `Copy` for *every* `T`. `#[derive(Clone, Copy)]`
+// would emit `impl<T: Clone> …` / `impl<T: Copy> …`, adding a spurious bound
+// on `T` that this type does not need (it stores no `T` by value). The same
+// reasoning applies to the other manual `Clone` impls in this module
+// (`Stream`, `ExternalSource`, `FeedbackSink`, `ChannelSender`).
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
@@ -84,7 +90,17 @@ type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
 /// Start / stop / teardown all share this shape.
 type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 
+/// One node's **r**un**t**ime record: everything the engine needs to schedule
+/// and drive that node, kept in parallel `Vec`s indexed by node position (its
+/// [`Handle`] index). It is the erased, uniform counterpart to a typed [`Op`]
+/// — the op's concrete `Cfg`/`State`/value slot are captured *inside* the
+/// `cycle` closure (so this struct stays non-generic and all nodes live in one
+/// `Vec`), while the fields here are the engine-visible facts: what activates
+/// the node, and its lifecycle hooks.
 struct NodeRt {
+    /// Indices of upstream nodes whose tick activates this one (the active
+    /// edges). A cycle runs when any of these ticked — see the dispatch loop
+    /// in [`Runner::run`].
     active_ups: Vec<usize>,
     /// The op's `ACTIVATION` — this contract drives dispatch: nodes without
     /// `callback_activated()` skip the dirty check entirely, and `always`

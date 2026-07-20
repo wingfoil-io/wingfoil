@@ -1,6 +1,6 @@
 //! Fluent wiring sugar: the classic wingfoil chaining style
 //! (`ticker(d).count().map(f).filter(&cond)`) over the explicit
-//! [`Builder`](crate::interp::Builder) core.
+//! [`Builder`] core.
 //!
 //! Combinators are **extension traits**, not inherent methods, so the op set
 //! is modular and open:
