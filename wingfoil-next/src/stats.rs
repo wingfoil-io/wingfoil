@@ -41,6 +41,10 @@ impl StatisticsOps for Stream<f64> {
     }
 
     fn ewma_per_tick(&self, alpha: f64) -> Stream<f64> {
+        debug_assert!(
+            (0.0..=1.0).contains(&alpha),
+            "ewma PerTick smoothing factor must be in [0, 1], got {alpha}"
+        );
         self.ewma(EwmaDecay::PerTick(alpha))
     }
 

@@ -20,7 +20,7 @@
 //! This layer is *wiring-time only* — it adds nothing to execution (the built
 //! [`Runner`] is identical).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
@@ -34,9 +34,17 @@ use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Run
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
+///
+/// [`build`](GraphBuilder::build) **consumes** the wired graph, so it may be
+/// called only once: the `built` flag (shared with every [`Stream`] wired from
+/// this builder) poisons the builder afterwards, turning a second `build()` —
+/// or any wiring from a retained `Stream` — into an explicit panic rather than
+/// the silent empty-`Runner` / out-of-bounds-`slot()` footgun it would
+/// otherwise be.
 #[derive(Clone, Default)]
 pub struct GraphBuilder {
     inner: Rc<RefCell<Builder>>,
+    built: Rc<Cell<bool>>,
 }
 
 impl GraphBuilder {
@@ -51,8 +59,21 @@ impl GraphBuilder {
     where
         F: FnOnce(&mut Builder) -> Handle<T>,
     {
+        self.assert_not_built();
         let handle = f(&mut self.inner.borrow_mut());
         self.wrap(handle)
+    }
+
+    /// Panic (with an explanatory message) if this builder has already been
+    /// consumed by [`build`](GraphBuilder::build). Wiring after `build` would
+    /// target an empty builder and later panic out-of-bounds inside `slot()`;
+    /// failing loudly here names the precondition instead.
+    fn assert_not_built(&self) {
+        assert!(
+            !self.built.get(),
+            "invariant: GraphBuilder already consumed by build(); wire all \
+             nodes before calling build() (build() may be called only once)"
+        );
     }
 
     /// Run a closure with the underlying builder — for sources that return
@@ -61,6 +82,7 @@ impl GraphBuilder {
     where
         F: FnOnce(&mut Builder) -> R,
     {
+        self.assert_not_built();
         f(&mut self.inner.borrow_mut())
     }
 
@@ -68,6 +90,7 @@ impl GraphBuilder {
     pub fn wrap<T>(&self, handle: Handle<T>) -> Stream<T> {
         Stream {
             inner: self.inner.clone(),
+            built: self.built.clone(),
             handle,
         }
     }
@@ -82,6 +105,7 @@ impl GraphBuilder {
         callback_activated: bool,
         node: impl FnMut(&mut crate::op::Ctx, bool) -> Result<crate::op::Tick<T>> + 'static,
     ) -> Stream<T> {
+        self.assert_not_built();
         let handle = self
             .inner
             .borrow_mut()
@@ -97,9 +121,22 @@ impl GraphBuilder {
     }
 
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
-    /// value handles (`runner.value(&stream)`); wiring further nodes from
-    /// them afterwards is a logic error — they would target an empty builder.
+    /// value handles (`runner.value(&stream)`).
+    ///
+    /// # Precondition
+    ///
+    /// May be called **once**: it takes the underlying [`Builder`], leaving the
+    /// `GraphBuilder` (and every clone) empty. A second `build()` — or wiring a
+    /// further node from a retained [`Stream`] afterwards — panics with an
+    /// explanatory message rather than silently returning an empty [`Runner`]
+    /// (the previous footgun, which later panicked out-of-bounds deep inside
+    /// `slot()`).
     pub fn build(&self) -> Runner {
+        assert!(
+            !self.built.replace(true),
+            "invariant: GraphBuilder::build() called twice; it consumes the \
+             wired graph, so a second call would return an empty Runner"
+        );
         std::mem::take(&mut *self.inner.borrow_mut()).build()
     }
 }
@@ -184,6 +221,10 @@ impl SourceOps for GraphBuilder {
 /// chaining: `g.ticker(p).count().map(|i| i * 2)`.
 pub struct Stream<T> {
     inner: Rc<RefCell<Builder>>,
+    /// Shared with the owning [`GraphBuilder`]: set once the graph is built, so
+    /// wiring from a retained `Stream` afterwards fails loudly (see
+    /// [`Stream::wire`]).
+    built: Rc<Cell<bool>>,
     handle: Handle<T>,
 }
 
@@ -191,6 +232,7 @@ impl<T> Clone for Stream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            built: self.built.clone(),
             handle: self.handle,
         }
     }
@@ -224,9 +266,15 @@ impl<T> Stream<T> {
     where
         F: FnOnce(&mut Builder, Handle<T>) -> Handle<B>,
     {
+        assert!(
+            !self.built.get(),
+            "invariant: wiring a Stream after GraphBuilder::build(); the graph \
+             is already consumed. Wire all nodes before calling build()"
+        );
         let handle = f(&mut self.inner.borrow_mut(), self.handle);
         Stream {
             inner: self.inner.clone(),
+            built: self.built.clone(),
             handle,
         }
     }

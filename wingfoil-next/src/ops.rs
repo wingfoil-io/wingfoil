@@ -542,6 +542,10 @@ impl Op for Ewma {
                 }
             }
         };
+        debug_assert!(
+            (0.0..=1.0).contains(&alpha),
+            "ewma smoothing factor must be in [0, 1], got {alpha}"
+        );
         state.value += alpha * (sample - state.value);
         Ok(Tick::Value(state.value))
     }
