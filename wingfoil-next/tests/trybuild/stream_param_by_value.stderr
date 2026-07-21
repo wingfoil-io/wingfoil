@@ -1,0 +1,5 @@
+error: stream parameters must be taken by reference: `name: &Stream<T>`
+ --> tests/trybuild/stream_param_by_value.rs:6:35
+  |
+6 |     fn bad(g: &GraphBuilder, src: Stream<u64>) -> Stream<u64> {
+  |                                   ^^^^^^

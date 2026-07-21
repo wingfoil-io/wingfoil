@@ -71,6 +71,7 @@
 //! store and breadth-first dirty-list scheduling for the interpreted engine
 //! (see `docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
 
+pub mod adapters;
 #[cfg(feature = "async")]
 pub mod async_source;
 pub mod channel;

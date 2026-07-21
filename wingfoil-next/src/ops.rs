@@ -629,6 +629,283 @@ impl Op for RollingMean {
     }
 }
 
+/// Ring-buffer state for the rolling variance / std ops: the most recent
+/// `window` samples plus incrementally maintained count-weighted moments
+/// (Welford's algorithm with exact removal), so a tick is O(1). Mirrors the
+/// classic `RollingMomentStream` under `Weighting::Count`.
+pub struct RollingMomentState {
+    buffer: VecDeque<f64>,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Default for RollingMomentState {
+    fn default() -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            count: 0,
+            mean: 0.0,
+            m2: 0.0,
+        }
+    }
+}
+
+impl RollingMomentState {
+    /// Fold a new sample into the moments (Welford update).
+    fn add(&mut self, x: f64) {
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (x - mean_old) / self.count as f64;
+        self.m2 += (x - mean_old) * (x - self.mean);
+    }
+
+    /// Exact inverse of [`add`](Self::add): drop a previously added sample so a
+    /// sliding window can evict its oldest contribution in O(1). Like any
+    /// revert-based scheme this can accumulate floating-point error, so `m2` is
+    /// clamped at zero.
+    fn remove(&mut self, x: f64) {
+        // Removing the final contribution empties the accumulator; reset
+        // cleanly rather than dividing by a count at (or below) zero.
+        if self.count <= 1 {
+            self.count = 0;
+            self.mean = 0.0;
+            self.m2 = 0.0;
+            return;
+        }
+        let n = self.count as f64;
+        let mean_old = (n * self.mean - x) / (n - 1.0);
+        self.m2 -= (x - mean_old) * (x - self.mean);
+        if self.m2 < 0.0 {
+            self.m2 = 0.0;
+        }
+        self.mean = mean_old;
+        self.count -= 1;
+    }
+
+    /// Push a sample, evicting the oldest once the window is full.
+    fn push(&mut self, sample: f64, window: usize) {
+        self.buffer.push_back(sample);
+        self.add(sample);
+        if self.buffer.len() > window {
+            let oldest = self
+                .buffer
+                .pop_front()
+                .expect("invariant: len > window >= 1 implies non-empty");
+            self.remove(oldest);
+        }
+    }
+
+    /// Sample variance (ddof = 1) — the classic `Weighting::Count` convention.
+    /// Yields `0.0` while fewer than two samples are present (rather than NaN).
+    fn variance(&self) -> f64 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        self.m2 / (self.count as f64 - 1.0)
+    }
+}
+
+/// Rolling **sample** variance (ddof = 1) over the most recent `window` `f64`
+/// samples. Matches the classic statistics adapter's `Weighting::Count`
+/// convention: the divisor is `n - 1`, and the result is `0.0` until at least
+/// two samples are in the window. `Cfg` = window.
+pub struct RollingVar;
+
+#[op(build = rolling_var)]
+impl Op for RollingVar {
+    type Cfg = usize;
+    type State = RollingMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Rolling **sample** standard deviation over the most recent `window` `f64`
+/// samples — the square root of [`RollingVar`] under the same (ddof = 1)
+/// convention. Clamped at zero before the square root so a constant window
+/// (whose incremental variance can drift a hair negative) yields `0.0`, not
+/// `NaN`. `Cfg` = window.
+pub struct RollingStd;
+
+#[op(build = rolling_std)]
+impl Op for RollingStd {
+    type Cfg = usize;
+    type State = RollingMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// Monotonic-deque state for the rolling min & max ops. Holds `(index, value)`
+/// candidates kept monotonic in value, so the front is always the window
+/// extreme — O(1) amortised per tick. Mirrors the classic `RollingExtremeStream`
+/// (a monotonic deque, not a per-tick window scan, so the tick semantics match
+/// the classic node exactly even though a scan would give the same values).
+#[derive(Default)]
+pub struct RollingExtremeState {
+    deque: VecDeque<(u64, f64)>,
+    index: u64,
+}
+
+impl RollingExtremeState {
+    /// Push a sample and return the current window extreme. `is_min` selects
+    /// which back candidates the new sample dominates: for a minimum we drop
+    /// candidates `>= sample`, for a maximum `<= sample`.
+    fn push(&mut self, sample: f64, window: usize, is_min: bool) -> f64 {
+        let window = window.max(1) as u64;
+        let i = self.index;
+        self.index += 1;
+
+        // Drop back candidates the new sample dominates (they can never again
+        // be the extreme while it is in the window).
+        while let Some(&(_, back)) = self.deque.back() {
+            let dominated = if is_min {
+                back >= sample
+            } else {
+                back <= sample
+            };
+            if dominated {
+                self.deque.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.deque.push_back((i, sample));
+
+        // Drop the front once it falls outside the last `window` indices. The
+        // just-pushed `i` is always in window, so the deque never empties.
+        while let Some(&(idx, _)) = self.deque.front() {
+            if i - idx >= window {
+                self.deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.deque
+            .front()
+            .expect("invariant: deque holds the current sample")
+            .1
+    }
+}
+
+/// Rolling minimum over the most recent `window` `f64` samples, via a monotonic
+/// deque — O(1) amortised per tick. `Cfg` = window.
+pub struct RollingMin;
+
+#[op(build = rolling_min)]
+impl Op for RollingMin {
+    type Cfg = usize;
+    type State = RollingExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingExtremeState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, *cfg, true)))
+    }
+}
+
+/// Rolling maximum over the most recent `window` `f64` samples, via a monotonic
+/// deque — O(1) amortised per tick. `Cfg` = window.
+pub struct RollingMax;
+
+#[op(build = rolling_max)]
+impl Op for RollingMax {
+    type Cfg = usize;
+    type State = RollingExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingExtremeState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, *cfg, false)))
+    }
+}
+
+/// Ring-buffer state for the rolling median op — retains the most recent
+/// `window` samples and recomputes the median (sort) each tick, matching the
+/// classic recompute-per-tick `WindowStream` (the median has no cheap
+/// incremental form here).
+#[derive(Default)]
+pub struct RollingMedianState {
+    buffer: VecDeque<f64>,
+}
+
+impl RollingMedianState {
+    /// Push a sample (evicting the oldest past `window`) and return the median
+    /// of the retained samples. An even-sized window averages the two middle
+    /// values, so unit weights reproduce the ordinary median — the classic
+    /// `Weighting::Count` behaviour.
+    fn push(&mut self, sample: f64, window: usize) -> f64 {
+        self.buffer.push_back(sample);
+        while self.buffer.len() > window {
+            self.buffer.pop_front();
+        }
+        let mut sorted: Vec<f64> = self.buffer.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        }
+    }
+}
+
+/// Rolling median over the most recent `window` `f64` samples. Recomputed per
+/// tick (O(window)); an even window averages its two middle values, matching
+/// the classic statistics adapter's count-weighted median. `Cfg` = window.
+pub struct RollingMedian;
+
+#[op(build = rolling_median)]
+impl Op for RollingMedian {
+    type Cfg = usize;
+    type State = RollingMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMedianState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, (*cfg).max(1))))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
