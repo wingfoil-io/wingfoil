@@ -378,6 +378,24 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Chain the same endomorphic `map` `n` times. `map_n(0, f)` is the
+    /// identity (a pass-through). Bounded repetition sugar for a straight deep
+    /// chain; inside `graph!` the count must be a literal so the DAG stays
+    /// static.
+    fn map_n<F>(&self, n: usize, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> T + Clone + 'static;
+
+    /// Fan out into `n` parallel branches — each built by `branch` from a copy
+    /// of this stream — and merge their outputs back into one stream (earliest-
+    /// supplied ticked branch wins, as `merge`). `n` must be at least 1. Inside
+    /// `graph!` the count must be a literal so the DAG stays static.
+    fn fan<B, F>(&self, n: usize, branch: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(Stream<T>) -> Stream<B>;
+
     /// Pass through the first `limit` values, then stay quiet.
     fn limit(&self, limit: u32) -> Stream<T>
     where
@@ -557,6 +575,31 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     {
         let other = other.handle();
         self.wire(|b, h| b.merge2(h, other))
+    }
+
+    fn map_n<F>(&self, n: usize, f: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> T + Clone + 'static,
+    {
+        let mut s = self.clone();
+        for _ in 0..n {
+            s = s.map(f.clone());
+        }
+        s
+    }
+
+    fn fan<B, F>(&self, n: usize, branch: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(Stream<T>) -> Stream<B>,
+    {
+        assert!(n >= 1, "`fan` requires at least one branch");
+        let mut merged = branch(self.clone());
+        for _ in 1..n {
+            merged = merged.merge(&branch(self.clone()));
+        }
+        merged
     }
 
     fn limit(&self, limit: u32) -> Stream<T>

@@ -1,0 +1,5 @@
+error: `.map_n(..)` repeat count must be an integer literal — the DAG must be static
+  --> tests/trybuild/map_n_nonliteral_count.rs:10:68
+   |
+10 |         let out = g.ticker(Duration::from_nanos(10)).count().map_n(n, |i| *i + 1);
+   |                                                                    ^

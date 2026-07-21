@@ -35,6 +35,28 @@ pub fn wire_chain(len: usize) -> (Vec<Rc<dyn Node>>, Rc<dyn Stream<u64>>) {
     (vec![s.clone().as_node()], s)
 }
 
+/// The `benches/graph.rs` "NxN" fan-out graph, self-driven by a ticker: one
+/// `count` source fanned out into `width` parallel chains of `depth` identity
+/// `map`s each, merged back into one stream (u64 payload). Every node fires on
+/// every cycle. Mirrors the interpreted-engine `10x10` bench so the generated
+/// tiers can be measured against the same shape.
+/// Total nodes: `width * depth + 5` (ticker + constant + sample + fold + maps
+/// + merge).
+pub fn wire_fanout(width: usize, depth: usize) -> (Vec<Rc<dyn Node>>, Rc<dyn Stream<u64>>) {
+    let src = ticker(Duration::from_nanos(100)).count();
+    let streams = (0..width)
+        .map(|_| {
+            let mut stream = src.clone();
+            for _ in 0..depth {
+                stream = stream.map(std::hint::black_box);
+            }
+            stream
+        })
+        .collect::<Vec<_>>();
+    let merged = merge(streams);
+    (vec![merged.clone().as_node()], merged)
+}
+
 /// A sparse graph: the same `len`-sample chain on a slow ticker, plus an
 /// independent fast counter. In historical mode the fast source fires 1000
 /// cycles for every chain tick, so almost every cycle leaves the chain

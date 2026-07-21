@@ -1,0 +1,5 @@
+error: `.fan(0, ..)` requires at least one branch
+ --> tests/trybuild/fan_zero_branches.rs:8:66
+  |
+8 |         let out = g.ticker(Duration::from_nanos(10)).count().fan(0, |s| s.map(|i| *i + 1));
+  |                                                                  ^

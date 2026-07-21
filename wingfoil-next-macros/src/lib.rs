@@ -94,7 +94,11 @@
 //! `.join(&other, f)`, `.delay(duration)`; statistics (on `f64` streams)
 //! `.ewma(decay)` / `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)`,
 //! `.rolling_sum(window)`, `.rolling_mean(window)`; sugar `.count()` and
-//! `.accumulate()`.
+//! `.accumulate()`; and bounded repetition `.map_n(N, f)` (chain `map` N
+//! times) / `.fan(N, |s| <sub-chain>)` (N parallel copies of a sub-chain,
+//! merged). `map_n` / `fan` counts must be integer literals so the unrolled
+//! DAG stays static — they are the static-topology answer to "no wiring inside
+//! loops" below.
 //!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
 //! computing configs, declaring locals that closures capture, helper calls.
@@ -107,7 +111,8 @@
 //! all statements run, so a shadowed capture would let the engines disagree.
 //!
 //! Limitations (v1): wiring itself must be straight-line (no wiring inside
-//! loops/conditionals — the DAG must be static); IO-edge sources and sinks
+//! loops/conditionals — the DAG must be static; use `.map_n` / `.fan` for
+//! regular repeated topologies); IO-edge sources and sinks
 //! (`external`, `poll`, `for_each`) are not expressible — IO lives at the
 //! fluent layer, feeding compiled islands through their inputs.
 
@@ -729,104 +734,17 @@ impl ChainWalker {
             self.lookup(root)?
         };
 
-        // Each further method call appends a node consuming `cur`.
-        while let Some((method, args)) = calls.next() {
+        // Each further method call appends node(s) consuming `cur`. Most
+        // combinators push a single node; `map_n` / `fan` expand to several
+        // (bounded compile-time repetition — the DAG stays static).
+        while let Some(call) = calls.next() {
+            let (method, args) = (call.0, &call.1);
             let name = if calls.peek().is_none() {
                 bound_name.clone()
             } else {
                 self.anon_name(method.span())
             };
-            cur = match method.to_string().as_str() {
-                "map" => {
-                    expect_arity(method, args, 1)?;
-                    self.push(name, OpKind::Map, vec![cur], vec![args[0].clone()])
-                }
-                "fold" => {
-                    expect_arity(method, args, 2)?;
-                    self.push(
-                        name,
-                        OpKind::Fold,
-                        vec![cur],
-                        vec![args[0].clone(), args[1].clone()],
-                    )
-                }
-                "filter" => {
-                    expect_arity(method, args, 1)?;
-                    let cond = self.stream_ref_arg(args[0])?;
-                    self.push(name, OpKind::Filter, vec![cur, cond], vec![])
-                }
-                "sample" => {
-                    expect_arity(method, args, 1)?;
-                    let trigger = self.stream_ref_arg(args[0])?;
-                    self.push(name, OpKind::Sample, vec![cur, trigger], vec![])
-                }
-                "merge" => {
-                    expect_arity(method, args, 1)?;
-                    let other = self.stream_ref_arg(args[0])?;
-                    self.push(name, OpKind::Merge, vec![cur, other], vec![])
-                }
-                "join" => {
-                    expect_arity(method, args, 2)?;
-                    let other = self.stream_ref_arg(args[0])?;
-                    self.push(name, OpKind::Join, vec![cur, other], vec![args[1].clone()])
-                }
-                "delay" => {
-                    expect_arity(method, args, 1)?;
-                    self.push(name, OpKind::Delay, vec![cur], vec![args[0].clone()])
-                }
-                // Sugar, desugared to the same folds the fluent layer uses.
-                "count" => {
-                    expect_arity(method, args, 0)?;
-                    let init: Expr = parse_quote!(0u64);
-                    let f: Expr = parse_quote!(|__acc, _| *__acc += 1);
-                    self.push(name, OpKind::Fold, vec![cur], vec![init, f])
-                }
-                "accumulate" => {
-                    expect_arity(method, args, 0)?;
-                    let init: Expr = parse_quote!(::std::vec::Vec::new());
-                    let f: Expr =
-                        parse_quote!(|__acc, __v| __acc.push(::core::clone::Clone::clone(__v)));
-                    self.push(name, OpKind::Fold, vec![cur], vec![init, f])
-                }
-                // Statistics ops (f64 → f64). The three `ewma*` spellings share
-                // one op, differing only in the `EwmaDecay` config they build.
-                "ewma" => {
-                    expect_arity(method, args, 1)?;
-                    self.push(name, OpKind::Ewma, vec![cur], vec![args[0].clone()])
-                }
-                "ewma_per_tick" => {
-                    expect_arity(method, args, 1)?;
-                    let alpha = args[0];
-                    let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::PerTick(#alpha));
-                    self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
-                }
-                "ewma_half_life" => {
-                    expect_arity(method, args, 1)?;
-                    let half_life = args[0];
-                    let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::HalfLife(
-                        (#half_life).as_nanos() as f64
-                    ));
-                    self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
-                }
-                "rolling_sum" => {
-                    expect_arity(method, args, 1)?;
-                    self.push(name, OpKind::RollingSum, vec![cur], vec![args[0].clone()])
-                }
-                "rolling_mean" => {
-                    expect_arity(method, args, 1)?;
-                    self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
-                }
-                other => {
-                    return Err(syn::Error::new(
-                        method.span(),
-                        format!(
-                            "unknown combinator `.{other}(..)`; expected one of: map, filter, \
-                             fold, sample, merge, join, delay, count, accumulate, ewma, \
-                             ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
-                        ),
-                    ));
-                }
-            };
+            cur = self.apply_call(cur, method, args, name)?;
         }
 
         if bound_name.to_string().starts_with(RESERVED_PREFIX) {
@@ -846,6 +764,236 @@ impl ChainWalker {
         }
         Ok(())
     }
+
+    /// Dispatch one fluent method call onto tail `cur`, pushing the node(s) it
+    /// expands to and returning the new tail. Single node for most
+    /// combinators; `map_n` / `fan` expand to several — bounded, compile-time
+    /// repetition that keeps the DAG static (their counts must be literals).
+    fn apply_call(
+        &mut self,
+        cur: usize,
+        method: &Ident,
+        args: &[&Expr],
+        name: Ident,
+    ) -> syn::Result<usize> {
+        Ok(match method.to_string().as_str() {
+            "map" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::Map, vec![cur], vec![args[0].clone()])
+            }
+            "fold" => {
+                expect_arity(method, args, 2)?;
+                self.push(
+                    name,
+                    OpKind::Fold,
+                    vec![cur],
+                    vec![args[0].clone(), args[1].clone()],
+                )
+            }
+            "filter" => {
+                expect_arity(method, args, 1)?;
+                let cond = self.stream_ref_arg(args[0])?;
+                self.push(name, OpKind::Filter, vec![cur, cond], vec![])
+            }
+            "sample" => {
+                expect_arity(method, args, 1)?;
+                let trigger = self.stream_ref_arg(args[0])?;
+                self.push(name, OpKind::Sample, vec![cur, trigger], vec![])
+            }
+            "merge" => {
+                expect_arity(method, args, 1)?;
+                let other = self.stream_ref_arg(args[0])?;
+                self.push(name, OpKind::Merge, vec![cur, other], vec![])
+            }
+            "join" => {
+                expect_arity(method, args, 2)?;
+                let other = self.stream_ref_arg(args[0])?;
+                self.push(name, OpKind::Join, vec![cur, other], vec![args[1].clone()])
+            }
+            "delay" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::Delay, vec![cur], vec![args[0].clone()])
+            }
+            // Sugar, desugared to the same folds the fluent layer uses.
+            "count" => {
+                expect_arity(method, args, 0)?;
+                let init: Expr = parse_quote!(0u64);
+                let f: Expr = parse_quote!(|__acc, _| *__acc += 1);
+                self.push(name, OpKind::Fold, vec![cur], vec![init, f])
+            }
+            "accumulate" => {
+                expect_arity(method, args, 0)?;
+                let init: Expr = parse_quote!(::std::vec::Vec::new());
+                let f: Expr =
+                    parse_quote!(|__acc, __v| __acc.push(::core::clone::Clone::clone(__v)));
+                self.push(name, OpKind::Fold, vec![cur], vec![init, f])
+            }
+            // Statistics ops (f64 → f64). The three `ewma*` spellings share
+            // one op, differing only in the `EwmaDecay` config they build.
+            "ewma" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::Ewma, vec![cur], vec![args[0].clone()])
+            }
+            "ewma_per_tick" => {
+                expect_arity(method, args, 1)?;
+                let alpha = args[0];
+                let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::PerTick(#alpha));
+                self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
+            }
+            "ewma_half_life" => {
+                expect_arity(method, args, 1)?;
+                let half_life = args[0];
+                let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::HalfLife(
+                    (#half_life).as_nanos() as f64
+                ));
+                self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
+            }
+            "rolling_sum" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingSum, vec![cur], vec![args[0].clone()])
+            }
+            "rolling_mean" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
+            }
+            // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
+            // `map`s; `fan(N, |s| <sub-chain>)` builds N copies of a sub-chain
+            // rooted at the current tail and merges them. Both take a literal
+            // count so the emitted DAG stays static.
+            "map_n" => {
+                expect_arity(method, args, 2)?;
+                let n = parse_static_count(method, args[0])?;
+                let f = args[1];
+                let mut tail = cur;
+                for k in 0..n {
+                    let node_name = if k + 1 == n {
+                        name.clone()
+                    } else {
+                        self.anon_name(method.span())
+                    };
+                    tail = self.push(node_name, OpKind::Map, vec![tail], vec![f.clone()]);
+                }
+                tail
+            }
+            "fan" => {
+                expect_arity(method, args, 2)?;
+                let n = parse_static_count(method, args[0])?;
+                if n == 0 {
+                    return Err(syn::Error::new(
+                        args[0].span(),
+                        "`.fan(0, ..)` requires at least one branch",
+                    ));
+                }
+                let Expr::Closure(closure) = args[1] else {
+                    return Err(syn::Error::new(
+                        args[1].span(),
+                        "`.fan(n, |s| ..)` second argument must be a closure taking the \
+                         per-branch source stream",
+                    ));
+                };
+                if closure.inputs.len() != 1 {
+                    return Err(syn::Error::new(
+                        closure.span(),
+                        "the `.fan` closure must take exactly one parameter (the per-branch \
+                         source stream)",
+                    ));
+                }
+                let mut params = Vec::new();
+                pattern_idents(&closure.inputs[0], &mut params);
+                let Some(param) = params.first().cloned() else {
+                    return Err(syn::Error::new(
+                        closure.inputs[0].span(),
+                        "the `.fan` closure parameter must be a simple name",
+                    ));
+                };
+                let tails: Vec<usize> = (0..n)
+                    .map(|_| self.walk_template(&param, cur, &closure.body))
+                    .collect::<syn::Result<_>>()?;
+                // Left-fold the branch tails through binary merges, matching
+                // the fluent layer's N-ary "first supplied that ticked wins".
+                let mut merged = tails[0];
+                for (j, &tail) in tails.iter().enumerate().skip(1) {
+                    let node_name = if j + 1 == tails.len() {
+                        name.clone()
+                    } else {
+                        self.anon_name(method.span())
+                    };
+                    merged = self.push(node_name, OpKind::Merge, vec![merged, tail], vec![]);
+                }
+                merged
+            }
+            other => {
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!(
+                        "unknown combinator `.{other}(..)`; expected one of: map, map_n, fan, \
+                         filter, fold, sample, merge, join, delay, count, accumulate, ewma, \
+                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
+                    ),
+                ));
+            }
+        })
+    }
+
+    /// Walk a `fan` sub-chain template: a fluent chain rooted at the closure
+    /// parameter `param`, which resolves to node `root` (the fan source).
+    /// Returns the tail node index without binding a user name — every node is
+    /// anonymous, since the branch tails are consumed by the merge.
+    fn walk_template(&mut self, param: &Ident, root: usize, body: &Expr) -> syn::Result<usize> {
+        let mut calls: Vec<(&Ident, Vec<&Expr>)> = Vec::new();
+        let mut cur_expr = body;
+        let root_ident = loop {
+            match cur_expr {
+                Expr::MethodCall(mc) => {
+                    calls.push((&mc.method, mc.args.iter().collect()));
+                    cur_expr = &mc.receiver;
+                }
+                Expr::Path(p) => {
+                    let Some(root_ident) = p.path.get_ident() else {
+                        return Err(syn::Error::new(
+                            p.span(),
+                            "`.fan` sub-chain must be rooted at the closure parameter",
+                        ));
+                    };
+                    break root_ident;
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        other.span(),
+                        "`.fan` closure body must be a fluent method chain rooted at its parameter",
+                    ));
+                }
+            }
+        };
+        if root_ident != param {
+            return Err(syn::Error::new(
+                root_ident.span(),
+                format!("`.fan` sub-chain must start from its parameter `{param}`"),
+            ));
+        }
+        calls.reverse();
+        let mut cur = root;
+        for call in &calls {
+            let (method, args) = (call.0, &call.1);
+            let anon = self.anon_name(method.span());
+            cur = self.apply_call(cur, method, args, anon)?;
+        }
+        Ok(cur)
+    }
+}
+
+/// Parse a `map_n` / `fan` repeat count: it must be an integer literal so the
+/// unrolled DAG is known at expansion time.
+fn parse_static_count(method: &Ident, arg: &Expr) -> syn::Result<usize> {
+    if let Expr::Lit(lit) = arg
+        && let syn::Lit::Int(int) = &lit.lit
+    {
+        return int.base10_parse::<usize>();
+    }
+    Err(syn::Error::new(
+        arg.span(),
+        format!("`.{method}(..)` repeat count must be an integer literal — the DAG must be static"),
+    ))
 }
 
 fn expect_arity(method: &Ident, args: &[&Expr], want: usize) -> syn::Result<()> {
