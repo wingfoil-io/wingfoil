@@ -7682,6 +7682,7 @@ name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "criterion",
  "futures",
  "tokio",
  "trybuild",
