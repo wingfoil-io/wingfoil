@@ -23,6 +23,15 @@ mod oe_dispatch {
 mod oe_standalone {
     include!(concat!(env!("OUT_DIR"), "/oe_standalone.rs"));
 }
+mod fanout_10x10_inline {
+    include!(concat!(env!("OUT_DIR"), "/fanout_10x10_inline.rs"));
+}
+mod fanout_10x10_dispatch {
+    include!(concat!(env!("OUT_DIR"), "/fanout_10x10_dispatch.rs"));
+}
+mod fanout_10x10_standalone {
+    include!(concat!(env!("OUT_DIR"), "/fanout_10x10_standalone.rs"));
+}
 mod chain_inline_16 {
     include!(concat!(env!("OUT_DIR"), "/chain_inline_16.rs"));
 }
@@ -229,5 +238,155 @@ fn chain_sparse(c: &mut Criterion) {
     sparse_group!(c, 1024, sparse_inline_1024, sparse_dispatch_1024);
 }
 
-criterion_group!(benches, odds_evens, chain_dense, chain_sparse);
+/// The NxN fan-out graph from `wingfoil/benches/graph.rs` (the interpreted
+/// engine's `10x10` bench), measured across all four tiers. One `count`
+/// source feeds `width` parallel `depth`-deep identity-`map` chains, merged
+/// into one stream; every node fires every cycle. Throughput in node-cycles/
+/// sec makes the per-node dispatch cost comparable across engines.
+fn fanout(c: &mut Criterion) {
+    const WIDTH: usize = 10;
+    const DEPTH: usize = 10;
+    // ticker + constant + sample + fold + (width * depth) maps + merge.
+    let nodes = WIDTH * DEPTH + 5;
+    const CYCLES: u32 = 10_000;
+    let run_for = RunFor::Cycles(CYCLES);
+    let mut g = c.benchmark_group("fanout_10x10");
+    g.sample_size(20);
+    g.throughput(Throughput::Elements(CYCLES as u64 * nodes as u64));
+    g.bench_function("interpreted", |b| {
+        b.iter(|| {
+            let (roots, values) = wiring::wire_fanout(WIDTH, DEPTH);
+            Graph::new(roots, HISTORICAL, run_for).run().unwrap();
+            black_box(values.peek_value())
+        })
+    });
+    g.bench_function("dispatch", |b| {
+        b.iter(|| {
+            let (roots, values) = wiring::wire_fanout(WIDTH, DEPTH);
+            fanout_10x10_dispatch::run(roots, HISTORICAL, run_for).unwrap();
+            black_box(values.peek_value())
+        })
+    });
+    g.bench_function("inline", |b| {
+        b.iter(|| {
+            let (roots, values) = wiring::wire_fanout(WIDTH, DEPTH);
+            fanout_10x10_inline::run(roots, HISTORICAL, run_for).unwrap();
+            black_box(values.peek_value())
+        })
+    });
+    g.bench_function("standalone", |b| {
+        b.iter(|| {
+            #[rustfmt::skip]
+            let inputs = fanout_10x10_standalone::Inputs {
+                tick_0: NanoTime::new(100),
+                constant_1: 1u64,
+                fold_3: |acc: &mut u64, v: u64| *acc += v,
+                map_4: black_box,
+                map_5: black_box,
+                map_6: black_box,
+                map_7: black_box,
+                map_8: black_box,
+                map_9: black_box,
+                map_10: black_box,
+                map_11: black_box,
+                map_12: black_box,
+                map_13: black_box,
+                map_14: black_box,
+                map_15: black_box,
+                map_16: black_box,
+                map_17: black_box,
+                map_18: black_box,
+                map_19: black_box,
+                map_20: black_box,
+                map_21: black_box,
+                map_22: black_box,
+                map_23: black_box,
+                map_24: black_box,
+                map_25: black_box,
+                map_26: black_box,
+                map_27: black_box,
+                map_28: black_box,
+                map_29: black_box,
+                map_30: black_box,
+                map_31: black_box,
+                map_32: black_box,
+                map_33: black_box,
+                map_34: black_box,
+                map_35: black_box,
+                map_36: black_box,
+                map_37: black_box,
+                map_38: black_box,
+                map_39: black_box,
+                map_40: black_box,
+                map_41: black_box,
+                map_42: black_box,
+                map_43: black_box,
+                map_44: black_box,
+                map_45: black_box,
+                map_46: black_box,
+                map_47: black_box,
+                map_48: black_box,
+                map_49: black_box,
+                map_50: black_box,
+                map_51: black_box,
+                map_52: black_box,
+                map_53: black_box,
+                map_54: black_box,
+                map_55: black_box,
+                map_56: black_box,
+                map_57: black_box,
+                map_58: black_box,
+                map_59: black_box,
+                map_60: black_box,
+                map_61: black_box,
+                map_62: black_box,
+                map_63: black_box,
+                map_64: black_box,
+                map_65: black_box,
+                map_66: black_box,
+                map_67: black_box,
+                map_68: black_box,
+                map_69: black_box,
+                map_70: black_box,
+                map_71: black_box,
+                map_72: black_box,
+                map_73: black_box,
+                map_74: black_box,
+                map_75: black_box,
+                map_76: black_box,
+                map_77: black_box,
+                map_78: black_box,
+                map_79: black_box,
+                map_80: black_box,
+                map_81: black_box,
+                map_82: black_box,
+                map_83: black_box,
+                map_84: black_box,
+                map_85: black_box,
+                map_86: black_box,
+                map_87: black_box,
+                map_88: black_box,
+                map_89: black_box,
+                map_90: black_box,
+                map_91: black_box,
+                map_92: black_box,
+                map_93: black_box,
+                map_94: black_box,
+                map_95: black_box,
+                map_96: black_box,
+                map_97: black_box,
+                map_98: black_box,
+                map_99: black_box,
+                map_100: black_box,
+                map_101: black_box,
+                map_102: black_box,
+                map_103: black_box,
+            };
+            black_box(fanout_10x10_standalone::run(inputs, HISTORICAL, run_for))
+        })
+    });
+    g.finish();
+}
+
+criterion_group!(benches, odds_evens, fanout, chain_dense, chain_sparse);
 criterion_main!(benches);
