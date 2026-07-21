@@ -12,8 +12,10 @@
 //! See `docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Sub;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -290,6 +292,101 @@ where
     }
 }
 
+/// Passes each value through unchanged while buffering it, then prints the
+/// whole buffer (`{value:?}` per line) at teardown. The classic `print` node,
+/// whose buffered `Drop` becomes the op's [`teardown`](Op::teardown) hook —
+/// so the summary still prints even if a cycle aborted the run. `State` is the
+/// buffer.
+pub struct Print<T>(PhantomData<T>);
+
+impl<T: Clone + Debug + 'static> Op for Print<T> {
+    type Cfg = ();
+    type State = Vec<T>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Vec<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        state.push(input.0.clone());
+        Ok(Tick::Value(input.0.clone()))
+    }
+
+    fn teardown(_cfg: &mut (), state: &mut Vec<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        for val in state.iter() {
+            println!("{val:?}");
+        }
+        Ok(())
+    }
+}
+
+/// Pending state for a [`Timed`] op: the tick count and the wall-clock start
+/// instant (set at [`start`](Op::start)).
+#[derive(Default)]
+pub struct TimedState {
+    cycles: u64,
+    wall_start: Option<Instant>,
+}
+
+/// Passes its source value through unchanged, recording the wall-clock start
+/// at [`start`](Op::start) and printing a performance summary at
+/// [`stop`](Op::stop) (tick count, wall-clock duration, per-tick average, and
+/// the engine-time span covered). The classic `timed` node.
+///
+/// Deviations from classic (observable value stream is identical — a
+/// pass-through — only the diagnostic differs): the summary goes to `stderr`
+/// via `eprintln!` rather than `log::info!` (wingfoil-next has no `log`
+/// dependency), and — since [`Ctx`] exposes no run mode — it always reports
+/// the wall-vs-engine speedup rather than branching on historical/realtime.
+pub struct Timed<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Timed<T> {
+    type Cfg = ();
+    type State = TimedState;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn start(_cfg: &mut (), state: &mut TimedState, _ctx: &mut Ctx<'_>) -> Result<()> {
+        state.wall_start = Some(Instant::now());
+        Ok(())
+    }
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut TimedState,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        state.cycles += 1;
+        Ok(Tick::Value(input.0.clone()))
+    }
+
+    fn stop(_cfg: &mut (), state: &mut TimedState, ctx: &mut Ctx<'_>) -> Result<()> {
+        let engine_elapsed = Duration::from(ctx.time() - ctx.start_time());
+        let wall = state
+            .wall_start
+            .map(|s| s.elapsed())
+            .unwrap_or(engine_elapsed);
+        let cycles = state.cycles;
+        let avg = Duration::from_nanos((wall.as_nanos() / u128::from(cycles.max(1))) as u64);
+        let speedup = if wall.as_secs_f64() > 0.0 {
+            engine_elapsed.as_secs_f64() / wall.as_secs_f64()
+        } else {
+            f64::INFINITY
+        };
+        eprintln!(
+            "{cycles} ticks processed in {wall:?}, {avg:?} average.   \
+             Covered {engine_elapsed:?} of engine time (x{speedup:.1})."
+        );
+        Ok(())
+    }
+}
+
 /// Buffers values and flushes them as a `Vec` on each fixed time boundary
 /// (`interval`), plus a final flush on the last cycle. `Cfg` = interval;
 /// `State` holds the next boundary and the pending buffer.
@@ -404,6 +501,36 @@ where
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<D>> {
         Ok(Tick::Value(cfg(input.0, input.1, input.2)))
+    }
+}
+
+/// Combines three streams with a *fallible* closure — the classic
+/// `try_trimap`. The `try_` counterpart to [`Join3`]: any returned `Err`
+/// propagates to abort the run with context. The closure is `Fn`, like
+/// [`Join3`].
+pub struct TryJoin3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
+
+impl<A, B, C, D, F> Op for TryJoin3<A, B, C, D, F>
+where
+    A: 'static,
+    B: 'static,
+    C: 'static,
+    D: Clone + 'static,
+    F: Fn(&A, &B, &C) -> Result<D> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B, &'a C);
+    type Out = D;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut F,
+        _state: &mut (),
+        input: (&A, &B, &C),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<D>> {
+        Ok(Tick::Value(cfg(input.0, input.1, input.2)?))
     }
 }
 
@@ -1078,6 +1205,31 @@ where
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         Ok(Tick::Value(cfg(input.0, input.1)))
+    }
+}
+
+/// Joins two streams with a *fallible* closure — the classic `try_bimap`. The
+/// `try_` counterpart to [`Join`]: any returned `Err` propagates to abort the
+/// run with context. Each upstream is independently active or passive (an
+/// engine dispatch concern); both values are always read. The closure is `Fn`,
+/// like [`Join`].
+pub struct TryJoin<A, B, C, F>(PhantomData<(A, B, C, F)>);
+
+impl<A, B, C, F> Op for TryJoin<A, B, C, F>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> Result<C> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B);
+    type Out = C;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
+        Ok(Tick::Value(cfg(input.0, input.1)?))
     }
 }
 

@@ -34,6 +34,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,8 +51,8 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message};
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Sample, Throttle,
-    Ticker, Window, WindowState, WithTime,
+    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Print, Sample,
+    Throttle, Ticker, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -780,6 +781,67 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// The classic `try_trimap`: [`trimap`](Self::trimap) with a *fallible*
+    /// closure. Any `Err` propagates to abort the run with context; the
+    /// active/passive edge and dispatch semantics are identical to `trimap`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_trimap<A, B, C, D, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        c: Handle<C>,
+        c_active: bool,
+        f: F,
+    ) -> Handle<D>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&A, &B, &C) -> Result<D> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let c_slot = self.slot(c);
+        let out = self.new_slot(D::default());
+        let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(3);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
+        if c_active {
+            active.push(c.idx);
+        }
+        self.push_node(
+            active,
+            TryJoin3::<A, B, C, D, F>::ACTIVATION,
+            "try_trimap",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                let vc = c_slot.borrow();
+                match TryJoin3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
     pub fn filter<T: Clone + Default + 'static>(
         &mut self,
         src: Handle<T>,
@@ -924,6 +986,59 @@ impl Builder {
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
                 match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
+    /// The classic `try_bimap`: [`bimap`](Self::bimap) with a *fallible*
+    /// closure. Any `Err` propagates to abort the run with context; the
+    /// active/passive edge and dispatch semantics are identical to `bimap`.
+    pub fn try_bimap<A, B, C, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        f: F,
+    ) -> Handle<C>
+    where
+        A: 'static,
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&A, &B) -> Result<C> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let out = self.new_slot(C::default());
+        let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(2);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
+        self.push_node(
+            active,
+            TryJoin::<A, B, C, F>::ACTIVATION,
+            "try_bimap",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                match TryJoin::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(va);
                         drop(vb);
@@ -1112,6 +1227,94 @@ impl Builder {
             let (cfg, state) = &mut *cs2.borrow_mut();
             let mut ctx = Ctx::new(k, idx);
             Finally::<A, F>::teardown(cfg, state, &mut ctx)
+        });
+        self.make_handle(idx)
+    }
+
+    /// The classic `print`: pass each value through unchanged while buffering
+    /// it, then print the whole buffer (`{value:?}` per line) at teardown.
+    /// Hand-written (not `#[op]`) because it carries a teardown hook.
+    pub fn print<T: Clone + Default + Debug + 'static>(&mut self, src: Handle<T>) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), Vec::<T>::new());
+        let cs2 = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Print::<T>::ACTIVATION,
+            "print",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Print::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        // Print buffers during the run and flushes at teardown (classic `Drop`).
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: print node just pushed");
+        node.teardown = Box::new(move |k| {
+            let (cfg, state) = &mut *cs2.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            Print::<T>::teardown(cfg, state, &mut ctx)
+        });
+        self.make_handle(idx)
+    }
+
+    /// The classic `timed`: pass `src` through unchanged, recording the
+    /// wall-clock start (`start` hook) and printing a performance summary at
+    /// `stop`. Hand-written (not `#[op]`) because it carries start + stop
+    /// hooks.
+    pub fn timed<T: Clone + Default + 'static>(&mut self, src: Handle<T>) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), TimedState::default());
+        let cs_start = cs.clone();
+        let cs_stop = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Timed::<T>::ACTIVATION,
+            "timed",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Timed::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs_start.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                Timed::<T>::start(cfg, state, &mut ctx)
+            }),
+        );
+        // `timed`'s summary prints at stop, after the last cycle.
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: timed node just pushed");
+        node.stop = Box::new(move |k| {
+            let (cfg, state) = &mut *cs_stop.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            Timed::<T>::stop(cfg, state, &mut ctx)
         });
         self.make_handle(idx)
     }

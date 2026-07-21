@@ -11,5 +11,9 @@
 //! - [`lines`] — a dependency-free, line-oriented file adapter (historical
 //!   replay source + realtime tail + file sink), the smallest complete
 //!   demonstration of an I/O edge in both directions.
+//! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
+//!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
 
+#[cfg(feature = "csv")]
+pub mod csv;
 pub mod lines;
