@@ -1,7 +1,10 @@
 //! Islands containing the combinators the existing nested-island suite does
-//! not exercise: `constant` + `merge` + `filter` in one island, and a
-//! statistics op (`ewma_per_tick`) in another. Closes the fable-review blind
-//! spot "no island containing merge/filter/constant/statistics".
+//! not exercise: `constant` + `merge` + `filter` in one island, a statistics
+//! op (`ewma_per_tick`) in another, and a `ticker` + `delay` island (two
+//! independent scheduling ops) that stresses the compiled island's private
+//! schedule-queue demux with multiple pending keys. Closes the fable-review
+//! blind spots "no island containing merge/filter/constant/statistics" and "no
+//! island with two inner scheduling ops (ticker + delay)".
 //!
 //! Each test pins interpreted == compiled == nested-in-interpreted, and (for
 //! the value-carrying islands) cross-checks the nested expansion against the
@@ -99,4 +102,41 @@ fn island_statistics_ewma_all_paths() {
         (r.value(&island) - interpreted).abs() < 1e-10,
         "interpreted == nested"
     );
+}
+
+wingfoil_next::graph! {
+    // Two independent scheduling ops in one island: the `ticker` source and a
+    // `delay`. In the compiled island both live in the same private schedule
+    // queue, so their due-times interleave — exercising the queue demux with
+    // more than one pending key (the odds_evens/ewma islands have at most one).
+    fn ticker_and_delay(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let base = g.ticker(Duration::from_secs(1)).count();
+        let delayed = base.delay(Duration::from_secs(2));
+        let merged = base.merge(&delayed).accumulate();
+        merged
+    }
+}
+
+/// The exact series is pinned by three-path agreement rather than hand-derived
+/// here — the point of the test is that the compiled island's schedule-queue
+/// demux, driven by two interleaving pending keys (ticker + delay), produces
+/// the *same* result as the interpreted engine and a nested mount. A demux bug
+/// that dropped or misrouted one pending key would break the agreement.
+#[test]
+fn island_two_scheduling_ops_all_paths() {
+    let run_for = RunFor::Cycles(6);
+
+    let (mut runner, out) = ticker_and_delay::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert!(!interpreted.is_empty(), "the island produces a series");
+
+    let (compiled,) = ticker_and_delay::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled, "interpreted == compiled");
+
+    let g = GraphBuilder::new();
+    let island = ticker_and_delay::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, r.value(&island), "interpreted == nested");
 }
