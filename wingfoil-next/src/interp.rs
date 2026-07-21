@@ -1277,8 +1277,28 @@ impl Builder {
             id: self.id,
             active_downs,
             seed_nodes,
+            dispatch: Dispatch::default(),
         }
     }
+}
+
+/// Which dispatch strategy [`Runner::run`] uses. Both produce **identical**
+/// observable results; they differ only in per-cycle cost.
+///
+/// [`Sparse`](Dispatch::Sparse) — the default and production path — drives a
+/// dirty-list seeded from the tick frontier, so per-cycle work is proportional
+/// to the nodes that actually fire. [`FullSweep`](Dispatch::FullSweep) is the
+/// original `O(N)`-per-cycle topological sweep, retained as an executable
+/// reference oracle: `runner.with_dispatch(Dispatch::FullSweep)` re-runs the
+/// same graph under the old engine for differential parity checks and
+/// sparse-vs-`N` benchmarking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dispatch {
+    /// Sparse dirty-list (default): work ∝ active nodes.
+    #[default]
+    Sparse,
+    /// Full topological sweep: work ∝ graph size `N`. Reference oracle.
+    FullSweep,
 }
 
 /// Executes a wired graph. Dispatch is a sparse dirty-list — classic wingfoil's
@@ -1309,6 +1329,8 @@ pub struct Runner {
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
+    /// Which dispatch loop `run` uses. `Sparse` by default; see [`Dispatch`].
+    dispatch: Dispatch,
 }
 
 impl Runner {
@@ -1366,78 +1388,13 @@ impl Runner {
         }
 
         if first_err.is_none() {
-            let n = self.nodes.len();
-            let mut dirty = vec![false; n];
-            // Sparse dirty-list scratch, allocated once and reused every cycle:
-            //   * `queue` — the dirty work set, a min-heap on node index so it
-            //     drains in ascending (wiring/topological) order. Every active
-            //     downstream has a higher index than its upstream, so a node
-            //     enqueued while processing `i` is always popped after `i` —
-            //     the heap never revisits a processed node.
-            //   * `node_dirty[i]` — guards a recombine node against being
-            //     enqueued twice, so it fires exactly once per cycle.
-            //   * `fired` — every node cycled this tick; the per-cycle `ticked`
-            //     and `node_dirty` resets touch only these, not all `N`, so
-            //     per-cycle work stays proportional to the active node count.
-            let mut queue: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
-            let mut node_dirty = vec![false; n];
-            let mut fired: Vec<usize> = Vec::new();
-            // Check `finished` *before* `begin_cycle` parks: a channel that
-            // received `EndOfStream` in the previous cycle ends the run now,
-            // rather than waiting for the bound while a live sender clone keeps
-            // the waker channel connected.
-            'run: while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-                // Seed the frontier: `always` ops fire unconditionally;
-                // callback-activated ops (tickers, `delay` pops, feedback
-                // source, channel replay) fire only when the kernel marked them
-                // dirty this cycle. Everything else reaches the queue by
-                // downstream propagation below.
-                for &i in &self.seed_nodes {
-                    if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
-                        node_dirty[i] = true;
-                        queue.push(Reverse(i));
-                    }
-                }
-                // Drain in ascending index order. A node that ticks marks its
-                // active downstream neighbours (all at higher indices, so still
-                // ahead in the drain) dirty — propagating the tick frontier,
-                // each node firing once after everything it reads.
-                while let Some(Reverse(i)) = queue.pop() {
-                    let did = match (self.nodes[i].cycle)(&mut kernel) {
-                        Ok(did) => did,
-                        Err(e) => {
-                            let label = self.nodes[i].label;
-                            first_err = Some(e.context(format!("node {i} ({label}) cycle")));
-                            break 'run;
-                        }
-                    };
-                    // `ticked[i]` must be visible to downstreams that read it
-                    // (`merge` tie-break, `delay` first-value seeding) before
-                    // they fire; index order guarantees every node `i` reads
-                    // has already set its flag.
-                    self.ticked.borrow_mut()[i] = did;
-                    fired.push(i);
-                    if did {
-                        for &d in &self.active_downs[i] {
-                            if !node_dirty[d] {
-                                node_dirty[d] = true;
-                                queue.push(Reverse(d));
-                            }
-                        }
-                    }
-                }
-                // Reset only the nodes we touched (the queue is already drained
-                // empty), keeping the per-cycle reset sparse.
-                {
-                    let mut t = self.ticked.borrow_mut();
-                    for &i in &fired {
-                        t[i] = false;
-                        node_dirty[i] = false;
-                    }
-                }
-                fired.clear();
-                kernel.end_cycle(&mut dirty);
-            }
+            // Both dispatch strategies produce identical observable results
+            // (see `Dispatch`); the sparse dirty-list is the default, the full
+            // sweep is retained as an executable reference oracle.
+            first_err = match self.dispatch {
+                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
+                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
+            };
         }
 
         // Cleanup always runs; a stop/teardown error only surfaces if no
@@ -1459,6 +1416,131 @@ impl Runner {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// Select the dispatch strategy for subsequent [`run`](Runner::run)s.
+    /// Defaults to [`Dispatch::Sparse`]; [`Dispatch::FullSweep`] is the
+    /// reference oracle (identical results, O(N) per cycle). Chainable.
+    pub fn with_dispatch(&mut self, dispatch: Dispatch) -> &mut Self {
+        self.dispatch = dispatch;
+        self
+    }
+
+    /// The sparse dirty-list dispatch loop. Seeds the tick frontier into an
+    /// index-ordered min-heap and drains it, propagating ticks through
+    /// [`active_downs`](Runner::active_downs); per-cycle work is proportional to
+    /// the nodes that fire. Returns the first cycle error, or `None` if the run
+    /// reached its bound cleanly.
+    fn run_cycles_sparse(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        let n = self.nodes.len();
+        let mut dirty = vec![false; n];
+        // Sparse dirty-list scratch, allocated once and reused every cycle:
+        //   * `queue` — the dirty work set, a min-heap on node index so it
+        //     drains in ascending (wiring/topological) order. Every active
+        //     downstream has a higher index than its upstream, so a node
+        //     enqueued while processing `i` is always popped after `i` — the
+        //     heap never revisits a processed node.
+        //   * `node_dirty[i]` — guards a recombine node against being enqueued
+        //     twice, so it fires exactly once per cycle.
+        //   * `fired` — every node cycled this tick; the per-cycle `ticked` and
+        //     `node_dirty` resets touch only these, not all `N`, so per-cycle
+        //     work stays proportional to the active node count.
+        let mut queue: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+        let mut node_dirty = vec![false; n];
+        let mut fired: Vec<usize> = Vec::new();
+        // Check `finished` *before* `begin_cycle` parks: a channel that received
+        // `EndOfStream` in the previous cycle ends the run now, rather than
+        // waiting for the bound while a live sender clone keeps the waker
+        // channel connected.
+        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+            // Seed the frontier: `always` ops fire unconditionally;
+            // callback-activated ops (tickers, `delay` pops, feedback source,
+            // channel replay) fire only when the kernel marked them dirty this
+            // cycle. Everything else reaches the queue by downstream
+            // propagation below.
+            for &i in &self.seed_nodes {
+                if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
+                    node_dirty[i] = true;
+                    queue.push(Reverse(i));
+                }
+            }
+            // Drain in ascending index order. A node that ticks marks its
+            // active downstream neighbours (all at higher indices, so still
+            // ahead in the drain) dirty — propagating the tick frontier, each
+            // node firing once after everything it reads.
+            while let Some(Reverse(i)) = queue.pop() {
+                let did = match (self.nodes[i].cycle)(kernel) {
+                    Ok(did) => did,
+                    Err(e) => {
+                        let label = self.nodes[i].label;
+                        return Some(e.context(format!("node {i} ({label}) cycle")));
+                    }
+                };
+                // `ticked[i]` must be visible to downstreams that read it
+                // (`merge` tie-break, `delay` first-value seeding) before they
+                // fire; index order guarantees every node `i` reads has already
+                // set its flag.
+                self.ticked.borrow_mut()[i] = did;
+                fired.push(i);
+                if did {
+                    for &d in &self.active_downs[i] {
+                        if !node_dirty[d] {
+                            node_dirty[d] = true;
+                            queue.push(Reverse(d));
+                        }
+                    }
+                }
+            }
+            // Reset only the nodes we touched (the queue is already drained
+            // empty), keeping the per-cycle reset sparse.
+            {
+                let mut t = self.ticked.borrow_mut();
+                for &i in &fired {
+                    t[i] = false;
+                    node_dirty[i] = false;
+                }
+            }
+            fired.clear();
+            kernel.end_cycle(&mut dirty);
+        }
+        None
+    }
+
+    /// The original full topological sweep, retained as a reference oracle:
+    /// every cycle it walks **all** nodes in wiring order and runs those whose
+    /// active upstream ticked (or which the kernel marked dirty) — `O(N)` per
+    /// cycle regardless of how many nodes fire. Observably identical to
+    /// [`run_cycles_sparse`](Runner::run_cycles_sparse); kept for differential
+    /// testing and benchmarking (see [`Dispatch`]).
+    fn run_cycles_full_sweep(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        let n = self.nodes.len();
+        let mut dirty = vec![false; n];
+        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                let due = node.activation.always
+                    || (node.activation.callback_activated() && dirty[i])
+                    || {
+                        let t = self.ticked.borrow();
+                        node.active_ups.iter().any(|&u| t[u])
+                    };
+                let did = if due {
+                    match (node.cycle)(kernel) {
+                        Ok(did) => did,
+                        Err(e) => {
+                            return Some(e.context(format!("node {i} ({}) cycle", node.label)));
+                        }
+                    }
+                } else {
+                    false
+                };
+                self.ticked.borrow_mut()[i] = did;
+            }
+            for t in self.ticked.borrow_mut().iter_mut() {
+                *t = false;
+            }
+            kernel.end_cycle(&mut dirty);
+        }
+        None
     }
 
     /// Current value of a node's output slot.

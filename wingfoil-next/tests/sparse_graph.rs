@@ -10,9 +10,47 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::interp::Dispatch;
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
+
+/// The sparse dirty-list and the retained full-sweep oracle must produce
+/// byte-identical results. Runs one non-trivial graph — scheduling (ticker,
+/// delay), a passive edge (`sample` of a delayed slot, the case most sensitive
+/// to evaluation order), a filter, and a tie-broken `merge` — under both
+/// dispatch strategies and asserts they agree.
+#[test]
+fn sparse_matches_full_sweep_oracle() {
+    fn wire(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let n = g.ticker(Duration::from_nanos(10)).count();
+        let keep_even = n.map(|i| i.is_multiple_of(2));
+        let evens = n.filter(&keep_even);
+        let delayed = n.delay(Duration::from_nanos(30));
+        let trig = g.ticker(Duration::from_nanos(10));
+        let sampled = delayed.sample(&trig);
+        sampled.merge(&evens).accumulate()
+    }
+
+    let g1 = GraphBuilder::new();
+    let h1 = wire(&g1);
+    let mut r1 = g1.build();
+    r1.run(HISTORICAL, RunFor::Cycles(15)).unwrap();
+    let sparse = r1.value(&h1);
+
+    let g2 = GraphBuilder::new();
+    let h2 = wire(&g2);
+    let mut r2 = g2.build();
+    r2.with_dispatch(Dispatch::FullSweep);
+    r2.run(HISTORICAL, RunFor::Cycles(15)).unwrap();
+    let full_sweep = r2.value(&h2);
+
+    assert!(!sparse.is_empty(), "graph produces a series");
+    assert_eq!(
+        sparse, full_sweep,
+        "sparse dispatch matches the full-sweep oracle"
+    );
+}
 
 /// A wide graph: one *fast* driver feeds a tiny active chain that ticks every
 /// cycle; a bank of `IDLE_WIDTH` maps hangs off a *slow* driver that fires far
