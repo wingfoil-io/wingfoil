@@ -40,8 +40,7 @@ fn sparse_matches_full_sweep_oracle() {
 
     let g2 = GraphBuilder::new();
     let h2 = wire(&g2);
-    let mut r2 = g2.build();
-    r2.with_dispatch(Dispatch::FullSweep);
+    let mut r2 = g2.build().with_dispatch(Dispatch::FullSweep);
     r2.run(HISTORICAL, RunFor::Cycles(15)).unwrap();
     let full_sweep = r2.value(&h2);
 

@@ -1420,8 +1420,10 @@ impl Runner {
 
     /// Select the dispatch strategy for subsequent [`run`](Runner::run)s.
     /// Defaults to [`Dispatch::Sparse`]; [`Dispatch::FullSweep`] is the
-    /// reference oracle (identical results, O(N) per cycle). Chainable.
-    pub fn with_dispatch(&mut self, dispatch: Dispatch) -> &mut Self {
+    /// reference oracle (identical results, O(N) per cycle). Consumes and
+    /// returns `self` so it chains off [`build`](Builder::build):
+    /// `let mut r = g.build().with_dispatch(Dispatch::FullSweep);`.
+    pub fn with_dispatch(mut self, dispatch: Dispatch) -> Self {
         self.dispatch = dispatch;
         self
     }
