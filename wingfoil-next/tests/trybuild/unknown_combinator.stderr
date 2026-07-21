@@ -1,4 +1,4 @@
-error: unknown combinator `.frobnicate(..)`; expected one of: map, filter, fold, sample, merge, join, delay, count, accumulate, ewma, ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean
+error: unknown combinator `.frobnicate(..)`; expected one of: map, map_n, fan, filter, fold, sample, merge, join, delay, count, accumulate, ewma, ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean
  --> tests/trybuild/unknown_combinator.rs:7:62
   |
 7 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();

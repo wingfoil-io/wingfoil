@@ -49,6 +49,18 @@ fn main() -> wingfoil::codegen::Result<()> {
         generate_standalone(roots, "run")?,
     )?;
 
+    // The NxN fan-out graph (mirrors the interpreted-engine `10x10` bench),
+    // all tiers.
+    let (roots, _) = bench_wiring::wire_fanout(10, 10);
+    emit_to_out_dir("fanout_10x10_inline.rs", roots, &inline)?;
+    let (roots, _) = bench_wiring::wire_fanout(10, 10);
+    emit_to_out_dir("fanout_10x10_dispatch.rs", roots, &dispatch)?;
+    let (roots, _) = bench_wiring::wire_fanout(10, 10);
+    std::fs::write(
+        out_path("fanout_10x10_standalone.rs"),
+        generate_standalone(roots, "run")?,
+    )?;
+
     // Dense chains at several sizes, all tiers.
     for &len in CHAIN_LENS {
         let (roots, _) = bench_wiring::wire_chain(len);
