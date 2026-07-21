@@ -8,27 +8,32 @@
 //! monomorphized function* a compiled runner calls; the engines share
 //! semantics by construction.
 //!
-//! Execution model (and a known gap): each cycle this engine sweeps **all**
-//! nodes in wiring (topological) order and runs those whose active upstream
-//! ticked (or which the kernel marked dirty). Insertion order is always a
-//! valid topological order — the fluent API forces a stream to exist before
-//! it can be referenced — so this is glitch-free and fires each node exactly
-//! once after its upstreams, giving results **identical** to classic
-//! wingfoil. But classic instead propagates **breadth-first from the ticked
-//! sources through a dirty-list**, touching only nodes that can fire; the
-//! `O(N)`-per-cycle sweep here does not match that on large, sparsely-ticking
-//! graphs. Closing that (breadth-first dirty-list + arena value store) is a
-//! planned engine phase — see `docs/port-plan.md` "Phase 4.5"; it is a
-//! mechanism/performance change only, results stay identical.
+//! Execution model: a sparse dirty-list, matching classic wingfoil's
+//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
+//! each node gets an *active-downstream* adjacency list. Each cycle seeds a
+//! work set from the frontier — `always` busy-poll ops and kernel-marked
+//! callback-activated ops (tickers, `delay` pops, feedback source, channel
+//! replay) — then propagates the tick frontier forward: a node that ticks
+//! marks its active downstream neighbours dirty. The work set drains in
+//! ascending node **index** order (an index min-heap); wiring order is a valid
+//! topological order over *all* edges — active and passive, since the fluent
+//! API forces a stream to exist before it is referenced — so each node fires
+//! exactly once after everything it reads. This is glitch-free, gives results
+//! **identical** to classic wingfoil (and byte-identical to the previous
+//! full-index sweep it replaces), but per-cycle work is proportional to the
+//! nodes that actually fire, not the graph size `N`.
 //!
-//! Value slots are individual `Rc<RefCell<T>>`s (the arena is part of that
-//! same phase). `run` is fallible — it returns the first
+//! Value slots are individual `Rc<RefCell<T>>`s; the arena/SoA store is a
+//! deliberately separate follow-on (the slot boundary is frozen here so the
+//! catalog and adapter ports are not touched twice — see the Phase 4.5
+//! coupling note in the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1229,6 +1234,37 @@ impl Builder {
     }
 
     pub fn build(self) -> Runner {
+        // Sparse-dispatch topology, precomputed once so per-cycle work is
+        // proportional to the nodes that fire, not the graph size `N`:
+        //
+        //   * `active_downs[u]` — the reverse of `active_ups`: the nodes a
+        //     ticking `u` marks dirty. Dispatch propagates the tick frontier
+        //     forward through these edges (passive edges are absent — read but
+        //     not triggering).
+        //   * `seed_nodes` — the frontier dispatch seeds each cycle: `always`
+        //     (busy-poll) and callback-activated nodes (tickers, feedback
+        //     source, channel/external, `delay`'s scheduled pop, …).
+        //     Precomputed so seeding is O(#sources), not O(N).
+        //
+        // Dispatch orders the per-cycle work set by ascending node **index**
+        // (see `Runner::run`). Wiring order is a valid topological order over
+        // *all* edges — active and passive — since the fluent API forces a
+        // stream to exist before it is referenced, so index order processes
+        // every node after everything it reads. That is what lets passive
+        // reads (e.g. `sample` of a `delay`ed slot) observe the same value the
+        // old full-index sweep produced, without tracking passive edges here.
+        let n = self.nodes.len();
+        let mut active_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut seed_nodes: Vec<usize> = Vec::new();
+        for i in 0..n {
+            for &u in &self.nodes[i].active_ups {
+                active_downs[u].push(i);
+            }
+            let act = self.nodes[i].activation;
+            if act.always || act.callback_activated() {
+                seed_nodes.push(i);
+            }
+        }
         Runner {
             nodes: self.nodes,
             slots: self.slots,
@@ -1239,14 +1275,23 @@ impl Builder {
             has_channel: self.has_channel,
             finished: self.finished,
             id: self.id,
+            active_downs,
+            seed_nodes,
         }
     }
 }
 
-/// Executes a wired graph. Dispatch walks nodes in wiring (topological)
-/// order each cycle: a node runs when an active upstream ticked, or — only
-/// for ops that declared [`Activation::schedules`](crate::op::Activation) — when the
-/// kernel marked it dirty.
+/// Executes a wired graph. Dispatch is a sparse dirty-list — classic wingfoil's
+/// `dirty_nodes_by_layer` model — so per-cycle work is proportional to the
+/// nodes that actually fire, not the graph size `N`. Each cycle seeds a work
+/// set from the frontier ([`seed_nodes`](Runner::seed_nodes): `always`
+/// busy-poll ops and kernel-marked callback-activated ops), then propagates the
+/// tick frontier forward: a node that ticks marks its active downstream
+/// neighbours ([`active_downs`](Runner::active_downs)) dirty. The work set is
+/// drained in ascending node **index** order (wiring order, a valid topological
+/// order over active *and* passive edges), so each node fires exactly once
+/// after everything it reads — glitch-free, single-fire, and byte-identical to
+/// the previous full-index sweep.
 pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
@@ -1257,6 +1302,13 @@ pub struct Runner {
     has_channel: bool,
     finished: Rc<Cell<bool>>,
     id: u64,
+    /// `active_downs[i]` = nodes triggered when `i` ticks (reverse of
+    /// `active_ups`). Passive edges are deliberately absent — they are read but
+    /// do not propagate ticks.
+    active_downs: Vec<Vec<usize>>,
+    /// Frontier sources seeded each cycle: `always` ops and callback-activated
+    /// ops (the latter only fire when the kernel marks them dirty).
+    seed_nodes: Vec<usize>,
 }
 
 impl Runner {
@@ -1316,35 +1368,74 @@ impl Runner {
         if first_err.is_none() {
             let n = self.nodes.len();
             let mut dirty = vec![false; n];
+            // Sparse dirty-list scratch, allocated once and reused every cycle:
+            //   * `queue` — the dirty work set, a min-heap on node index so it
+            //     drains in ascending (wiring/topological) order. Every active
+            //     downstream has a higher index than its upstream, so a node
+            //     enqueued while processing `i` is always popped after `i` —
+            //     the heap never revisits a processed node.
+            //   * `node_dirty[i]` — guards a recombine node against being
+            //     enqueued twice, so it fires exactly once per cycle.
+            //   * `fired` — every node cycled this tick; the per-cycle `ticked`
+            //     and `node_dirty` resets touch only these, not all `N`, so
+            //     per-cycle work stays proportional to the active node count.
+            let mut queue: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+            let mut node_dirty = vec![false; n];
+            let mut fired: Vec<usize> = Vec::new();
             // Check `finished` *before* `begin_cycle` parks: a channel that
             // received `EndOfStream` in the previous cycle ends the run now,
             // rather than waiting for the bound while a live sender clone keeps
             // the waker channel connected.
             'run: while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-                for (i, node) in self.nodes.iter_mut().enumerate() {
-                    let due = node.activation.always
-                        || (node.activation.callback_activated() && dirty[i])
-                        || {
-                            let t = self.ticked.borrow();
-                            node.active_ups.iter().any(|&u| t[u])
-                        };
-                    let did = if due {
-                        match (node.cycle)(&mut kernel) {
-                            Ok(did) => did,
-                            Err(e) => {
-                                first_err =
-                                    Some(e.context(format!("node {i} ({}) cycle", node.label)));
-                                break 'run;
+                // Seed the frontier: `always` ops fire unconditionally;
+                // callback-activated ops (tickers, `delay` pops, feedback
+                // source, channel replay) fire only when the kernel marked them
+                // dirty this cycle. Everything else reaches the queue by
+                // downstream propagation below.
+                for &i in &self.seed_nodes {
+                    if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
+                        node_dirty[i] = true;
+                        queue.push(Reverse(i));
+                    }
+                }
+                // Drain in ascending index order. A node that ticks marks its
+                // active downstream neighbours (all at higher indices, so still
+                // ahead in the drain) dirty — propagating the tick frontier,
+                // each node firing once after everything it reads.
+                while let Some(Reverse(i)) = queue.pop() {
+                    let did = match (self.nodes[i].cycle)(&mut kernel) {
+                        Ok(did) => did,
+                        Err(e) => {
+                            let label = self.nodes[i].label;
+                            first_err = Some(e.context(format!("node {i} ({label}) cycle")));
+                            break 'run;
+                        }
+                    };
+                    // `ticked[i]` must be visible to downstreams that read it
+                    // (`merge` tie-break, `delay` first-value seeding) before
+                    // they fire; index order guarantees every node `i` reads
+                    // has already set its flag.
+                    self.ticked.borrow_mut()[i] = did;
+                    fired.push(i);
+                    if did {
+                        for &d in &self.active_downs[i] {
+                            if !node_dirty[d] {
+                                node_dirty[d] = true;
+                                queue.push(Reverse(d));
                             }
                         }
-                    } else {
-                        false
-                    };
-                    self.ticked.borrow_mut()[i] = did;
+                    }
                 }
-                for t in self.ticked.borrow_mut().iter_mut() {
-                    *t = false;
+                // Reset only the nodes we touched (the queue is already drained
+                // empty), keeping the per-cycle reset sparse.
+                {
+                    let mut t = self.ticked.borrow_mut();
+                    for &i in &fired {
+                        t[i] = false;
+                        node_dirty[i] = false;
+                    }
                 }
+                fired.clear();
                 kernel.end_cycle(&mut dirty);
             }
         }
