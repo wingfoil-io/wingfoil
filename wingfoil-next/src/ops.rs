@@ -12,8 +12,10 @@
 //! See `docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Sub;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -290,6 +292,101 @@ where
     }
 }
 
+/// Passes each value through unchanged while buffering it, then prints the
+/// whole buffer (`{value:?}` per line) at teardown. The classic `print` node,
+/// whose buffered `Drop` becomes the op's [`teardown`](Op::teardown) hook —
+/// so the summary still prints even if a cycle aborted the run. `State` is the
+/// buffer.
+pub struct Print<T>(PhantomData<T>);
+
+impl<T: Clone + Debug + 'static> Op for Print<T> {
+    type Cfg = ();
+    type State = Vec<T>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Vec<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        state.push(input.0.clone());
+        Ok(Tick::Value(input.0.clone()))
+    }
+
+    fn teardown(_cfg: &mut (), state: &mut Vec<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        for val in state.iter() {
+            println!("{val:?}");
+        }
+        Ok(())
+    }
+}
+
+/// Pending state for a [`Timed`] op: the tick count and the wall-clock start
+/// instant (set at [`start`](Op::start)).
+#[derive(Default)]
+pub struct TimedState {
+    cycles: u64,
+    wall_start: Option<Instant>,
+}
+
+/// Passes its source value through unchanged, recording the wall-clock start
+/// at [`start`](Op::start) and printing a performance summary at
+/// [`stop`](Op::stop) (tick count, wall-clock duration, per-tick average, and
+/// the engine-time span covered). The classic `timed` node.
+///
+/// Deviations from classic (observable value stream is identical — a
+/// pass-through — only the diagnostic differs): the summary goes to `stderr`
+/// via `eprintln!` rather than `log::info!` (wingfoil-next has no `log`
+/// dependency), and — since [`Ctx`] exposes no run mode — it always reports
+/// the wall-vs-engine speedup rather than branching on historical/realtime.
+pub struct Timed<T>(PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Timed<T> {
+    type Cfg = ();
+    type State = TimedState;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn start(_cfg: &mut (), state: &mut TimedState, _ctx: &mut Ctx<'_>) -> Result<()> {
+        state.wall_start = Some(Instant::now());
+        Ok(())
+    }
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut TimedState,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        state.cycles += 1;
+        Ok(Tick::Value(input.0.clone()))
+    }
+
+    fn stop(_cfg: &mut (), state: &mut TimedState, ctx: &mut Ctx<'_>) -> Result<()> {
+        let engine_elapsed = Duration::from(ctx.time() - ctx.start_time());
+        let wall = state
+            .wall_start
+            .map(|s| s.elapsed())
+            .unwrap_or(engine_elapsed);
+        let cycles = state.cycles;
+        let avg = Duration::from_nanos((wall.as_nanos() / u128::from(cycles.max(1))) as u64);
+        let speedup = if wall.as_secs_f64() > 0.0 {
+            engine_elapsed.as_secs_f64() / wall.as_secs_f64()
+        } else {
+            f64::INFINITY
+        };
+        eprintln!(
+            "{cycles} ticks processed in {wall:?}, {avg:?} average.   \
+             Covered {engine_elapsed:?} of engine time (x{speedup:.1})."
+        );
+        Ok(())
+    }
+}
+
 /// Buffers values and flushes them as a `Vec` on each fixed time boundary
 /// (`interval`), plus a final flush on the last cycle. `Cfg` = interval;
 /// `State` holds the next boundary and the pending buffer.
@@ -404,6 +501,36 @@ where
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<D>> {
         Ok(Tick::Value(cfg(input.0, input.1, input.2)))
+    }
+}
+
+/// Combines three streams with a *fallible* closure — the classic
+/// `try_trimap`. The `try_` counterpart to [`Join3`]: any returned `Err`
+/// propagates to abort the run with context. The closure is `Fn`, like
+/// [`Join3`].
+pub struct TryJoin3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
+
+impl<A, B, C, D, F> Op for TryJoin3<A, B, C, D, F>
+where
+    A: 'static,
+    B: 'static,
+    C: 'static,
+    D: Clone + 'static,
+    F: Fn(&A, &B, &C) -> Result<D> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B, &'a C);
+    type Out = D;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut F,
+        _state: &mut (),
+        input: (&A, &B, &C),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<D>> {
+        Ok(Tick::Value(cfg(input.0, input.1, input.2)?))
     }
 }
 
@@ -629,6 +756,283 @@ impl Op for RollingMean {
     }
 }
 
+/// Ring-buffer state for the rolling variance / std ops: the most recent
+/// `window` samples plus incrementally maintained count-weighted moments
+/// (Welford's algorithm with exact removal), so a tick is O(1). Mirrors the
+/// classic `RollingMomentStream` under `Weighting::Count`.
+pub struct RollingMomentState {
+    buffer: VecDeque<f64>,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Default for RollingMomentState {
+    fn default() -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            count: 0,
+            mean: 0.0,
+            m2: 0.0,
+        }
+    }
+}
+
+impl RollingMomentState {
+    /// Fold a new sample into the moments (Welford update).
+    fn add(&mut self, x: f64) {
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (x - mean_old) / self.count as f64;
+        self.m2 += (x - mean_old) * (x - self.mean);
+    }
+
+    /// Exact inverse of [`add`](Self::add): drop a previously added sample so a
+    /// sliding window can evict its oldest contribution in O(1). Like any
+    /// revert-based scheme this can accumulate floating-point error, so `m2` is
+    /// clamped at zero.
+    fn remove(&mut self, x: f64) {
+        // Removing the final contribution empties the accumulator; reset
+        // cleanly rather than dividing by a count at (or below) zero.
+        if self.count <= 1 {
+            self.count = 0;
+            self.mean = 0.0;
+            self.m2 = 0.0;
+            return;
+        }
+        let n = self.count as f64;
+        let mean_old = (n * self.mean - x) / (n - 1.0);
+        self.m2 -= (x - mean_old) * (x - self.mean);
+        if self.m2 < 0.0 {
+            self.m2 = 0.0;
+        }
+        self.mean = mean_old;
+        self.count -= 1;
+    }
+
+    /// Push a sample, evicting the oldest once the window is full.
+    fn push(&mut self, sample: f64, window: usize) {
+        self.buffer.push_back(sample);
+        self.add(sample);
+        if self.buffer.len() > window {
+            let oldest = self
+                .buffer
+                .pop_front()
+                .expect("invariant: len > window >= 1 implies non-empty");
+            self.remove(oldest);
+        }
+    }
+
+    /// Sample variance (ddof = 1) — the classic `Weighting::Count` convention.
+    /// Yields `0.0` while fewer than two samples are present (rather than NaN).
+    fn variance(&self) -> f64 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        self.m2 / (self.count as f64 - 1.0)
+    }
+}
+
+/// Rolling **sample** variance (ddof = 1) over the most recent `window` `f64`
+/// samples. Matches the classic statistics adapter's `Weighting::Count`
+/// convention: the divisor is `n - 1`, and the result is `0.0` until at least
+/// two samples are in the window. `Cfg` = window.
+pub struct RollingVar;
+
+#[op(build = rolling_var)]
+impl Op for RollingVar {
+    type Cfg = usize;
+    type State = RollingMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Rolling **sample** standard deviation over the most recent `window` `f64`
+/// samples — the square root of [`RollingVar`] under the same (ddof = 1)
+/// convention. Clamped at zero before the square root so a constant window
+/// (whose incremental variance can drift a hair negative) yields `0.0`, not
+/// `NaN`. `Cfg` = window.
+pub struct RollingStd;
+
+#[op(build = rolling_std)]
+impl Op for RollingStd {
+    type Cfg = usize;
+    type State = RollingMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(*input.0, (*cfg).max(1));
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// Monotonic-deque state for the rolling min & max ops. Holds `(index, value)`
+/// candidates kept monotonic in value, so the front is always the window
+/// extreme — O(1) amortised per tick. Mirrors the classic `RollingExtremeStream`
+/// (a monotonic deque, not a per-tick window scan, so the tick semantics match
+/// the classic node exactly even though a scan would give the same values).
+#[derive(Default)]
+pub struct RollingExtremeState {
+    deque: VecDeque<(u64, f64)>,
+    index: u64,
+}
+
+impl RollingExtremeState {
+    /// Push a sample and return the current window extreme. `is_min` selects
+    /// which back candidates the new sample dominates: for a minimum we drop
+    /// candidates `>= sample`, for a maximum `<= sample`.
+    fn push(&mut self, sample: f64, window: usize, is_min: bool) -> f64 {
+        let window = window.max(1) as u64;
+        let i = self.index;
+        self.index += 1;
+
+        // Drop back candidates the new sample dominates (they can never again
+        // be the extreme while it is in the window).
+        while let Some(&(_, back)) = self.deque.back() {
+            let dominated = if is_min {
+                back >= sample
+            } else {
+                back <= sample
+            };
+            if dominated {
+                self.deque.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.deque.push_back((i, sample));
+
+        // Drop the front once it falls outside the last `window` indices. The
+        // just-pushed `i` is always in window, so the deque never empties.
+        while let Some(&(idx, _)) = self.deque.front() {
+            if i - idx >= window {
+                self.deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.deque
+            .front()
+            .expect("invariant: deque holds the current sample")
+            .1
+    }
+}
+
+/// Rolling minimum over the most recent `window` `f64` samples, via a monotonic
+/// deque — O(1) amortised per tick. `Cfg` = window.
+pub struct RollingMin;
+
+#[op(build = rolling_min)]
+impl Op for RollingMin {
+    type Cfg = usize;
+    type State = RollingExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingExtremeState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, *cfg, true)))
+    }
+}
+
+/// Rolling maximum over the most recent `window` `f64` samples, via a monotonic
+/// deque — O(1) amortised per tick. `Cfg` = window.
+pub struct RollingMax;
+
+#[op(build = rolling_max)]
+impl Op for RollingMax {
+    type Cfg = usize;
+    type State = RollingExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingExtremeState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, *cfg, false)))
+    }
+}
+
+/// Ring-buffer state for the rolling median op — retains the most recent
+/// `window` samples and recomputes the median (sort) each tick, matching the
+/// classic recompute-per-tick `WindowStream` (the median has no cheap
+/// incremental form here).
+#[derive(Default)]
+pub struct RollingMedianState {
+    buffer: VecDeque<f64>,
+}
+
+impl RollingMedianState {
+    /// Push a sample (evicting the oldest past `window`) and return the median
+    /// of the retained samples. An even-sized window averages the two middle
+    /// values, so unit weights reproduce the ordinary median — the classic
+    /// `Weighting::Count` behaviour.
+    fn push(&mut self, sample: f64, window: usize) -> f64 {
+        self.buffer.push_back(sample);
+        while self.buffer.len() > window {
+            self.buffer.pop_front();
+        }
+        let mut sorted: Vec<f64> = self.buffer.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        }
+    }
+}
+
+/// Rolling median over the most recent `window` `f64` samples. Recomputed per
+/// tick (O(window)); an even window averages its two middle values, matching
+/// the classic statistics adapter's count-weighted median. `Cfg` = window.
+pub struct RollingMedian;
+
+#[op(build = rolling_median)]
+impl Op for RollingMedian {
+    type Cfg = usize;
+    type State = RollingMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut RollingMedianState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0, (*cfg).max(1))))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
@@ -801,6 +1205,31 @@ where
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         Ok(Tick::Value(cfg(input.0, input.1)))
+    }
+}
+
+/// Joins two streams with a *fallible* closure — the classic `try_bimap`. The
+/// `try_` counterpart to [`Join`]: any returned `Err` propagates to abort the
+/// run with context. Each upstream is independently active or passive (an
+/// engine dispatch concern); both values are always read. The closure is `Fn`,
+/// like [`Join`].
+pub struct TryJoin<A, B, C, F>(PhantomData<(A, B, C, F)>);
+
+impl<A, B, C, F> Op for TryJoin<A, B, C, F>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> Result<C> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B);
+    type Out = C;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
+        Ok(Tick::Value(cfg(input.0, input.1)?))
     }
 }
 

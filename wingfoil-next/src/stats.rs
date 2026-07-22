@@ -33,6 +33,26 @@ pub trait StatisticsOps {
 
     /// Mean over a sliding window of the last `window` values.
     fn rolling_mean(&self, window: usize) -> Stream<f64>;
+
+    /// Minimum over a sliding window of the last `window` values.
+    fn rolling_min(&self, window: usize) -> Stream<f64>;
+
+    /// Maximum over a sliding window of the last `window` values.
+    fn rolling_max(&self, window: usize) -> Stream<f64>;
+
+    /// Sample variance (ddof = 1) over a sliding window of the last `window`
+    /// values — the classic statistics adapter's count-weighted convention
+    /// (divisor `n - 1`, `0.0` until two samples are present).
+    fn rolling_var(&self, window: usize) -> Stream<f64>;
+
+    /// Sample standard deviation over a sliding window of the last `window`
+    /// values — the square root of [`rolling_var`](Self::rolling_var) under the
+    /// same (ddof = 1) convention.
+    fn rolling_std(&self, window: usize) -> Stream<f64>;
+
+    /// Median over a sliding window of the last `window` values (an even window
+    /// averages its two middle values).
+    fn rolling_median(&self, window: usize) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -58,5 +78,25 @@ impl StatisticsOps for Stream<f64> {
 
     fn rolling_mean(&self, window: usize) -> Stream<f64> {
         self.wire(|b, h| b.rolling_mean(h, window))
+    }
+
+    fn rolling_min(&self, window: usize) -> Stream<f64> {
+        self.wire(|b, h| b.rolling_min(h, window))
+    }
+
+    fn rolling_max(&self, window: usize) -> Stream<f64> {
+        self.wire(|b, h| b.rolling_max(h, window))
+    }
+
+    fn rolling_var(&self, window: usize) -> Stream<f64> {
+        self.wire(|b, h| b.rolling_var(h, window))
+    }
+
+    fn rolling_std(&self, window: usize) -> Stream<f64> {
+        self.wire(|b, h| b.rolling_std(h, window))
+    }
+
+    fn rolling_median(&self, window: usize) -> Stream<f64> {
+        self.wire(|b, h| b.rolling_median(h, window))
     }
 }

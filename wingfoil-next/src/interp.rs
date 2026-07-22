@@ -8,27 +8,33 @@
 //! monomorphized function* a compiled runner calls; the engines share
 //! semantics by construction.
 //!
-//! Execution model (and a known gap): each cycle this engine sweeps **all**
-//! nodes in wiring (topological) order and runs those whose active upstream
-//! ticked (or which the kernel marked dirty). Insertion order is always a
-//! valid topological order — the fluent API forces a stream to exist before
-//! it can be referenced — so this is glitch-free and fires each node exactly
-//! once after its upstreams, giving results **identical** to classic
-//! wingfoil. But classic instead propagates **breadth-first from the ticked
-//! sources through a dirty-list**, touching only nodes that can fire; the
-//! `O(N)`-per-cycle sweep here does not match that on large, sparsely-ticking
-//! graphs. Closing that (breadth-first dirty-list + arena value store) is a
-//! planned engine phase — see `docs/port-plan.md` "Phase 4.5"; it is a
-//! mechanism/performance change only, results stay identical.
+//! Execution model: a sparse dirty-list, matching classic wingfoil's
+//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
+//! each node gets an *active-downstream* adjacency list. Each cycle seeds a
+//! work set from the frontier — `always` busy-poll ops and kernel-marked
+//! callback-activated ops (tickers, `delay` pops, feedback source, channel
+//! replay) — then propagates the tick frontier forward: a node that ticks
+//! marks its active downstream neighbours dirty. The work set drains in
+//! ascending node **index** order (an index min-heap); wiring order is a valid
+//! topological order over *all* edges — active and passive, since the fluent
+//! API forces a stream to exist before it is referenced — so each node fires
+//! exactly once after everything it reads. This is glitch-free, gives results
+//! **identical** to classic wingfoil (and byte-identical to the previous
+//! full-index sweep it replaces), but per-cycle work is proportional to the
+//! nodes that actually fire, not the graph size `N`.
 //!
-//! Value slots are individual `Rc<RefCell<T>>`s (the arena is part of that
-//! same phase). `run` is fallible — it returns the first
+//! Value slots are individual `Rc<RefCell<T>>`s; the arena/SoA store is a
+//! deliberately separate follow-on (the slot boundary is frozen here so the
+//! catalog and adapter ports are not touched twice — see the Phase 4.5
+//! coupling note in the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,8 +51,8 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message};
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Sample, Throttle,
-    Ticker, Window, WindowState, WithTime,
+    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Print, Sample,
+    Throttle, Ticker, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -775,6 +781,67 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// The classic `try_trimap`: [`trimap`](Self::trimap) with a *fallible*
+    /// closure. Any `Err` propagates to abort the run with context; the
+    /// active/passive edge and dispatch semantics are identical to `trimap`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_trimap<A, B, C, D, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        c: Handle<C>,
+        c_active: bool,
+        f: F,
+    ) -> Handle<D>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&A, &B, &C) -> Result<D> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let c_slot = self.slot(c);
+        let out = self.new_slot(D::default());
+        let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(3);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
+        if c_active {
+            active.push(c.idx);
+        }
+        self.push_node(
+            active,
+            TryJoin3::<A, B, C, D, F>::ACTIVATION,
+            "try_trimap",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                let vc = c_slot.borrow();
+                match TryJoin3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
     pub fn filter<T: Clone + Default + 'static>(
         &mut self,
         src: Handle<T>,
@@ -919,6 +986,59 @@ impl Builder {
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
                 match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
+    /// The classic `try_bimap`: [`bimap`](Self::bimap) with a *fallible*
+    /// closure. Any `Err` propagates to abort the run with context; the
+    /// active/passive edge and dispatch semantics are identical to `bimap`.
+    pub fn try_bimap<A, B, C, F>(
+        &mut self,
+        a: Handle<A>,
+        a_active: bool,
+        b: Handle<B>,
+        b_active: bool,
+        f: F,
+    ) -> Handle<C>
+    where
+        A: 'static,
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&A, &B) -> Result<C> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let out = self.new_slot(C::default());
+        let cs = Self::cell(f, ());
+        let mut active = Vec::with_capacity(2);
+        if a_active {
+            active.push(a.idx);
+        }
+        if b_active {
+            active.push(b.idx);
+        }
+        self.push_node(
+            active,
+            TryJoin::<A, B, C, F>::ACTIVATION,
+            "try_bimap",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                match TryJoin::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(va);
                         drop(vb);
@@ -1111,6 +1231,94 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// The classic `print`: pass each value through unchanged while buffering
+    /// it, then print the whole buffer (`{value:?}` per line) at teardown.
+    /// Hand-written (not `#[op]`) because it carries a teardown hook.
+    pub fn print<T: Clone + Default + Debug + 'static>(&mut self, src: Handle<T>) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), Vec::<T>::new());
+        let cs2 = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Print::<T>::ACTIVATION,
+            "print",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Print::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        // Print buffers during the run and flushes at teardown (classic `Drop`).
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: print node just pushed");
+        node.teardown = Box::new(move |k| {
+            let (cfg, state) = &mut *cs2.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            Print::<T>::teardown(cfg, state, &mut ctx)
+        });
+        self.make_handle(idx)
+    }
+
+    /// The classic `timed`: pass `src` through unchanged, recording the
+    /// wall-clock start (`start` hook) and printing a performance summary at
+    /// `stop`. Hand-written (not `#[op]`) because it carries start + stop
+    /// hooks.
+    pub fn timed<T: Clone + Default + 'static>(&mut self, src: Handle<T>) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let cs = Self::cell((), TimedState::default());
+        let cs_start = cs.clone();
+        let cs_stop = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            Timed::<T>::ACTIVATION,
+            "timed",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match Timed::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs_start.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                Timed::<T>::start(cfg, state, &mut ctx)
+            }),
+        );
+        // `timed`'s summary prints at stop, after the last cycle.
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: timed node just pushed");
+        node.stop = Box::new(move |k| {
+            let (cfg, state) = &mut *cs_stop.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            Timed::<T>::stop(cfg, state, &mut ctx)
+        });
+        self.make_handle(idx)
+    }
+
     /// Open a feedback edge: returns a source stream (no upstreams, so the
     /// graph stays acyclic) plus the [`FeedbackSink`] that feeds it. Values
     /// sent through the sink are emitted by the source on the *next* cycle.
@@ -1229,6 +1437,37 @@ impl Builder {
     }
 
     pub fn build(self) -> Runner {
+        // Sparse-dispatch topology, precomputed once so per-cycle work is
+        // proportional to the nodes that fire, not the graph size `N`:
+        //
+        //   * `active_downs[u]` — the reverse of `active_ups`: the nodes a
+        //     ticking `u` marks dirty. Dispatch propagates the tick frontier
+        //     forward through these edges (passive edges are absent — read but
+        //     not triggering).
+        //   * `seed_nodes` — the frontier dispatch seeds each cycle: `always`
+        //     (busy-poll) and callback-activated nodes (tickers, feedback
+        //     source, channel/external, `delay`'s scheduled pop, …).
+        //     Precomputed so seeding is O(#sources), not O(N).
+        //
+        // Dispatch orders the per-cycle work set by ascending node **index**
+        // (see `Runner::run`). Wiring order is a valid topological order over
+        // *all* edges — active and passive — since the fluent API forces a
+        // stream to exist before it is referenced, so index order processes
+        // every node after everything it reads. That is what lets passive
+        // reads (e.g. `sample` of a `delay`ed slot) observe the same value the
+        // old full-index sweep produced, without tracking passive edges here.
+        let n = self.nodes.len();
+        let mut active_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut seed_nodes: Vec<usize> = Vec::new();
+        for i in 0..n {
+            for &u in &self.nodes[i].active_ups {
+                active_downs[u].push(i);
+            }
+            let act = self.nodes[i].activation;
+            if act.always || act.callback_activated() {
+                seed_nodes.push(i);
+            }
+        }
         Runner {
             nodes: self.nodes,
             slots: self.slots,
@@ -1239,14 +1478,43 @@ impl Builder {
             has_channel: self.has_channel,
             finished: self.finished,
             id: self.id,
+            active_downs,
+            seed_nodes,
+            dispatch: Dispatch::default(),
         }
     }
 }
 
-/// Executes a wired graph. Dispatch walks nodes in wiring (topological)
-/// order each cycle: a node runs when an active upstream ticked, or — only
-/// for ops that declared [`Activation::schedules`](crate::op::Activation) — when the
-/// kernel marked it dirty.
+/// Which dispatch strategy [`Runner::run`] uses. Both produce **identical**
+/// observable results; they differ only in per-cycle cost.
+///
+/// [`Sparse`](Dispatch::Sparse) — the default and production path — drives a
+/// dirty-list seeded from the tick frontier, so per-cycle work is proportional
+/// to the nodes that actually fire. [`FullSweep`](Dispatch::FullSweep) is the
+/// original `O(N)`-per-cycle topological sweep, retained as an executable
+/// reference oracle: `runner.with_dispatch(Dispatch::FullSweep)` re-runs the
+/// same graph under the old engine for differential parity checks and
+/// sparse-vs-`N` benchmarking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dispatch {
+    /// Sparse dirty-list (default): work ∝ active nodes.
+    #[default]
+    Sparse,
+    /// Full topological sweep: work ∝ graph size `N`. Reference oracle.
+    FullSweep,
+}
+
+/// Executes a wired graph. Dispatch is a sparse dirty-list — classic wingfoil's
+/// `dirty_nodes_by_layer` model — so per-cycle work is proportional to the
+/// nodes that actually fire, not the graph size `N`. Each cycle seeds a work
+/// set from the frontier ([`seed_nodes`](Runner::seed_nodes): `always`
+/// busy-poll ops and kernel-marked callback-activated ops), then propagates the
+/// tick frontier forward: a node that ticks marks its active downstream
+/// neighbours ([`active_downs`](Runner::active_downs)) dirty. The work set is
+/// drained in ascending node **index** order (wiring order, a valid topological
+/// order over active *and* passive edges), so each node fires exactly once
+/// after everything it reads — glitch-free, single-fire, and byte-identical to
+/// the previous full-index sweep.
 pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
@@ -1257,6 +1525,15 @@ pub struct Runner {
     has_channel: bool,
     finished: Rc<Cell<bool>>,
     id: u64,
+    /// `active_downs[i]` = nodes triggered when `i` ticks (reverse of
+    /// `active_ups`). Passive edges are deliberately absent — they are read but
+    /// do not propagate ticks.
+    active_downs: Vec<Vec<usize>>,
+    /// Frontier sources seeded each cycle: `always` ops and callback-activated
+    /// ops (the latter only fire when the kernel marks them dirty).
+    seed_nodes: Vec<usize>,
+    /// Which dispatch loop `run` uses. `Sparse` by default; see [`Dispatch`].
+    dispatch: Dispatch,
 }
 
 impl Runner {
@@ -1314,39 +1591,13 @@ impl Runner {
         }
 
         if first_err.is_none() {
-            let n = self.nodes.len();
-            let mut dirty = vec![false; n];
-            // Check `finished` *before* `begin_cycle` parks: a channel that
-            // received `EndOfStream` in the previous cycle ends the run now,
-            // rather than waiting for the bound while a live sender clone keeps
-            // the waker channel connected.
-            'run: while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-                for (i, node) in self.nodes.iter_mut().enumerate() {
-                    let due = node.activation.always
-                        || (node.activation.callback_activated() && dirty[i])
-                        || {
-                            let t = self.ticked.borrow();
-                            node.active_ups.iter().any(|&u| t[u])
-                        };
-                    let did = if due {
-                        match (node.cycle)(&mut kernel) {
-                            Ok(did) => did,
-                            Err(e) => {
-                                first_err =
-                                    Some(e.context(format!("node {i} ({}) cycle", node.label)));
-                                break 'run;
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    self.ticked.borrow_mut()[i] = did;
-                }
-                for t in self.ticked.borrow_mut().iter_mut() {
-                    *t = false;
-                }
-                kernel.end_cycle(&mut dirty);
-            }
+            // Both dispatch strategies produce identical observable results
+            // (see `Dispatch`); the sparse dirty-list is the default, the full
+            // sweep is retained as an executable reference oracle.
+            first_err = match self.dispatch {
+                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
+                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
+            };
         }
 
         // Cleanup always runs; a stop/teardown error only surfaces if no
@@ -1368,6 +1619,133 @@ impl Runner {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// Select the dispatch strategy for subsequent [`run`](Runner::run)s.
+    /// Defaults to [`Dispatch::Sparse`]; [`Dispatch::FullSweep`] is the
+    /// reference oracle (identical results, O(N) per cycle). Consumes and
+    /// returns `self` so it chains off [`build`](Builder::build):
+    /// `let mut r = g.build().with_dispatch(Dispatch::FullSweep);`.
+    pub fn with_dispatch(mut self, dispatch: Dispatch) -> Self {
+        self.dispatch = dispatch;
+        self
+    }
+
+    /// The sparse dirty-list dispatch loop. Seeds the tick frontier into an
+    /// index-ordered min-heap and drains it, propagating ticks through
+    /// [`active_downs`](Runner::active_downs); per-cycle work is proportional to
+    /// the nodes that fire. Returns the first cycle error, or `None` if the run
+    /// reached its bound cleanly.
+    fn run_cycles_sparse(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        let n = self.nodes.len();
+        let mut dirty = vec![false; n];
+        // Sparse dirty-list scratch, allocated once and reused every cycle:
+        //   * `queue` — the dirty work set, a min-heap on node index so it
+        //     drains in ascending (wiring/topological) order. Every active
+        //     downstream has a higher index than its upstream, so a node
+        //     enqueued while processing `i` is always popped after `i` — the
+        //     heap never revisits a processed node.
+        //   * `node_dirty[i]` — guards a recombine node against being enqueued
+        //     twice, so it fires exactly once per cycle.
+        //   * `fired` — every node cycled this tick; the per-cycle `ticked` and
+        //     `node_dirty` resets touch only these, not all `N`, so per-cycle
+        //     work stays proportional to the active node count.
+        let mut queue: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+        let mut node_dirty = vec![false; n];
+        let mut fired: Vec<usize> = Vec::new();
+        // Check `finished` *before* `begin_cycle` parks: a channel that received
+        // `EndOfStream` in the previous cycle ends the run now, rather than
+        // waiting for the bound while a live sender clone keeps the waker
+        // channel connected.
+        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+            // Seed the frontier: `always` ops fire unconditionally;
+            // callback-activated ops (tickers, `delay` pops, feedback source,
+            // channel replay) fire only when the kernel marked them dirty this
+            // cycle. Everything else reaches the queue by downstream
+            // propagation below.
+            for &i in &self.seed_nodes {
+                if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
+                    node_dirty[i] = true;
+                    queue.push(Reverse(i));
+                }
+            }
+            // Drain in ascending index order. A node that ticks marks its
+            // active downstream neighbours (all at higher indices, so still
+            // ahead in the drain) dirty — propagating the tick frontier, each
+            // node firing once after everything it reads.
+            while let Some(Reverse(i)) = queue.pop() {
+                let did = match (self.nodes[i].cycle)(kernel) {
+                    Ok(did) => did,
+                    Err(e) => {
+                        let label = self.nodes[i].label;
+                        return Some(e.context(format!("node {i} ({label}) cycle")));
+                    }
+                };
+                // `ticked[i]` must be visible to downstreams that read it
+                // (`merge` tie-break, `delay` first-value seeding) before they
+                // fire; index order guarantees every node `i` reads has already
+                // set its flag.
+                self.ticked.borrow_mut()[i] = did;
+                fired.push(i);
+                if did {
+                    for &d in &self.active_downs[i] {
+                        if !node_dirty[d] {
+                            node_dirty[d] = true;
+                            queue.push(Reverse(d));
+                        }
+                    }
+                }
+            }
+            // Reset only the nodes we touched (the queue is already drained
+            // empty), keeping the per-cycle reset sparse.
+            {
+                let mut t = self.ticked.borrow_mut();
+                for &i in &fired {
+                    t[i] = false;
+                    node_dirty[i] = false;
+                }
+            }
+            fired.clear();
+            kernel.end_cycle(&mut dirty);
+        }
+        None
+    }
+
+    /// The original full topological sweep, retained as a reference oracle:
+    /// every cycle it walks **all** nodes in wiring order and runs those whose
+    /// active upstream ticked (or which the kernel marked dirty) — `O(N)` per
+    /// cycle regardless of how many nodes fire. Observably identical to
+    /// [`run_cycles_sparse`](Runner::run_cycles_sparse); kept for differential
+    /// testing and benchmarking (see [`Dispatch`]).
+    fn run_cycles_full_sweep(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        let n = self.nodes.len();
+        let mut dirty = vec![false; n];
+        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                let due = node.activation.always
+                    || (node.activation.callback_activated() && dirty[i])
+                    || {
+                        let t = self.ticked.borrow();
+                        node.active_ups.iter().any(|&u| t[u])
+                    };
+                let did = if due {
+                    match (node.cycle)(kernel) {
+                        Ok(did) => did,
+                        Err(e) => {
+                            return Some(e.context(format!("node {i} ({}) cycle", node.label)));
+                        }
+                    }
+                } else {
+                    false
+                };
+                self.ticked.borrow_mut()[i] = did;
+            }
+            for t in self.ticked.borrow_mut().iter_mut() {
+                *t = false;
+            }
+            kernel.end_cycle(&mut dirty);
+        }
+        None
     }
 
     /// Current value of a node's output slot.

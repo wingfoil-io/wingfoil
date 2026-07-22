@@ -1,0 +1,5 @@
+error: graph functions must return `Stream<T>` (or a tuple of `Stream<T>`s)
+ --> tests/trybuild/missing_return_type.rs:6:5
+  |
+6 |     fn bad(g: &GraphBuilder) {
+  |     ^^

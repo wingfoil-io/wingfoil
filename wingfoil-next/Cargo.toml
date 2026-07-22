@@ -28,6 +28,13 @@ tokio = { version = "1", features = [
     "macros",
 ], optional = true }
 
+# `csv` feature: the serde-typed CSV replay source + file sink adapter. Optional
+# so the default build stays dependency-free. Versions mirror the classic
+# `wingfoil` crate's csv adapter.
+csv = { version = "1.4", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde-aux = { version = "4.7.0", optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -36,6 +43,7 @@ criterion = "0.8.1"
 [features]
 default = []
 async = ["dep:tokio", "dep:futures"]
+csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
 
 [[example]]
 name = "async_source"
@@ -48,3 +56,7 @@ required-features = ["async"]
 [[bench]]
 name = "fanout"
 harness = false
+
+[[example]]
+name = "csv_adapter"
+required-features = ["csv"]

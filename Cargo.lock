@@ -7683,7 +7683,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion",
+ "csv",
  "futures",
+ "serde",
+ "serde-aux",
  "tokio",
  "trybuild",
  "wingfoil",
