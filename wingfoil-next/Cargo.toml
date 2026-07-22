@@ -54,7 +54,7 @@ name = "produce_async_feed"
 required-features = ["async"]
 
 [[bench]]
-name = "fanout"
+name = "tiers"
 harness = false
 
 [[bench]]
