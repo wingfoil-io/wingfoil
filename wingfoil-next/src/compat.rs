@@ -23,11 +23,12 @@
 //! the full ~40-method surface is mechanical from here.
 
 use std::cell::RefCell;
+use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::{RunFor, RunMode};
+use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;
@@ -103,6 +104,24 @@ impl<T: 'static> Signal<T> {
         self.wrap(self.stream.fold(init, f))
     }
 
+    /// Pair each value with the current engine time: `(time, value)`.
+    pub fn with_time(&self) -> Signal<(NanoTime, T)>
+    where
+        T: Clone,
+    {
+        self.wrap(self.stream.with_time())
+    }
+
+    /// Emit the current engine time whenever this signal ticks.
+    pub fn ticked_at(&self) -> Signal<NanoTime> {
+        self.wrap(self.stream.ticked_at())
+    }
+
+    /// Emit elapsed engine time (`now - start`) whenever this signal ticks.
+    pub fn ticked_at_elapsed(&self) -> Signal<NanoTime> {
+        self.wrap(self.stream.ticked_at_elapsed())
+    }
+
     /// Run the graph to its bound, storing the runner for `peek_value`.
     ///
     /// Re-running is not supported: the shared [`GraphBuilder`] is consumed by
@@ -156,12 +175,63 @@ impl<T: Clone + Default + 'static> Signal<T> {
     pub fn accumulate(&self) -> Signal<Vec<T>> {
         self.wrap(self.stream.accumulate())
     }
+
+    /// Emit the current value whenever `trigger` ticks (passive read).
+    pub fn sample(&self, trigger: &Signal<()>) -> Signal<T> {
+        self.wrap(self.stream.sample(&trigger.stream))
+    }
+
+    /// Merge with another signal; the earliest-supplied ticked input wins.
+    pub fn merge(&self, other: &Signal<T>) -> Signal<T> {
+        self.wrap(self.stream.merge(&other.stream))
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    pub fn limit(&self, limit: u32) -> Signal<T> {
+        self.wrap(self.stream.limit(limit))
+    }
+
+    /// Rate-limit: emit at most once per `interval`.
+    pub fn throttle(&self, interval: Duration) -> Signal<T> {
+        self.wrap(self.stream.throttle(interval))
+    }
+
+    /// Buffer values and flush them as a `Vec` on each `interval` boundary
+    /// (and once more on the last cycle).
+    pub fn window(&self, interval: Duration) -> Signal<Vec<T>> {
+        self.wrap(self.stream.window(interval))
+    }
+
+    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
+    /// (and once more on the last cycle).
+    pub fn buffer(&self, capacity: usize) -> Signal<Vec<T>> {
+        self.wrap(self.stream.buffer(capacity))
+    }
 }
 
 impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
     /// Re-emit each value `delay` later.
     pub fn delay(&self, delay: Duration) -> Signal<T> {
         self.wrap(self.stream.delay(delay))
+    }
+
+    /// Suppress consecutive duplicate values (emit on change only).
+    pub fn distinct(&self) -> Signal<T> {
+        self.wrap(self.stream.distinct())
+    }
+}
+
+impl<T: Clone + Default + Sub<Output = T> + 'static> Signal<T> {
+    /// Emit the successive difference `value - previous`; quiet on the first.
+    pub fn difference(&self) -> Signal<T> {
+        self.wrap(self.stream.difference())
+    }
+}
+
+impl<T: Clone + Default + Not<Output = T> + 'static> Signal<T> {
+    /// Negate each value (`!value`) — sugar over `map`.
+    pub fn not(&self) -> Signal<T> {
+        self.wrap(self.stream.not())
     }
 }
 
