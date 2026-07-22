@@ -16,9 +16,14 @@
 //! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
 //!   detection) over sliding windows, behind the `augurs` feature. A pure-Rust
 //!   compute adapter (no service), so it is transform ops, not a source/sink.
+//! - [`cache`] — an internal, content-addressed on-disk result cache (no graph
+//!   nodes) behind the `cache` feature; the port of the classic
+//!   `wingfoil::adapters::cache` infrastructure that backs cached reads.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
+#[cfg(feature = "cache")]
+pub mod cache;
 #[cfg(feature = "csv")]
 pub mod csv;
 pub mod lines;
