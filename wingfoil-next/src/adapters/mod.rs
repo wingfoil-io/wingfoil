@@ -13,7 +13,12 @@
 //!   demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
+//! - [`cache`] — an internal, content-addressed on-disk result cache (no graph
+//!   nodes) behind the `cache` feature; the port of the classic
+//!   `wingfoil::adapters::cache` infrastructure that backs cached reads.
 
+#[cfg(feature = "cache")]
+pub mod cache;
 #[cfg(feature = "csv")]
 pub mod csv;
 pub mod lines;
