@@ -16,9 +16,12 @@
 //! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
 //!   detection) over sliding windows, behind the `augurs` feature. A pure-Rust
 //!   compute adapter (no service), so it is transform ops, not a source/sink.
+//! - [`common`] — dependency-free pure helpers shared by replay sources
+//!   (out-of-window row filtering, run-window time slicing); no I/O of its own.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
+pub mod common;
 #[cfg(feature = "csv")]
 pub mod csv;
 pub mod lines;
