@@ -373,18 +373,18 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 
 1. **statistics** — pure computation, the largest single chunk, huge test
    suite, zero IO. Best stress test of engine-owned state; do it first.
-   🟡 *started*: the statistics families are largely ported with parity
-   tests — exponential (`Ewma`, PerTick + clock-driven HalfLife,
-   `tests/statistics.rs`); count-windowed rolling
-   (`RollingSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` — monotonic-deque and
-   incremental-moment variants, `tests/statistics_rolling.rs`); cumulative
-   / unbounded (`CumulativeSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` —
-   Welford online moments for mean/var/std, `tests/statistics_cumulative.rs`);
-   and **time-windowed** rolling (`TimeWindowedSum`/`Mean`/`Min`/`Max`/`Var`/
-   `Std`/`Median` over a bounded `Window::Time`, count-weighted — incremental
-   sum/moments, monotonic-deque min/max, recompute median,
-   `tests/statistics_time_windowed.rs`). Remaining: the time-*weighted* moment
-   path (`Weighting::Time`, both cumulative and windowed).
+   ✅ *ported* (interpreted + fluent; `graph!`-macro rows are a mechanical
+   follow-up): the statistics adapter is fully covered with parity tests —
+   exponential EWMA (`Ewma`, PerTick + clock-driven HalfLife, `tests/statistics.rs`);
+   count-windowed rolling (`RollingSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` —
+   monotonic deque + incremental moments, `tests/statistics_rolling.rs`);
+   cumulative / unbounded, both count-weighted (`CumulativeSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` —
+   Welford online moments for mean/var/std, `tests/statistics_cumulative.rs`) and
+   time-weighted (`TimeWeighted{Mean,Var,Std}`, West's weighted-Welford); and
+   time-windowed (`Window::Time`), both count-weighted (`TimeWindowed*`) and
+   time-weighted (`TimeWeightedWindowed{Mean,Var,Std}` — West's weighted-Welford
+   with exact removal on eviction). Every `Weighting × Window` combination the
+   classic adapter offers is now ported.
 2. **cache**, **common** (WindowFilter) — small, pure.
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +

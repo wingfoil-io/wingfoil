@@ -114,6 +114,24 @@ pub trait StatisticsOps {
     /// Median over a bounded time window (an even count averages its two middle
     /// values). Recomputed per tick over the retained window.
     fn time_windowed_median(&self, window: Duration) -> Stream<f64>;
+
+    /// **Time-weighted** mean over a bounded time window: each in-window sample
+    /// is weighted by its in-effect Δt (from the graph clock), and samples age
+    /// out once older than `window`. Combines the Δt-weighting of
+    /// [`time_weighted_*`](Self::time_weighted_windowed_var) with a bounded time
+    /// window. O(1) amortised per tick (West's weighted-Welford with exact
+    /// removal on eviction).
+    fn time_weighted_windowed_mean(&self, window: Duration) -> Stream<f64>;
+
+    /// **Time-weighted** (population) variance over a bounded time window —
+    /// `m2 / Σ Δt` over the in-window, Δt-weighted samples. `0.0` until weight
+    /// has accumulated.
+    fn time_weighted_windowed_var(&self, window: Duration) -> Stream<f64>;
+
+    /// **Time-weighted** standard deviation over a bounded time window — the
+    /// square root of
+    /// [`time_weighted_windowed_var`](Self::time_weighted_windowed_var).
+    fn time_weighted_windowed_std(&self, window: Duration) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -222,5 +240,20 @@ impl StatisticsOps for Stream<f64> {
     fn time_windowed_median(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
         self.wire(move |b, h| b.time_windowed_median(h, window))
+    }
+
+    fn time_weighted_windowed_mean(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_weighted_windowed_mean(h, window))
+    }
+
+    fn time_weighted_windowed_var(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_weighted_windowed_var(h, window))
+    }
+
+    fn time_weighted_windowed_std(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_weighted_windowed_std(h, window))
     }
 }
