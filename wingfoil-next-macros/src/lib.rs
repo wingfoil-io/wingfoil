@@ -93,7 +93,10 @@
 //! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
 //! `.join(&other, f)`, `.delay(duration)`; statistics (on `f64` streams)
 //! `.ewma(decay)` / `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)`,
-//! `.rolling_sum(window)`, `.rolling_mean(window)`; sugar `.count()` and
+//! `.rolling_sum(window)`, `.rolling_mean(window)`; stateless / single-input
+//! `.distinct()`, `.difference()`, `.limit(n)`, `.inspect(f)`,
+//! `.map_filter(f)`, `.with_time()`, `.ticked_at()`, `.ticked_at_elapsed()`;
+//! sugar `.count()` and
 //! `.accumulate()`; and bounded repetition `.map_n(N, f)` (chain `map` N
 //! times) / `.fan(N, |s| <sub-chain>)` (N parallel copies of a sub-chain,
 //! merged). `map_n` / `fan` counts must be integer literals so the unrolled
@@ -144,6 +147,15 @@ enum OpKind {
     Ewma,
     RollingSum,
     RollingMean,
+    // Stateless / single-input ops brought into the compiled path.
+    Distinct,
+    Difference,
+    Limit,
+    Inspect,
+    MapFilter,
+    WithTime,
+    TickedAt,
+    TickedAtElapsed,
 }
 
 /// The shape of an op's `Op::In` tuple — how the cycle call assembles its
@@ -199,6 +211,18 @@ enum ValueSeed {
     /// local (fold seeds its slot with `init`, matching `interp.rs` which does
     /// `new_slot(init.clone())`). Requires the op to keep a `__state` local.
     CloneState,
+    /// `let mut v = (NanoTime::ZERO, Clone::clone(&<upstream value>));` — the
+    /// `with_time` slot seed. `interp.rs` seeds it with
+    /// `(NanoTime::ZERO, src_slot.borrow().clone())`: the engine clock is
+    /// `ZERO` before the first tick (== `NanoTime::default()`), paired with the
+    /// upstream's *own* seed value (not `T::default()`, which would drift when
+    /// the upstream is a `fold` with a non-default init). Reads the upstream's
+    /// already-declared `__v_<up>` local, so it must appear after it in the
+    /// setup order (nodes are emitted topologically, so it does). When the
+    /// upstream is an `Input` (nested only, where `__v_<input>` is not in scope
+    /// at setup) it falls back to `Default` — the island's *observable* pre-tick
+    /// value is the outer graph's `Default` composite-slot seed regardless.
+    WithTimeUpstream,
 }
 
 /// Which of an op's upstream `refs` are *active* (propagate ticks / appear in
@@ -444,6 +468,127 @@ impl OpKind {
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Suppresses consecutive duplicates. `State = Option<T>` (seeded
+            // `None`), value slot seeded `Out::default()` by `register_op1`.
+            OpKind::Distinct => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Distinct<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::Default(quote! { ::core::option::Option }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Successive difference. `State = Option<T>` (previous value).
+            OpKind::Difference => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Difference<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::Default(quote! { ::core::option::Option }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Passes the first `limit` values then stays quiet. `Cfg = u32`
+            // (the limit), `State = u32` (count emitted, seeded 0).
+            OpKind::Limit => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Limit<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { u32 }),
+                },
+                state_init: StateInit::Default(quote! { u32 }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Side-effecting tap that passes its value through. The observer
+            // closure is the config (like Map).
+            OpKind::Inspect => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::Inspect<_, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: Some(0),
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Map + filter in one pass: the closure returns `(B, bool)`. The
+            // closure is the config (like Map).
+            OpKind::MapFilter => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::MapFilter<_, _, _> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: Some(0),
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Pairs each value with the engine time: emits `(NanoTime, T)`.
+            // Stateless, but its slot seed is *not* `Default` — see
+            // `ValueSeed::WithTimeUpstream`.
+            OpKind::WithTime => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::WithTime<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::WithTimeUpstream,
+                edges: Edges::AllActive,
+            },
+            // Emits the engine time whenever the upstream ticks (value ignored).
+            OpKind::TickedAt => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::TickedAt<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Emits elapsed engine time (`now - start`) on each upstream tick.
+            OpKind::TickedAtElapsed => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::TickedAtElapsed<_> },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::None,
+                state_init: StateInit::None,
                 value_seed: ValueSeed::Default,
                 edges: Edges::AllActive,
             },
@@ -856,6 +1001,39 @@ impl ChainWalker {
                 expect_arity(method, args, 1)?;
                 self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
             }
+            // Stateless / single-input catalog ops.
+            "distinct" => {
+                expect_arity(method, args, 0)?;
+                self.push(name, OpKind::Distinct, vec![cur], vec![])
+            }
+            "difference" => {
+                expect_arity(method, args, 0)?;
+                self.push(name, OpKind::Difference, vec![cur], vec![])
+            }
+            "limit" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::Limit, vec![cur], vec![args[0].clone()])
+            }
+            "inspect" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::Inspect, vec![cur], vec![args[0].clone()])
+            }
+            "map_filter" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::MapFilter, vec![cur], vec![args[0].clone()])
+            }
+            "with_time" => {
+                expect_arity(method, args, 0)?;
+                self.push(name, OpKind::WithTime, vec![cur], vec![])
+            }
+            "ticked_at" => {
+                expect_arity(method, args, 0)?;
+                self.push(name, OpKind::TickedAt, vec![cur], vec![])
+            }
+            "ticked_at_elapsed" => {
+                expect_arity(method, args, 0)?;
+                self.push(name, OpKind::TickedAtElapsed, vec![cur], vec![])
+            }
             // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
             // `map`s; `fan(N, |s| <sub-chain>)` builds N copies of a sub-chain
             // rooted at the current tail and merges them. Both take a literal
@@ -928,7 +1106,9 @@ impl ChainWalker {
                     format!(
                         "unknown combinator `.{other}(..)`; expected one of: map, map_n, fan, \
                          filter, fold, sample, merge, join, delay, count, accumulate, ewma, \
-                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
+                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean, distinct, \
+                         difference, limit, inspect, map_filter, with_time, ticked_at, \
+                         ticked_at_elapsed"
                     ),
                 ));
             }
@@ -1508,7 +1688,7 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
 
 /// cfg + state + value slot declarations for one node, driven by the op's
 /// [`OpInfo`] (`cfg_init` / `state_init` / `unit_output`).
-fn node_decl(node: &NodeDef) -> TokenStream2 {
+fn node_decl(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
     // Inputs have no storage here — their value/tick are read from the outer
     // graph in the `nested` prologue.
     if node.op == OpKind::Input {
@@ -1572,6 +1752,25 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
             ValueSeed::CloneState => {
                 quote! { let mut #value = ::core::clone::Clone::clone(&#state); }
             }
+            ValueSeed::WithTimeUpstream => {
+                // Mirror interp.rs `new_slot((NanoTime::ZERO, src.clone()))`:
+                // ZERO clock (== the pre-first-tick engine time) paired with
+                // the upstream's own seed. An `Input` upstream has no `__v_`
+                // local in scope at setup (nested reads it per-cycle), so fall
+                // back to `Default` there.
+                let up = &def.nodes[node.refs[0]];
+                let time = quote! { ::wingfoil_next::wingfoil::NanoTime::ZERO };
+                match up.op {
+                    OpKind::Input => quote! { let mut #value = Default::default(); },
+                    OpKind::Ticker => quote! { let mut #value = (#time, ()); },
+                    _ => {
+                        let up_v = format_ident!("__v_{}", up.name);
+                        quote! {
+                            let mut #value = (#time, ::core::clone::Clone::clone(&#up_v));
+                        }
+                    }
+                }
+            }
         }
     };
     // Delay keeps an extra engine-level `__seeded` flag so it can store its
@@ -1597,7 +1796,7 @@ fn interleaved_setup(def: &GraphDef) -> Vec<TokenStream2> {
         while let Some((_, stmt)) = passthrough.next_if(|(pos, _)| *pos <= i) {
             setup.push(quote! { #stmt });
         }
-        setup.push(node_decl(node));
+        setup.push(node_decl(def, node));
     }
     for (_, stmt) in passthrough {
         setup.push(quote! { #stmt });
