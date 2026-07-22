@@ -4,12 +4,19 @@
 //! the new `Op`/`Builder` engine. This is the compatibility surface that
 //! lets existing code (and the Python bindings) migrate unchanged.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::compat::{constant, ticker};
+use wingfoil_next::compat::{Signal, constant, ticker};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
+
+/// A classic `f64` counter: 1.0, 2.0, 3.0, ... one value per 100ns tick.
+fn counter_f64() -> Signal<f64> {
+    ticker(Duration::from_nanos(100)).count().map(|i| *i as f64)
+}
 
 /// The canonical classic snippet: count a ticker and read the result.
 #[test]
@@ -233,4 +240,192 @@ fn classic_buffer_flushes_by_capacity() {
         .accumulate();
     buffered.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(vec![vec![1, 2], vec![3, 4], vec![5]], buffered.peek_value());
+}
+
+// --- Phase-6 facade expansion: transforms, joins, sinks, statistics ---------
+
+/// `try_map` applies a fallible closure; the `Ok` path passes values through.
+#[test]
+fn classic_try_map_ok_path_passes_values() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let doubled = count
+        .try_map(|i| Ok::<u64, anyhow::Error>(i * 2))
+        .accumulate();
+    doubled.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![2, 4, 6, 8], doubled.peek_value());
+}
+
+/// `try_map` returning `Err` aborts the run with context.
+#[test]
+fn classic_try_map_err_aborts_run() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let checked = count.try_map(|i| {
+        if *i >= 3 {
+            anyhow::bail!("value too large: {i}");
+        }
+        Ok(*i)
+    });
+    let err = checked
+        .run(HISTORICAL, RunFor::Cycles(5))
+        .expect_err("try_map Err must abort the run");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("too large"), "unexpected error: {msg}");
+}
+
+/// `map_filter` maps and filters in one pass: `(value, emit?)`.
+#[test]
+fn classic_map_filter_maps_and_filters() {
+    // counts 1..=6 -> keep evens, emit their halves: 2->1, 4->2, 6->3
+    let count = ticker(Duration::from_nanos(100)).count();
+    let kept = count
+        .map_filter(|i| (i / 2, i.is_multiple_of(2)))
+        .accumulate();
+    kept.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![1, 2, 3], kept.peek_value());
+}
+
+/// `join` combines two active signals, ticking when either ticks.
+#[test]
+fn classic_join_combines_two_signals() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let tens = count.map(|i| i * 10);
+    let summed = count.join(&tens, |a, b| a + b).accumulate();
+    summed.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    // count i and 10*i tick together each cycle: i + 10i = 11i
+    assert_eq!(vec![11, 22, 33, 44], summed.peek_value());
+}
+
+/// `join_passive` triggers on the left signal; the right is read passively.
+#[test]
+fn classic_join_passive_reads_right_passively() {
+    let tk = ticker(Duration::from_nanos(100));
+    let count = tk.count();
+    let value = count.map(|i| i * 100);
+    // trigger fires on even counts only (cycles 2,4,6)
+    let trigger = tk.filter(&count.map(|i| i.is_multiple_of(2)));
+    let sampled = trigger.join_passive(&value, |_, v| *v).accumulate();
+    sampled.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![200, 400, 600], sampled.peek_value());
+}
+
+/// `join3` combines three active signals.
+#[test]
+fn classic_join3_combines_three_signals() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let tens = count.map(|i| i * 10);
+    let hundreds = count.map(|i| i * 100);
+    let summed = count
+        .join3(&tens, &hundreds, |a, b, c| a + b + c)
+        .accumulate();
+    summed.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    // i + 10i + 100i = 111i
+    assert_eq!(vec![111, 222, 333], summed.peek_value());
+}
+
+/// `try_join` combines two signals via a fallible closure (Ok path).
+#[test]
+fn classic_try_join_ok_path() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let tens = count.map(|i| i * 10);
+    let summed = count
+        .try_join(&tens, |a, b| Ok::<u64, anyhow::Error>(a + b))
+        .accumulate();
+    summed.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![11, 22, 33], summed.peek_value());
+}
+
+/// `map_n` chains the same map `n` times.
+#[test]
+fn classic_map_n_chains_map() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    // add 1 three times: i -> i + 3
+    let bumped = count.map_n(3, |i| i + 1).accumulate();
+    bumped.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![4, 5, 6], bumped.peek_value());
+}
+
+/// `inspect` observes each value and passes it through unchanged.
+#[test]
+fn classic_inspect_taps_values() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen_tap = seen.clone();
+    let count = ticker(Duration::from_nanos(100)).count();
+    let tapped = count
+        .inspect(move |v| seen_tap.borrow_mut().push(*v))
+        .accumulate();
+    tapped.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], tapped.peek_value());
+    assert_eq!(vec![1, 2, 3], *seen.borrow());
+}
+
+/// `for_each` runs a fallible sink on each tick.
+#[test]
+fn classic_for_each_runs_sink() {
+    let sum = Rc::new(RefCell::new(0u64));
+    let sum_sink = sum.clone();
+    let count = ticker(Duration::from_nanos(100)).count();
+    let sink = count.for_each(move |v| {
+        *sum_sink.borrow_mut() += *v;
+        Ok(())
+    });
+    sink.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    // 1 + 2 + 3 + 4
+    assert_eq!(10, *sum.borrow());
+}
+
+/// `finally` runs once at teardown, observing the last value.
+#[test]
+fn classic_finally_runs_at_teardown() {
+    let last = Rc::new(RefCell::new(0u64));
+    let last_sink = last.clone();
+    let count = ticker(Duration::from_nanos(100)).count();
+    let done = count.finally(move |v| {
+        *last_sink.borrow_mut() = *v;
+        Ok(())
+    });
+    done.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(5, *last.borrow());
+}
+
+/// `fan` splits into parallel branches and merges them back. Here two disjoint
+/// branches (evens, odds) reconstruct the original sequence.
+#[test]
+fn classic_fan_splits_and_merges() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let fanned = count
+        .fan(2, |branch: Signal<u64>| {
+            let cond = branch.map(|i| i.is_multiple_of(2));
+            branch.filter(&cond)
+        })
+        .accumulate();
+    fanned.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    // both branches filter to evens, merge is idempotent here -> 2, 4
+    assert_eq!(vec![2, 4], fanned.peek_value());
+}
+
+/// `rolling_sum` over the f64 counter: window 3 of 1,2,3,4,5.
+#[test]
+fn classic_rolling_sum_window() {
+    let sums = counter_f64().rolling_sum(3).accumulate();
+    sums.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    // windows: {1},{1,2},{1,2,3},{2,3,4},{3,4,5} -> 1,3,6,9,12
+    assert_eq!(vec![1.0, 3.0, 6.0, 9.0, 12.0], sums.peek_value());
+}
+
+/// `rolling_mean` over the f64 counter: window 2.
+#[test]
+fn classic_rolling_mean_window() {
+    let means = counter_f64().rolling_mean(2).accumulate();
+    means.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    // windows: {1},{1,2},{2,3},{3,4} -> 1, 1.5, 2.5, 3.5
+    assert_eq!(vec![1.0, 1.5, 2.5, 3.5], means.peek_value());
+}
+
+/// `ewma_per_tick` seeds on the first sample then blends with `alpha`.
+#[test]
+fn classic_ewma_per_tick_blends() {
+    let ewma = counter_f64().ewma_per_tick(0.5).accumulate();
+    ewma.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    // seed 1; then 0.5*2 + 0.5*1 = 1.5; then 0.5*3 + 0.5*1.5 = 2.25
+    assert_eq!(vec![1.0, 1.5, 2.25], ewma.peek_value());
 }
