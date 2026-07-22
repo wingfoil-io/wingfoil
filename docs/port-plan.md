@@ -380,11 +380,14 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    incremental-moment variants, `tests/statistics_rolling.rs`); cumulative
    / unbounded (`CumulativeSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` —
    Welford online moments for mean/var/std, `tests/statistics_cumulative.rs`);
-   and **time-windowed** rolling (`TimeWindowedSum`/`Mean`/`Min`/`Max`/`Var`/
+   **time-windowed** rolling (`TimeWindowedSum`/`Mean`/`Min`/`Max`/`Var`/
    `Std`/`Median` over a bounded `Window::Time`, count-weighted — incremental
    sum/moments, monotonic-deque min/max, recompute median,
-   `tests/statistics_time_windowed.rs`). Remaining: the time-*weighted* moment
-   path (`Weighting::Time`, both cumulative and windowed).
+   `tests/statistics_time_windowed.rs`); and cumulative time-weighted moments
+   (`TimeWeightedMean`/`Var`/`Std` — West's weighted-Welford, each sample
+   weighted by its in-effect Δt off the graph clock,
+   `tests/statistics_time_weighted.rs`). Remaining: the time-weighted *windowed*
+   moment path (`Weighting::Time` over a bounded `Window::Time`).
 2. **cache**, **common** (WindowFilter) — small, pure.
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +

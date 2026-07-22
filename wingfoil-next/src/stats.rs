@@ -114,6 +114,22 @@ pub trait StatisticsOps {
     /// Median over a bounded time window (an even count averages its two middle
     /// values). Recomputed per tick over the retained window.
     fn time_windowed_median(&self, window: Duration) -> Stream<f64>;
+
+    /// Cumulative **time-weighted** mean over every value seen so far: each
+    /// sample is weighted by the interval it was in effect (Δt read from the
+    /// graph clock), so a value that persisted longer counts proportionally
+    /// more. The most recent sample is credited only once the next tick
+    /// advances the clock; the first sample seeds the mean.
+    fn time_weighted_mean(&self) -> Stream<f64>;
+
+    /// Cumulative **time-weighted** (population) variance over every value seen
+    /// so far — `m2 / Σ Δt`, maintained incrementally with West's
+    /// weighted-Welford moments. `0.0` until weight has accumulated.
+    fn time_weighted_var(&self) -> Stream<f64>;
+
+    /// Cumulative **time-weighted** standard deviation over every value seen so
+    /// far — the square root of [`time_weighted_var`](Self::time_weighted_var).
+    fn time_weighted_std(&self) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -222,5 +238,17 @@ impl StatisticsOps for Stream<f64> {
     fn time_windowed_median(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
         self.wire(move |b, h| b.time_windowed_median(h, window))
+    }
+
+    fn time_weighted_mean(&self) -> Stream<f64> {
+        self.wire(|b, h| b.time_weighted_mean(h))
+    }
+
+    fn time_weighted_var(&self) -> Stream<f64> {
+        self.wire(|b, h| b.time_weighted_var(h))
+    }
+
+    fn time_weighted_std(&self) -> Stream<f64> {
+        self.wire(|b, h| b.time_weighted_std(h))
     }
 }
