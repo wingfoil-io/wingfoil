@@ -1,0 +1,5 @@
+error: graph functions cannot be generic
+ --> tests/trybuild/generic_graph_fn.rs:6:11
+  |
+6 |     fn bad<T>(g: &GraphBuilder) -> Stream<u64> {
+  |           ^

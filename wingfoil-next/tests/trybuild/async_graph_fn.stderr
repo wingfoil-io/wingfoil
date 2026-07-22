@@ -1,0 +1,5 @@
+error: graph functions must be plain `fn`s
+ --> tests/trybuild/async_graph_fn.rs:6:5
+  |
+6 |     async fn bad(g: &GraphBuilder) -> Stream<u64> {
+  |     ^^^^^

@@ -21,6 +21,7 @@
 //! [`Runner`] is identical).
 
 use std::cell::{Cell, RefCell};
+use std::fmt::Debug;
 use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
@@ -363,6 +364,34 @@ pub trait StreamOps<T>: Sized {
         D: Clone + Default + 'static,
         F: Fn(&T, &B, &C) -> D + 'static;
 
+    /// Combine with another stream via a *fallible* closure — the `try_`
+    /// counterpart to [`join`](StreamOps::join). Both inputs active; a returned
+    /// `Err` aborts the run with context (the classic `try_bimap`).
+    fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static;
+
+    /// [`join_passive`](StreamOps::join_passive) with a *fallible* closure:
+    /// this stream triggers the combine, `other` is read passively, and a
+    /// returned `Err` aborts the run with context.
+    fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static;
+
+    /// Combine three streams (all active) via a *fallible* closure — the
+    /// `try_` counterpart to [`join3`](StreamOps::join3). A returned `Err`
+    /// aborts the run with context (the classic `try_trimap`).
+    fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> Result<D> + 'static;
+
     /// Emit only when `condition`'s current value is true.
     fn filter(&self, condition: &Stream<bool>) -> Stream<T>
     where
@@ -439,6 +468,18 @@ pub trait StreamOps<T>: Sized {
     fn not(&self) -> Stream<T>
     where
         T: Clone + Default + Not<Output = T> + 'static;
+
+    /// Pass each value through unchanged while buffering it, then print the
+    /// whole buffer (`{value:?}` per line) at teardown (the classic `print`).
+    fn print(&self) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static;
+
+    /// Pass each value through unchanged, printing a performance summary at
+    /// the end of the run (the classic `timed`).
+    fn timed(&self) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
 
     /// Re-emit each value `delay` later.
     fn delay(&self, delay: Duration) -> Stream<T>
@@ -553,6 +594,37 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|bld, h| bld.trimap(h, true, bh, true, ch, true, f))
     }
 
+    fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static,
+    {
+        let other = other.handle();
+        self.wire(|b, h| b.try_bimap(h, true, other, true, f))
+    }
+
+    fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static,
+    {
+        let other = other.handle();
+        self.wire(|b, h| b.try_bimap(h, true, other, false, f))
+    }
+
+    fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> Result<D> + 'static,
+    {
+        let (bh, ch) = (b.handle(), c.handle());
+        self.wire(|bld, h| bld.try_trimap(h, true, bh, true, ch, true, f))
+    }
+
     fn filter(&self, condition: &Stream<bool>) -> Stream<T>
     where
         T: Clone + Default + 'static,
@@ -657,6 +729,20 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         T: Clone + Default + Not<Output = T> + 'static,
     {
         self.map(|v| !v.clone())
+    }
+
+    fn print(&self) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static,
+    {
+        self.wire(|b, h| b.print(h))
+    }
+
+    fn timed(&self) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        self.wire(|b, h| b.timed(h))
     }
 
     fn delay(&self, delay: Duration) -> Stream<T>
