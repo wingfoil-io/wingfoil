@@ -8,9 +8,9 @@ name: security.audit
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "next" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "next" ]
   schedule:
     # Mondays 06:00 UTC — catch newly disclosed advisories against pinned deps.
     - cron: "0 6 * * 1"
