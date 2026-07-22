@@ -95,10 +95,19 @@ pub fn replay_lines_scheduled(
     for (i, line) in BufReader::new(file).lines().enumerate() {
         let line =
             line.with_context(|| format!("lines adapter: reading line {i} of {}", path.display()))?;
-        // `step * i` on the u32 tick index keeps timestamps non-decreasing (the
-        // channel receiver requires it); a distinct `step` per record yields
-        // one line per burst, a zero step groups them.
-        sender.send_at(line, base + step * (i as u32));
+        // A distinct `step` per record yields one line per burst, a zero step
+        // groups them; either way timestamps stay non-decreasing (the channel
+        // receiver requires it). `try_from` turns the u32 tick-index ceiling
+        // into a clear error rather than a silent wrap that would rewind the
+        // clock and fail the run far from its cause.
+        let tick = u32::try_from(i).with_context(|| {
+            format!(
+                "lines adapter: {} has more lines than the {} the replay clock can schedule",
+                path.display(),
+                u32::MAX
+            )
+        })?;
+        sender.send_at(line, base + step * tick);
     }
     // Queue the end-of-stream so the historical receiver stops collecting.
     sender.close();
@@ -111,30 +120,50 @@ pub fn replay_lines_scheduled(
 /// sources have nothing to busy-poll in a historical replay).
 ///
 /// Reads whatever the file holds at `poll` time, line by line; a line that is
-/// not yet terminated by a newline, or a read error, yields no tick. This is a
-/// deliberately minimal tail (it does not follow rotations) — the deterministic
-/// path is [`replay_lines`]. Returns an error if the file cannot be opened.
+/// not yet terminated by a newline, or a read error, yields no tick. A line
+/// that straddles a poll boundary (its bytes arrive across several polls) is
+/// **reassembled**: the partial bytes are held until the terminating newline
+/// arrives, then emitted whole — never in fragments and never dropped. This is
+/// a deliberately minimal tail (it does not follow rotations) — the
+/// deterministic path is [`replay_lines`]. Returns an error if the file cannot
+/// be opened.
 pub fn tail_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<Burst<String>>> {
     let path = path.as_ref();
     let file = File::open(path)
         .with_context(|| format!("lines adapter: opening tail file {}", path.display()))?;
-    let reader = Rc::new(RefCell::new(BufReader::new(file)));
+    // `read_line` consumes whatever bytes are available even when no newline is
+    // present, so a line whose bytes span multiple polls must be accumulated in
+    // `pending` across calls; a fresh buffer each poll would drop those bytes
+    // and later emit a corrupted remainder. `pending` carries them until the
+    // newline lands.
+    let state = Rc::new(RefCell::new((BufReader::new(file), String::new())));
     Ok(g.poll(move || {
-        let mut buf = String::new();
-        match reader.borrow_mut().read_line(&mut buf) {
-            // A complete, newline-terminated line: emit it (without the `\n`).
-            Ok(n) if n > 0 && buf.ends_with('\n') => {
-                buf.pop();
-                if buf.ends_with('\r') {
-                    buf.pop();
-                }
-                Some(Burst::from([buf]))
-            }
-            // EOF, a partial (un-terminated) trailing line, or a read error:
-            // nothing to emit this cycle.
-            _ => None,
-        }
+        let (reader, pending) = &mut *state.borrow_mut();
+        poll_line(reader, pending).map(|line| Burst::from([line]))
     }))
+}
+
+/// Read toward the next newline, accumulating partial bytes in `pending` across
+/// calls. Returns the completed line (its trailing `\n`, and any `\r`, stripped)
+/// once the terminator arrives, resetting `pending`; returns `None` on EOF, a
+/// still-unterminated line, or a read error — leaving the bytes read so far in
+/// `pending` for the next call. Factored out of [`tail_lines`] so the
+/// straddled-line reassembly is unit-testable without a realtime run.
+fn poll_line<R: BufRead>(reader: &mut R, pending: &mut String) -> Option<String> {
+    match reader.read_line(pending) {
+        // A complete, newline-terminated line: take it (stripping the line
+        // ending) and clear `pending` for the next line.
+        Ok(n) if n > 0 && pending.ends_with('\n') => {
+            pending.pop();
+            if pending.ends_with('\r') {
+                pending.pop();
+            }
+            Some(std::mem::take(pending))
+        }
+        // EOF, a partial (un-terminated) trailing line, or a read error:
+        // nothing to emit this cycle. Whatever was read stays in `pending`.
+        _ => None,
+    }
 }
 
 /// A line-oriented file sink — the outbound counterpart of [`replay_lines`].
@@ -203,4 +232,75 @@ where
             .with_context(|| format!("lines adapter: flushing {display}"))?;
         Ok(())
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::poll_line;
+    use std::collections::VecDeque;
+    use std::io::{BufReader, Read, Result as IoResult};
+
+    /// A reader that hands out preset chunks one `read` at a time; an empty
+    /// chunk yields `Ok(0)` (a momentary EOF), modelling a file still being
+    /// appended to — exactly the straddled-line case [`poll_line`] must
+    /// reassemble.
+    struct ChunkReader {
+        chunks: VecDeque<&'static [u8]>,
+    }
+
+    impl Read for ChunkReader {
+        fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+            match self.chunks.pop_front() {
+                Some(chunk) => {
+                    let n = chunk.len().min(buf.len());
+                    buf[..n].copy_from_slice(&chunk[..n]);
+                    Ok(n)
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    /// The regression this guards: `read_line` consumes the partial bytes even
+    /// with no newline, so a fresh-buffer-per-poll tail would drop "par" and
+    /// later emit a corrupted "tial". `poll_line` must hold the partial line and
+    /// emit it whole once the terminator arrives.
+    #[test]
+    fn poll_line_reassembles_a_line_split_across_polls() {
+        // "par" arrives, then a momentary EOF, then the rest "tial\n".
+        let mut reader = BufReader::new(ChunkReader {
+            chunks: VecDeque::from([&b"par"[..], &b""[..], &b"tial\n"[..]]),
+        });
+        let mut pending = String::new();
+
+        // First poll: only the partial "par" — nothing emitted, bytes retained.
+        assert_eq!(poll_line(&mut reader, &mut pending), None);
+        assert_eq!(pending, "par");
+
+        // Second poll: the rest lands and the whole line comes out intact.
+        assert_eq!(
+            poll_line(&mut reader, &mut pending),
+            Some("partial".to_string())
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn poll_line_strips_crlf_and_emits_each_line_once() {
+        let mut reader = BufReader::new(ChunkReader {
+            chunks: VecDeque::from([&b"alpha\r\nbeta\n"[..]]),
+        });
+        let mut pending = String::new();
+        assert_eq!(
+            poll_line(&mut reader, &mut pending),
+            Some("alpha".to_string())
+        );
+        assert_eq!(
+            poll_line(&mut reader, &mut pending),
+            Some("beta".to_string())
+        );
+        // Drained: no more complete lines.
+        assert_eq!(poll_line(&mut reader, &mut pending), None);
+        assert!(pending.is_empty());
+    }
 }

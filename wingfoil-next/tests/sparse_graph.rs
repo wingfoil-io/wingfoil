@@ -123,6 +123,82 @@ fn quiet_subgraph_is_not_cycled_on_unrelated_ticks() {
     );
 }
 
+/// Randomised differential parity: build many pseudo-random graphs and assert
+/// the sparse engine and the retained full-sweep oracle agree on every one. A
+/// single hand-wired graph (see `sparse_matches_full_sweep_oracle`) only covers
+/// the shapes we thought to write; this fuzzes the two engines against each
+/// other across a broad mix of schedulers, passive edges, tie-broken merges,
+/// stateful folds/delays and wide fan-in, which is exactly what the oracle was
+/// retained for. A deterministic LCG seeds each graph, so a failure reproduces
+/// from its printed seed.
+#[test]
+fn sparse_matches_full_sweep_across_random_graphs() {
+    // Build the *same* graph structure from a seed (the LCG is deterministic),
+    // returning an accumulated series to compare. Kept to `u64` streams so every
+    // combinator stays well-typed.
+    fn build_random(g: &GraphBuilder, seed: u64) -> Stream<Vec<u64>> {
+        let mut rng = seed;
+        let mut next = || {
+            // A standard 64-bit LCG (Knuth's constants); we use the high bits.
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            rng >> 33
+        };
+
+        // A handful of independent schedulers at distinct periods, so islands
+        // tick on different cycles — the case sparse dispatch is most about.
+        let mut pool: Vec<Stream<u64>> = vec![
+            g.ticker(Duration::from_nanos(1 + next() % 4)).count(),
+            g.ticker(Duration::from_nanos(1 + next() % 6)).count(),
+            g.ticker(Duration::from_nanos(1 + next() % 9)).count(),
+        ];
+
+        let steps = 8 + next() % 12;
+        for _ in 0..steps {
+            let ai = next() as usize % pool.len();
+            let bi = next() as usize % pool.len();
+            let k = 1 + next() % 7;
+            let s = match next() % 8 {
+                0 => pool[ai].map(move |v| v.wrapping_add(k)),
+                1 => pool[ai].map(move |v| v.wrapping_mul(k)),
+                2 => pool[ai].delay(Duration::from_nanos(1 + next() % 4)),
+                3 => pool[ai].fold(0u64, |acc, v| *acc = acc.wrapping_add(*v)),
+                4 => pool[ai].merge(&pool[bi]),
+                5 => pool[ai].join(&pool[bi], |x, y| x.wrapping_add(*y)),
+                6 => {
+                    let trig = g.ticker(Duration::from_nanos(1 + next() % 3));
+                    pool[ai].sample(&trig)
+                }
+                _ => {
+                    let cond = pool[ai].map(|v| v.is_multiple_of(2));
+                    pool[bi].filter(&cond)
+                }
+            };
+            pool.push(s);
+        }
+        pool.last().expect("pool seeded non-empty").accumulate()
+    }
+
+    for seed in 0..64u64 {
+        let g_sparse = GraphBuilder::new();
+        let h_sparse = build_random(&g_sparse, seed);
+        let mut r_sparse = g_sparse.build();
+        r_sparse.run(HISTORICAL, RunFor::Cycles(40)).unwrap();
+
+        let g_full = GraphBuilder::new();
+        let h_full = build_random(&g_full, seed);
+        let mut r_full = g_full.build().with_dispatch(Dispatch::FullSweep);
+        r_full.run(HISTORICAL, RunFor::Cycles(40)).unwrap();
+
+        assert_eq!(
+            r_sparse.value(&h_sparse),
+            r_full.value(&h_full),
+            "sparse and full-sweep disagree on random graph seed {seed}"
+        );
+    }
+}
+
 /// Correctness at scale: a wide fan-out where every branch is a distinct
 /// arithmetic transform of one shared counter. The engine must fire each branch
 /// once per cycle after the shared source, glitch-free, and land the right
