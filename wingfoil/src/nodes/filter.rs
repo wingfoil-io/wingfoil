@@ -23,9 +23,8 @@ impl<T: Element> MutableNode for FilterStream<T> {
 
 impl<T: Element> FilterStream<T> {
     /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
-    /// here, and generated static runners ([`crate::codegen`]) call it
-    /// directly for static dispatch without the `GraphState`/`Result`
-    /// plumbing.
+    /// here. Keeping it in a standalone method lets callers invoke it directly
+    /// for static dispatch without the `GraphState`/`Result` plumbing.
     #[doc(hidden)]
     pub fn cycle_inline(&mut self) -> bool {
         let val = self.source.peek_value();
