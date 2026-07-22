@@ -373,12 +373,16 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 
 1. **statistics** — pure computation, the largest single chunk, huge test
    suite, zero IO. Best stress test of engine-owned state; do it first.
-   🟡 *started*: all three statistics families now have a representative
-   port with parity tests (`tests/statistics.rs`) — exponential (`Ewma`,
-   PerTick + clock-driven HalfLife), windowed (`RollingSum`, `RollingMean`
-   over a ring buffer), and cumulative is expressible via `fold`. Remaining:
-   rolling median/var/std/min-max (monotonic-deque / incremental-moment
-   variants), time-windowed rolling, weighted moments.
+   🟡 *started*: the statistics families are largely ported with parity
+   tests — exponential (`Ewma`, PerTick + clock-driven HalfLife,
+   `tests/statistics.rs`); count-windowed rolling
+   (`RollingSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` — monotonic-deque and
+   incremental-moment variants, `tests/statistics_rolling.rs`); and
+   **time-windowed** rolling (`TimeWindowedSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/
+   `Median` over a bounded `Window::Time`, count-weighted — incremental
+   sum/moments, monotonic-deque min/max, recompute median,
+   `tests/statistics_time_windowed.rs`). Remaining: the time-*weighted* moment
+   path (`Weighting::Time`, both cumulative and windowed).
 2. **cache**, **common** (WindowFilter) — small, pure.
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +

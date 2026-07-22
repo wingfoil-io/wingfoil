@@ -9,6 +9,8 @@
 
 use std::time::Duration;
 
+use wingfoil::NanoTime;
+
 use crate::fluent::Stream;
 use crate::ops::EwmaDecay;
 
@@ -53,6 +55,35 @@ pub trait StatisticsOps {
     /// Median over a sliding window of the last `window` values (an even window
     /// averages its two middle values).
     fn rolling_median(&self, window: usize) -> Stream<f64>;
+
+    /// Sum over a bounded **time** window — the samples seen in the last
+    /// `window` of graph time (an entry exactly `window` old is retained). O(1)
+    /// per tick.
+    fn time_windowed_sum(&self, window: Duration) -> Stream<f64>;
+
+    /// Arithmetic mean over a bounded time window (count-weighted — the ordinary
+    /// mean of the samples in the window). O(1) amortised per tick.
+    fn time_windowed_mean(&self, window: Duration) -> Stream<f64>;
+
+    /// Minimum over a bounded time window, via a monotonic deque — O(1)
+    /// amortised per tick.
+    fn time_windowed_min(&self, window: Duration) -> Stream<f64>;
+
+    /// Maximum over a bounded time window, via a monotonic deque — O(1)
+    /// amortised per tick.
+    fn time_windowed_max(&self, window: Duration) -> Stream<f64>;
+
+    /// **Sample** variance (ddof = 1) over a bounded time window — `0.0` until
+    /// two samples are in the window. O(1) amortised per tick.
+    fn time_windowed_var(&self, window: Duration) -> Stream<f64>;
+
+    /// **Sample** standard deviation over a bounded time window — the square
+    /// root of [`time_windowed_var`](Self::time_windowed_var).
+    fn time_windowed_std(&self, window: Duration) -> Stream<f64>;
+
+    /// Median over a bounded time window (an even count averages its two middle
+    /// values). Recomputed per tick over the retained window.
+    fn time_windowed_median(&self, window: Duration) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -98,5 +129,40 @@ impl StatisticsOps for Stream<f64> {
 
     fn rolling_median(&self, window: usize) -> Stream<f64> {
         self.wire(|b, h| b.rolling_median(h, window))
+    }
+
+    fn time_windowed_sum(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_sum(h, window))
+    }
+
+    fn time_windowed_mean(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_mean(h, window))
+    }
+
+    fn time_windowed_min(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_min(h, window))
+    }
+
+    fn time_windowed_max(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_max(h, window))
+    }
+
+    fn time_windowed_var(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_var(h, window))
+    }
+
+    fn time_windowed_std(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_std(h, window))
+    }
+
+    fn time_windowed_median(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_median(h, window))
     }
 }
