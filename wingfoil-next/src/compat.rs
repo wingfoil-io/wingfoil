@@ -23,6 +23,7 @@
 //! the full ~40-method surface is mechanical from here.
 
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
@@ -32,6 +33,8 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;
+use crate::ops::EwmaDecay;
+use crate::stats::StatisticsOps;
 
 /// A stream in an implicit graph, with the classic `run` / `peek_value`
 /// ergonomics. Combinators mirror the classic `StreamOperators`.
@@ -122,6 +125,129 @@ impl<T: 'static> Signal<T> {
         self.wrap(self.stream.ticked_at_elapsed())
     }
 
+    /// Apply a fallible closure to each value; a returned `Err` aborts the run
+    /// with context.
+    pub fn try_map<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Result<B> + 'static,
+    {
+        self.wrap(self.stream.try_map(f))
+    }
+
+    /// Map and filter in one pass: `f` returns `(value, emit?)`.
+    pub fn map_filter<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> (B, bool) + 'static,
+    {
+        self.wrap(self.stream.map_filter(f))
+    }
+
+    /// Combine with another signal; ticks when either input ticks.
+    pub fn join<B, C, F>(&self, other: &Signal<B>, f: F) -> Signal<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> C + 'static,
+    {
+        self.wrap(self.stream.join(&other.stream, f))
+    }
+
+    /// Combine with another signal read *passively*: this signal triggers the
+    /// combine, `other`'s current value is read but does not trigger.
+    pub fn join_passive<B, C, F>(&self, other: &Signal<B>, f: F) -> Signal<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> C + 'static,
+    {
+        self.wrap(self.stream.join_passive(&other.stream, f))
+    }
+
+    /// Combine three signals (all active); ticks when any input ticks.
+    pub fn join3<B, C, D, F>(&self, b: &Signal<B>, c: &Signal<C>, f: F) -> Signal<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> D + 'static,
+    {
+        self.wrap(self.stream.join3(&b.stream, &c.stream, f))
+    }
+
+    /// Combine with another signal via a *fallible* closure — the `try_`
+    /// counterpart to [`join`](Signal::join). Both inputs active; a returned
+    /// `Err` aborts the run with context.
+    pub fn try_join<B, C, F>(&self, other: &Signal<B>, f: F) -> Signal<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static,
+    {
+        self.wrap(self.stream.try_join(&other.stream, f))
+    }
+
+    /// [`join_passive`](Signal::join_passive) with a *fallible* closure: this
+    /// signal triggers the combine, `other` is read passively, and a returned
+    /// `Err` aborts the run with context.
+    pub fn try_join_passive<B, C, F>(&self, other: &Signal<B>, f: F) -> Signal<C>
+    where
+        B: 'static,
+        C: Clone + Default + 'static,
+        F: Fn(&T, &B) -> Result<C> + 'static,
+    {
+        self.wrap(self.stream.try_join_passive(&other.stream, f))
+    }
+
+    /// Combine three signals (all active) via a *fallible* closure — the `try_`
+    /// counterpart to [`join3`](Signal::join3). A returned `Err` aborts the run
+    /// with context.
+    pub fn try_join3<B, C, D, F>(&self, b: &Signal<B>, c: &Signal<C>, f: F) -> Signal<D>
+    where
+        B: 'static,
+        C: 'static,
+        D: Clone + Default + 'static,
+        F: Fn(&T, &B, &C) -> Result<D> + 'static,
+    {
+        self.wrap(self.stream.try_join3(&b.stream, &c.stream, f))
+    }
+
+    /// Run a side-effecting (fallible) closure on each tick — the graph's
+    /// outbound edge (print, send, record). A returned `Err` aborts the run
+    /// with context. Emits `()` per tick.
+    pub fn for_each<F>(&self, f: F) -> Signal<()>
+    where
+        F: Fn(&T) -> Result<()> + 'static,
+    {
+        self.wrap(self.stream.for_each(f))
+    }
+
+    /// Fan out into `n` parallel branches — each built by `branch` from a copy
+    /// of this signal — and merge their outputs back into one signal (earliest-
+    /// supplied ticked branch wins, as `merge`). `n` must be at least 1.
+    ///
+    /// The branch closure works in the classic idiom over [`Signal`], not the
+    /// fluent [`Stream`] the underlying `fan` exposes; the wrapper threads the
+    /// shared graph/runner into each branch signal and unwraps the result.
+    pub fn fan<B, F>(&self, n: usize, branch: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(Signal<T>) -> Signal<B>,
+    {
+        let graph = self.graph.clone();
+        let runner = self.runner.clone();
+        let stream = self.stream.fan(n, |s: Stream<T>| {
+            let sig = Signal {
+                stream: s,
+                graph: graph.clone(),
+                runner: runner.clone(),
+            };
+            branch(sig).stream
+        });
+        self.wrap(stream)
+    }
+
     /// Run the graph to its bound, storing the runner for `peek_value`.
     ///
     /// Re-running is not supported: the shared [`GraphBuilder`] is consumed by
@@ -207,6 +333,47 @@ impl<T: Clone + Default + 'static> Signal<T> {
     pub fn buffer(&self, capacity: usize) -> Signal<Vec<T>> {
         self.wrap(self.stream.buffer(capacity))
     }
+
+    /// Observe each value with a side-effecting closure, passing it through
+    /// unchanged (a debug tap).
+    pub fn inspect<F>(&self, f: F) -> Signal<T>
+    where
+        F: Fn(&T) + 'static,
+    {
+        self.wrap(self.stream.inspect(f))
+    }
+
+    /// Pass each value through unchanged, printing a performance summary at
+    /// the end of the run (the classic `timed`).
+    pub fn timed(&self) -> Signal<T> {
+        self.wrap(self.stream.timed())
+    }
+
+    /// Chain the same endomorphic `map` `n` times. `map_n(0, f)` is the
+    /// identity (a pass-through).
+    pub fn map_n<F>(&self, n: usize, f: F) -> Signal<T>
+    where
+        F: Fn(&T) -> T + Clone + 'static,
+    {
+        self.wrap(self.stream.map_n(n, f))
+    }
+
+    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
+    /// it. Observes this signal's last value; emits nothing.
+    pub fn finally<F>(&self, f: F) -> Signal<()>
+    where
+        F: Fn(&T) -> Result<()> + 'static,
+    {
+        self.wrap(self.stream.finally(f))
+    }
+}
+
+impl<T: Clone + Default + Debug + 'static> Signal<T> {
+    /// Pass each value through unchanged while buffering it, then print the
+    /// whole buffer (`{value:?}` per line) at teardown (the classic `print`).
+    pub fn print(&self) -> Signal<T> {
+        self.wrap(self.stream.print())
+    }
 }
 
 impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
@@ -239,5 +406,63 @@ impl Signal<()> {
     /// Running count of ticks: 1, 2, 3, ...
     pub fn count(&self) -> Signal<u64> {
         self.wrap(self.stream.count())
+    }
+}
+
+impl Signal<f64> {
+    /// Exponentially-weighted moving average with an explicit [`EwmaDecay`]
+    /// policy (per-tick alpha or clock half-life).
+    pub fn ewma(&self, decay: EwmaDecay) -> Signal<f64> {
+        self.wrap(self.stream.ewma(decay))
+    }
+
+    /// EWMA with a fixed smoothing factor `alpha` applied once per tick,
+    /// seeded on the first sample.
+    pub fn ewma_per_tick(&self, alpha: f64) -> Signal<f64> {
+        self.wrap(self.stream.ewma_per_tick(alpha))
+    }
+
+    /// EWMA whose weights decay off engine time: a sample's weight halves
+    /// every `half_life` of elapsed time, independent of tick rate.
+    pub fn ewma_half_life(&self, half_life: Duration) -> Signal<f64> {
+        self.wrap(self.stream.ewma_half_life(half_life))
+    }
+
+    /// Sum over a sliding window of the last `window` values.
+    pub fn rolling_sum(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_sum(window))
+    }
+
+    /// Mean over a sliding window of the last `window` values.
+    pub fn rolling_mean(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_mean(window))
+    }
+
+    /// Minimum over a sliding window of the last `window` values.
+    pub fn rolling_min(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_min(window))
+    }
+
+    /// Maximum over a sliding window of the last `window` values.
+    pub fn rolling_max(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_max(window))
+    }
+
+    /// Sample variance (ddof = 1) over a sliding window of the last `window`
+    /// values.
+    pub fn rolling_var(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_var(window))
+    }
+
+    /// Sample standard deviation over a sliding window of the last `window`
+    /// values.
+    pub fn rolling_std(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_std(window))
+    }
+
+    /// Median over a sliding window of the last `window` values (an even window
+    /// averages its two middle values).
+    pub fn rolling_median(&self, window: usize) -> Signal<f64> {
+        self.wrap(self.stream.rolling_median(window))
     }
 }
