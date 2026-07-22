@@ -3,11 +3,11 @@ name: test.rust
 on:
   workflow_call:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "next" ]
     paths-ignore:
       - ".github/workflows/**"
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "next" ]
     paths-ignore:
       - ".github/workflows/**"
   workflow_dispatch:
