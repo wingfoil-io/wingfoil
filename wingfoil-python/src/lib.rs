@@ -2,6 +2,7 @@ mod proxy_stream;
 #[cfg(feature = "aeron")]
 mod py_aeron;
 mod py_augurs;
+mod py_compiled;
 mod py_csv;
 mod py_element;
 #[cfg(feature = "etcd")]
@@ -197,6 +198,9 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ticker, module)?)?;
     module.add_function(wrap_pyfunction!(constant, module)?)?;
     module.add_function(wrap_pyfunction!(bimap, module)?)?;
+    // POC: a fixed wingfoil-next `compiled()` graph exposed to Python.
+    module.add_function(wrap_pyfunction!(py_compiled::compiled_squares, module)?)?;
+    module.add_function(wrap_pyfunction!(py_compiled::interpreted_squares, module)?)?;
     module.add_function(wrap_pyfunction!(py_csv::py_csv_read, module)?)?;
     #[cfg(feature = "etcd")]
     module.add_function(wrap_pyfunction!(py_etcd::py_etcd_sub, module)?)?;

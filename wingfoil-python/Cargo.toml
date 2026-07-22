@@ -29,6 +29,10 @@ aeron = ["wingfoil/aeron"]
 # parent
 wingfoil = { path = "../wingfoil", features = ["csv", "kdb", "zmq", "etcd", "fluvio", "prometheus", "otlp", "fix", "web", "kafka", "redis", "postgres", "augurs"] }
 
+# POC: the dual-mode (interpreted + compiled) prototype crate, so a fixed
+# monomorphized `compiled()` graph can be exposed to Python.
+wingfoil-next = { path = "../wingfoil-next" }
+
 # workspace deps
 anyhow = {workspace = true}
 chrono = {workspace = true}
