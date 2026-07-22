@@ -53,6 +53,36 @@ pub trait StatisticsOps {
     /// Median over a sliding window of the last `window` values (an even window
     /// averages its two middle values).
     fn rolling_median(&self, window: usize) -> Stream<f64>;
+
+    /// Cumulative sum over every value seen so far (an unbounded / expanding
+    /// window) — a running total, O(1) per tick.
+    fn cumulative_sum(&self) -> Stream<f64>;
+
+    /// Cumulative arithmetic mean over every value seen so far — O(1) per tick
+    /// via Welford's online moments.
+    fn cumulative_mean(&self) -> Stream<f64>;
+
+    /// Cumulative minimum over every value seen so far — a running extreme.
+    fn cumulative_min(&self) -> Stream<f64>;
+
+    /// Cumulative maximum over every value seen so far — a running extreme.
+    fn cumulative_max(&self) -> Stream<f64>;
+
+    /// Cumulative **sample** variance (ddof = 1) over every value seen so far —
+    /// the classic statistics adapter's count-weighted convention (divisor
+    /// `n - 1`, `0.0` until two values are present), maintained incrementally
+    /// with Welford's online moments.
+    fn cumulative_var(&self) -> Stream<f64>;
+
+    /// Cumulative **sample** standard deviation over every value seen so far —
+    /// the square root of [`cumulative_var`](Self::cumulative_var) under the
+    /// same (ddof = 1) convention.
+    fn cumulative_std(&self) -> Stream<f64>;
+
+    /// Cumulative median over every value seen so far (an even count averages
+    /// its two middle values). Retains all samples, so its memory grows with
+    /// the stream.
+    fn cumulative_median(&self) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -98,5 +128,33 @@ impl StatisticsOps for Stream<f64> {
 
     fn rolling_median(&self, window: usize) -> Stream<f64> {
         self.wire(|b, h| b.rolling_median(h, window))
+    }
+
+    fn cumulative_sum(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_sum(h))
+    }
+
+    fn cumulative_mean(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_mean(h))
+    }
+
+    fn cumulative_min(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_min(h))
+    }
+
+    fn cumulative_max(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_max(h))
+    }
+
+    fn cumulative_var(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_var(h))
+    }
+
+    fn cumulative_std(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_std(h))
+    }
+
+    fn cumulative_median(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_median(h))
     }
 }
