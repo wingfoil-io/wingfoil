@@ -35,6 +35,19 @@ csv = { version = "1.4", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
+# `augurs` feature: on-graph time-series forecasting + outlier detection. A
+# pure-Rust compute library (no external service), so — like the classic
+# `wingfoil` augurs adapter — coverage lives behind `--features augurs` with no
+# integration-test split. Pinned and default-features-off, mirroring the classic
+# crate; only the `ets`, `mstl`, and `outlier` sub-features are enabled, matching
+# the two ported ops (Prophet is deliberately excluded — it needs a bundled Stan
+# toolchain).
+augurs = { version = "0.10.2", default-features = false, features = [
+    "ets",
+    "mstl",
+    "outlier",
+], optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -44,6 +57,7 @@ criterion = "0.8.1"
 default = []
 async = ["dep:tokio", "dep:futures"]
 csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
+augurs = ["dep:augurs"]
 
 [[example]]
 name = "async_source"

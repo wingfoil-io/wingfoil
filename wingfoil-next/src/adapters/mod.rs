@@ -13,7 +13,12 @@
 //!   demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
+//! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
+//!   detection) over sliding windows, behind the `augurs` feature. A pure-Rust
+//!   compute adapter (no service), so it is transform ops, not a source/sink.
 
+#[cfg(feature = "augurs")]
+pub mod augurs;
 #[cfg(feature = "csv")]
 pub mod csv;
 pub mod lines;
