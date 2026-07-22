@@ -93,7 +93,9 @@
 //! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
 //! `.join(&other, f)`, `.delay(duration)`; statistics (on `f64` streams)
 //! `.ewma(decay)` / `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)`,
-//! `.rolling_sum(window)`, `.rolling_mean(window)`; sugar `.count()` and
+//! `.rolling_sum(window)`, `.rolling_mean(window)`, `.rolling_min(window)`,
+//! `.rolling_max(window)`, `.rolling_var(window)`, `.rolling_std(window)`,
+//! `.rolling_median(window)`; sugar `.count()` and
 //! `.accumulate()`; and bounded repetition `.map_n(N, f)` (chain `map` N
 //! times) / `.fan(N, |s| <sub-chain>)` (N parallel copies of a sub-chain,
 //! merged). `map_n` / `fan` counts must be integer literals so the unrolled
@@ -144,6 +146,11 @@ enum OpKind {
     Ewma,
     RollingSum,
     RollingMean,
+    RollingMin,
+    RollingMax,
+    RollingVar,
+    RollingStd,
+    RollingMedian,
 }
 
 /// The shape of an op's `Op::In` tuple — how the cycle call assembles its
@@ -444,6 +451,97 @@ impl OpKind {
                     ty: Some(quote! { usize }),
                 },
                 state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Rolling min / max over the most recent `window` f64 samples (a
+            // monotonic-deque `RollingExtremeState`). `Cfg = usize` (window),
+            // value slot seeded 0.0 (`f64::default()`) by `register_op1`.
+            OpKind::RollingMin => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingMin },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(
+                    quote! { ::wingfoil_next::ops::RollingExtremeState },
+                ),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            OpKind::RollingMax => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingMax },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(
+                    quote! { ::wingfoil_next::ops::RollingExtremeState },
+                ),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Rolling sample variance / std (ddof = 1) over the most recent
+            // `window` f64 samples (Welford moments in `RollingMomentState`).
+            OpKind::RollingVar => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingVar },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingMomentState }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            OpKind::RollingStd => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingStd },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingMomentState }),
+                value_seed: ValueSeed::Default,
+                edges: Edges::AllActive,
+            },
+            // Rolling median over the most recent `window` f64 samples
+            // (recompute-per-tick `RollingMedianState`).
+            OpKind::RollingMedian => OpInfo {
+                op_type: quote! { ::wingfoil_next::ops::RollingMedian },
+                callback_activated: false,
+                has_start: false,
+                state_in_start: false,
+                owned_closure: None,
+                unit_output: false,
+                inputs: Inputs::One,
+                cfg_init: CfgInit::Expr {
+                    arg: 0,
+                    ty: Some(quote! { usize }),
+                },
+                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingMedianState }),
                 value_seed: ValueSeed::Default,
                 edges: Edges::AllActive,
             },
@@ -856,6 +954,31 @@ impl ChainWalker {
                 expect_arity(method, args, 1)?;
                 self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
             }
+            "rolling_min" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingMin, vec![cur], vec![args[0].clone()])
+            }
+            "rolling_max" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingMax, vec![cur], vec![args[0].clone()])
+            }
+            "rolling_var" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingVar, vec![cur], vec![args[0].clone()])
+            }
+            "rolling_std" => {
+                expect_arity(method, args, 1)?;
+                self.push(name, OpKind::RollingStd, vec![cur], vec![args[0].clone()])
+            }
+            "rolling_median" => {
+                expect_arity(method, args, 1)?;
+                self.push(
+                    name,
+                    OpKind::RollingMedian,
+                    vec![cur],
+                    vec![args[0].clone()],
+                )
+            }
             // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
             // `map`s; `fan(N, |s| <sub-chain>)` builds N copies of a sub-chain
             // rooted at the current tail and merges them. Both take a literal
@@ -928,7 +1051,8 @@ impl ChainWalker {
                     format!(
                         "unknown combinator `.{other}(..)`; expected one of: map, map_n, fan, \
                          filter, fold, sample, merge, join, delay, count, accumulate, ewma, \
-                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
+                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean, \
+                         rolling_min, rolling_max, rolling_var, rolling_std, rolling_median"
                     ),
                 ));
             }
