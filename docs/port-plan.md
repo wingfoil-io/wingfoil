@@ -296,26 +296,26 @@ What's automated:
   op type, dispatch flags, and the `Inputs`/`CfgInit`/`StateInit` shapes) drives
   every emitter. Named fields make a half-filled row a compile error.
 
-So the places to touch when adding an op:
+So the places to touch when adding an op — **the compiled path is
+zero-touch; there is no macro table**:
 
-| Op fits `#[op]`? | Interpreted only | + `graph!`/compiled |
+| Op shape | Interpreted | `graph!`/compiled |
 |---|---|---|
-| Yes (single-input) | `ops.rs` (`impl` + attr) + fluent method | nothing — the generic fallback covers it |
-| Multi-input, values-only, all-active (the `join` shape) | `ops.rs` `impl` + `register_op2`-based fluent method | nothing — `&stream` args are classified as edges |
-| No (source, passive edge, tick-flag input, custom seed) | `ops.rs` `impl` + hand `Builder` method + fluent method | `OpKind` variant, `info()` row, parse arm |
+| Single-input (`#[op]` scope) | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
+| Multi-input, values-only, all-active (the `join` shape) | `ops.rs` `impl` (+ attr with `no_builder`) + `register_op2`-based fluent method | nothing — `&stream` args classify as edges |
+| Exotic (config-derived seeds, passive edges) | hand `Builder` method + fluent method | hand-write the forwarder family (see fold/sample in `ops.rs`) |
 
-**Update — the single- and multi-input compiled paths are now zero-touch.**
-Constraint #1
-still holds (a proc macro sees tokens, not types), but it is routed around
-rather than paid per-op: an unknown combinator falls through to a generic
-emission that calls `#[op]`-generated forwarder functions by naming
-convention, and rustc's inference + monomorphization resolve the op type the
-macro never names (its `ACTIVATION` is re-emitted as a const the emission
-folds on). Measured at parity with a table row and covered by
-`wingfoil-next/tests/custom_op.rs`; the full analysis, the field-by-field
-table-vs-trait split, and the residue that still needs table rows are in
-`docs/macro-extensibility-decision.md`. The fluent method remains hand-written
-(constraint #2, unchanged).
+Constraint #1 still holds (a proc macro sees tokens, not types), but it is
+routed around rather than paid per-op: every method call is emitted through
+`#[op]`-generated forwarder functions by naming convention, rustc's
+inference resolves the op type the macro never names, and per-op facts
+(`ACTIVATION`, passive-edge masks) are re-emitted as consts the emission
+folds on. Delay's engine-level special cases became `Tick::Silent` in the
+`Op` contract. Measured at parity with the deleted table emission and
+covered by `wingfoil-next/tests/custom_op.rs`; full analysis in
+`docs/macro-extensibility-decision.md`. The fluent method remains
+hand-written (constraint #2, unchanged).
+
 
 **Completeness test (committed, Phase 1).** A `supported_ops!()` function-like
 macro emits the single list that both the `graph!` parse-match and its

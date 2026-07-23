@@ -69,26 +69,23 @@ impl Activation {
     }
 }
 
-/// The outcome of one op cycle: either the op ticked and produced a value,
-/// or it stayed quiet. Replaces the `bool` + hidden-value-slot side channel
-/// of the old `MutableNode::cycle`.
+/// The outcome of one op cycle: the op ticked with a value, updated its
+/// value silently, or stayed quiet. Replaces the `bool` + hidden-value-slot
+/// side channel of the old `MutableNode::cycle`.
 ///
-/// # Contract gap: "update the value slot without ticking"
-///
-/// There is deliberately **no** `Silent(T)` variant that would update a node's
-/// value slot while suppressing the downstream tick. Classic wingfoil's
-/// `delay` uses exactly that ("store the first upstream value without
-/// ticking", so passive readers see it before the delay elapses). Because an
-/// op cannot express it, the two ops that need engine-owned init/timing
-/// behaviour — `delay`'s first-value seeding and its zero-delay inline emit —
-/// apply it at the **engine** level instead (see `Builder::delay` in
-/// `interp.rs` and the Delay branch in the `graph!` macro's `node_dispatch`),
-/// kept in lockstep across interpreted/compiled/nested. If a third op ever
-/// needs the same shape, promote it to a real `Tick::Silent(T)` variant here
-/// and teach all three engines to store-without-ticking on it.
+/// `Silent` updates the node's value slot **without** propagating a tick:
+/// passive readers (sample, join's other leg) see the new value, but no
+/// downstream node is activated. Classic wingfoil's `delay` needs exactly
+/// this ("store the first upstream value without ticking", so passive
+/// readers never see `T::default()` before the delay elapses) — it was
+/// previously an engine-level special case in three places; promoting it to
+/// the contract lets `delay` express its full semantics in `cycle` and every
+/// engine handle it generically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tick<T> {
     Value(T),
+    /// Update the value slot, but do not tick downstream.
+    Silent(T),
     Quiet,
 }
 

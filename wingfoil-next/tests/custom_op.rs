@@ -172,83 +172,62 @@ where
 // ---------------------------------------------------------------------------
 
 pub const __WF_OP_SCALE_ACTIVATION: Activation = Scale::ACTIVATION;
+pub const __WF_OP_SCALE_PASSIVE: u32 = 0;
 pub const __WF_OP_DELTA_ACTIVATION: Activation = Activation::NONE;
+pub const __WF_OP_DELTA_PASSIVE: u32 = 0;
 pub const __WF_OP_APPLY_ACTIVATION: Activation = Activation::NONE;
+pub const __WF_OP_APPLY_PASSIVE: u32 = 0;
 pub const __WF_OP_SPREAD_ACTIVATION: Activation = Spread::ACTIVATION;
+pub const __WF_OP_SPREAD_PASSIVE: u32 = 0;
 pub const __WF_OP_COMBINE_ACTIVATION: Activation = Activation::NONE;
+pub const __WF_OP_COMBINE_PASSIVE: u32 = 0;
+
+// Cycle forwarders take the uniform `(value, tick)` pair per edge and adapt
+// to the op's `In`; `_owned` variants take the literal-closure config by
+// value plus the (empty) plain-config slot.
 
 pub fn __wf_op_scale_cycle(
     cfg: &mut <Scale as Op>::Cfg,
     state: &mut <Scale as Op>::State,
-    input: <Scale as Op>::In<'_>,
+    input: ((&f64, bool),),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Scale as Op>::Out>> {
-    <Scale as Op>::cycle(cfg, state, input, ctx)
-}
-
-pub fn __wf_op_scale_start(
-    cfg: &mut <Scale as Op>::Cfg,
-    state: &mut <Scale as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    <Scale as Op>::start(cfg, state, ctx)
+    <Scale as Op>::cycle(cfg, state, (input.0.0,), ctx)
 }
 
 pub fn __wf_op_delta_cycle<T: Clone + std::ops::Sub<Output = T> + 'static>(
     cfg: &mut <Delta<T> as Op>::Cfg,
     state: &mut <Delta<T> as Op>::State,
-    input: <Delta<T> as Op>::In<'_>,
+    input: ((&T, bool),),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Delta<T> as Op>::Out>> {
-    <Delta<T> as Op>::cycle(cfg, state, input, ctx)
-}
-
-pub fn __wf_op_delta_start<T: Clone + std::ops::Sub<Output = T> + 'static>(
-    cfg: &mut <Delta<T> as Op>::Cfg,
-    state: &mut <Delta<T> as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    <Delta<T> as Op>::start(cfg, state, ctx)
+    <Delta<T> as Op>::cycle(cfg, state, (input.0.0,), ctx)
 }
 
 pub fn __wf_op_apply_cycle_owned<F: Fn(&f64) -> f64 + 'static>(
     mut cfg: <Apply<F> as Op>::Cfg,
+    _plain: &mut (),
     state: &mut <Apply<F> as Op>::State,
-    input: <Apply<F> as Op>::In<'_>,
+    input: ((&f64, bool),),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Apply<F> as Op>::Out>> {
-    <Apply<F> as Op>::cycle(&mut cfg, state, input, ctx)
-}
-
-pub fn __wf_op_apply_start_owned<F: Fn(&f64) -> f64 + 'static>(
-    mut cfg: <Apply<F> as Op>::Cfg,
-    state: &mut <Apply<F> as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    <Apply<F> as Op>::start(&mut cfg, state, ctx)
+    <Apply<F> as Op>::cycle(&mut cfg, state, (input.0.0,), ctx)
 }
 
 pub fn __wf_op_spread_cycle(
     cfg: &mut <Spread as Op>::Cfg,
     state: &mut <Spread as Op>::State,
-    input: <Spread as Op>::In<'_>,
+    input: ((&f64, bool), (&f64, bool)),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Spread as Op>::Out>> {
-    <Spread as Op>::cycle(cfg, state, input, ctx)
-}
-
-pub fn __wf_op_spread_start(
-    cfg: &mut <Spread as Op>::Cfg,
-    state: &mut <Spread as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    <Spread as Op>::start(cfg, state, ctx)
+    <Spread as Op>::cycle(cfg, state, (input.0.0, input.1.0), ctx)
 }
 
 pub fn __wf_op_combine_cycle_owned<A, B, C, F>(
     mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+    _plain: &mut (),
     state: &mut <Combine<A, B, C, F> as Op>::State,
-    input: <Combine<A, B, C, F> as Op>::In<'_>,
+    input: ((&A, bool), (&B, bool)),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Combine<A, B, C, F> as Op>::Out>>
 where
@@ -257,21 +236,66 @@ where
     C: Clone + 'static,
     F: Fn(&A, &B) -> C + 'static,
 {
-    <Combine<A, B, C, F> as Op>::cycle(&mut cfg, state, input, ctx)
+    <Combine<A, B, C, F> as Op>::cycle(&mut cfg, state, (input.0.0, input.1.0), ctx)
 }
 
-pub fn __wf_op_combine_start_owned<A, B, C, F>(
-    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
-    state: &mut <Combine<A, B, C, F> as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()>
-where
-    A: 'static,
-    B: 'static,
-    C: Clone + 'static,
-    F: Fn(&A, &B) -> C + 'static,
-{
-    <Combine<A, B, C, F> as Op>::start(&mut cfg, state, ctx)
+// Start forwarders: none of these ops override `Op::start`, so they are the
+// fully-erased no-ops the `#[op]` derive would generate (op generics must
+// not appear — they would dangle at the call site).
+
+pub fn __wf_op_scale_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_delta_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_apply_start_owned<P, S>(
+    _plain: &mut P,
+    _state: &mut S,
+    _ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_spread_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_combine_start_owned<P, S>(
+    _plain: &mut P,
+    _state: &mut S,
+    _ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    Ok(())
+}
+
+// Seed forwarders: structural — generic only over the params the State/Out
+// tokens mention, so nothing dangles. All defaults here (no fold-style
+// config-derived seeds among these ops).
+
+pub fn __wf_op_scale_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_scale_seed_value<P>(_cfg: &P) -> f64 {
+    0.0
+}
+pub fn __wf_op_delta_seed_state<T, P>(_cfg: &P) -> Option<T> {
+    None
+}
+pub fn __wf_op_delta_seed_value<T: Default, P>(_cfg: &P) -> T {
+    T::default()
+}
+pub fn __wf_op_apply_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_apply_seed_value<P>(_cfg: &P) -> f64 {
+    0.0
+}
+pub fn __wf_op_spread_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_spread_seed_value<P>(_cfg: &P) -> f64 {
+    0.0
+}
+pub fn __wf_op_combine_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_combine_seed_value<C: Default, P>(_cfg: &P) -> C {
+    C::default()
 }
 
 // ---------------------------------------------------------------------------

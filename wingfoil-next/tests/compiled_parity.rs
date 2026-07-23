@@ -15,7 +15,7 @@ use std::time::Duration;
 use wingfoil::codegen::Kernel;
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::op::{Ctx, Op, Tick};
-use wingfoil_next::ops::{Filter, Fold, Map, Merge2, Ticker};
+use wingfoil_next::ops::{Filter, Fold, Map, Merge2, Ticker, TickerState};
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -44,8 +44,8 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     // cfg + state per node (the closures are written once, here — there is
     // no second copy to drift out of sync with the interpreted wiring above
     // once the macro emits both from one definition).
-    let mut tick_cfg = NanoTime::from(PERIOD);
-    let mut tick_state: Option<NanoTime> = None;
+    let mut tick_cfg = PERIOD;
+    let mut tick_state = TickerState::default();
     let mut count_f = |acc: &mut u64, _: &()| *acc += 1;
     let mut count_acc = 0u64;
     let mut even_f = |i: &u64| i.is_multiple_of(2);
@@ -88,6 +88,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                     v_count = v;
                     true
                 }
+                Tick::Silent(v) => {
+                    v_count = v;
+                    false
+                }
                 Tick::Quiet => false,
             }
         };
@@ -98,6 +102,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                 Tick::Value(v) => {
                     v_is_even = v;
                     true
+                }
+                Tick::Silent(v) => {
+                    v_is_even = v;
+                    false
                 }
                 Tick::Quiet => false,
             }
@@ -110,6 +118,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                     v_is_odd = v;
                     true
                 }
+                Tick::Silent(v) => {
+                    v_is_odd = v;
+                    false
+                }
                 Tick::Quiet => false,
             }
         };
@@ -120,6 +132,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                 Tick::Value(v) => {
                     v_odds = v;
                     true
+                }
+                Tick::Silent(v) => {
+                    v_odds = v;
+                    false
                 }
                 Tick::Quiet => false,
             }
@@ -132,6 +148,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                     v_odd_str = v;
                     true
                 }
+                Tick::Silent(v) => {
+                    v_odd_str = v;
+                    false
+                }
                 Tick::Quiet => false,
             }
         };
@@ -143,6 +163,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                     v_evens = v;
                     true
                 }
+                Tick::Silent(v) => {
+                    v_evens = v;
+                    false
+                }
                 Tick::Quiet => false,
             }
         };
@@ -153,6 +177,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                 Tick::Value(v) => {
                     v_even_str = v;
                     true
+                }
+                Tick::Silent(v) => {
+                    v_even_str = v;
+                    false
                 }
                 Tick::Quiet => false,
             }
@@ -169,6 +197,10 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
                 Tick::Value(v) => {
                     v_merged = v;
                     true
+                }
+                Tick::Silent(v) => {
+                    v_merged = v;
+                    false
                 }
                 Tick::Quiet => false,
             }

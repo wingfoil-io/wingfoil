@@ -47,22 +47,24 @@ impl Op for Incr {
 }
 
 pub const __WF_OP_INCR_ACTIVATION: Activation = Incr::ACTIVATION;
+pub const __WF_OP_INCR_PASSIVE: u32 = 0;
 
 pub fn __wf_op_incr_cycle(
     cfg: &mut <Incr as Op>::Cfg,
     state: &mut <Incr as Op>::State,
-    input: <Incr as Op>::In<'_>,
+    input: ((&f64, bool),),
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<<Incr as Op>::Out>> {
-    <Incr as Op>::cycle(cfg, state, input, ctx)
+    <Incr as Op>::cycle(cfg, state, (input.0.0,), ctx)
 }
 
-pub fn __wf_op_incr_start(
-    cfg: &mut <Incr as Op>::Cfg,
-    state: &mut <Incr as Op>::State,
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    <Incr as Op>::start(cfg, state, ctx)
+pub fn __wf_op_incr_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_incr_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_incr_seed_value<P>(_cfg: &P) -> f64 {
+    0.0
 }
 
 trait IncrOps {

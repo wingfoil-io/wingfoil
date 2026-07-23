@@ -6,12 +6,16 @@ the macro's op-table become optional — an unknown user op flowing through a
 generic, trait-driven path so it works in `compiled()` with no macro-crate
 edit — and if so, how far do we take it?
 
-**Answer.** Yes — **option 2** (generic single-input fallback + metadata moved
-onto trait/derive). The load-bearing uncertainty is resolved: *a proc macro
-can emit a monomorphized call to an op whose concrete type it never names*,
-and the result benchmarks at **1.01×** a hand-written table row. The
-prototype on this branch implements the fallback end-to-end; the residue the
-table must keep is small, enumerable, and stops growing.
+**Answer.** Yes — and the branch now goes past option 2 to the end state:
+**one mechanism, no table**. The load-bearing uncertainty is resolved: *a
+proc macro can emit a monomorphized call to an op whose concrete type it
+never names*, at parity with the hand-written table rows it replaced. The
+`OpKind`/`OpInfo` table has been **deleted**; every op — the built-in catalog
+and user ops alike — dispatches through the same forwarder mechanism, so the
+built-ins are now ordinary users of the extension surface (the best ongoing
+test of it). What remains in the macro is parse-level sugar only (`count`,
+`accumulate`, `map_n`, `fan`, the `ewma_*` spellings) — rewrites into base
+ops, not a second op path.
 
 Everything below is grounded in the prototype commits on this branch:
 `wingfoil-next-macros/src/lib.rs` (the fallback), `wingfoil-next/tests/custom_op.rs`
@@ -189,7 +193,43 @@ Zero table rows edited; zero engine-semantics changes; full suite + clippy
    n-ary forwarders + a `register_op2`-based builder method is the same
    mechanical pattern (the macro-side emission already handles any arity).
 
-## 5. Recommendation
+## 5. Convergence: how the residue was absorbed (the table is deleted)
+
+Each table-only capability moved to the trait/derive layer, exactly as
+§3 predicted:
+
+| Former table capability | Where it lives now |
+|---|---|
+| input shapes (value-only / tick-flag / pairs) | the macro always passes one `(value, tick)` pair per edge; the `#[op]` derive parses `In`'s tokens and emits the adapting forwarder — shape knowledge lives with the type |
+| activation / dirty checks | `__WF_OP_<M>_ACTIVATION` const, re-emitted by `#[op]`, folded post-mono (also composes the island's callback flag and supports `always` busy-poll ops) |
+| passive edges (sample) | `__WF_OP_<M>_PASSIVE` bitmask const, folded into dispatch conditions and the island's input-activation list |
+| state/value seeding (fold) | `_seed_state` / `_seed_value` forwarders — structural generics so nothing dangles; fold hand-writes them to clone `init` into both (classic parity preserved) |
+| delay's zero-delay inline emit + silent first-value store | promoted into the `Op` contract as `Tick::Silent(T)` (the promotion `op.rs` had reserved); `Delay::cycle` now expresses its full semantics once, and all three engines handle `Silent` generically |
+| sources (ticker/constant) | same mechanism, rooted at builder methods; `Ticker`/`Delay` `Cfg` became the call-site `Duration` (arg-verbatim convention), with ticker caching the converted period in state at `start` |
+| `unit_output`, `CfgInit`, `StateInit`, `ValueSeed`, `Edges`, `Inputs`, `OpKind`, `OpInfo` | deleted |
+
+Two conventions carry the start hooks: `_start` forwards the real
+`Op::start` only when the impl overrides it (otherwise it is a fully-erased
+no-op — a forwarding version would dangle op generics that `Cfg`/`State`
+don't mention, e.g. filter's `T`); closure-config ops get `_start_owned`,
+which cannot see the closure (a duplicate literal would have un-inferable
+parameter types), so a closure-config op with a real `start` hook
+hand-writes its forwarders.
+
+Known limitations of the unified conventions (accepted, documented):
+- an op mixing a *non-literal* closure (factory/named local) with other
+  plain config args (fold with a closure factory) is not expressible — the
+  literal-closure and named-closure forms both work;
+- at most one literal closure argument per call;
+- `_start_owned` cannot pass the closure to a start hook.
+
+Benchmark after deletion (same dense 20-chain): the two bench variants are
+now literally the same mechanism and measure identical; against the
+pre-deletion table emission, interleaved A/B runs show parity within ~3%
+with overlapping confidence intervals on a host drifting ±5% between runs
+(the earlier stable-host measurement of the same mechanism was 1.01×).
+
+## 6. Recommendation
 
 **Option 2.** Option 1 (islands only) leaves the single most common extension —
 a user transform in a hot compiled graph — behind a per-activation dyn
@@ -201,8 +241,8 @@ feedback as HList/index gymnastics, brutal error messages) to delete a table
 that option 2 has already reduced to a static, non-growing residue of
 genuinely exotic wiring.
 
-Migration path: (a) this branch — fallback + forwarders + const guard +
-multi-input convention [done]; (b) `#[op]` out-of-crate + delete the four
-redundant rows; (c) stop/teardown emission.
+Migration path: (a) fallback + forwarders + const guards + multi-input
+convention [done]; (b) absorb the residue and delete the table [done — §5];
+(c) `#[op]` out-of-crate; (d) stop/teardown emission.
 The escape hatch (`nested()` islands for interpreted-only ops) remains for
 everything the residue still excludes.

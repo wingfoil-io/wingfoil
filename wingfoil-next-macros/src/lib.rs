@@ -87,18 +87,24 @@
 //! expands to `wire` + `nested` only, and must have exactly one output
 //! (a composite is one node with one output); `nested` is likewise only
 //! emitted for single-output graphs. A passively read input (sample's data
-//! edge) does not activate the island. Supported chain
-//! methods mirror the fluent API: sources `.ticker(period)` /
-//! `.constant(value)` on the builder; combinators `.map(f)`,
-//! `.filter(&cond)`, `.fold(init, f)`, `.sample(&trigger)`, `.merge(&other)`,
-//! `.join(&other, f)`, `.delay(duration)`; statistics (on `f64` streams)
-//! `.ewma(decay)` / `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)`,
-//! `.rolling_sum(window)`, `.rolling_mean(window)`; sugar `.count()` and
-//! `.accumulate()`; and bounded repetition `.map_n(N, f)` (chain `map` N
-//! times) / `.fan(N, |s| <sub-chain>)` (N parallel copies of a sub-chain,
-//! merged). `map_n` / `fan` counts must be integer literals so the unrolled
-//! DAG stays static — they are the static-topology answer to "no wiring inside
-//! loops" below.
+//! edge) does not activate the island.
+//!
+//! **The op set is open.** The macro has no per-op table: every method call —
+//! built-in catalog op or user-defined — is dispatched through one mechanism,
+//! the naming-convention forwarder functions (`__wf_op_<name>_cycle` /
+//! `_cycle_owned` / `_start` / `_start_owned` / `_seed_state` / `_seed_value`,
+//! plus the `__WF_OP_<NAME>_ACTIVATION` / `_PASSIVE` consts) that `#[op]`
+//! generates next to the op's impl. The macro never names an op type: rustc's
+//! inference resolves it from the argument types, and the consts fold into
+//! the dispatch conditions after monomorphization. Call arguments classify
+//! at expansion time: `&name` naming a bound stream → an input edge (active,
+//! read by value, in call order after the receiver); a literal closure → the
+//! op's by-value config; anything else → the plain config (one value or a
+//! tuple). Parse-level sugar remains: `.count()` / `.accumulate()` (folds),
+//! `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)` (`EwmaDecay` configs),
+//! and bounded repetition `.map_n(N, f)` / `.fan(N, |s| <sub-chain>)`, whose
+//! counts must be integer literals so the unrolled DAG stays static — the
+//! static-topology answer to "no wiring inside loops" below.
 //!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
 //! computing configs, declaring locals that closures capture, helper calls.
@@ -126,448 +132,82 @@ use syn::{
     parse_quote,
 };
 
-#[derive(Clone, Copy, PartialEq)]
-enum OpKind {
-    /// A stream parameter of the wiring fn — an edge into the graph, not an
-    /// op. Only valid in the `nested` expansion, where its value and tick
-    /// flag are read from the *outer* graph.
-    Input,
-    Ticker,
-    Constant,
-    Map,
-    Filter,
-    Fold,
-    Sample,
-    Merge,
-    Join,
-    Delay,
-    Ewma,
-    RollingSum,
-    RollingMean,
-    /// Generic fallback for a combinator the macro does not know: a
-    /// **single-input, receiver-activated** op resolved by *type inference*
-    /// instead of a table row. The emission calls naming-convention forwarder
-    /// functions (`__wf_op_<name>_cycle` / `_cycle_owned` / `_start` /
-    /// `_start_owned`) that the `#[op]` attribute generates next to the op's
-    /// `Op` impl; rustc infers the op's concrete type from the input/cfg
-    /// argument types, so the macro never needs to name it. The method ident
-    /// lives in [`NodeDef::custom`]; per-node facts come from
-    /// [`NodeDef::info`], not [`OpKind::info`].
-    Custom,
-}
-
-/// The shape of an op's `Op::In` tuple — how the cycle call assembles its
-/// inputs from upstream value/tick locals. Adding an op picks an existing
-/// shape; a genuinely novel shape adds one arm to [`cycle_input`].
-enum Inputs {
-    /// `()` — sources (ticker/constant).
-    Unit,
-    /// `(&v0,)` — one input read by value (map/fold/sample-data/ewma/…).
-    One,
-    /// `(&v0, &v1)` — two inputs by value (filter/join).
-    Two,
-    /// `(&v0, t0)` — one input plus its tick flag (delay).
-    OneTick,
-    /// `((&v0, t0), (&v1, t1))` — two `(value, tick)` pairs (merge).
-    TwoTickPairs,
-    /// `(&v0, &v1, …, &vn)` — n inputs by value, all active (custom ops:
-    /// the receiver plus every `&stream` argument, in call order).
-    Many(usize),
-}
-
-/// How `node_decl` initialises a node's `__cfg` local (the non-closure config;
-/// closure configs keep no local and go through `cycle_owned_cfg` instead).
-enum CfgInit {
-    /// No `__cfg` local.
-    None,
-    /// `let __cfg [: ty] = exprs[arg];`
-    Expr {
-        arg: usize,
-        ty: Option<TokenStream2>,
-    },
-    /// `let __cfg = NanoTime::from(exprs[arg]);`
-    NanoTimeFrom(usize),
-}
-
-/// How `node_decl` initialises a node's `__state` local.
-enum StateInit {
-    /// No `__state` local.
-    None,
-    /// `let __state = exprs[arg];` (fold's accumulator seed).
-    Expr(usize),
-    /// `let __state = <ty>::default();`
-    Default(TokenStream2),
-    /// `let __state: Option<ty> = None;` (ticker's last-scheduled-time).
-    OptionNone(TokenStream2),
-    /// `let __state = Default::default();` with **no** type — the state's
-    /// concrete type is inferred from the forwarder call's
-    /// `&mut <X as Op>::State` parameter once the op type resolves (custom
-    /// ops only). Requires `State: Default`, same as the interpreted
-    /// `register_op1` shape.
-    DefaultInferred,
-}
-
-/// How `node_decl` seeds a node's `__v_<name>` output value slot — the value
-/// a passive/sample/join reader sees *before* the node's first tick. This must
-/// match what the interpreted engine seeds its slot with (`interp.rs`), or the
-/// engines drift on pre-first-tick reads.
-enum ValueSeed {
-    /// `let mut v = Default::default();` — the output type's default.
-    Default,
-    /// `let mut v = Clone::clone(&state);` — a clone of the op's `__state`
-    /// local (fold seeds its slot with `init`, matching `interp.rs` which does
-    /// `new_slot(init.clone())`). Requires the op to keep a `__state` local.
-    CloneState,
-}
-
-/// Which of an op's upstream `refs` are *active* (propagate ticks / appear in
-/// the dispatch condition). Single-sourced here so the interpreted engine, the
-/// compiled emission, and the nested emission cannot disagree — previously
-/// Sample's passive data edge was a hard-coded special case in three places.
-enum Edges {
-    /// Every `ref` is an active upstream.
-    AllActive,
-    /// Only the `ref` at this index is active; the rest are passive (read by
-    /// value but do not trigger). Sample is `OneActive(1)`: its data source
-    /// (`refs[0]`) is passive, its trigger (`refs[1]`) is the sole active edge.
-    OneActive(usize),
-}
-
-/// Everything the emitters need to know about an op, **single-sourced** in one
-/// [`OpKind::info`] arm per op: its type, the boolean facts dispatch consults,
-/// and the structural shapes `node_decl`/`cycle_input`/`op_type` build from.
-/// Adding an op is one `info` arm (plus its parse arm and enum variant); the
-/// named fields — spelled in full per arm, with no `..base` fill — make a
-/// half-filled entry a compile error, not a silent gap.
-struct OpInfo {
-    /// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
-    op_type: TokenStream2,
-    /// Can be activated by a kernel callback → dispatch needs a dirty check.
-    callback_activated: bool,
-    /// Has a `start` hook to run before the first cycle.
-    has_start: bool,
-    /// `start` receives the state local too (only the ticker's start does).
-    state_in_start: bool,
-    /// Index in `exprs` of a closure config inlined at the cycle call via
-    /// `cycle_owned_cfg` (direct-argument closure inference).
-    owned_closure: Option<usize>,
-    /// Unit output (ticker) → no value slot to declare or store into.
-    unit_output: bool,
-    inputs: Inputs,
-    cfg_init: CfgInit,
-    state_init: StateInit,
-    /// How the output value slot is seeded before the first tick.
-    value_seed: ValueSeed,
-    /// Which upstream `refs` are active (drive dispatch).
-    edges: Edges,
-}
-
-impl OpInfo {
-    /// Keeps a `__cfg` local passed to `cycle` by `&mut`.
-    fn cfg_local(&self) -> bool {
-        !matches!(self.cfg_init, CfgInit::None)
-    }
-    /// Keeps a `__state` local passed to `cycle` by `&mut`.
-    fn state_local(&self) -> bool {
-        !matches!(self.state_init, StateInit::None)
-    }
-}
-
-impl OpKind {
-    fn info(self) -> OpInfo {
-        let nanotime = quote! { ::wingfoil_next::wingfoil::NanoTime };
-        // Every field is spelled out per arm — no `..base` fill — so adding a
-        // field (or a new op) that omits it is a compile error, not a silent
-        // gap that never fires compiled/nested.
-        match self {
-            // A graph edge, not a real op: it declares no storage and is never
-            // dispatched (the `nested` expansion reads its value/tick from the
-            // outer graph). A benign all-false `info` keeps whole-graph scans
-            // like the callback-activation check from special-casing it.
-            OpKind::Input => OpInfo {
-                op_type: quote! {},
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Ticker => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Ticker },
-                callback_activated: true,
-                has_start: true,
-                state_in_start: true,
-                owned_closure: None,
-                unit_output: true,
-                inputs: Inputs::Unit,
-                cfg_init: CfgInit::NanoTimeFrom(0),
-                state_init: StateInit::OptionNone(nanotime),
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Constant => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Const<_> },
-                callback_activated: true,
-                has_start: true,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::Unit,
-                cfg_init: CfgInit::Expr { arg: 0, ty: None },
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Map => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Map<_, _, _> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: Some(0),
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Filter => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Filter<_> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::Two,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Fold => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Fold<_, _, _> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: Some(1),
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::Expr(0),
-                // Seed the slot with a clone of the accumulator (init), so a
-                // passive/sample/join read before the first tick sees `init`,
-                // not `Default` — matching interp.rs `new_slot(init.clone())`.
-                value_seed: ValueSeed::CloneState,
-                edges: Edges::AllActive,
-            },
-            OpKind::Sample => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Sample<_> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                // refs = [data, trigger]; only the trigger is active.
-                edges: Edges::OneActive(1),
-            },
-            OpKind::Merge => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Merge2<_> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::TwoTickPairs,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Join => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Join<_, _, _, _> },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: Some(0),
-                unit_output: false,
-                inputs: Inputs::Two,
-                cfg_init: CfgInit::None,
-                state_init: StateInit::None,
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Delay => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Delay<_> },
-                callback_activated: true,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::OneTick,
-                cfg_init: CfgInit::NanoTimeFrom(0),
-                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::DelayState }),
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::Ewma => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::Ewma },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::Expr {
-                    arg: 0,
-                    ty: Some(quote! { ::wingfoil_next::ops::EwmaDecay }),
-                },
-                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::EwmaState }),
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::RollingSum => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::RollingSum },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::Expr {
-                    arg: 0,
-                    ty: Some(quote! { usize }),
-                },
-                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            OpKind::RollingMean => OpInfo {
-                op_type: quote! { ::wingfoil_next::ops::RollingMean },
-                callback_activated: false,
-                has_start: false,
-                state_in_start: false,
-                owned_closure: None,
-                unit_output: false,
-                inputs: Inputs::One,
-                cfg_init: CfgInit::Expr {
-                    arg: 0,
-                    ty: Some(quote! { usize }),
-                },
-                state_init: StateInit::Default(quote! { ::wingfoil_next::ops::RollingWindowState }),
-                value_seed: ValueSeed::Default,
-                edges: Edges::AllActive,
-            },
-            // Custom info depends on the call site (arg count / closure-ness),
-            // so it lives on the node: see `NodeDef::info`.
-            OpKind::Custom => unreachable!("custom ops use NodeDef::info, not OpKind::info"),
-        }
-    }
-}
-
+/// One node of the parsed DAG. There is **one emission mechanism**: every op
+/// is dispatched through naming-convention forwarder functions
+/// (`__wf_op_<method>_cycle` / `_cycle_owned` / `_start` / `_start_owned` /
+/// `_seed_state` / `_seed_value`, plus the `__WF_OP_<METHOD>_ACTIVATION` and
+/// `__WF_OP_<METHOD>_PASSIVE` consts), generated by `#[op]` next to the op's
+/// impl — or hand-written for exotic shapes (fold's cfg-derived seeds,
+/// sample's passive edge). The macro never names an op type: rustc's
+/// inference resolves it from the argument types at the expansion site, and
+/// per-op consts fold into the dispatch conditions after monomorphization.
+///
+/// Call-site classification (in `apply_call` / the source arm):
+/// - an argument `&name` (or a bare input-parameter `name`) where `name` is
+///   a stream bound in this graph → an **edge** (`refs`, receiver first);
+/// - a literal closure → `closure`, passed by value at the cycle call (the
+///   `cycle_owned_cfg` inference-deferral trick);
+/// - anything else → `plain`, the op's `Cfg` (one value, or a tuple).
 struct NodeDef {
     name: Ident,
-    op: OpKind,
-    /// For [`OpKind::Custom`]: the method ident from the call site, naming
-    /// the forwarder functions the emission calls (spans point errors at the
-    /// offending method). `None` for every table op.
-    custom: Option<Ident>,
-    /// Indices (into the node list) of upstream nodes, in op-argument order.
+    /// The op's method name, naming its forwarder family. `None` for input
+    /// pseudo-nodes (stream parameters of the wiring fn), which have no
+    /// storage or dispatch — the `nested` expansion reads their value/tick
+    /// from the outer graph.
+    method: Option<Ident>,
+    /// Upstream node indices: the receiver first (combinators), then every
+    /// `&stream` argument in call order. Empty for sources.
     refs: Vec<usize>,
-    /// Non-node args (configs, closures), in op-argument order.
-    exprs: Vec<Expr>,
+    /// Non-stream, non-closure arguments, in call order — the op's `Cfg`.
+    plain: Vec<Expr>,
+    /// At most one literal-closure argument.
+    closure: Option<Expr>,
 }
 
 impl NodeDef {
-    /// The [`OpInfo`] driving this node's emission: the hand-written table row
-    /// for known ops, or the one **generic shape** for custom ops — the
-    /// receiver plus every `&stream` argument as active, values-only inputs
-    /// (in call order), `Cfg` from the (optional) remaining argument,
-    /// `State`/value-slot `Default`-seeded with types left to inference.
-    /// Everything else a table row can express (passive edges, tick-flag
-    /// inputs, non-default seeding, unit outputs) is out of the fallback's
-    /// scope by design.
-    fn info(&self) -> OpInfo {
-        if self.op != OpKind::Custom {
-            return self.op.info();
-        }
-        // A *literal* closure config goes by value through the `_cycle_owned`
-        // forwarder (same inference-deferral trick as the table's
-        // `cycle_owned_cfg`); any other config argument is the op's `Cfg`,
-        // hoisted into a `__cfg` local. (`exprs` holds only config args for
-        // custom nodes — stream edges were routed into `refs` at parse time.)
-        let lit_closure = self.exprs.len() == 1 && matches!(self.exprs[0], Expr::Closure(_));
-        OpInfo {
-            op_type: quote! {},
-            // Not used for dispatch: a custom op's dirty check is guarded by
-            // its `__WF_OP_<NAME>_ACTIVATION` const at the emission sites
-            // (see `node_dispatch` / `expand_nested`), so a non-scheduling op
-            // pays nothing after constant folding.
-            callback_activated: false,
-            // `Op::start` has a no-op default; calling it unconditionally
-            // through the forwarder lets custom ops keep lifecycle hooks
-            // (the no-op case is inlined away after monomorphization).
-            has_start: true,
-            state_in_start: true,
-            owned_closure: if lit_closure { Some(0) } else { None },
-            unit_output: false,
-            inputs: Inputs::Many(self.refs.len()),
-            cfg_init: if self.exprs.is_empty() || lit_closure {
-                CfgInit::None
-            } else {
-                CfgInit::Expr { arg: 0, ty: None }
-            },
-            state_init: StateInit::DefaultInferred,
-            value_seed: ValueSeed::Default,
-            edges: Edges::AllActive,
-        }
+    fn is_input(&self) -> bool {
+        self.method.is_none()
     }
 
-    /// The forwarder function ident for a custom op: `__wf_op_<method>_<kind>`
-    /// (`kind` ∈ cycle / cycle_owned / start / start_owned), spanned at the
-    /// call-site method so an op with no `#[op]`-generated forwarders errors
-    /// *there*.
-    fn forwarder(&self, kind: &str) -> Ident {
-        let method = self
-            .custom
+    fn method(&self) -> &Ident {
+        self.method
             .as_ref()
-            .expect("invariant: forwarder() only called for OpKind::Custom nodes");
+            .expect("invariant: input pseudo-nodes are skipped before emission")
+    }
+
+    /// The forwarder function ident `__wf_op_<method>_<kind>`, spanned at the
+    /// call-site method so an op with no forwarders errors *there*.
+    fn forwarder(&self, kind: &str) -> Ident {
+        let method = self.method();
         Ident::new(&format!("__wf_op_{method}_{kind}"), method.span())
     }
 
-    /// The `__WF_OP_<METHOD>_ACTIVATION` const for a custom op — the op's
-    /// `Op::ACTIVATION`, re-emitted monomorphically by `#[op]` so the
-    /// emission can guard the dirty check with it. The guard is a *runtime*
-    /// `const.callback_activated() && __dirty[i]` expression that LLVM
-    /// constant-folds to nothing for non-scheduling ops (measured: restores
-    /// exact parity with table rows on the dense-chain bench).
-    fn activation_const(&self) -> Ident {
-        let method = self
-            .custom
-            .as_ref()
-            .expect("invariant: activation_const() only called for OpKind::Custom nodes");
+    /// The `__WF_OP_<METHOD>_<kind>` const ident (ACTIVATION / PASSIVE).
+    fn op_const(&self, kind: &str) -> Ident {
+        let method = self.method();
         Ident::new(
-            &format!("__WF_OP_{}_ACTIVATION", method.to_string().to_uppercase()),
+            &format!("__WF_OP_{}_{kind}", method.to_string().to_uppercase()),
             method.span(),
         )
     }
 
-    /// Active upstream node indices (what propagates ticks to this node).
-    /// The active/passive edge shape is single-sourced in [`OpInfo::edges`]
-    /// (e.g. Sample's data edge is passive, its trigger active) so the three
-    /// emission paths cannot disagree.
-    fn active_ups(&self) -> Vec<usize> {
-        match self.info().edges {
-            Edges::AllActive => self.refs.clone(),
-            Edges::OneActive(i) => vec![self.refs[i]],
+    /// Whether this node keeps a `__cfg_<name>` local (any plain args).
+    fn has_cfg(&self) -> bool {
+        !self.plain.is_empty()
+    }
+
+    /// The plain-config expression: one value, or a tuple in call order.
+    fn cfg_expr(&self) -> TokenStream2 {
+        match self.plain.len() {
+            0 => quote! { () },
+            1 => {
+                let e = &self.plain[0];
+                quote! { #e }
+            }
+            _ => {
+                let es = &self.plain;
+                quote! { ( #(#es),* ) }
+            }
         }
     }
 }
@@ -695,33 +335,54 @@ impl ChainWalker {
         }
     }
 
-    fn push(&mut self, name: Ident, op: OpKind, refs: Vec<usize>, exprs: Vec<Expr>) -> usize {
-        let ix = self.nodes.len();
-        self.nodes.push(NodeDef {
-            name,
-            op,
-            custom: None,
-            refs,
-            exprs,
-        });
-        ix
-    }
-
-    /// Push a generic-fallback node for an unknown combinator `method`.
-    fn push_custom(
+    /// Push a node for op `method`, classifying `args`: `&stream` → edge,
+    /// literal closure → by-value cycle config, anything else → plain `Cfg`.
+    fn push_op(
         &mut self,
         name: Ident,
         method: Ident,
+        receiver: Option<usize>,
+        args: &[&Expr],
+    ) -> syn::Result<usize> {
+        let mut refs: Vec<usize> = receiver.into_iter().collect();
+        let mut plain: Vec<Expr> = Vec::new();
+        let mut closure: Option<Expr> = None;
+        for arg in args {
+            if let Ok(edge) = self.stream_ref_arg(arg) {
+                refs.push(edge);
+            } else if matches!(arg, Expr::Closure(_)) {
+                if closure.is_some() {
+                    return Err(syn::Error::new(
+                        method.span(),
+                        format!(
+                            "`.{method}(..)` has more than one literal closure argument; ops take \
+                             at most one (bind extras to a `let` first)"
+                        ),
+                    ));
+                }
+                closure = Some((*arg).clone());
+            } else {
+                plain.push((*arg).clone());
+            }
+        }
+        Ok(self.push_node(name, Some(method), refs, plain, closure))
+    }
+
+    fn push_node(
+        &mut self,
+        name: Ident,
+        method: Option<Ident>,
         refs: Vec<usize>,
-        exprs: Vec<Expr>,
+        plain: Vec<Expr>,
+        closure: Option<Expr>,
     ) -> usize {
         let ix = self.nodes.len();
         self.nodes.push(NodeDef {
             name,
-            op: OpKind::Custom,
-            custom: Some(method),
+            method,
             refs,
-            exprs,
+            plain,
+            closure,
         });
         ix
     }
@@ -828,27 +489,12 @@ impl ChainWalker {
             } else {
                 self.anon_name(method.span())
             };
-            match method.to_string().as_str() {
-                "ticker" | "constant" => {
-                    let op = if *method == "ticker" {
-                        OpKind::Ticker
-                    } else {
-                        OpKind::Constant
-                    };
-                    expect_arity(method, args, 1)?;
-                    self.push(name, op, vec![], vec![args[0].clone()])
-                }
-                other => {
-                    return Err(syn::Error::new(
-                        method.span(),
-                        format!(
-                            "unknown source `.{other}(..)` on the builder; expected `.ticker(..)` \
-                             or `.constant(..)` (external sources are not supported in graph! — \
-                             use the fluent API directly)"
-                        ),
-                    ));
-                }
-            }
+            // Sources go through the same forwarder mechanism as combinators
+            // — `.ticker(..)`, `.constant(..)`, or any user source with
+            // `#[op]`-generated forwarders. No receiver, so no edges (a
+            // `&stream` argument still classifies as an edge, which a
+            // source's forwarder arity will reject).
+            self.push_op(name, (*method).clone(), None, args)?
         } else {
             self.lookup(root)?
         };
@@ -884,10 +530,11 @@ impl ChainWalker {
         Ok(())
     }
 
-    /// Dispatch one fluent method call onto tail `cur`, pushing the node(s) it
-    /// expands to and returning the new tail. Single node for most
-    /// combinators; `map_n` / `fan` expand to several — bounded, compile-time
-    /// repetition that keeps the DAG static (their counts must be literals).
+    /// Dispatch one fluent method call onto tail `cur`, pushing the node(s)
+    /// it expands to and returning the new tail. Parse-level **sugar**
+    /// (`count`, `accumulate`, `ewma_per_tick`, `ewma_half_life`, `map_n`,
+    /// `fan`) rewrites into base ops; every other method — built-in or
+    /// user-defined — is one op node dispatched through its forwarders.
     fn apply_call(
         &mut self,
         cur: usize,
@@ -896,68 +543,30 @@ impl ChainWalker {
         name: Ident,
     ) -> syn::Result<usize> {
         Ok(match method.to_string().as_str() {
-            "map" => {
-                expect_arity(method, args, 1)?;
-                self.push(name, OpKind::Map, vec![cur], vec![args[0].clone()])
-            }
-            "fold" => {
-                expect_arity(method, args, 2)?;
-                self.push(
-                    name,
-                    OpKind::Fold,
-                    vec![cur],
-                    vec![args[0].clone(), args[1].clone()],
-                )
-            }
-            "filter" => {
-                expect_arity(method, args, 1)?;
-                let cond = self.stream_ref_arg(args[0])?;
-                self.push(name, OpKind::Filter, vec![cur, cond], vec![])
-            }
-            "sample" => {
-                expect_arity(method, args, 1)?;
-                let trigger = self.stream_ref_arg(args[0])?;
-                self.push(name, OpKind::Sample, vec![cur, trigger], vec![])
-            }
-            "merge" => {
-                expect_arity(method, args, 1)?;
-                let other = self.stream_ref_arg(args[0])?;
-                self.push(name, OpKind::Merge, vec![cur, other], vec![])
-            }
-            "join" => {
-                expect_arity(method, args, 2)?;
-                let other = self.stream_ref_arg(args[0])?;
-                self.push(name, OpKind::Join, vec![cur, other], vec![args[1].clone()])
-            }
-            "delay" => {
-                expect_arity(method, args, 1)?;
-                self.push(name, OpKind::Delay, vec![cur], vec![args[0].clone()])
-            }
             // Sugar, desugared to the same folds the fluent layer uses.
             "count" => {
                 expect_arity(method, args, 0)?;
                 let init: Expr = parse_quote!(0u64);
                 let f: Expr = parse_quote!(|__acc, _| *__acc += 1);
-                self.push(name, OpKind::Fold, vec![cur], vec![init, f])
+                let fold = Ident::new("fold", method.span());
+                self.push_node(name, Some(fold), vec![cur], vec![init], Some(f))
             }
             "accumulate" => {
                 expect_arity(method, args, 0)?;
                 let init: Expr = parse_quote!(::std::vec::Vec::new());
                 let f: Expr =
                     parse_quote!(|__acc, __v| __acc.push(::core::clone::Clone::clone(__v)));
-                self.push(name, OpKind::Fold, vec![cur], vec![init, f])
+                let fold = Ident::new("fold", method.span());
+                self.push_node(name, Some(fold), vec![cur], vec![init], Some(f))
             }
-            // Statistics ops (f64 → f64). The three `ewma*` spellings share
-            // one op, differing only in the `EwmaDecay` config they build.
-            "ewma" => {
-                expect_arity(method, args, 1)?;
-                self.push(name, OpKind::Ewma, vec![cur], vec![args[0].clone()])
-            }
+            // The three `ewma*` spellings share one op, differing only in the
+            // `EwmaDecay` config they build.
             "ewma_per_tick" => {
                 expect_arity(method, args, 1)?;
                 let alpha = args[0];
                 let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::PerTick(#alpha));
-                self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
+                let ewma = Ident::new("ewma", method.span());
+                self.push_node(name, Some(ewma), vec![cur], vec![cfg], None)
             }
             "ewma_half_life" => {
                 expect_arity(method, args, 1)?;
@@ -965,15 +574,8 @@ impl ChainWalker {
                 let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::HalfLife(
                     (#half_life).as_nanos() as f64
                 ));
-                self.push(name, OpKind::Ewma, vec![cur], vec![cfg])
-            }
-            "rolling_sum" => {
-                expect_arity(method, args, 1)?;
-                self.push(name, OpKind::RollingSum, vec![cur], vec![args[0].clone()])
-            }
-            "rolling_mean" => {
-                expect_arity(method, args, 1)?;
-                self.push(name, OpKind::RollingMean, vec![cur], vec![args[0].clone()])
+                let ewma = Ident::new("ewma", method.span());
+                self.push_node(name, Some(ewma), vec![cur], vec![cfg], None)
             }
             // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
             // `map`s; `fan(N, |s| <sub-chain>)` builds N copies of a sub-chain
@@ -983,6 +585,7 @@ impl ChainWalker {
                 expect_arity(method, args, 2)?;
                 let n = parse_static_count(method, args[0])?;
                 let f = args[1];
+                let map = Ident::new("map", method.span());
                 let mut tail = cur;
                 for k in 0..n {
                     let node_name = if k + 1 == n {
@@ -990,7 +593,7 @@ impl ChainWalker {
                     } else {
                         self.anon_name(method.span())
                     };
-                    tail = self.push(node_name, OpKind::Map, vec![tail], vec![f.clone()]);
+                    tail = self.push_op(node_name, map.clone(), Some(tail), &[f])?;
                 }
                 tail
             }
@@ -1030,6 +633,7 @@ impl ChainWalker {
                     .collect::<syn::Result<_>>()?;
                 // Left-fold the branch tails through binary merges, matching
                 // the fluent layer's N-ary "first supplied that ticked wins".
+                let merge = Ident::new("merge", method.span());
                 let mut merged = tails[0];
                 for (j, &tail) in tails.iter().enumerate().skip(1) {
                     let node_name = if j + 1 == tails.len() {
@@ -1037,46 +641,21 @@ impl ChainWalker {
                     } else {
                         self.anon_name(method.span())
                     };
-                    merged = self.push(node_name, OpKind::Merge, vec![merged, tail], vec![]);
+                    merged = self.push_node(
+                        node_name,
+                        Some(merge.clone()),
+                        vec![merged, tail],
+                        vec![],
+                        None,
+                    );
                 }
                 merged
             }
-            // Generic fallback: an unknown method is assumed to be a custom
-            // op whose `#[op]` attribute generated forwarder functions
-            // (`__wf_op_<name>_cycle` etc.) in scope at the expansion site.
-            // Arguments are classified at expansion time: an argument of the
-            // form `&name` (or a bare input-parameter `name`) where `name` is
-            // a stream bound in this graph is a **stream edge**; everything
-            // else is config. This is unambiguous because stream names cannot
-            // be shadowed and non-wiring code cannot mention them. The op's
-            // inputs are `(receiver, edges…)` in call order — values-only,
-            // all active (the `join` shape); at most one config argument,
-            // taken as the op's `Cfg` (a literal closure goes by value
-            // through `_cycle_owned`). If no forwarders exist — a typo, or an
-            // op that never derived them — the error is an unresolved
-            // `__wf_op_<name>_cycle` spanned at this method.
-            _ => {
-                let mut refs = vec![cur];
-                let mut cfgs: Vec<Expr> = Vec::new();
-                for arg in args {
-                    match self.stream_ref_arg(arg) {
-                        Ok(edge) => refs.push(edge),
-                        Err(_) => cfgs.push((*arg).clone()),
-                    }
-                }
-                if cfgs.len() > 1 {
-                    return Err(syn::Error::new(
-                        method.span(),
-                        format!(
-                            "`.{method}(..)` is not a built-in combinator, and custom ops take \
-                             at most one non-stream (config) argument — got {}. Stream edges \
-                             must be written `&name` referencing a stream bound in this graph",
-                            cfgs.len()
-                        ),
-                    ));
-                }
-                self.push_custom(name, method.clone(), refs, cfgs)
-            }
+            // Everything else — built-in or user op — dispatches through its
+            // naming-convention forwarders. A typo (or an op with no
+            // forwarders in scope) fails as an unresolved
+            // `__wf_op_<name>_cycle`, spanned at this method.
+            _ => self.push_op(name, method.clone(), Some(cur), args)?,
         })
     }
 
@@ -1245,7 +824,7 @@ impl Parse for GraphDef {
         // Input streams are pseudo-nodes: chains may root at them, and the
         // `nested` expansion reads their value/tick from the outer graph.
         for (name, _) in &inputs {
-            let ix = walker.push(name.clone(), OpKind::Input, vec![], vec![]);
+            let ix = walker.push_node(name.clone(), None, vec![], vec![], None);
             walker.index_of.insert(name.to_string(), ix);
         }
         let mut passthrough: Vec<(usize, Stmt)> = Vec::new();
@@ -1362,7 +941,7 @@ impl Parse for GraphDef {
                     format!("`{name}` is not a stream bound by a `let` in this body"),
                 ));
             };
-            if walker.nodes[ix].op == OpKind::Input {
+            if walker.nodes[ix].is_input() {
                 return Err(syn::Error::new(
                     name.span(),
                     format!(
@@ -1429,9 +1008,13 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Parsed `#[op(build = <ident>)]` arguments.
+/// Parsed `#[op(build = <ident>[, no_builder])]` arguments. `no_builder`
+/// skips the interpreted `Builder` method (for ops with hand-written
+/// builder wiring — sources, multi-input, tick-flag shapes) while still
+/// emitting the `graph!` forwarders.
 struct OpArgs {
     build: Ident,
+    no_builder: bool,
 }
 
 impl Parse for OpArgs {
@@ -1445,12 +1028,22 @@ impl Parse for OpArgs {
         }
         input.parse::<Token![=]>()?;
         let build: Ident = input.parse()?;
-        Ok(OpArgs { build })
+        let mut no_builder = false;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            let flag: Ident = input.parse()?;
+            if flag != "no_builder" {
+                return Err(syn::Error::new(flag.span(), "expected `no_builder`"));
+            }
+            no_builder = true;
+        }
+        Ok(OpArgs { build, no_builder })
     }
 }
 
 /// The `T` of a single-element reference tuple type `(&'a T,)`, or an error if
-/// the type is not that shape (which is how `#[op]` enforces its scope).
+/// the type is not that shape (which is how `#[op]` scopes its *Builder
+/// method* generation; the `graph!` forwarders support any [`InShape`]).
 fn single_ref_tuple_elem(ty: &Type) -> syn::Result<Type> {
     if let Type::Tuple(tup) = ty
         && tup.elems.len() == 1
@@ -1460,7 +1053,8 @@ fn single_ref_tuple_elem(ty: &Type) -> syn::Result<Type> {
     }
     Err(syn::Error::new(
         ty.span(),
-        "#[op] supports only single-input ops: `type In<'a>` must be `(&'a T,)`",
+        "#[op] generates a Builder method only for single-input ops (`type In<'a>` = `(&'a T,)`); \
+         add `no_builder` to keep a hand-written Builder method and still get graph! forwarders",
     ))
 }
 
@@ -1469,23 +1063,161 @@ fn is_unit_type(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(t) if t.elems.is_empty())
 }
 
+fn is_bool(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.path.is_ident("bool"))
+}
+
+/// Strip lifetimes from a type (`&'a T` -> `&T`), recursively — forwarder
+/// signatures use elided lifetimes where `Op::In<'a>` names one.
+fn strip_lifetimes(ty: &Type) -> Type {
+    let mut ty = ty.clone();
+    strip_lifetimes_mut(&mut ty);
+    ty
+}
+
+fn strip_lifetimes_mut(ty: &mut Type) {
+    match ty {
+        Type::Reference(r) => {
+            r.lifetime = None;
+            strip_lifetimes_mut(&mut r.elem);
+        }
+        Type::Tuple(t) => t.elems.iter_mut().for_each(strip_lifetimes_mut),
+        Type::Path(p) => {
+            for seg in p.path.segments.iter_mut() {
+                if let syn::PathArguments::AngleBracketed(args) = &mut seg.arguments {
+                    for arg in args.args.iter_mut() {
+                        if let syn::GenericArgument::Type(t) = arg {
+                            strip_lifetimes_mut(t);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The identifiers appearing anywhere in a token stream — used to filter an
+/// impl's generic params down to those a given type actually mentions.
+fn idents_in(tokens: TokenStream2, out: &mut std::collections::HashSet<String>) {
+    for tt in tokens {
+        match tt {
+            proc_macro2::TokenTree::Ident(i) => {
+                out.insert(i.to_string());
+            }
+            proc_macro2::TokenTree::Group(g) => idents_in(g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+fn idents_of(tokens: TokenStream2) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    idents_in(tokens, &mut set);
+    set
+}
+
+/// The parsed shape of an `Op::In` tuple: its stream edges, and how to build
+/// the op's `In` value from the **uniform pairs input** the `graph!` emission
+/// always passes — `((&v0, t0), (&v1, t1), ...)`, one `(value, tick)` pair
+/// per edge. Element forms:
+/// - `&T` — edge, value only;
+/// - `(&T, bool)` — edge with its tick flag;
+/// - bare `bool` — the tick flag of the *previous* edge (delay's flat form).
+struct InShape {
+    /// Per-edge value reference types, lifetimes stripped (`&T`).
+    edge_ref_tys: Vec<Type>,
+    /// Per-edge value types (`T`), for `'static` predicates.
+    edge_val_tys: Vec<Type>,
+    /// Builds the op's `In` from the pairs param `__input`.
+    in_expr: TokenStream2,
+}
+
+fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
+    let Type::Tuple(tup) = in_ty else {
+        return Err(syn::Error::new(
+            in_ty.span(),
+            "#[op]: `type In<'a>` must be a tuple (possibly empty for sources)",
+        ));
+    };
+    let mut edge_ref_tys = Vec::new();
+    let mut edge_val_tys = Vec::new();
+    let mut elems: Vec<TokenStream2> = Vec::new();
+    for elem in &tup.elems {
+        match elem {
+            Type::Reference(r) => {
+                let ix = syn::Index::from(edge_ref_tys.len());
+                edge_ref_tys.push(strip_lifetimes(elem));
+                edge_val_tys.push(strip_lifetimes(&r.elem));
+                elems.push(quote! { __input.#ix.0 });
+            }
+            Type::Tuple(pair)
+                if pair.elems.len() == 2
+                    && matches!(pair.elems[0], Type::Reference(_))
+                    && is_bool(&pair.elems[1]) =>
+            {
+                let ix = syn::Index::from(edge_ref_tys.len());
+                let Type::Reference(r) = &pair.elems[0] else {
+                    unreachable!("guarded by the match arm");
+                };
+                edge_ref_tys.push(strip_lifetimes(&pair.elems[0]));
+                edge_val_tys.push(strip_lifetimes(&r.elem));
+                elems.push(quote! { (__input.#ix.0, __input.#ix.1) });
+            }
+            other if is_bool(other) => {
+                if edge_ref_tys.is_empty() {
+                    return Err(syn::Error::new(
+                        other.span(),
+                        "#[op]: a bare `bool` In element must follow the edge it is the tick of",
+                    ));
+                }
+                let ix = syn::Index::from(edge_ref_tys.len() - 1);
+                elems.push(quote! { __input.#ix.1 });
+            }
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "#[op]: In elements must be `&T` (edge), `(&T, bool)` (edge + tick), or \
+                     `bool` (previous edge\'s tick)",
+                ));
+            }
+        }
+    }
+    let in_expr = if tup.elems.is_empty() {
+        quote! { () }
+    } else {
+        quote! { ( #(#elems,)* ) }
+    };
+    Ok(InShape {
+        edge_ref_tys,
+        edge_val_tys,
+        in_expr,
+    })
+}
+
 fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let self_ty = &*imp.self_ty;
 
-    // Pull `In` / `Cfg` / `Out` off the impl's associated types, and the
-    // `ACTIVATION` expression off its associated const.
-    let (mut in_ty, mut cfg_ty, mut out_ty) = (None, None, None);
+    // Pull `In` / `Cfg` / `State` / `Out` off the impl\'s associated types,
+    // the `ACTIVATION` expression off its associated const, and whether the
+    // impl overrides `start`.
+    let (mut in_ty, mut cfg_ty, mut state_ty, mut out_ty) = (None, None, None, None);
     let mut activation_expr: Option<Expr> = None;
+    let mut overrides_start = false;
     for it in &imp.items {
         match it {
             ImplItem::Type(t) => match t.ident.to_string().as_str() {
                 "In" => in_ty = Some(t.ty.clone()),
                 "Cfg" => cfg_ty = Some(t.ty.clone()),
+                "State" => state_ty = Some(t.ty.clone()),
                 "Out" => out_ty = Some(t.ty.clone()),
                 _ => {}
             },
             ImplItem::Const(c) if c.ident == "ACTIVATION" => {
                 activation_expr = Some(c.expr.clone());
+            }
+            ImplItem::Fn(f) if f.sig.ident == "start" => {
+                overrides_start = true;
             }
             _ => {}
         }
@@ -1494,48 +1226,48 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         |what: &str| syn::Error::new(imp.span(), format!("#[op]: impl has no `type {what}`"));
     let in_ty = in_ty.ok_or_else(|| missing("In"))?;
     let cfg_ty = cfg_ty.ok_or_else(|| missing("Cfg"))?;
+    let state_ty = state_ty.ok_or_else(|| missing("State"))?;
     let out_ty = out_ty.ok_or_else(|| missing("Out"))?;
-    let input_ty = single_ref_tuple_elem(&in_ty)?;
+    let shape = parse_in_shape(&in_ty)?;
+    let activation_expr = activation_expr
+        .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
 
     let name = &args.build;
-    let has_cfg = !is_unit_type(&cfg_ty);
-    let cfg_param = if has_cfg {
-        quote! { , cfg: #cfg_ty }
-    } else {
-        quote! {}
-    };
-    let cfg_arg = if has_cfg {
-        quote! { cfg }
-    } else {
-        quote! { () }
-    };
 
-    // Emit the impl's generic *parameters* bare (`<A, B, F>`) and route every
-    // bound — inline ones and the impl's own `where` — into a single `where`
-    // clause, so a param is never bounded in two places (`multiple_bound_locations`).
-    // Add the two the slot machinery needs: an indexable input (`'static`) and
-    // a default-able output slot.
+    // Emit the impl\'s generic *parameters* bare (`<A, B, F>`) and route every
+    // bound — inline ones and the impl\'s own `where` — into a single `where`
+    // clause, so a param is never bounded in two places
+    // (`multiple_bound_locations`). Add the preds the slot machinery needs:
+    // indexable edge values (`'static`) and a default-able output slot.
     let mut bare_params: Vec<TokenStream2> = Vec::new();
+    let mut param_names: Vec<String> = Vec::new();
+    let mut inline_bounds: Vec<(String, TokenStream2)> = Vec::new();
     let mut preds: Vec<TokenStream2> = Vec::new();
     for p in &imp.generics.params {
         match p {
             syn::GenericParam::Type(tp) => {
                 let id = &tp.ident;
                 bare_params.push(quote! { #id });
+                param_names.push(id.to_string());
                 if !tp.bounds.is_empty() {
                     let bounds = &tp.bounds;
+                    inline_bounds.push((id.to_string(), quote! { #id: #bounds }));
                     preds.push(quote! { #id: #bounds });
                 }
             }
             other => bare_params.push(quote! { #other }),
         }
     }
+    let mut where_preds_src: Vec<TokenStream2> = Vec::new();
     if let Some(w) = &imp.generics.where_clause {
         for pr in &w.predicates {
+            where_preds_src.push(quote! { #pr });
             preds.push(quote! { #pr });
         }
     }
-    preds.push(quote! { #input_ty: 'static });
+    for val_ty in &shape.edge_val_tys {
+        preds.push(quote! { #val_ty: 'static });
+    }
     preds.push(quote! { #out_ty: ::core::default::Default });
     let generics = if bare_params.is_empty() {
         quote! {}
@@ -1544,105 +1276,229 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     };
     let where_tokens = quote! { where #(#preds),* };
 
-    let doc = format!("Interpreted-engine wiring for [`{name}`]. Generated by `#[op]`.");
-
-    // The graph!/compiled forwarders: generic functions that call the op's
-    // trait items without the *macro* ever naming the op type — the `graph!`
-    // generic fallback emits calls to these by **naming convention**
-    // (`__wf_op_<name>_cycle` …), and rustc's inference resolves the op's
-    // concrete type from the argument types at the expansion site. The
-    // `_owned` variants take `Cfg` by value as a direct argument so a literal
-    // closure cfg gets the same inference deferral as `cycle_owned_cfg`.
+    // ---- graph! forwarders --------------------------------------------------
+    //
+    // Generic functions the `graph!` emission calls by naming convention
+    // (`__wf_op_<name>_cycle` ...), so the macro never names the op type —
+    // rustc\'s inference resolves it from the argument types at the expansion
+    // site. The emission is uniform: every edge arrives as a `(value, tick)`
+    // pair; `in_expr` adapts the pairs to the op\'s declared `In` shape. The
+    // `_owned` variants take the (literal-closure) `Cfg` by value as a direct
+    // argument for the same inference deferral as `cycle_owned_cfg`.
     let cycle_fn = format_ident!("__wf_op_{}_cycle", name);
     let cycle_owned_fn = format_ident!("__wf_op_{}_cycle_owned", name);
     let start_fn = format_ident!("__wf_op_{}_start", name);
     let start_owned_fn = format_ident!("__wf_op_{}_start_owned", name);
-    // The op's `ACTIVATION` expression, re-emitted as a monomorphic const so
-    // the `graph!` fallback can guard its dirty check with it (the generic
-    // forwarders cannot carry a const, and `<X<T> as Op>::ACTIVATION` would
-    // need the type name the fallback never has). Requires the expression not
-    // to mention the impl's generics — true of every op in the catalog.
-    let activation_expr = activation_expr
-        .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
-    let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", name.to_string().to_uppercase());
+    let seed_state_fn = format_ident!("__wf_op_{}_seed_state", name);
+    let seed_value_fn = format_ident!("__wf_op_{}_seed_value", name);
+    let upper = name.to_string().to_uppercase();
+    let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", upper);
+    let passive_const = format_ident!("__WF_OP_{}_PASSIVE", upper);
+
+    let edge_ref_tys = &shape.edge_ref_tys;
+    let pairs_ty = if edge_ref_tys.is_empty() {
+        quote! { () }
+    } else {
+        quote! { ( #((#edge_ref_tys, bool),)* ) }
+    };
+    let in_expr = &shape.in_expr;
+
+    // Seed forwarders are *structural*: they return the State/Out type
+    // written in the impl, generic only over the params those tokens mention
+    // (plus the ignored cfg param `P`). Anything more would leave dangling
+    // inference vars at the call site. The default is `Default::default()`;
+    // ops needing config-derived seeds (fold) hand-write these forwarders.
+    let seed_fn = |ret_ty: &Type, fn_name: &Ident| {
+        let ret_idents = idents_of(quote! { #ret_ty });
+        let kept: Vec<Ident> = param_names
+            .iter()
+            .filter(|p| ret_idents.contains(*p))
+            .map(|p| format_ident!("{}", p))
+            .collect();
+        let kept_names: std::collections::HashSet<String> =
+            kept.iter().map(|i| i.to_string()).collect();
+        // A bound predicate is kept only if every impl generic it mentions
+        // is kept — else it would drag in dangling params.
+        let mut seed_preds: Vec<TokenStream2> = Vec::new();
+        for (owner, bound) in &inline_bounds {
+            if kept_names.contains(owner) {
+                let mentioned = idents_of(bound.clone());
+                if param_names
+                    .iter()
+                    .all(|p| !mentioned.contains(p) || kept_names.contains(p))
+                {
+                    seed_preds.push(bound.clone());
+                }
+            }
+        }
+        for pr in &where_preds_src {
+            let mentioned = idents_of(pr.clone());
+            if param_names.iter().any(|p| mentioned.contains(p))
+                && param_names
+                    .iter()
+                    .all(|p| !mentioned.contains(p) || kept_names.contains(p))
+            {
+                seed_preds.push(pr.clone());
+            }
+        }
+        seed_preds.push(quote! { #ret_ty: ::core::default::Default });
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            #[allow(clippy::unused_unit)]
+            pub fn #fn_name <#(#kept,)* __P> (_cfg: &__P) -> #ret_ty
+            where #(#seed_preds),*
+            {
+                ::core::default::Default::default()
+            }
+        }
+    };
+    let seed_state = seed_fn(&state_ty, &seed_state_fn);
+    let seed_value = seed_fn(&out_ty, &seed_value_fn);
+
+    // `_start_owned` is called when the op\'s config is a literal closure: the
+    // closure cannot be re-created for the start call (its duplicate would
+    // have un-inferable parameter types), so the convention is that
+    // closure-config ops have no config-touching start hook. When the impl
+    // does not override `start`, that is a plain no-op, fully generic so no
+    // op params dangle. An op that overrides `start` *and* has a closure
+    // config must hand-write its forwarders (this fn is then not emitted, so
+    // the call site fails to resolve rather than silently skipping the hook).
+    let start_owned = if overrides_start {
+        quote! {}
+    } else {
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #start_owned_fn <__Plain, __State> (
+                _plain: &mut __Plain,
+                _state: &mut __State,
+                _ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<()> {
+                ::core::result::Result::Ok(())
+            }
+        }
+    };
+
+    // `_start`, same principle as the seeds: when the impl does not override
+    // `start` the forwarder is a fully-erased no-op — a real forwarding fn
+    // would carry op generics that `Cfg`/`State` may not mention (filter's
+    // `T`), leaving un-inferable type vars at the call site. When `start`
+    // *is* overridden the real forwarder is emitted with the op's generics;
+    // such ops (ticker, constant) anchor them through `Cfg`/`State`.
+    let start = if overrides_start {
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #start_fn #generics (
+                __cfg: &mut #cfg_ty,
+                __state: &mut #state_ty,
+                __ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<()>
+            #where_tokens
+            {
+                <#self_ty as crate::op::Op>::start(__cfg, __state, __ctx)
+            }
+        }
+    } else {
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #start_fn <__Cfg, __State> (
+                _cfg: &mut __Cfg,
+                _state: &mut __State,
+                _ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<()> {
+                ::core::result::Result::Ok(())
+            }
+        }
+    };
+
     let forwarders = quote! {
         #[doc(hidden)]
         pub const #activation_const: crate::op::Activation = #activation_expr;
+        /// Bit i set = edge i is passive (does not activate the node).
+        #[doc(hidden)]
+        pub const #passive_const: u32 = 0;
 
         #[doc(hidden)]
         #[inline(always)]
         pub fn #cycle_fn #generics (
-            __cfg: &mut <#self_ty as crate::op::Op>::Cfg,
-            __state: &mut <#self_ty as crate::op::Op>::State,
-            __input: <#self_ty as crate::op::Op>::In<'_>,
+            __cfg: &mut #cfg_ty,
+            __state: &mut #state_ty,
+            __input: #pairs_ty,
             __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<crate::op::Tick<<#self_ty as crate::op::Op>::Out>>
+        ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
         #where_tokens
         {
-            <#self_ty as crate::op::Op>::cycle(__cfg, __state, __input, __ctx)
+            <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
         }
 
         #[doc(hidden)]
         #[inline(always)]
         pub fn #cycle_owned_fn #generics (
-            mut __cfg: <#self_ty as crate::op::Op>::Cfg,
-            __state: &mut <#self_ty as crate::op::Op>::State,
-            __input: <#self_ty as crate::op::Op>::In<'_>,
+            mut __cfg: #cfg_ty,
+            __plain: &mut (),
+            __state: &mut #state_ty,
+            __input: #pairs_ty,
             __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<crate::op::Tick<<#self_ty as crate::op::Op>::Out>>
+        ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
         #where_tokens
         {
-            <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, __input, __ctx)
+            <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
         }
 
-        #[doc(hidden)]
-        #[inline(always)]
-        pub fn #start_fn #generics (
-            __cfg: &mut <#self_ty as crate::op::Op>::Cfg,
-            __state: &mut <#self_ty as crate::op::Op>::State,
-            __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<()>
-        #where_tokens
-        {
-            <#self_ty as crate::op::Op>::start(__cfg, __state, __ctx)
-        }
+        #start
+        #start_owned
+        #seed_state
+        #seed_value
+    };
 
-        #[doc(hidden)]
-        #[inline(always)]
-        pub fn #start_owned_fn #generics (
-            mut __cfg: <#self_ty as crate::op::Op>::Cfg,
-            __state: &mut <#self_ty as crate::op::Op>::State,
-            __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<()>
-        #where_tokens
-        {
-            <#self_ty as crate::op::Op>::start(&mut __cfg, __state, __ctx)
+    // ---- interpreted Builder method (single-input ops only) ----------------
+    let builder = if args.no_builder {
+        quote! {}
+    } else {
+        let input_ty = single_ref_tuple_elem(&in_ty)?;
+        let has_cfg = !is_unit_type(&cfg_ty);
+        let cfg_param = if has_cfg {
+            quote! { , cfg: #cfg_ty }
+        } else {
+            quote! {}
+        };
+        let cfg_arg = if has_cfg {
+            quote! { cfg }
+        } else {
+            quote! { () }
+        };
+        let doc = format!("Interpreted-engine wiring for [`{name}`]. Generated by `#[op]`.");
+        quote! {
+            impl crate::interp::Builder {
+                #[doc = #doc]
+                pub fn #name #generics (
+                    &mut self,
+                    src: crate::interp::Handle<#input_ty>
+                    #cfg_param
+                ) -> crate::interp::Handle<#out_ty>
+                #where_tokens
+                {
+                    self.register_op1(
+                        src,
+                        ::core::any::type_name::<#self_ty>(),
+                        <#self_ty as crate::op::Op>::ACTIVATION,
+                        #cfg_arg,
+                        ::core::default::Default::default(),
+                        |__cfg, __state, __a, __ctx| {
+                            <#self_ty as crate::op::Op>::cycle(__cfg, __state, (__a,), __ctx)
+                        },
+                    )
+                }
+            }
         }
     };
 
     Ok(quote! {
         #forwarders
-        impl crate::interp::Builder {
-            #[doc = #doc]
-            pub fn #name #generics (
-                &mut self,
-                src: crate::interp::Handle<#input_ty>
-                #cfg_param
-            ) -> crate::interp::Handle<#out_ty>
-            #where_tokens
-            {
-                self.register_op1(
-                    src,
-                    ::core::any::type_name::<#self_ty>(),
-                    <#self_ty as crate::op::Op>::ACTIVATION,
-                    #cfg_arg,
-                    ::core::default::Default::default(),
-                    |__cfg, __state, __a, __ctx| {
-                        <#self_ty as crate::op::Op>::cycle(__cfg, __state, (__a,), __ctx)
-                    },
-                )
-            }
-        }
+        #builder
     })
 }
 
@@ -1738,90 +1594,41 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
     }
 }
 
-/// cfg + state + value slot declarations for one node, driven by the op's
-/// [`OpInfo`] (`cfg_init` / `state_init` / `unit_output`).
+/// cfg + state + value-slot declarations for one node — **uniform for every
+/// op**: the plain call arguments become the `__cfg` local (one value, or a
+/// tuple in call order), and the state and value slots are seeded through the
+/// op's `_seed_state` / `_seed_value` forwarders. The macro writes no types
+/// anywhere; inference resolves them through the forwarder calls (fold's
+/// hand-written seeds clone the accumulator init into both, so a passive
+/// read before the first tick sees `init` — classic parity).
 fn node_decl(node: &NodeDef) -> TokenStream2 {
     // Inputs have no storage here — their value/tick are read from the outer
     // graph in the `nested` prologue.
-    if node.op == OpKind::Input {
+    if node.is_input() {
         return quote! {};
     }
     let name = &node.name;
     let cfg = format_ident!("__cfg_{}", name);
     let state = format_ident!("__state_{}", name);
     let value = format_ident!("__v_{}", name);
-    let exprs = &node.exprs;
-    let info = node.info();
-
-    let cfg_decl = match &info.cfg_init {
-        CfgInit::None => quote! {},
-        CfgInit::Expr { arg, ty } => {
-            let e = &exprs[*arg];
-            match ty {
-                Some(t) => quote! { let mut #cfg: #t = #e; },
-                None => quote! { let mut #cfg = #e; },
-            }
-        }
-        CfgInit::NanoTimeFrom(arg) => {
-            let e = &exprs[*arg];
-            quote! { let mut #cfg = ::wingfoil_next::wingfoil::NanoTime::from(#e); }
-        }
-    };
-    let state_decl = match &info.state_init {
-        StateInit::None => quote! {},
-        StateInit::Expr(arg) => {
-            let e = &exprs[*arg];
-            quote! { let mut #state = #e; }
-        }
-        StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
-        StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
-        // The state's type is inferred from the forwarder call's
-        // `&mut <X as Op>::State` parameter (custom ops).
-        StateInit::DefaultInferred => {
-            quote! { let mut #state = ::core::default::Default::default(); }
-        }
-    };
-    // A **non-literal** closure config (map/fold/join) — e.g. `make_f()` or a
-    // named local — is evaluated **once** here into a setup local, not inline
-    // in the cycle loop: otherwise its factory re-runs every due cycle
-    // (drifting from the interpreted engine, which evaluates it once at
-    // wiring). The cycle then calls the ordinary `Op::cycle(&mut __cfg, …)`
-    // (its concrete factory type needs no inference help). A *literal* closure
-    // (`|i| ...`, `move |i| ...`) is left inline and passed by value directly
-    // through `cycle_owned_cfg`: hoisting it to a `let` would strip the context
-    // rustc needs to infer its argument types (E0282), and its construction is
-    // a zero-cost ZST each cycle anyway.
-    let closure_cfg_decl = match info.owned_closure {
-        Some(ix) if !matches!(&exprs[ix], Expr::Closure(_)) => {
-            let e = &exprs[ix];
-            quote! { let mut #cfg = #e; }
-        }
-        _ => quote! {},
-    };
-    // A unit-output op (ticker) has no value slot to declare. Otherwise seed
-    // the slot per the op's `value_seed`: `Default` for most, or a clone of
-    // the `__state` local for fold (so pre-first-tick reads see `init`).
-    let value_decl = if info.unit_output {
-        quote! {}
-    } else {
-        match info.value_seed {
-            ValueSeed::Default => quote! { let mut #value = Default::default(); },
-            ValueSeed::CloneState => {
-                quote! { let mut #value = ::core::clone::Clone::clone(&#state); }
-            }
-        }
-    };
-    // Delay keeps an extra engine-level `__seeded` flag so it can store its
-    // first upstream value into the slot *without ticking* (classic parity —
-    // passive readers see the real first value, not `T::default()`, before the
-    // delay elapses). See the Delay branch in `node_dispatch`.
-    let delay_seed_decl = if node.op == OpKind::Delay {
-        let seeded = format_ident!("__seeded_{}", name);
-        quote! { let mut #seeded = false; }
+    let seed_state = node.forwarder("seed_state");
+    let seed_value = node.forwarder("seed_value");
+    let cfg_decl = if node.has_cfg() {
+        let e = node.cfg_expr();
+        quote! { let mut #cfg = #e; }
     } else {
         quote! {}
     };
-    quote! { #cfg_decl #closure_cfg_decl #state_decl #value_decl #delay_seed_decl }
+    let cfg_ref = if node.has_cfg() {
+        quote! { &#cfg }
+    } else {
+        quote! { &() }
+    };
+    quote! {
+        #cfg_decl
+        let mut #state = #seed_state(#cfg_ref);
+        let mut #value = #seed_value(#cfg_ref);
+    }
 }
 
 /// Passthrough statements interleaved with node declarations in source
@@ -1842,63 +1649,40 @@ fn interleaved_setup(def: &GraphDef) -> Vec<TokenStream2> {
     setup
 }
 
-/// Which nodes need a named `__t_x` tick flag (someone consumes it) rather
-/// than a bare `if`.
-fn tick_flags_needed(def: &GraphDef) -> Vec<bool> {
-    let mut has_active_downstream = vec![false; def.nodes.len()];
-    for node in &def.nodes {
-        for u in node.active_ups() {
-            has_active_downstream[u] = true;
-        }
-    }
-    def.nodes
-        .iter()
-        .enumerate()
-        .map(|(i, node)| has_active_downstream[i] || def.outs.iter().any(|(o, _)| o == &node.name))
-        .collect()
-}
-
+/// The start call for one node: `_start` for plain configs, `_start_owned`
+/// for literal-closure configs (which the start convention cannot see — the
+/// forwarder is a no-op unless the op overrides `start`, in which case it
+/// must hand-write its forwarders). `Op::start` has a no-op default, so
+/// calling unconditionally costs nothing after monomorphization.
 fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     let cfg = format_ident!("__cfg_{}", node.name);
     let state = format_ident!("__state_{}", node.name);
-    let state_arg = start_state_arg(node, &state);
     let ctx = ctx_expr(target, idx);
-    if node.op == OpKind::Custom {
-        // Forwarder-based start: `_start(&mut cfg, ..)` when a cfg local
-        // exists, `_start_owned(<closure>, ..)` for a literal-closure cfg
-        // (rebuilt for the start call — a zero-sized value), `_start(&mut (),
-        // ..)` for a cfg-less op.
-        let info = node.info();
-        let call = match info.owned_closure {
-            Some(ix) => {
-                let f = &node.exprs[ix];
-                let fwd = node.forwarder("start_owned");
-                quote! { #fwd(#f, #state_arg, &mut __ctx)?; }
-            }
-            None => {
-                let cfg_arg = cycle_cfg_arg(node, &cfg);
-                let fwd = node.forwarder("start");
-                quote! { #fwd(#cfg_arg, #state_arg, &mut __ctx)?; }
-            }
-        };
-        return quote! {
-            {
-                let mut __ctx = #ctx;
-                #call
-            }
-        };
-    }
-    let op_path = op_path(node.op);
+    let cfg_arg = if node.has_cfg() {
+        quote! { &mut #cfg }
+    } else {
+        quote! { &mut () }
+    };
+    let fwd = if node.closure.is_some() {
+        node.forwarder("start_owned")
+    } else {
+        node.forwarder("start")
+    };
     quote! {
         {
             let mut __ctx = #ctx;
-            #op_path::start(&mut #cfg, #state_arg, &mut __ctx)?;
+            #fwd(#cfg_arg, &mut #state, &mut __ctx)?;
         }
     }
 }
 
-/// The dispatch line for one node: condition, `Op::cycle` call, tick flag.
-fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> TokenStream2 {
+/// The dispatch line for one node: condition, forwarder cycle call, tick
+/// flag. The condition composes, per edge, a passive-mask guard
+/// (`__WF_OP_<M>_PASSIVE`, sample's data edge), plus the activation-const
+/// guards for busy-poll (`always`) and callback (`schedules`/`threaded`)
+/// activation — all consts, folded away after monomorphization for the ops
+/// that do not use them.
+fn node_dispatch(def: &GraphDef, target: Target, i: usize) -> TokenStream2 {
     let node = &def.nodes[i];
     let name = &node.name;
     let cfg = format_ident!("__cfg_{}", name);
@@ -1906,163 +1690,82 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     let value = format_ident!("__v_{}", name);
     let ticked = format_ident!("__t_{}", name);
     let idx = i;
+    let act = node.op_const("ACTIVATION");
+    let passive = node.op_const("PASSIVE");
 
     let mut cond_parts: Vec<TokenStream2> = node
-        .active_ups()
+        .refs
         .iter()
-        .map(|&u| {
+        .enumerate()
+        .map(|(pos, &u)| {
             let t = format_ident!("__t_{}", def.nodes[u].name);
-            quote! { #t }
+            let p = pos as u32;
+            quote! { (((#passive >> #p) & 1) == 0 && #t) }
         })
         .collect();
-    if node.op == OpKind::Custom {
-        // The macro cannot see the op's `ACTIVATION`, so the dirty check is
-        // guarded by its re-emitted const — constant-folded away when the op
-        // never schedules.
-        let act = node.activation_const();
-        cond_parts.push(quote! { (#act.callback_activated() && __dirty[#idx]) });
-    } else if node.info().callback_activated {
-        cond_parts.push(quote! { __dirty[#idx] });
-    }
+    cond_parts.push(quote! { #act.always });
+    cond_parts.push(quote! { (#act.callback_activated() && __dirty[#idx]) });
     let cond = quote! { #(#cond_parts)||* };
 
     let input = cycle_input(def, node);
-    let cfg_arg = cycle_cfg_arg(node, &cfg);
-    let state_arg = cycle_state_arg(node, &state);
-    let on_value = if node.info().unit_output {
-        // Unit output: no value slot to store.
-        quote! { ::wingfoil_next::op::Tick::Value(()) => true, }
+    let cfg_arg = if node.has_cfg() {
+        quote! { &mut #cfg }
     } else {
-        quote! {
-            ::wingfoil_next::op::Tick::Value(__val) => {
-                #value = __val;
-                true
-            }
-        }
+        quote! { &mut () }
     };
-    // A *literal* closure config goes by value as a DIRECT argument so rustc
-    // defers its signature inference until `input` has resolved the op's value
-    // types (a closure behind `&mut` loses that deferral and fails E0282); it
-    // is a zero-cost ZST rebuilt each cycle. A *non-literal* config (`make_f()`,
-    // a named local) was evaluated once into `__cfg_<name>` by `node_decl` and
-    // is passed here via the ordinary `Op::cycle(&mut __cfg, …)` — its concrete
-    // type needs no inference help — so the factory runs once, not per cycle.
-    let cycle_call = if node.op == OpKind::Custom {
-        // Forwarder-based dispatch: the macro never names the op type — the
-        // forwarder's generic signature lets inference resolve it from the
-        // input/cfg argument types. A literal closure cfg goes by value
-        // through `_cycle_owned` (same inference-deferral trick as
-        // `cycle_owned_cfg`); everything else through `_cycle` by `&mut`.
-        match node.info().owned_closure {
-            Some(ix) => {
-                let f = &node.exprs[ix];
-                let fwd = node.forwarder("cycle_owned");
-                quote! { #fwd(#f, #state_arg, #input, &mut __ctx) }
-            }
-            None => {
-                let fwd = node.forwarder("cycle");
-                quote! { #fwd(#cfg_arg, #state_arg, #input, &mut __ctx) }
-            }
+    // A literal closure goes by value as a DIRECT argument so rustc defers
+    // its signature inference until `input` has resolved the op's value
+    // types (behind `&mut` that deferral does not apply); it is a zero-cost
+    // ZST rebuilt each cycle. Non-closure configs were hoisted once into
+    // `__cfg_<name>` by `node_decl`.
+    let cycle_call = match &node.closure {
+        Some(f) => {
+            let fwd = node.forwarder("cycle_owned");
+            quote! { #fwd(#f, #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
-    } else {
-        let op_path = op_path(node.op);
-        match node.op.info().owned_closure {
-            Some(ix) => {
-                if matches!(&node.exprs[ix], Expr::Closure(_)) {
-                    let f = &node.exprs[ix];
-                    let ty = op_type(node.op);
-                    quote! {
-                        ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
-                    }
-                } else {
-                    quote! { #op_path::cycle(&mut #cfg, #state_arg, #input, &mut __ctx) }
-                }
-            }
-            None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
+        None => {
+            let fwd = node.forwarder("cycle");
+            quote! { #fwd(#cfg_arg, &mut #state, #input, &mut __ctx) }
         }
     };
     let ctx = ctx_expr(target, idx);
     // `?` propagates an op error out of the enclosing `compiled()` fn or the
     // `nested()` composite closure — both return `anyhow::Result`.
-    let call = if node.op == OpKind::Delay {
-        // Delay carries two engine-level behaviours classic has that `Op::cycle`
-        // cannot express, applied here in every emission path (and mirrored in
-        // interp.rs):
-        //   1. zero delay emits inline in the *same* cycle (classic special-
-        //      cases it; scheduling `time + 0` would instead pop next cycle);
-        //   2. the first upstream value is stored into the slot *without*
-        //      ticking, so passive readers see it (not `T::default()`) before
-        //      the delay elapses.
-        // `Op::cycle` still owns the queue/scheduling for the non-zero case.
-        let src_v = upstream_value_expr(def, node.refs[0]);
-        let src_t = format_ident!("__t_{}", def.nodes[node.refs[0]].name);
-        let seeded = format_ident!("__seeded_{}", name);
-        let op_path = op_path(node.op);
-        quote! {
-            {
-                if #cfg == ::wingfoil_next::wingfoil::NanoTime::ZERO {
-                    if #src_t {
-                        #value = ::core::clone::Clone::clone(#src_v);
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    let mut __ctx = #ctx;
-                    match #op_path::cycle(&mut #cfg, &mut #state, (#src_v, #src_t), &mut __ctx)? {
-                        ::wingfoil_next::op::Tick::Value(__val) => {
-                            #value = __val;
-                            true
-                        }
-                        ::wingfoil_next::op::Tick::Quiet => {
-                            if #src_t && !#seeded {
-                                #value = ::core::clone::Clone::clone(#src_v);
-                                #seeded = true;
-                            }
-                            false
-                        }
-                    }
+    let call = quote! {
+        {
+            let mut __ctx = #ctx;
+            match #cycle_call? {
+                ::wingfoil_next::op::Tick::Value(__val) => {
+                    #value = __val;
+                    true
                 }
-            }
-        }
-    } else {
-        quote! {
-            {
-                let mut __ctx = #ctx;
-                match #cycle_call? {
-                    #on_value
-                    ::wingfoil_next::op::Tick::Quiet => false,
+                ::wingfoil_next::op::Tick::Silent(__val) => {
+                    #value = __val;
+                    false
                 }
+                ::wingfoil_next::op::Tick::Quiet => false,
             }
         }
     };
-
-    if needs_flag {
-        quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
-    } else {
-        quote! { if #cond { let _ = #call; } }
-    }
+    // Every node gets a named tick flag: downstream cycle inputs are uniform
+    // `(value, tick)` pairs, so any consumer may read it. `let _` silences
+    // the terminal-node case.
+    quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
 }
 
 fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let n = def.nodes.len();
-    let flags = tick_flags_needed(def);
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
     let mut body = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
-        if node.info().has_start {
-            starts.push(node_start(Target::Compiled, i, node));
-        }
-        body.push(node_dispatch(def, Target::Compiled, i, flags[i]));
+        starts.push(node_start(Target::Compiled, i, node));
+        body.push(node_dispatch(def, Target::Compiled, i));
     }
 
     let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
-    let out_values: Vec<TokenStream2> = def
-        .outs
-        .iter()
-        .map(|(o, _)| output_value_expr(def, o))
-        .collect();
+    let out_values: Vec<TokenStream2> =
+        def.outs.iter().map(|(o, _)| output_value_expr(o)).collect();
 
     quote! {
         /// The same graph, fully monomorphized: node state in locals, tick
@@ -2095,44 +1798,28 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let n = def.nodes.len();
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
-    let out_v = output_value_expr(def, out_name);
-    // Whether the island can be activated by kernel callbacks: an
-    // expansion-time bool for table ops, OR-ed at runtime with each custom
-    // op's `ACTIVATION` const (a handful of const bools evaluated once at
-    // wiring time).
-    let static_callback_activated = def.nodes.iter().any(|node| node.info().callback_activated);
-    let custom_activation_consts: Vec<Ident> = def
+    let out_v = output_value_expr(out_name);
+    // Whether the island can be activated by kernel callbacks: the OR of
+    // every inner op's `ACTIVATION` const — a handful of const bools,
+    // evaluated once at wiring time.
+    let act_consts: Vec<Ident> = def
         .nodes
         .iter()
-        .filter(|node| node.op == OpKind::Custom)
-        .map(|node| node.activation_const())
+        .filter(|node| !node.is_input())
+        .map(|node| node.op_const("ACTIVATION"))
         .collect();
     let callback_activated = quote! {
-        #static_callback_activated #(|| #custom_activation_consts.callback_activated())*
+        false #(|| #act_consts.callback_activated())*
     };
-    let flags = tick_flags_needed(def);
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
     let mut body = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
-        if node.op == OpKind::Input {
+        if node.is_input() {
             continue;
         }
-        if node.info().has_start {
-            starts.push(node_start(Target::Nested, i, node));
-        }
-        body.push(node_dispatch(def, Target::Nested, i, flags[i]));
-    }
-
-    // Only inputs that are an *active* upstream of some inner node activate
-    // the composite; a passively read input (sample's data edge) must not.
-    let mut input_active = vec![false; n];
-    for node in &def.nodes {
-        for u in node.active_ups() {
-            if def.nodes[u].op == OpKind::Input {
-                input_active[u] = true;
-            }
-        }
+        starts.push(node_start(Target::Nested, i, node));
+        body.push(node_dispatch(def, Target::Nested, i));
     }
 
     let in_names: Vec<&Ident> = def.inputs.iter().map(|(name, _)| name).collect();
@@ -2153,12 +1840,26 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
         .iter()
         .map(|name| format_ident!("__v_{}", name))
         .collect();
-    let active_ix_ids: Vec<&Ident> = def
+    // Only inputs consumed through a *non-passive* edge activate the
+    // composite (sample's data edge must not). Per input, OR the passive-mask
+    // guards of every consuming edge — consts, evaluated once at wiring.
+    let input_active_exprs: Vec<TokenStream2> = def
         .inputs
         .iter()
         .enumerate()
-        .filter(|(i, _)| input_active[*i])
-        .map(|(i, _)| &ix_ids[i])
+        .map(|(input_ix, _)| {
+            let mut parts: Vec<TokenStream2> = Vec::new();
+            for consumer in def.nodes.iter().filter(|node| !node.is_input()) {
+                let passive = consumer.op_const("PASSIVE");
+                for (pos, &u) in consumer.refs.iter().enumerate() {
+                    if u == input_ix {
+                        let p = pos as u32;
+                        parts.push(quote! { (((#passive >> #p) & 1) == 0) });
+                    }
+                }
+            }
+            quote! { false #(|| #parts)* }
+        })
         .collect();
     let ticked_bind = if def.inputs.is_empty() {
         quote! {}
@@ -2187,8 +1888,12 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
             )*
             let mut __q = ::wingfoil_next::wingfoil::TimeQueue::<usize>::new();
             let mut __dirty = [false; #n];
-            let __active: ::std::vec::Vec<usize> =
-                ::std::vec::Vec::from([#(#active_ix_ids),*]);
+            let mut __active: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
+            #(
+                if #input_active_exprs {
+                    __active.push(#ix_ids);
+                }
+            )*
             __g.__composite(__active, #callback_activated, move |__ctx, __is_start| {
                 let __now = __ctx.time();
                 let __start_time = __ctx.start_time();
@@ -2223,101 +1928,39 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     }
 }
 
-/// The concrete (inference-holed) op type, e.g. `::ops::Map<_, _, _>`.
-fn op_type(op: OpKind) -> TokenStream2 {
-    op.info().op_type
+/// The value expression for an output node (`o` is a resolved node name):
+/// its `__v_<name>` slot. Every op — unit-valued sources included — keeps a
+/// slot, seeded through its `_seed_value` forwarder.
+fn output_value_expr(o: &Ident) -> TokenStream2 {
+    let v = format_ident!("__v_{}", o);
+    quote! { #v }
 }
 
-/// The value expression for an output node (`o` is a resolved node name): its
-/// `__v_<name>` slot, or the unit literal `()` for a unit-output op (a bare
-/// ticker returned directly), which declares no value slot.
-fn output_value_expr(def: &GraphDef, o: &Ident) -> TokenStream2 {
-    let is_unit = def
-        .nodes
-        .iter()
-        .find(|n| &n.name == o)
-        .is_some_and(|n| n.info().unit_output);
-    if is_unit {
-        quote! { () }
-    } else {
-        let v = format_ident!("__v_{}", o);
-        quote! { #v }
-    }
-}
-
-/// The op type wrapped as `<Type as Op>` so trait items resolve without
-/// `Op` being in scope at the expansion site.
-fn op_path(op: OpKind) -> TokenStream2 {
-    let ty = op_type(op);
-    quote! { <#ty as ::wingfoil_next::op::Op> }
-}
-
-fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
-    if node.info().cfg_local() {
-        quote! { &mut #cfg }
-    } else {
-        quote! { &mut () }
-    }
-}
-
-fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.info().state_local() {
-        quote! { &mut #state }
-    } else {
-        quote! { &mut () }
-    }
-}
-
-fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.info().state_in_start {
-        quote! { &mut #state }
-    } else {
-        quote! { &mut () }
-    }
-}
-
-/// A `&`-expression for reading an upstream's current value. A ticker upstream
-/// has no value slot — its value is the unit literal. An input upstream's local
-/// is a borrow guard on the outer graph's slot, so it is re-borrowed rather
-/// than referenced.
+/// A `&`-expression for reading an upstream's current value. An input
+/// upstream's local is a borrow guard on the outer graph's slot, so it is
+/// re-borrowed rather than referenced.
 fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
     let up = &def.nodes[ix];
     let ident = format_ident!("__v_{}", up.name);
-    match up.op {
-        OpKind::Ticker => quote! { &() },
-        OpKind::Input => quote! { &*#ident },
-        _ => quote! { &#ident },
+    if up.is_input() {
+        quote! { &*#ident }
+    } else {
+        quote! { &#ident }
     }
 }
 
-/// The `Op::In` tuple for one cycle, built from upstream value/tick locals.
+/// The uniform cycle input: one `(value, tick)` pair per edge, in edge order
+/// (`()` for sources). The op's `_cycle` forwarder adapts the pairs to its
+/// declared `In` shape — value-only, tick-flagged, or pairs-verbatim — so
+/// the macro carries no per-op input-shape knowledge at all.
 fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
-    let v = |ix: usize| upstream_value_expr(def, ix);
-    let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
-    match node.info().inputs {
-        Inputs::Unit => quote! { () },
-        Inputs::One => {
-            let src = v(node.refs[0]);
-            quote! { (#src,) }
-        }
-        Inputs::Two => {
-            let (a, b) = (v(node.refs[0]), v(node.refs[1]));
-            quote! { (#a, #b) }
-        }
-        Inputs::OneTick => {
-            let src = v(node.refs[0]);
-            let ts = t(node.refs[0]);
-            quote! { (#src, #ts) }
-        }
-        Inputs::TwoTickPairs => {
-            let (a, b) = (v(node.refs[0]), v(node.refs[1]));
-            let (ta, tb) = (t(node.refs[0]), t(node.refs[1]));
-            quote! { ((#a, #ta), (#b, #tb)) }
-        }
-        Inputs::Many(n) => {
-            debug_assert_eq!(n, node.refs.len());
-            let vs = node.refs.iter().map(|&ix| v(ix));
-            quote! { ( #(#vs,)* ) }
-        }
+    if node.refs.is_empty() {
+        return quote! { () };
     }
+    let pairs = node.refs.iter().map(|&u| {
+        let v = upstream_value_expr(def, u);
+        let t = format_ident!("__t_{}", def.nodes[u].name);
+        quote! { (#v, #t) }
+    });
+    quote! { ( #(#pairs,)* ) }
 }
