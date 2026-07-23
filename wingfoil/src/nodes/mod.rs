@@ -52,9 +52,9 @@ mod window;
 mod with_time;
 
 pub use always::*;
-// Concrete node types used by generated static runners (`crate::codegen`)
-// for typed downcast handles. `#[doc(hidden)]` where newly exposed — they are
-// implementation detail, reachable by name only from generated code.
+// Concrete node types. Those marked `#[doc(hidden)]` are exposed by name for
+// internal construction only — an implementation detail, not part of the
+// stable public API.
 #[cfg(feature = "async")]
 pub use async_io::*;
 pub use callback::CallBackStream;
