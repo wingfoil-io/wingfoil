@@ -1101,6 +1101,376 @@ impl Op for RollingMedian {
     }
 }
 
+// ── time-windowed rolling statistics (Window::Time, count-weighted) ──────────
+//
+// Each op keeps the samples currently inside a bounded time window — the last
+// `window` nanoseconds of graph time — and computes a statistic over them.
+// Eviction semantics, reproduced from the classic `WindowStream` /
+// `RollingMomentStream` `Window::Time` path (`wingfoil/src/adapters/statistics.rs`):
+//
+//   * on each tick the current sample is pushed at `now = ctx.time()`, then
+//     every front entry whose age `now - t` is **strictly greater** than
+//     `window` is evicted — so an entry exactly `window` old is retained (an
+//     inclusive trailing boundary);
+//   * the just-pushed sample has age 0, so it is always in window and the window
+//     is **never empty** (classic has no empty-window instant — even a zero-width
+//     window keeps the current sample); and
+//   * `var`/`std` use the sample (ddof = 1) convention — `0.0` until at least two
+//     samples are in the window.
+//
+// All are count-weighted (the ordinary statistic over the samples in the
+// window). The time-*weighted* windowed combo (`Weighting::Time` over
+// `Window::Time`) is a separate follow-up.
+
+/// True when an entry at time `t` observed from `now` has aged past `window`
+/// nanoseconds (the classic strictly-greater trailing boundary). Time is
+/// monotonic, so `now >= t` and the subtraction never underflows.
+fn aged_out(now: NanoTime, t: NanoTime, window: u64) -> bool {
+    u64::from(now) - u64::from(t) > window
+}
+
+/// Ring-buffer state for the time-windowed sum: the `(time, value)` samples
+/// currently inside the window and their running total, maintained
+/// incrementally (add on push, subtract on evict) rather than rescanned.
+#[derive(Default)]
+pub struct TimeWindowSumState {
+    buffer: VecDeque<(NanoTime, f64)>,
+    sum: f64,
+}
+
+impl TimeWindowSumState {
+    /// Push `sample` at `now`, evict aged entries, and return the running sum
+    /// over what remains.
+    fn push(&mut self, now: NanoTime, sample: f64, window: u64) -> f64 {
+        self.buffer.push_back((now, sample));
+        self.sum += sample;
+        while let Some(&(t, v)) = self.buffer.front() {
+            if aged_out(now, t, window) {
+                self.sum -= v;
+                self.buffer.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.sum
+    }
+}
+
+/// Sum over a bounded time window of the last `window` (a [`NanoTime`] duration)
+/// of graph time — O(1) per tick. Mirrors the classic `sum(Window::Time(_))`.
+pub struct TimeWindowedSum;
+
+#[op(build = time_windowed_sum)]
+impl Op for TimeWindowedSum {
+    type Cfg = NanoTime;
+    type State = TimeWindowSumState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowSumState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let out = state.push(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(out))
+    }
+}
+
+/// Ring-buffer state for the time-windowed mean / variance / std: the
+/// `(time, value)` samples in the window plus incrementally maintained
+/// count-weighted moments (Welford's algorithm with exact removal), so a tick
+/// is O(1) amortised. Mirrors the classic `RollingMomentStream` under
+/// `Weighting::Count` with a `Window::Time` eviction rule.
+#[derive(Default)]
+pub struct TimeWindowMomentState {
+    buffer: VecDeque<(NanoTime, f64)>,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl TimeWindowMomentState {
+    /// Fold a new sample into the moments (Welford update).
+    fn add(&mut self, x: f64) {
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (x - mean_old) / self.count as f64;
+        self.m2 += (x - mean_old) * (x - self.mean);
+    }
+
+    /// Exact inverse of [`add`](Self::add): drop a previously added sample as it
+    /// leaves the window, in O(1). `m2` is clamped at zero against
+    /// revert-scheme floating-point drift.
+    fn remove(&mut self, x: f64) {
+        if self.count <= 1 {
+            self.count = 0;
+            self.mean = 0.0;
+            self.m2 = 0.0;
+            return;
+        }
+        let n = self.count as f64;
+        let mean_old = (n * self.mean - x) / (n - 1.0);
+        self.m2 -= (x - mean_old) * (x - self.mean);
+        if self.m2 < 0.0 {
+            self.m2 = 0.0;
+        }
+        self.mean = mean_old;
+        self.count -= 1;
+    }
+
+    /// Push `sample` at `now` and evict every aged entry, removing each from the
+    /// moments as it leaves.
+    fn push(&mut self, now: NanoTime, sample: f64, window: u64) {
+        self.buffer.push_back((now, sample));
+        self.add(sample);
+        while let Some(&(t, v)) = self.buffer.front() {
+            if aged_out(now, t, window) {
+                self.buffer.pop_front();
+                self.remove(v);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Sample variance (ddof = 1) — `0.0` while fewer than two samples are in
+    /// the window.
+    fn variance(&self) -> f64 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        self.m2 / (self.count as f64 - 1.0)
+    }
+}
+
+/// Arithmetic mean over a bounded time window — O(1) amortised per tick.
+/// Mirrors the classic `mean(Window::Time(_), Weighting::Count)`.
+pub struct TimeWindowedMean;
+
+#[op(build = time_windowed_mean)]
+impl Op for TimeWindowedMean {
+    type Cfg = NanoTime;
+    type State = TimeWindowMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(ctx.time(), *input.0, u64::from(*cfg));
+        // The current sample is always in window, so `count >= 1` and `mean`
+        // holds the window mean (equal to the sample on the first tick).
+        Ok(Tick::Value(state.mean))
+    }
+}
+
+/// **Sample** variance (ddof = 1) over a bounded time window — O(1) amortised
+/// per tick. Mirrors the classic `variance(Window::Time(_), Weighting::Count)`.
+pub struct TimeWindowedVar;
+
+#[op(build = time_windowed_var)]
+impl Op for TimeWindowedVar {
+    type Cfg = NanoTime;
+    type State = TimeWindowMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// **Sample** standard deviation over a bounded time window — the square root of
+/// [`TimeWindowedVar`], clamped at zero before the root so a constant window
+/// yields `0.0`, not `NaN`. Mirrors the classic `std(Window::Time(_),
+/// Weighting::Count)`.
+pub struct TimeWindowedStd;
+
+#[op(build = time_windowed_std)]
+impl Op for TimeWindowedStd {
+    type Cfg = NanoTime;
+    type State = TimeWindowMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// Monotonic-deque state for the time-windowed min & max. Holds `(time, value)`
+/// candidates kept monotonic in value and increasing in time front-to-back, so
+/// the front is always the window extreme — O(1) amortised per tick. Unlike the
+/// classic time-windowed `WindowStream` (a per-tick scan), this uses the same
+/// monotonic-deque trick as the classic *count*-windowed `RollingExtremeStream`,
+/// front-evicting by age instead of by index; the emitted values are identical.
+#[derive(Default)]
+pub struct TimeWindowExtremeState {
+    deque: VecDeque<(NanoTime, f64)>,
+}
+
+impl TimeWindowExtremeState {
+    /// Push `sample` at `now` and return the window extreme. `is_min` selects
+    /// which back candidates the new sample dominates: for a minimum we drop
+    /// candidates `>= sample`, for a maximum `<= sample`.
+    fn push(&mut self, now: NanoTime, sample: f64, window: u64, is_min: bool) -> f64 {
+        // Drop back candidates the new sample dominates (they can never again be
+        // the extreme while it is in the window).
+        while let Some(&(_, back)) = self.deque.back() {
+            let dominated = if is_min {
+                back >= sample
+            } else {
+                back <= sample
+            };
+            if dominated {
+                self.deque.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.deque.push_back((now, sample));
+
+        // Drop the front while it has aged out. The just-pushed sample has age
+        // 0, so the deque never empties.
+        while let Some(&(t, _)) = self.deque.front() {
+            if aged_out(now, t, window) {
+                self.deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.deque
+            .front()
+            .expect("invariant: just-pushed sample is within the window")
+            .1
+    }
+}
+
+/// Minimum over a bounded time window, via a monotonic deque — O(1) amortised
+/// per tick. Mirrors the classic `min(Window::Time(_))`.
+pub struct TimeWindowedMin;
+
+#[op(build = time_windowed_min)]
+impl Op for TimeWindowedMin {
+    type Cfg = NanoTime;
+    type State = TimeWindowExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowExtremeState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let out = state.push(ctx.time(), *input.0, u64::from(*cfg), true);
+        Ok(Tick::Value(out))
+    }
+}
+
+/// Maximum over a bounded time window, via a monotonic deque — O(1) amortised
+/// per tick. Mirrors the classic `max(Window::Time(_))`.
+pub struct TimeWindowedMax;
+
+#[op(build = time_windowed_max)]
+impl Op for TimeWindowedMax {
+    type Cfg = NanoTime;
+    type State = TimeWindowExtremeState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowExtremeState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let out = state.push(ctx.time(), *input.0, u64::from(*cfg), false);
+        Ok(Tick::Value(out))
+    }
+}
+
+/// Ring-buffer state for the time-windowed median — retains the `(time, value)`
+/// samples in the window and recomputes the median (sort) each tick, matching
+/// the classic recompute-per-tick `WindowStream` (the median has no cheap
+/// incremental form here).
+#[derive(Default)]
+pub struct TimeWindowMedianState {
+    buffer: VecDeque<(NanoTime, f64)>,
+}
+
+impl TimeWindowMedianState {
+    /// Push `sample` at `now`, evict aged entries, and return the median of the
+    /// retained samples. An even count averages the two middle values, so this
+    /// reproduces the classic count-weighted median.
+    fn push(&mut self, now: NanoTime, sample: f64, window: u64) -> f64 {
+        self.buffer.push_back((now, sample));
+        while let Some(&(t, _)) = self.buffer.front() {
+            if aged_out(now, t, window) {
+                self.buffer.pop_front();
+            } else {
+                break;
+            }
+        }
+        let mut sorted: Vec<f64> = self.buffer.iter().map(|&(_, v)| v).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        }
+    }
+}
+
+/// Median over a bounded time window. Recomputed per tick (O(w log w) over the
+/// `w` retained samples); an even count averages the two middle values,
+/// matching the classic count-weighted median. Mirrors the classic
+/// `median(Window::Time(_), Weighting::Count)`.
+pub struct TimeWindowedMedian;
+
+#[op(build = time_windowed_median)]
+impl Op for TimeWindowedMedian {
+    type Cfg = NanoTime;
+    type State = TimeWindowMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWindowMedianState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let out = state.push(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(out))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
