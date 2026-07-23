@@ -13,7 +13,10 @@
 //!   demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
+//! - [`common`] — dependency-free pure helpers shared by replay sources
+//!   (out-of-window row filtering, run-window time slicing); no I/O of its own.
 
+pub mod common;
 #[cfg(feature = "csv")]
 pub mod csv;
 pub mod lines;
