@@ -89,6 +89,26 @@ pub enum Tick<T> {
     Quiet,
 }
 
+/// Which lifecycle phase a composite (`graph!` `nested`) node is being driven
+/// through. A compiled sub-graph mounted as one interpreted node runs its
+/// interior through the *same* straight-line code in every phase; the outer
+/// engine selects the phase when it calls the composite's cycle/start/stop/
+/// teardown, so inner `start`/`stop`/`teardown` hooks fire at the right point
+/// in the *outer* run (cleanup after the last outer cycle, error or not).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompositePhase {
+    /// Before the first cycle: run inner `start` hooks, forward the earliest
+    /// inner schedule.
+    Start,
+    /// One activation: demultiplex due inner callbacks and run the interior.
+    Cycle,
+    /// After the last cycle: run inner `stop` hooks (error-safe).
+    Stop,
+    /// At the very end: run inner `teardown` hooks (error-safe).
+    Teardown,
+}
+
 /// The engine services an op may use, scoped to the current node.
 ///
 /// Deliberately narrow — time and self-scheduling only. This is the entire

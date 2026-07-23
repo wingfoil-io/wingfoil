@@ -67,6 +67,25 @@ pub fn __wf_op_incr_seed_value<P>(_cfg: &P) -> f64 {
     0.0
 }
 
+pub fn __wf_op_incr_stop(
+    cfg: &mut <Incr as Op>::Cfg,
+    state: &mut <Incr as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Incr as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_incr_teardown(
+    cfg: &mut <Incr as Op>::Cfg,
+    state: &mut <Incr as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Incr as Op>::teardown(cfg, state, ctx)
+}
+
 trait IncrOps {
     fn incr(&self) -> Stream<f64>;
 }

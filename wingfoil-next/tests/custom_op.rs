@@ -300,6 +300,117 @@ pub fn __wf_op_combine_seed_value<C: Default, P>(_cfg: &P) -> C {
     C::default()
 }
 
+// Stop / teardown forwarders: each mirrors its op's cycle forwarder (same
+// input parameter, present only to anchor generics/closures) and calls the
+// hook — the trait default no-op here, as none of these ops override
+// stop/teardown. The `graph!` tail calls one per node at the cleanup tail.
+pub fn __wf_op_scale_stop(
+    cfg: &mut <Scale as Op>::Cfg,
+    state: &mut <Scale as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Scale as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_scale_teardown(
+    cfg: &mut <Scale as Op>::Cfg,
+    state: &mut <Scale as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Scale as Op>::teardown(cfg, state, ctx)
+}
+pub fn __wf_op_delta_stop<T: Clone + std::ops::Sub<Output = T> + 'static>(
+    cfg: &mut <Delta<T> as Op>::Cfg,
+    state: &mut <Delta<T> as Op>::State,
+    input: ((&T, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Delta<T> as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_delta_teardown<T: Clone + std::ops::Sub<Output = T> + 'static>(
+    cfg: &mut <Delta<T> as Op>::Cfg,
+    state: &mut <Delta<T> as Op>::State,
+    input: ((&T, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Delta<T> as Op>::teardown(cfg, state, ctx)
+}
+pub fn __wf_op_apply_stop_owned<F: Fn(&f64) -> f64 + 'static>(
+    mut cfg: <Apply<F> as Op>::Cfg,
+    _plain: &mut (),
+    state: &mut <Apply<F> as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Apply<F> as Op>::stop(&mut cfg, state, ctx)
+}
+pub fn __wf_op_apply_teardown_owned<F: Fn(&f64) -> f64 + 'static>(
+    mut cfg: <Apply<F> as Op>::Cfg,
+    _plain: &mut (),
+    state: &mut <Apply<F> as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Apply<F> as Op>::teardown(&mut cfg, state, ctx)
+}
+pub fn __wf_op_spread_stop(
+    cfg: &mut <Spread as Op>::Cfg,
+    state: &mut <Spread as Op>::State,
+    input: ((&f64, bool), (&f64, bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Spread as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_spread_teardown(
+    cfg: &mut <Spread as Op>::Cfg,
+    state: &mut <Spread as Op>::State,
+    input: ((&f64, bool), (&f64, bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Spread as Op>::teardown(cfg, state, ctx)
+}
+pub fn __wf_op_combine_stop_owned<A, B, C, F>(
+    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+    _plain: &mut (),
+    state: &mut <Combine<A, B, C, F> as Op>::State,
+    input: ((&A, bool), (&B, bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> C + 'static,
+{
+    let _ = input;
+    <Combine<A, B, C, F> as Op>::stop(&mut cfg, state, ctx)
+}
+pub fn __wf_op_combine_teardown_owned<A, B, C, F>(
+    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+    _plain: &mut (),
+    state: &mut <Combine<A, B, C, F> as Op>::State,
+    input: ((&A, bool), (&B, bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> C + 'static,
+{
+    let _ = input;
+    <Combine<A, B, C, F> as Op>::teardown(&mut cfg, state, ctx)
+}
+
 // ---------------------------------------------------------------------------
 // The fluent methods, so `wire()`/`interpreted()` see the same vocabulary —
 // one-liners over the (now public) single-input registration primitive.
@@ -538,6 +649,25 @@ pub fn __wf_op_snap_seed_value<T: Default, P>(_cfg: &P) -> T {
     T::default()
 }
 
+pub fn __wf_op_snap_stop<T: Clone + 'static>(
+    cfg: &mut <Snap<T> as Op>::Cfg,
+    state: &mut <Snap<T> as Op>::State,
+    input: ((&T, bool), (&(), bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Snap<T> as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_snap_teardown<T: Clone + 'static>(
+    cfg: &mut <Snap<T> as Op>::Cfg,
+    state: &mut <Snap<T> as Op>::State,
+    input: ((&T, bool), (&(), bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Snap<T> as Op>::teardown(cfg, state, ctx)
+}
+
 /// User seeded accumulator: running max, seeded with (and floored at) `init`.
 pub struct Ratchet;
 
@@ -583,6 +713,25 @@ pub fn __wf_op_ratchet_seed_state(cfg: &f64) -> f64 {
 }
 pub fn __wf_op_ratchet_seed_value(cfg: &f64) -> f64 {
     *cfg
+}
+
+pub fn __wf_op_ratchet_stop(
+    cfg: &mut <Ratchet as Op>::Cfg,
+    state: &mut <Ratchet as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Ratchet as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_ratchet_teardown(
+    cfg: &mut <Ratchet as Op>::Cfg,
+    state: &mut <Ratchet as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Ratchet as Op>::teardown(cfg, state, ctx)
 }
 
 trait ShapeOps {

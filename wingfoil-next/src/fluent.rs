@@ -104,7 +104,8 @@ impl GraphBuilder {
         &self,
         active_ups: Vec<usize>,
         callback_activated: bool,
-        node: impl FnMut(&mut crate::op::Ctx, bool) -> Result<crate::op::Tick<T>> + 'static,
+        node: impl FnMut(&mut crate::op::Ctx, crate::op::CompositePhase) -> Result<crate::op::Tick<T>>
+        + 'static,
     ) -> Stream<T> {
         self.assert_not_built();
         let handle = self

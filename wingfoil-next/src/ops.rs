@@ -318,6 +318,7 @@ where
 /// buffer.
 pub struct Print<T>(PhantomData<T>);
 
+#[op(build = print, no_builder)]
 impl<T: Clone + Debug + 'static> Op for Print<T> {
     type Cfg = ();
     type State = Vec<T>;
@@ -345,10 +346,25 @@ impl<T: Clone + Debug + 'static> Op for Print<T> {
 
 /// Pending state for a [`Timed`] op: the tick count and the wall-clock start
 /// instant (set at [`start`](Op::start)).
-#[derive(Default)]
-pub struct TimedState {
+///
+/// Carries the source value type `T` as a `PhantomData` marker purely so the
+/// `#[op]`-generated `start`/`stop` forwarders can anchor `T` through the
+/// `&mut State` argument (`Timed`'s `Cfg`/`Out` do not otherwise pin it in a
+/// hook that ignores the value) — the lifecycle behaviour is `T`-independent.
+pub struct TimedState<T> {
     cycles: u64,
     wall_start: Option<Instant>,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Default for TimedState<T> {
+    fn default() -> Self {
+        Self {
+            cycles: 0,
+            wall_start: None,
+            _marker: PhantomData,
+        }
+    }
 }
 
 /// Passes its source value through unchanged, recording the wall-clock start
@@ -363,21 +379,22 @@ pub struct TimedState {
 /// the wall-vs-engine speedup rather than branching on historical/realtime.
 pub struct Timed<T>(PhantomData<T>);
 
+#[op(build = timed, no_builder)]
 impl<T: Clone + 'static> Op for Timed<T> {
     type Cfg = ();
-    type State = TimedState;
+    type State = TimedState<T>;
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn start(_cfg: &mut (), state: &mut TimedState, _ctx: &mut Ctx<'_>) -> Result<()> {
+    fn start(_cfg: &mut (), state: &mut TimedState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
         state.wall_start = Some(Instant::now());
         Ok(())
     }
 
     fn cycle(
         _cfg: &mut (),
-        state: &mut TimedState,
+        state: &mut TimedState<T>,
         input: (&T,),
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
@@ -385,7 +402,7 @@ impl<T: Clone + 'static> Op for Timed<T> {
         Ok(Tick::Value(input.0.clone()))
     }
 
-    fn stop(_cfg: &mut (), state: &mut TimedState, ctx: &mut Ctx<'_>) -> Result<()> {
+    fn stop(_cfg: &mut (), state: &mut TimedState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
         let engine_elapsed = Duration::from(ctx.time() - ctx.start_time());
         let wall = state
             .wall_start
@@ -1287,6 +1304,7 @@ where
 /// source's last value. Emits nothing during the run.
 pub struct Finally<A, F>(PhantomData<(A, F)>);
 
+#[op(build = finally, no_builder)]
 impl<A, F> Op for Finally<A, F>
 where
     A: Clone + Default + 'static,
