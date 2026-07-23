@@ -1035,7 +1035,7 @@ impl Builder {
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Sample::<T>::cycle(&mut (), &mut (), (&v,), &mut ctx)? {
+                match Sample::<T>::cycle(&mut (), &mut (), (&v, &()), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;

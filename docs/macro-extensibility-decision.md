@@ -207,12 +207,19 @@ Each table-only capability moved to the trait/derive layer, exactly as
 |---|---|
 | input shapes (value-only / tick-flag / pairs) | the macro always passes one `(value, tick)` pair per edge; the `#[op]` derive parses `In`'s tokens and emits the adapting forwarder — shape knowledge lives with the type |
 | activation / dirty checks | `__WF_OP_<M>_ACTIVATION` const, re-emitted by `#[op]`, folded post-mono (also composes the island's callback flag and supports `always` busy-poll ops) |
-| passive edges (sample) | `__WF_OP_<M>_PASSIVE` bitmask const, folded into dispatch conditions and the island's input-activation list |
-| state/value seeding (fold) | `_seed_state` / `_seed_value` forwarders — structural generics so nothing dangles; fold hand-writes them to clone `init` into both (classic parity preserved) |
+| passive edges (sample) | `#[op(passive = [i, ..])]` → `__WF_OP_<M>_PASSIVE` bitmask const, folded into dispatch conditions and the island's input-activation list. Sample's `In` carries its unit trigger (`(&T, &())`), so the whole op is derive-generated |
+| state/value seeding (fold) | `#[op(init_arg)]` — the seeded-accumulator shape: the call's plain argument is the initial `State`, cloned into state *and* value slot by derive-emitted seeds (classic parity). Fold is fully derive-generated |
 | delay's zero-delay inline emit + silent first-value store | promoted into the `Op` contract as `Tick::Silent(T)` (the promotion `op.rs` had reserved); `Delay::cycle` now expresses its full semantics once, and all three engines handle `Silent` generically |
 | sources (ticker/constant) | same mechanism, rooted at builder methods; `Ticker`/`Delay` `Cfg` became the call-site `Duration` (arg-verbatim convention), with ticker caching the converted period in state at `start` |
 | `unit_output`, `CfgInit`, `StateInit`, `ValueSeed`, `Edges`, `Inputs`, `OpKind`, `OpInfo` | deleted |
 | `count` / `accumulate` / `ewma_per_tick` / `ewma_half_life` parse arms | retired into real ops (`Count`, `Accumulate`, `EwmaPerTick`, `EwmaHalfLife`); the fluent layer calls the same ops, single-sourcing desugars that previously existed in two places |
+
+No catalog op hand-writes forwarders any more — `passive = [..]` and
+`init_arg` cover the last two shapes (sample, fold), and
+`tests/custom_op.rs` proves both shapes from *user* position (`Snap`, a
+passive-edge sampler, and `Ratchet`, a seeded running-max) with hand-written
+forwarders mirroring the derive's output — the pattern any out-of-crate op
+uses until `#[op]` works there.
 
 Two conventions carry the start hooks: `_start` forwards the real
 `Op::start` only when the impl overrides it (otherwise it is a fully-erased

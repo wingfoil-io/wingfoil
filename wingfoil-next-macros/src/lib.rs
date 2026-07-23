@@ -977,13 +977,26 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Parsed `#[op(build = <ident>[, no_builder])]` arguments. `no_builder`
-/// skips the interpreted `Builder` method (for ops with hand-written
-/// builder wiring — sources, multi-input, tick-flag shapes) while still
-/// emitting the `graph!` forwarders.
+/// Parsed `#[op(...)]` arguments:
+///
+/// - `build = <name>` — the fluent/graph method name (required, first);
+/// - `no_builder` — skip the interpreted `Builder` method (ops with
+///   hand-written builder wiring: sources, multi-input, seeded shapes);
+/// - `passive = [i, ...]` — the listed edge positions are **passive** (read
+///   but not activating; sample's data edge is `passive = [0]`). Becomes the
+///   `__WF_OP_<NAME>_PASSIVE` bitmask const the emission folds into dispatch
+///   conditions;
+/// - `init_arg` — the **seeded-accumulator** shape (fold): the call site's
+///   single plain argument is the initial `State`, cloned into both the
+///   state and the value slot (so passive reads before the first tick see
+///   the seed), and the op's `Cfg` is a literal closure passed by value.
+///   Implies `no_builder` (the interpreted side needs a seeded slot, which
+///   `register_op1` does not express).
 struct OpArgs {
     build: Ident,
     no_builder: bool,
+    init_arg: bool,
+    passive: u32,
 }
 
 impl Parse for OpArgs {
@@ -998,15 +1011,54 @@ impl Parse for OpArgs {
         input.parse::<Token![=]>()?;
         let build: Ident = input.parse()?;
         let mut no_builder = false;
-        if input.peek(Token![,]) {
+        let mut init_arg = false;
+        let mut passive: u32 = 0;
+        while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let flag: Ident = input.parse()?;
-            if flag != "no_builder" {
-                return Err(syn::Error::new(flag.span(), "expected `no_builder`"));
+            match flag.to_string().as_str() {
+                "no_builder" => no_builder = true,
+                "init_arg" => init_arg = true,
+                "passive" => {
+                    input.parse::<Token![=]>()?;
+                    let content;
+                    syn::bracketed!(content in input);
+                    for lit in content.parse_terminated(syn::LitInt::parse, Token![,])? {
+                        let pos: u32 = lit.base10_parse()?;
+                        if pos >= 32 {
+                            return Err(syn::Error::new(
+                                lit.span(),
+                                "passive edge positions must be < 32",
+                            ));
+                        }
+                        passive |= 1 << pos;
+                    }
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        flag.span(),
+                        format!(
+                            "unknown #[op] flag `{other}`; expected `no_builder`, \
+                             `init_arg`, or `passive = [..]`"
+                        ),
+                    ));
+                }
             }
-            no_builder = true;
         }
-        Ok(OpArgs { build, no_builder })
+        if init_arg && !no_builder {
+            return Err(syn::Error::new(
+                build.span(),
+                "`init_arg` requires `no_builder`: the interpreted Builder method for a \
+                 seeded op must seed its value slot, which the generated `register_op1` \
+                 wrapper does not express — write it by hand",
+            ));
+        }
+        Ok(OpArgs {
+            build,
+            no_builder,
+            init_arg,
+            passive,
+        })
     }
 }
 
@@ -1263,6 +1315,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let upper = name.to_string().to_uppercase();
     let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", upper);
     let passive_const = format_ident!("__WF_OP_{}_PASSIVE", upper);
+    let passive_mask = args.passive;
 
     let edge_ref_tys = &shape.edge_ref_tys;
     let pairs_ty = if edge_ref_tys.is_empty() {
@@ -1322,8 +1375,73 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
     };
-    let seed_state = seed_fn(&state_ty, &seed_state_fn);
-    let seed_value = seed_fn(&out_ty, &seed_value_fn);
+    let (seed_state, seed_value) = if args.init_arg {
+        // Seeded-accumulator shape: the call site's plain argument is the
+        // initial `State`, cloned into the state *and* the value slot (so a
+        // passive read before the first tick sees the seed — fold's classic
+        // parity). Generic only over the params the State/Out tokens
+        // mention, like the Default-based seeds.
+        let seed = |ret_ty: &Type, fn_name: &Ident| {
+            let mentioned = {
+                let mut set = idents_of(quote! { #state_ty });
+                set.extend(idents_of(quote! { #ret_ty }));
+                set
+            };
+            let kept: Vec<Ident> = param_names
+                .iter()
+                .filter(|p| mentioned.contains(*p))
+                .map(|p| format_ident!("{}", p))
+                .collect();
+            let kept_names: std::collections::HashSet<String> =
+                kept.iter().map(|i| i.to_string()).collect();
+            let mut seed_preds: Vec<TokenStream2> = Vec::new();
+            for (owner, bound) in &inline_bounds {
+                if kept_names.contains(owner) {
+                    let bound_mentions = idents_of(bound.clone());
+                    if param_names
+                        .iter()
+                        .all(|p| !bound_mentions.contains(p) || kept_names.contains(p))
+                    {
+                        seed_preds.push(bound.clone());
+                    }
+                }
+            }
+            for pr in &where_preds_src {
+                let pr_mentions = idents_of(pr.clone());
+                if param_names.iter().any(|p| pr_mentions.contains(p))
+                    && param_names
+                        .iter()
+                        .all(|p| !pr_mentions.contains(p) || kept_names.contains(p))
+                {
+                    seed_preds.push(pr.clone());
+                }
+            }
+            seed_preds.push(quote! { #state_ty: ::core::clone::Clone });
+            let kept_list = if kept.is_empty() {
+                quote! {}
+            } else {
+                quote! { <#(#kept),*> }
+            };
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #fn_name #kept_list (__init: &#state_ty) -> #ret_ty
+                where #(#seed_preds),*
+                {
+                    ::core::clone::Clone::clone(__init)
+                }
+            }
+        };
+        (
+            seed(&state_ty, &seed_state_fn),
+            seed(&out_ty, &seed_value_fn),
+        )
+    } else {
+        (
+            seed_fn(&state_ty, &seed_state_fn),
+            seed_fn(&out_ty, &seed_value_fn),
+        )
+    };
 
     // `_start_owned` is called when the op\'s config is a literal closure: the
     // closure cannot be re-created for the start call (its duplicate would
@@ -1383,31 +1501,23 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         }
     };
 
-    let forwarders = quote! {
-        #[doc(hidden)]
-        pub const #activation_const: crate::op::Activation = #activation_expr;
-        /// Bit i set = edge i is passive (does not activate the node).
-        #[doc(hidden)]
-        pub const #passive_const: u32 = 0;
-
-        #[doc(hidden)]
-        #[inline(always)]
-        pub fn #cycle_fn #generics (
-            __cfg: &mut #cfg_ty,
-            __state: &mut #state_ty,
-            __input: #pairs_ty,
-            __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
-        #where_tokens
-        {
-            <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
-        }
-
+    // `_cycle_owned`'s plain slot is unused `()` normally; under `init_arg`
+    // it is the accumulator seed (typed `State`), which the cycle ignores —
+    // the seeds consumed it at declaration time. `_cycle` (hoisted non-closure
+    // config) is not emitted under `init_arg`: that shape would need a
+    // `(init, cfg)` tuple whose seeding one signature cannot express — a
+    // seeded op's config must be a literal closure (hand-write otherwise).
+    let owned_plain_ty = if args.init_arg {
+        quote! { #state_ty }
+    } else {
+        quote! { () }
+    };
+    let cycle_owned = quote! {
         #[doc(hidden)]
         #[inline(always)]
         pub fn #cycle_owned_fn #generics (
             mut __cfg: #cfg_ty,
-            __plain: &mut (),
+            __plain: &mut #owned_plain_ty,
             __state: &mut #state_ty,
             __input: #pairs_ty,
             __ctx: &mut crate::op::Ctx<'_>,
@@ -1416,6 +1526,36 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         {
             <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
         }
+    };
+    let cycle = if args.init_arg {
+        quote! {}
+    } else {
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #cycle_fn #generics (
+                __cfg: &mut #cfg_ty,
+                __state: &mut #state_ty,
+                __input: #pairs_ty,
+                __ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
+            #where_tokens
+            {
+                <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
+            }
+        }
+    };
+
+    let forwarders = quote! {
+        #[doc(hidden)]
+        pub const #activation_const: crate::op::Activation = #activation_expr;
+        /// Bit i set = edge i is passive (does not activate the node).
+        #[doc(hidden)]
+        pub const #passive_const: u32 = #passive_mask;
+
+        #cycle
+
+        #cycle_owned
 
         #start
         #start_owned

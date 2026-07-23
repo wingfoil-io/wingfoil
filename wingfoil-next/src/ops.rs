@@ -8,10 +8,11 @@
 //! which generates the `graph!` forwarder functions (`__wf_op_<name>_*`) that
 //! all compiled/nested emission dispatches through, plus — for single-input
 //! shapes — the interpreted [`Builder`](crate::interp::Builder) wiring method
-//! (over `register_op1`), with the node label derived from `type_name`. Ops
-//! that don't fit the derive's scope (fold's config-derived seeds, sample's
-//! passive edge) hand-write their forwarders below; multi-input and source
-//! ops use `no_builder` and keep hand-written `Builder` methods.
+//! (over `register_op1`), with the node label derived from `type_name`.
+//! Attribute flags cover every shape in the catalog: `passive = [..]` marks
+//! non-activating edges (sample), `init_arg` is the seeded-accumulator shape
+//! (fold), and multi-input and source ops use `no_builder` to keep their
+//! hand-written `Builder` methods.
 //! See `docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
@@ -1132,6 +1133,7 @@ impl<T: Clone + 'static> Op for Filter<T> {
 /// which the engine owns.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
+#[op(build = fold, no_builder, init_arg)]
 impl<A, B, F> Op for Fold<A, B, F>
 where
     A: 'static,
@@ -1148,58 +1150,6 @@ where
         cfg(state, input.0);
         Ok(Tick::Value(state.clone()))
     }
-}
-
-// `graph!` forwarders for fold, hand-written: fold's call shape mixes a plain
-// argument (the accumulator seed, which the `#[op]` derive cannot know seeds
-// both the state and the value slot) with a literal closure. The macro passes
-// the plain args as the "cfg" local, the closure by value at the cycle call.
-#[doc(hidden)]
-pub const __WF_OP_FOLD_ACTIVATION: Activation = Activation::NONE;
-#[doc(hidden)]
-pub const __WF_OP_FOLD_PASSIVE: u32 = 0;
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_fold_cycle_owned<A, B, F>(
-    f: F,
-    _init: &mut B,
-    state: &mut B,
-    input: ((&A, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<Tick<B>>
-where
-    A: 'static,
-    B: Clone + 'static,
-    F: Fn(&mut B, &A) + 'static,
-{
-    crate::op::cycle_owned_cfg::<Fold<A, B, F>>(f, state, (input.0.0,), ctx)
-}
-
-/// Fold seeds both its state (the accumulator) and its value slot with the
-/// `init` argument, so a passive read before the first tick sees `init`,
-/// not `Default` — classic parity, previously a `ValueSeed::CloneState`
-/// table row.
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_fold_seed_state<B: Clone>(init: &B) -> B {
-    init.clone()
-}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_fold_seed_value<B: Clone>(init: &B) -> B {
-    init.clone()
-}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_fold_start_owned<B, S>(
-    _init: &mut B,
-    _state: &mut S,
-    _ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    Ok(())
 }
 
 /// Running count of upstream ticks: 1, 2, 3, … Previously desugared to
@@ -1251,58 +1201,26 @@ impl<T: Clone + 'static> Op for Accumulate<T> {
 }
 
 /// Emits its (passive) source value whenever its trigger ticks. The trigger
-/// carries no value — its tick is the activation condition, supplied by the
-/// engine's dispatch, so it does not appear in `In`.
+/// is a unit stream: its *tick* is the activation condition (`passive = [0]`
+/// marks the data edge as non-activating), and its unit value is ignored.
 pub struct Sample<T>(PhantomData<T>);
 
+#[op(build = sample, no_builder, passive = [0])]
 impl<T: Clone + 'static> Op for Sample<T> {
     type Cfg = ();
     type State = ();
-    type In<'a> = (&'a T,);
+    type In<'a> = (&'a T, &'a ());
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T, &()),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
         Ok(Tick::Value(input.0.clone()))
     }
-}
-
-// `graph!` forwarders for sample, hand-written for two reasons the `#[op]`
-// derive cannot express: the receiver edge is *passive* (bit 0 of the mask),
-// and the trigger edge exists in the graph but not in `Op::In` (its tick is
-// the activation condition; its value and type are discarded here).
-#[doc(hidden)]
-pub const __WF_OP_SAMPLE_ACTIVATION: Activation = Activation::NONE;
-/// Bit 0 set: the receiver (data) edge is passive; only the trigger
-/// (edge 1) activates the node.
-#[doc(hidden)]
-pub const __WF_OP_SAMPLE_PASSIVE: u32 = 0b1;
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_sample_cycle<T: Clone + 'static, Trig>(
-    cfg: &mut (),
-    state: &mut (),
-    input: ((&T, bool), (&Trig, bool)),
-    ctx: &mut Ctx<'_>,
-) -> Result<Tick<T>> {
-    Sample::<T>::cycle(cfg, state, (input.0.0,), ctx)
-}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_sample_start(_cfg: &mut (), _state: &mut (), _ctx: &mut Ctx<'_>) -> Result<()> {
-    Ok(())
-}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_sample_seed_state<P>(_cfg: &P) {}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn __wf_op_sample_seed_value<T: Default, P>(_cfg: &P) -> T {
-    T::default()
 }
 
 /// A busy-poll source: the closure is called once on **every** engine cycle

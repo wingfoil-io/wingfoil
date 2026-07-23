@@ -303,7 +303,7 @@ zero-touch; there is no macro table**:
 |---|---|---|
 | Single-input (`#[op]` scope) | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
 | Multi-input, values-only, all-active (the `join` shape) | `ops.rs` `impl` (+ attr with `no_builder`) + `register_op2`-based fluent method | nothing — `&stream` args classify as edges |
-| Exotic (config-derived seeds, passive edges) | hand `Builder` method + fluent method | hand-write the forwarder family (see fold/sample in `ops.rs`) |
+| Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | hand `Builder` method + fluent method (`bimap` / `fold` are the public primitives) | nothing — attribute flags on `#[op]` |
 
 Constraint #1 still holds (a proc macro sees tokens, not types), but it is
 routed around rather than paid per-op: every method call is emitted through

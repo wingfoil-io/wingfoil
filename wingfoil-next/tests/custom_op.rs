@@ -29,7 +29,9 @@
 //!
 //! plus in-crate [`Distinct`](wingfoil_next::ops) — which has `#[op]` but **no
 //! table row**, proving the whole `#[op]` catalog reaches `graph!` through the
-//! fallback with zero per-op macro edits.
+//! fallback with zero per-op macro edits; and, at the end of the file, the
+//! two formerly-"exotic" shapes as user ops — [`Snap`] (passive data edge,
+//! sample's shape) and [`Ratchet`] (seeded accumulator, fold's shape).
 
 use std::time::Duration;
 
@@ -485,4 +487,150 @@ fn multi_input_custom_op_in_nested_island() {
     let mut runner = g.build();
     runner.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(10.0, runner.value(out));
+}
+
+// ---------------------------------------------------------------------------
+// The two formerly-"exotic" shapes, as USER ops — proving they are ordinary:
+// a passive-edge op (sample's shape) and a seeded accumulator (fold's shape).
+// The hand-written forwarders below are exactly what `#[op(build = snap,
+// passive = [0])]` / `#[op(build = ratchet, init_arg)]` emit for in-crate ops.
+// ---------------------------------------------------------------------------
+
+/// User sample: emit the (passive) data value when the trigger ticks.
+pub struct Snap<T>(std::marker::PhantomData<T>);
+
+impl<T: Clone + 'static> Op for Snap<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T, &'a ());
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T, &()),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
+pub const __WF_OP_SNAP_ACTIVATION: Activation = Activation::NONE;
+/// Bit 0: the data (receiver) edge is passive; only the trigger activates.
+pub const __WF_OP_SNAP_PASSIVE: u32 = 0b1;
+
+pub fn __wf_op_snap_cycle<T: Clone + 'static>(
+    cfg: &mut <Snap<T> as Op>::Cfg,
+    state: &mut <Snap<T> as Op>::State,
+    input: ((&T, bool), (&(), bool)),
+    ctx: &mut Ctx<'_>,
+) -> Result<Tick<T>> {
+    <Snap<T> as Op>::cycle(cfg, state, (input.0.0, input.1.0), ctx)
+}
+
+pub fn __wf_op_snap_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_snap_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_snap_seed_value<T: Default, P>(_cfg: &P) -> T {
+    T::default()
+}
+
+/// User seeded accumulator: running max, seeded with (and floored at) `init`.
+pub struct Ratchet;
+
+impl Op for Ratchet {
+    /// The floor — also the state/value seed.
+    type Cfg = f64;
+    type State = f64;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut f64,
+        state: &mut f64,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        *state = state.max(*input.0);
+        Ok(Tick::Value(*state))
+    }
+}
+
+pub const __WF_OP_RATCHET_ACTIVATION: Activation = Ratchet::ACTIVATION;
+pub const __WF_OP_RATCHET_PASSIVE: u32 = 0;
+
+pub fn __wf_op_ratchet_cycle(
+    cfg: &mut <Ratchet as Op>::Cfg,
+    state: &mut <Ratchet as Op>::State,
+    input: ((&f64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<Tick<f64>> {
+    <Ratchet as Op>::cycle(cfg, state, (input.0.0,), ctx)
+}
+
+pub fn __wf_op_ratchet_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+/// Seeded shape: the plain argument (the floor) seeds state *and* slot, so a
+/// passive read before the first tick sees the floor, not 0.0.
+pub fn __wf_op_ratchet_seed_state(cfg: &f64) -> f64 {
+    *cfg
+}
+pub fn __wf_op_ratchet_seed_value(cfg: &f64) -> f64 {
+    *cfg
+}
+
+trait ShapeOps {
+    fn snap(&self, trigger: &Stream<()>) -> Stream<f64>;
+    fn ratchet(&self, floor: f64) -> Stream<f64>;
+}
+
+impl ShapeOps for Stream<f64> {
+    fn snap(&self, trigger: &Stream<()>) -> Stream<f64> {
+        let trigger = trigger.handle();
+        // bimap: data edge passive, trigger edge active — the public
+        // interpreted primitive for the sample shape.
+        self.wire(|b, h| b.bimap(h, false, trigger, true, |v: &f64, _: &()| *v))
+    }
+
+    fn ratchet(&self, floor: f64) -> Stream<f64> {
+        // fold is the public interpreted primitive for the seeded shape —
+        // identical math, and it seeds the slot with `floor` just like the
+        // compiled emission's seed forwarders.
+        self.fold(floor, |acc, v| *acc = acc.max(*v))
+    }
+}
+
+wingfoil_next::graph! {
+    fn shapes_graph(g: &GraphBuilder) -> (Stream<f64>, Stream<f64>) {
+        let data = g.ticker(PERIOD).count().map(|c| *c as f64);
+        let trig = g.ticker(Duration::from_millis(3));
+        let snapped = data.snap(&trig);
+        let peak = data.map(|v| 10.0 - (*v - 4.0).abs()).ratchet(5.0);
+        (snapped, peak)
+    }
+}
+
+/// The passive-edge and seeded shapes as user ops. At cycle times 0..6ms:
+/// `data = c` (1..7); the 3ms trigger ticks at t ∈ {0, 3, 6}, so `snapped`
+/// last updates at t = 6 with `data = 7`. The tent `10 − |c − 4|` runs
+/// 7,8,9,10,9,8,7 and `ratchet(5.0)` holds the max: `10`.
+#[test]
+fn user_passive_and_seeded_shapes() {
+    let run_for = RunFor::Cycles(7);
+
+    let (mut runner, snapped, peak) = shapes_graph::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let (snapped_i, peak_i) = (runner.value(snapped), runner.value(peak));
+    assert_eq!(7.0, snapped_i);
+    assert_eq!(10.0, peak_i);
+
+    let (snapped_c, peak_c) = shapes_graph::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(snapped_i, snapped_c);
+    assert_eq!(peak_i, peak_c);
 }
