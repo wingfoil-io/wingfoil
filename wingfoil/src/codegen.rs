@@ -1,14 +1,16 @@
-//! The minimal engine kernel driven by standalone generated runners
-//! ([`generate_standalone`](crate::codegen::generate_standalone)).
+//! The minimal engine kernel: engine time, the scheduled-callback queue and
+//! the run bounds, factored out so an engine can drive a graph without the
+//! `dyn Node` / [`Graph`](crate::Graph) machinery — node state lives in the
+//! caller's own structures instead. The `begin_cycle` logic transcribes the
+//! interpreted engine's loop head ([`Graph::advance`]), so a kernel-driven
+//! run and the interpreted engine cannot drift on timing or bounds.
 //!
-//! A standalone runner has no `dyn Node`s and no [`Graph`](crate::Graph) —
-//! node state lives in monomorphized locals inside the generated function.
-//! What must remain at runtime is exactly this: engine time, the scheduled
-//! callback queue, and the run bounds. The `begin_cycle` logic transcribes
-//! the interpreted engine's loop head ([`Graph::advance`]) minus the parts a
-//! standalone graph cannot have (ready callbacks from threaded sources,
-//! always-callbacks, dynamic graph changes) — the standalone generator only
-//! accepts node kinds that use scheduled callbacks.
+//! This module keeps the historical name `codegen`: the ahead-of-time
+//! retrofit code generator that once lived here (which walked a wired classic
+//! graph and emitted a standalone static-schedule Rust runner) has been
+//! removed, superseded by the `wingfoil-next` macro `compiled()` / islands
+//! path. What remains is this shared runtime kernel, which the
+//! `wingfoil-next` engine still builds on.
 //!
 //! [`Graph::advance`]: crate::Graph
 
@@ -49,9 +51,8 @@ pub fn waker_channel() -> (KernelWaker, ReadyReceiver) {
     (KernelWaker { sender }, receiver)
 }
 
-/// Clock, scheduled-callback queue and run bounds for a standalone generated
-/// runner. See the [module docs](self) for how this relates to the
-/// interpreted engine.
+/// Clock, scheduled-callback queue and run bounds for a kernel-driven engine.
+/// See the [module docs](self) for how this relates to the interpreted engine.
 pub struct Kernel {
     run_mode: RunMode,
     start_time: NanoTime,
@@ -165,9 +166,9 @@ impl Kernel {
 
     /// Advance to the next cycle: check the run bounds, advance engine time
     /// and mark due callbacks in `dirty`. Returns `false` when the run is
-    /// complete. Transcribes `Graph::advance` + the historical/realtime
-    /// callback processing, minus ready callbacks (standalone graphs have no
-    /// threaded sources).
+    /// complete. Transcribes `Graph::advance` together with the
+    /// historical/realtime callback processing (including external wake-ups
+    /// via [`KernelWaker`]).
     pub fn begin_cycle(&mut self, dirty: &mut [bool]) -> bool {
         loop {
             // Bounds handling is identical to the interpreted engine: the

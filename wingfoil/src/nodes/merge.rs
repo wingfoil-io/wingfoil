@@ -29,16 +29,6 @@ impl<T: Element> MergeStream<T> {
         }
         false
     }
-
-    /// Statically-dispatched cycle for generated runners ([`crate::codegen`]).
-    /// `upstream_ticked` carries the tick flags for `upstreams` (same order)
-    /// from the compiled schedule — the interpreted path derives the same
-    /// flags from `GraphState` in `cycle`; both feed
-    /// [`emit_first_ticked`](Self::emit_first_ticked).
-    #[doc(hidden)]
-    pub fn cycle_inline(&mut self, upstream_ticked: &[bool]) -> bool {
-        self.emit_first_ticked(|pos| upstream_ticked.get(pos).copied().unwrap_or(false))
-    }
 }
 
 #[node(active = [upstreams], output = value: T)]

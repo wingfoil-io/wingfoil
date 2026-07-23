@@ -24,9 +24,8 @@ impl<IN, OUT: Element> MutableNode for MapStream<IN, OUT> {
 
 impl<IN, OUT: Element> MapStream<IN, OUT> {
     /// The node's cycle logic, single-sourced: `MutableNode::cycle` delegates
-    /// here, and generated static runners ([`crate::codegen`]) call it
-    /// directly for static dispatch without the `GraphState`/`Result`
-    /// plumbing.
+    /// here. Keeping it in a standalone method lets callers invoke it directly
+    /// for static dispatch without the `GraphState`/`Result` plumbing.
     #[doc(hidden)]
     pub fn cycle_inline(&mut self) -> bool {
         self.value = (self.func)(self.upstream.peek_value());

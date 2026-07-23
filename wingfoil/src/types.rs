@@ -189,11 +189,6 @@ pub trait Node: MutableNode {
     fn start(&self, state: &mut GraphState) -> anyhow::Result<()>;
     fn stop(&self, state: &mut GraphState) -> anyhow::Result<()>;
     fn teardown(&self, state: &mut GraphState) -> anyhow::Result<()>;
-    /// Downcast support for the static-runner codegen ([`crate::codegen`]):
-    /// exposes the concrete node (behind its `RefCell`) as `Any` so generated
-    /// code can obtain a typed handle for static dispatch.
-    #[doc(hidden)]
-    fn as_any_rc(self: Rc<Self>) -> Rc<dyn std::any::Any>;
 }
 
 /// A trait through which a reference to [Stream]'s value can
@@ -232,9 +227,6 @@ impl<NODE: MutableNode + 'static> Node for RefCell<NODE> {
     }
     fn teardown(&self, state: &mut GraphState) -> anyhow::Result<()> {
         self.borrow_mut().teardown(state)
-    }
-    fn as_any_rc(self: Rc<Self>) -> Rc<dyn std::any::Any> {
-        self
     }
 }
 
