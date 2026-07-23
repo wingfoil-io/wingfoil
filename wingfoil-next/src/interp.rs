@@ -744,7 +744,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(T::default());
-        let cs = Self::cell(NanoTime::from(interval), None::<NanoTime>);
+        let cs = Self::cell(interval, None::<NanoTime>);
         self.push_node(
             vec![src.idx],
             Throttle::<T>::ACTIVATION,
@@ -782,7 +782,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(Vec::<T>::new());
-        let cs = Self::cell(NanoTime::from(interval), WindowState::<T>::default());
+        let cs = Self::cell(interval, WindowState::<T>::default());
         let cs2 = cs.clone();
         self.push_node(
             vec![src.idx],
