@@ -257,27 +257,30 @@ impl<T: Clone + 'static> Op for Limit<T> {
 }
 
 /// Rate-limits: emits the first value, then suppresses until at least
-/// `interval` has passed since the last emit. `Cfg` = interval, `State` =
-/// last emit time.
+/// `interval` has passed since the last emit. `Cfg` = the interval as passed
+/// at the call site (`Duration`, per the uniform arg-is-the-config
+/// convention; converted to engine time in `cycle`), `State` = last emit time.
 pub struct Throttle<T>(PhantomData<T>);
 
+#[op(build = throttle, no_builder)]
 impl<T: Clone + 'static> Op for Throttle<T> {
-    type Cfg = NanoTime;
+    type Cfg = Duration;
     type State = Option<NanoTime>;
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
+        cfg: &mut Duration,
         state: &mut Option<NanoTime>,
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
+        let interval = NanoTime::from(*cfg);
         let now = ctx.time();
         let emit = match *state {
             None => true,
-            Some(last) => now - last >= *cfg,
+            Some(last) => now - last >= interval,
         };
         Ok(if emit {
             *state = Some(now);
@@ -407,8 +410,10 @@ impl<T: Clone + 'static> Op for Timed<T> {
 }
 
 /// Buffers values and flushes them as a `Vec` on each fixed time boundary
-/// (`interval`), plus a final flush on the last cycle. `Cfg` = interval;
-/// `State` holds the next boundary and the pending buffer.
+/// (`interval`), plus a final flush on the last cycle. `Cfg` = the interval as
+/// passed at the call site (`Duration`, per the uniform arg-is-the-config
+/// convention; converted to engine time in `start`/`cycle`); `State` holds the
+/// next boundary and the pending buffer.
 pub struct Window<T>(PhantomData<T>);
 
 /// Pending state for a [`Window`] op.
@@ -426,24 +431,26 @@ impl<T> Default for WindowState<T> {
     }
 }
 
+#[op(build = window, no_builder)]
 impl<T: Clone + 'static> Op for Window<T> {
-    type Cfg = NanoTime;
+    type Cfg = Duration;
     type State = WindowState<T>;
     type In<'a> = (&'a T,);
     type Out = Vec<T>;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn start(cfg: &mut NanoTime, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
-        state.next_window = ctx.time() + *cfg;
+    fn start(cfg: &mut Duration, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
+        state.next_window = ctx.time() + NanoTime::from(*cfg);
         Ok(())
     }
 
     fn cycle(
-        cfg: &mut NanoTime,
+        cfg: &mut Duration,
         state: &mut WindowState<T>,
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Vec<T>>> {
+        let interval = NanoTime::from(*cfg);
         let now = ctx.time();
         let mut out = None;
         if now >= state.next_window {
@@ -452,7 +459,7 @@ impl<T: Clone + 'static> Op for Window<T> {
             }
             // Advance the boundary past `now`, regardless of data.
             while state.next_window <= now {
-                state.next_window = state.next_window + *cfg;
+                state.next_window = state.next_window + interval;
             }
         }
         state.buffer.push(input.0.clone());
@@ -499,6 +506,7 @@ impl<T: Clone + 'static> Op for Buffer<T> {
 /// all three values are read. `Fn`, like [`Join`].
 pub struct Join3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
+#[op(build = join3, no_builder)]
 impl<A, B, C, D, F> Op for Join3<A, B, C, D, F>
 where
     A: 'static,
@@ -529,6 +537,7 @@ where
 /// [`Join3`].
 pub struct TryJoin3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
+#[op(build = try_join3, no_builder)]
 impl<A, B, C, D, F> Op for TryJoin3<A, B, C, D, F>
 where
     A: 'static,
@@ -1340,6 +1349,7 @@ where
 /// like [`Join`].
 pub struct TryJoin<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
+#[op(build = try_join, no_builder)]
 impl<A, B, C, F> Op for TryJoin<A, B, C, F>
 where
     A: 'static,
