@@ -1,5 +1,56 @@
-error: unknown combinator `.frobnicate(..)`; expected one of: map, map_n, fan, filter, fold, sample, merge, join, delay, count, accumulate, ewma, ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean
- --> tests/trybuild/unknown_combinator.rs:7:62
-  |
-7 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-  |                                                              ^^^^^^^^^^
+error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
+  --> tests/trybuild/unknown_combinator.rs:12:62
+   |
+12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+   |                                                              ^^^^^^^^^^
+   |
+  ::: src/ops.rs
+   |
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
+   |
+help: a constant with a similar name exists
+   |
+12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_PASSIVE();
+   |
+
+error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
+  --> tests/trybuild/unknown_combinator.rs:12:62
+   |
+12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+   |                                                              ^^^^^^^^^^
+   |
+  ::: src/ops.rs
+   |
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
+   |
+help: a constant with a similar name exists
+   |
+12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_ACTIVATION();
+   |
+
+error[E0599]: no method named `frobnicate` found for struct `wingfoil_next::fluent::Stream<T>` in the current scope
+  --> tests/trybuild/unknown_combinator.rs:12:62
+   |
+12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+   |                                                              ^^^^^^^^^^ method not found in `wingfoil_next::fluent::Stream<u64>`
+
+error[E0425]: cannot find function `__wf_op_frobnicate_cycle` in this scope
+  --> tests/trybuild/unknown_combinator.rs:12:62
+   |
+12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+   |                                                              ^^^^^^^^^^
+   |
+  ::: src/ops.rs
+   |
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named function `__wf_op_accumulate_cycle` defined here
+   |
+help: a function with a similar name exists
+   |
+12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__wf_op_accumulate_cycle();
+   |

@@ -4,11 +4,15 @@
 //! the logic is identical, but here it is written once and executed by every
 //! engine, interpreted or compiled.
 //!
-//! Single-input ops carry `#[op(build = name)]`, which also generates their
-//! interpreted [`Builder`](crate::interp::Builder) wiring method (over
-//! `register_op1`), with the node label derived from `type_name`. Ops that
-//! don't fit that shape (multi-input, passive edges, tick-flag inputs, sources,
-//! custom state seeds, lifecycle hooks) keep hand-written `Builder` methods.
+//! Every op carries `#[op(build = name)]` (or hand-written equivalents),
+//! which generates the `graph!` forwarder functions (`__wf_op_<name>_*`) that
+//! all compiled/nested emission dispatches through, plus — for single-input
+//! shapes — the interpreted [`Builder`](crate::interp::Builder) wiring method
+//! (over `register_op1`), with the node label derived from `type_name`.
+//! Attribute flags cover every shape in the catalog: `passive = [..]` marks
+//! non-activating edges (sample), `init_arg` is the seeded-accumulator shape
+//! (fold), and multi-input and source ops use `no_builder` to keep their
+//! hand-written `Builder` methods.
 //! See `docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
@@ -24,32 +28,46 @@ use wingfoil::{NanoTime, TimeQueue};
 use wingfoil_next_macros::op;
 
 /// Ticks at a fixed interval, anchored to its first activation to avoid
-/// drift. `Cfg` = interval, `State` = the last scheduled time.
+/// drift. `Cfg` = interval, `State` = the converted period plus the last
+/// scheduled time.
 pub struct Ticker;
 
+/// [`Ticker`] state: the period converted to engine time **once** in `start`
+/// (converting per cycle measurably slows dense graphs), plus the last
+/// scheduled time (drift anchoring).
+#[derive(Default)]
+pub struct TickerState {
+    period: NanoTime,
+    next: Option<NanoTime>,
+}
+
+#[op(build = ticker, no_builder)]
 impl Op for Ticker {
-    type Cfg = NanoTime;
-    type State = Option<NanoTime>;
+    /// The interval as passed at the call site (`Duration`, per the uniform
+    /// arg-is-the-config convention); converted to engine time in `start`.
+    type Cfg = Duration;
+    type State = TickerState;
     type In<'a> = ();
     type Out = ();
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut Option<NanoTime>,
+        _cfg: &mut Duration,
+        state: &mut TickerState,
         _input: (),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<()>> {
-        let next = match *state {
-            Some(t) => t + *cfg,
-            None => ctx.time() + *cfg,
+        let next = match state.next {
+            Some(t) => t + state.period,
+            None => ctx.time() + state.period,
         };
-        *state = Some(next);
+        state.next = Some(next);
         ctx.schedule(next);
         Ok(Tick::Value(()))
     }
 
-    fn start(_cfg: &mut NanoTime, _state: &mut Option<NanoTime>, ctx: &mut Ctx<'_>) -> Result<()> {
+    fn start(cfg: &mut Duration, state: &mut TickerState, ctx: &mut Ctx<'_>) -> Result<()> {
+        state.period = NanoTime::from(*cfg);
         ctx.schedule(ctx.start_time());
         Ok(())
     }
@@ -58,6 +76,7 @@ impl Op for Ticker {
 /// Ticks once with a fixed value, on the first cycle.
 pub struct Const<T>(PhantomData<T>);
 
+#[op(build = constant, no_builder)]
 impl<T: Clone + 'static> Op for Const<T> {
     type Cfg = T;
     type State = ();
@@ -678,6 +697,55 @@ impl Op for Ewma {
     }
 }
 
+/// [`Ewma`] with a fixed per-tick smoothing factor — `Cfg` is the bare
+/// `alpha` as passed at the call site; the [`EwmaDecay`] policy is built
+/// inside `cycle` (an enum wrap, folded after monomorphization). Previously
+/// call-site sugar duplicated in the fluent layer and the `graph!` macro.
+pub struct EwmaPerTick;
+
+#[op(build = ewma_per_tick)]
+impl Op for EwmaPerTick {
+    type Cfg = f64;
+    type State = EwmaState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut f64,
+        state: &mut EwmaState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let mut decay = EwmaDecay::PerTick(*cfg);
+        Ewma::cycle(&mut decay, state, input, ctx)
+    }
+}
+
+/// [`Ewma`] whose weights decay off engine time — `Cfg` is the half-life as
+/// passed at the call site (`Duration`); converted per activation, which is
+/// noise next to the `exp()` in the decay itself.
+pub struct EwmaHalfLife;
+
+#[op(build = ewma_half_life)]
+impl Op for EwmaHalfLife {
+    type Cfg = Duration;
+    type State = EwmaState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut Duration,
+        state: &mut EwmaState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let mut decay = EwmaDecay::HalfLife(cfg.as_nanos() as f64);
+        Ewma::cycle(&mut decay, state, input, ctx)
+    }
+}
+
 /// Shared ring-buffer state for the rolling-window statistics ops: the most
 /// recent `window` samples and their running sum (maintained in O(1) per
 /// tick).
@@ -1036,6 +1104,7 @@ impl Op for RollingMedian {
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
+#[op(build = filter, no_builder)]
 impl<T: Clone + 'static> Op for Filter<T> {
     type Cfg = ();
     type State = ();
@@ -1064,6 +1133,7 @@ impl<T: Clone + 'static> Op for Filter<T> {
 /// which the engine owns.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
+#[op(build = fold, no_builder, init_arg)]
 impl<A, B, F> Op for Fold<A, B, F>
 where
     A: 'static,
@@ -1082,19 +1152,73 @@ where
     }
 }
 
+/// Running count of upstream ticks: 1, 2, 3, … Previously desugared to
+/// [`Fold`] separately in the fluent layer *and* the `graph!` macro (two
+/// places that could drift); now one op both layers call.
+pub struct Count<T>(PhantomData<T>);
+
+#[op(build = count)]
+impl<T: 'static> Op for Count<T> {
+    type Cfg = ();
+    type State = u64;
+    type In<'a> = (&'a T,);
+    type Out = u64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut u64,
+        _input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<u64>> {
+        *state += 1;
+        Ok(Tick::Value(*state))
+    }
+}
+
+/// Collect every emitted value into a `Vec`, emitting the accumulated `Vec`
+/// on each tick (cloned per tick — identical to its previous fold-based
+/// desugar). Single-sourced for both layers, like [`Count`].
+pub struct Accumulate<T>(PhantomData<T>);
+
+#[op(build = accumulate)]
+impl<T: Clone + 'static> Op for Accumulate<T> {
+    type Cfg = ();
+    type State = Vec<T>;
+    type In<'a> = (&'a T,);
+    type Out = Vec<T>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Vec<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Vec<T>>> {
+        state.push(input.0.clone());
+        Ok(Tick::Value(state.clone()))
+    }
+}
+
 /// Emits its (passive) source value whenever its trigger ticks. The trigger
-/// carries no value — its tick is the activation condition, supplied by the
-/// engine's dispatch, so it does not appear in `In`.
+/// is a unit stream: its *tick* is the activation condition (`passive = [0]`
+/// marks the data edge as non-activating), and its unit value is ignored.
 pub struct Sample<T>(PhantomData<T>);
 
+#[op(build = sample, no_builder, passive = [0])]
 impl<T: Clone + 'static> Op for Sample<T> {
     type Cfg = ();
     type State = ();
-    type In<'a> = (&'a T,);
+    type In<'a> = (&'a T, &'a ());
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T, &()),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
         Ok(Tick::Value(input.0.clone()))
     }
 }
@@ -1190,6 +1314,7 @@ where
 /// upstreams: ticks when either input ticks, reading both current values.
 pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
+#[op(build = join, no_builder)]
 impl<A, B, C, F> Op for Join<A, B, C, F>
 where
     A: 'static,
@@ -1240,21 +1365,25 @@ where
 /// can run it.
 pub struct Delay<T>(PhantomData<T>);
 
-/// Pending values for a [`Delay`] op.
+/// Pending values for a [`Delay`] op, plus whether the first upstream value
+/// has been stored into the slot (via [`Tick::Silent`]).
 pub struct DelayState<T: PartialEq> {
     queue: TimeQueue<T>,
+    seeded: bool,
 }
 
 impl<T: PartialEq> Default for DelayState<T> {
     fn default() -> Self {
         Self {
             queue: TimeQueue::new(),
+            seeded: false,
         }
     }
 }
 
+#[op(build = delay, no_builder)]
 impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
-    type Cfg = NanoTime;
+    type Cfg = Duration;
     type State = DelayState<T>;
     /// Source value plus whether the source ticked this cycle.
     type In<'a> = (&'a T, bool);
@@ -1262,20 +1391,37 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
-        cfg: &mut NanoTime,
+        cfg: &mut Duration,
         state: &mut DelayState<T>,
         input: (&T, bool),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
         let (value, src_ticked) = input;
+        let delay = NanoTime::from(*cfg);
+        // Classic parity: a zero delay emits inline in the *same* cycle
+        // (scheduling `time + 0` would instead pop next cycle).
+        if delay == NanoTime::ZERO {
+            return Ok(if src_ticked {
+                Tick::Value(value.clone())
+            } else {
+                Tick::Quiet
+            });
+        }
         if src_ticked {
-            let at = ctx.time() + *cfg;
+            let at = ctx.time() + delay;
             state.queue.push(value.clone(), at);
             ctx.schedule(at);
         }
         let mut out = Tick::Quiet;
         while let Some(due) = state.queue.pop_if_pending(ctx.time()) {
             out = Tick::Value(due);
+        }
+        // Classic parity: the first upstream value is stored into the slot
+        // *without* ticking, so passive readers see it (not `T::default()`)
+        // before the delay elapses.
+        if matches!(out, Tick::Quiet) && src_ticked && !state.seeded {
+            state.seeded = true;
+            return Ok(Tick::Silent(value.clone()));
         }
         Ok(out)
     }
@@ -1285,6 +1431,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
 /// wins. Tick flags arrive as input data, not via engine lookups.
 pub struct Merge2<T>(PhantomData<T>);
 
+#[op(build = merge, no_builder)]
 impl<T: Clone + 'static> Op for Merge2<T> {
     type Cfg = ();
     type State = ();

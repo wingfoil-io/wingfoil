@@ -47,10 +47,12 @@
 //!   is open; [`prelude`] brings the common set into scope.
 //! - **[`ops`]** — the op catalog (map/filter/fold/join/delay/window/… plus
 //!   the sources), and **[`stats`]** — EWMA and rolling-window statistics as a
-//!   separate opt-in [`StatisticsOps`](stats::StatisticsOps) trait. A single-
-//!   input op is single-sourced: `#[op(build = name)]` on its `Op` impl
-//!   generates the interpreted `Builder` method (see `ops.rs`), and the
-//!   `graph!`/compiled path is one table row (`OpKind::info`) — see
+//!   separate opt-in [`StatisticsOps`](stats::StatisticsOps) trait. An op is
+//!   single-sourced through **one mechanism**: `#[op(build = name)]` on its
+//!   `Op` impl generates the interpreted `Builder` method (single-input
+//!   shapes) *and* the `graph!` forwarder functions every compiled/nested
+//!   emission dispatches through — there is no per-op table in the macro, so
+//!   built-in and user ops take the identical path — see
 //!   `docs/port-plan.md` "Adding an op".
 //! - **Sources in every activation mode**: `Activation::THREADED`
 //!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`

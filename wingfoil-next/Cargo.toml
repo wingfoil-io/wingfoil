@@ -57,6 +57,10 @@ required-features = ["async"]
 name = "fanout"
 harness = false
 
+[[bench]]
+name = "custom_op"
+harness = false
+
 [[example]]
 name = "csv_adapter"
 required-features = ["csv"]
