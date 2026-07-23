@@ -65,11 +65,11 @@ impl StatisticsOps for Stream<f64> {
             (0.0..=1.0).contains(&alpha),
             "ewma PerTick smoothing factor must be in [0, 1], got {alpha}"
         );
-        self.ewma(EwmaDecay::PerTick(alpha))
+        self.wire(|b, h| b.ewma_per_tick(h, alpha))
     }
 
     fn ewma_half_life(&self, half_life: Duration) -> Stream<f64> {
-        self.ewma(EwmaDecay::HalfLife(half_life.as_nanos() as f64))
+        self.wire(|b, h| b.ewma_half_life(h, half_life))
     }
 
     fn rolling_sum(&self, window: usize) -> Stream<f64> {

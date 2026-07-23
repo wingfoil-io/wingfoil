@@ -560,7 +560,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     where
         T: Clone + Default + 'static,
     {
-        self.fold(Vec::new(), |acc, v: &T| acc.push(v.clone()))
+        self.wire(|b, h| b.accumulate(h))
     }
 
     fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
@@ -779,7 +779,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
 impl Stream<()> {
     /// Running count of ticks: 1, 2, 3, ...
     pub fn count(&self) -> Stream<u64> {
-        self.fold(0u64, |acc, _| *acc += 1)
+        self.wire(|b, h| b.count(h))
     }
 }
 

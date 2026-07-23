@@ -52,7 +52,8 @@ use crate::channel::{ChannelSender, Message};
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::ops::{
     Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Print, Sample,
-    Throttle, Ticker, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState, WithTime,
+    Throttle, Ticker, TickerState, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState,
+    WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -517,13 +518,15 @@ impl Builder {
 
     /// Register a **single-active-input** op — the shape shared by `map`,
     /// `fold`, `ewma`, and ~15 others: one upstream read by reference, one
-    /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. This is the
+    /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. Public so
+    /// third-party op traits can wire this shape through
+    /// [`Stream::wire`](crate::fluent::Stream::wire). This is the
     /// reusable core the `#[op]` attribute generates a thin wrapper around; the
     /// per-op `step` closure (which builds the concrete `(&a,)` input tuple and
     /// calls `Op::cycle`) is the only monomorphic piece, so this primitive
     /// stays free of the GAT-over-HRTB gymnastics a fully generic version would
     /// need. `label` is `type_name::<Op>()`; it is shortened for error context.
-    pub(crate) fn register_op1<A, C, S, Out, Step>(
+    pub fn register_op1<A, C, S, Out, Step>(
         &mut self,
         src: Handle<A>,
         label: &'static str,
@@ -557,6 +560,74 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
+    /// Register a **two-active-input** op — the `join` shape: both upstreams
+    /// read by reference, both triggering, one output slot, engine-owned
+    /// `cfg`+`state`, no lifecycle hooks. Public for the same reason as
+    /// [`register_op1`](Self::register_op1): third-party op traits wire this
+    /// shape through [`Stream::wire`](crate::fluent::Stream::wire) (passive
+    /// edges keep hand-written methods — see [`bimap`](Self::bimap)).
+    // One over clippy's limit, but this is a registration primitive whose
+    // arguments mirror `register_op1` plus the second input handle — grouping
+    // them into a struct would only move the eight names one level down.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_op2<A, B, C, S, Out, Step>(
+        &mut self,
+        a: Handle<A>,
+        b: Handle<B>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state: S,
+        mut step: Step,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let out = self.new_slot(Out::default());
+        let cs = Rc::new(RefCell::new((cfg, state)));
+        self.push_node(
+            vec![a.idx, b.idx],
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                match step(cfg, state, &va, &vb, &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -568,7 +639,7 @@ impl Builder {
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
         let idx = self.nodes.len();
         let out = self.new_slot(());
-        let cs = Self::cell(NanoTime::from(period), None);
+        let cs = Self::cell(period, TickerState::default());
         let cs2 = cs.clone();
         self.push_node(
             Vec::new(),
@@ -581,6 +652,10 @@ impl Builder {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -610,6 +685,10 @@ impl Builder {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -643,6 +722,11 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -674,6 +758,11 @@ impl Builder {
                         drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -708,6 +797,11 @@ impl Builder {
                         drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -773,6 +867,11 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -834,6 +933,11 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -864,6 +968,11 @@ impl Builder {
                         drop(v);
                         *out.borrow_mut() = value;
                         Ok(true)
+                    }
+                    Tick::Silent(value) => {
+                        drop(v);
+                        *out.borrow_mut() = value;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -897,6 +1006,11 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -921,11 +1035,16 @@ impl Builder {
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                match Sample::<T>::cycle(&mut (), &mut (), (&v,), &mut ctx)? {
+                match Sample::<T>::cycle(&mut (), &mut (), (&v, &()), &mut ctx)? {
                     Tick::Value(value) => {
                         drop(v);
                         *out.borrow_mut() = value;
                         Ok(true)
+                    }
+                    Tick::Silent(value) => {
+                        drop(v);
+                        *out.borrow_mut() = value;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -992,6 +1111,12 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -1045,6 +1170,12 @@ impl Builder {
                         *out.borrow_mut() = v;
                         Ok(true)
                     }
+                    Tick::Silent(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -1064,44 +1195,25 @@ impl Builder {
         let out = self.new_slot(T::default());
         let ticked = self.ticked.clone();
         let is = src.idx;
-        // State carries an extra `seeded` flag alongside the op's `DelayState`
-        // (the op's state stays in ops.rs): it records whether the first
-        // upstream value has been stored into the slot.
-        let cs = Self::cell(NanoTime::from(delay), (DelayState::<T>::default(), false));
+        let cs = Self::cell(delay, DelayState::<T>::default());
         self.push_node(
             vec![src.idx],
             Delay::<T>::ACTIVATION,
             "delay",
             Box::new(move |k| {
                 let src_ticked = ticked.borrow()[is];
-                let (cfg, (state, seeded)) = &mut *cs.borrow_mut();
+                let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let v = src_slot.borrow();
-                // Two engine-level behaviours classic has that `Op::cycle`
-                // cannot express (mirrored in the `graph!` macro's Delay
-                // emission so all three paths agree):
-                //   1. zero delay emits inline this cycle;
-                //   2. the first upstream value seeds the slot *without*
-                //      ticking, so passive readers never see `T::default()`.
-                let (write, did): (Option<T>, bool) = if *cfg == NanoTime::ZERO {
-                    if src_ticked {
-                        (Some(v.clone()), true)
-                    } else {
-                        (None, false)
-                    }
-                } else {
+                // Zero-delay inline emit and first-value seeding (via
+                // `Tick::Silent`) live in `Delay::cycle` itself, so every
+                // engine gets them from the one implementation.
+                let (write, did): (Option<T>, bool) =
                     match Delay::<T>::cycle(cfg, state, (&v, src_ticked), &mut ctx)? {
                         Tick::Value(value) => (Some(value), true),
-                        Tick::Quiet => {
-                            if src_ticked && !*seeded {
-                                *seeded = true;
-                                (Some(v.clone()), false)
-                            } else {
-                                (None, false)
-                            }
-                        }
-                    }
-                };
+                        Tick::Silent(value) => (Some(value), false),
+                        Tick::Quiet => (None, false),
+                    };
                 drop(v);
                 if let Some(w) = write {
                     *out.borrow_mut() = w;
@@ -1144,6 +1256,12 @@ impl Builder {
                         *out.borrow_mut() = value;
                         Ok(true)
                     }
+                    Tick::Silent(value) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = value;
+                        Ok(false)
+                    }
                     Tick::Quiet => Ok(false),
                 }
             }),
@@ -1176,6 +1294,10 @@ impl Builder {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -1212,6 +1334,11 @@ impl Builder {
                         drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -1253,6 +1380,11 @@ impl Builder {
                         drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -1296,6 +1428,11 @@ impl Builder {
                         drop(a);
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
@@ -1419,6 +1556,10 @@ impl Builder {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
                         Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(false)
                     }
                     Tick::Quiet => Ok(false),
                 }
