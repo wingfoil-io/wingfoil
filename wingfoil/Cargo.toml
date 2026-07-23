@@ -229,10 +229,6 @@ required-features = ["kdb"]
 
 
 [[example]]
-name = "codegen"
-path = "examples/codegen/main.rs"
-
-[[example]]
 name = "run_mode"
 
 [[example]]

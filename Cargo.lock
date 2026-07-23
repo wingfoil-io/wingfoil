@@ -7660,15 +7660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingfoil-codegen-build-example"
-version = "8.0.0"
-dependencies = [
- "anyhow",
- "criterion",
- "wingfoil",
-]
-
-[[package]]
 name = "wingfoil-derive"
 version = "8.0.0"
 dependencies = [

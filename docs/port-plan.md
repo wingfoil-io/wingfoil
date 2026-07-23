@@ -28,8 +28,8 @@ until cutover, so:
 The shared `Kernel` (clock, schedule queue, run bounds, waker channel)
 already serves both engines and is the fixed point of the migration.
 Branch-1 retrofit codegen (`wingfoil::codegen::{generate, StaticRuntime,
-generate_standalone}` + fingerprints + the build-example crate) is retired
-at the end — `compiled()` and islands supersede it with strictly better
+generate_standalone}` + fingerprints + the build-example crate) has been
+retired — `compiled()` and islands supersede it with strictly better
 guarantees.
 
 ## Capability matrix
@@ -505,10 +505,10 @@ follow-on increments once that boundary question is settled.
 
 - Deprecate classic engine internals (`MutableNode` wiring path), keep the
   facade API.
-- Retire branch-1 codegen: `wingfoil::codegen::{generate,
+- Branch-1 codegen has been retired: `wingfoil::codegen::{generate,
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
-  files, `wingfoil-codegen-build-example`. `Kernel`, `KernelWaker`,
-  `waker_channel` remain (they are the engine core now).
+  files, and `wingfoil-codegen-build-example` are removed. `Kernel`,
+  `KernelWaker`, `waker_channel` remain (they are the engine core now).
 - Docs: rewrite crate docs + CLAUDE.md for the op pattern; migration guide
   from `#[node]` to `Op`.
 - Version: next merges into `wingfoil` as a major bump.

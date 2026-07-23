@@ -14,8 +14,6 @@ wingfoil/           # Core Rust library
     lib.rs          # Public API re-exports
     types.rs        # Core traits: Element, Node, MutableNode, Stream
     graph.rs        # Graph execution engine (RunMode, RunFor)
-    codegen/        # Ahead-of-time codegen: static-schedule runners (generate) and
-                    #   fully monomorphized standalone runners (generate_standalone)
     time.rs         # NanoTime (nanoseconds from UNIX epoch)
     nodes/          # 40+ node implementations (map, filter, fold, delay, feedback, etc.)
     adapters/       # I/O adapters (CSV, ZMQ, Kafka, KDB+, Redis, Postgres, etcd,
@@ -27,8 +25,6 @@ wingfoil/           # Core Rust library
                     #   feedback, threading, plus one per adapter)
   benches/          # Criterion benchmarks
 
-wingfoil-codegen-build-example/  # Build-time codegen: build.rs generates the static
-                    #   runner into OUT_DIR from a wiring file shared with the app
 wingfoil-derive/    # Proc macros (#[node] attribute)
 wingfoil-python/    # PyO3 Python bindings (built with maturin)
   src/

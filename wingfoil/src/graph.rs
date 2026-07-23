@@ -1,5 +1,5 @@
 use crate::queue::TimeQueue;
-use crate::types::{MutableNode, NanoTime, Node};
+use crate::types::{NanoTime, Node};
 use by_address::ByThinAddress;
 
 use crossbeam::channel::{Receiver, SendError, Sender, select};
@@ -119,9 +119,6 @@ impl RunFor {
 ///
 /// `end_time` / `end_cycle` default to their `MAX` sentinel when the
 /// corresponding bound does not apply (e.g. `end_cycle` for `RunFor::Duration`).
-///
-/// `pub(crate)` so the generated static runner ([`crate::codegen`]) can drive
-/// the same [`Graph::advance`] loop head as the interpreted engine.
 #[derive(Clone, Copy)]
 pub(crate) struct RunBounds {
     pub(crate) start_time: NanoTime,
@@ -572,9 +569,8 @@ impl Graph {
     }
 
     /// Resolve the run bounds and record the run's start time on the graph
-    /// state. Called once at the top of a run — by the interpreted run loop
-    /// ([`run_nodes`](Graph::run_nodes)) and by the generated static runner
-    /// ([`crate::codegen::StaticRuntime`]).
+    /// state. Called once at the top of a run, by the run loop
+    /// ([`run_nodes`](Graph::run_nodes)).
     pub(crate) fn begin_run(&mut self) -> RunBounds {
         let bounds = self.resolve_start_end();
         self.state.start_time = bounds.start_time;
@@ -627,10 +623,9 @@ impl Graph {
         Ok(())
     }
 
-    /// The run-loop head shared by the interpreted engine and the generated
-    /// static runner ([`crate::codegen::StaticRuntime`]): check the configured
-    /// bounds, flag the last cycle, advance time, process due callbacks
-    /// (marking the affected nodes dirty) and snap the per-cycle wall clock.
+    /// The run-loop head: check the configured bounds, flag the last cycle,
+    /// advance time, process due callbacks (marking the affected nodes dirty)
+    /// and snap the per-cycle wall clock.
     ///
     /// Returns `Ok(true)` when a cycle should run, `Ok(false)` when the run is
     /// complete (bounds reached, or a historical run with no further work).
@@ -951,41 +946,10 @@ impl Graph {
         Ok(())
     }
 
-    /// Like [`cycle_node_inner`](Graph::cycle_node_inner) but dispatches
-    /// statically on a concrete node type: same engine bookkeeping
-    /// (`current_node_index` so `add_callback` works, tick recording, error
-    /// context), but the `cycle` call is monomorphized instead of going
-    /// through the `dyn Node` vtable. Used by generated static runners for
-    /// state-needing nodes (`delay`, `ticker`, `throttle`, ...).
-    pub(crate) fn cycle_typed_inner<NODE: MutableNode>(
-        &mut self,
-        index: usize,
-        node: &std::cell::RefCell<NODE>,
-    ) -> anyhow::Result<bool> {
-        if !self.state.nodes[index].active {
-            return Ok(false);
-        }
-        self.state.current_node_index = Some(index);
-        let result = node.borrow_mut().cycle(&mut self.state);
-        self.state.current_node_index = None;
-
-        let ticked = result.map_err(|e| {
-            let context = self.format_context(index, 3);
-            e.context(format!("Error in node [{index}]:\n{context}"))
-        })?;
-
-        if ticked {
-            self.state.set_ticked(index);
-        }
-        Ok(ticked)
-    }
-
     /// Cycle a single node without propagating its tick downstream. Records
     /// the tick on the graph state (so [`GraphState::ticked`] works) and
-    /// returns whether the node ticked. The interpreted engine propagates via
-    /// [`cycle_node`](Graph::cycle_node); the generated static runner
-    /// ([`crate::codegen::StaticRuntime`]) propagates through its compiled
-    /// schedule instead.
+    /// returns whether the node ticked. The engine propagates the tick via
+    /// [`cycle_node`](Graph::cycle_node).
     #[cfg_attr(
         feature = "instrument-cycle-node",
         tracing::instrument(skip(self), fields(node = tracing::field::Empty))
@@ -1022,70 +986,6 @@ impl Graph {
         for i in self.state.node_dirty.iter_mut() {
             *i = false;
         }
-    }
-
-    // ── accessors for the static-runner codegen (`crate::codegen`) ──────────
-
-    /// Surface any wiring error (e.g. a cycle) stashed during construction.
-    pub(crate) fn take_wiring_error(&mut self) -> Option<anyhow::Error> {
-        self.state.wiring_error.take()
-    }
-
-    pub(crate) fn node_count(&self) -> usize {
-        self.state.nodes.len()
-    }
-
-    pub(crate) fn node_type_name(&self, index: usize) -> String {
-        self.state.nodes[index].node.type_name()
-    }
-
-    pub(crate) fn node_layer(&self, index: usize) -> usize {
-        self.state.nodes[index].layer
-    }
-
-    /// Indices of `index`'s upstreams over *active* edges, in wiring order.
-    pub(crate) fn active_upstream_indices(&self, index: usize) -> Vec<usize> {
-        self.state.nodes[index]
-            .upstreams
-            .iter()
-            .filter(|e| e.active)
-            .map(|e| e.node_index)
-            .collect()
-    }
-
-    /// Indices of `index`'s upstreams over *passive* edges, in wiring order.
-    pub(crate) fn passive_upstream_indices(&self, index: usize) -> Vec<usize> {
-        self.state.nodes[index]
-            .upstreams
-            .iter()
-            .filter(|e| !e.active)
-            .map(|e| e.node_index)
-            .collect()
-    }
-
-    /// True if a node was marked dirty by callback processing this cycle.
-    pub(crate) fn is_node_dirty(&self, index: usize) -> bool {
-        self.state.node_dirty[index]
-    }
-
-    pub(crate) fn node_rc(&self, index: usize) -> Rc<dyn Node> {
-        self.state.nodes[index].node.clone()
-    }
-
-    /// Record a tick for `index` on the graph state. Used by generated static
-    /// runners for statically-dispatched (inlined) nodes, which bypass
-    /// [`cycle_node_inner`](Graph::cycle_node_inner) — so `GraphState::ticked`
-    /// stays correct for any fallback node that consults it.
-    pub(crate) fn set_node_ticked(&mut self, index: usize) {
-        self.state.set_ticked(index);
-    }
-
-    /// True if a node requested a dynamic graph change (`add_upstream` /
-    /// `remove_node`) during the cycle just executed. The static runner
-    /// rejects these — a compiled schedule cannot change shape.
-    #[cfg(feature = "dynamic-graph")]
-    pub(crate) fn has_pending_dynamic_changes(&self) -> bool {
-        !self.state.pending_additions.is_empty() || !self.state.pending_removals.is_empty()
     }
 
     #[cfg(feature = "dynamic-graph")]

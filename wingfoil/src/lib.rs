@@ -228,6 +228,12 @@ pub mod adapters;
 #[cfg(feature = "bench")]
 mod bencher;
 mod channel;
+/// The shared runtime kernel (clock, scheduled-callback queue, run bounds).
+///
+/// Retains the historical `codegen` name: the ahead-of-time retrofit code
+/// generator that once lived here has been removed, superseded by the
+/// `wingfoil-next` macro `compiled()` / islands path. The kernel it left
+/// behind is still the engine core that `wingfoil-next` builds on.
 pub mod codegen;
 mod graph;
 mod latency;
