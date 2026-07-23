@@ -13,9 +13,14 @@ never names*, at parity with the hand-written table rows it replaced. The
 `OpKind`/`OpInfo` table has been **deleted**; every op — the built-in catalog
 and user ops alike — dispatches through the same forwarder mechanism, so the
 built-ins are now ordinary users of the extension surface (the best ongoing
-test of it). What remains in the macro is parse-level sugar only (`count`,
-`accumulate`, `map_n`, `fan`, the `ewma_*` spellings) — rewrites into base
-ops, not a second op path.
+test of it). The macro knows exactly **two** method names of its own —
+`map_n` and `fan`, the topology combinators, which create N nodes
+(inexpressible by any per-node mechanism) and take literal counts so the
+DAG stays static. Everything else — `count`, `accumulate`, `ewma_per_tick`,
+`ewma_half_life` included — is an ordinary op ([`Count`], [`Accumulate`],
+[`EwmaPerTick`], [`EwmaHalfLife`] in `ops.rs`), which also removed the last
+drift risk: their desugars were previously written twice, once in the
+fluent layer and once in the macro; both layers now call the same op.
 
 Everything below is grounded in the prototype commits on this branch:
 `wingfoil-next-macros/src/lib.rs` (the fallback), `wingfoil-next/tests/custom_op.rs`
@@ -207,6 +212,7 @@ Each table-only capability moved to the trait/derive layer, exactly as
 | delay's zero-delay inline emit + silent first-value store | promoted into the `Op` contract as `Tick::Silent(T)` (the promotion `op.rs` had reserved); `Delay::cycle` now expresses its full semantics once, and all three engines handle `Silent` generically |
 | sources (ticker/constant) | same mechanism, rooted at builder methods; `Ticker`/`Delay` `Cfg` became the call-site `Duration` (arg-verbatim convention), with ticker caching the converted period in state at `start` |
 | `unit_output`, `CfgInit`, `StateInit`, `ValueSeed`, `Edges`, `Inputs`, `OpKind`, `OpInfo` | deleted |
+| `count` / `accumulate` / `ewma_per_tick` / `ewma_half_life` parse arms | retired into real ops (`Count`, `Accumulate`, `EwmaPerTick`, `EwmaHalfLife`); the fluent layer calls the same ops, single-sourcing desugars that previously existed in two places |
 
 Two conventions carry the start hooks: `_start` forwards the real
 `Op::start` only when the impl overrides it (otherwise it is a fully-erased

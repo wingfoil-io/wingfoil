@@ -6,13 +6,13 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = constant, no_builder)]
-   | ----------------------------------- similarly named constant `__WF_OP_CONSTANT_PASSIVE` defined here
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
    |
 help: a constant with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_CONSTANT_PASSIVE();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_PASSIVE();
    |
 
 error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
@@ -23,13 +23,13 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = constant, no_builder)]
-   | ----------------------------------- similarly named constant `__WF_OP_CONSTANT_ACTIVATION` defined here
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
    |
 help: a constant with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_CONSTANT_ACTIVATION();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_ACTIVATION();
    |
 
 error[E0599]: no method named `frobnicate` found for struct `wingfoil_next::fluent::Stream<T>` in the current scope
@@ -46,11 +46,11 @@ error[E0425]: cannot find function `__wf_op_frobnicate_cycle` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = constant, no_builder)]
-   | ----------------------------------- similarly named function `__wf_op_constant_cycle` defined here
+   | #[op(build = accumulate)]
+   | ------------------------- similarly named function `__wf_op_accumulate_cycle` defined here
    |
 help: a function with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-12 +         let out = g.ticker(Duration::from_nanos(10)).count().__wf_op_constant_cycle();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__wf_op_accumulate_cycle();
    |

@@ -100,11 +100,12 @@
 //! at expansion time: `&name` naming a bound stream → an input edge (active,
 //! read by value, in call order after the receiver); a literal closure → the
 //! op's by-value config; anything else → the plain config (one value or a
-//! tuple). Parse-level sugar remains: `.count()` / `.accumulate()` (folds),
-//! `.ewma_per_tick(alpha)` / `.ewma_half_life(dur)` (`EwmaDecay` configs),
-//! and bounded repetition `.map_n(N, f)` / `.fan(N, |s| <sub-chain>)`, whose
-//! counts must be integer literals so the unrolled DAG stays static — the
-//! static-topology answer to "no wiring inside loops" below.
+//! tuple). The macro knows exactly **two** method names of its own — the
+//! topology combinators `.map_n(N, f)` / `.fan(N, |s| <sub-chain>)`, which
+//! create N nodes (inexpressible per-node) and whose counts must be integer
+//! literals so the unrolled DAG stays static — the static-topology answer
+//! to "no wiring inside loops" below. Everything else, `.count()` and
+//! `.ewma_per_tick(..)` included, is an ordinary op.
 //!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
 //! computing configs, declaring locals that closures capture, helper calls.
@@ -531,10 +532,12 @@ impl ChainWalker {
     }
 
     /// Dispatch one fluent method call onto tail `cur`, pushing the node(s)
-    /// it expands to and returning the new tail. Parse-level **sugar**
-    /// (`count`, `accumulate`, `ewma_per_tick`, `ewma_half_life`, `map_n`,
-    /// `fan`) rewrites into base ops; every other method — built-in or
-    /// user-defined — is one op node dispatched through its forwarders.
+    /// it expands to and returning the new tail. Exactly **two** names are
+    /// known to the macro — `map_n` and `fan`, the topology combinators
+    /// (they create N nodes, which no per-node mechanism can express, and
+    /// their counts must be literals so the DAG stays static). Every other
+    /// method — built-in or user-defined — is one op node dispatched
+    /// through its forwarders.
     fn apply_call(
         &mut self,
         cur: usize,
@@ -543,40 +546,6 @@ impl ChainWalker {
         name: Ident,
     ) -> syn::Result<usize> {
         Ok(match method.to_string().as_str() {
-            // Sugar, desugared to the same folds the fluent layer uses.
-            "count" => {
-                expect_arity(method, args, 0)?;
-                let init: Expr = parse_quote!(0u64);
-                let f: Expr = parse_quote!(|__acc, _| *__acc += 1);
-                let fold = Ident::new("fold", method.span());
-                self.push_node(name, Some(fold), vec![cur], vec![init], Some(f))
-            }
-            "accumulate" => {
-                expect_arity(method, args, 0)?;
-                let init: Expr = parse_quote!(::std::vec::Vec::new());
-                let f: Expr =
-                    parse_quote!(|__acc, __v| __acc.push(::core::clone::Clone::clone(__v)));
-                let fold = Ident::new("fold", method.span());
-                self.push_node(name, Some(fold), vec![cur], vec![init], Some(f))
-            }
-            // The three `ewma*` spellings share one op, differing only in the
-            // `EwmaDecay` config they build.
-            "ewma_per_tick" => {
-                expect_arity(method, args, 1)?;
-                let alpha = args[0];
-                let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::PerTick(#alpha));
-                let ewma = Ident::new("ewma", method.span());
-                self.push_node(name, Some(ewma), vec![cur], vec![cfg], None)
-            }
-            "ewma_half_life" => {
-                expect_arity(method, args, 1)?;
-                let half_life = args[0];
-                let cfg: Expr = parse_quote!(::wingfoil_next::ops::EwmaDecay::HalfLife(
-                    (#half_life).as_nanos() as f64
-                ));
-                let ewma = Ident::new("ewma", method.span());
-                self.push_node(name, Some(ewma), vec![cur], vec![cfg], None)
-            }
             // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
             // `map`s; `fan(N, |s| <sub-chain>)` builds N copies of a sub-chain
             // rooted at the current tail and merges them. Both take a literal

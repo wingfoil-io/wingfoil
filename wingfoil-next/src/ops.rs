@@ -696,6 +696,55 @@ impl Op for Ewma {
     }
 }
 
+/// [`Ewma`] with a fixed per-tick smoothing factor — `Cfg` is the bare
+/// `alpha` as passed at the call site; the [`EwmaDecay`] policy is built
+/// inside `cycle` (an enum wrap, folded after monomorphization). Previously
+/// call-site sugar duplicated in the fluent layer and the `graph!` macro.
+pub struct EwmaPerTick;
+
+#[op(build = ewma_per_tick)]
+impl Op for EwmaPerTick {
+    type Cfg = f64;
+    type State = EwmaState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut f64,
+        state: &mut EwmaState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let mut decay = EwmaDecay::PerTick(*cfg);
+        Ewma::cycle(&mut decay, state, input, ctx)
+    }
+}
+
+/// [`Ewma`] whose weights decay off engine time — `Cfg` is the half-life as
+/// passed at the call site (`Duration`); converted per activation, which is
+/// noise next to the `exp()` in the decay itself.
+pub struct EwmaHalfLife;
+
+#[op(build = ewma_half_life)]
+impl Op for EwmaHalfLife {
+    type Cfg = Duration;
+    type State = EwmaState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut Duration,
+        state: &mut EwmaState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let mut decay = EwmaDecay::HalfLife(cfg.as_nanos() as f64);
+        Ewma::cycle(&mut decay, state, input, ctx)
+    }
+}
+
 /// Shared ring-buffer state for the rolling-window statistics ops: the most
 /// recent `window` samples and their running sum (maintained in O(1) per
 /// tick).
@@ -1151,6 +1200,54 @@ pub fn __wf_op_fold_start_owned<B, S>(
     _ctx: &mut Ctx<'_>,
 ) -> Result<()> {
     Ok(())
+}
+
+/// Running count of upstream ticks: 1, 2, 3, … Previously desugared to
+/// [`Fold`] separately in the fluent layer *and* the `graph!` macro (two
+/// places that could drift); now one op both layers call.
+pub struct Count<T>(PhantomData<T>);
+
+#[op(build = count)]
+impl<T: 'static> Op for Count<T> {
+    type Cfg = ();
+    type State = u64;
+    type In<'a> = (&'a T,);
+    type Out = u64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut u64,
+        _input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<u64>> {
+        *state += 1;
+        Ok(Tick::Value(*state))
+    }
+}
+
+/// Collect every emitted value into a `Vec`, emitting the accumulated `Vec`
+/// on each tick (cloned per tick — identical to its previous fold-based
+/// desugar). Single-sourced for both layers, like [`Count`].
+pub struct Accumulate<T>(PhantomData<T>);
+
+#[op(build = accumulate)]
+impl<T: Clone + 'static> Op for Accumulate<T> {
+    type Cfg = ();
+    type State = Vec<T>;
+    type In<'a> = (&'a T,);
+    type Out = Vec<T>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Vec<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Vec<T>>> {
+        state.push(input.0.clone());
+        Ok(Tick::Value(state.clone()))
+    }
 }
 
 /// Emits its (passive) source value whenever its trigger ticks. The trigger
