@@ -517,13 +517,15 @@ impl Builder {
 
     /// Register a **single-active-input** op — the shape shared by `map`,
     /// `fold`, `ewma`, and ~15 others: one upstream read by reference, one
-    /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. This is the
+    /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. Public so
+    /// third-party op traits can wire this shape through
+    /// [`Stream::wire`](crate::fluent::Stream::wire). This is the
     /// reusable core the `#[op]` attribute generates a thin wrapper around; the
     /// per-op `step` closure (which builds the concrete `(&a,)` input tuple and
     /// calls `Op::cycle`) is the only monomorphic piece, so this primitive
     /// stays free of the GAT-over-HRTB gymnastics a fully generic version would
     /// need. `label` is `type_name::<Op>()`; it is shortened for error context.
-    pub(crate) fn register_op1<A, C, S, Out, Step>(
+    pub fn register_op1<A, C, S, Out, Step>(
         &mut self,
         src: Handle<A>,
         label: &'static str,

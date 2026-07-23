@@ -144,6 +144,16 @@ enum OpKind {
     Ewma,
     RollingSum,
     RollingMean,
+    /// Generic fallback for a combinator the macro does not know: a
+    /// **single-input, receiver-activated** op resolved by *type inference*
+    /// instead of a table row. The emission calls naming-convention forwarder
+    /// functions (`__wf_op_<name>_cycle` / `_cycle_owned` / `_start` /
+    /// `_start_owned`) that the `#[op]` attribute generates next to the op's
+    /// `Op` impl; rustc infers the op's concrete type from the input/cfg
+    /// argument types, so the macro never needs to name it. The method ident
+    /// lives in [`NodeDef::custom`]; per-node facts come from
+    /// [`NodeDef::info`], not [`OpKind::info`].
+    Custom,
 }
 
 /// The shape of an op's `Op::In` tuple — how the cycle call assembles its
@@ -186,6 +196,12 @@ enum StateInit {
     Default(TokenStream2),
     /// `let __state: Option<ty> = None;` (ticker's last-scheduled-time).
     OptionNone(TokenStream2),
+    /// `let __state = Default::default();` with **no** type — the state's
+    /// concrete type is inferred from the forwarder call's
+    /// `&mut <X as Op>::State` parameter once the op type resolves (custom
+    /// ops only). Requires `State: Default`, same as the interpreted
+    /// `register_op1` shape.
+    DefaultInferred,
 }
 
 /// How `node_decl` seeds a node's `__v_<name>` output value slot — the value
@@ -447,6 +463,9 @@ impl OpKind {
                 value_seed: ValueSeed::Default,
                 edges: Edges::AllActive,
             },
+            // Custom info depends on the call site (arg count / closure-ness),
+            // so it lives on the node: see `NodeDef::info`.
+            OpKind::Custom => unreachable!("custom ops use NodeDef::info, not OpKind::info"),
         }
     }
 }
@@ -454,6 +473,10 @@ impl OpKind {
 struct NodeDef {
     name: Ident,
     op: OpKind,
+    /// For [`OpKind::Custom`]: the method ident from the call site, naming
+    /// the forwarder functions the emission calls (spans point errors at the
+    /// offending method). `None` for every table op.
+    custom: Option<Ident>,
     /// Indices (into the node list) of upstream nodes, in op-argument order.
     refs: Vec<usize>,
     /// Non-node args (configs, closures), in op-argument order.
@@ -461,12 +484,83 @@ struct NodeDef {
 }
 
 impl NodeDef {
+    /// The [`OpInfo`] driving this node's emission: the hand-written table row
+    /// for known ops, or the one **generic shape** for custom ops —
+    /// single-input, receiver-activated, `Cfg` from the (optional) call
+    /// argument, `State`/value-slot `Default`-seeded with types left to
+    /// inference. Everything else a table row can express (passive edges,
+    /// tick-flag inputs, non-default seeding, unit outputs) is out of the
+    /// fallback's scope by design.
+    fn info(&self) -> OpInfo {
+        if self.op != OpKind::Custom {
+            return self.op.info();
+        }
+        // A single *literal* closure argument goes by value through the
+        // `_cycle_owned` forwarder (same inference-deferral trick as the
+        // table's `cycle_owned_cfg`); any other single argument is the op's
+        // `Cfg`, hoisted into a `__cfg` local.
+        let lit_closure = self.exprs.len() == 1 && matches!(self.exprs[0], Expr::Closure(_));
+        OpInfo {
+            op_type: quote! {},
+            // Not used for dispatch: a custom op's dirty check is guarded by
+            // its `__WF_OP_<NAME>_ACTIVATION` const at the emission sites
+            // (see `node_dispatch` / `expand_nested`), so a non-scheduling op
+            // pays nothing after constant folding.
+            callback_activated: false,
+            // `Op::start` has a no-op default; calling it unconditionally
+            // through the forwarder lets custom ops keep lifecycle hooks
+            // (the no-op case is inlined away after monomorphization).
+            has_start: true,
+            state_in_start: true,
+            owned_closure: if lit_closure { Some(0) } else { None },
+            unit_output: false,
+            inputs: Inputs::One,
+            cfg_init: if self.exprs.is_empty() || lit_closure {
+                CfgInit::None
+            } else {
+                CfgInit::Expr { arg: 0, ty: None }
+            },
+            state_init: StateInit::DefaultInferred,
+            value_seed: ValueSeed::Default,
+            edges: Edges::AllActive,
+        }
+    }
+
+    /// The forwarder function ident for a custom op: `__wf_op_<method>_<kind>`
+    /// (`kind` ∈ cycle / cycle_owned / start / start_owned), spanned at the
+    /// call-site method so an op with no `#[op]`-generated forwarders errors
+    /// *there*.
+    fn forwarder(&self, kind: &str) -> Ident {
+        let method = self
+            .custom
+            .as_ref()
+            .expect("invariant: forwarder() only called for OpKind::Custom nodes");
+        Ident::new(&format!("__wf_op_{method}_{kind}"), method.span())
+    }
+
+    /// The `__WF_OP_<METHOD>_ACTIVATION` const for a custom op — the op's
+    /// `Op::ACTIVATION`, re-emitted monomorphically by `#[op]` so the
+    /// emission can guard the dirty check with it. The guard is a *runtime*
+    /// `const.callback_activated() && __dirty[i]` expression that LLVM
+    /// constant-folds to nothing for non-scheduling ops (measured: restores
+    /// exact parity with table rows on the dense-chain bench).
+    fn activation_const(&self) -> Ident {
+        let method = self
+            .custom
+            .as_ref()
+            .expect("invariant: activation_const() only called for OpKind::Custom nodes");
+        Ident::new(
+            &format!("__WF_OP_{}_ACTIVATION", method.to_string().to_uppercase()),
+            method.span(),
+        )
+    }
+
     /// Active upstream node indices (what propagates ticks to this node).
     /// The active/passive edge shape is single-sourced in [`OpInfo::edges`]
     /// (e.g. Sample's data edge is passive, its trigger active) so the three
     /// emission paths cannot disagree.
     fn active_ups(&self) -> Vec<usize> {
-        match self.op.info().edges {
+        match self.info().edges {
             Edges::AllActive => self.refs.clone(),
             Edges::OneActive(i) => vec![self.refs[i]],
         }
@@ -601,6 +695,26 @@ impl ChainWalker {
         self.nodes.push(NodeDef {
             name,
             op,
+            custom: None,
+            refs,
+            exprs,
+        });
+        ix
+    }
+
+    /// Push a generic-fallback node for an unknown combinator `method`.
+    fn push_custom(
+        &mut self,
+        name: Ident,
+        method: Ident,
+        refs: Vec<usize>,
+        exprs: Vec<Expr>,
+    ) -> usize {
+        let ix = self.nodes.len();
+        self.nodes.push(NodeDef {
+            name,
+            op: OpKind::Custom,
+            custom: Some(method),
             refs,
             exprs,
         });
@@ -922,15 +1036,31 @@ impl ChainWalker {
                 }
                 merged
             }
-            other => {
-                return Err(syn::Error::new(
-                    method.span(),
-                    format!(
-                        "unknown combinator `.{other}(..)`; expected one of: map, map_n, fan, \
-                         filter, fold, sample, merge, join, delay, count, accumulate, ewma, \
-                         ewma_per_tick, ewma_half_life, rolling_sum, rolling_mean"
-                    ),
-                ));
+            // Generic fallback: an unknown method is assumed to be a
+            // **single-input custom op** whose `#[op]` attribute generated
+            // forwarder functions (`__wf_op_<name>_cycle` etc.) in scope at
+            // the expansion site. The receiver is its only (active) edge; at
+            // most one argument, taken as the op's `Cfg` (a literal closure
+            // goes by value through `_cycle_owned`). If no forwarders exist —
+            // a typo, or an op that never derived them — the error is an
+            // unresolved `__wf_op_<name>_cycle` spanned at this method.
+            _ => {
+                if args.len() > 1 {
+                    return Err(syn::Error::new(
+                        method.span(),
+                        format!(
+                            "`.{method}(..)` is not a built-in combinator, and custom ops take \
+                             at most one config argument (multi-input custom ops are not \
+                             supported in graph! yet)"
+                        ),
+                    ));
+                }
+                self.push_custom(
+                    name,
+                    method.clone(),
+                    vec![cur],
+                    args.iter().map(|e| (*e).clone()).collect(),
+                )
             }
         })
     }
@@ -1327,16 +1457,22 @@ fn is_unit_type(ty: &Type) -> bool {
 fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let self_ty = &*imp.self_ty;
 
-    // Pull `In` / `Cfg` / `Out` off the impl's associated types.
+    // Pull `In` / `Cfg` / `Out` off the impl's associated types, and the
+    // `ACTIVATION` expression off its associated const.
     let (mut in_ty, mut cfg_ty, mut out_ty) = (None, None, None);
+    let mut activation_expr: Option<Expr> = None;
     for it in &imp.items {
-        if let ImplItem::Type(t) = it {
-            match t.ident.to_string().as_str() {
+        match it {
+            ImplItem::Type(t) => match t.ident.to_string().as_str() {
                 "In" => in_ty = Some(t.ty.clone()),
                 "Cfg" => cfg_ty = Some(t.ty.clone()),
                 "Out" => out_ty = Some(t.ty.clone()),
                 _ => {}
+            },
+            ImplItem::Const(c) if c.ident == "ACTIVATION" => {
+                activation_expr = Some(c.expr.clone());
             }
+            _ => {}
         }
     }
     let missing =
@@ -1394,7 +1530,83 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let where_tokens = quote! { where #(#preds),* };
 
     let doc = format!("Interpreted-engine wiring for [`{name}`]. Generated by `#[op]`.");
+
+    // The graph!/compiled forwarders: generic functions that call the op's
+    // trait items without the *macro* ever naming the op type — the `graph!`
+    // generic fallback emits calls to these by **naming convention**
+    // (`__wf_op_<name>_cycle` …), and rustc's inference resolves the op's
+    // concrete type from the argument types at the expansion site. The
+    // `_owned` variants take `Cfg` by value as a direct argument so a literal
+    // closure cfg gets the same inference deferral as `cycle_owned_cfg`.
+    let cycle_fn = format_ident!("__wf_op_{}_cycle", name);
+    let cycle_owned_fn = format_ident!("__wf_op_{}_cycle_owned", name);
+    let start_fn = format_ident!("__wf_op_{}_start", name);
+    let start_owned_fn = format_ident!("__wf_op_{}_start_owned", name);
+    // The op's `ACTIVATION` expression, re-emitted as a monomorphic const so
+    // the `graph!` fallback can guard its dirty check with it (the generic
+    // forwarders cannot carry a const, and `<X<T> as Op>::ACTIVATION` would
+    // need the type name the fallback never has). Requires the expression not
+    // to mention the impl's generics — true of every op in the catalog.
+    let activation_expr = activation_expr
+        .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
+    let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", name.to_string().to_uppercase());
+    let forwarders = quote! {
+        #[doc(hidden)]
+        pub const #activation_const: crate::op::Activation = #activation_expr;
+
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn #cycle_fn #generics (
+            __cfg: &mut <#self_ty as crate::op::Op>::Cfg,
+            __state: &mut <#self_ty as crate::op::Op>::State,
+            __input: <#self_ty as crate::op::Op>::In<'_>,
+            __ctx: &mut crate::op::Ctx<'_>,
+        ) -> ::anyhow::Result<crate::op::Tick<<#self_ty as crate::op::Op>::Out>>
+        #where_tokens
+        {
+            <#self_ty as crate::op::Op>::cycle(__cfg, __state, __input, __ctx)
+        }
+
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn #cycle_owned_fn #generics (
+            mut __cfg: <#self_ty as crate::op::Op>::Cfg,
+            __state: &mut <#self_ty as crate::op::Op>::State,
+            __input: <#self_ty as crate::op::Op>::In<'_>,
+            __ctx: &mut crate::op::Ctx<'_>,
+        ) -> ::anyhow::Result<crate::op::Tick<<#self_ty as crate::op::Op>::Out>>
+        #where_tokens
+        {
+            <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, __input, __ctx)
+        }
+
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn #start_fn #generics (
+            __cfg: &mut <#self_ty as crate::op::Op>::Cfg,
+            __state: &mut <#self_ty as crate::op::Op>::State,
+            __ctx: &mut crate::op::Ctx<'_>,
+        ) -> ::anyhow::Result<()>
+        #where_tokens
+        {
+            <#self_ty as crate::op::Op>::start(__cfg, __state, __ctx)
+        }
+
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn #start_owned_fn #generics (
+            mut __cfg: <#self_ty as crate::op::Op>::Cfg,
+            __state: &mut <#self_ty as crate::op::Op>::State,
+            __ctx: &mut crate::op::Ctx<'_>,
+        ) -> ::anyhow::Result<()>
+        #where_tokens
+        {
+            <#self_ty as crate::op::Op>::start(&mut __cfg, __state, __ctx)
+        }
+    };
+
     Ok(quote! {
+        #forwarders
         impl crate::interp::Builder {
             #[doc = #doc]
             pub fn #name #generics (
@@ -1451,6 +1663,11 @@ fn expand(def: &GraphDef) -> TokenStream2 {
             use super::*;
             use ::wingfoil_next::fluent::*;
             use ::wingfoil_next::stats::*;
+            // In-crate `#[op]` forwarders (`__wf_op_*`), so catalog ops reach
+            // the generic fallback without an import at the call site. User
+            // ops' forwarders arrive through `use super::*`.
+            #[allow(unused_imports)]
+            use ::wingfoil_next::ops::*;
             #wire_fn
             #standalone
             #nested
@@ -1519,7 +1736,7 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
     let state = format_ident!("__state_{}", name);
     let value = format_ident!("__v_{}", name);
     let exprs = &node.exprs;
-    let info = node.op.info();
+    let info = node.info();
 
     let cfg_decl = match &info.cfg_init {
         CfgInit::None => quote! {},
@@ -1543,6 +1760,11 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
         }
         StateInit::Default(ty) => quote! { let mut #state = #ty::default(); },
         StateInit::OptionNone(ty) => quote! { let mut #state: Option<#ty> = None; },
+        // The state's type is inferred from the forwarder call's
+        // `&mut <X as Op>::State` parameter (custom ops).
+        StateInit::DefaultInferred => {
+            quote! { let mut #state = ::core::default::Default::default(); }
+        }
     };
     // A **non-literal** closure config (map/fold/join) — e.g. `make_f()` or a
     // named local — is evaluated **once** here into a setup local, not inline
@@ -1624,9 +1846,34 @@ fn tick_flags_needed(def: &GraphDef) -> Vec<bool> {
 fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     let cfg = format_ident!("__cfg_{}", node.name);
     let state = format_ident!("__state_{}", node.name);
-    let op_path = op_path(node.op);
     let state_arg = start_state_arg(node, &state);
     let ctx = ctx_expr(target, idx);
+    if node.op == OpKind::Custom {
+        // Forwarder-based start: `_start(&mut cfg, ..)` when a cfg local
+        // exists, `_start_owned(<closure>, ..)` for a literal-closure cfg
+        // (rebuilt for the start call — a zero-sized value), `_start(&mut (),
+        // ..)` for a cfg-less op.
+        let info = node.info();
+        let call = match info.owned_closure {
+            Some(ix) => {
+                let f = &node.exprs[ix];
+                let fwd = node.forwarder("start_owned");
+                quote! { #fwd(#f, #state_arg, &mut __ctx)?; }
+            }
+            None => {
+                let cfg_arg = cycle_cfg_arg(node, &cfg);
+                let fwd = node.forwarder("start");
+                quote! { #fwd(#cfg_arg, #state_arg, &mut __ctx)?; }
+            }
+        };
+        return quote! {
+            {
+                let mut __ctx = #ctx;
+                #call
+            }
+        };
+    }
+    let op_path = op_path(node.op);
     quote! {
         {
             let mut __ctx = #ctx;
@@ -1653,16 +1900,21 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
             quote! { #t }
         })
         .collect();
-    if node.op.info().callback_activated {
+    if node.op == OpKind::Custom {
+        // The macro cannot see the op's `ACTIVATION`, so the dirty check is
+        // guarded by its re-emitted const — constant-folded away when the op
+        // never schedules.
+        let act = node.activation_const();
+        cond_parts.push(quote! { (#act.callback_activated() && __dirty[#idx]) });
+    } else if node.info().callback_activated {
         cond_parts.push(quote! { __dirty[#idx] });
     }
     let cond = quote! { #(#cond_parts)||* };
 
-    let op_path = op_path(node.op);
     let input = cycle_input(def, node);
     let cfg_arg = cycle_cfg_arg(node, &cfg);
     let state_arg = cycle_state_arg(node, &state);
-    let on_value = if node.op.info().unit_output {
+    let on_value = if node.info().unit_output {
         // Unit output: no value slot to store.
         quote! { ::wingfoil_next::op::Tick::Value(()) => true, }
     } else {
@@ -1680,19 +1932,39 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
     // a named local) was evaluated once into `__cfg_<name>` by `node_decl` and
     // is passed here via the ordinary `Op::cycle(&mut __cfg, …)` — its concrete
     // type needs no inference help — so the factory runs once, not per cycle.
-    let cycle_call = match node.op.info().owned_closure {
-        Some(ix) => {
-            if matches!(&node.exprs[ix], Expr::Closure(_)) {
+    let cycle_call = if node.op == OpKind::Custom {
+        // Forwarder-based dispatch: the macro never names the op type — the
+        // forwarder's generic signature lets inference resolve it from the
+        // input/cfg argument types. A literal closure cfg goes by value
+        // through `_cycle_owned` (same inference-deferral trick as
+        // `cycle_owned_cfg`); everything else through `_cycle` by `&mut`.
+        match node.info().owned_closure {
+            Some(ix) => {
                 let f = &node.exprs[ix];
-                let ty = op_type(node.op);
-                quote! {
-                    ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
-                }
-            } else {
-                quote! { #op_path::cycle(&mut #cfg, #state_arg, #input, &mut __ctx) }
+                let fwd = node.forwarder("cycle_owned");
+                quote! { #fwd(#f, #state_arg, #input, &mut __ctx) }
+            }
+            None => {
+                let fwd = node.forwarder("cycle");
+                quote! { #fwd(#cfg_arg, #state_arg, #input, &mut __ctx) }
             }
         }
-        None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
+    } else {
+        let op_path = op_path(node.op);
+        match node.op.info().owned_closure {
+            Some(ix) => {
+                if matches!(&node.exprs[ix], Expr::Closure(_)) {
+                    let f = &node.exprs[ix];
+                    let ty = op_type(node.op);
+                    quote! {
+                        ::wingfoil_next::op::cycle_owned_cfg::<#ty>(#f, #state_arg, #input, &mut __ctx)
+                    }
+                } else {
+                    quote! { #op_path::cycle(&mut #cfg, #state_arg, #input, &mut __ctx) }
+                }
+            }
+            None => quote! { #op_path::cycle(#cfg_arg, #state_arg, #input, &mut __ctx) },
+        }
     };
     let ctx = ctx_expr(target, idx);
     // `?` propagates an op error out of the enclosing `compiled()` fn or the
@@ -1710,6 +1982,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize, needs_flag: bool) -> 
         let src_v = upstream_value_expr(def, node.refs[0]);
         let src_t = format_ident!("__t_{}", def.nodes[node.refs[0]].name);
         let seeded = format_ident!("__seeded_{}", name);
+        let op_path = op_path(node.op);
         quote! {
             {
                 if #cfg == ::wingfoil_next::wingfoil::NanoTime::ZERO {
@@ -1763,7 +2036,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let mut starts = Vec::new();
     let mut body = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
-        if node.op.info().has_start {
+        if node.info().has_start {
             starts.push(node_start(Target::Compiled, i, node));
         }
         body.push(node_dispatch(def, Target::Compiled, i, flags[i]));
@@ -1808,10 +2081,20 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
     let out_v = output_value_expr(def, out_name);
-    let callback_activated = def
+    // Whether the island can be activated by kernel callbacks: an
+    // expansion-time bool for table ops, OR-ed at runtime with each custom
+    // op's `ACTIVATION` const (a handful of const bools evaluated once at
+    // wiring time).
+    let static_callback_activated = def.nodes.iter().any(|node| node.info().callback_activated);
+    let custom_activation_consts: Vec<Ident> = def
         .nodes
         .iter()
-        .any(|node| node.op.info().callback_activated);
+        .filter(|node| node.op == OpKind::Custom)
+        .map(|node| node.activation_const())
+        .collect();
+    let callback_activated = quote! {
+        #static_callback_activated #(|| #custom_activation_consts.callback_activated())*
+    };
     let flags = tick_flags_needed(def);
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
@@ -1820,7 +2103,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
         if node.op == OpKind::Input {
             continue;
         }
-        if node.op.info().has_start {
+        if node.info().has_start {
             starts.push(node_start(Target::Nested, i, node));
         }
         body.push(node_dispatch(def, Target::Nested, i, flags[i]));
@@ -1938,7 +2221,7 @@ fn output_value_expr(def: &GraphDef, o: &Ident) -> TokenStream2 {
         .nodes
         .iter()
         .find(|n| &n.name == o)
-        .is_some_and(|n| n.op.info().unit_output);
+        .is_some_and(|n| n.info().unit_output);
     if is_unit {
         quote! { () }
     } else {
@@ -1955,7 +2238,7 @@ fn op_path(op: OpKind) -> TokenStream2 {
 }
 
 fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
-    if node.op.info().cfg_local() {
+    if node.info().cfg_local() {
         quote! { &mut #cfg }
     } else {
         quote! { &mut () }
@@ -1963,7 +2246,7 @@ fn cycle_cfg_arg(node: &NodeDef, cfg: &Ident) -> TokenStream2 {
 }
 
 fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.op.info().state_local() {
+    if node.info().state_local() {
         quote! { &mut #state }
     } else {
         quote! { &mut () }
@@ -1971,7 +2254,7 @@ fn cycle_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
 }
 
 fn start_state_arg(node: &NodeDef, state: &Ident) -> TokenStream2 {
-    if node.op.info().state_in_start {
+    if node.info().state_in_start {
         quote! { &mut #state }
     } else {
         quote! { &mut () }
@@ -1996,7 +2279,7 @@ fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
 fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
     let v = |ix: usize| upstream_value_expr(def, ix);
     let t = |ix: usize| format_ident!("__t_{}", def.nodes[ix].name);
-    match node.op.info().inputs {
+    match node.info().inputs {
         Inputs::Unit => quote! { () },
         Inputs::One => {
             let src = v(node.refs[0]);
