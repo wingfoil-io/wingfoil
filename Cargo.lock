@@ -7673,11 +7673,14 @@ name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "criterion",
  "csv",
  "futures",
+ "log",
  "serde",
  "serde-aux",
+ "sha2 0.10.9",
  "tokio",
  "trybuild",
  "wingfoil",
