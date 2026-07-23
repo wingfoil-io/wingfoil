@@ -567,6 +567,63 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// Register a **two-active-input** op — the `join` shape: both upstreams
+    /// read by reference, both triggering, one output slot, engine-owned
+    /// `cfg`+`state`, no lifecycle hooks. Public for the same reason as
+    /// [`register_op1`](Self::register_op1): third-party op traits wire this
+    /// shape through [`Stream::wire`](crate::fluent::Stream::wire) (passive
+    /// edges keep hand-written methods — see [`bimap`](Self::bimap)).
+    // One over clippy's limit, but this is a registration primitive whose
+    // arguments mirror `register_op1` plus the second input handle — grouping
+    // them into a struct would only move the eight names one level down.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_op2<A, B, C, S, Out, Step>(
+        &mut self,
+        a: Handle<A>,
+        b: Handle<B>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state: S,
+        mut step: Step,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let out = self.new_slot(Out::default());
+        let cs = Rc::new(RefCell::new((cfg, state)));
+        self.push_node(
+            vec![a.idx, b.idx],
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                match step(cfg, state, &va, &vb, &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(va);
+                        drop(vb);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
         let idx = self.nodes.len();
         let out = self.new_slot(());

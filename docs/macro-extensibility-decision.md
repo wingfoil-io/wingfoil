@@ -117,37 +117,55 @@ mechanical follow-up for both paths.)
 | `state_init` | **convention** (implemented) | `Default::default()`, type inferred — same contract as `register_op1`. `fold`'s call-arg seed stays a table row |
 | `value_seed` | **convention** | `Default` — matching interpreted. `CloneState` (fold's correctness-critical pre-first-tick `init`) stays a table row |
 | `unit_output` | residue | needs `Out = ()` knowledge; only ticker — sources are outside fallback scope anyway |
-| `inputs` shape | **the crux** | `One` by convention; multi-input/tick-flag/passive not derivable from tokens (below) |
-| `edges` | residue with `inputs` | `AllActive` by convention; `OneActive` (sample) stays |
+| `inputs` shape | **convention** (implemented) | `(receiver, edges…)` values-only, all active — see below; tick-flag/passive inputs not derivable from tokens |
+| `edges` | **convention** (implemented) | `AllActive`; `OneActive` (sample's passive edge) stays a table row |
 
-**Net residue** = sources (ticker/constant), multi-input shapes (filter, merge,
-join, sample), tick-flag inputs (delay, merge), non-default seeding (fold,
-delay), and parse-level sugar (`count`, `accumulate`, `map_n`, `fan`,
-`ewma_*` spellings). That is essentially today's table — but the table **stops
-growing**: every future single-input op (the `#[op]` shape, ~15 of the current
-catalog and climbing) needs zero macro edits. Three current rows
-(`Ewma`, `RollingSum`, `RollingMean`) are already deletable via the fallback;
-left in place on this branch to keep the prototype diff reviewable.
+**Net residue** = sources (ticker/constant), tick-flag inputs (delay, merge),
+passive edges (sample), non-default seeding (fold, delay), and parse-level
+sugar (`count`, `accumulate`, `map_n`, `fan`, `ewma_*` spellings). The table
+**stops growing**: every future single- *or* multi-input values-only op needs
+zero macro edits. Four current rows (`Ewma`, `RollingSum`, `RollingMean`,
+`Join`) are already deletable via the fallback; left in place on this branch
+to keep the prototype diff reviewable.
 
-### Smallest convention that unblocks multi-input
+### The multi-input convention (implemented and proven)
 
-At a call `.my_join(&other, f)`, classify each argument at expansion time:
-an argument of the exact form `&name` (or bare `name`) where `name` is a
-**stream bound in this graph** is an *edge*; everything else is config. This is
-decidable and unambiguous *today* because the macro already tracks bound
-stream names, already rejects shadowing, and already forbids stream
-identifiers inside non-wiring code. Convention: edges are active, values-only,
-`In = (&recv, &edge, cfg…)` — the `join` shape. Passive edges and tick-flag
-inputs stay hand-written table rows (they are rare and correctness-critical).
-Estimated at ~60 lines (generalize `Inputs::One/Two` to a count + forwarder
-arity). Deferred from this prototype deliberately.
+At a call `.my_join(&other, f)`, the fallback classifies each argument at
+expansion time: an argument of the exact form `&name` (or a bare
+input-parameter `name`) where `name` is a **stream bound in this graph** is an
+*edge*; everything else is config. This is decidable and unambiguous because
+the macro already tracks bound stream names, already rejects shadowing, and
+already forbids stream identifiers inside non-wiring code. Edges are active
+and values-only: `In = (&receiver, &edge…)` in call order — the `join` shape —
+with at most one config argument (a literal closure goes through
+`_cycle_owned` as before). Cost: `Inputs::Many(n)` in the emitter plus the
+classification loop (~40 lines), and a public `register_op2` so out-of-crate
+ops can wire the interpreted path.
+
+Proven in `tests/custom_op.rs` by two user ops through all three engines:
+`Spread` (two inputs, no config) and `Combine<A, B, C, F>` — a fully generic
+user-defined join (`.combine(&other, |a, b| a + 10.0 * b)`, two inputs **and**
+a closure config, every type inferred) — including a two-input `nested()`
+island. Multi-input is the same monomorphized emission as single-input (one
+more tuple element), so the 1.01× benchmark result carries over unchanged.
+
+Passive edges and tick-flag inputs stay hand-written table rows (rare and
+correctness-critical); an op needing them runs interpreted or gets a row.
+
+One inference caveat, not specific to the fallback (built-in `join` defers
+closure inference the same way): with heavy generic-math crates in the linked
+impl universe (nalgebra via the classic crate's augurs adapter under
+`--all-features`), an unannotated two-arg closure body like `a + 10.0 * b`
+can overflow trait search (E0275) before the input types unify. Annotating
+the closure params (`|a: &f64, b: &f64| …`) resolves it and is what user code
+would naturally write.
 
 ## 4. Blast radius of option 2 (measured — it *is* this branch's diff)
 
 | File | Change |
 |---|---|
 | `wingfoil-next-macros/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
-| `wingfoil-next/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc) — without it even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
+| `wingfoil-next/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
 | `tests/custom_op.rs`, `benches/custom_op.rs` | new (proof + measurement) |
 | `tests/trybuild/unknown_combinator.*` | error changed: first error is now the friendly `E0599: no method named `frobnicate` found for Stream<u64>` at the call site |
 
@@ -166,6 +184,10 @@ Zero table rows edited; zero engine-semantics changes; full suite + clippy
 2. **stop/teardown in compiled()** — pre-existing gap, same forwarder pattern.
 3. **Collision hygiene**: a denylist for `Stream`'s own inherent methods
    (`clone`, `handle`, `wire`) so typos there keep a curated error.
+4. **`#[op]` for multi-input ops**: the derive currently generates
+   forwarders for the single-input `In` shape only; extending it to emit the
+   n-ary forwarders + a `register_op2`-based builder method is the same
+   mechanical pattern (the macro-side emission already handles any arity).
 
 ## 5. Recommendation
 
@@ -179,8 +201,8 @@ feedback as HList/index gymnastics, brutal error messages) to delete a table
 that option 2 has already reduced to a static, non-growing residue of
 genuinely exotic wiring.
 
-Migration path: (a) this branch — fallback + forwarders + const guard
-[done]; (b) `#[op]` out-of-crate + delete the three redundant stats rows;
-(c) multi-input convention if demand appears; (d) stop/teardown emission.
+Migration path: (a) this branch — fallback + forwarders + const guard +
+multi-input convention [done]; (b) `#[op]` out-of-crate + delete the four
+redundant rows; (c) stop/teardown emission.
 The escape hatch (`nested()` islands for interpreted-only ops) remains for
 everything the residue still excludes.

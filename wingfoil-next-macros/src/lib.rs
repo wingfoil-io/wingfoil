@@ -170,6 +170,9 @@ enum Inputs {
     OneTick,
     /// `((&v0, t0), (&v1, t1))` — two `(value, tick)` pairs (merge).
     TwoTickPairs,
+    /// `(&v0, &v1, …, &vn)` — n inputs by value, all active (custom ops:
+    /// the receiver plus every `&stream` argument, in call order).
+    Many(usize),
 }
 
 /// How `node_decl` initialises a node's `__cfg` local (the non-closure config;
@@ -485,20 +488,22 @@ struct NodeDef {
 
 impl NodeDef {
     /// The [`OpInfo`] driving this node's emission: the hand-written table row
-    /// for known ops, or the one **generic shape** for custom ops —
-    /// single-input, receiver-activated, `Cfg` from the (optional) call
-    /// argument, `State`/value-slot `Default`-seeded with types left to
-    /// inference. Everything else a table row can express (passive edges,
-    /// tick-flag inputs, non-default seeding, unit outputs) is out of the
-    /// fallback's scope by design.
+    /// for known ops, or the one **generic shape** for custom ops — the
+    /// receiver plus every `&stream` argument as active, values-only inputs
+    /// (in call order), `Cfg` from the (optional) remaining argument,
+    /// `State`/value-slot `Default`-seeded with types left to inference.
+    /// Everything else a table row can express (passive edges, tick-flag
+    /// inputs, non-default seeding, unit outputs) is out of the fallback's
+    /// scope by design.
     fn info(&self) -> OpInfo {
         if self.op != OpKind::Custom {
             return self.op.info();
         }
-        // A single *literal* closure argument goes by value through the
-        // `_cycle_owned` forwarder (same inference-deferral trick as the
-        // table's `cycle_owned_cfg`); any other single argument is the op's
-        // `Cfg`, hoisted into a `__cfg` local.
+        // A *literal* closure config goes by value through the `_cycle_owned`
+        // forwarder (same inference-deferral trick as the table's
+        // `cycle_owned_cfg`); any other config argument is the op's `Cfg`,
+        // hoisted into a `__cfg` local. (`exprs` holds only config args for
+        // custom nodes — stream edges were routed into `refs` at parse time.)
         let lit_closure = self.exprs.len() == 1 && matches!(self.exprs[0], Expr::Closure(_));
         OpInfo {
             op_type: quote! {},
@@ -514,7 +519,7 @@ impl NodeDef {
             state_in_start: true,
             owned_closure: if lit_closure { Some(0) } else { None },
             unit_output: false,
-            inputs: Inputs::One,
+            inputs: Inputs::Many(self.refs.len()),
             cfg_init: if self.exprs.is_empty() || lit_closure {
                 CfgInit::None
             } else {
@@ -1036,31 +1041,41 @@ impl ChainWalker {
                 }
                 merged
             }
-            // Generic fallback: an unknown method is assumed to be a
-            // **single-input custom op** whose `#[op]` attribute generated
-            // forwarder functions (`__wf_op_<name>_cycle` etc.) in scope at
-            // the expansion site. The receiver is its only (active) edge; at
-            // most one argument, taken as the op's `Cfg` (a literal closure
-            // goes by value through `_cycle_owned`). If no forwarders exist —
-            // a typo, or an op that never derived them — the error is an
-            // unresolved `__wf_op_<name>_cycle` spanned at this method.
+            // Generic fallback: an unknown method is assumed to be a custom
+            // op whose `#[op]` attribute generated forwarder functions
+            // (`__wf_op_<name>_cycle` etc.) in scope at the expansion site.
+            // Arguments are classified at expansion time: an argument of the
+            // form `&name` (or a bare input-parameter `name`) where `name` is
+            // a stream bound in this graph is a **stream edge**; everything
+            // else is config. This is unambiguous because stream names cannot
+            // be shadowed and non-wiring code cannot mention them. The op's
+            // inputs are `(receiver, edges…)` in call order — values-only,
+            // all active (the `join` shape); at most one config argument,
+            // taken as the op's `Cfg` (a literal closure goes by value
+            // through `_cycle_owned`). If no forwarders exist — a typo, or an
+            // op that never derived them — the error is an unresolved
+            // `__wf_op_<name>_cycle` spanned at this method.
             _ => {
-                if args.len() > 1 {
+                let mut refs = vec![cur];
+                let mut cfgs: Vec<Expr> = Vec::new();
+                for arg in args {
+                    match self.stream_ref_arg(arg) {
+                        Ok(edge) => refs.push(edge),
+                        Err(_) => cfgs.push((*arg).clone()),
+                    }
+                }
+                if cfgs.len() > 1 {
                     return Err(syn::Error::new(
                         method.span(),
                         format!(
                             "`.{method}(..)` is not a built-in combinator, and custom ops take \
-                             at most one config argument (multi-input custom ops are not \
-                             supported in graph! yet)"
+                             at most one non-stream (config) argument — got {}. Stream edges \
+                             must be written `&name` referencing a stream bound in this graph",
+                            cfgs.len()
                         ),
                     ));
                 }
-                self.push_custom(
-                    name,
-                    method.clone(),
-                    vec![cur],
-                    args.iter().map(|e| (*e).clone()).collect(),
-                )
+                self.push_custom(name, method.clone(), refs, cfgs)
             }
         })
     }
@@ -2298,6 +2313,11 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
             let (a, b) = (v(node.refs[0]), v(node.refs[1]));
             let (ta, tb) = (t(node.refs[0]), t(node.refs[1]));
             quote! { ((#a, #ta), (#b, #tb)) }
+        }
+        Inputs::Many(n) => {
+            debug_assert_eq!(n, node.refs.len());
+            let vs = node.refs.iter().map(|&ix| v(ix));
+            quote! { ( #(#vs,)* ) }
         }
     }
 }

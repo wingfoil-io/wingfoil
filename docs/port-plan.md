@@ -301,9 +301,11 @@ So the places to touch when adding an op:
 | Op fits `#[op]`? | Interpreted only | + `graph!`/compiled |
 |---|---|---|
 | Yes (single-input) | `ops.rs` (`impl` + attr) + fluent method | nothing — the generic fallback covers it |
-| No (multi-input, source, …) | `ops.rs` `impl` + hand `Builder` method + fluent method | `OpKind` variant, `info()` row, parse arm |
+| Multi-input, values-only, all-active (the `join` shape) | `ops.rs` `impl` + `register_op2`-based fluent method | nothing — `&stream` args are classified as edges |
+| No (source, passive edge, tick-flag input, custom seed) | `ops.rs` `impl` + hand `Builder` method + fluent method | `OpKind` variant, `info()` row, parse arm |
 
-**Update — the single-input compiled path is now zero-touch.** Constraint #1
+**Update — the single- and multi-input compiled paths are now zero-touch.**
+Constraint #1
 still holds (a proc macro sees tokens, not types), but it is routed around
 rather than paid per-op: an unknown combinator falls through to a generic
 emission that calls `#[op]`-generated forwarder functions by naming
