@@ -1310,6 +1310,10 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let cycle_owned_fn = format_ident!("__wf_op_{}_cycle_owned", name);
     let start_fn = format_ident!("__wf_op_{}_start", name);
     let start_owned_fn = format_ident!("__wf_op_{}_start_owned", name);
+    let stop_fn = format_ident!("__wf_op_{}_stop", name);
+    let stop_owned_fn = format_ident!("__wf_op_{}_stop_owned", name);
+    let teardown_fn = format_ident!("__wf_op_{}_teardown", name);
+    let teardown_owned_fn = format_ident!("__wf_op_{}_teardown_owned", name);
     let seed_state_fn = format_ident!("__wf_op_{}_seed_state", name);
     let seed_value_fn = format_ident!("__wf_op_{}_seed_value", name);
     let upper = name.to_string().to_uppercase();
@@ -1546,6 +1550,54 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         }
     };
 
+    // `_stop` / `_teardown` — the end-of-run lifecycle hooks. Emitted for
+    // *every* op and always *real* (calling `<X as Op>::stop`/`teardown`,
+    // whose trait default is a no-op that constant-folds away): the `graph!`
+    // tail can then call them for every node unconditionally without the macro
+    // knowing which ops override a hook. Crucially they mirror
+    // `cycle` / `cycle_owned` *exactly* — same `#pairs_ty` input parameter,
+    // ignored by the hook — so rustc anchors the op's generics (and, in the
+    // `_owned` variant, a literal-closure config's argument types) from the
+    // call-site input the same way `cycle` does. A fully-erased no-op could
+    // not: a bare closure literal handed to a signature that never relates it
+    // to a typed input fails inference (E0282). The `_owned` variant threads
+    // the closure through by value so a `finally` closure reaches its
+    // `teardown`.
+    let lifecycle = |plain_fn: &Ident, owned_fn: &Ident, hook: &Ident| {
+        quote! {
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #plain_fn #generics (
+                __cfg: &mut #cfg_ty,
+                __state: &mut #state_ty,
+                __input: #pairs_ty,
+                __ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<()>
+            #where_tokens
+            {
+                let _ = __input;
+                <#self_ty as crate::op::Op>::#hook(__cfg, __state, __ctx)
+            }
+
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn #owned_fn #generics (
+                mut __cfg: #cfg_ty,
+                __plain: &mut #owned_plain_ty,
+                __state: &mut #state_ty,
+                __input: #pairs_ty,
+                __ctx: &mut crate::op::Ctx<'_>,
+            ) -> ::anyhow::Result<()>
+            #where_tokens
+            {
+                let _ = (__plain, __input);
+                <#self_ty as crate::op::Op>::#hook(&mut __cfg, __state, __ctx)
+            }
+        }
+    };
+    let stop = lifecycle(&stop_fn, &stop_owned_fn, &format_ident!("stop"));
+    let teardown = lifecycle(&teardown_fn, &teardown_owned_fn, &format_ident!("teardown"));
+
     let forwarders = quote! {
         #[doc(hidden)]
         pub const #activation_const: crate::op::Activation = #activation_expr;
@@ -1559,6 +1611,8 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
 
         #start
         #start_owned
+        #stop
+        #teardown
         #seed_state
         #seed_value
     };
@@ -1785,6 +1839,44 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     }
 }
 
+/// One end-of-run lifecycle call (`stop` or `teardown`) for one node, run at
+/// the loop tail. Unlike `start`, cleanup is **error-safe**: a hook error is
+/// captured into `__first_err` (first-error-wins) rather than propagated, so
+/// every node's stop and teardown still run after an earlier abort — mirroring
+/// the interpreted `Runner`. Closure-config nodes route through the `_owned`
+/// forwarder, threading the literal closure through by value (as `cycle_owned`
+/// does) so a `finally` closure is available to its `teardown`.
+fn node_lifecycle(def: &GraphDef, target: Target, idx: usize, hook: &str) -> TokenStream2 {
+    let node = &def.nodes[idx];
+    let cfg = format_ident!("__cfg_{}", node.name);
+    let state = format_ident!("__state_{}", node.name);
+    let ctx = ctx_expr(target, idx);
+    let input = lifecycle_input(def, node);
+    let cfg_arg = if node.has_cfg() {
+        quote! { &mut #cfg }
+    } else {
+        quote! { &mut () }
+    };
+    let call = match &node.closure {
+        Some(f) => {
+            let fwd = node.forwarder(&format!("{hook}_owned"));
+            quote! { #fwd(#f, #cfg_arg, &mut #state, #input, &mut __ctx) }
+        }
+        None => {
+            let fwd = node.forwarder(hook);
+            quote! { #fwd(#cfg_arg, &mut #state, #input, &mut __ctx) }
+        }
+    };
+    quote! {
+        {
+            let mut __ctx = #ctx;
+            if let ::core::result::Result::Err(__e) = #call {
+                __first_err.get_or_insert(__e);
+            }
+        }
+    }
+}
+
 /// The dispatch line for one node: condition, forwarder cycle call, tick
 /// flag. The condition composes, per edge, a passive-mask guard
 /// (`__WF_OP_<M>_PASSIVE`, sample's data edge), plus the activation-const
@@ -1867,9 +1959,13 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
     let mut body = Vec::new();
+    let mut stops = Vec::new();
+    let mut teardowns = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
         starts.push(node_start(Target::Compiled, i, node));
         body.push(node_dispatch(def, Target::Compiled, i));
+        stops.push(node_lifecycle(def, Target::Compiled, i, "stop"));
+        teardowns.push(node_lifecycle(def, Target::Compiled, i, "teardown"));
     }
 
     let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
@@ -1881,19 +1977,45 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
         /// propagation as bools, every `Op::cycle` (closures included)
         /// visible to the compiler. Derived from the same tokens as
         /// `interpreted`, so the two cannot drift.
+        // A side-effect-only sink (`finally`, `print`, `for_each`) is a node
+        // with no downstream and no output slot read, so its `__v_`/`__state_`
+        // locals are write-only — allowed, as in `nested`.
+        #[allow(unused_mut, unused_variables, unused_assignments)]
         pub fn compiled(
             run_mode: ::wingfoil_next::wingfoil::RunMode,
             run_for: ::wingfoil_next::wingfoil::RunFor,
         ) -> ::wingfoil_next::anyhow::Result<( #(#out_types,)* )> {
             let mut __k = ::wingfoil_next::wingfoil::codegen::Kernel::new(run_mode, run_for);
             #(#setup)*
-            #(#starts)*
-            let mut __dirty = [false; #n];
-            while __k.begin_cycle(&mut __dirty) {
-                #(#body)*
-                __k.end_cycle(&mut __dirty);
+            // Cleanup (stop/teardown) must run even when `start` or a cycle
+            // aborts, so the run phase is an immediately-invoked closure whose
+            // `?` is *captured* into `__first_err` rather than early-returning
+            // out of `compiled`. After it, every node's `stop` then `teardown`
+            // runs in node order — each get-or-inserting its error — and the
+            // outputs are returned only if nothing errored. This mirrors the
+            // interpreted `Runner`: cleanup always runs, first error wins.
+            let mut __first_err: ::core::option::Option<::wingfoil_next::anyhow::Error> =
+                ::core::option::Option::None;
+            let __run = (|| -> ::wingfoil_next::anyhow::Result<()> {
+                #(#starts)*
+                let mut __dirty = [false; #n];
+                while __k.begin_cycle(&mut __dirty) {
+                    #(#body)*
+                    __k.end_cycle(&mut __dirty);
+                }
+                ::core::result::Result::Ok(())
+            })();
+            if let ::core::result::Result::Err(__e) = __run {
+                __first_err = ::core::option::Option::Some(__e);
             }
-            Ok(( #(#out_values,)* ))
+            #(#stops)*
+            #(#teardowns)*
+            match __first_err {
+                ::core::option::Option::Some(__e) => ::core::result::Result::Err(__e),
+                ::core::option::Option::None => {
+                    ::core::result::Result::Ok(( #(#out_values,)* ))
+                }
+            }
         }
     }
 }
@@ -1923,12 +2045,16 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
     let mut body = Vec::new();
+    let mut stops = Vec::new();
+    let mut teardowns = Vec::new();
     for (i, node) in def.nodes.iter().enumerate() {
         if node.is_input() {
             continue;
         }
         starts.push(node_start(Target::Nested, i, node));
         body.push(node_dispatch(def, Target::Nested, i));
+        stops.push(node_lifecycle(def, Target::Nested, i, "stop"));
+        teardowns.push(node_lifecycle(def, Target::Nested, i, "teardown"));
     }
 
     let in_names: Vec<&Ident> = def.inputs.iter().map(|(name, _)| name).collect();
@@ -1984,7 +2110,7 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
         /// code — the same code `compiled` emits. Inner schedules (tickers,
         /// delays) are demultiplexed through a private queue; only the
         /// earliest is forwarded to the outer kernel.
-        #[allow(unused_mut, unused_variables)]
+        #[allow(unused_mut, unused_variables, unused_assignments)]
         pub fn nested(
             __g: &::wingfoil_next::fluent::GraphBuilder,
             #(#in_names: &::wingfoil_next::fluent::Stream<#in_tys>,)*
@@ -2003,15 +2129,50 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
                     __active.push(#ix_ids);
                 }
             )*
-            __g.__composite(__active, #callback_activated, move |__ctx, __is_start| {
+            __g.__composite(__active, #callback_activated, move |__ctx, __phase| {
                 let __now = __ctx.time();
                 let __start_time = __ctx.start_time();
-                if __is_start {
-                    #(#starts)*
-                    if let Some(__t) = __q.next_time() {
-                        __ctx.schedule(__t);
+                match __phase {
+                    ::wingfoil_next::op::CompositePhase::Start => {
+                        #(#starts)*
+                        if let Some(__t) = __q.next_time() {
+                            __ctx.schedule(__t);
+                        }
+                        return ::core::result::Result::Ok(::wingfoil_next::op::Tick::Quiet);
                     }
-                    return ::core::result::Result::Ok(::wingfoil_next::op::Tick::Quiet);
+                    // End-of-run cleanup, driven by the outer engine calling
+                    // the composite node's stop/teardown. Error-safe: every
+                    // inner op's hook runs, first error wins — the same
+                    // contract `compiled` and the interpreted `Runner` honour.
+                    ::wingfoil_next::op::CompositePhase::Stop => {
+                        let mut __first_err:
+                            ::core::option::Option<::wingfoil_next::anyhow::Error> =
+                            ::core::option::Option::None;
+                        #(#stops)*
+                        return match __first_err {
+                            ::core::option::Option::Some(__e) => {
+                                ::core::result::Result::Err(__e)
+                            }
+                            ::core::option::Option::None => {
+                                ::core::result::Result::Ok(::wingfoil_next::op::Tick::Quiet)
+                            }
+                        };
+                    }
+                    ::wingfoil_next::op::CompositePhase::Teardown => {
+                        let mut __first_err:
+                            ::core::option::Option<::wingfoil_next::anyhow::Error> =
+                            ::core::option::Option::None;
+                        #(#teardowns)*
+                        return match __first_err {
+                            ::core::option::Option::Some(__e) => {
+                                ::core::result::Result::Err(__e)
+                            }
+                            ::core::option::Option::None => {
+                                ::core::result::Result::Ok(::wingfoil_next::op::Tick::Quiet)
+                            }
+                        };
+                    }
+                    ::wingfoil_next::op::CompositePhase::Cycle => {}
                 }
                 for __d in __dirty.iter_mut() {
                     *__d = false;
@@ -2070,6 +2231,32 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
         let v = upstream_value_expr(def, u);
         let t = format_ident!("__t_{}", def.nodes[u].name);
         quote! { (#v, #t) }
+    });
+    quote! { ( #(#pairs,)* ) }
+}
+
+/// The input passed to a node's `stop`/`teardown` forwarder. It has the same
+/// `#pairs_ty` shape as [`cycle_input`] — the forwarders take it purely so
+/// rustc anchors the op's generics (and a literal-closure config's argument
+/// types) exactly as `cycle` does — but the hook ignores it, so the tick flags
+/// are the literal `false` (the per-cycle `__t_<name>` locals are scoped to the
+/// dispatch loop / cycle phase and are out of scope at the cleanup tail) and an
+/// input edge is read straight from its captured slot rather than the
+/// cycle-phase borrow guard.
+fn lifecycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
+    if node.refs.is_empty() {
+        return quote! { () };
+    }
+    let pairs = node.refs.iter().map(|&u| {
+        let up = &def.nodes[u];
+        let v = if up.is_input() {
+            let slot = format_ident!("__slot_{}", up.name);
+            quote! { &*#slot.borrow() }
+        } else {
+            let ident = format_ident!("__v_{}", up.name);
+            quote! { &#ident }
+        };
+        quote! { (#v, false) }
     });
     quote! { ( #(#pairs,)* ) }
 }
