@@ -73,6 +73,7 @@
   },
   "pnpm": {
     "overrides": {
+      "seroval": ">=1.5.3",
       "svelte": ">=5.55.7",
       "devalue": ">=5.8.1",
       "esbuild": ">=0.25.0",

@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  seroval: '>=1.5.3'
   svelte: '>=5.55.7'
   devalue: '>=5.8.1'
   esbuild: '>=0.25.0'
@@ -807,10 +808,10 @@ packages:
     resolution: {integrity: sha512-qpY0Cl+fKYFn4GOf3cMiq6l72CpuVaawb6ILjubOQ+diJ54LfOWaSSPsaswN8DRPIPW4Yq+tE1k5aKd7ILyaFg==}
     engines: {node: '>=10'}
     peerDependencies:
-      seroval: ^1.0
+      seroval: '>=1.5.3'
 
-  seroval@1.5.2:
-    resolution: {integrity: sha512-xcRN39BdsnO9Tf+VzsE7b3JyTJASItIV1FVFewJKCFcW4s4haIKS3e6vj8PGB9qBwC7tnuOywQMdv5N4qkzi7Q==}
+  seroval@1.5.6:
+    resolution: {integrity: sha512-rVQVWjjSvlINzaQPZH5JFqsqEsIWdTxY3iJZCnTL/5gQbXIRooVZKI60tVCkOVfzcRPejboxO2t0P89dg5mQaA==}
     engines: {node: '>=10'}
 
   siginfo@2.0.0:
@@ -1663,19 +1664,19 @@ snapshots:
 
   semver@7.8.5: {}
 
-  seroval-plugins@1.5.2(seroval@1.5.2):
+  seroval-plugins@1.5.2(seroval@1.5.6):
     dependencies:
-      seroval: 1.5.2
+      seroval: 1.5.6
 
-  seroval@1.5.2: {}
+  seroval@1.5.6: {}
 
   siginfo@2.0.0: {}
 
   solid-js@1.9.12:
     dependencies:
       csstype: 3.2.3
-      seroval: 1.5.2
-      seroval-plugins: 1.5.2(seroval@1.5.2)
+      seroval: 1.5.6
+      seroval-plugins: 1.5.2(seroval@1.5.6)
 
   solid-refresh@0.6.3(solid-js@1.9.12):
     dependencies:
