@@ -46,8 +46,8 @@ const STEP: Duration = Duration::from_nanos(100);
 wingfoil_next::graph! {
     fn dense_chain(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
-        let chained = src.map_n(32, |i| std::hint::black_box(i.wrapping_add(1)));
-        let keep = chained.map(|i| i.is_multiple_of(2));
+        let chained = src.map_n(32, |i: &u64| std::hint::black_box(i.wrapping_add(1)));
+        let keep = chained.map(|i: &u64| i.is_multiple_of(2));
         let filtered = chained.filter(&keep);
         let sum = filtered.fold(0u64, |acc, v| *acc += v);
         sum
