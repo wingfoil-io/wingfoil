@@ -53,6 +53,13 @@ legacy capability, example, or test case.
   compiled/nested emission dispatches through. Built-in and user ops take
   the identical path.
 
+## Branching: all next work merges into `next`, not `main`
+
+Cut branches from the `next` branch (`git checkout next && git pull origin
+next && git checkout -b <branch-name>`) and open pull requests with **base
+`next`** — never `main`. `main` only receives the eventual next→main
+cutover/sync PRs.
+
 ## Working conventions
 
 - Tests use `RunMode::HistoricalFrom(NanoTime::ZERO)` for determinism, and
