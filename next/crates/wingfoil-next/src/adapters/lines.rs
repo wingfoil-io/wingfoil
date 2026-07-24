@@ -3,7 +3,7 @@
 //!
 //! It reads and writes newline-delimited **records** (plain `String` lines, no
 //! serde) using nothing but `std::fs` / `std::io`. It is the dependency-free
-//! cousin of the planned CSV adapter (see `docs/port-plan.md`, Phase 4:
+//! cousin of the planned CSV adapter (see `next/docs/port-plan.md`, Phase 4:
 //! "csv — replay source + sink; exercises historical bursts"): the same shape,
 //! without the parsing.
 //!

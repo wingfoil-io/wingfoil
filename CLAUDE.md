@@ -25,6 +25,14 @@ wingfoil/           # Core Rust library
                     #   feedback, threading, plus one per adapter)
   benches/          # Criterion benchmarks
 
+next/               # Wingfoil Next — the Op-pattern engine being built to replace
+                    #   the legacy tree wholesale (see next/README.md for the
+                    #   design objectives, and next/CLAUDE.md when working in it)
+  docs/             # port-plan.md (the port roadmap), design reviews/decisions
+  crates/
+    wingfoil-next/        # Dual-mode (interpreted + compiled) engine, ops, adapters
+    wingfoil-next-macros/ # graph! / #[op] proc macros
+
 wingfoil-derive/    # Proc macros (#[node] attribute)
 wingfoil-python/    # PyO3 Python bindings (built with maturin)
   src/
@@ -104,6 +112,11 @@ cargo +<ci-version> clippy --workspace --all-targets --all-features -- -D warnin
   2. Pull latest changes: `git pull origin main`
   3. Create a new branch from the updated main: `git checkout -b <branch-name>`
 - Branch naming convention: use simple descriptive names (e.g., `add-metrics`, `fix-error-handling`)
+- **Wingfoil Next work targets the `next` branch, not `main`**: branches for
+  work under `next/` are cut from `next` (`git checkout next && git pull
+  origin next && git checkout -b <branch-name>`) and their pull requests
+  merge into `next` — never into `main`. Only the eventual next→main
+  cutover/sync PRs target `main`.
 
 ### Pre-Commit Checklist
 

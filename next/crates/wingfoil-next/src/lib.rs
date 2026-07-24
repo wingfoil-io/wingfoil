@@ -53,7 +53,7 @@
 //!   shapes) *and* the `graph!` forwarder functions every compiled/nested
 //!   emission dispatches through — there is no per-op table in the macro, so
 //!   built-in and user ops take the identical path — see
-//!   `docs/port-plan.md` "Adding an op".
+//!   `next/docs/port-plan.md` "Adding an op".
 //! - **Sources in every activation mode**: `Activation::THREADED`
 //!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`
 //!   [`poll`](fluent::SourceOps::poll), the both-modes
@@ -71,7 +71,7 @@
 //! Still out of scope for the prototype (documented, not forgotten):
 //! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA value
 //! store and breadth-first dirty-list scheduling for the interpreted engine
-//! (see `docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
+//! (see `next/docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
 
 pub mod adapters;
 #[cfg(feature = "async")]

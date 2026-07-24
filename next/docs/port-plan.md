@@ -313,7 +313,7 @@ inference resolves the op type the macro never names, and per-op facts
 folds on. Delay's engine-level special cases became `Tick::Silent` in the
 `Op` contract. Measured at parity with the deleted table emission and
 covered by `wingfoil-next/tests/custom_op.rs`; full analysis in
-`docs/macro-extensibility-decision.md`. The fluent method remains
+`macro-extensibility-decision.md`. The fluent method remains
 hand-written (constraint #2, unchanged).
 
 
