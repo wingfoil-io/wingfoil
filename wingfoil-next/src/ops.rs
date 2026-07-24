@@ -1101,6 +1101,248 @@ impl Op for RollingMedian {
     }
 }
 
+/// Incrementally maintained count-weighted moments over the **whole** stream
+/// (a cumulative / unbounded window), via Welford's online algorithm — O(1)
+/// time and memory, numerically stable (never a naive sum-of-squares). Mirrors
+/// the classic `MomentStream` under `Weighting::Count`: samples never leave, so
+/// unlike [`RollingMomentState`] there is no buffer and no removal.
+#[derive(Default)]
+pub struct CumulativeMomentState {
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl CumulativeMomentState {
+    /// Fold a new sample into the running moments (Welford update).
+    fn add(&mut self, x: f64) {
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (x - mean_old) / self.count as f64;
+        self.m2 += (x - mean_old) * (x - self.mean);
+    }
+
+    /// Sample variance (ddof = 1) — the classic `Weighting::Count` convention.
+    /// Yields `0.0` while fewer than two samples have been seen (rather than
+    /// NaN).
+    fn variance(&self) -> f64 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        self.m2 / (self.count as f64 - 1.0)
+    }
+}
+
+/// Cumulative arithmetic mean over every sample seen so far — O(1) per tick via
+/// Welford (see [`CumulativeMomentState`]). Mirrors the classic
+/// `mean(Window::Unbounded, Weighting::Count)`.
+pub struct CumulativeMean;
+
+#[op(build = cumulative_mean)]
+impl Op for CumulativeMean {
+    type Cfg = ();
+    type State = CumulativeMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.add(*input.0);
+        Ok(Tick::Value(state.mean))
+    }
+}
+
+/// Cumulative **sample** variance (ddof = 1) over every sample seen so far —
+/// O(1) per tick via Welford (see [`CumulativeMomentState`]). The divisor is
+/// `n - 1`, and the result is `0.0` until at least two samples are present.
+/// Mirrors the classic `variance(Window::Unbounded, Weighting::Count)`.
+pub struct CumulativeVar;
+
+#[op(build = cumulative_var)]
+impl Op for CumulativeVar {
+    type Cfg = ();
+    type State = CumulativeMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.add(*input.0);
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Cumulative **sample** standard deviation over every sample seen so far — the
+/// square root of [`CumulativeVar`] under the same (ddof = 1) convention.
+/// Clamped at zero before the square root so a constant stream (whose
+/// incremental variance can drift a hair negative) yields `0.0`, not `NaN`.
+pub struct CumulativeStd;
+
+#[op(build = cumulative_std)]
+impl Op for CumulativeStd {
+    type Cfg = ();
+    type State = CumulativeMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeMomentState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.add(*input.0);
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// Cumulative sum over every sample seen so far — a running total, O(1) per
+/// tick. Mirrors the classic `sum(Window::Unbounded)` (`CumulativeStream` with
+/// `CumulativeStat::Sum`).
+pub struct CumulativeSum;
+
+#[op(build = cumulative_sum)]
+impl Op for CumulativeSum {
+    type Cfg = ();
+    /// The running total (starts at `0.0`, so the first sample seeds it).
+    type State = f64;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut f64,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        *state += *input.0;
+        Ok(Tick::Value(*state))
+    }
+}
+
+/// Cumulative minimum over every sample seen so far — a running extreme, O(1)
+/// per tick. The `Option` state distinguishes "no sample yet" from a genuine
+/// `0.0`, so the first sample seeds the extreme rather than `min(0.0, x)`.
+/// Mirrors the classic `min(Window::Unbounded)`.
+pub struct CumulativeMin;
+
+#[op(build = cumulative_min)]
+impl Op for CumulativeMin {
+    type Cfg = ();
+    /// The running minimum; `None` until the first sample seeds it.
+    type State = Option<f64>;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Option<f64>,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        let acc = match *state {
+            Some(m) => m.min(sample),
+            None => sample,
+        };
+        *state = Some(acc);
+        Ok(Tick::Value(acc))
+    }
+}
+
+/// Cumulative maximum over every sample seen so far — a running extreme, O(1)
+/// per tick. `Option` state seeds on the first sample (see [`CumulativeMin`]).
+/// Mirrors the classic `max(Window::Unbounded)`.
+pub struct CumulativeMax;
+
+#[op(build = cumulative_max)]
+impl Op for CumulativeMax {
+    type Cfg = ();
+    /// The running maximum; `None` until the first sample seeds it.
+    type State = Option<f64>;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Option<f64>,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        let acc = match *state {
+            Some(m) => m.max(sample),
+            None => sample,
+        };
+        *state = Some(acc);
+        Ok(Tick::Value(acc))
+    }
+}
+
+/// Retains **every** sample so far and recomputes the median (sort) each tick,
+/// mirroring the classic recompute-per-tick `WindowStream` in its unbounded
+/// mode (the median has no cheap incremental form here, so — unlike the other
+/// cumulative stats — its memory grows with the stream).
+#[derive(Default)]
+pub struct CumulativeMedianState {
+    buffer: Vec<f64>,
+}
+
+impl CumulativeMedianState {
+    /// Push a sample (retaining all history) and return the median of every
+    /// sample seen so far. An even count averages the two middle values, so
+    /// this reproduces the classic count-weighted median.
+    fn push(&mut self, sample: f64) -> f64 {
+        self.buffer.push(sample);
+        let mut sorted = self.buffer.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        }
+    }
+}
+
+/// Cumulative median over every sample seen so far. Recomputed per tick
+/// (O(n log n)); an even count averages the two middle values, matching the
+/// classic count-weighted median. Retains all samples, so its memory grows with
+/// the stream. Mirrors the classic `median(Window::Unbounded, Weighting::Count)`.
+pub struct CumulativeMedian;
+
+#[op(build = cumulative_median)]
+impl Op for CumulativeMedian {
+    type Cfg = ();
+    type State = CumulativeMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeMedianState,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push(*input.0)))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
