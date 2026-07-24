@@ -64,3 +64,25 @@ harness = false
 [[example]]
 name = "csv_adapter"
 required-features = ["csv"]
+
+# Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
+# Each lives in its own directory with a README, mirroring the classic layout.
+[[example]]
+name = "breadth_first"
+path = "examples/breadth_first/main.rs"
+
+[[example]]
+name = "feedback"
+path = "examples/feedback/main.rs"
+
+[[example]]
+name = "run_mode"
+path = "examples/run_mode/main.rs"
+
+[[example]]
+name = "order_book"
+path = "examples/order_book/main.rs"
+
+[[example]]
+name = "statistics"
+path = "examples/statistics/main.rs"
