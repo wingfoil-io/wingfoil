@@ -1,6 +1,6 @@
-# Review: `docs/port-plan.md` + the `wingfoil-next` implementation
+# Review: `port-plan.md` + the `wingfoil-next` implementation
 
-Date: 2026-07-20. Scope: the port plan (`docs/port-plan.md`) and the
+Date: 2026-07-20. Scope: the port plan (`port-plan.md`) and the
 `wingfoil-next` / `wingfoil-next-macros` crates as of this branch. All
 findings below were verified against the actual code paths (and, where noted,
 reproduced with probe tests); classic parity claims were checked against
@@ -96,7 +96,7 @@ clamp, non-zero-start `window`, compat double-run/peek-before-run, and `trybuild
 compile-fail tests. ⚠️ A dedicated `Checkpoint`-semantics test is not added
 (Checkpoint stays a documented no-op).
 
-**Plan-level improvements** — all six applied to `docs/port-plan.md` (stale
+**Plan-level improvements** — all six applied to `port-plan.md` (stale
 status header, Phase 4.5 coupling/rework-trap, single-run vs Gate 6 + reset hook
 into Phase 1, engine-owned-drift risk register + table-driven parity strategy,
 completeness test committed, `Tick::Silent` question into Phase 1).

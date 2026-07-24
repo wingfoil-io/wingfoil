@@ -13,7 +13,7 @@ workspace = true
 # Reuses the clock/scheduler core (`codegen::Kernel`), `NanoTime` and the
 # run-mode types. Everything else — the Op trait, ops, and engines — is
 # from-scratch.
-wingfoil = { path = "../wingfoil" }
+wingfoil = { path = "../../../wingfoil" }
 wingfoil-next-macros = { path = "../wingfoil-next-macros" }
 anyhow = { workspace = true }
 

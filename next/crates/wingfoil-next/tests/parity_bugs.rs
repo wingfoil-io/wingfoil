@@ -1,5 +1,5 @@
 //! Regression tests for the semantic-parity bugs found in the fable review
-//! (`docs/fable-review.md`). Each test pins interpreted == compiled == nested
+//! (`next/docs/fable-review.md`). Each test pins interpreted == compiled == nested
 //! for a case that previously drifted between the three execution paths, or
 //! pins next's behaviour against classic wingfoil.
 

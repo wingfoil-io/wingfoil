@@ -25,6 +25,14 @@ wingfoil/           # Core Rust library
                     #   feedback, threading, plus one per adapter)
   benches/          # Criterion benchmarks
 
+next/               # Wingfoil Next — the Op-pattern engine being built to replace
+                    #   the legacy tree wholesale (see next/README.md for the
+                    #   design objectives, and next/CLAUDE.md when working in it)
+  docs/             # port-plan.md (the port roadmap), design reviews/decisions
+  crates/
+    wingfoil-next/        # Dual-mode (interpreted + compiled) engine, ops, adapters
+    wingfoil-next-macros/ # graph! / #[op] proc macros
+
 wingfoil-derive/    # Proc macros (#[node] attribute)
 wingfoil-python/    # PyO3 Python bindings (built with maturin)
   src/

@@ -127,7 +127,7 @@ impl<T: 'static> Signal<T> {
     /// Re-running is not supported: the shared [`GraphBuilder`] is consumed by
     /// the first `run`, so a second call would build — and silently run — an
     /// empty graph, then read a now-dangling handle out of bounds. Until re-run
-    /// support lands (deferred — see `docs/fable-review.md`, plan point 3) a
+    /// support lands (deferred — see `next/docs/fable-review.md`, plan point 3) a
     /// second call is a *reachable* user error, not an unreachable invariant,
     /// so it is surfaced as an error rather than a panic. The first run's
     /// runner is left in place, so `peek_value` keeps working.

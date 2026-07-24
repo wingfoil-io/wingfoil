@@ -13,7 +13,7 @@
 //! non-activating edges (sample), `init_arg` is the seeded-accumulator shape
 //! (fold), and multi-input and source ops use `no_builder` to keep their
 //! hand-written `Builder` methods.
-//! See `docs/port-plan.md` "Adding an op" for the full recipe.
+//! See `next/docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
 use std::fmt::Debug;

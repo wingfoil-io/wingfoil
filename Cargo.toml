@@ -3,10 +3,10 @@
 members = [
     "wingfoil",
     "wingfoil-derive",
-    "wingfoil-next",
-    "wingfoil-next-macros",
     "wingfoil-python",
     "wingfoil-wire-types",
+    "next/crates/wingfoil-next",
+    "next/crates/wingfoil-next-macros",
 ]
 # wingfoil-wasm is excluded from the default workspace because it targets
 # wasm32-unknown-unknown and depends on a different lock file / toolchain.

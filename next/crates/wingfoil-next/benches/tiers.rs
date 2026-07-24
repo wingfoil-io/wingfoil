@@ -13,7 +13,7 @@
 //!   interpreted graph (compiled-speed interior, one outer dyn call per
 //!   activation).
 //!
-//! The regression thesis (see `docs/port-plan.md`, Phase 6 + benchmarks):
+//! The regression thesis (see `next/docs/port-plan.md`, Phase 6 + benchmarks):
 //! `compiled` and `nested` should win on dense dispatch. This suite is the
 //! scaffold that catches drift in that relationship; it grows as more ops reach
 //! the compiled path.

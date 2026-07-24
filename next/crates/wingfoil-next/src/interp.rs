@@ -9,7 +9,7 @@
 //! semantics by construction.
 //!
 //! Execution model: a sparse dirty-list, matching classic wingfoil's
-//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
+//! `dirty_nodes_by_layer` (see `next/docs/port-plan.md` "Phase 4.5"). At `build()`
 //! each node gets an *active-downstream* adjacency list. Each cycle seeds a
 //! work set from the frontier — `always` busy-poll ops and kernel-marked
 //! callback-activated ops (tickers, `delay` pops, feedback source, channel
