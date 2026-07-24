@@ -49,7 +49,7 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message};
-use crate::op::{Activation, Ctx, Op, Tick};
+use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
     Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Print, Sample,
     Throttle, Ticker, TickerState, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState,
@@ -1412,7 +1412,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(T::default());
-        let cs = Self::cell((), TimedState::default());
+        let cs = Self::cell((), TimedState::<T>::default());
         let cs_start = cs.clone();
         let cs_stop = cs.clone();
         self.push_node(
@@ -1535,12 +1535,14 @@ impl Builder {
     ) -> Handle<T>
     where
         T: Clone + Default + 'static,
-        F: FnMut(&mut Ctx, bool) -> Result<Tick<T>> + 'static,
+        F: FnMut(&mut Ctx, CompositePhase) -> Result<Tick<T>> + 'static,
     {
         let idx = self.nodes.len();
         let out = self.new_slot(T::default());
         let cell = Rc::new(RefCell::new(node));
-        let cell2 = cell.clone();
+        let cell_start = cell.clone();
+        let cell_stop = cell.clone();
+        let cell_teardown = cell.clone();
         let caps = Activation {
             schedules: callback_activated,
             threaded: false,
@@ -1552,7 +1554,7 @@ impl Builder {
             "graph",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                match (cell.borrow_mut())(&mut ctx, false)? {
+                match (cell.borrow_mut())(&mut ctx, CompositePhase::Cycle)? {
                     Tick::Value(v) => {
                         *out.borrow_mut() = v;
                         Ok(true)
@@ -1566,10 +1568,28 @@ impl Builder {
             }),
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                (cell2.borrow_mut())(&mut ctx, true)?;
+                (cell_start.borrow_mut())(&mut ctx, CompositePhase::Start)?;
                 Ok(())
             }),
         );
+        // The island's inner `stop`/`teardown` hooks run when the *outer*
+        // engine drives the composite node's own stop/teardown at cleanup —
+        // so an island containing `print`/`timed`/`finally` flushes like any
+        // other node. The closure itself keeps cleanup error-safe internally.
+        let composite_node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: composite node just pushed");
+        composite_node.stop = Box::new(move |k| {
+            let mut ctx = Ctx::new(k, idx);
+            (cell_stop.borrow_mut())(&mut ctx, CompositePhase::Stop)?;
+            Ok(())
+        });
+        composite_node.teardown = Box::new(move |k| {
+            let mut ctx = Ctx::new(k, idx);
+            (cell_teardown.borrow_mut())(&mut ctx, CompositePhase::Teardown)?;
+            Ok(())
+        });
         self.make_handle(idx)
     }
 
