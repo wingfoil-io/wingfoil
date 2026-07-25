@@ -79,6 +79,10 @@ harness = false
 name = "csv_adapter"
 required-features = ["csv"]
 
+[[example]]
+name = "augurs_adapter"
+required-features = ["augurs"]
+
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.
 [[example]]

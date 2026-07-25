@@ -75,6 +75,17 @@ jobs:
         env:
           RUST_LOG: INFO
 
+      - name: Run wingfoil-next tests
+        # The coverage run above is scoped to `-p wingfoil`, so the next-engine
+        # crate's tests — the adapter parity suites (lines/csv/augurs) and the
+        # trybuild cases — would otherwise never execute in CI. Run them here
+        # with all features so the feature-gated csv/augurs adapters are
+        # exercised. `--lib --tests` skips the example binaries (already
+        # compile-checked by the workspace clippy step below).
+        run: cargo test -p wingfoil-next --all-features --lib --tests
+        env:
+          RUST_LOG: INFO
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         continue-on-error: true
