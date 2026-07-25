@@ -7683,6 +7683,7 @@ dependencies = [
  "etcd-client",
  "futures",
  "log",
+ "rdkafka",
  "redis",
  "reqwest",
  "serde",
