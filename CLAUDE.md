@@ -2,6 +2,16 @@
 
 This file provides guidance for Claude Code when working with this codebase.
 
+> **Working under `next/`? Read [`next/CLAUDE.md`](next/CLAUDE.md) first.**
+> Wingfoil Next is the Op-pattern engine we are building in the `next/`
+> folder to stage the replacement for the legacy tree — when it is ready we
+> swap it in wholesale. All of that work has its own conventions and, most
+> importantly, a **different branching workflow: branches are cut from and
+> pull requests merge into the `next` branch, never `main`** (see
+> [next/CLAUDE.md](next/CLAUDE.md#branching-all-next-work-merges-into-next-not-main)).
+> This root file still applies (error-handling policy, pre-commit checklist,
+> etc.); `next/CLAUDE.md` adds and overrides on top of it.
+
 ## Project Overview
 
 Wingfoil is a Rust stream processing library for building directed acyclic graphs (DAGs) of data transformations. It supports both real-time and historical (backtesting) execution modes.
