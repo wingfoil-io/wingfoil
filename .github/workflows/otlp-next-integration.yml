@@ -1,0 +1,54 @@
+name: test.integration.otlp-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/otlp**'
+      - 'next/crates/wingfoil-next/tests/otlp_integration.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  otlp-next-integration:
+    name: OTLP (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install protoc
+        # opentelemetry-otlp's http-proto exporter builds prost-generated code,
+        # which invokes protoc at build time.
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Pre-pull OTel collector image
+        # testcontainers pulls the image lazily on first use, which is
+        # vulnerable to transient registry flakes. Pull once up front with
+        # retries so the test reuses the cached image.
+        run: |
+          for i in 1 2 3; do
+            docker pull otel/opentelemetry-collector:0.149.0 && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull OTel collector image after 3 attempts" && exit 1
+
+      - name: Run OTLP (next) integration tests
+        run: |
+          cargo test --features otlp-integration-test -p wingfoil-next \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO

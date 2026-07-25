@@ -65,6 +65,11 @@ jobs:
     uses: ./.github/workflows/otlp-integration.yml
     secrets: inherit
 
+  otlp-next-integration:
+    name: OTLP (next) Integration Tests
+    uses: ./.github/workflows/otlp-next-integration.yml
+    secrets: inherit
+
   zmq-etcd-integration:
     name: ZMQ etcd Integration Tests
     uses: ./.github/workflows/zmq-etcd-integration.yml
