@@ -191,6 +191,16 @@ type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 /// no-op (a stateless node with no persistent slot needs no reset).
 type ResetFn = Box<dyn FnMut()>;
 
+/// A graph mutation staged by an in-graph node during its `cycle` (where it
+/// cannot borrow the `Runner`), applied by [`Runner::run_dynamic`] at the next
+/// cycle boundary. This is how a self-contained dynamic node (e.g. a
+/// [`dynamic_group`](Builder::dynamic_group)) grows or shrinks the graph from
+/// inside its own logic — mirroring classic's `pending_additions` /
+/// `pending_removals` (`graph.rs:369-392`). Shared via `Rc` between the staging
+/// node and the runner.
+#[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
+type PendingMut = Box<dyn FnOnce(&mut Runner, &mut Kernel) -> Result<()>>;
+
 /// One node's **r**un**t**ime record: everything the engine needs to schedule
 /// and drive that node, kept in parallel `Vec`s indexed by node position (its
 /// [`Handle`] index). It is the erased, uniform counterpart to a typed [`Op`]
@@ -324,6 +334,12 @@ pub struct Builder {
     /// this builder mints and carried into its [`Runner`], so a handle used
     /// with a *different* runner is caught by a `debug_assert`.
     id: u64,
+    /// Mutations staged by in-graph dynamic nodes (e.g. a
+    /// [`dynamic_group`](Builder::dynamic_group)) during a cycle, applied at the
+    /// cycle boundary by [`Runner::run_dynamic`]. Shared (`Rc`) with any such
+    /// node at wiring time; empty and inert on a static graph.
+    #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
+    pending: Rc<RefCell<Vec<PendingMut>>>,
 }
 
 impl Default for Builder {
@@ -341,6 +357,7 @@ impl Default for Builder {
             finished: Rc::new(Cell::new(false)),
             re_runnable: true,
             id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
+            pending: Rc::new(RefCell::new(Vec::new())),
         }
     }
 }
@@ -2056,6 +2073,7 @@ impl Builder {
             active_downs,
             passive_downs,
             removed: vec![false; n],
+            pending: self.pending,
             seed_nodes,
             layer,
             dispatch: Dispatch::default(),
@@ -2125,6 +2143,12 @@ pub struct Runner {
     /// all-false on a static run.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     removed: Vec<bool>,
+    /// Mutations staged by in-graph dynamic nodes during a cycle, drained and
+    /// applied at each cycle boundary by [`run_dynamic`](Runner::run_dynamic).
+    /// Shares the `Rc` the [`Builder`] handed to any staging node. Empty on a
+    /// static graph.
+    #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
+    pending: Rc<RefCell<Vec<PendingMut>>>,
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
@@ -2550,8 +2574,20 @@ impl Runner {
                 }
                 kernel.end_cycle(&mut dirty);
                 cycles += 1;
-                // Apply staged mutations at the boundary, matching classic's
-                // end-of-cycle `process_pending_*` (`graph.rs:934-939`).
+                // Apply mutations staged by in-graph dynamic nodes during this
+                // cycle (e.g. a `dynamic_group`'s insert/remove), matching
+                // classic's end-of-cycle `process_pending_*` (`graph.rs:934-939`).
+                let staged = std::mem::take(&mut *self.pending.borrow_mut());
+                for apply in staged {
+                    if let Err(e) = apply(self, &mut kernel) {
+                        first_err = Some(e);
+                        break;
+                    }
+                }
+                if first_err.is_some() {
+                    break;
+                }
+                // Then the caller-driven mutation scope (driver-thread surface).
                 let mut ext = Extension {
                     runner: self,
                     kernel: &mut kernel,
@@ -2650,6 +2686,10 @@ impl Runner {
             start,
             stop: Box::new(|_| Ok(())),
             teardown: Box::new(|_| Ok(())),
+            // Dynamically-added nodes default to a no-op reset — re-run
+            // (a second `run`) is a static-graph capability; a graph mutated
+            // via `run_dynamic` rebuilds its dynamic region on the next run.
+            reset: Box::new(|| {}),
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
@@ -2901,6 +2941,42 @@ impl Extension<'_> {
         self.runner.rt_make_handle(idx)
     }
 
+    /// Append a value-predicate filter of an existing `src` onto the live graph:
+    /// it re-emits `src`'s value on the cycles `pred` holds and stays quiet
+    /// otherwise — the per-key selector a `dynamic_group` factory typically
+    /// builds over a shared feed.
+    pub fn filter_value<A, F>(&mut self, src: impl AsHandle<A>, pred: F) -> Handle<A>
+    where
+        A: Clone + Default + 'static,
+        F: Fn(&A) -> bool + 'static,
+    {
+        let src = src.as_handle();
+        let idx = self.runner.nodes.len();
+        let src_slot = self.runner.rt_slot(src);
+        let out = self.runner.rt_new_slot(A::default());
+        let cycle: CycleFn = Box::new(move |_k| {
+            let v = src_slot.borrow();
+            if pred(&v) {
+                let val = v.clone();
+                drop(v);
+                *out.borrow_mut() = val;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        });
+        self.runner.rt_append_node(
+            vec![src.idx],
+            Vec::new(),
+            Activation::NONE,
+            "filter_value",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+        self.appended.push(idx);
+        self.runner.rt_make_handle(idx)
+    }
+
     /// Splice `new` in as an upstream of the existing `caller`. An `active`
     /// edge re-fires `caller` whenever `new` ticks and lifts `caller`'s layer
     /// above `new` (via `fix_layers`) so dispatch order stays correct even
@@ -2937,5 +3013,142 @@ impl Extension<'_> {
     /// already-removed node is a no-op.
     pub fn remove<T>(&mut self, node: impl AsHandle<T>) -> Result<()> {
         self.runner.remove_node(node.as_handle().idx, self.kernel)
+    }
+}
+
+/// One live per-key stream a [`dynamic_group`](Builder::dynamic_group) tracks:
+/// its output value slot and its node index (to read its per-cycle tick flag).
+#[cfg(feature = "dynamic-graph")]
+struct LiveStream<T> {
+    slot: Rc<RefCell<T>>,
+    idx: usize,
+}
+
+#[cfg(feature = "dynamic-graph")]
+impl Builder {
+    /// A keyed collection of dynamically-wired sub-graphs, kept in sync with the
+    /// graph — the next twin of classic `dynamic_group_stream`
+    /// (`nodes/dynamic_group.rs`). A single in-graph node reacts to two key
+    /// streams and folds its live members into an output value `V`:
+    ///
+    /// - when `add` ticks, `factory` builds a per-key sub-graph (via an
+    ///   [`Extension`]) whose output is wired in as an **active** upstream with
+    ///   `recycle` (so it observes real current values); its handle is tracked
+    ///   under the key;
+    /// - when `del` ticks, `on_remove` runs and the key's output node is removed;
+    /// - every cycle, `on_tick` folds each tracked member **that ticked this
+    ///   cycle** into `V`. Because each member is an active upstream, the layered
+    ///   engine drains the group *after* them, so those reads are the members'
+    ///   current values — the fresh-read guarantee dynamic groups depend on.
+    ///
+    /// Runs under [`Runner::run_dynamic`] (its boundary is where the staged
+    /// insert/remove mutations apply). The store is a `BTreeMap`, so `K: Ord`;
+    /// the pluggable-`StreamStore` backends of classic are a deliberate
+    /// ergonomic omission, not a semantic one.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dynamic_group<K, T, V, Factory, OnTick, OnRemove>(
+        &mut self,
+        add: Handle<K>,
+        del: Handle<K>,
+        factory: Factory,
+        init: V,
+        on_tick: OnTick,
+        on_remove: OnRemove,
+    ) -> Handle<V>
+    where
+        K: Clone + Default + Ord + 'static,
+        T: Clone + Default + 'static,
+        V: Clone + Default + 'static,
+        Factory: Fn(&mut Extension<'_>, K) -> Handle<T> + 'static,
+        OnTick: Fn(&mut V, &K, &T) + 'static,
+        OnRemove: Fn(&mut V, &K) + 'static,
+    {
+        let idx = self.nodes.len();
+        let add_slot = self.slot(add);
+        let del_slot = self.slot(del);
+        let out = self.new_slot(init.clone());
+        let ticked = self.ticked.clone();
+        let pending = self.pending.clone();
+        let (add_idx, del_idx) = (add.idx, del.idx);
+
+        let store: Rc<RefCell<std::collections::BTreeMap<K, LiveStream<T>>>> =
+            Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+        let factory = Rc::new(factory);
+        let mut value = init;
+
+        let cycle: CycleFn = Box::new(move |_k| {
+            let (add_t, del_t) = {
+                let t = ticked.borrow();
+                (t[add_idx], t[del_idx])
+            };
+            // Add: stage the factory build + active/recycle splice for the
+            // boundary (the store insert happens there too, once it has a slot).
+            if add_t {
+                let key: K = add_slot.borrow().clone();
+                let f = factory.clone();
+                let store_ins = store.clone();
+                pending.borrow_mut().push(Box::new(
+                    move |runner: &mut Runner, kernel: &mut Kernel| {
+                        let mut ext = Extension {
+                            runner,
+                            kernel,
+                            appended: Vec::new(),
+                        };
+                        let h = f(&mut ext, key.clone());
+                        let slot = ext.runner.rt_slot(h);
+                        let caller = ext.runner.rt_make_handle::<V>(idx);
+                        ext.add_upstream(caller, h, true, true);
+                        store_ins.borrow_mut().insert(
+                            key,
+                            LiveStream {
+                                slot,
+                                idx: h.index(),
+                            },
+                        );
+                        Ok(())
+                    },
+                ));
+            }
+            // Delete: run `on_remove` and drop from the store now (so it stops
+            // aggregating immediately); stage the node removal for the boundary.
+            if del_t {
+                let key: K = del_slot.borrow().clone();
+                on_remove(&mut value, &key);
+                let removed = store.borrow_mut().remove(&key);
+                if let Some(live) = removed {
+                    pending.borrow_mut().push(Box::new(
+                        move |runner: &mut Runner, kernel: &mut Kernel| {
+                            runner.remove_node(live.idx, kernel)
+                        },
+                    ));
+                }
+            }
+            // Aggregate the members that ticked this cycle. `ticked[live.idx]`
+            // and `live.slot` are the member's current tick/value: the member is
+            // an active upstream, so it drained before this node (layer order).
+            let mut ticked_any = false;
+            {
+                let t = ticked.borrow();
+                let members = store.borrow();
+                for (key, live) in members.iter() {
+                    if t[live.idx] {
+                        let v = live.slot.borrow().clone();
+                        on_tick(&mut value, key, &v);
+                        ticked_any = true;
+                    }
+                }
+            }
+            *out.borrow_mut() = value.clone();
+            Ok(ticked_any)
+        });
+
+        self.push_node(
+            vec![add_idx, del_idx],
+            Activation::NONE,
+            "dynamic_group",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
     }
 }

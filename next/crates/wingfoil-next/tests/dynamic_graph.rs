@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::interp::Extension;
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -288,5 +289,71 @@ fn without_recycle_quiet_source_stays_default() {
         runner.value(mapped.unwrap()),
         0,
         "without recycle the quiet source never re-ticks the appended node"
+    );
+}
+
+/// End-to-end twin of the `dynamic-group` example (`examples/dynamic`): a keyed
+/// price book maintained by an in-graph `dynamic_group` node that wires per-key
+/// filter sub-graphs on `add`, tears them down on `del`, and folds each live
+/// member's current price into a `BTreeMap` — all driven from *inside* the graph
+/// (no driver-hook mutation). Exercises the whole stack: in-cycle staging,
+/// active/recycle splicing, removal, and the fresh-read guarantee (each member
+/// is an active upstream, so the group reads its current value).
+///
+/// A shared feed emits `(key, price)` alternating key 1/0 each cycle with
+/// `price = cycle * 10`. Key 0 is added at cycle 1, key 1 at cycle 2, and key 0
+/// is deleted at cycle 4.
+#[test]
+fn dynamic_group_maintains_a_live_price_book() {
+    use std::collections::BTreeMap;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    // Shared feed: (key, price) with key alternating 1,0,1,0,… and price = 10*cycle.
+    let feed = n.map(|c: &u64| (c % 2, c * 10)).handle();
+    // `add` fires key 0 at cycle 1 and key 1 at cycle 2. `del` fires key 0 at
+    // cycle 4, and a no-op delete of a non-existent key at cycle 5 — the latter
+    // exists to trigger the group *early* (via its `del` edge) on a cycle where
+    // key 1's member also fires. Without `fix_layers` re-sorting the group above
+    // its members, that early trigger drains the group before key 1's member,
+    // so it would miss the cycle-5 price (50) and the book would hold a stale 30.
+    let add = n
+        .map_filter(|c: &u64| ((if *c == 1 { 0u64 } else { 1 }), *c == 1 || *c == 2))
+        .handle();
+    let del = n
+        .map_filter(|c: &u64| ((if *c == 4 { 0u64 } else { 99 }), *c == 4 || *c == 5))
+        .handle();
+
+    let book = g.with_builder(|b| {
+        b.dynamic_group(
+            add,
+            del,
+            // Factory: per-key subgraph = filter the feed to this key, take price.
+            move |ext: &mut Extension<'_>, k: u64| {
+                let selected = ext.filter_value(feed, move |(i, _): &(u64, u64)| *i == k);
+                ext.map(selected, |(_, px): &(u64, u64)| *px)
+            },
+            BTreeMap::<u64, u64>::new(),
+            |book: &mut BTreeMap<u64, u64>, key: &u64, price: &u64| {
+                book.insert(*key, *price);
+            },
+            |book: &mut BTreeMap<u64, u64>, key: &u64| {
+                book.remove(key);
+            },
+        )
+    });
+
+    let mut runner = g.build();
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |_ext, _cycle| Ok(()))
+        .unwrap();
+
+    // key0 tracked prices on cycles 2 (20), removed at cycle 4; key1 tracked on
+    // cycles 3 (30) and 5 (50). Final book holds only the live key 1 at 50.
+    let final_book = runner.value(book);
+    assert_eq!(
+        final_book,
+        BTreeMap::from([(1u64, 50u64)]),
+        "final price book"
     );
 }
