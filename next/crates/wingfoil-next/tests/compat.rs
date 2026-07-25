@@ -4,6 +4,8 @@
 //! the new `Op`/`Builder` engine. This is the compatibility surface that
 //! lets existing code (and the Python bindings) migrate unchanged.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -233,4 +235,205 @@ fn classic_buffer_flushes_by_capacity() {
         .accumulate();
     buffered.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(vec![vec![1, 2], vec![3, 4], vec![5]], buffered.peek_value());
+}
+
+// --- Newly surfaced operator methods, all in the classic idiom -------------
+
+/// `try_map` applies a fallible closure; the `Ok` path passes values through.
+#[test]
+fn classic_try_map_transforms_values() {
+    let doubled = ticker(Duration::from_nanos(100))
+        .count()
+        .try_map(|i: &u64| Ok(*i * 2))
+        .accumulate();
+    doubled.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![2, 4, 6], doubled.peek_value());
+}
+
+/// `map_filter` maps and drops in one pass, preserving values **and** the tick
+/// times of the values it keeps.
+#[test]
+fn classic_map_filter_keeps_even_counts_with_times() {
+    // counts 1,2,3,4 at t=0,100,200,300; keep even counts → (2@100, 4@300)
+    let evens = ticker(Duration::from_nanos(100))
+        .count()
+        .map_filter(|i: &u64| (*i, i.is_multiple_of(2)))
+        .with_time()
+        .accumulate();
+    evens.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::from(100u64), 2u64),
+            (NanoTime::from(300u64), 4u64),
+        ],
+        evens.peek_value()
+    );
+}
+
+/// `filter_map` keeps `Some`, drops `None`.
+#[test]
+fn classic_filter_map_keeps_some() {
+    // counts 1..=6; keep squares of odd inputs → 1, 9, 25
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .filter_map(|i: &u64| (i % 2 == 1).then_some(i * i))
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![1, 9, 25], out.peek_value());
+}
+
+/// `filter_value` drops values failing a predicate.
+#[test]
+fn classic_filter_value_drops_on_predicate() {
+    // counts 1..=5; keep > 3 → 4, 5
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .filter_value(|i: &u64| *i > 3)
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![4, 5], out.peek_value());
+}
+
+/// `reduce` folds from `T::default()`, applying `f(acc, value)` — a running sum.
+#[test]
+fn classic_reduce_running_sum() {
+    // counts 1,2,3,4; running sum 1,3,6,10
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .reduce(|acc: &u64, v: &u64| acc + v)
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![1, 3, 6, 10], out.peek_value());
+}
+
+/// `produce` emits a fresh value on each tick, ignoring the source value.
+#[test]
+fn classic_produce_emits_on_each_tick() {
+    let out = ticker(Duration::from_nanos(100))
+        .produce(|| 42u64)
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![42, 42, 42], out.peek_value());
+}
+
+/// `inspect` runs a side effect while passing values through unchanged.
+#[test]
+fn classic_inspect_taps_and_passes_through() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .inspect(move |v: &u64| s.borrow_mut().push(*v))
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], out.peek_value());
+    assert_eq!(vec![1, 2, 3], *seen.borrow());
+}
+
+/// `for_each` runs a side-effecting sink on each tick.
+#[test]
+fn classic_for_each_sinks_each_value() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let sink = ticker(Duration::from_nanos(100))
+        .count()
+        .for_each(move |v: &u64| {
+            s.borrow_mut().push(*v);
+            Ok(())
+        });
+    sink.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], *seen.borrow());
+}
+
+/// `finally` runs once at teardown, observing the last value.
+#[test]
+fn classic_finally_runs_at_teardown() {
+    let last = Rc::new(RefCell::new(0u64));
+    let f = last.clone();
+    let sink = ticker(Duration::from_nanos(100))
+        .count()
+        .finally(move |v: &u64| {
+            *f.borrow_mut() = *v;
+            Ok(())
+        });
+    sink.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(3, *last.borrow());
+}
+
+/// `collapse` reduces an iterable value to its last item, quiet when empty.
+#[test]
+fn classic_collapse_takes_last_item() {
+    // counts 1,2,3 → vecs [1,10],[2,20],[3,30] → collapse → 10,20,30
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .map(|i: &u64| vec![*i, *i * 10])
+        .collapse::<u64>()
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![10, 20, 30], out.peek_value());
+}
+
+/// `timed` passes values through unchanged (it only prints a summary).
+#[test]
+fn classic_timed_passes_through() {
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .timed()
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], out.peek_value());
+}
+
+/// `print` passes values through unchanged (it only prints at teardown).
+#[test]
+fn classic_print_passes_through() {
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .print()
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], out.peek_value());
+}
+
+/// `delay_with_reset` with a never-firing trigger behaves like plain `delay`.
+#[test]
+fn classic_delay_with_reset_never_resets() {
+    let c = constant(7u64);
+    // A trigger derived from the same graph that never ticks.
+    let never = c.filter_value(|_| false);
+    let delayed = c
+        .delay_with_reset(Duration::from_nanos(50), &never)
+        .accumulate();
+    // constant ticks once at t=0; delayed re-emits it at t=50.
+    delayed.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![7], delayed.peek_value());
+}
+
+/// `split` decomposes a signal of pairs into two component signals.
+#[test]
+fn classic_split_decomposes_pairs() {
+    let pairs = ticker(Duration::from_nanos(100))
+        .count()
+        .map(|i: &u64| (*i, *i * 10));
+    let (a, b) = pairs.split();
+    let aa = a.accumulate();
+    let bb = b.accumulate();
+    // Running `aa` builds the shared graph (which includes `bb`); both read
+    // off the same retained runner.
+    aa.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], aa.peek_value());
+    assert_eq!(vec![10, 20, 30], bb.peek_value());
+}
+
+/// `filter_none` drops `None`, yielding just the `Some` payloads.
+#[test]
+fn classic_filter_none_drops_none() {
+    // counts 1..=6; Some for odd inputs only → 1, 3, 5
+    let out = ticker(Duration::from_nanos(100))
+        .count()
+        .map(|i: &u64| (i % 2 == 1).then_some(*i))
+        .filter_none()
+        .accumulate();
+    out.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![1, 3, 5], out.peek_value());
 }
