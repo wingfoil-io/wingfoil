@@ -7693,6 +7693,7 @@ dependencies = [
  "trybuild",
  "wingfoil",
  "wingfoil-next-macros",
+ "zmq",
 ]
 
 [[package]]

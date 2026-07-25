@@ -98,6 +98,16 @@ reqwest = { version = "0.12", features = [
     "blocking",
 ], optional = true }
 
+# `zmq` feature: real-time pub/sub over ØMQ sockets (`zmq_sub` source +
+# `ZeroMqPub` sink), with optional etcd-based service discovery. Synchronous and
+# poll-based, so — like the classic `wingfoil` zmq adapter — it uses a background
+# thread over the `channel` layer and deliberately does NOT pull in `async`.
+# Messages are `bincode`-framed (reuses the optional `bincode`/`serde` entries
+# above). Version mirrors the classic `wingfoil` crate's zmq adapter so the two
+# trees don't drift; the `zmq` crate links the system `libzmq` (Debian/Ubuntu:
+# `libzmq3-dev`).
+zmq = { version = "0.10.0", optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -123,6 +133,15 @@ prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
 # `reqwest` (blocking) queries Prometheus. Mirrors classic wingfoil.
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
+# ZMQ pub/sub adapter. `bincode`/`serde` frame the wire envelope; the `zmq` crate
+# links the system `libzmq`. No `async` — the subscriber uses a background thread
+# over the `channel` layer (matching classic).
+zmq = ["dep:zmq", "dep:bincode", "dep:serde"]
+# Core pub/sub parity tests (real sockets, no external service / container).
+zmq-integration-test = ["zmq"]
+# etcd service-discovery parity tests (needs Docker via testcontainers). Enables
+# the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
+zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
 # Runtime graph dynamism: append nodes and splice edges into a live graph
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors classic wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
@@ -176,6 +195,10 @@ required-features = ["redis"]
 [[example]]
 name = "prometheus_adapter"
 required-features = ["prometheus"]
+
+[[example]]
+name = "zmq_adapter"
+required-features = ["zmq"]
 
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.
