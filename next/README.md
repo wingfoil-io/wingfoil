@@ -1,135 +1,169 @@
 # Wingfoil Next
 
-Wingfoil Next is the ground-up redesign of [wingfoil](../README.md)'s core:
-node semantics are written **once**, as pure [`Op`] functions over
-engine-owned state, and executed by multiple engines — an interpreted engine
-for flexibility, a fully monomorphized `compiled()` runner for speed, and
-compiled islands (`nested()`) mounted as single nodes inside interpreted
-graphs. All three are derived from the same wiring tokens by the `graph!`
-macro, so the engines *cannot* drift: there is no duplicated cycle logic
-anywhere.
+Wingfoil Next is a blazingly fast, highly scalable stream processing engine
+designed for latency-critical use cases such as electronic trading and
+real-time AI systems.
+
+You describe your graph of calculations once, in a single fluent wiring, and
+choose how to run it: an **interpreted** engine for a fully open, dynamic
+world; a fully monomorphized **compiled** runner for maximum throughput; or
+**nested** compiled islands mounted inside an interpreted graph. Every tier is
+derived from the same definition, so they cannot drift — there is no
+duplicated execution logic anywhere.
+
+Wingfoil simplifies receiving, processing, distributing and monitoring
+streaming data across your entire stack.
+
+
+## Features
+
+- **Fast**: ultra low latency and high throughput from an efficient
+  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)-based execution
+  engine, with a `compiled()` tier that monomorphizes the whole graph into one
+  function for the compiler to optimise across node boundaries.
+- **Three execution tiers**: run any graph interpreted (open-world, dynamic),
+  fully compiled (static, fastest), or as compiled islands nested inside an
+  interpreted graph — all from one wiring definition.
+- **Backtesting**: replay historical data deterministically to backtest and
+  optimise strategies, then swap to realtime with the same graph wiring.
+- **Lossless**: same-instant values ride a single burst — never coalesced,
+  never latest-wins — identically in realtime and historical replay.
+- **Fallible everywhere**: every lifecycle function returns a `Result`; errors
+  abort the run with context and cleanup still runs.
+- **Simple to use**: define your graph of calculations; Wingfoil manages its
+  execution.
+- **Adapters**: integrations for CSV, etcd, the augurs time-series toolkit,
+  and line-oriented files, with async/Tokio at your graph edges.
+- **Multi-threading**: distribute graph execution across threads through the
+  channel layer.
+- **Extensible**: add sources, combinators, statistics and adapters as
+  extension traits; your own ops get interpreted *and* compiled coverage with
+  `#[op]`, with no macro table to edit.
+
+
+## Quick Start
+
+In this example we build a simple, linear pipeline with all nodes ticking in
+lock-step.
 
 ```rust
 use std::time::Duration;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil::{RunFor, RunMode};
 use wingfoil_next::prelude::*;
 
 fn main() {
     let g = GraphBuilder::new();
-    let msgs = g
-        .ticker(Duration::from_millis(100))
+    g.ticker(Duration::from_secs(1))
         .count()
-        .map(|i| format!("tick {i}"))
-        .accumulate();
+        .map(|i| format!("hello, world {i}"))
+        .print();
+
     let mut runner = g.build();
-    runner
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
-        .unwrap();
-    for msg in runner.value(&msgs) {
-        println!("{msg}");
-    }
+    runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
 }
 ```
 
-## Design objectives
+This output is produced:
 
-1. **A strict superset of legacy wingfoil — including examples.** Before
-   cutover, everything the legacy tree offers must exist here: every
-   node/operator, every adapter, every run mode and execution pattern, the
-   examples, benchmarks, language bindings and docs. Where next deliberately
-   deviates (e.g. by-design `compiled()` restrictions), the deviation is
-   documented in the capability matrix in [`docs/port-plan.md`](docs/port-plan.md)
-   — never left implicit. Anything legacy does that next cannot do (or has
-   not explicitly ruled out) is a cutover blocker.
-
-2. **Ready to swap out the legacy tree wholesale.** This folder mirrors the
-   legacy repo root — `README`, `LICENSE`, `CONTRIBUTING`, `docs/`, and the
-   crates under `crates/` — so the eventual cutover is a directory promotion,
-   not a re-organisation. Until then, the legacy crates keep shipping
-   untouched and serve as the permanent parity oracle for the port.
-
-3. **Single-sourced semantics, dual execution.** An op is *only* semantics:
-   no storage (state is an associated type the engine owns), no upstream
-   pointers (typed inputs are passed in per cycle), and a `const ACTIVATION`
-   declaration instead of hidden scheduling behaviour. Both engines execute
-   the identical monomorphizable `Op::cycle` functions.
-
-4. **Lossless by default.** Same-instant values ride one `Burst` — never
-   coalesced, never latest-wins — in realtime and in deterministic
-   historical replay alike.
-
-5. **Fallible everywhere.** Every lifecycle function (`start` / `cycle` /
-   `stop` / `teardown`) returns `anyhow::Result`; errors abort the run with
-   context, and cleanup still runs.
-
-6. **An open vocabulary.** Sources, combinators, statistics and adapters are
-   *extension traits* over two public primitives (`GraphBuilder::source`,
-   `Stream::wire`) — third-party ops wire in exactly the way built-ins do,
-   and `#[op(build = ...)]` gives user ops the same interpreted + compiled
-   coverage with no macro table to edit.
-
-## Layout
-
-```
-next/
-  README.md               # This file
-  LICENSE.txt             # Apache-2.0, same terms as the legacy tree
-  CONTRIBUTING.md         # How to build, test, and port features across
-  CLAUDE.md               # Guidance for Claude Code when working in next/
-  docs/
-    port-plan.md          # The port roadmap: phases, capability matrix, gates
-    fable-review.md       # Design review of the plan + implementation
-    macro-extensibility-decision.md  # Why graph! has no per-op table
-  crates/
-    wingfoil-next/        # The engine: Op trait, interpreted engine, ops,
-                          #   stats, adapters, channel/async sources,
-                          #   examples, tests, benches
-    wingfoil-next-macros/ # graph! (one wiring fn -> interpreted/compiled/
-                          #   nested) and #[op] proc macros
+```pre
+hello, world 1
+hello, world 2
+hello, world 3
 ```
 
-## Build and test
 
-Run from the repository root — the crates are members of the root workspace:
+## A Worked Example
 
-```bash
-# Build / test
-cargo build -p wingfoil-next
-cargo test  -p wingfoil-next
-cargo test  -p wingfoil-next --all-features   # + async, csv, augurs adapters
+Wingfoil lets you wire up complex business logic, splitting and recombining
+streams and modulating the frequency of data. Here a price stream is folded
+into fast and slow EMAs, recombined into a crossover signal, and gated so it
+only fires when the signal *changes*:
 
-# Examples (each ported legacy example keeps its name)
-cargo run -p wingfoil-next --example hello_graph
-cargo run -p wingfoil-next --example order_book
-cargo run -p wingfoil-next --example csv_adapter --features csv
+```rust,ignore
+let g = GraphBuilder::new();
+let price = g.ticker(Duration::from_millis(1)).map(next_price);
 
-# Benchmarks (three-tier regression gate: interpreted vs compiled vs nested)
-cargo bench -p wingfoil-next
+// Fast and slow EMAs over the same price stream, recombined into a signal.
+let fast = price.fold((0.0, false), ema(0.30)).map(|s| s.0);
+let slow = price.fold((0.0, false), ema(0.05)).map(|s| s.0);
+let signal = fast.join(&slow, |f, s| f > s);
 
-# Lint (workspace-wide aliases, mirror CI)
-cargo lint
-cargo lint-all
-cargo fmt --all -- --check
+// Emit only when the crossover state changes.
+signal
+    .fold((false, false), |st, s| { st.0 = st.1; st.1 = *s; })
+    .filter(|st| st.0 != st.1)
+    .print();
+
+let mut runner = g.build();
+runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5_000)).unwrap();
 ```
+
+See the full [`order_book`](crates/wingfoil-next/examples/order_book/) and
+[`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) examples.
+
 
 ## Execution tiers
 
 One wiring function, wrapped in `graph! { fn my_graph(g: &GraphBuilder) -> ... }`,
-expands to a module offering all three:
+expands to a module offering all three tiers:
 
 | Tier | Entry point | What it is |
 |---|---|---|
-| Interpreted | fluent chaining directly, or `my_graph::interpreted()` | One dyn boundary per op; open world — threaded/busy-poll sources, feedback, bursts |
-| Compiled | `my_graph::compiled(run_mode, run_for)` | The whole graph monomorphized into one function, state in locals — fastest, static DAGs only |
-| Nested (island) | `my_graph::nested(&g, inputs...)` | A compiled sub-graph mounted as one node of an interpreted graph — hot core compiled, edges stay open |
+| Interpreted | fluent chaining directly, or `my_graph::interpreted()` | One dyn boundary per op; open world — threaded/busy-poll sources, feedback, bursts. |
+| Compiled | `my_graph::compiled(run_mode, run_for)` | The whole graph monomorphized into one function, state in locals — fastest, static DAGs. |
+| Nested (island) | `my_graph::nested(&g, inputs...)` | A compiled sub-graph mounted as one node of an interpreted graph — hot core compiled, edges stay open. |
 
-See the capability matrix in [`docs/port-plan.md`](docs/port-plan.md) for
-exactly what each tier supports and which restrictions are by design.
 
-## Status
+## More Examples
 
-Porting is in progress, phase by phase, with the legacy test suite as the
-parity oracle — see [`docs/port-plan.md`](docs/port-plan.md) for the live
-✅/🟡/⬜ state. The port can pause at any phase boundary with everything
-shipped still correct; the legacy crates remain the production engine until
-the superset objective above is met.
+Every example is runnable with `cargo run -p wingfoil-next --example <name>`
+(add `--features <name>` for adapter examples).
+
+### Core concepts
+
+| Example | Description |
+|---|---|
+| [`hello_graph`](crates/wingfoil-next/examples/hello_graph.rs) | Smallest graph: a ticker counted and formatted, run historical (instant) then realtime. |
+| [`order_book`](crates/wingfoil-next/examples/order_book/) | Maintain a limit order book in `fold` state, derive trades and two-way prices. |
+| [`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) | Backtest-shaped: a price walk, fast/slow EMAs, and golden/death-cross signals on state change. |
+| [`breadth_first`](crates/wingfoil-next/examples/breadth_first/) | Why breadth-first execution avoids the node explosion of naive depth-first DAGs. |
+| [`run_mode`](crates/wingfoil-next/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring. |
+| [`feedback`](crates/wingfoil-next/examples/feedback/) | Close a loop between nodes with a `feedback` channel — a control loop a plain DAG can't express. |
+| [`threading`](crates/wingfoil-next/examples/threading/) | Run a producer sub-graph on its own thread, feeding the main graph over the channel layer. |
+| [`async`](crates/wingfoil-next/examples/async/) | Drive a graph from an async/Tokio producer of timestamped values at the graph edge. |
+| [`statistics`](crates/wingfoil-next/examples/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
+| [`odds_evens`](crates/wingfoil-next/examples/odds_evens.rs) | Split a counter by parity into two branches and merge back — the split-and-recombine DAG. |
+| [`dual_mode`](crates/wingfoil-next/examples/dual_mode.rs) | One `graph!` wiring expands to both an interpreted and a fully compiled runner. |
+| [`fanout_10x10`](crates/wingfoil-next/examples/fanout_10x10.rs) | A 10×10 fan-out graph expressed through `graph!`, the benchmark shape. |
+
+### Adapters
+
+| Example | Description |
+|---|---|
+| [`csv_adapter`](crates/wingfoil-next/examples/csv_adapter.rs) | Replay a CSV as a deterministic historical burst stream, transform each row, write back to CSV. |
+| [`etcd_adapter`](crates/wingfoil-next/examples/etcd_adapter.rs) | Watch an etcd key prefix, transform values, and write the result back. |
+| [`augurs_adapter`](crates/wingfoil-next/examples/augurs_adapter.rs) | On-graph forecasting and outlier detection over sliding windows with the augurs toolkit. |
+| [`lines_adapter`](crates/wingfoil-next/examples/lines_adapter.rs) | Dependency-free line-oriented file adapter — replay a text file, transform it, write it out. |
+| [`async_source`](crates/wingfoil-next/examples/async_source.rs) | Bridge an async producer of timestamped values into a wingfoil-next graph. |
+
+
+## Links
+
+- Explore the [examples](crates/wingfoil-next/examples/)
+- Read the [benchmarks](crates/wingfoil-next/benches/)
+- See [CONTRIBUTING](CONTRIBUTING.md) to build, test and contribute
+
+
+## Get Involved!
+
+We want to hear from you! Especially if you:
+- are interested in [contributing](CONTRIBUTING.md)
+- know of a project that Wingfoil would be well-suited for
+- would like to request a feature or report a bug
+- have any feedback
+
+Please do get in touch:
+- ping us on [discord](https://discord.gg/rfGqf3Ff)
+- email us at [hello@wingfoil.io](mailto:hello@wingfoil.io)
+- submit an [issue](https://github.com/wingfoil-io/wingfoil/issues)
+- get involved in the [discussion](https://github.com/wingfoil-io/wingfoil/discussions/)
