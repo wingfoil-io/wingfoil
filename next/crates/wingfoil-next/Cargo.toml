@@ -86,6 +86,18 @@ redis = { version = "0.27", features = [
     "streams",
 ], optional = true }
 
+# `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
+# live-tail source, and a streaming insert sink, on the async `tokio-postgres`
+# client. Built on `async` (the `Handle::block_on` reader/sink and the
+# `produce_async` live tail) and `async-stream` (the sub's `stream!` macro).
+# Versions mirror the classic `wingfoil` crate's postgres adapter (tokio-postgres
+# 0.7 with `with-chrono-0_4`, chrono 0.4) so the two trees don't drift. Reuses the
+# optional `testcontainers` entry (used only by the gated integration tests).
+tokio-postgres = { version = "0.7", features = [
+    "with-chrono-0_4",
+], optional = true }
+chrono = { version = "0.4", optional = true }
+
 # `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
 # `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
 # lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
@@ -128,6 +140,11 @@ etcd-integration-test = ["etcd", "dep:testcontainers"]
 # consume_async sink) and `async-stream` (the snapshot→tail stream! macro).
 redis = ["dep:redis", "dep:async-stream", "async"]
 redis-integration-test = ["redis", "dep:testcontainers"]
+# PostgreSQL adapter. Built on `async` (produce_async live tail + block_on
+# reader/sink) and `async-stream` (the sub's `stream!` macro); `chrono` for the
+# timestamp column conversions.
+postgres = ["dep:tokio-postgres", "dep:chrono", "dep:async-stream", "async"]
+postgres-integration-test = ["postgres", "dep:testcontainers"]
 # Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
 prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
@@ -191,6 +208,11 @@ required-features = ["etcd"]
 [[example]]
 name = "redis_adapter"
 required-features = ["redis"]
+
+[[example]]
+name = "postgres_adapter"
+path = "examples/postgres_adapter/main.rs"
+required-features = ["postgres"]
 
 [[example]]
 name = "prometheus_adapter"

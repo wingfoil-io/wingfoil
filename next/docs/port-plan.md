@@ -499,11 +499,13 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (`CacheKey`/`CacheConfig`/`FileCache`) behind the `cache` feature
    (`adapters::cache`, `tests/cache_adapter.rs`, classic unit tests ported
    verbatim). **Deviations** (none behavioural): (a) the classic time-slicing
-   helpers (`compute_time_slices`/`compute_validated_time_slices`) stay with
-   their `kdb`/`postgres` readers and land in `common` when those adapters port
-   (Phase 4 items 4–5), so only the always-compiled `WindowFilter` surface is
-   here; (b) `FileCache`'s log messages drop the classic "KDB " prefix (the
-   cache is not kdb-specific in next).
+   helpers (`compute_time_slices`/`compute_validated_time_slices`) land in
+   `common` alongside the time-sliced readers — **ported with `postgres`**
+   (Phase 4 item 4) and feature-gated on `postgres` today (the kdb port adds
+   `feature = "kdb"` to the gate at Phase 4 item 5); the always-compiled
+   `WindowFilter`/`TimeWindow` surface is here from the start; (b) `FileCache`'s
+   log messages drop the classic "KDB " prefix (the cache is not kdb-specific in
+   next).
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
    ✅ *done*. The `csv` and `lines` adapters share two fluent primitives so the
    source/sink boilerplate lives in one place: `GraphBuilder::replay_results`
@@ -571,6 +573,32 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    sources **reject `RunMode::HistoricalFrom` at wiring time** (live, unbounded,
    wall-clock streams — Pub/Sub has no backlog, the stream tail blocks forever —
    with no historical timeline to replay).
+   ✅ **postgres** *(done)*: a time-partitioned historical replay source
+   (`postgres_read` — one query per midnight-aligned time slice, clamped by
+   `WindowFilter`, fed to `replay_results`), a realtime `LISTEN`/`NOTIFY`
+   live-tail source (`postgres_sub`), and a streaming insert sink
+   (`PostgresSinkOps::postgres_write`, per-burst pipelined via `consume_async`),
+   behind the `postgres` feature on the async `tokio-postgres` client. **First
+   time-partitioned adapter to port**, so it lands the shared time slicer
+   (`compute_time_slices`/`compute_validated_time_slices`) in `adapters::common`
+   (feature-gated `postgres` now; kdb adds its feature at item 5) alongside the
+   already-present `WindowFilter`/`TimeWindow`. Parity port of the classic
+   adapter's tests as `tests/postgres_integration.rs` (testcontainers, gated on
+   `postgres-integration-test`) plus no-service tests in
+   `tests/postgres_adapter.rs`; classic example ported to
+   `examples/postgres_adapter/`. **Password redaction** (classic PR #433) is
+   reproduced: `PostgresConnection::redacted()` masks the DSN `password=…` token
+   at every `connect()` error site. **Deviations** (capabilities all preserved),
+   the same three as etcd/redis plus one reader-shape change: (a) the tokio
+   runtime is the caller's (`&Handle` + a `RunParams` for the sources); (b) the
+   sink connects eagerly at wiring and returns `Result`; (c) the sink is the
+   `PostgresSinkOps` trait only (classic's free fn + operator trait folded in),
+   burst-only like classic, and takes a `consume_async` `buffer_size`; (d) the
+   reader queries every slice at **wiring** time (`Handle::block_on`) onto
+   `replay_results` rather than streaming through `produce_async` — identical for
+   a bounded historical run, but a connection/query error surfaces at wiring
+   while a decode/non-monotonic-time error still aborts the run. The live tail
+   **rejects `RunMode::HistoricalFrom` at wiring time** (use `postgres_read`).
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
    ✅ **zmq** *(done)*: real-time ØMQ pub/sub — a `zmq_sub` source (a background
    OS thread polling the `SUB` socket + monitor, feeding the `channel` layer,
@@ -601,6 +629,9 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    the Python bindings (Phase 6), which is also why the classic `zmq-cross-lang`
    tests are not ported. Realtime-only, so the parity tests assert received
    values (consecutive counters, connection status) rather than exact tick times.
+   - **kdb** reuses the `postgres`-ported time slicer in `adapters::common` —
+     add `feature = "kdb"` to the `#[cfg]` gate on `compute_time_slices` /
+     `compute_validated_time_slices` and their tests.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.

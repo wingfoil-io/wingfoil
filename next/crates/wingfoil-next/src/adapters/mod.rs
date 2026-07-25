@@ -35,6 +35,12 @@
 //!   `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature
 //!   (built on the async `produce_async` / `consume_async` ergonomics). The
 //!   sources are realtime-only.
+//! - [`postgres`] — PostgreSQL: a time-partitioned historical replay source
+//!   (`postgres_read`, one query per time slice via the shared time slicer +
+//!   `replay_results`), a realtime `LISTEN`/`NOTIFY` live-tail source
+//!   (`postgres_sub`), and a streaming insert sink
+//!   (`PostgresSinkOps::postgres_write`), behind the `postgres` feature (built on
+//!   the async `tokio-postgres` client). The live tail is realtime-only.
 //! - [`zmq`] — real-time ØMQ pub/sub (`zmq_sub` source with a connection-status
 //!   stream + `ZeroMqPub::zmq_pub` sink), with optional etcd service discovery,
 //!   behind the `zmq` feature. Synchronous/poll-based, so it uses a background
@@ -50,6 +56,8 @@ pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
 pub mod lines;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
 #[cfg(feature = "redis")]
