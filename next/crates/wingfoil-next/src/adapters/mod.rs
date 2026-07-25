@@ -26,6 +26,10 @@
 //! - [`common`] — helpers shared across adapters (the out-of-window row
 //!   [`WindowFilter`](common::WindowFilter) for caller-parameterised historical
 //!   replays). Always compiled, dependency-light.
+//! - [`prometheus`] — a realtime, pull-based metrics sink serving a
+//!   `GET /metrics` endpoint in Prometheus text format (register streams as
+//!   gauges via `PrometheusSinkOps::prometheus_gauge`), behind the `prometheus`
+//!   feature. A sink only; a no-op under historical replay.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
@@ -37,3 +41,5 @@ pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
 pub mod lines;
+#[cfg(feature = "prometheus")]
+pub mod prometheus;

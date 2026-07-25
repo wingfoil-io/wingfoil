@@ -1,0 +1,68 @@
+name: test.integration.prometheus-next
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/prometheus**'
+      - 'next/crates/wingfoil-next/tests/prometheus_integration.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  prometheus-next-integration:
+    name: Prometheus (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Start Grafana + Prometheus stack
+        # Reuses the classic prometheus adapter's Docker stack — the exporter's
+        # `/metrics` text format is identical, and the stack scrapes
+        # WINGFOIL_METRICS_PORT (9091) on the host.
+        run: docker compose up -d
+        working-directory: wingfoil/src/adapters/prometheus/docker
+
+      - name: Wait for Prometheus to be healthy
+        run: |
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:9090/-/healthy > /dev/null; then
+              echo "Prometheus is up"
+              break
+            fi
+            echo "Waiting for Prometheus... ($i/12)"
+            sleep 5
+          done
+          curl -sf http://localhost:9090/-/healthy || (echo "Prometheus never became healthy" && exit 1)
+
+      - name: Run Prometheus (next) integration tests
+        run: |
+          cargo test --features prometheus-integration-test -p wingfoil-next \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+          PROMETHEUS_TEST_URL: http://localhost:9090
+          WINGFOIL_METRICS_PORT: "9091"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+        working-directory: wingfoil/src/adapters/prometheus/docker
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down
+        working-directory: wingfoil/src/adapters/prometheus/docker

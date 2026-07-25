@@ -523,6 +523,24 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    both hinge on `Complete`, so the port must plumb a "publish source finished"
    signal (adjacent to `Ctx::is_last_cycle` / lifecycle) through to the adapter,
    not just carry the wire types over.
+   ✅ **prometheus** *(done)*: a realtime, pull-based metrics **sink** —
+   `PrometheusExporter` (owns the registry, spawns the hand-rolled `GET /metrics`
+   HTTP server, synchronous bind) plus the `PrometheusSinkOps::prometheus_gauge`
+   extension trait that registers a lock-free `arc-swap` slot per metric and
+   wires the publish sink (over `register_op1`), behind the `prometheus` feature.
+   No-op under historical replay (reads the new
+   [`Ctx::run_mode`](../crates/wingfoil-next/src/op.rs) accessor). Self-contained
+   parity tests in `tests/prometheus_adapter.rs` (the classic exporter unit tests
+   + the `multiple_metrics` self-contained integration test, raw-TCP scrape); the
+   end-to-end Prometheus-scrape test is `tests/prometheus_integration.rs` behind
+   `prometheus-integration-test` (reuses the classic Docker stack;
+   `prometheus-next-integration.yml`). **Deviations** (all capabilities
+   preserved): (a) the sink is the `PrometheusSinkOps` extension trait
+   (`stream.prometheus_gauge(&exporter, name)`), not an `exporter.register(...)`
+   method, per the sink-as-trait convention; (b) `serve` returns
+   `anyhow::Result<u16>` with `.context`, not `Result<u16, io::Error>`. The one
+   engine addition is `Ctx::run_mode()` (a realtime-only IO sink needs to see the
+   run mode; reported as `RealTime` inside an island, like `is_last_cycle`).
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
