@@ -20,8 +20,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-use crate::PyElement;
 use crate::graph::{PyGraph, PyStream};
+use crate::{PyElement, Tick};
 
 fn to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(format!("{err:#}"))
@@ -82,6 +82,21 @@ impl Graph {
 #[pyclass(name = "Stream", unsendable)]
 pub struct Stream(PyStream);
 
+impl Stream {
+    /// The underlying erased object form — the seam third-party ops wire onto
+    /// via [`PyStream::wire_op1`]. Lets a `#[pyfunction]` in any crate accept a
+    /// `Stream` and extend it.
+    pub fn object(&self) -> &PyStream {
+        &self.0
+    }
+}
+
+impl From<PyStream> for Stream {
+    fn from(stream: PyStream) -> Self {
+        Stream(stream)
+    }
+}
+
 #[pymethods]
 impl Stream {
     /// Apply a Python callable to each value; a raised exception aborts the run.
@@ -115,10 +130,21 @@ impl Stream {
     }
 }
 
+// A demonstration op authored the way a third-party crate would: a plain Rust
+// step function exposed to Python by `pyop!` as a free function
+// `wingfoil_next.scale(stream, factor)`. It edge-converts f64 <-> PyElement and
+// wires onto the shared graph — proving the "author an op in Rust, call it from
+// Python" path end to end.
+crate::pyop! {
+    /// Multiply each value by `factor`.
+    fn scale(factor: f64): f64 => f64 = |cfg, _state, a, _ctx| Ok(Tick::Value(*a * *cfg))
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
+    m.add_function(wrap_pyfunction!(scale, m)?)?;
     Ok(())
 }

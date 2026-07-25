@@ -63,3 +63,22 @@ def test_native_types_round_trip():
     out = g.constant("hello").map(lambda s: s.upper())
     g.run(cycles=1)
     assert out.value() == "HELLO"
+
+
+def test_user_op_scale():
+    # `scale` is a Rust-authored op (via pyop!), called as a free function.
+    g = wf.Graph()
+    out = wf.scale(g.constant(3.0), 4.0)
+    g.run(cycles=1)
+    assert out.value() == 12.0
+
+
+def test_user_op_composes_with_builtins():
+    # The "extend in Python" thesis: a Rust user op wired between built-in
+    # combinators. counter 1..5 -> scale x10 -> 10,20,30,40,50 -> keep > 25.
+    g = wf.Graph()
+    scaled = wf.scale(g.counter(period_nanos=100), 10.0)
+    keep = scaled.map(lambda x: x > 25)
+    out = scaled.filter(keep)
+    g.run(cycles=5)
+    assert out.value() == 50.0

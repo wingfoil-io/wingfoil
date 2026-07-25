@@ -21,7 +21,14 @@
 
 pub mod element;
 pub mod graph;
+#[macro_use]
+mod macros;
 mod python;
 
 pub use element::PyElement;
 pub use graph::{PyGraph, PyStream};
+pub use python::{Graph, Stream};
+
+// Re-exported so third-party op crates (and the `pyop!` macro) can name the op
+// vocabulary without depending on `wingfoil-next` directly.
+pub use wingfoil_next::op::{Activation, Ctx, Tick};

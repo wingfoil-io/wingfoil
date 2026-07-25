@@ -28,7 +28,8 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use pyo3::prelude::*;
 use wingfoil::{RunFor, RunMode};
-use wingfoil_next::interp::Runner;
+use wingfoil_next::interp::{Builder, Runner};
+use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps};
 
 use crate::PyElement;
@@ -147,6 +148,51 @@ impl PyStream {
     /// Suppress consecutive duplicate values (emit on change only).
     pub fn distinct(&self) -> PyStream {
         self.wrap(self.stream.distinct())
+    }
+
+    /// Wire a **single-input op** onto this stream at the erased boundary — the
+    /// extensibility primitive third-party ops (and the `pyop!` macro) build
+    /// on. The op computes on its own concrete types: the input is extracted
+    /// from [`PyElement`] with `A: TryFrom<&PyElement>` and the output is boxed
+    /// back with `Out: Into<PyElement>`, so only the edges convert while the
+    /// interior stays natively typed.
+    ///
+    /// `cfg`/`state` are engine-owned (construction-time config and mutable
+    /// state); `step` is the op's `cycle`. A `TryFrom`/`step` error aborts the
+    /// run with context.
+    pub fn wire_op1<A, C, S, Out, Step>(
+        &self,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state: S,
+        mut step: Step,
+    ) -> PyStream
+    where
+        A: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        C: 'static,
+        S: 'static,
+        Out: Into<PyElement> + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let wired = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                label,
+                activation,
+                cfg,
+                state,
+                move |c, s, a: &PyElement, ctx| {
+                    let input = A::try_from(a)?;
+                    Ok(match step(c, s, &input, ctx)? {
+                        Tick::Value(v) => Tick::Value(v.into()),
+                        Tick::Silent(v) => Tick::Silent(v.into()),
+                        Tick::Quiet => Tick::Quiet,
+                    })
+                },
+            )
+        });
+        self.wrap(wired)
     }
 
     /// The stream's current value after [`PyGraph::run`].
