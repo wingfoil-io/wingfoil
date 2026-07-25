@@ -16,9 +16,15 @@
 //! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
 //!   detection) over sliding windows, behind the `augurs` feature. A pure-Rust
 //!   compute adapter (no service), so it is transform ops, not a source/sink.
+//! - [`etcd`] — a streaming key-prefix snapshot + watch source (`etcd_sub`) and
+//!   a key-value PUT sink (`EtcdSinkOps::etcd_pub`) for the etcd key-value
+//!   store, behind the `etcd` feature (built on the async `produce_async`
+//!   ergonomic).
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
 #[cfg(feature = "csv")]
 pub mod csv;
+#[cfg(feature = "etcd")]
+pub mod etcd;
 pub mod lines;

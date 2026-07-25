@@ -16,6 +16,10 @@ workspace = true
 wingfoil = { path = "../../../wingfoil" }
 wingfoil-next-macros = { path = "../wingfoil-next-macros" }
 anyhow = { workspace = true }
+# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the re-exported `burst!` macro
+# expands to `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for
+# that macro to resolve. Version mirrors the classic `wingfoil` crate.
+tinyvec = { version = "1.10.0", features = ["alloc"] }
 
 # `async` feature: the `produce_async` ergonomic source (async closure →
 # timestamped burst stream) over the channel. Optional so the core engine
@@ -48,6 +52,18 @@ augurs = { version = "0.10.2", default-features = false, features = [
     "outlier",
 ], optional = true }
 
+# `etcd` feature: streaming key-prefix snapshot + watch source and a key-value
+# PUT sink for the etcd key-value store. Built on the `async` `produce_async`
+# ergonomic (`etcd-client` is a tokio client). Versions mirror the classic
+# `wingfoil` crate's etcd adapter so the two trees don't drift. `testcontainers`
+# (used only by the integration tests) is an optional [dependencies] entry
+# because feature flags cannot gate dev-dependencies.
+etcd-client = { version = "0.18", optional = true }
+async-stream = { version = "0.3.6", optional = true }
+testcontainers = { version = "0.27", features = [
+    "blocking",
+], optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -58,6 +74,8 @@ default = []
 async = ["dep:tokio", "dep:futures"]
 csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
 augurs = ["dep:augurs"]
+etcd = ["dep:etcd-client", "dep:async-stream", "async"]
+etcd-integration-test = ["etcd", "dep:testcontainers"]
 
 [[example]]
 name = "async_source"
@@ -93,6 +111,10 @@ required-features = ["csv"]
 [[example]]
 name = "augurs_adapter"
 required-features = ["augurs"]
+
+[[example]]
+name = "etcd_adapter"
+required-features = ["etcd"]
 
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.

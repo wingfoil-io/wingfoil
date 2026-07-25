@@ -467,6 +467,21 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +
    lifecycle hooks.
+   ✅ **etcd** *(done)*: snapshot→watch source (`etcd_sub`) on `produce_async`
+   and a key-value PUT sink (`EtcdSinkOps::etcd_pub`) with leases (background
+   keepalive + revoke-on-teardown via a `Drop` guard) and the `force`
+   conditional write, behind the `etcd` feature. Parity port of the classic
+   adapter's tests as `tests/etcd_integration.rs` (testcontainers, gated on
+   `etcd-integration-test`) plus no-service tests in `tests/etcd_adapter.rs`.
+   **Deviations** (capabilities all preserved): (a) the tokio runtime is the
+   caller's — `etcd_sub`/`etcd_pub` take a `&tokio::runtime::Handle` (and
+   `etcd_sub` a `RunParams`), matching next's `produce_async` convention rather
+   than classic's hidden global runtime; (b) the sink connects eagerly at wiring
+   and returns `Result`, so a connection error surfaces before the run rather
+   than during it (classic connected lazily inside the consumer); (c) the sink
+   is the `EtcdSinkOps` trait only (classic's free `etcd_pub` fn folded into the
+   trait, per next's sink-as-trait convention). The sink drives writes with
+   `Handle::block_on`, so the graph must be driven from a non-async thread.
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
