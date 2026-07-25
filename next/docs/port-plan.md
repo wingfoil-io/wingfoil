@@ -582,25 +582,32 @@ tombstoned, not freed (classic parity). Parity tests in
 `tests/dynamic_graph.rs`.
 
 **Known parity gaps (for the cutover audit).** The runtime *behaviour* is a
-faithful twin (values + tick times match classic's oracles); what next omits so
-far is ergonomic surface, not mechanism:
+faithful twin (values + tick times match classic's oracles). The two
+dynamic-graph ergonomic gaps below are now **closed** (both were ergonomic
+surface over the existing mechanism — no engine/staging changes):
 
-- **`StreamStore` (pluggable `dynamic_group` backing store).** next's
-  `dynamic_group` hardcodes a `BTreeMap` (so `K: Ord`); classic is generic over
-  a `StreamStore` trait with `BTreeMap`/`HashMap` blanket impls. This is
-  deliberately deferred, not just unfinished. The only capability it actually
-  unlocks is a key type that is `Hash + Eq` but **not** `Ord` (the container
-  choice is otherwise near-irrelevant to cost — the per-cycle work is iterating
-  *live* members, O(members), regardless of backing store). And `HashMap`'s
-  nondeterministic iteration order is a mild footgun against backtest
-  determinism, so `BTreeMap`-only is arguably the *safer* default, not merely a
-  smaller one. Re-add the trait (a mechanical ~20-min change: one trait param +
-  two blanket impls, touching no engine/staging code) if the cutover requires
-  strict signature parity or a real non-`Ord` key appears — not speculatively.
-- **`DemuxMap` key lifecycle + `demux_it`.** next's `demux` exposes the raw
-  routing primitive (`route(value) -> slot` + overflow); classic's
-  auto-assigning/`Close`-releasing `DemuxMap` and the `Burst` `demux_it` variant
-  layer on top of it and can be added without engine changes.
+- **`StreamStore` (pluggable `dynamic_group` backing store). ✅ closed.**
+  `Builder::dynamic_group_with_store` takes a caller-supplied
+  [`StreamStore`]-implementing container for the group's live members; the
+  `StreamStore` trait (one value type param) has blanket impls for `BTreeMap`
+  (`K: Ord`) and `HashMap` (`K: Hash + Eq`). `dynamic_group` is unchanged — it
+  delegates with a `BTreeMap`, still the default (deterministic iteration is the
+  safer backtest default). The added capability is a `Hash + Eq` key that is not
+  `Ord`; the container is otherwise irrelevant to cost (per-cycle work iterates
+  *live* members, O(members), regardless of backing store). Parity test:
+  `dynamic_group_with_store_supports_non_ord_hashmap_key` in
+  `tests/dynamic_graph.rs`.
+- **`DemuxMap` key lifecycle + `demux_it`. ✅ closed.** `Builder::demux` stays
+  the raw routing primitive (`route(value) -> slot` + overflow). Layered on top
+  of it (no engine changes): `Builder::demux_map` (twin of classic
+  `StreamOperators::demux`) adds the auto-assigning / `Close`-releasing
+  `DemuxMap` key lifecycle over a single value, and `Builder::demux_it` (twin of
+  classic `demux_it`) routes each item of an iterable source value to its keyed
+  child, each selected child re-emitting a `Burst` of exactly its items. next's
+  `DemuxMap` assigns the *lowest* free slot (a `BTreeSet` pool rather than
+  classic's `HashSet`), so slot assignment is deterministic. Parity tests:
+  `demux_map_auto_assigns_and_releases_slots` and
+  `demux_it_routes_each_item_to_a_burst_per_child`.
 
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 

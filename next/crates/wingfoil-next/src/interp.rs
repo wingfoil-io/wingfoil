@@ -3054,10 +3054,76 @@ impl Extension<'_> {
 
 /// One live per-key stream a [`dynamic_group`](Builder::dynamic_group) tracks:
 /// its output value slot and its node index (to read its per-cycle tick flag).
+///
+/// Public only so it can name the value type in a [`StreamStore`] bound on
+/// [`dynamic_group_with_store`](Builder::dynamic_group_with_store); its fields
+/// are engine internals and stay private (a store only ever moves whole
+/// `LiveStream`s around, never inspects them).
 #[cfg(feature = "dynamic-graph")]
-struct LiveStream<T> {
+pub struct LiveStream<T> {
     slot: SlotRef<T>,
     idx: usize,
+}
+
+/// Backing-store abstraction for [`dynamic_group_with_store`](Builder::dynamic_group_with_store)
+/// — the next twin of classic `StreamStore` (`nodes/dynamic_group.rs`). A
+/// `dynamic_group` keeps its live per-key members in one of these; the trait
+/// abstracts over the container so the key can be `Ord` ([`BTreeMap`]) *or*
+/// merely `Hash + Eq` ([`HashMap`]). Blanket impls cover both; implement it for
+/// any other keyed collection.
+///
+/// `BTreeMap` stays the default (via [`dynamic_group`](Builder::dynamic_group)):
+/// its deterministic iteration order is the safer backtest default, and the
+/// per-cycle cost is iterating *live* members regardless of the container.
+#[cfg(feature = "dynamic-graph")]
+pub trait StreamStore<K, V> {
+    /// Insert (or replace) the member stored under `key`.
+    fn store_insert(&mut self, key: K, value: V);
+    /// Remove and return the member stored under `key`, if any.
+    fn store_remove(&mut self, key: &K) -> Option<V>;
+    /// Iterate `(key, member)` pairs in the store's native order.
+    fn store_entries<'a>(&'a self) -> impl Iterator<Item = (&'a K, &'a V)>
+    where
+        K: 'a,
+        V: 'a;
+}
+
+#[cfg(feature = "dynamic-graph")]
+impl<K: Ord, V> StreamStore<K, V> for std::collections::BTreeMap<K, V> {
+    fn store_insert(&mut self, key: K, value: V) {
+        self.insert(key, value);
+    }
+
+    fn store_remove(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+
+    fn store_entries<'a>(&'a self) -> impl Iterator<Item = (&'a K, &'a V)>
+    where
+        K: 'a,
+        V: 'a,
+    {
+        self.iter()
+    }
+}
+
+#[cfg(feature = "dynamic-graph")]
+impl<K: std::hash::Hash + Eq, V> StreamStore<K, V> for std::collections::HashMap<K, V> {
+    fn store_insert(&mut self, key: K, value: V) {
+        self.insert(key, value);
+    }
+
+    fn store_remove(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+
+    fn store_entries<'a>(&'a self) -> impl Iterator<Item = (&'a K, &'a V)>
+    where
+        K: 'a,
+        V: 'a,
+    {
+        self.iter()
+    }
 }
 
 #[cfg(feature = "dynamic-graph")]
@@ -3078,9 +3144,11 @@ impl Builder {
     ///   current values — the fresh-read guarantee dynamic groups depend on.
     ///
     /// Runs under [`Runner::run_dynamic`] (its boundary is where the staged
-    /// insert/remove mutations apply). The store is a `BTreeMap`, so `K: Ord`;
-    /// the pluggable-`StreamStore` backends of classic are a deliberate
-    /// ergonomic omission, not a semantic one.
+    /// insert/remove mutations apply). The live members are held in a
+    /// `BTreeMap` (so `K: Ord`); use
+    /// [`dynamic_group_with_store`](Self::dynamic_group_with_store) to back them
+    /// with a `HashMap` (or any [`StreamStore`]) for a `Hash + Eq` key that is
+    /// not `Ord`.
     #[allow(clippy::too_many_arguments)]
     pub fn dynamic_group<K, T, V, Factory, OnTick, OnRemove>(
         &mut self,
@@ -3099,6 +3167,49 @@ impl Builder {
         OnTick: Fn(&mut V, &K, &T) + 'static,
         OnRemove: Fn(&mut V, &K) + 'static,
     {
+        self.dynamic_group_with_store(
+            add,
+            del,
+            factory,
+            std::collections::BTreeMap::new(),
+            init,
+            on_tick,
+            on_remove,
+        )
+    }
+
+    /// Like [`dynamic_group`](Self::dynamic_group) but with the live members
+    /// held in a caller-supplied [`StreamStore`] — the next twin of classic
+    /// `dynamic_group_stream_with_store`. Pass a `HashMap::new()` to key the
+    /// group by a `Hash + Eq` type that is not `Ord`:
+    ///
+    /// ```ignore
+    /// b.dynamic_group_with_store(
+    ///     add, del, factory,
+    ///     std::collections::HashMap::new(), // Hash + Eq key, no Ord needed
+    ///     init, on_tick, on_remove,
+    /// );
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn dynamic_group_with_store<K, T, V, S, Factory, OnTick, OnRemove>(
+        &mut self,
+        add: Handle<K>,
+        del: Handle<K>,
+        factory: Factory,
+        store: S,
+        init: V,
+        on_tick: OnTick,
+        on_remove: OnRemove,
+    ) -> Handle<V>
+    where
+        K: Clone + Default + 'static,
+        T: Clone + Default + 'static,
+        V: Clone + Default + 'static,
+        S: StreamStore<K, LiveStream<T>> + 'static,
+        Factory: Fn(&mut Extension<'_>, K) -> Handle<T> + 'static,
+        OnTick: Fn(&mut V, &K, &T) + 'static,
+        OnRemove: Fn(&mut V, &K) + 'static,
+    {
         let idx = self.nodes.len();
         let add_slot = self.slot(add);
         let del_slot = self.slot(del);
@@ -3107,8 +3218,7 @@ impl Builder {
         let pending = self.pending.clone();
         let (add_idx, del_idx) = (add.idx, del.idx);
 
-        let store: Rc<RefCell<std::collections::BTreeMap<K, LiveStream<T>>>> =
-            Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+        let store: Rc<RefCell<S>> = Rc::new(RefCell::new(store));
         let factory = Rc::new(factory);
         let mut value = init;
 
@@ -3134,7 +3244,7 @@ impl Builder {
                         let slot = ext.runner.rt_slot(h);
                         let caller = ext.runner.rt_make_handle::<V>(idx);
                         ext.add_upstream(caller, h, true, true);
-                        store_ins.borrow_mut().insert(
+                        store_ins.borrow_mut().store_insert(
                             key,
                             LiveStream {
                                 slot,
@@ -3150,7 +3260,7 @@ impl Builder {
             if del_t {
                 let key: K = del_slot.borrow().clone();
                 on_remove(&mut value, &key);
-                let removed = store.borrow_mut().remove(&key);
+                let removed = store.borrow_mut().store_remove(&key);
                 if let Some(live) = removed {
                     pending.borrow_mut().push(Box::new(
                         move |runner: &mut Runner, kernel: &mut Kernel| {
@@ -3166,7 +3276,7 @@ impl Builder {
             {
                 let t = ticked.borrow();
                 let members = store.borrow();
-                for (key, live) in members.iter() {
+                for (key, live) in members.store_entries() {
                     if t[live.idx] {
                         let v = live.slot.borrow().clone();
                         on_tick(&mut value, key, &v);
@@ -3197,10 +3307,12 @@ impl Builder {
     /// re-emits the source's current value; the others stay quiet. No nodes are
     /// added or removed — the graph shape is fixed, only the tick is routed.
     ///
-    /// Returns `(children, overflow)`. Unlike classic's `DemuxMap`, key→slot
-    /// assignment and slot release (`DemuxEvent::Close`) are the caller's
-    /// concern here (a deliberately thinner surface over the routing primitive);
-    /// classic's auto-assigning map is a convenience that can layer on top.
+    /// Returns `(children, overflow)`. This is the raw routing primitive:
+    /// key→slot assignment and slot release are the caller's concern. For
+    /// classic's auto-assigning / `Close`-releasing key lifecycle, use
+    /// [`demux_map`](Self::demux_map) (single value) or
+    /// [`demux_it`](Self::demux_it) (a `Burst` per child), which layer a
+    /// [`DemuxMap`] on top of this primitive.
     pub fn demux<T, F>(
         &mut self,
         source: Handle<T>,
@@ -3270,5 +3382,217 @@ impl Builder {
             }
         }
         (children, overflow.expect("overflow child built"))
+    }
+
+    /// Auto-assigning demux — the next twin of classic `demux`
+    /// (`StreamOperators::demux`). Layers a [`DemuxMap`] key lifecycle over the
+    /// raw [`demux`](Self::demux) primitive: each cycle `func(value)` yields a
+    /// key and a [`DemuxEvent`]; the map hands each *new* key a free slot from a
+    /// pool of `capacity`, and [`DemuxEvent::Close`] routes to the key's current
+    /// slot and then releases it back to the pool. Keys arriving with no slot
+    /// free route to the overflow child.
+    ///
+    /// Returns `(children, overflow)` exactly like [`demux`](Self::demux); the
+    /// only added behaviour is the automatic slot bookkeeping.
+    pub fn demux_map<T, K, F>(
+        &mut self,
+        source: Handle<T>,
+        capacity: usize,
+        func: F,
+    ) -> (Vec<Handle<T>>, Handle<T>)
+    where
+        T: Clone + Default + 'static,
+        K: std::hash::Hash + Eq + 'static,
+        F: Fn(&T) -> (K, DemuxEvent) + 'static,
+    {
+        let map = DemuxMap::new(capacity);
+        // `route` returns `capacity` (== size) for overflow, which the raw
+        // `demux` primitive maps to the overflow child.
+        let route = move |v: &T| {
+            let (key, event) = func(v);
+            let slot = match event {
+                DemuxEvent::Close => map.release(&key),
+                DemuxEvent::None => map.get_or_insert(key),
+            };
+            slot.unwrap_or(capacity)
+        };
+        self.demux(source, capacity, route)
+    }
+
+    /// Iterable demux — the next twin of classic `demux_it`
+    /// (`StreamOperators::demux_it`). Where [`demux_map`](Self::demux_map) routes
+    /// one value to one child, this routes *each item* of an iterable source
+    /// value to its keyed child, and every selected child re-emits a
+    /// [`Burst`] of exactly the items routed to it this cycle. Unselected
+    /// children stay quiet. Same [`DemuxMap`] key lifecycle as
+    /// [`demux_map`](Self::demux_map).
+    ///
+    /// Built on the same same-cycle mark-dirty primitive as
+    /// [`demux`](Self::demux) (no engine changes): the parent clears one
+    /// `Burst` slot per child, accumulates each item into its slot's burst, and
+    /// marks that child dirty; each child reads its own burst slice.
+    pub fn demux_it<I, T, K, F>(
+        &mut self,
+        source: Handle<I>,
+        capacity: usize,
+        func: F,
+    ) -> (Vec<Handle<Burst<T>>>, Handle<Burst<T>>)
+    where
+        I: IntoIterator<Item = T> + Clone + Default + 'static,
+        T: Clone + Default + 'static,
+        K: std::hash::Hash + Eq + 'static,
+        F: Fn(&T) -> (K, DemuxEvent) + 'static,
+    {
+        self.has_marks = true;
+        let source_slot = self.slot(source);
+        let map = DemuxMap::new(capacity);
+
+        // Parent: publishes one `Burst` per child (capacity children + 1
+        // overflow), routes each source item into its slot's burst, and marks
+        // that child. It never ticks itself (`Ok(false)`).
+        let parent_idx = self.nodes.len();
+        let parent_out = self.new_slot(vec![Burst::<T>::new(); capacity + 1]);
+        let child_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let marks = self.marks.clone();
+        let idxs_cycle = child_indices.clone();
+        let publish = parent_out.clone();
+        let cycle: CycleFn = Box::new(move |_k| {
+            let items = source_slot.borrow().clone();
+            let mut rows = publish.borrow_mut();
+            for row in rows.iter_mut() {
+                row.clear();
+            }
+            for item in items {
+                let (key, event) = func(&item);
+                let slot = match event {
+                    DemuxEvent::Close => map.release(&key),
+                    DemuxEvent::None => map.get_or_insert(key),
+                }
+                .unwrap_or(capacity); // overflow slot == capacity (last row)
+                rows[slot].push(item);
+                let target = idxs_cycle.borrow()[slot];
+                marks.borrow_mut().push(target);
+            }
+            Ok(false)
+        });
+        self.push_node(
+            vec![source.idx],
+            Activation::NONE,
+            "demux_it",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+
+        // `capacity` children + 1 overflow; each reads its own burst slice from
+        // the parent's published vec (passive, so it drains after the mark) and
+        // fires only when the parent marked it.
+        let mut children = Vec::with_capacity(capacity);
+        let mut overflow = None;
+        for slot in 0..=capacity {
+            let child_idx = self.nodes.len();
+            let read = parent_out.clone();
+            let out = self.new_slot(Burst::<T>::new());
+            let cycle: CycleFn = Box::new(move |_k| {
+                let v = read.borrow()[slot].clone();
+                *out.borrow_mut() = v;
+                Ok(true)
+            });
+            self.push_node(
+                Vec::new(),
+                Activation::NONE,
+                "demux_it_child",
+                cycle,
+                Box::new(|_| Ok(())),
+            );
+            self.set_passive_ups(child_idx, vec![parent_idx]);
+            child_indices.borrow_mut().push(child_idx);
+            let handle = self.make_handle::<Burst<T>>(child_idx);
+            if slot < capacity {
+                children.push(handle);
+            } else {
+                overflow = Some(handle);
+            }
+        }
+        (children, overflow.expect("overflow child built"))
+    }
+}
+
+/// Signals, for a demuxed value, whether it opens/continues a key's slot or
+/// releases it. The next twin of classic `DemuxEvent` (`nodes/demux.rs`), used
+/// by [`Builder::demux_map`] and [`Builder::demux_it`].
+#[cfg(feature = "dynamic-graph")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DemuxEvent {
+    /// Route to the key's slot, assigning a free slot if the key is new.
+    None,
+    /// Route to the key's current slot, then release it back to the pool.
+    Close,
+}
+
+/// Auto-assigning key→slot map backing [`Builder::demux_map`] /
+/// [`Builder::demux_it`] — the next twin of classic `DemuxMap`
+/// (`nodes/demux.rs`). Hands each new key a free slot from a pool of `capacity`;
+/// [`DemuxEvent::Close`] frees a key's slot again. A key that arrives with no
+/// slot free is pinned to overflow until it is released.
+#[cfg(feature = "dynamic-graph")]
+struct DemuxMap<K: std::hash::Hash + Eq> {
+    inner: RefCell<DemuxMapInner<K>>,
+}
+
+#[cfg(feature = "dynamic-graph")]
+struct DemuxMapInner<K: std::hash::Hash + Eq> {
+    /// Slots `0..capacity` not currently assigned to a key. A `BTreeSet` (not
+    /// classic's `HashSet`) so a new key always claims the *lowest* free slot —
+    /// making slot assignment deterministic, the safer backtest default.
+    available: std::collections::BTreeSet<usize>,
+    /// Assigned keys → their slot (`None` means the key overflowed: no slot was
+    /// free when it first arrived).
+    in_use: std::collections::HashMap<K, Option<usize>>,
+}
+
+#[cfg(feature = "dynamic-graph")]
+impl<K: std::hash::Hash + Eq> DemuxMap<K> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            inner: RefCell::new(DemuxMapInner {
+                available: (0..capacity).collect(),
+                in_use: std::collections::HashMap::new(),
+            }),
+        }
+    }
+
+    /// Return the key's slot (`Some(ix)`), assigning a free one if the key is
+    /// new; `None` means overflow (already-overflowed key, or no slot free).
+    fn get_or_insert(&self, key: K) -> Option<usize> {
+        let mut m = self.inner.borrow_mut();
+        if let Some(entry) = m.in_use.get(&key) {
+            return *entry;
+        }
+        match m.available.iter().next().copied() {
+            Some(ix) => {
+                m.available.remove(&ix);
+                m.in_use.insert(key, Some(ix));
+                Some(ix)
+            }
+            None => {
+                m.in_use.insert(key, None);
+                None
+            }
+        }
+    }
+
+    /// Route the key's final value to its current slot, then free that slot back
+    /// to the pool. `None` means overflow. Releasing an unknown key routes to any
+    /// currently-free slot (classic parity) without mutating the pool.
+    fn release(&self, key: &K) -> Option<usize> {
+        let mut m = self.inner.borrow_mut();
+        match m.in_use.remove(key) {
+            Some(Some(ix)) => {
+                m.available.insert(ix);
+                Some(ix)
+            }
+            Some(None) => None,
+            None => m.available.iter().next().copied(),
+        }
     }
 }
