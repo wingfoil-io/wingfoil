@@ -20,9 +20,18 @@
 //!   a key-value PUT sink (`EtcdSinkOps::etcd_pub`) for the etcd key-value
 //!   store, behind the `etcd` feature (built on the async `produce_async`
 //!   ergonomic).
+//! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
+//!   time-sliced historical readers, behind the `cache` feature. A pure utility
+//!   (async `get`/`put`), not a source/sink op.
+//! - [`common`] — helpers shared across adapters (the out-of-window row
+//!   [`WindowFilter`](common::WindowFilter) for caller-parameterised historical
+//!   replays). Always compiled, dependency-light.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
+#[cfg(feature = "cache")]
+pub mod cache;
+pub mod common;
 #[cfg(feature = "csv")]
 pub mod csv;
 #[cfg(feature = "etcd")]
