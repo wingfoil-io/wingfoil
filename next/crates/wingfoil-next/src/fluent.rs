@@ -31,7 +31,7 @@ use wingfoil::NanoTime;
 
 use crate::Burst;
 use crate::channel::ChannelSender;
-use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner};
+use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -282,9 +282,11 @@ impl<T> Stream<T> {
     }
 
     /// The shared value slot backing this stream. Used by the `graph!`
-    /// macro's `nested` expansion to read composite inputs.
+    /// macro's `nested` expansion to read composite inputs. Returns a
+    /// [`SlotRef`] — the frozen access boundary — not the concrete cell, so the
+    /// value store can move to an arena later without changing this hook.
     #[doc(hidden)]
-    pub fn __slot(&self) -> Rc<RefCell<T>>
+    pub fn __slot(&self) -> SlotRef<T>
     where
         T: 'static,
     {

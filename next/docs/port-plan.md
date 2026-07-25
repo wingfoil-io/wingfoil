@@ -433,31 +433,42 @@ gap against classic (pending the benchmark below as the standing gate).
 
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 
-### Arena / SoA value store — deferred perf follow-on (boundary frozen)
+### Arena / SoA value store — deferred perf follow-on (boundary frozen by type)
 
-Value slots are still individual `Rc<RefCell<T>>`s. Moving them to a
-contiguous arena / structure-of-arrays store is a **pure memory/throughput
-optimisation** (semantics unchanged) that lands the "dense hot-path speed"
-number and enables the post-v1 zero-copy passthrough (a node that provably
-forwards its input aliases the upstream slot handle instead of cloning).
+**Decision: do the arena later, not now.** It's a pure perf follow-on; the
+interpreted engine is already at parity with classic (the dirty-list did that),
+and nothing correctness- or cutover-related depends on it. The critical path to
+cutover is *breadth* — catalog, adapters, facade, python — so the arena waits
+for a measured need. Two cheap de-risking steps were done now instead (below),
+so "later" stays free and evidence-driven.
 
-The rework-trap the review flagged — every `Builder` registration closure and
-every macro emission captures the concrete `Rc<RefCell<T>>` today, so a naive
-swap touches the whole ported catalog + adapters **twice** — is **resolved by
-option (b): freeze the slot API boundary now** (`interp.rs:26`). Ops touch
-slots only through `Handle<T>` + the `slot()`/`new_slot()` accessors and the
-`.borrow()`/`.borrow_mut()` access shape, so the arena becomes an internal swap
-behind those accessors and the ported catalog survives unchanged. This is no
-longer a sequencing risk — the bulk catalog/adapter port can proceed against
-the frozen boundary and the arena lands whenever the dense-path speedup is
-wanted.
+Moving the per-slot `Rc<RefCell<T>>`s to a contiguous arena / structure-of-arrays
+store is a **pure memory/throughput optimisation** (semantics unchanged) that
+lands the "dense hot-path speed" number and enables the zero-copy passthrough
+(a node that provably forwards its input aliases the upstream slot handle
+instead of cloning — see the ref/aliasing note below).
 
-⚠️ **Frozen by convention, not yet by type.** `slot()`/`new_slot()` still
-*return* `Rc<RefCell<T>>`, and closures call `.borrow_mut()` on that concrete
-type. Before starting the arena, confirm one of: (a) the accessor already
-hands out an opaque guard an arena can re-implement, or (b) a small guard
-newtype (`SlotRef<T>`) goes in first so the swap stays internal. Cheap now;
-avoids a mechanical type-swap across every capture site later.
+The rework-trap the review flagged — every `Builder` registration closure
+captures the concrete slot type, so a naive swap touches the whole ported
+catalog + adapters **twice** — is **resolved: the slot API boundary is now
+frozen by type.** ✅ `SlotRef<T>` (`interp.rs`) is the sole access boundary:
+`slot()`/`new_slot()` return it, and every registration closure reads/writes
+only through `SlotRef::borrow`/`borrow_mut`, never the concrete cell. Today it
+wraps an `Rc<RefCell<T>>`; the arena becomes an internal swap of that innards
+with **zero capture sites touched**. Audited: the macro crate never names the
+slot type (compiled uses locals), and the one other hook —
+`Stream::__slot` for `nested` islands — now returns `SlotRef<T>` too. So the
+bulk catalog/adapter port proceeds against the frozen boundary and the arena
+lands whenever a measured need appears.
+
+**Measured baseline** (`benches/store_baseline.rs`, added now): on a large
+forwarding graph (8 KiB `Vec` payload through 16 `filter` hops), the owned-`Vec`
+run is ~5× an `Rc<Vec>` run of the identical graph — i.e. the per-hop clone tax
+that slot-aliasing would remove is *large* for big-payload forwarding, so the
+arena+aliasing has real teeth there (ratio is machine-dependent; regenerate
+before deciding). The same bench's `sparse_dispatch` group is the standing gate
+for the dirty-list: `Dispatch::Sparse` runs ~8× faster than the `FullSweep`
+oracle on a graph padded with cold nodes, confirming work ∝ active, not `N`.
 
 ### Dynamic graphs (runtime add/remove) — enabler landed, feature not built
 
@@ -569,7 +580,7 @@ dynamism is an interpreted-engine capability, matching classic.
 |---|---|---|
 | Engine-owned init / evaluation-timing drift across the three emission paths | silent wrong values — the macro crate's interpreted/compiled/nested paths are the biggest drift surface; op-`cycle` semantics agree but engine-owned *seeding* and *timing* do not (fold init, closure-factory re-eval) | table-driven three-engine parity test (one micro-graph per macro-supported combinator, `interpreted == compiled == nested`); seed with the known divergences; single seed/init field per op so all three paths read one source |
 | Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; remaining: the sparse-graph benchmark as the standing gate |
-| Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — every `Builder` registration + macro emission captures `Rc<RefCell<T>>` today | ✅ **resolved: slot API boundary frozen** (option b, `interp.rs:26`) — ops go through `Handle<T>` + `slot()`/`new_slot()`, so the arena is an internal follow-on. Caveat: frozen by convention, not yet by type (accessor still returns `Rc<RefCell<T>>`) — add a `SlotRef<T>` guard first if needed (see Phase 4.5) |
+| Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — registrations capture the slot type | ✅ **resolved: boundary frozen by type.** `SlotRef<T>` (`interp.rs`) is the sole access path (`slot()`/`new_slot()` return it; ops only `borrow`/`borrow_mut`); the arena is an internal swap of its innards, zero capture sites touched. Macro uses locals; `Stream::__slot` returns `SlotRef` too |
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
@@ -593,11 +604,35 @@ dynamism is an interpreted-engine capability, matching classic.
 - **Emit-by-reference / zero-copy passthrough.** Today an op reads its
   upstreams by reference (`In<'a> = (&'a A,)`, no clone to inspect) but must
   *produce* an owned value into its own slot — a passthrough or a big-value
-  forward costs a clone (cheap only if the element is `Rc`/`Arc`). A future
-  optimisation could let a node that provably forwards its input unchanged
-  *alias* the upstream slot instead of owning a copy (or, with the Phase 4.5
-  arena, hand out a slot handle rather than a value). Purely a memory/throughput
-  win — semantics are unchanged — so it stays out of the correctness-first path.
+  forward costs a clone (cheap only if the element is `Rc`/`Arc`; `store_baseline`
+  measures the tax). A node that provably forwards its input unchanged could
+  *alias* the upstream slot instead of owning a copy. Purely a memory/throughput
+  win — semantics unchanged — so it stays off the correctness-first path.
+
+  **Shape (decided): op-declared aliasing on the frozen slot handle, *not* a
+  threaded `'cycle` lifetime.** The clean encoding is a per-op fact —
+  `Aliases(input_k)` vs `Owns` — that both engines honour identically:
+  interpreted redirects the output `SlotRef` (or arena handle) to the upstream
+  slot; compiled reuses the upstream local. The materialize/alias boundary falls
+  out correctly: structural passthroughs (`filter`/`sample`/`merge`, and
+  `fold`'s publish) alias; retainers (`delay`/`buffer`/`window`) and producers
+  (`map`) own — `map` is the case `Rc` could never have helped anyway (it's new
+  data). **Soundness rides on the single-fire guarantee**: each node writes its
+  slot once per cycle before its readers run, so a within-cycle alias can't be
+  mutated out from under a reader; the feature would be unsound in a re-fire
+  engine. The alias fact must be a property of the *op* (structurally a
+  passthrough), never inferred from a user `map` closure the engine can't see
+  into — that keeps the two engines in agreement.
+
+  The type-level alternative — a `'cycle` lifetime threaded through `Op::Out`
+  so the borrow checker enforces "can't retain a `&'cycle T`" — was considered
+  and **set aside**: it collides with the interpreted engine's `Rc<dyn Any>` /
+  `Box<dyn Fn>` erasure (neither is `'static`-free), needs GAT-over-HRTB
+  gymnastics, and — worst — an op written with a borrowing `Out<'cycle>` may not
+  be expressible identically on both engines, cracking the single-source /
+  dual-execution invariant. The op-declared form gets ~all the benefit with
+  none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
+  natural home).
 
 ## Sequencing and parallelism
 
