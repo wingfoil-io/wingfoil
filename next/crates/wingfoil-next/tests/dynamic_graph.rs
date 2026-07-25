@@ -357,3 +357,49 @@ fn dynamic_group_maintains_a_live_price_book() {
         "final price book"
     );
 }
+
+/// `demux` fixed-topology routing (twin of classic `demux`, `nodes/demux.rs`):
+/// the parent marks exactly the routed child each cycle — same-cycle, via the
+/// engine's mark-dirty primitive — and each child re-emits the source's current
+/// value only on the cycles it was selected, staying quiet otherwise. Routes a
+/// counter (1..=6) by parity: even → child 0, odd → child 1.
+#[test]
+fn demux_routes_each_value_to_its_child() {
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count().handle(); // 1, 2, …, 6
+    let (children, _overflow) = g.with_builder(|b| b.demux(n, 2, |v: &u64| (*v % 2) as usize));
+    let c0 = g.wrap(children[0]).accumulate();
+    let c1 = g.wrap(children[1]).accumulate();
+
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    // Child 0 saw the even values, child 1 the odd ones — each only on its
+    // selected cycles (accumulate collects only ticked values).
+    assert_eq!(runner.value(&c0), vec![2u64, 4, 6], "child 0 (even)");
+    assert_eq!(runner.value(&c1), vec![1u64, 3, 5], "child 1 (odd)");
+}
+
+/// `demux` overflow: a routed slot `>= size` lands on the overflow child.
+/// Routing `value - 1` with `size = 2` sends 1 → child 0, 2 → child 1, and
+/// 3, 4, 5, 6 → overflow.
+#[test]
+fn demux_routes_excess_to_overflow() {
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count().handle();
+    let (children, overflow) = g.with_builder(|b| b.demux(n, 2, |v: &u64| (*v - 1) as usize));
+    let c0 = g.wrap(children[0]).accumulate();
+    let c1 = g.wrap(children[1]).accumulate();
+    let ov = g.wrap(overflow).accumulate();
+
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    assert_eq!(runner.value(&c0), vec![1u64], "slot 0");
+    assert_eq!(runner.value(&c1), vec![2u64], "slot 1");
+    assert_eq!(
+        runner.value(&ov),
+        vec![3u64, 4, 5, 6],
+        "overflow (slots >= size)"
+    );
+}

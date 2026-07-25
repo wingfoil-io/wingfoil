@@ -101,12 +101,13 @@ today's interpreted engine.
   the highest index can be spliced beneath an existing lower-indexed caller,
   `fix_layers` lifting the caller above it. Surfaces: `Runner::run_dynamic` with
   an `Extension` scope (`map`/`fold`/`filter_value`/`add_upstream`/`remove`,
-  active/passive + `recycle`), and an in-graph `Builder::dynamic_group`
-  (classic's `dynamic_group_stream` twin) that stages insert/remove from its own
-  `cycle`. Parity tests in `tests/dynamic_graph.rs`; removed slots are
-  tombstoned, not freed (classic parity). The compiled/island interior stays
-  fixed by design, but an island can be wired dynamically into the interpreted
-  graph. See the Phase 4.5 note.
+  active/passive + `recycle`), an in-graph `Builder::dynamic_group` (classic's
+  `dynamic_group_stream` twin) that stages insert/remove from its own `cycle`,
+  and `Builder::demux` (fixed-topology dynamic *routing* on a same-cycle
+  mark-dirty primitive — no add/remove). Parity tests in
+  `tests/dynamic_graph.rs`; removed slots are tombstoned, not freed (classic
+  parity). The compiled/island interior stays fixed by design, but an island
+  can be wired dynamically into the interpreted graph. See the Phase 4.5 note.
 ¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
   deferred 4.5 arena rework can also improve on.
@@ -525,10 +526,12 @@ index)` key is what makes runtime mutation possible — a node appended at the
 highest index can be spliced beneath an existing lower-indexed caller, with
 `fix_layers` lifting the caller's layer above the new upstream (the reorder
 plain index order cannot express). Surfaces: `Runner::run_dynamic` + an
-`Extension` scope (append / active-passive splice / remove / recycle) and an
+`Extension` scope (append / active-passive splice / remove / recycle), an
 in-graph `Builder::dynamic_group` (classic's `dynamic_group_stream` twin) that
-stages insert/remove from its own `cycle`. Removed slots are tombstoned, not
-freed (classic parity). Parity tests in `tests/dynamic_graph.rs`.
+stages insert/remove from its own `cycle`, and `Builder::demux` (fixed-topology
+routing on a same-cycle mark-dirty primitive — no add/remove). Removed slots are
+tombstoned, not freed (classic parity). Parity tests in
+`tests/dynamic_graph.rs`.
 
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 

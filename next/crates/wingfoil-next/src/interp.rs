@@ -340,6 +340,16 @@ pub struct Builder {
     /// node at wiring time; empty and inert on a static graph.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     pending: Rc<RefCell<Vec<PendingMut>>>,
+    /// Same-cycle "mark this node dirty" requests from a routing node (a
+    /// [`demux`](Builder::demux) parent), drained *within* the current cycle by
+    /// the dispatch loop. Shared (`Rc`) with the routing node. Distinct from
+    /// `pending` (next-cycle structural mutation) — this is fixed-topology
+    /// dynamic *routing*: a node enqueues a chosen, already-wired downstream to
+    /// fire this cycle. `has_marks` gates the drain off the hot path.
+    marks: Rc<RefCell<Vec<usize>>>,
+    /// Set when any [`demux`](Builder::demux) node is wired, so the dispatch
+    /// loop knows to drain `marks`. Off (and the drain skipped) otherwise.
+    has_marks: bool,
 }
 
 impl Default for Builder {
@@ -358,6 +368,8 @@ impl Default for Builder {
             re_runnable: true,
             id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
             pending: Rc::new(RefCell::new(Vec::new())),
+            marks: Rc::new(RefCell::new(Vec::new())),
+            has_marks: false,
         }
     }
 }
@@ -2074,6 +2086,8 @@ impl Builder {
             passive_downs,
             removed: vec![false; n],
             pending: self.pending,
+            marks: self.marks,
+            has_marks: self.has_marks,
             seed_nodes,
             layer,
             dispatch: Dispatch::default(),
@@ -2149,6 +2163,11 @@ pub struct Runner {
     /// static graph.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     pending: Rc<RefCell<Vec<PendingMut>>>,
+    /// Same-cycle mark-dirty requests from routing nodes ([`demux`](Builder::demux)),
+    /// drained by the dispatch loop within the current cycle. See [`Builder::marks`].
+    marks: Rc<RefCell<Vec<usize>>>,
+    /// Whether any routing node exists; gates the `marks` drain off the hot path.
+    has_marks: bool,
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
@@ -2399,6 +2418,18 @@ impl Runner {
                     if !node_dirty[d] {
                         node_dirty[d] = true;
                         queue.push(Reverse((self.layer[d], d)));
+                    }
+                }
+            }
+            // Same-cycle routing: a `demux` parent marks a chosen, already-wired
+            // child (higher `(layer, index)`, so still ahead in the drain) to
+            // fire this cycle — even though the parent itself did not tick.
+            if self.has_marks {
+                let mut marks = self.marks.borrow_mut();
+                for target in marks.drain(..) {
+                    if !node_dirty[target] {
+                        node_dirty[target] = true;
+                        queue.push(Reverse((self.layer[target], target)));
                     }
                 }
             }
@@ -3150,5 +3181,89 @@ impl Builder {
             Box::new(|_| Ok(())),
         );
         self.make_handle(idx)
+    }
+
+    /// Fixed-topology dynamic *routing* — the next twin of classic `demux`
+    /// (`nodes/demux.rs`). Pre-wires `size` child streams plus one overflow
+    /// child; each cycle the parent reads `source`, calls `route(value)` for a
+    /// slot, and marks **only** the chosen child to fire this cycle (via the
+    /// engine's same-cycle mark-dirty). A slot `< size` selects that child;
+    /// anything `>= size` routes to the overflow child. The selected child
+    /// re-emits the source's current value; the others stay quiet. No nodes are
+    /// added or removed — the graph shape is fixed, only the tick is routed.
+    ///
+    /// Returns `(children, overflow)`. Unlike classic's `DemuxMap`, key→slot
+    /// assignment and slot release (`DemuxEvent::Close`) are the caller's
+    /// concern here (a deliberately thinner surface over the routing primitive);
+    /// classic's auto-assigning map is a convenience that can layer on top.
+    pub fn demux<T, F>(
+        &mut self,
+        source: Handle<T>,
+        size: usize,
+        route: F,
+    ) -> (Vec<Handle<T>>, Handle<T>)
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> usize + 'static,
+    {
+        self.has_marks = true;
+        let source_slot = self.slot(source);
+
+        // Parent: reads `source`, routes, and marks the chosen child. It never
+        // ticks itself (`Ok(false)`) — it publishes the value for the child to
+        // read and hands the tick to that one child via the mark-dirty buffer.
+        let parent_idx = self.nodes.len();
+        let parent_out = self.new_slot(T::default());
+        let child_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let marks = self.marks.clone();
+        let idxs_cycle = child_indices.clone();
+        let publish = parent_out.clone();
+        let cycle: CycleFn = Box::new(move |_k| {
+            let value = source_slot.borrow().clone();
+            *publish.borrow_mut() = value.clone();
+            let slot = route(&value).min(size); // `>= size` → overflow (last entry)
+            let target = idxs_cycle.borrow()[slot];
+            marks.borrow_mut().push(target);
+            Ok(false)
+        });
+        self.push_node(
+            vec![source.idx],
+            Activation::NONE,
+            "demux",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+
+        // `size` children + 1 overflow. Each reads the parent's published value
+        // passively (so its layer sits above the parent and it drains *after*
+        // the mark) but is never triggered by it — only the mark fires it.
+        let mut children = Vec::with_capacity(size);
+        let mut overflow = None;
+        for slot in 0..=size {
+            let child_idx = self.nodes.len();
+            let read = parent_out.clone();
+            let out = self.new_slot(T::default());
+            let cycle: CycleFn = Box::new(move |_k| {
+                let v = read.borrow().clone();
+                *out.borrow_mut() = v;
+                Ok(true)
+            });
+            self.push_node(
+                Vec::new(),
+                Activation::NONE,
+                "demux_child",
+                cycle,
+                Box::new(|_| Ok(())),
+            );
+            self.set_passive_ups(child_idx, vec![parent_idx]);
+            child_indices.borrow_mut().push(child_idx);
+            let handle = self.make_handle::<T>(child_idx);
+            if slot < size {
+                children.push(handle);
+            } else {
+                overflow = Some(handle);
+            }
+        }
+        (children, overflow.expect("overflow child built"))
     }
 }
