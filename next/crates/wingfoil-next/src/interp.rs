@@ -860,8 +860,9 @@ impl Builder {
     ) -> Handle<Burst<T>> {
         let idx = self.nodes.len();
         let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
-        let slots: Vec<Rc<RefCell<T>>> = srcs.iter().map(|h| self.slot(*h)).collect();
+        let slots: Vec<SlotRef<T>> = srcs.iter().map(|h| self.slot(*h)).collect();
         let out = self.new_slot(Burst::<T>::new());
+        let out_reset = out.clone();
         let ticked = self.ticked.clone();
         self.push_node(
             indices.clone(),
@@ -886,6 +887,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = Burst::new();
+        }));
         self.make_handle(idx)
     }
 
@@ -1478,6 +1482,7 @@ impl Builder {
         let ticked = self.ticked.clone();
         let (is, it) = (src.idx, trigger.idx);
         let cs = Self::cell(delay, DelayWithResetState::<T>::default());
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx, trigger.idx],
             DelayWithReset::<T>::ACTIVATION,
@@ -1508,6 +1513,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = DelayWithResetState::<T>::default();
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
