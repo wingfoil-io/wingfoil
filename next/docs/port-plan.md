@@ -551,6 +551,26 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
      conditional-write test aborts a single-cycle (`RunFor::Cycles(1)`) run on
      the very write that fails. Until `consume_async` can preserve that
      final-write abort, `etcd_pub` keeps its per-write `Handle::block_on` path.
+   ✅ **redis** *(done)*: Pub/Sub (`redis_sub` source + `RedisSinkOps::redis_pub`
+   sink) and Streams (`redis_stream_read` snapshot→tail source +
+   `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature.
+   Both sources ride `produce_async`; both sinks ride the shared **`consume_async`**
+   primitive (redis has no per-write conditional to abort synchronously, unlike
+   `etcd_pub`, so the off-thread sink fits — writes land in order and flush at
+   teardown). Parity port of the classic adapter's tests as
+   `tests/redis_integration.rs` (testcontainers, gated on `redis-integration-test`)
+   plus no-service tests in `tests/redis_adapter.rs`; classic example ported to
+   `examples/redis_adapter.rs`. **Deviations** (capabilities all preserved), the
+   same three as etcd: (a) the tokio runtime is the caller's (`&Handle` + a
+   `RunParams` for the sources); (b) the sinks connect eagerly at wiring and
+   return `Result`, so a connection error surfaces before the run; (c) the sinks
+   are the `RedisSinkOps` / `RedisStreamSinkOps` traits only (classic's free
+   functions + operator traits folded into one trait each). Two burst-model
+   notes: `redis_stream_read`'s snapshot rides one atomic burst (one shared
+   timestamp, as etcd) rather than classic's per-entry `NanoTime::now()`; and both
+   sources **reject `RunMode::HistoricalFrom` at wiring time** (live, unbounded,
+   wall-clock streams — Pub/Sub has no backlog, the stream tail blocks forever —
+   with no historical timeline to replay).
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —

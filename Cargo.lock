@@ -7682,6 +7682,7 @@ dependencies = [
  "etcd-client",
  "futures",
  "log",
+ "redis",
  "reqwest",
  "serde",
  "serde-aux",

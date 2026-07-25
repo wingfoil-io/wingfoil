@@ -74,6 +74,18 @@ testcontainers = { version = "0.27", features = [
     "blocking",
 ], optional = true }
 
+# `redis` feature: Pub/Sub (`SUBSCRIBE`/`PUBLISH`) and Streams
+# (`XRANGE`/`XREAD`/`XADD`) transports. Built on the `async` `produce_async`
+# source and `consume_async` sink ergonomics (`redis` is a tokio client).
+# Version + features mirror the classic `wingfoil` crate's redis adapter so the
+# two trees don't drift. Reuses the optional `async-stream` and `testcontainers`
+# entries above (testcontainers is only used by the gated integration tests).
+redis = { version = "0.27", features = [
+    "tokio-comp",
+    "aio",
+    "streams",
+], optional = true }
+
 # `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
 # `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
 # lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
@@ -102,6 +114,10 @@ cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
+# Redis Pub/Sub + Streams adapter. Built on `async` (produce_async source +
+# consume_async sink) and `async-stream` (the snapshot→tail stream! macro).
+redis = ["dep:redis", "dep:async-stream", "async"]
+redis-integration-test = ["redis", "dep:testcontainers"]
 # Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
 prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
@@ -152,6 +168,10 @@ required-features = ["augurs"]
 [[example]]
 name = "etcd_adapter"
 required-features = ["etcd"]
+
+[[example]]
+name = "redis_adapter"
+required-features = ["redis"]
 
 [[example]]
 name = "prometheus_adapter"
