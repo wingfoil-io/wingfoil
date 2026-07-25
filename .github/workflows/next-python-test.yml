@@ -1,0 +1,68 @@
+name: test.next-python
+
+on:
+  workflow_call:
+  push:
+    branches: [ "next", "main" ]
+    paths:
+      - "next/crates/wingfoil-next-python/**"
+      - "next/crates/wingfoil-next-python-macros/**"
+      - "next/crates/wingfoil-next/**"
+  pull_request:
+    branches: [ "next", "main" ]
+    paths:
+      - "next/crates/wingfoil-next-python/**"
+      - "next/crates/wingfoil-next-python-macros/**"
+      - "next/crates/wingfoil-next/**"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Next Python Interop
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        # protobuf-compiler: a transitive dep of the engine's feature graph.
+        # patchelf: maturin uses it to build the extension module on Linux.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler patchelf
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Rust tests (boundary type, object form, wire_op1 seam, #[pyop] cross-crate)
+        # Default features (extension-module OFF) so the auto-initialize
+        # embedded-interpreter unit and integration tests link libpython and run.
+        # These do not run in the rust-test leg, which is scoped to
+        # `-p wingfoil` / `-p wingfoil-next`.
+        run: cargo test -p wingfoil-next-python
+
+      - name: Build module and run pytest
+        working-directory: next/crates/wingfoil-next-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip maturin pytest
+          .venv/bin/maturin develop
+          .venv/bin/pytest -q
