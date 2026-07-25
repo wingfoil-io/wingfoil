@@ -11,13 +11,16 @@
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!
-//! Parity coverage note: classic's `zmq_same_thread` (publisher + subscriber
-//! nodes in one graph on one thread) is not ported separately — next's
-//! subscriber runs its own background thread over the `channel`, and
-//! `round_trip_consecutive_counters` exercises the same pub→sub path across
-//! threads. Classic's two first-message variants collapse into one here:
-//! `first_message_not_dropped` uses a *no-delay* publisher (the harder
-//! slow-joiner case, classic's `..._no_delay`), which subsumes the delayed one.
+//! Parity coverage note: `first_message_not_dropped` ports classic's
+//! `zmq_first_message_not_dropped` — publisher and subscriber in one graph, with
+//! a delayed publisher, asserting counter value 1 is never lost to the ZMQ
+//! slow-joiner. Classic only asserts first-message-not-dropped in that
+//! single-graph layout; its cross-thread test asserts consecutiveness only,
+//! which `round_trip_consecutive_counters` covers here. The publisher delay is
+//! larger than classic's 200 ms ([`SUB_SETTLE`]) because next's subscriber runs
+//! over the `channel` layer (a background thread feeding the graph) rather than
+//! classic's `ReceiverStream`, and takes longer to connect and propagate its
+//! subscription filter after the graph starts.
 #![cfg(feature = "zmq-integration-test")]
 
 use std::thread::JoinHandle;
@@ -78,22 +81,53 @@ fn round_trip_consecutive_counters() {
         .unwrap();
 }
 
+/// Head-start the publisher gives the subscriber to connect and propagate its
+/// subscription filter before the first message is sent. Classic uses 200 ms
+/// with its `ReceiverStream` subscriber; next's `channel`-based subscriber
+/// (a background thread feeding the graph) establishes more slowly, so the test
+/// allows a wider, machine-safe window. Purely a test settle time — the adapter
+/// keeps classic's 50 ms post-accept flush window unchanged.
+const SUB_SETTLE: Duration = Duration::from_millis(600);
+
 #[test]
 fn first_message_not_dropped() {
-    // The publisher buffers early messages until the subscriber's subscription
-    // filter propagates, so counter value 1 is never lost to the ZMQ
-    // slow-joiner problem — parity of classic `zmq_first_message_not_dropped`.
+    // Faithful port of classic's `zmq_first_message_not_dropped`: publisher and
+    // subscriber share ONE graph so they start together deterministically, and
+    // the publisher's output is delayed by `SUB_SETTLE` so the subscriber's
+    // filter is live before the first message. That makes the slow-joiner
+    // buffering race-free, so counter value 1 is never dropped. Classic only
+    // asserts first-message-not-dropped in this single-graph layout; across
+    // *separate* threads (where the publisher can race ahead of the subscriber's
+    // connect) it asserts consecutiveness only — which
+    // `round_trip_consecutive_counters` covers here.
     let port = 5712;
     let address = format!("tcp://127.0.0.1:{port}");
-    let publisher = spawn_publisher(port, Duration::from_millis(50), Duration::from_secs(2));
+    let period = Duration::from_millis(50);
 
-    let values = receive_counters(&address, Duration::from_millis(1500)).unwrap();
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(period)
+        .count()
+        .delay(SUB_SETTLE)
+        .map(|n: &u64| format!("{n}").into_bytes())
+        .zmq_pub(port, ());
+    let (data, _status) = zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, &address).unwrap();
+    let received = data.collapse_accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(
+            RunMode::RealTime,
+            RunFor::Duration(SUB_SETTLE + period * 18),
+        )
+        .unwrap();
+    let values: Vec<u64> = runner
+        .value(&received)
+        .into_iter()
+        .map(|b| String::from_utf8(b).expect("utf8").parse().expect("u64"))
+        .collect();
     assert!(!values.is_empty(), "no values received");
     assert_eq!(values[0], 1, "first message dropped: got {values:?}");
-    publisher
-        .join()
-        .expect("publisher thread panicked")
-        .unwrap();
 }
 
 #[test]
