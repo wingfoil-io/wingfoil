@@ -2018,6 +2018,7 @@ impl Builder {
         // the reorder index order alone cannot express.
         let n = self.nodes.len();
         let mut active_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut passive_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut seed_nodes: Vec<usize> = Vec::new();
         let mut layer: Vec<usize> = vec![0; n];
         for i in 0..n {
@@ -2030,8 +2031,10 @@ impl Builder {
             // but still raise the layer: a passive reader must drain after the
             // value it reads, exactly as classic counts every upstream
             // (`graph.rs:794`). Index order is topological over all edges, so
-            // `layer[u]` is already final here.
+            // `layer[u]` is already final here. `passive_downs` is the reverse,
+            // used only by a dynamic `fix_layers`.
             for &u in &self.nodes[i].passive_ups {
+                passive_downs[u].push(i);
                 lyr = lyr.max(layer[u] + 1);
             }
             layer[i] = lyr;
@@ -2051,6 +2054,7 @@ impl Builder {
             finished: self.finished,
             id: self.id,
             active_downs,
+            passive_downs,
             seed_nodes,
             layer,
             dispatch: Dispatch::default(),
@@ -2104,6 +2108,13 @@ pub struct Runner {
     /// `active_ups`). Passive edges are deliberately absent — they are read but
     /// do not propagate ticks.
     active_downs: Vec<Vec<usize>>,
+    /// `passive_downs[i]` = nodes that *passively* read `i` (reverse of
+    /// `passive_ups`). Never used for tick propagation — only so a dynamic
+    /// `fix_layers` can raise a passive reader's layer when the node it reads is
+    /// relayered (classic propagates through every downstream, active or
+    /// passive). Inert unless the graph is mutated at runtime.
+    #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
+    passive_downs: Vec<Vec<usize>>,
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
@@ -2296,56 +2307,78 @@ impl Runner {
         // waiting for the bound while a live sender clone keeps the waker
         // channel connected.
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-            // Seed the frontier: `always` ops fire unconditionally;
-            // callback-activated ops (tickers, `delay` pops, feedback source,
-            // channel replay) fire only when the kernel marked them dirty this
-            // cycle. Everything else reaches the queue by downstream
-            // propagation below.
-            for &i in &self.seed_nodes {
-                if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
-                    node_dirty[i] = true;
-                    queue.push(Reverse((self.layer[i], i)));
-                }
-            }
-            // Drain in ascending `(layer, index)` order. A node that ticks marks
-            // its active downstream neighbours (all at strictly higher layers,
-            // so still ahead in the drain) dirty — propagating the tick
-            // frontier, each node firing once after everything it reads.
-            while let Some(Reverse((_layer, i))) = queue.pop() {
-                let did = match (self.nodes[i].cycle)(kernel) {
-                    Ok(did) => did,
-                    Err(e) => {
-                        let label = self.nodes[i].label;
-                        return Some(e.context(format!("node {i} ({label}) cycle")));
-                    }
-                };
-                // `ticked[i]` must be visible to downstreams that read it
-                // (`merge` tie-break, `delay` first-value seeding) before they
-                // fire; index order guarantees every node `i` reads has already
-                // set its flag.
-                self.ticked.borrow_mut()[i] = did;
-                fired.push(i);
-                if did {
-                    for &d in &self.active_downs[i] {
-                        if !node_dirty[d] {
-                            node_dirty[d] = true;
-                            queue.push(Reverse((self.layer[d], d)));
-                        }
-                    }
-                }
-            }
-            // Reset only the nodes we touched (the queue is already drained
-            // empty), keeping the per-cycle reset sparse.
+            if let Some(e) =
+                self.drain_cycle(kernel, &dirty, &mut queue, &mut node_dirty, &mut fired)
             {
-                let mut t = self.ticked.borrow_mut();
-                for &i in &fired {
-                    t[i] = false;
-                    node_dirty[i] = false;
-                }
+                return Some(e);
             }
-            fired.clear();
             kernel.end_cycle(&mut dirty);
         }
+        None
+    }
+
+    /// Seed, drain and reset a single already-begun cycle — the body shared by
+    /// [`run_cycles_sparse`](Runner::run_cycles_sparse) and (behind
+    /// `dynamic-graph`) [`run_dynamic`](Runner::run_dynamic). `dirty` was filled
+    /// by `kernel.begin_cycle`; the scratch buffers are reused across cycles and
+    /// must be empty (`queue`, `fired`) / sized to the node count and all-false
+    /// (`node_dirty`) on entry, and are restored to that state on a clean
+    /// return. On a cycle error the buffers are left as-is (the run aborts, so
+    /// they are not reused). Returns the first cycle error, or `None`.
+    fn drain_cycle(
+        &mut self,
+        kernel: &mut Kernel,
+        dirty: &[bool],
+        queue: &mut BinaryHeap<Reverse<(usize, usize)>>,
+        node_dirty: &mut [bool],
+        fired: &mut Vec<usize>,
+    ) -> Option<anyhow::Error> {
+        // Seed the frontier: `always` ops fire unconditionally; callback-
+        // activated ops (tickers, `delay` pops, feedback source, channel replay)
+        // fire only when the kernel marked them dirty this cycle. Everything
+        // else reaches the queue by downstream propagation below.
+        for &i in &self.seed_nodes {
+            if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
+                node_dirty[i] = true;
+                queue.push(Reverse((self.layer[i], i)));
+            }
+        }
+        // Drain in ascending `(layer, index)` order. A node that ticks marks its
+        // active downstream neighbours (all at strictly higher layers, so still
+        // ahead in the drain) dirty — propagating the tick frontier, each node
+        // firing once after everything it reads.
+        while let Some(Reverse((_layer, i))) = queue.pop() {
+            let did = match (self.nodes[i].cycle)(kernel) {
+                Ok(did) => did,
+                Err(e) => {
+                    let label = self.nodes[i].label;
+                    return Some(e.context(format!("node {i} ({label}) cycle")));
+                }
+            };
+            // `ticked[i]` must be visible to downstreams that read it (`merge`
+            // tie-break, `delay` first-value seeding) before they fire; layer
+            // order guarantees every node `i` reads has already set its flag.
+            self.ticked.borrow_mut()[i] = did;
+            fired.push(i);
+            if did {
+                for &d in &self.active_downs[i] {
+                    if !node_dirty[d] {
+                        node_dirty[d] = true;
+                        queue.push(Reverse((self.layer[d], d)));
+                    }
+                }
+            }
+        }
+        // Reset only the nodes we touched (the queue is already drained empty),
+        // keeping the per-cycle reset sparse.
+        {
+            let mut t = self.ticked.borrow_mut();
+            for &i in &*fired {
+                t[i] = false;
+                node_dirty[i] = false;
+            }
+        }
+        fired.clear();
         None
     }
 
@@ -2399,5 +2432,371 @@ impl Runner {
             .expect("invariant: Handle<T> indexes a slot of type T")
             .borrow()
             .clone()
+    }
+}
+
+// ---- Runtime graph dynamism (feature `dynamic-graph`) ----------------------
+//
+// Runtime add/splice on the live interpreted graph. Built on the always-on
+// layered `(layer, index)` dispatch: because dispatch order is a `layer` key
+// (not raw node index), a new node can be appended at the end of the `nodes`
+// vec (highest index) and *spliced beneath* an existing lower-indexed caller —
+// `fix_layers` lifts the caller's layer above the new node so it still drains
+// after it, the reorder classic wingfoil does with its own `layer`/`fix_layers`
+// (`graph.rs:1149`) and index order alone cannot express.
+//
+// `run_dynamic` mirrors `run` but hands a mutation scope to a caller-supplied
+// hook at each cycle boundary — the exact point classic applies its staged
+// `pending_additions`/`pending_removals` (`graph.rs:934-939`), so a node added
+// after cycle N first fires in cycle N+1. This is the driver-thread surface;
+// the in-`cycle` node-driven path (what `DynamicGroup` needs) stages into the
+// same boundary apply and lands in a later increment.
+
+#[cfg(feature = "dynamic-graph")]
+impl Runner {
+    /// Longest-path dispatch layer of a node — the first component of the
+    /// `(layer, index)` sort key. Exposed for dynamism tests that assert
+    /// `fix_layers` re-sorted a spliced node correctly.
+    #[doc(hidden)]
+    pub fn layer_of<T>(&self, h: impl AsHandle<T>) -> usize {
+        self.layer[h.as_handle().index()]
+    }
+
+    /// Run the graph like [`run`](Runner::run), but call `between` at every
+    /// cycle boundary with a mutation scope ([`Extension`]) over the live graph
+    /// and the number of cycles completed so far. Nodes appended (or edges
+    /// spliced) through the scope take effect on the *next* cycle — classic
+    /// wingfoil's "requested in cycle N, live in N+1" contract.
+    pub fn run_dynamic<F>(
+        &mut self,
+        run_mode: RunMode,
+        run_for: RunFor,
+        mut between: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&mut Extension<'_>, u32) -> Result<()>,
+    {
+        // Source/run-mode validation, identical to `run`.
+        let realtime = matches!(run_mode, RunMode::RealTime);
+        if !realtime && self.has_external {
+            bail!(
+                "graphs with external sources require RunMode::RealTime — untimestamped \
+                 external events have no place in a deterministic historical replay (use a \
+                 channel with timestamped sends for historical)"
+            );
+        }
+        if !realtime && self.has_always {
+            bail!(
+                "graphs with poll sources require RunMode::RealTime — there is nothing to \
+                 busy-poll in a deterministic historical replay"
+            );
+        }
+        let needs_waker = self.has_external || (self.has_channel && realtime);
+        let mut kernel = if needs_waker {
+            let Some(ready) = self.ready.take() else {
+                bail!(
+                    "a Runner with realtime sources (external/poll/realtime channel) supports \
+                     only a single run — the waker/ready channel is consumed by the first run"
+                );
+            };
+            Kernel::with_ready(run_mode, run_for, ready)
+        } else {
+            Kernel::new(run_mode, run_for)
+        };
+        if self.has_always {
+            kernel.set_spin(true);
+        }
+
+        let mut first_err: Option<anyhow::Error> = None;
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.start)(&mut kernel) {
+                first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
+                break;
+            }
+        }
+
+        if first_err.is_none() {
+            // Scratch is reused across cycles and regrown as nodes are appended.
+            // `dirty` is sized to the current node count each cycle (the kernel
+            // marks due callbacks into it by index).
+            let mut queue: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+            let mut node_dirty: Vec<bool> = Vec::new();
+            let mut fired: Vec<usize> = Vec::new();
+            let mut cycles: u32 = 0;
+            loop {
+                let n = self.nodes.len();
+                if node_dirty.len() < n {
+                    node_dirty.resize(n, false);
+                }
+                let mut dirty = vec![false; n];
+                if self.finished.get() || !kernel.begin_cycle(&mut dirty) {
+                    break;
+                }
+                if let Some(e) =
+                    self.drain_cycle(&mut kernel, &dirty, &mut queue, &mut node_dirty, &mut fired)
+                {
+                    first_err = Some(e);
+                    break;
+                }
+                kernel.end_cycle(&mut dirty);
+                cycles += 1;
+                // Apply staged mutations at the boundary, matching classic's
+                // end-of-cycle `process_pending_*` (`graph.rs:934-939`).
+                let mut ext = Extension { runner: self };
+                if let Err(e) = between(&mut ext, cycles) {
+                    first_err = Some(e);
+                    break;
+                }
+            }
+        }
+
+        // Cleanup always runs; a stop/teardown error only surfaces if no
+        // earlier error already won.
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.stop)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) stop", node.label));
+                first_err.get_or_insert(e);
+            }
+        }
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.teardown)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) teardown", node.label));
+                first_err.get_or_insert(e);
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    fn rt_slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+        debug_assert_eq!(
+            h.builder_id, self.id,
+            "Handle used with a different Runner than the Builder that minted it"
+        );
+        self.slots[h.idx]
+            .clone()
+            .downcast::<RefCell<T>>()
+            .expect("invariant: Handle<T> indexes a slot of type T")
+    }
+
+    fn rt_new_slot<T: 'static>(&mut self, init: T) -> Rc<RefCell<T>> {
+        let slot = Rc::new(RefCell::new(init));
+        self.slots.push(slot.clone() as Rc<dyn Any>);
+        slot
+    }
+
+    fn rt_make_handle<T>(&self, idx: usize) -> Handle<T> {
+        Handle {
+            idx,
+            builder_id: self.id,
+            _t: PhantomData,
+        }
+    }
+
+    /// Append a node to the *live* graph, growing every parallel structure the
+    /// sparse engine keeps (`nodes`, `ticked`, `active_downs`, `passive_downs`,
+    /// `layer`, and `seed_nodes` if the node self-activates) and wiring its
+    /// reverse edges + layer. `active_ups`/`passive_ups` reference existing
+    /// (lower-index) nodes, so no existing node's order changes — pure append.
+    fn rt_append_node(
+        &mut self,
+        active_ups: Vec<usize>,
+        passive_ups: Vec<usize>,
+        activation: Activation,
+        label: &'static str,
+        cycle: CycleFn,
+        start: LifecycleFn,
+    ) -> usize {
+        let idx = self.nodes.len();
+        let mut lyr = 0usize;
+        for &u in &active_ups {
+            self.active_downs[u].push(idx);
+            lyr = lyr.max(self.layer[u] + 1);
+        }
+        for &u in &passive_ups {
+            self.passive_downs[u].push(idx);
+            lyr = lyr.max(self.layer[u] + 1);
+        }
+        self.nodes.push(NodeRt {
+            active_ups,
+            passive_ups,
+            activation,
+            label,
+            cycle,
+            start,
+            stop: Box::new(|_| Ok(())),
+            teardown: Box::new(|_| Ok(())),
+        });
+        self.ticked.borrow_mut().push(false);
+        self.active_downs.push(Vec::new());
+        self.passive_downs.push(Vec::new());
+        self.layer.push(lyr);
+        if activation.always || activation.callback_activated() {
+            self.seed_nodes.push(idx);
+        }
+        idx
+    }
+
+    /// Splice an edge from existing `new` into existing `caller`, then
+    /// re-establish layer order. An active edge (`active`) records
+    /// `caller`→`active_ups` + the reverse `active_downs[new]` so `new`'s tick
+    /// re-fires `caller`; a passive edge records `passive_ups`/`passive_downs`
+    /// only. `caller` may now depend on a *higher-indexed* `new`, so
+    /// `fix_layers` lifts its layer above `new` — the reorder only the
+    /// `(layer, index)` key can dispatch.
+    fn splice_upstream(&mut self, caller: usize, new: usize, active: bool) {
+        if active {
+            self.nodes[caller].active_ups.push(new);
+            self.active_downs[new].push(caller);
+        } else {
+            self.nodes[caller].passive_ups.push(new);
+            self.passive_downs[new].push(caller);
+        }
+        self.fix_layers(caller);
+    }
+
+    /// Recompute `start`'s layer from its upstreams (active *and* passive) and
+    /// propagate any increase to every node that reads it (active *and*
+    /// passive downstreams), iterative BFS. Port of classic's `fix_layers`
+    /// (`graph.rs:1149`): after splicing a new upstream into an existing
+    /// caller, this lifts the caller — and anything reading it — above the new
+    /// node so `(layer, index)` dispatch still drains each node after
+    /// everything it reads.
+    fn fix_layers(&mut self, start: usize) {
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        queue.push_back(start);
+        while let Some(node) = queue.pop_front() {
+            let required = self.nodes[node]
+                .active_ups
+                .iter()
+                .chain(self.nodes[node].passive_ups.iter())
+                .map(|&u| self.layer[u])
+                .max()
+                .map_or(0, |m| m + 1);
+            if required > self.layer[node] {
+                self.layer[node] = required;
+                for &d in self.active_downs[node]
+                    .iter()
+                    .chain(self.passive_downs[node].iter())
+                {
+                    queue.push_back(d);
+                }
+            }
+        }
+    }
+}
+
+/// A scoped mutation session over a *live* [`Runner`], handed to the
+/// [`run_dynamic`](Runner::run_dynamic) boundary hook. Every node appended or
+/// edge spliced here takes effect on the next cycle. Handles it mints carry the
+/// runner's `builder_id`, so cross-runner misuse stays caught.
+#[cfg(feature = "dynamic-graph")]
+pub struct Extension<'r> {
+    runner: &'r mut Runner,
+}
+
+#[cfg(feature = "dynamic-graph")]
+impl Extension<'_> {
+    /// Append a `map` of an existing `src` onto the live graph. It ticks from
+    /// the next cycle whenever `src` ticks; its value is observable via
+    /// [`Runner::value`].
+    pub fn map<A, B, F>(&mut self, src: impl AsHandle<A>, f: F) -> Handle<B>
+    where
+        A: 'static,
+        B: Clone + Default + 'static,
+        F: Fn(&A) -> B + 'static,
+    {
+        let src = src.as_handle();
+        let idx = self.runner.nodes.len();
+        let src_slot = self.runner.rt_slot(src);
+        let out = self.runner.rt_new_slot(B::default());
+        let cs = Rc::new(RefCell::new((f, ())));
+        let cycle: CycleFn = Box::new(move |k| {
+            let (cfg, state) = &mut *cs.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            let a = src_slot.borrow();
+            match crate::ops::Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                Tick::Value(v) => {
+                    drop(a);
+                    *out.borrow_mut() = v;
+                    Ok(true)
+                }
+                Tick::Silent(v) => {
+                    drop(a);
+                    *out.borrow_mut() = v;
+                    Ok(false)
+                }
+                Tick::Quiet => Ok(false),
+            }
+        });
+        self.runner.rt_append_node(
+            vec![src.idx],
+            Vec::new(),
+            crate::ops::Map::<A, B, F>::ACTIVATION,
+            "map",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+        self.runner.rt_make_handle(idx)
+    }
+
+    /// Append a `fold` of an existing `src` onto the live graph — a running
+    /// accumulator seeded with `init`, updated each time `src` ticks.
+    pub fn fold<A, B, F>(&mut self, src: impl AsHandle<A>, init: B, f: F) -> Handle<B>
+    where
+        A: 'static,
+        B: Clone + 'static,
+        F: Fn(&mut B, &A) + 'static,
+    {
+        let src = src.as_handle();
+        let idx = self.runner.nodes.len();
+        let src_slot = self.runner.rt_slot(src);
+        let out = self.runner.rt_new_slot(init.clone());
+        let cs = Rc::new(RefCell::new((f, init)));
+        let cycle: CycleFn = Box::new(move |k| {
+            let (cfg, state) = &mut *cs.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            let a = src_slot.borrow();
+            match Fold::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
+                Tick::Value(v) => {
+                    drop(a);
+                    *out.borrow_mut() = v;
+                    Ok(true)
+                }
+                Tick::Silent(v) => {
+                    drop(a);
+                    *out.borrow_mut() = v;
+                    Ok(false)
+                }
+                Tick::Quiet => Ok(false),
+            }
+        });
+        self.runner.rt_append_node(
+            vec![src.idx],
+            Vec::new(),
+            Fold::<A, B, F>::ACTIVATION,
+            "fold",
+            cycle,
+            Box::new(|_| Ok(())),
+        );
+        self.runner.rt_make_handle(idx)
+    }
+
+    /// Splice `new` in as an upstream of the existing `caller`. An `active`
+    /// edge re-fires `caller` whenever `new` ticks and lifts `caller`'s layer
+    /// above `new` (via `fix_layers`) so dispatch order stays correct even
+    /// though `caller` has the lower index; a passive edge is read-only but
+    /// still raises the layer. Takes effect next cycle.
+    pub fn add_upstream<C, N>(
+        &mut self,
+        caller: impl AsHandle<C>,
+        new: impl AsHandle<N>,
+        active: bool,
+    ) {
+        let caller = caller.as_handle();
+        let new = new.as_handle();
+        self.runner.splice_upstream(caller.idx, new.idx, active);
     }
 }
