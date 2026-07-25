@@ -2659,21 +2659,26 @@ impl Runner {
         }
     }
 
-    fn rt_slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+    // Dynamic node registration reaches the value store through the same
+    // `SlotRef` boundary as static wiring (`Builder::slot`/`new_slot`), so a
+    // future arena/SoA swap need not special-case dynamically-added slots.
+    fn rt_slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
         debug_assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Runner than the Builder that minted it"
         );
-        self.slots[h.idx]
-            .clone()
-            .downcast::<RefCell<T>>()
-            .expect("invariant: Handle<T> indexes a slot of type T")
+        SlotRef::new(
+            self.slots[h.idx]
+                .clone()
+                .downcast::<RefCell<T>>()
+                .expect("invariant: Handle<T> indexes a slot of type T"),
+        )
     }
 
-    fn rt_new_slot<T: 'static>(&mut self, init: T) -> Rc<RefCell<T>> {
-        let slot = Rc::new(RefCell::new(init));
-        self.slots.push(slot.clone() as Rc<dyn Any>);
-        slot
+    fn rt_new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
+        let cell = Rc::new(RefCell::new(init));
+        self.slots.push(cell.clone() as Rc<dyn Any>);
+        SlotRef::new(cell)
     }
 
     fn rt_make_handle<T>(&self, idx: usize) -> Handle<T> {
@@ -3051,7 +3056,7 @@ impl Extension<'_> {
 /// its output value slot and its node index (to read its per-cycle tick flag).
 #[cfg(feature = "dynamic-graph")]
 struct LiveStream<T> {
-    slot: Rc<RefCell<T>>,
+    slot: SlotRef<T>,
     idx: usize,
 }
 
