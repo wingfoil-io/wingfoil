@@ -372,16 +372,24 @@ covered by `wingfoil-next/tests/custom_op.rs`; full analysis in
 hand-written (constraint #2, unchanged).
 
 
-**Completeness test (committed, Phase 1).** A `supported_ops!()` function-like
-macro emits the single list that both the `graph!` parse-match and its
-"unsupported op" error message already consume (so they can no longer drift
-from each other). A `wingfoil-next` test then diffs that list against the
-fluent trait surface, with an explicit `"not expressible"` allowlist for the
-by-design gaps (feedback, IO-edge sources, …). This fails the build when an
-`Op` is registered on one side but not the other — the cheap guard against
-one-sided registration. (The reverse direction — a `graph!` op with no fluent
-equivalent — is already guarded by construction, since `wire()` compiles the
-wiring function verbatim.)
+**Completeness test ✅ (Phase 1) — realized as a compile-guard.** The original
+plan (a `supported_ops!()` list diffed against the fluent surface) assumed the
+`graph!` **op table / parse-match** that the forwarder refactor since *deleted*
+(see `macro-extensibility-decision.md`): `graph!` now dispatches through
+naming-convention forwarders (`__wf_op_<name>_*`), so there is no central op
+list to diff and an unknown op simply fails to resolve a forwarder. The guard
+is instead realized at **compile time** in `tests/op_completeness.rs`: a
+combinator *used inside* a `graph!` block only compiles if it has **both** a
+fluent method (the wiring fn is fluent code) **and** a forwarder (`#[op]`), so
+exercising every dual-mode combinator there is exactly the two-sided
+one-sided-registration guard, and each block additionally asserts
+`interpreted() == compiled()`. The by-design fluent-only surface (feedback, IO
+sources `external`/`channel`/`poll`, the `for_each` sink) is documented in that
+file as the explicit allowlist. Building it also **surfaced three ops that are
+currently interpreted-only for want of a forwarder** — `join_passive` /
+`try_join_passive` (passive-edge joins), `delay_with_reset`, and `with_time`
+(all hand-written builder methods, not `#[op]`); these are candidate follow-ups
+(give them `#[op]` or an equivalent forwarder), not by-design gaps.
 
 Inventory (classic `nodes/` → target), grouped by effort:
 
@@ -568,8 +576,8 @@ dynamism is an interpreted-engine capability, matching classic.
   interpreted `Builder` method (over `register_op1`) for single-input ops;
   labels derive from `type_name`; the `graph!`/compiled path is table-driven
   (`OpKind::info`). See **Adding an op** under Phase 2. The completeness test
-  guarding against one-sided registration is committed to Phase 1 (the
-  `supported_ops!()`-vs-fluent diff described under **Adding an op**). Still
+  guarding against one-sided registration ✅ landed in Phase 1 as a
+  compile-guard (`tests/op_completeness.rs`) — see **Adding an op**. Still
   open: extending `#[op]` coverage to more shapes; optionally generating the
   fluent method (only clean as inherent-on-`Stream`, deliberately deferred to
   keep it trait-based).
