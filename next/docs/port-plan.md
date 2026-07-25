@@ -505,6 +505,21 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    here; (b) `FileCache`'s log messages drop the classic "KDB " prefix (the
    cache is not kdb-specific in next).
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
+   ✅ *done*. The `csv` and `lines` adapters share two fluent primitives so the
+   source/sink boilerplate lives in one place: `GraphBuilder::replay_results`
+   (queue a finite `Result<(value, time)>` sequence onto a `channel` source and
+   close it — the decode-error-then-stop shape `csv_read` needs) and
+   `StreamOps::for_each_mut` (the `&mut`-writer sink, wrapping the owned resource
+   in a `RefCell` once instead of in every sink). **Deviation (B3)**: next's
+   `csv_read` reads and deserializes the whole file up front (it queues every row
+   onto the channel source before the run), whereas classic's `TryIteratorStream`
+   streams rows lazily; behaviour is identical for finite files, but next holds
+   the full row set in memory and surfaces a decode error at the start of replay
+   rather than mid-stream. `csv` also gains the single-value `CsvSinkOps for
+   Stream<T>` convenience (auto-wrapping into a one-element burst, matching
+   `etcd`); `lines` deliberately keeps its sink burst-only, because `Burst<T>`
+   *is* `Display` — a `Stream<Burst<T>>` would be indistinguishable from a
+   single-value `Stream<T: Display>`, so the same convenience is ambiguous there.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +
    lifecycle hooks.
    ✅ **etcd** *(done)*: snapshot→watch source (`etcd_sub`) on `produce_async`

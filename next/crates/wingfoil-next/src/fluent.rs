@@ -152,6 +152,44 @@ impl GraphBuilder {
         let handle = self.with_builder(|b| b.combine(&handles));
         self.wrap(handle)
     }
+
+    /// Queue a finite, non-decreasing timestamped sequence onto a
+    /// [`channel`](SourceOps::channel) source and close it, returning the
+    /// historical-replay [`Burst`] source. Row `(value, time)` is delivered on
+    /// the graph clock at `time` (records sharing a timestamp ride one atomic
+    /// burst); the sender is closed once the sequence is exhausted so the
+    /// historical receiver stops collecting.
+    ///
+    /// Rows are `Result`, so a mid-sequence error is forwarded through
+    /// [`ChannelSender::send_error`](crate::channel::ChannelSender::send_error)
+    /// — aborting the run with that error's context — and iteration stops
+    /// there. This is the shared engine of the
+    /// [`replay_lines`](crate::adapters::lines::replay_lines) /
+    /// [`csv_read`](crate::adapters::csv::csv_read) sources; `csv_read` relies
+    /// on the error-then-stop shape to surface a decode failure.
+    pub fn replay_results<T, I>(&self, rows: I) -> Stream<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+        I: IntoIterator<Item = Result<(T, NanoTime)>>,
+    {
+        let (stream, sender) = self.channel::<T>();
+        for row in rows {
+            match row {
+                Ok((value, time)) => {
+                    sender.send_at(value, time);
+                }
+                // Mirror the classic adapters: forward the producer error into
+                // the graph (it aborts the run with context) and stop queueing.
+                Err(error) => {
+                    sender.send_error(error);
+                    break;
+                }
+            }
+        }
+        // Queue the end-of-stream so the historical receiver stops collecting.
+        sender.close();
+        stream
+    }
 }
 
 /// Source constructors — the graph's entry points. An extension trait on
@@ -550,6 +588,19 @@ pub trait StreamOps<T>: Sized {
         T: 'static,
         F: Fn(&T) -> Result<()> + 'static;
 
+    /// Side-effecting sink over an owned, mutable resource opened at wiring
+    /// time — the `&mut` counterpart to [`for_each`](StreamOps::for_each).
+    /// `writer` is moved in and wrapped in a `RefCell`; `f` runs once per tick
+    /// with a `&mut W` to it, and a returned `Err` aborts the run with context.
+    /// Spares every file/socket sink the "`for_each` takes an `Fn` but my
+    /// writer needs `&mut`, so wrap it in a `RefCell`" boilerplate. Emits `()`
+    /// per tick.
+    fn for_each_mut<W, F>(&self, writer: W, f: F) -> Stream<()>
+    where
+        T: 'static,
+        W: 'static,
+        F: Fn(&mut W, &T) -> Result<()> + 'static;
+
     /// Run `f` once at teardown — after the run ends, even if a cycle aborted
     /// it. Observes this stream's last value; emits nothing.
     fn finally<F>(&self, f: F) -> Stream<()>
@@ -845,6 +896,21 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T) -> Result<()> + 'static,
     {
         self.wire(|b, h| b.for_each(h, f))
+    }
+
+    fn for_each_mut<W, F>(&self, writer: W, f: F) -> Stream<()>
+    where
+        T: 'static,
+        W: 'static,
+        F: Fn(&mut W, &T) -> Result<()> + 'static,
+    {
+        // The one place the RefCell dance lives: a sink hands in an owned `&mut`
+        // resource and a plain `Fn(&mut W, &T)`, and this wraps it for `for_each`.
+        let writer = RefCell::new(writer);
+        self.for_each(move |value: &T| {
+            let mut w = writer.borrow_mut();
+            f(&mut w, value)
+        })
     }
 
     fn finally<F>(&self, f: F) -> Stream<()>

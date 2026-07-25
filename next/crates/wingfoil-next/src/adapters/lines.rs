@@ -16,9 +16,10 @@
 //!   [`replay_lines`] / [`replay_lines_scheduled`] (deterministic historical
 //!   replay) and [`tail_lines`] (a realtime `poll`-driven tail). Each returns a
 //!   `Stream<Burst<String>>`.
-//! - **Sink** — the [`LinesSinkOps`] extension trait on
-//!   `Stream<Burst<T>>`, enabled with
-//!   `use wingfoil_next::adapters::lines::LinesSinkOps;`.
+//! - **Sink** — the [`LinesSinkOps`] extension trait on `Stream<Burst<T>>`,
+//!   enabled with `use wingfoil_next::adapters::lines::LinesSinkOps;`. (A
+//!   single-value `Stream<T>` maps first — see the trait docs for why there is
+//!   no `Stream<T>` convenience impl here.)
 //!
 //! # Historical replay (the burst model)
 //!
@@ -40,9 +41,9 @@
 //!
 //! [`LinesSinkOps::write_lines`] / [`LinesSinkOps::append_lines`] open the
 //! target file once at wiring time and return a `Stream<()>` sink built on the
-//! existing [`for_each`](crate::fluent::StreamOps::for_each) op: each cycle
-//! writes every record in the incoming burst as its own line and flushes, with
-//! any I/O error propagated through the fallible cycle (`?` + `.context`).
+//! shared [`for_each_mut`](crate::fluent::StreamOps::for_each_mut) op: each
+//! cycle writes every record in the incoming burst as its own line and flushes,
+//! with any I/O error propagated through the fallible cycle (`?` + `.context`).
 
 use std::cell::RefCell;
 use std::fmt::Display;
@@ -55,8 +56,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use wingfoil::NanoTime;
 
-use crate::Burst;
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
+use crate::{Burst, burst};
 
 /// Deterministic historical replay of a newline-delimited file, one record per
 /// successive graph instant.
@@ -65,6 +66,8 @@ use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 /// `step = 1ns`, so record `i` is delivered at time `i` and every burst holds
 /// exactly one line. Run the graph with `RunMode::HistoricalFrom(t)` where
 /// `t <= base` (e.g. `NanoTime::ZERO`).
+///
+/// # Errors
 ///
 /// Returns an error if the file cannot be opened or a line cannot be read.
 pub fn replay_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<Burst<String>>> {
@@ -81,6 +84,8 @@ pub fn replay_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<B
 /// reproducible and needs no producer thread. `base` must be at or after the
 /// run's start time (the channel receiver rejects a pre-start timestamp).
 ///
+/// # Errors
+///
 /// Returns an error if the file cannot be opened or a line cannot be read.
 pub fn replay_lines_scheduled(
     g: &GraphBuilder,
@@ -91,7 +96,7 @@ pub fn replay_lines_scheduled(
     let path = path.as_ref();
     let file = File::open(path)
         .with_context(|| format!("lines adapter: opening source file {}", path.display()))?;
-    let (stream, sender) = g.channel::<String>();
+    let mut rows = Vec::new();
     for (i, line) in BufReader::new(file).lines().enumerate() {
         let line =
             line.with_context(|| format!("lines adapter: reading line {i} of {}", path.display()))?;
@@ -107,11 +112,12 @@ pub fn replay_lines_scheduled(
                 u32::MAX
             )
         })?;
-        sender.send_at(line, base + step * tick);
+        rows.push((line, base + step * tick));
     }
-    // Queue the end-of-stream so the historical receiver stops collecting.
-    sender.close();
-    Ok(stream)
+    // Read/overflow errors surface above at wiring time (via `?`);
+    // `replay_results` queues the collected rows onto a channel source and
+    // closes it. Every row is `Ok`, so nothing is forwarded via `send_error`.
+    Ok(g.replay_results(rows.into_iter().map(Ok)))
 }
 
 /// A best-effort **realtime** tail of a newline-delimited file: a busy-poll
@@ -125,8 +131,11 @@ pub fn replay_lines_scheduled(
 /// **reassembled**: the partial bytes are held until the terminating newline
 /// arrives, then emitted whole — never in fragments and never dropped. This is
 /// a deliberately minimal tail (it does not follow rotations) — the
-/// deterministic path is [`replay_lines`]. Returns an error if the file cannot
-/// be opened.
+/// deterministic path is [`replay_lines`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
 pub fn tail_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<Burst<String>>> {
     let path = path.as_ref();
     let file = File::open(path)
@@ -139,7 +148,7 @@ pub fn tail_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<Bur
     let state = Rc::new(RefCell::new((BufReader::new(file), String::new())));
     Ok(g.poll(move || {
         let (reader, pending) = &mut *state.borrow_mut();
-        poll_line(reader, pending).map(|line| Burst::from([line]))
+        poll_line(reader, pending).map(|line| burst![line])
     }))
 }
 
@@ -170,19 +179,33 @@ fn poll_line<R: BufRead>(reader: &mut R, pending: &mut String) -> Option<String>
 ///
 /// An extension trait on `Stream<Burst<T>>` (so `use`ing it enables
 /// `stream.write_lines(path)` chaining), layered over the existing
-/// [`for_each`](crate::fluent::StreamOps::for_each) op the same way
+/// [`for_each_mut`](crate::fluent::StreamOps::for_each_mut) op the same way
 /// [`StatisticsOps`](crate::stats::StatisticsOps) layers over `wire`. Each
 /// emitted burst writes every record as its own line, then flushes; an I/O
 /// error aborts the run with context.
+///
+/// Unlike [`CsvSinkOps`](crate::adapters::csv::CsvSinkOps) and
+/// [`EtcdSinkOps`](crate::adapters::etcd::EtcdSinkOps), this trait deliberately
+/// has **no single-value `Stream<T>` convenience impl**: `Burst<T>` is itself
+/// `Display` (a `tinyvec` renders as `[a, b]`), so a `Stream<Burst<T>>` *is* a
+/// `Stream<T: Display>` — a second impl for `Stream<T>` would be ambiguous with
+/// (or silently shadow) the burst form. A single-value stream therefore maps
+/// first: `stream.map(|v| burst![v.clone()]).write_lines(path)`.
 pub trait LinesSinkOps<T> {
     /// Write each record to `path` as a line, **truncating** the file first
-    /// (created if absent). Returns the sink `Stream<()>`, or an error if the
-    /// file cannot be opened.
+    /// (created if absent). Returns the sink `Stream<()>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened.
     fn write_lines(&self, path: impl AsRef<Path>) -> Result<Stream<()>>;
 
     /// Write each record to `path` as a line, **appending** to any existing
-    /// content (created if absent). Returns the sink `Stream<()>`, or an error
-    /// if the file cannot be opened.
+    /// content (created if absent). Returns the sink `Stream<()>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened.
     fn append_lines(&self, path: impl AsRef<Path>) -> Result<Stream<()>>;
 }
 
@@ -200,8 +223,9 @@ where
 }
 
 /// Shared implementation of the two [`LinesSinkOps`] methods: open the file
-/// once (truncate for write, append for append) and wire a `for_each` sink that
-/// writes every record in each burst as a line, flushing per cycle.
+/// once (truncate for write, append for append) and wire a
+/// [`for_each_mut`](crate::fluent::StreamOps::for_each_mut) sink that writes
+/// every record in each burst as a line, flushing per cycle.
 fn sink_lines<T>(
     stream: &Stream<Burst<T>>,
     path: impl AsRef<Path>,
@@ -219,19 +243,17 @@ where
         .open(path)
         .with_context(|| format!("lines adapter: opening sink file {}", path.display()))?;
     let display = path.display().to_string();
-    // `for_each` takes an `Fn`; the `BufWriter` needs `&mut`, so it lives behind
-    // a `RefCell`.
-    let writer = RefCell::new(BufWriter::new(file));
-    Ok(stream.for_each(move |burst: &Burst<T>| {
-        let mut w = writer.borrow_mut();
-        for record in burst.iter() {
-            writeln!(w, "{record}")
-                .with_context(|| format!("lines adapter: writing to {display}"))?;
-        }
-        w.flush()
-            .with_context(|| format!("lines adapter: flushing {display}"))?;
-        Ok(())
-    }))
+    Ok(
+        stream.for_each_mut(BufWriter::new(file), move |w, burst: &Burst<T>| {
+            for record in burst.iter() {
+                writeln!(w, "{record}")
+                    .with_context(|| format!("lines adapter: writing to {display}"))?;
+            }
+            w.flush()
+                .with_context(|| format!("lines adapter: flushing {display}"))?;
+            Ok(())
+        }),
+    )
 }
 
 #[cfg(test)]

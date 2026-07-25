@@ -186,6 +186,25 @@ fn csv_round_trip_read_transform_write() {
     );
 }
 
+/// The single-value convenience impl (`CsvSinkOps for Stream<T>`) auto-wraps
+/// each value into a one-element burst, so a plain `Stream<Record>` writes
+/// without a manual `.map(|v| burst![v])`.
+#[test]
+fn single_value_stream_uses_the_convenience_sink() {
+    let path = write_tmp("sv_in.csv", "1001,1\n1002,2\n");
+    let out = write_tmp("sv_out.csv", "");
+
+    let g = GraphBuilder::new();
+    // `collapse` turns Stream<Burst<Record>> into a plain Stream<Record>.
+    let each: Stream<Record> = csv_read(&g, &path, get_time, false).unwrap().collapse();
+    let _sink = each.csv_write(&out).unwrap();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+
+    assert_eq!(output_lines(&out), vec!["1001,1001,1", "1002,1002,2"]);
+}
+
 /// A named-struct record exercises the header path: the sink writes a leading
 /// `time` column plus the record's serde field names, then one row per record.
 #[test]
