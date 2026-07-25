@@ -40,6 +40,11 @@ jobs:
     uses: ./.github/workflows/postgres-integration.yml
     secrets: inherit
 
+  postgres-next-integration:
+    name: postgres (next) Integration Tests
+    uses: ./.github/workflows/postgres-next-integration.yml
+    secrets: inherit
+
   prometheus-integration:
     name: Prometheus Integration Tests
     uses: ./.github/workflows/prometheus-integration.yml
