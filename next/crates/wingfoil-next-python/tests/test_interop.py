@@ -50,12 +50,15 @@ def test_map_callable_exception_aborts_run():
         g.run(cycles=1)
 
 
-def test_second_run_raises():
+def test_graph_reruns_and_resets():
+    # A re-runnable graph can be run repeatedly; the engine resets node state
+    # between runs, so it reproduces the same values.
     g = wf.Graph()
-    g.constant(1.0)
+    out = g.constant(2.0).map(lambda x: x + 1)
     g.run(cycles=1)
-    with pytest.raises(RuntimeError, match="more than once"):
-        g.run(cycles=1)
+    assert out.value() == 3.0
+    g.run(cycles=1)
+    assert out.value() == 3.0
 
 
 def test_native_types_round_trip():

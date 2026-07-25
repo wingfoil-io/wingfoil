@@ -25,7 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use pyo3::prelude::*;
 use wingfoil::{RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Runner};
@@ -73,25 +73,23 @@ impl PyGraph {
         self.wrap(counted.map(|n: &u64| PyElement::from(*n as i64)))
     }
 
-    /// Build and run the graph to its bound, storing the runner so retained
+    /// Run the graph to its bound, storing the runner so retained
     /// [`PyStream`]s can be read with [`PyStream::value`].
     ///
-    /// Re-running is not yet supported: the shared builder is consumed by the
-    /// first run (a second `build()` would return an empty graph). Until the
-    /// per-node reset hook lands (`next/docs/port-plan.md`, Phase 1) a second
-    /// call is a *reachable* user error, surfaced as an `Err` rather than the
-    /// builder's internal panic. The first run's runner stays in place.
+    /// The graph builds once (first run) and the runner is reused, so it may be
+    /// run **repeatedly** when re-runnable — sources + combinators + feedback,
+    /// the deterministic historical subset — each run first resetting every node
+    /// to its wiring-time state so runs are independent (engine reset hook). A
+    /// graph with single-run sources (`external`/`poll`/`channel`) errors on the
+    /// second run, surfaced from the engine.
     pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
-        if self.runner.borrow().is_some() {
-            bail!(
-                "PyGraph::run called more than once: re-running a graph is not \
-                 yet supported (the builder is consumed by the first run)"
-            );
+        let mut slot = self.runner.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(self.builder.build());
         }
-        let mut runner = self.builder.build();
-        let result = runner.run(run_mode, run_for);
-        *self.runner.borrow_mut() = Some(runner);
-        result
+        slot.as_mut()
+            .expect("runner set above")
+            .run(run_mode, run_for)
     }
 }
 
@@ -157,15 +155,16 @@ impl PyStream {
     /// back with `Out: Into<PyElement>`, so only the edges convert while the
     /// interior stays natively typed.
     ///
-    /// `cfg`/`state` are engine-owned (construction-time config and mutable
-    /// state); `step` is the op's `cycle`. A `TryFrom`/`step` error aborts the
-    /// run with context.
-    pub fn wire_op1<A, C, S, Out, Step>(
+    /// `cfg` is engine-owned construction-time config; `state_init` builds the
+    /// op's mutable state (re-invoked on a graph reset, so re-runs start clean);
+    /// `step` is the op's `cycle`. A `TryFrom`/`step` error aborts the run with
+    /// context.
+    pub fn wire_op1<A, C, S, Out, Step, SInit>(
         &self,
         label: &'static str,
         activation: Activation,
         cfg: C,
-        state: S,
+        state_init: SInit,
         mut step: Step,
     ) -> PyStream
     where
@@ -173,6 +172,7 @@ impl PyStream {
         C: 'static,
         S: 'static,
         Out: Into<PyElement> + 'static,
+        SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
         let wired = self.stream.wire(move |b: &mut Builder, h| {
@@ -181,7 +181,7 @@ impl PyStream {
                 label,
                 activation,
                 cfg,
-                state,
+                state_init,
                 move |c, s, a: &PyElement, ctx| {
                     let input = A::try_from(a)?;
                     Ok(match step(c, s, &input, ctx)? {
@@ -302,13 +302,18 @@ mod tests {
     }
 
     #[test]
-    fn second_run_is_an_error_not_a_panic() {
+    fn graph_reruns_and_resets() {
         let g = PyGraph::new();
-        let _ = g.constant(PyElement::from(1.0_f64));
+        let out = g
+            .constant(PyElement::from(2.0_f64))
+            .map(lambda("lambda x: x + 1"));
         run_cycles(&g, 1);
-        let err = g
-            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
-            .unwrap_err();
-        assert!(format!("{err}").contains("more than once"));
+        let first: f64 = (&out.value()).try_into().unwrap();
+        // Re-run: the engine resets every node to its wiring-time state, so a
+        // re-runnable graph reproduces the same values.
+        run_cycles(&g, 1);
+        let second: f64 = (&out.value()).try_into().unwrap();
+        assert_eq!(3.0, first);
+        assert_eq!(first, second);
     }
 }

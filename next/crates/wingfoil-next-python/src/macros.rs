@@ -43,11 +43,11 @@ macro_rules! pyop_fn {
             stream: pyo3::PyRef<'_, $crate::Stream>,
             $cfg: $cfg_ty,
         ) -> $crate::Stream {
-            $crate::Stream::from(stream.object().wire_op1::<$in_ty, _, _, $out_ty, _>(
+            $crate::Stream::from(stream.object().wire_op1::<$in_ty, _, _, $out_ty, _, _>(
                 stringify!($name),
                 $crate::Activation::NONE,
                 $cfg,
-                (),
+                || (),
                 $body,
             ))
         }
@@ -59,11 +59,11 @@ macro_rules! pyop_fn {
         $(#[$meta])*
         #[pyo3::pyfunction]
         fn $name(stream: pyo3::PyRef<'_, $crate::Stream>) -> $crate::Stream {
-            $crate::Stream::from(stream.object().wire_op1::<$in_ty, _, _, $out_ty, _>(
+            $crate::Stream::from(stream.object().wire_op1::<$in_ty, _, _, $out_ty, _, _>(
                 stringify!($name),
                 $crate::Activation::NONE,
                 (),
-                (),
+                || (),
                 $body,
             ))
         }

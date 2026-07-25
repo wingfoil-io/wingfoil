@@ -164,12 +164,12 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             #param
         ) -> ::wingfoil_next_python::Stream {
             ::wingfoil_next_python::Stream::from(
-                ::wingfoil_next_python::PyStream::wire_op1::<#a_ty, _, _, #out_ty, _>(
+                ::wingfoil_next_python::PyStream::wire_op1::<#a_ty, _, _, #out_ty, _, _>(
                     stream.object(),
                     #name_str,
                     <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
                     #cfg_value,
-                    (),
+                    || (),
                     |__c, __s, __a: &#a_ty, __ctx| {
                         <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
                     },

@@ -46,11 +46,11 @@ fn external_crate_can_wire_a_custom_op() {
     // the public seam — exactly what `pyop!` generates the Python glue around.
     let bumped = g
         .constant(PyElement::from(10.0_f64))
-        .wire_op1::<f64, _, _, f64, _>(
+        .wire_op1::<f64, _, _, f64, _, _>(
             "bump",
             Activation::NONE,
             5.0_f64,
-            (),
+            || (),
             |cfg: &mut f64, _state: &mut (), a: &f64, _ctx| Ok(Tick::Value(*a + *cfg)),
         );
 
@@ -69,11 +69,11 @@ fn custom_op_error_aborts_run() {
     // `counter` emits 1 on the first cycle, which is odd.
     let checked = g
         .counter(Duration::from_nanos(100))
-        .wire_op1::<i64, _, _, i64, _>(
+        .wire_op1::<i64, _, _, i64, _, _>(
             "even_only",
             Activation::NONE,
             (),
-            (),
+            || (),
             |_cfg, _state, a: &i64, _ctx| {
                 if a % 2 == 0 {
                     Ok(Tick::Value(*a))
