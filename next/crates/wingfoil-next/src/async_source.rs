@@ -10,6 +10,12 @@
 //! aborts the run. The graph source emits [`Burst<T>`](crate::Burst),
 //! never latest-wins.
 //!
+//! Its sink counterpart is [`consume_async`]: an async consumer that drains each
+//! [`Burst<T>`](crate::Burst) to a background task over a bounded channel
+//! (back-pressure + preserved write order), so networked sinks run off the
+//! single-threaded engine via [`for_each`](crate::fluent::StreamOps::for_each)
+//! instead of blocking a `cycle` on I/O.
+//!
 //! Gated behind the `async` feature (it pulls in `tokio` + `futures`); the
 //! core engine stays executor-free.
 //!
@@ -52,8 +58,10 @@
 //! ```
 
 use std::future::Future;
+use std::sync::mpsc;
 
 use futures::{SinkExt, StreamExt};
+use tokio::runtime::Handle;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
@@ -229,4 +237,206 @@ where
         }
     });
     validated
+}
+
+// ---------------------------------------------------------------------------
+// consume_async — the sink counterpart of produce_async
+// ---------------------------------------------------------------------------
+
+/// Drive a graph **sink** from an async consumer, so networked writes run off
+/// the single-threaded engine instead of blocking a `cycle` on I/O. The mirror
+/// image of [`produce_async`]: where the source hands values *from* a background
+/// task *into* the graph, this hands each burst's values *out of* the graph to a
+/// background task.
+///
+/// Returns a closure to plug into [`for_each`](crate::fluent::StreamOps::for_each):
+///
+/// ```ignore
+/// let rt = tokio::runtime::Runtime::new()?;
+/// let g = GraphBuilder::new();
+/// let sink = some_burst_stream.for_each(consume_async(rt.handle(), Some(64), |v| async move {
+///     write_somewhere(v).await // returns anyhow::Result<()>
+/// }));
+/// ```
+///
+/// # Guarantees
+///
+/// * **Order is preserved.** Every value is drained by a **single** consumer
+///   task that awaits each `run(value)` to completion before taking the next, so
+///   writes land in the exact order the graph produced them (values within a
+///   burst, and across bursts).
+/// * **Back-pressure.** `buffer_size` bounds how far the graph may run ahead of a
+///   slower sink: `Some(n)` uses a bounded channel of ~`n` and the sink closure
+///   *blocks the graph thread* on a full channel (on `handle`, exactly as
+///   [`produce_async_bounded`]'s producer blocks on a full permit channel) until
+///   the consumer drains one — so at most ~`n` values sit unwritten, memory does
+///   not grow without bound, and nothing is dropped. `None` is unbounded (a fast
+///   graph feeding a slow sink accumulates an arbitrarily large backlog). Unlike
+///   a source, back-pressure applies in **both** run modes here — the sink never
+///   collects up front, so bounding it can never deadlock.
+/// * **Errors propagate into the graph.** A write error is reported over an error
+///   channel (not a lock — the graph execution path stays lock-free) and the
+///   consumer task stops. The sink closure polls that channel on entry to each
+///   cycle and, once an error is present, [aborts the run](anyhow::bail) with
+///   context — mirroring how [`produce_async`] surfaces a producer error on the
+///   next cycle rather than mid-await. A closed data channel (the consumer having
+///   stopped after an error) is likewise turned into an aborting error on the
+///   next send.
+///
+/// # Teardown
+///
+/// The returned closure owns the sender and the consumer task's join handle; when
+/// the graph is dropped it drops the sender (so the consumer's `recv` ends) and
+/// **blocks until the consumer has drained every queued write**, so an offloaded
+/// sink is fully flushed at teardown rather than losing in-flight writes.
+///
+/// # Limitation — a final-cycle write error is not surfaced
+///
+/// Because writes run off-thread and the error is observed on a *later* cycle,
+/// an error from the writes of the **last** cycle of a bounded run has no
+/// subsequent cycle to surface it, and the teardown flush cannot turn an
+/// already-`Ok` run into an `Err` (Drop returns no `Result`). Sinks that must
+/// abort the run deterministically on the final write (e.g. etcd's `force:false`
+/// conditional under `RunFor::Cycles(1)`) therefore cannot yet migrate to this
+/// primitive — see `docs/port-plan.md`.
+///
+/// # Runtime requirement (the same `block_on` footgun as the etcd sink)
+///
+/// The sink closure and the teardown flush drive the runtime with
+/// [`Handle::block_on`] on the graph thread, so **the graph must be built, run,
+/// and dropped from a non-async thread** (`main`, a `#[test]` fn). Driving it
+/// from inside an async context makes those `block_on` calls panic.
+///
+/// Gated behind the `async` feature, like [`produce_async`].
+pub fn consume_async<T, F, Fut>(
+    handle: &Handle,
+    buffer_size: Option<usize>,
+    run: F,
+) -> impl Fn(&Burst<T>) -> anyhow::Result<()> + use<T, F, Fut>
+where
+    T: Clone + Default + Send + 'static,
+    F: FnMut(T) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    // Error channel: the consumer task reports the first write error here; the
+    // sink closure polls it (non-blocking) each cycle and aborts the run. A
+    // channel — not a lock — keeps the graph execution path lock-free.
+    let (err_tx, err_rx) = mpsc::channel::<String>();
+
+    // Bounded (back-pressure) or unbounded data channel, per `buffer_size`.
+    let (tx, mut rx) = sink_channel::<T>(buffer_size);
+
+    let mut run = run;
+    let task = handle.spawn(async move {
+        // Single consumer: await each write to completion before the next, so
+        // writes land in the order the graph produced them.
+        while let Some(item) = rx.recv().await {
+            if let Err(e) = run(item).await {
+                // Report the error, then return — dropping the receiver closes
+                // the data channel so the sink's next send fails fast too.
+                let _ = err_tx.send(format!("{e:#}"));
+                return;
+            }
+        }
+    });
+
+    let state = SinkState {
+        handle: handle.clone(),
+        tx: Some(tx),
+        task: Some(task),
+    };
+    let send_handle = handle.clone();
+    move |burst: &Burst<T>| -> anyhow::Result<()> {
+        // Surface a prior async write error before doing more work.
+        if let Ok(msg) = err_rx.try_recv() {
+            anyhow::bail!("consume_async: background sink write failed: {msg}");
+        }
+        let tx = state
+            .tx
+            .as_ref()
+            .expect("invariant: sink sender present during the run");
+        for item in burst.iter() {
+            if tx.send_blocking(&send_handle, item.clone()).is_err() {
+                // A closed data channel means the consumer task stopped, which
+                // only happens after a write error; surface it with context.
+                return match err_rx.try_recv() {
+                    Ok(msg) => Err(anyhow::anyhow!(
+                        "consume_async: background sink write failed: {msg}"
+                    )),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "consume_async: background sink task ended unexpectedly"
+                    )),
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sender half of the sink's data channel — bounded (back-pressured) or
+/// unbounded, chosen by `buffer_size`.
+enum SinkTx<T> {
+    Bounded(tokio::sync::mpsc::Sender<T>),
+    Unbounded(tokio::sync::mpsc::UnboundedSender<T>),
+}
+
+impl<T: Send + 'static> SinkTx<T> {
+    /// Hand a value to the consumer task. Bounded: block the caller (on
+    /// `handle`) until the channel has capacity (back-pressure). Unbounded:
+    /// never blocks. `Err(())` means the channel is closed (consumer stopped).
+    fn send_blocking(&self, handle: &Handle, item: T) -> Result<(), ()> {
+        match self {
+            SinkTx::Bounded(s) => handle.block_on(s.send(item)).map_err(|_| ()),
+            SinkTx::Unbounded(s) => s.send(item).map_err(|_| ()),
+        }
+    }
+}
+
+/// Receiver half of the sink's data channel.
+enum SinkRx<T> {
+    Bounded(tokio::sync::mpsc::Receiver<T>),
+    Unbounded(tokio::sync::mpsc::UnboundedReceiver<T>),
+}
+
+impl<T> SinkRx<T> {
+    async fn recv(&mut self) -> Option<T> {
+        match self {
+            SinkRx::Bounded(r) => r.recv().await,
+            SinkRx::Unbounded(r) => r.recv().await,
+        }
+    }
+}
+
+fn sink_channel<T>(buffer_size: Option<usize>) -> (SinkTx<T>, SinkRx<T>) {
+    match buffer_size {
+        // `Some(0)` would be a zero-capacity channel (a panic); treat it as 1.
+        Some(n) => {
+            let (tx, rx) = tokio::sync::mpsc::channel::<T>(n.max(1));
+            (SinkTx::Bounded(tx), SinkRx::Bounded(rx))
+        }
+        None => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<T>();
+            (SinkTx::Unbounded(tx), SinkRx::Unbounded(rx))
+        }
+    }
+}
+
+/// Owns the sink's sender and consumer-task handle so teardown can flush.
+struct SinkState<T> {
+    handle: Handle,
+    tx: Option<SinkTx<T>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl<T> Drop for SinkState<T> {
+    fn drop(&mut self) {
+        // Flush at teardown: drop the sender so the consumer task's `recv()`
+        // returns `None` and it finishes draining every queued write, then wait
+        // for the task to complete. Runs on the (non-async) graph thread, like
+        // produce_async's teardown, so `block_on` is safe here.
+        self.tx.take();
+        if let Some(task) = self.task.take() {
+            let _ = self.handle.block_on(task);
+        }
+    }
 }

@@ -441,6 +441,19 @@ values and tick times.
   classic. `tests/produce_async.rs` (deterministic historical replay,
   same-time-one-burst, mid-stream error abort) + `produce_async_feed`
   example.
+- ✅ `consume_async` ergonomic — the **sink** counterpart of `produce_async`,
+  completing the source/sink async symmetry (the classic `consume_async`),
+  gated behind `async`: `async_source::consume_async(handle, buffer_size, |v|
+  async {...})` returns a closure to plug into `for_each`. A single background
+  consumer task drains each burst so **write order is preserved**; a bounded
+  channel (`buffer_size`) applies back-pressure (the sink closure blocks the
+  graph thread on a full channel, both run modes); a write error propagates
+  into the graph over an error channel and aborts the run on the next cycle;
+  teardown flushes all queued writes. `tests/consume_async.rs` (order,
+  bounded back-pressure, error-abort). Known limitation: a write error from the
+  **last** cycle of a bounded run has no later cycle to surface it (the teardown
+  flush cannot turn an `Ok` run into `Err`), so a sink that must abort
+  deterministically on its final write cannot migrate to it yet (see etcd).
 - ✅ Classic `threading`/`async` examples re-implemented on next. `threading`
   (`examples/threading/`) offloads a producer sub-graph to a worker thread that
   feeds the main graph over the channel layer — next's take on classic
@@ -509,6 +522,20 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    is the `EtcdSinkOps` trait only (classic's free `etcd_pub` fn folded into the
    trait, per next's sink-as-trait convention). The sink drives writes with
    `Handle::block_on`, so the graph must be driven from a non-async thread.
+   - **Historical mode unsupported:** `etcd_sub` is a live, unbounded,
+     wall-clock-stamped watch with no historical timeline to replay, and the
+     historical channel path would block-collect it up front and deadlock at
+     `start`. `etcd_sub` now returns `Result` and **rejects
+     `RunMode::HistoricalFrom` at wiring time** with a clear error; run it under
+     `RunMode::RealTime`.
+   - **Follow-up — migrate `etcd_pub` to `consume_async`:** the async-sink
+     primitive `consume_async` (Phase 3, landed) exists to move `etcd_pub`'s
+     writes off the graph thread, but the migration is **deferred**:
+     `consume_async` surfaces a write error only on a later cycle (or swallows
+     it in the teardown flush), whereas `etcd_pub`'s `force: false`
+     conditional-write test aborts a single-cycle (`RunFor::Cycles(1)`) run on
+     the very write that fails. Until `consume_async` can preserve that
+     final-write abort, `etcd_pub` keeps its per-write `Handle::block_on` path.
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
