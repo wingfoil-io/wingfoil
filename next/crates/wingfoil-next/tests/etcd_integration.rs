@@ -102,7 +102,7 @@ fn test_sub_empty_snapshot_then_live_write() -> anyhow::Result<()> {
         realtime(1),
         EtcdConnection::new(&endpoint),
         "/empty/",
-    )
+    )?
     .collapse_accumulate();
 
     let endpoint_clone = endpoint.clone();
@@ -136,7 +136,7 @@ fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
         realtime(1),
         EtcdConnection::new(&endpoint),
         "/snap/",
-    )
+    )?
     .collapse_accumulate();
 
     let mut runner = g.build();
@@ -172,7 +172,7 @@ fn test_sub_live_updates() -> anyhow::Result<()> {
         realtime(1),
         EtcdConnection::new(&endpoint),
         "/live/",
-    )
+    )?
     .collapse_accumulate();
 
     let mut runner = g.build();
@@ -208,7 +208,7 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
         realtime(2),
         EtcdConnection::new(&endpoint),
         "/del/",
-    )
+    )?
     .collapse_accumulate();
 
     let mut runner = g.build();
@@ -244,7 +244,7 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
         realtime(1),
         EtcdConnection::new(&endpoint),
         "/race/",
-    )
+    )?
     .collapse_accumulate();
 
     let mut runner = g.build();
