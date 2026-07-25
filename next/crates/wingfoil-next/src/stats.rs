@@ -162,6 +162,29 @@ pub trait StatisticsOps {
     /// root of
     /// [`time_windowed_var_time_weighted`](Self::time_windowed_var_time_weighted).
     fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64>;
+
+    // ── time-weighted median (Weighting::Time) ───────────────────────────────
+    //
+    // The time-weighted twin of the median ops above: each retained sample is
+    // weighted by how long it was in effect (the Δt until its successor, read
+    // from engine time) and the median is the value at which cumulative weight
+    // crosses half the total. The newest sample carries zero weight until the
+    // next tick advances the clock, so it does not shift the median on arrival.
+    // Recompute-per-tick (the median has no cheap incremental form), ported from
+    // the classic `WindowStream::weighted_median` under `Weighting::Time`.
+
+    /// Cumulative time-weighted median over every sample seen so far (an
+    /// unbounded window) — each sample weighted by how long it was in effect.
+    /// Retains all samples, so its memory grows with the stream.
+    fn cumulative_median_time_weighted(&self) -> Stream<f64>;
+
+    /// Time-weighted median over the most recent `window` samples (a count
+    /// window), each weighted by how long it was in effect.
+    fn rolling_median_time_weighted(&self, window: usize) -> Stream<f64>;
+
+    /// Time-weighted median over a bounded time window — the samples seen in the
+    /// last `window` of graph time, each weighted by how long it was in effect.
+    fn time_windowed_median_time_weighted(&self, window: Duration) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -309,5 +332,18 @@ impl StatisticsOps for Stream<f64> {
     fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
         self.wire(move |b, h| b.time_windowed_std_time_weighted(h, window))
+    }
+
+    fn cumulative_median_time_weighted(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_median_time_weighted(h))
+    }
+
+    fn rolling_median_time_weighted(&self, window: usize) -> Stream<f64> {
+        self.wire(move |b, h| b.rolling_median_time_weighted(h, window))
+    }
+
+    fn time_windowed_median_time_weighted(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_median_time_weighted(h, window))
     }
 }
