@@ -18,8 +18,9 @@
 //! - **Source** — the free builder function [`csv_read`] on a
 //!   [`GraphBuilder`]: deterministic historical replay of a CSV file, emitting
 //!   `Stream<Burst<T>>`.
-//! - **Sink** — the [`CsvSinkOps`] extension trait on `Stream<Burst<T>>`,
-//!   enabled with `use wingfoil_next::adapters::csv::CsvSinkOps;`.
+//! - **Sink** — the [`CsvSinkOps`] extension trait on `Stream<Burst<T>>` (and,
+//!   for convenience, `Stream<T>` — each value auto-wrapped into a one-element
+//!   burst), enabled with `use wingfoil_next::adapters::csv::CsvSinkOps;`.
 //!
 //! # Historical replay (the burst model)
 //!
@@ -50,13 +51,12 @@
 //! names, via `serde_aux` introspection — a positional tuple record has no
 //! named fields, so no header is written, matching classic), and returns a
 //! `Stream<()>` sink built on
-//! [`with_time`](crate::fluent::StreamOps::with_time) then
-//! [`for_each`](crate::fluent::StreamOps::for_each): each cycle serializes every
-//! record in the incoming burst as one `(time, record)` row and flushes, with
-//! any I/O or serialization error propagated through the fallible cycle (`?` and
-//! `.context`).
+//! [`with_time`](crate::fluent::StreamOps::with_time) then the shared
+//! [`for_each_mut`](crate::fluent::StreamOps::for_each_mut): each cycle
+//! serializes every record in the incoming burst as one `(time, record)` row
+//! and flushes, with any I/O or serialization error propagated through the
+//! fallible cycle (`?` and `.context`).
 
-use std::cell::RefCell;
 use std::fs::File;
 use std::path::Path;
 
@@ -66,8 +66,8 @@ use serde::de::DeserializeOwned;
 use serde_aux::serde_introspection::serde_introspect;
 use wingfoil::NanoTime;
 
-use crate::Burst;
-use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
+use crate::fluent::{GraphBuilder, Stream, StreamOps};
+use crate::{Burst, burst};
 
 /// Deterministic historical replay of a CSV file: each record is emitted as a
 /// [`Burst<T>`] on the graph clock at `get_time(&record)`, with records sharing
@@ -105,51 +105,52 @@ where
     let file =
         File::open(path).with_context(|| format!("csv_read: failed to open {}", path.display()))?;
     let display = path.display().to_string();
-    let (stream, sender) = g.channel::<T>();
-    let mut reader = csv::ReaderBuilder::new()
+    let reader = csv::ReaderBuilder::new()
         .has_headers(has_headers)
         .from_reader(file);
-    for record in reader.deserialize::<T>() {
-        match record {
-            Ok(rec) => {
+    // Deserialize lazily into `Result<(record, time)>` rows and hand them to the
+    // shared `replay_results` engine: it queues each row via `send_at`, and — on
+    // a malformed row — forwards the error via `send_error` and stops, so the run
+    // aborts with the same context string the classic adapter uses (mirroring
+    // classic's abort-not-panic on a bad row). `into_deserialize` owns the reader
+    // so the iterator is `'static`.
+    let rows = reader.into_deserialize::<T>().map(move |record| {
+        record
+            .map(|rec| {
                 let time = get_time(&rec);
-                sender.send_at(rec, time);
-            }
-            // Mirror classic: a malformed row aborts the run rather than
-            // panicking. The channel error carries the same context string the
-            // classic adapter uses, so callers see the identical message.
-            Err(e) => {
-                sender.send_error(anyhow::Error::new(e).context(format!(
+                (rec, time)
+            })
+            .map_err(|e| {
+                anyhow::Error::new(e).context(format!(
                     "csv_read: failed to deserialize row from {display}"
-                )));
-                break;
-            }
-        }
-    }
-    // Queue the end-of-stream so the historical receiver stops collecting.
-    sender.close();
-    Ok(stream)
+                ))
+            })
+    });
+    Ok(g.replay_results(rows))
 }
 
 /// A CSV file sink — the outbound counterpart of [`csv_read`].
 ///
-/// An extension trait on `Stream<Burst<T>>` (so `use`ing it enables
-/// `stream.csv_write(path)` chaining), layered over the existing
+/// An extension trait on `Stream<Burst<T>>` — and, for convenience,
+/// `Stream<T>` (each value auto-wrapped into a one-element burst) — so `use`ing
+/// it enables `stream.csv_write(path)` chaining, layered over the existing
 /// [`with_time`](crate::fluent::StreamOps::with_time) +
-/// [`for_each`](crate::fluent::StreamOps::for_each) ops the same way
+/// [`for_each_mut`](crate::fluent::StreamOps::for_each_mut) ops the same way
 /// [`LinesSinkOps`](crate::adapters::lines::LinesSinkOps) layers over
-/// `for_each`. Each emitted burst writes every record as one `(time, record)`
-/// row — a leading `time` column carrying the graph time — then flushes; an I/O
-/// or serialization error aborts the run with context.
-///
-/// Single-value streams wrap into a one-element burst first, e.g.
-/// `stream.map(|v| burst![v.clone()]).csv_write(path)`.
+/// `for_each_mut`. Each emitted burst writes every record as one `(time,
+/// record)` row — a leading `time` column carrying the graph time — then
+/// flushes; an I/O or serialization error aborts the run with context.
 pub trait CsvSinkOps<T> {
     /// Write each record to `path` as a `(time, record)` CSV row, **truncating**
     /// the file first (created if absent). The header (a `time` column plus the
     /// record's serde field names) is written up front unless the record is a
-    /// positional tuple with no named fields. Returns the sink `Stream<()>`, or
-    /// an error if the file cannot be opened.
+    /// positional tuple with no named fields. Returns the sink `Stream<()>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened (or its header cannot be
+    /// written) at wiring time. A per-row I/O or serialization failure aborts
+    /// the run with context.
     fn csv_write(&self, path: impl AsRef<Path>) -> Result<Stream<()>>;
 }
 
@@ -166,13 +167,9 @@ where
         write_header::<T>(&mut writer)
             .with_context(|| format!("csv_write: writing header to {}", path.display()))?;
         let display = path.display().to_string();
-        // `for_each` takes an `Fn`; the `csv::Writer` needs `&mut`, so it lives
-        // behind a `RefCell`.
-        let writer = RefCell::new(writer);
         Ok(self
             .with_time()
-            .for_each(move |(time, burst): &(NanoTime, Burst<T>)| {
-                let mut w = writer.borrow_mut();
+            .for_each_mut(writer, move |w, (time, burst): &(NanoTime, Burst<T>)| {
                 for rec in burst.iter() {
                     w.serialize((*time, rec)).with_context(|| {
                         format!("csv_write: failed to serialize record to {display}")
@@ -182,6 +179,27 @@ where
                     .with_context(|| format!("csv_write: flushing {display}"))?;
                 Ok(())
             }))
+    }
+}
+
+/// Single-value convenience: a plain `Stream<T>` (not `Stream<Burst<T>>`)
+/// writes each value as one `(time, record)` row, wrapping it into a
+/// one-element burst first — so callers never wrap by hand (matching the
+/// `EtcdSinkOps for Stream<EtcdEntry>` convention).
+///
+/// This second impl is unambiguous with the `Stream<Burst<T>>` one only because
+/// `Burst<T>` (a `tinyvec`) is **not** `Serialize` in this build (the `serde`
+/// feature is off), so a `Stream<Burst<U>>` never matches this `Stream<T>` impl
+/// — the parsing counterpart of the constraint that blocks the same convenience
+/// on [`LinesSinkOps`](crate::adapters::lines::LinesSinkOps), where `Burst<T>`
+/// *is* `Display`.
+impl<T> CsvSinkOps<T> for Stream<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + 'static,
+{
+    fn csv_write(&self, path: impl AsRef<Path>) -> Result<Stream<()>> {
+        self.map(|v: &T| -> Burst<T> { burst![v.clone()] })
+            .csv_write(path)
     }
 }
 
