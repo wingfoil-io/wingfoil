@@ -471,6 +471,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `tests/statistics_time_windowed.rs`). Remaining: the time-*weighted* moment
    path (`Weighting::Time`, both cumulative and windowed).
 2. **cache**, **common** (WindowFilter) — small, pure.
+   ✅ *done*: **common** ports the always-compiled `TimeWindow`/`WindowFilter`
+   out-of-window row filter (`adapters::common`, `tests/common_adapter.rs`);
+   **cache** ports the file-backed, query-keyed, LRU-evicting result cache
+   (`CacheKey`/`CacheConfig`/`FileCache`) behind the `cache` feature
+   (`adapters::cache`, `tests/cache_adapter.rs`, classic unit tests ported
+   verbatim). **Deviations** (none behavioural): (a) the classic time-slicing
+   helpers (`compute_time_slices`/`compute_validated_time_slices`) stay with
+   their `kdb`/`postgres` readers and land in `common` when those adapters port
+   (Phase 4 items 4–5), so only the always-compiled `WindowFilter` surface is
+   here; (b) `FileCache`'s log messages drop the classic "KDB " prefix (the
+   cache is not kdb-specific in next).
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
 4. **redis, postgres, etcd** — request/response shaped; fallible cycle +
    lifecycle hooks.

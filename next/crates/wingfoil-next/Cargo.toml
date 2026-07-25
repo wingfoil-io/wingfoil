@@ -20,6 +20,9 @@ anyhow = { workspace = true }
 # expands to `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for
 # that macro to resolve. Version mirrors the classic `wingfoil` crate.
 tinyvec = { version = "1.10.0", features = ["alloc"] }
+# Used by the always-compiled `adapters::common` module (the out-of-window row
+# filter's summary warning). Version mirrors the classic `wingfoil` crate.
+log = { workspace = true }
 
 # `async` feature: the `produce_async` ergonomic source (async closure →
 # timestamped burst stream) over the channel. Optional so the core engine
@@ -38,6 +41,13 @@ tokio = { version = "1", features = [
 csv = { version = "1.4", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde-aux = { version = "4.7.0", optional = true }
+
+# `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
+# time-sliced historical readers (classic `kdb_read_cached`). Async file IO
+# (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
+# Versions mirror the classic `wingfoil` crate's kdb/cache deps.
+sha2 = { version = "0.10", optional = true }
+bincode = { version = "1.3.3", optional = true }
 
 # `augurs` feature: on-graph time-series forecasting + outlier detection. A
 # pure-Rust compute library (no external service), so — like the classic
@@ -73,6 +83,10 @@ criterion = "0.8.1"
 default = []
 async = ["dep:tokio", "dep:futures"]
 csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
+# File-backed result cache. Reuses `async` for the tokio runtime and adds
+# tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
+# (`sha2`, `bincode`, `async`, `tokio/fs`).
+cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
