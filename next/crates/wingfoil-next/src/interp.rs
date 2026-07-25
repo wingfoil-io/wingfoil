@@ -181,6 +181,15 @@ pub(crate) fn short_type_name(s: &'static str) -> &'static str {
 type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
 /// Start / stop / teardown all share this shape.
 type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
+/// A node's re-run hook: restore its engine-owned state and value slot to
+/// their **wiring-time initial values**, so a second [`Runner::run`] starts
+/// from a clean slate (the kernel is rebuilt from `t=0` each run, and each
+/// node's `start` re-seeds its schedules, so this closure need only reset
+/// per-node state — never the kernel). Takes no [`Kernel`]: reset happens
+/// *between* runs, when no kernel exists. Restoring a stored value is
+/// infallible, so unlike the other hooks it returns nothing. Defaults to a
+/// no-op (a stateless node with no persistent slot needs no reset).
+type ResetFn = Box<dyn FnMut()>;
 
 /// One node's **r**un**t**ime record: everything the engine needs to schedule
 /// and drive that node, kept in parallel `Vec`s indexed by node position (its
@@ -206,6 +215,10 @@ struct NodeRt {
     start: LifecycleFn,
     stop: LifecycleFn,
     teardown: LifecycleFn,
+    /// Re-run hook — restores this node's state + value slot to their
+    /// wiring-time initial values before a second [`Runner::run`]. See
+    /// [`ResetFn`]. Defaults to a no-op; stateful nodes overwrite it.
+    reset: ResetFn,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -289,6 +302,14 @@ pub struct Builder {
     /// `finished` flag (here one shared flag ends the run on any channel
     /// close, which is the single-channel realtime case the fix targets).
     finished: Rc<Cell<bool>>,
+    /// True while every node in the graph can restore itself for a re-run
+    /// (see [`ResetFn`]). Cleared by nodes that hold state the engine cannot
+    /// reset — `external`/`poll`/`channel` sources (their producer channels
+    /// and wakers are consumed by the first run) and `composite` islands
+    /// (their interior owns a private runtime with no reset hook). A
+    /// [`Runner`] built from such a graph is single-run; a pure historical
+    /// graph (tickers/constants + combinators + feedback) re-runs.
+    re_runnable: bool,
     /// Process-unique id (see [`NEXT_BUILDER_ID`]), stamped on every [`Handle`]
     /// this builder mints and carried into its [`Runner`], so a handle used
     /// with a *different* runner is caught by a `debug_assert`.
@@ -308,6 +329,7 @@ impl Default for Builder {
             has_always: false,
             has_channel: false,
             finished: Rc::new(Cell::new(false)),
+            re_runnable: true,
             id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
@@ -330,6 +352,8 @@ impl Builder {
         let out = self.new_slot(Burst::<T>::new());
         let (tx, rx) = std::sync::mpsc::channel::<T>();
         self.has_external = true;
+        // The producer channel + waker are consumed by the first run.
+        self.re_runnable = false;
         self.push_node(
             Vec::new(),
             Activation::THREADED,
@@ -380,6 +404,9 @@ impl Builder {
         let out = self.new_slot(Burst::<T>::new());
         let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
         self.has_channel = true;
+        // The receiver is drained (historical) or waker-driven (realtime) by
+        // the first run; a second run would see an empty channel.
+        self.re_runnable = false;
         // Shared between the cycle and start adapters: the receiver, plus the
         // time-grouped bursts the historical `start` fills.
         let cs = Self::cell(rx, VecDeque::<(NanoTime, Burst<T>)>::new());
@@ -564,8 +591,20 @@ impl Builder {
             start,
             stop: Box::new(|_| Ok(())),
             teardown: Box::new(|_| Ok(())),
+            reset: Box::new(|| {}),
         });
         self.ticked.borrow_mut().push(false);
+    }
+
+    /// Attach a re-run hook to the node most recently pushed. Called by the
+    /// registration methods right after `push_node`, so a second
+    /// [`Runner::run`] restores that node's state and value slot. See
+    /// [`ResetFn`].
+    fn set_reset(&mut self, reset: ResetFn) {
+        self.nodes
+            .last_mut()
+            .expect("invariant: set_reset called immediately after push_node")
+            .reset = reset;
     }
 
     /// Shared cfg+state cell, used by both the cycle and start adapters.
@@ -583,13 +622,18 @@ impl Builder {
     /// calls `Op::cycle`) is the only monomorphic piece, so this primitive
     /// stays free of the GAT-over-HRTB gymnastics a fully generic version would
     /// need. `label` is `type_name::<Op>()`; it is shortened for error context.
-    pub fn register_op1<A, C, S, Out, Step>(
+    ///
+    /// `state_init` is a *factory* (not a value) so the engine can re-run it
+    /// on a second [`Runner::run`], restoring the op's state to its
+    /// wiring-time initial value (see [`ResetFn`]). The `#[op]`-generated
+    /// wrapper passes `|| Default::default()`.
+    pub fn register_op1<A, C, S, Out, Step, SInit>(
         &mut self,
         src: Handle<A>,
         label: &'static str,
         activation: Activation,
         cfg: C,
-        state: S,
+        state_init: SInit,
         mut step: Step,
     ) -> Handle<Out>
     where
@@ -597,12 +641,14 @@ impl Builder {
         C: 'static,
         S: 'static,
         Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state)));
+        let cs = Rc::new(RefCell::new((cfg, state_init())));
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             activation,
@@ -627,6 +673,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out_reset.borrow_mut() = Out::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -640,14 +690,14 @@ impl Builder {
     // arguments mirror `register_op1` plus the second input handle — grouping
     // them into a struct would only move the eight names one level down.
     #[allow(clippy::too_many_arguments)]
-    pub fn register_op2<A, B, C, S, Out, Step>(
+    pub fn register_op2<A, B, C, S, Out, Step, SInit>(
         &mut self,
         a: Handle<A>,
         b: Handle<B>,
         label: &'static str,
         activation: Activation,
         cfg: C,
-        state: S,
+        state_init: SInit,
         mut step: Step,
     ) -> Handle<Out>
     where
@@ -656,13 +706,15 @@ impl Builder {
         C: 'static,
         S: 'static,
         Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
         let idx = self.nodes.len();
         let a_slot = self.slot(a);
         let b_slot = self.slot(b);
         let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state)));
+        let cs = Rc::new(RefCell::new((cfg, state_init())));
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![a.idx, b.idx],
             activation,
@@ -690,6 +742,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out_reset.borrow_mut() = Out::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -698,6 +754,7 @@ impl Builder {
         let out = self.new_slot(());
         let cs = Self::cell(period, TickerState::default());
         let cs2 = cs.clone();
+        let cs_reset = cs.clone();
         self.push_node(
             Vec::new(),
             Ticker::ACTIVATION,
@@ -723,6 +780,9 @@ impl Builder {
                 Ticker::start(cfg, state, &mut ctx)
             }),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = TickerState::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -731,6 +791,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         let cs = Self::cell(value, ());
         let cs2 = cs.clone();
+        let out_reset = out.clone();
         self.push_node(
             Vec::new(),
             Const::<T>::ACTIVATION,
@@ -756,6 +817,9 @@ impl Builder {
                 Const::<T>::start(cfg, state, &mut ctx)
             }),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -796,8 +860,9 @@ impl Builder {
     ) -> Handle<Burst<T>> {
         let idx = self.nodes.len();
         let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
-        let slots: Vec<Rc<RefCell<T>>> = srcs.iter().map(|h| self.slot(*h)).collect();
+        let slots: Vec<SlotRef<T>> = srcs.iter().map(|h| self.slot(*h)).collect();
         let out = self.new_slot(Burst::<T>::new());
+        let out_reset = out.clone();
         let ticked = self.ticked.clone();
         self.push_node(
             indices.clone(),
@@ -822,6 +887,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = Burst::new();
+        }));
         self.make_handle(idx)
     }
 
@@ -832,6 +900,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot((NanoTime::ZERO, src_slot.borrow().clone()));
+        let (src_reset, out_reset) = (src_slot.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             WithTime::<T>::ACTIVATION,
@@ -855,6 +924,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = (NanoTime::ZERO, src_reset.borrow().clone());
+        }));
         self.make_handle(idx)
     }
 
@@ -868,6 +940,7 @@ impl Builder {
         let src_slot = self.slot(src);
         let out = self.new_slot(T::default());
         let cs = Self::cell(interval, None::<NanoTime>);
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Throttle::<T>::ACTIVATION,
@@ -892,6 +965,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = None;
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -907,6 +984,7 @@ impl Builder {
         let out = self.new_slot(Vec::<T>::new());
         let cs = Self::cell(interval, WindowState::<T>::default());
         let cs2 = cs.clone();
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Window::<T>::ACTIVATION,
@@ -935,6 +1013,10 @@ impl Builder {
                 Window::<T>::start(cfg, state, &mut ctx)
             }),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = WindowState::<T>::default();
+            *out_reset.borrow_mut() = Vec::new();
+        }));
         self.make_handle(idx)
     }
 
@@ -964,6 +1046,7 @@ impl Builder {
         let c_slot = self.slot(c);
         let out = self.new_slot(D::default());
         let cs = Self::cell(f, ());
+        let out_reset = out.clone();
         let mut active = Vec::with_capacity(3);
         if a_active {
             active.push(a.idx);
@@ -1000,6 +1083,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = D::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1030,6 +1116,7 @@ impl Builder {
         let c_slot = self.slot(c);
         let out = self.new_slot(D::default());
         let cs = Self::cell(f, ());
+        let out_reset = out.clone();
         let mut active = Vec::with_capacity(3);
         if a_active {
             active.push(a.idx);
@@ -1066,6 +1153,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = D::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1078,6 +1168,7 @@ impl Builder {
         let src_slot = self.slot(src);
         let cond_slot = self.slot(condition);
         let out = self.new_slot(T::default());
+        let out_reset = out.clone();
         self.push_node(
             vec![src.idx, condition.idx],
             Filter::<T>::ACTIVATION,
@@ -1102,6 +1193,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1113,8 +1207,10 @@ impl Builder {
     {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
+        let init_reset = init.clone();
         let out = self.new_slot(init.clone());
         let cs = Self::cell(f, init);
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Fold::<A, B, F>::ACTIVATION,
@@ -1139,6 +1235,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = init_reset.clone();
+            *out_reset.borrow_mut() = init_reset.clone();
+        }));
         self.make_handle(idx)
     }
 
@@ -1151,6 +1251,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(T::default());
+        let out_reset = out.clone();
         self.push_node(
             vec![trigger.idx],
             Sample::<T>::ACTIVATION,
@@ -1174,6 +1275,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1211,6 +1315,7 @@ impl Builder {
         let b_slot = self.slot(b);
         let out = self.new_slot(C::default());
         let cs = Self::cell(f, ());
+        let out_reset = out.clone();
         let mut active = Vec::with_capacity(2);
         if a_active {
             active.push(a.idx);
@@ -1245,6 +1350,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = C::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1270,6 +1378,7 @@ impl Builder {
         let b_slot = self.slot(b);
         let out = self.new_slot(C::default());
         let cs = Self::cell(f, ());
+        let out_reset = out.clone();
         let mut active = Vec::with_capacity(2);
         if a_active {
             active.push(a.idx);
@@ -1304,6 +1413,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = C::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1319,6 +1431,7 @@ impl Builder {
         let ticked = self.ticked.clone();
         let is = src.idx;
         let cs = Self::cell(delay, DelayState::<T>::default());
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Delay::<T>::ACTIVATION,
@@ -1345,6 +1458,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = DelayState::<T>::default();
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1365,6 +1482,7 @@ impl Builder {
         let ticked = self.ticked.clone();
         let (is, it) = (src.idx, trigger.idx);
         let cs = Self::cell(delay, DelayWithResetState::<T>::default());
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx, trigger.idx],
             DelayWithReset::<T>::ACTIVATION,
@@ -1395,6 +1513,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = DelayWithResetState::<T>::default();
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1408,6 +1530,7 @@ impl Builder {
         let a_slot = self.slot(a);
         let b_slot = self.slot(b);
         let out = self.new_slot(T::default());
+        let out_reset = out.clone();
         let ticked = self.ticked.clone();
         let (ia, ib) = (a.idx, b.idx);
         self.push_node(
@@ -1440,6 +1563,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1456,6 +1582,8 @@ impl Builder {
         let out = self.new_slot(T::default());
         let cs = Self::cell(f, ());
         self.has_always = true;
+        // A busy-poll source is inherently single-run (realtime only).
+        self.re_runnable = false;
         self.push_node(
             Vec::new(),
             Poll::<T, F>::ACTIVATION,
@@ -1494,6 +1622,7 @@ impl Builder {
         let out = self.new_slot(());
         let cs = Self::cell(f, A::default());
         let cs2 = cs.clone();
+        let cs_reset = cs.clone();
         self.push_node(
             vec![src.idx],
             Finally::<A, F>::ACTIVATION,
@@ -1528,6 +1657,9 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Finally::<A, F>::teardown(cfg, state, &mut ctx)
         });
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = A::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1540,6 +1672,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         let cs = Self::cell((), Vec::<T>::new());
         let cs2 = cs.clone();
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Print::<T>::ACTIVATION,
@@ -1574,6 +1707,10 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Print::<T>::teardown(cfg, state, &mut ctx)
         });
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = Vec::new();
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1588,6 +1725,7 @@ impl Builder {
         let cs = Self::cell((), TimedState::<T>::default());
         let cs_start = cs.clone();
         let cs_stop = cs.clone();
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
         self.push_node(
             vec![src.idx],
             Timed::<T>::ACTIVATION,
@@ -1626,6 +1764,10 @@ impl Builder {
             let mut ctx = Ctx::new(k, idx);
             Timed::<T>::stop(cfg, state, &mut ctx)
         });
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = TimedState::<T>::default();
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1643,6 +1785,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         let queue: Rc<RefCell<TimeQueue<T>>> = Rc::new(RefCell::new(TimeQueue::new()));
         let q = queue.clone();
+        let (q_reset, out_reset) = (queue.clone(), out.clone());
         self.push_node(
             Vec::new(),
             Activation::SCHEDULES,
@@ -1658,6 +1801,10 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *q_reset.borrow_mut() = TimeQueue::new();
+            *out_reset.borrow_mut() = T::default();
+        }));
         (self.make_handle(idx), FeedbackSink { queue, source: idx })
     }
 
@@ -1674,6 +1821,7 @@ impl Builder {
         let out = self.new_slot(T::default());
         let queue = sink.queue.clone();
         let source = sink.source;
+        let out_reset = out.clone();
         self.push_node(
             vec![src.idx],
             Activation::NONE,
@@ -1688,6 +1836,9 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
         self.make_handle(idx)
     }
 
@@ -1712,6 +1863,10 @@ impl Builder {
     {
         let idx = self.nodes.len();
         let out = self.new_slot(T::default());
+        // A mounted island owns a private interior runtime with no reset hook,
+        // so a graph containing one is single-run for now (see the re-run note
+        // in the port plan).
+        self.re_runnable = false;
         let cell = Rc::new(RefCell::new(node));
         let cell_start = cell.clone();
         let cell_stop = cell.clone();
@@ -1815,6 +1970,8 @@ impl Builder {
             active_downs,
             seed_nodes,
             dispatch: Dispatch::default(),
+            re_runnable: self.re_runnable,
+            has_run: false,
         }
     }
 }
@@ -1868,12 +2025,43 @@ pub struct Runner {
     seed_nodes: Vec<usize>,
     /// Which dispatch loop `run` uses. `Sparse` by default; see [`Dispatch`].
     dispatch: Dispatch,
+    /// Whether every node can restore itself for a re-run (see
+    /// [`Builder::re_runnable`](Builder)). A graph with `external`/`poll`/
+    /// `channel` sources or `composite` islands is single-run.
+    re_runnable: bool,
+    /// Set after the first [`run`](Runner::run); a subsequent run first calls
+    /// [`reset`](Runner::reset) to restore state.
+    has_run: bool,
 }
 
 impl Runner {
     /// Run the graph to its bound. Returns the first error from any node's
     /// `start`/`cycle`/`stop`/`teardown` (with node context), or `Ok(())`.
+    ///
+    /// A [`Runner`] may be run **repeatedly** as long as its graph is
+    /// re-runnable — tickers/constants + combinators + feedback, the
+    /// deterministic historical subset. A second `run` first restores every
+    /// node's state and value slot to its wiring-time initial value (via
+    /// [`reset`](Runner::reset)), so each run is independent and reproduces a
+    /// fresh graph exactly (spike 0.4's "setup-per-run" semantics). A graph
+    /// with `external`/`poll`/`channel` sources or `composite` islands is
+    /// single-run — its producer channels, wakers, and island interiors are
+    /// consumed by the first run — and a second `run` returns an error rather
+    /// than silently producing wrong values.
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
+        if self.has_run {
+            if self.re_runnable {
+                self.reset();
+            } else {
+                bail!(
+                    "this Runner is single-run: its graph contains external/poll/channel \
+                     sources or a nested island whose state cannot be reset — build a fresh \
+                     graph to run again (a historical graph of tickers/constants + combinators \
+                     re-runs)"
+                );
+            }
+        }
+        self.has_run = true;
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
         // timestamps and runs in both modes. These are reachable user errors
@@ -1953,6 +2141,30 @@ impl Runner {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// Restore every node's engine-owned state and value slot to its
+    /// wiring-time initial value, so the next [`run`](Runner::run) starts from
+    /// a clean slate — spike 0.4's per-run reset semantics. Called
+    /// automatically by `run` on a re-run; exposed so a caller can reset
+    /// explicitly. The kernel is rebuilt from `t=0` on each `run` and each
+    /// node's `start` re-seeds its schedules, so this only touches per-node
+    /// state (accumulators, buffers, delay queues), never the clock.
+    ///
+    /// Only meaningful for a re-runnable graph; on a single-run graph
+    /// (external/poll/channel/island) the per-node reset closures still run but
+    /// cannot restore a consumed producer channel, so [`run`](Runner::run)
+    /// still refuses a second call.
+    pub fn reset(&mut self) {
+        for node in &mut self.nodes {
+            (node.reset)();
+        }
+        // Defensive: every run leaves `ticked` all-false (each cycle clears the
+        // nodes it fired), but clear it anyway so reset is self-contained.
+        for t in self.ticked.borrow_mut().iter_mut() {
+            *t = false;
+        }
+        self.finished.set(false);
     }
 
     /// Select the dispatch strategy for subsequent [`run`](Runner::run)s.

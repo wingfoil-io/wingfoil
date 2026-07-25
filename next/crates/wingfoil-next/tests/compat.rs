@@ -62,26 +62,26 @@ fn peek_before_run_panics_with_a_clear_message() {
     let _ = counted.peek_value();
 }
 
-/// Re-running is deferred: the builder is consumed by the first run, so a
-/// second `run` must surface a clear error instead of silently running an
-/// empty graph and then panicking out-of-bounds in `peek_value`. The first
-/// run's result stays readable afterwards.
+/// Re-running is supported (spike 0.4's setup-per-run reset): the graph is
+/// built once and the runner retained, and each `run` restores every node's
+/// state and value slot first, so two runs of the *same* `Signal` produce
+/// identical results — never the accumulator-continues bug (a count that would
+/// go 5 → 10). This is the wingfoil-python re-run gate.
 #[test]
-fn second_run_errors_and_leaves_first_result_intact() {
+fn second_run_matches_the_first() {
     let counted = ticker(Duration::from_nanos(100)).count();
+
     counted.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(5, counted.peek_value());
 
-    let err = counted
-        .run(HISTORICAL, RunFor::Cycles(5))
-        .expect_err("a second run must error, not silently run an empty graph");
-    assert!(
-        err.to_string().contains("called more than once"),
-        "unexpected error message: {err}"
-    );
-
-    // The first run's runner is untouched, so peek still returns its value.
+    // A second run reproduces the first exactly — the count restarts from the
+    // fold's wiring-time seed rather than continuing at 5.
+    counted.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(5, counted.peek_value());
+
+    // A different bound on the retained runner still gives fresh-graph results.
+    counted.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(3, counted.peek_value());
 }
 
 // --- Expanded operator surface, all in the classic idiom -------------------

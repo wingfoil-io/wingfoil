@@ -65,7 +65,7 @@ today's interpreted engine.
 | Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
 | Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
-| Re-run (independent repeated runs) | ✅⁸ | ❌⁸ | ✅⁹ | ✅⁹ |
+| Re-run (independent repeated runs) | ✅⁸ | ✅⁸ | ✅⁹ | ✅⁹ |
 | Dynamic graph (runtime add/remove) | ✅ | 📅¹⁰ | ❌ | 🟡¹⁰ |
 | Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ✅¹² | 🟡¹³ | ✅¹⁴ |
 | Dense hot-path speed (measured) | 1× | ~1×¹² | 3–4×¹⁵ | interior 3–4×¹⁵ |
@@ -88,8 +88,13 @@ today's interpreted engine.
   would drift between the interpreted and compiled engines) is a compile
   error. Both express arbitrary per-node state, by different idioms.
 ⁸ Classic is the reference — a fresh `Graph::run` re-initialises via
-  `setup`. next's v1 Runner is single-run (spike 0.4); matching classic's
-  re-run needs the per-node reset hook (planned).
+  `setup`. The interpreted engine now matches it: the per-node `reset` hook
+  (Phase 1, landed) restores each node's state + value slot to its wiring-time
+  initial value, so `Runner::run` re-runs for the deterministic historical
+  subset (tickers/constants + combinators + feedback). Graphs with
+  external/poll/channel sources or nested islands stay single-run by
+  construction (consumed producer channels/wakers/interiors) — a second `run`
+  errors rather than misbehaving.
 ⁹ `compiled()` is a plain fn — each call is a fresh independent run.
 ¹⁰ The sparse dirty-list engine — the mutable-frontier *enabler* for runtime
   add/remove — has landed, but graph *mutation* itself (`Runner::extend`) is
@@ -243,23 +248,61 @@ on re-run working. Rather than discovering this at the facade, the per-node
 plumbing (it slots into the existing lifecycle machinery). This closes the
 last Phase-0 spike by decision.
 
+**Update — delivered in Phase 1.** The `reset` hook has since landed (see the
+Phase 1 bullet): the interpreted `Runner` re-runs the deterministic historical
+subset, restoring per-node state + slots to their wiring-time values, and
+`compat::Signal::run` is re-runnable. Single-run graphs (external/poll/channel/
+island) error on a second `run` rather than misbehaving.
+
 **Gate 0:** all four spikes land with classic-parity tests green.
 
 ## Phase 1 — contract completion
 
 - Fold spike results into `op.rs` + all three engines + macro.
-- Variadic gaps: `Join3` (trimap), n-ary merge, `try_map`/`try_bimap`/
-  `try_trimap` (trivial once cycle is fallible — the closure returns
-  `Result`, the op `?`s it).
-- Multi-output islands via projection nodes (or explicitly re-defer with a
-  written rationale).
+- Variadic gaps: `Join3` (trimap) ✅, n-ary merge ✅, `try_map`/`try_bimap`/
+  `try_trimap` ✅ (trivial once cycle is fallible — the closure returns
+  `Result`, the op `?`s it). **n-ary merge** landed as `StreamOps::merge_all`
+  (`fluent.rs`) — sugar that unrolls to a left-associated chain of 2-ary
+  `merge`s. 2-ary merge's earliest-wins tie-break is associative, so the chain
+  and a single variadic node fire identically; the sugar-over-primitive
+  approach matches `fan`/`map_n`, and a dedicated variadic op would add engine
+  complexity for zero observable difference (`tests/rerun.rs::
+  merge_all_matches_chained_merge`).
+- **Multi-output islands — re-deferred (written rationale).** An `Op`/island
+  produces a single `Out`; classic multi-output nodes (`demux`,
+  `dynamic_group`) would need projection nodes that fan a tuple output into N
+  slots. Re-deferred for v1 because: (a) nothing in the catalog *ported so far*
+  needs it — every Phase 2 op landed is single-output, and the two classic
+  multi-output nodes are in the "Structural / deferred" group that also awaits
+  the dynamic-graph decision (Phase 4.5); (b) an island already exposes its one
+  output cleanly, and a caller wanting K outputs can mount K islands over the
+  same inputs (wasteful only if the shared interior is expensive — none is
+  today); (c) the honest projection design is coupled to the Phase 4.5 arena
+  slot representation (a projection writes several slots from one cycle), so
+  building it against today's `Rc<RefCell<T>>` slots risks the exact
+  touch-it-twice rework the Phase 4.5 coupling note warns against. Decision:
+  revisit alongside `demux`/`dynamic_group` in the Phase 4.5 dynamic-graph
+  pass, not as isolated Phase 1 work.
 - Debug labels on nodes (needed by 0.1 error reports; also unlocks GML
   export in Phase 5).
-- **Per-node `reset`/`setup` hook** (from spike 0.4) — restores each op's
-  state to its wiring-time initial value and re-seeds schedules, giving
-  well-defined re-run. It is contract work, not a facade detail: the Phase 6
-  compat facade re-runs classic streams and `compat::Signal` already breaks
-  without it (see 0.4). Same plumbing shape as `stop`/`teardown`.
+- **Per-node `reset`/`setup` hook** ✅ **landed** (from spike 0.4) — the
+  interpreted engine now restores each node's engine-owned state and value slot
+  to its wiring-time initial value before a re-run, giving well-defined
+  repeated runs. `register_op1`/`register_op2` take a *state factory*
+  (`Fn() -> S`, not a value) so the engine can re-seed; the `#[op]` macro emits
+  `|| Default::default()`. `NodeRt` carries a `reset` closure (same plumbing
+  shape as `stop`/`teardown`), set by every registration. `Runner::run`
+  auto-resets on a second call (and `Runner::reset()` is public); the kernel is
+  rebuilt from `t=0` each run and each node's `start` re-seeds its schedules, so
+  reset only touches per-node state. Graphs with `external`/`poll`/`channel`
+  sources or `composite` islands are single-run by construction (their producer
+  channels, wakers, and island interiors are consumed by the first run) and a
+  second `run` errors clearly. This unblocks the Phase 6 compat facade:
+  `compat::Signal::run` is now re-runnable, the wingfoil-python re-run gate.
+  Covered by `tests/rerun.rs` (re-run == fresh graph; fold restarts not
+  continues; buffering/sampling ops reset; feedback re-runs; explicit reset;
+  single-run guard) and the rewritten `tests/compat.rs::
+  second_run_matches_the_first`.
 - **`Tick::Silent` (update-value-without-ticking) contract decision** — the
   `Tick` contract today cannot express "store a new value but don't tick,"
   which classic relies on (e.g. `Delay`'s first-value seeding, so passive

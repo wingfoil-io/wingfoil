@@ -1649,7 +1649,9 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                         ::core::any::type_name::<#self_ty>(),
                         <#self_ty as crate::op::Op>::ACTIVATION,
                         #cfg_arg,
-                        ::core::default::Default::default(),
+                        // A factory, not a value, so the interpreted engine can
+                        // re-seed the op's state on a re-run (see `ResetFn`).
+                        || ::core::default::Default::default(),
                         |__cfg, __state, __a, __ctx| {
                             <#self_ty as crate::op::Op>::cycle(__cfg, __state, (__a,), __ctx)
                         },

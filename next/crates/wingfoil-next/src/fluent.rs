@@ -429,6 +429,22 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Merge this stream with every stream in `others` into one — the n-ary
+    /// `merge`. On a same-cycle tie the earliest-supplied ticked input wins:
+    /// this stream first, then `others` in slice order. `merge_all(&[])` is
+    /// just this stream.
+    ///
+    /// This unrolls to a left-associated chain of 2-ary
+    /// [`merge`](StreamOps::merge)s (`self.merge(a).merge(b)…`), which is
+    /// exactly equivalent — 2-ary merge's earliest-wins tie-break is
+    /// associative, so the chain and a single n-ary node fire identically. It
+    /// closes the n-ary-merge vocabulary gap without a bespoke variadic op (the
+    /// same sugar-over-primitive approach as [`fan`](StreamOps::fan) /
+    /// [`map_n`](StreamOps::map_n)).
+    fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
     /// Chain the same endomorphic `map` `n` times. `map_n(0, f)` is the
     /// identity (a pass-through). Bounded repetition sugar for a straight deep
     /// chain; inside `graph!` the count must be a literal so the DAG stays
@@ -686,6 +702,17 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     {
         let other = other.handle();
         self.wire(|b, h| b.merge2(h, other))
+    }
+
+    fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+    {
+        let mut merged = self.clone();
+        for other in others {
+            merged = merged.merge(other);
+        }
+        merged
     }
 
     fn map_n<F>(&self, n: usize, f: F) -> Stream<T>

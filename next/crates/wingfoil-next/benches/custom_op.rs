@@ -93,9 +93,14 @@ trait IncrOps {
 impl IncrOps for Stream<f64> {
     fn incr(&self) -> Stream<f64> {
         self.wire(|b, h| {
-            b.register_op1(h, "incr", Incr::ACTIVATION, (), (), |c, s, a, ctx| {
-                <Incr as Op>::cycle(c, s, (a,), ctx)
-            })
+            b.register_op1(
+                h,
+                "incr",
+                Incr::ACTIVATION,
+                (),
+                || (),
+                |c, s, a, ctx| <Incr as Op>::cycle(c, s, (a,), ctx),
+            )
         })
     }
 }
