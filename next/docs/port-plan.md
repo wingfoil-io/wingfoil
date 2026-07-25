@@ -533,6 +533,27 @@ routing on a same-cycle mark-dirty primitive — no add/remove). Removed slots a
 tombstoned, not freed (classic parity). Parity tests in
 `tests/dynamic_graph.rs`.
 
+**Known parity gaps (for the cutover audit).** The runtime *behaviour* is a
+faithful twin (values + tick times match classic's oracles); what next omits so
+far is ergonomic surface, not mechanism:
+
+- **`StreamStore` (pluggable `dynamic_group` backing store).** next's
+  `dynamic_group` hardcodes a `BTreeMap` (so `K: Ord`); classic is generic over
+  a `StreamStore` trait with `BTreeMap`/`HashMap` blanket impls. This is
+  deliberately deferred, not just unfinished. The only capability it actually
+  unlocks is a key type that is `Hash + Eq` but **not** `Ord` (the container
+  choice is otherwise near-irrelevant to cost — the per-cycle work is iterating
+  *live* members, O(members), regardless of backing store). And `HashMap`'s
+  nondeterministic iteration order is a mild footgun against backtest
+  determinism, so `BTreeMap`-only is arguably the *safer* default, not merely a
+  smaller one. Re-add the trait (a mechanical ~20-min change: one trait param +
+  two blanket impls, touching no engine/staging code) if the cutover requires
+  strict signature parity or a real non-`Ord` key appears — not speculatively.
+- **`DemuxMap` key lifecycle + `demux_it`.** next's `demux` exposes the raw
+  routing primitive (`route(value) -> slot` + overflow); classic's
+  auto-assigning/`Close`-releasing `DemuxMap` and the `Burst` `demux_it` variant
+  layer on top of it and can be added without engine changes.
+
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 
 ### Arena / SoA value store — deferred perf follow-on (boundary frozen by type)
