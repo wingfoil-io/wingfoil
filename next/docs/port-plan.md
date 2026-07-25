@@ -493,6 +493,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.
+   *"wingfoil-js untouched" holds only if the ported web adapter reproduces
+   the v2 control plane the client depends on:* `Hello`/`Subscribe`/
+   `Unsubscribe`, burst payloads (`Stream<Vec<T>>` published as an array), both
+   codecs (`Bincode` + `Json` — the latency tracker requires `Json`), and —
+   the one JS-facing behaviour riding on an **engine-side** trigger rather than
+   the frozen wire format — `ControlMessage::Complete { topic }` emitted when a
+   `web_pub` source stream *ends* (historical replay / finite `RunFor`). The
+   client's `onComplete` and its "stop reconnecting after a clean finish" logic
+   both hinge on `Complete`, so the port must plumb a "publish source finished"
+   signal (adjacent to `Ctx::is_last_cycle` / lifecycle) through to the adapter,
+   not just carry the wire types over.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
