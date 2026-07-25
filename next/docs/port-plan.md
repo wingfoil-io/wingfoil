@@ -572,6 +572,35 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    wall-clock streams — Pub/Sub has no backlog, the stream tail blocks forever —
    with no historical timeline to replay).
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
+   ✅ **zmq** *(done)*: real-time ØMQ pub/sub — a `zmq_sub` source (a background
+   OS thread polling the `SUB` socket + monitor, feeding the `channel` layer,
+   returning a `(data, status)` pair) and a `ZeroMqPub::zmq_pub` /
+   `zmq_pub_on` sink (a `register_op1` op that binds the `PUB` socket lazily on
+   the first cycle, buffers around the ZMQ slow-joiner, and sends `EndOfStream`
+   + revokes the registry via a `Drop` on its state), behind the `zmq` feature.
+   The pluggable **discovery backend** is preserved as the skill's
+   trait-behind-a-feature: a `ZmqRegistry` trait with `ZmqPubRegistration` /
+   `ZmqSubConfig` `Into`-wrappers (`()` / bare-address vs `(name, registry)`),
+   and an `EtcdRegistry` implementation gated on the `etcd` feature. Parity port
+   of the classic tests: no-service wiring tests in `tests/zmq_adapter.rs`
+   (`zmq`), real-socket pub/sub tests in `tests/zmq_integration.rs`
+   (`zmq-integration-test`), and etcd-discovery tests in
+   `tests/zmq_etcd_integration.rs` (`zmq-etcd-integration-test`, testcontainers);
+   classic direct-mode example ported to `examples/zmq_adapter.rs`. Like classic,
+   the `zmq` feature deliberately does **not** depend on `async`. **Deviations**
+   (capabilities all preserved): (a) `zmq_sub` takes a `&GraphBuilder` and a
+   `RunMode` and **rejects `RunMode::HistoricalFrom` at wiring time** — next's
+   channel is bimodal and would block-collect the never-closing subscriber and
+   deadlock at `start`, so it errors rather than rejecting at run start the way
+   classic's realtime-only `ReceiverStream` does; (b) `zmq_pub` returns a sink
+   `Stream<()>` (not `Rc<dyn Node>`), binding/registering/run-mode-checking
+   lazily on the first cycle so a historical run still errors with "real-time"
+   before touching the registry; (c) the `bincode` wire envelope is next-local,
+   so a next publisher interoperates with a next subscriber but is **not**
+   wire-compatible with a classic/Python peer — cross-language interop lands with
+   the Python bindings (Phase 6), which is also why the classic `zmq-cross-lang`
+   tests are not ported. Realtime-only, so the parity tests assert received
+   values (consecutive counters, connection status) rather than exact tick times.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.

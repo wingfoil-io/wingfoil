@@ -35,6 +35,10 @@
 //!   `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature
 //!   (built on the async `produce_async` / `consume_async` ergonomics). The
 //!   sources are realtime-only.
+//! - [`zmq`] — real-time ØMQ pub/sub (`zmq_sub` source with a connection-status
+//!   stream + `ZeroMqPub::zmq_pub` sink), with optional etcd service discovery,
+//!   behind the `zmq` feature. Synchronous/poll-based, so it uses a background
+//!   thread over the `channel` layer (not `async`); the source is realtime-only.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
@@ -50,3 +54,5 @@ pub mod lines;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "zmq")]
+pub mod zmq;
