@@ -141,6 +141,16 @@ impl GraphBuilder {
         );
         std::mem::take(&mut *self.inner.borrow_mut()).build()
     }
+
+    /// Combine several same-type streams into a `Stream<Burst<T>>` (the classic
+    /// `combine`): each cycle gathers the current values of every input that
+    /// ticked *this* instant into one [`Burst`], in argument order — same-instant
+    /// values ride one burst, never latest-wins.
+    pub fn combine<T: Clone + Default + 'static>(&self, streams: &[Stream<T>]) -> Stream<Burst<T>> {
+        let handles: Vec<Handle<T>> = streams.iter().map(|s| s.handle()).collect();
+        let handle = self.with_builder(|b| b.combine(&handles));
+        self.wrap(handle)
+    }
 }
 
 /// Source constructors — the graph's entry points. An extension trait on
@@ -180,6 +190,11 @@ pub trait SourceOps {
     fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
     where
         T: Clone + Default + PartialEq + 'static;
+
+    /// A source that never ticks (the classic `never`). Useful as an inert
+    /// trigger — e.g. a [`delay_with_reset`](StreamOps::delay_with_reset) that
+    /// never resets behaves like a plain [`delay`](StreamOps::delay).
+    fn never(&self) -> Stream<()>;
 }
 
 impl SourceOps for GraphBuilder {
@@ -215,6 +230,10 @@ impl SourceOps for GraphBuilder {
     {
         let (handle, sink) = self.with_builder(|b| b.feedback::<T>());
         (self.wrap(handle), sink)
+    }
+
+    fn never(&self) -> Stream<()> {
+        self.source(|b| b.never())
     }
 }
 
@@ -489,6 +508,23 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + PartialEq + 'static;
 
+    /// [`delay`](StreamOps::delay) with a reset trigger (the classic
+    /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
+    /// current value and any pending (delayed) values are dropped. `trigger`
+    /// is read for its tick only, so its value type is irrelevant.
+    fn delay_with_reset<U>(&self, delay: Duration, trigger: &Stream<U>) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static,
+        U: 'static;
+
+    /// Collapse a burst/iterator value into a single tick of its **last** item
+    /// (the classic `collapse`); stays quiet when the iterator is empty. Sugar
+    /// over [`map_filter`](StreamOps::map_filter).
+    fn collapse<OUT>(&self) -> Stream<OUT>
+    where
+        T: Clone + IntoIterator<Item = OUT> + 'static,
+        OUT: Clone + Default + 'static;
+
     /// Run a side-effecting (fallible) closure on each tick — the graph's
     /// outbound edge (print, send, record). A returned `Err` aborts the run
     /// with context. Emits `()` per tick.
@@ -755,6 +791,26 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|b, h| b.delay(h, delay))
     }
 
+    fn delay_with_reset<U>(&self, delay: Duration, trigger: &Stream<U>) -> Stream<T>
+    where
+        T: Clone + Default + PartialEq + 'static,
+        U: 'static,
+    {
+        let trig = trigger.handle();
+        self.wire(|b, h| b.delay_with_reset(h, trig, delay))
+    }
+
+    fn collapse<OUT>(&self) -> Stream<OUT>
+    where
+        T: Clone + IntoIterator<Item = OUT> + 'static,
+        OUT: Clone + Default + 'static,
+    {
+        self.map_filter(|x: &T| match x.clone().into_iter().last() {
+            Some(last) => (last, true),
+            None => (OUT::default(), false),
+        })
+    }
+
     fn for_each<F>(&self, f: F) -> Stream<()>
     where
         T: 'static,
@@ -794,5 +850,18 @@ impl<T: Clone + Default + 'static> Stream<Burst<T>> {
         self.fold(Vec::new(), |acc, burst: &Burst<T>| {
             acc.extend(burst.iter().cloned())
         })
+    }
+}
+
+impl<A, B> Stream<(A, B)>
+where
+    A: Clone + Default + 'static,
+    B: Clone + Default + 'static,
+{
+    /// Decompose a stream of pairs into its two component streams (the classic
+    /// `split`) — sugar over two [`map`](StreamOps::map)s. Both branches tick
+    /// whenever the source does.
+    pub fn split(&self) -> (Stream<A>, Stream<B>) {
+        (self.map(|t| t.0.clone()), self.map(|t| t.1.clone()))
     }
 }

@@ -345,10 +345,10 @@ Inventory (classic `nodes/` → target), grouped by effort:
 | Group | Nodes | Notes |
 |---|---|---|
 | Done in prototype | map, filter, fold, constant, sample, merge (2-ary), delay, tick(er), producer(→poll), consumer(→for_each), try_map, finally, feedback | parity-tested |
-| Trivial state/closure | ✅ distinct, difference, limit, map_filter, throttle, inspect, window, buffer, with_time, ticked_at/-elapsed, not (`tests/catalog.rs`); ⬜ print, timed, split/combine/collapse (Burst/tuple structural) | recipe proven; `window`/`buffer` use `Ctx::is_last_cycle` |
-| Scheduling | ✅ throttle; ⬜ delay_with_reset, node_flow (node-level delay/filter/limit/throttle) | `SCHEDULES`/time-gated; pattern proven by delay + throttle |
-| Multi-input | ✅ bimap (active/passive) + join, trimap + join3; ⬜ try_* variants | passive `bimap` unlocked passive feedback; `trimap` is the 3-ary combine |
-| Engine-touching | always (→`ALWAYS`, done), never, finally (needs teardown), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
+| Trivial state/closure | ✅ distinct, difference, limit, map_filter, throttle, inspect, window, buffer, with_time, ticked_at/-elapsed, not, print, timed (`tests/catalog.rs`, `tests/catalog_ops.rs`); ✅ split, combine, collapse (Burst/tuple structural, `tests/catalog_flow.rs`) | recipe proven; `window`/`buffer` use `Ctx::is_last_cycle`; `combine` builds the burst locally (no shared-cell port) |
+| Scheduling | ✅ throttle, delay_with_reset, node_flow (node-level delay/filter/limit/throttle, run over the unit-stream path, `tests/catalog_flow.rs`) | `SCHEDULES`/time-gated; pattern proven by delay + throttle |
+| Multi-input | ✅ bimap (active/passive) + join, trimap + join3, try_* variants (`tests/catalog_ops.rs`) | passive `bimap` unlocked passive feedback; `trimap` is the 3-ary combine |
+| Engine-touching | always (→`ALWAYS`, done), ✅ never (`tests/catalog_flow.rs`), finally (needs teardown, done), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
 | Structural / deferred | demux, dynamic_group, graph_node | multi-output + dynamic-graph decisions below |
 
 **Dynamic graphs** (`graph_node`, `dynamic_group`, the dynamic examples):
@@ -357,6 +357,14 @@ loops). Runtime graph *mutation* is a separate feature: either
 `Runner::extend` on the interpreted engine (design here, implement if the
 demand is real) or an explicit out-of-scope ruling for v1. Do not let this
 block the catalog — decide, document, move on.
+
+**Engine coverage note:** `never`, `combine`, and `delay_with_reset` land as
+interpreted-engine (fluent) ports — like `feedback` — since a zero-input
+source, an n-ary fan-in, and a two-tick-flag scheduling op fall outside the
+`#[op]` single-input scope that auto-emits the `graph!`/compiled forwarders.
+`split`/`collapse` are pure sugar over `map`/`map_filter`, so they reach every
+engine for free. Extending `combine`/`delay_with_reset` to `graph!`/compiled is
+a follow-up (as it is for `feedback`).
 
 **Gate 2:** every classic node test has a next twin producing identical
 values and tick times.

@@ -54,9 +54,9 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
-    Const, Delay, DelayState, Filter, Finally, Fold, Join, Join3, Merge2, Poll, Print, Sample,
-    Throttle, Ticker, TickerState, Timed, TimedState, TryJoin, TryJoin3, Window, WindowState,
-    WithTime,
+    Const, Delay, DelayState, DelayWithReset, DelayWithResetState, Filter, Finally, Fold, Join,
+    Join3, Merge2, Never, Poll, Print, Sample, Throttle, Ticker, TickerState, Timed, TimedState,
+    TryJoin, TryJoin3, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -759,6 +759,72 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// A source that never ticks (the classic `never`). No upstreams and no
+    /// scheduling, so the engine never cycles it; used as an inert trigger.
+    pub fn never(&mut self) -> Handle<()> {
+        let idx = self.nodes.len();
+        // The slot is kept for index alignment; `never` never writes it.
+        let _out = self.new_slot(());
+        self.push_node(
+            Vec::new(),
+            Never::ACTIVATION,
+            "never",
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                match Never::cycle(&mut (), &mut (), (), &mut ctx)? {
+                    Tick::Value(()) | Tick::Silent(()) => Ok(false),
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
+    /// Combine several same-type streams into a `Stream<Burst<T>>` (the classic
+    /// `combine`): each cycle gathers the current values of every upstream that
+    /// ticked *this* instant into one [`Burst`], in upstream order. Quiet on a
+    /// cycle where none ticked (only reachable via a shared scheduled wake).
+    ///
+    /// Hand-written (no `Op` witness): an n-ary fan-in does not fit the `Op`
+    /// trait's fixed-arity tuple `In`, and — unlike the classic port's shared
+    /// `Rc<RefCell<Burst>>` cell written by per-stream feeder nodes — the burst
+    /// is built locally here, honouring next's no-shared-mutable-slot rule.
+    pub fn combine<T: Clone + Default + 'static>(
+        &mut self,
+        srcs: &[Handle<T>],
+    ) -> Handle<Burst<T>> {
+        let idx = self.nodes.len();
+        let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
+        let slots: Vec<Rc<RefCell<T>>> = srcs.iter().map(|h| self.slot(*h)).collect();
+        let out = self.new_slot(Burst::<T>::new());
+        let ticked = self.ticked.clone();
+        self.push_node(
+            indices.clone(),
+            Activation::NONE,
+            "combine",
+            Box::new(move |_k| {
+                let mut burst = Burst::<T>::new();
+                {
+                    let t = ticked.borrow();
+                    for (i, slot) in indices.iter().zip(slots.iter()) {
+                        if t[*i] {
+                            burst.push(slot.borrow().clone());
+                        }
+                    }
+                }
+                if burst.is_empty() {
+                    Ok(false)
+                } else {
+                    *out.borrow_mut() = burst;
+                    Ok(true)
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
     /// Pair each value with the current engine time: `(time, value)`. Kept
     /// hand-written (not `#[op]`): the output `(NanoTime, T)` is seeded from
     /// the input's current value, so it never requires `T: Default`.
@@ -1271,6 +1337,56 @@ impl Builder {
                         Tick::Silent(value) => (Some(value), false),
                         Tick::Quiet => (None, false),
                     };
+                drop(v);
+                if let Some(w) = write {
+                    *out.borrow_mut() = w;
+                }
+                Ok(did)
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.make_handle(idx)
+    }
+
+    /// [`delay`](Self::delay) with a reset trigger (the classic
+    /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
+    /// current upstream value and the pending queue is cleared. `trigger` is
+    /// read for its *tick* only — its value type is irrelevant — so it is an
+    /// active edge alongside the upstream.
+    pub fn delay_with_reset<T: Clone + Default + PartialEq + 'static, U: 'static>(
+        &mut self,
+        src: Handle<T>,
+        trigger: Handle<U>,
+        delay: Duration,
+    ) -> Handle<T> {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(T::default());
+        let ticked = self.ticked.clone();
+        let (is, it) = (src.idx, trigger.idx);
+        let cs = Self::cell(delay, DelayWithResetState::<T>::default());
+        self.push_node(
+            vec![src.idx, trigger.idx],
+            DelayWithReset::<T>::ACTIVATION,
+            "delay_with_reset",
+            Box::new(move |k| {
+                let (src_ticked, trig_ticked) = {
+                    let t = ticked.borrow();
+                    (t[is], t[it])
+                };
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let v = src_slot.borrow();
+                let (write, did): (Option<T>, bool) = match DelayWithReset::<T>::cycle(
+                    cfg,
+                    state,
+                    (&v, src_ticked, trig_ticked),
+                    &mut ctx,
+                )? {
+                    Tick::Value(value) => (Some(value), true),
+                    Tick::Silent(value) => (Some(value), false),
+                    Tick::Quiet => (None, false),
+                };
                 drop(v);
                 if let Some(w) = write {
                     *out.borrow_mut() = w;

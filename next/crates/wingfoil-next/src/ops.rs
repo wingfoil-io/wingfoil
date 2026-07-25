@@ -2095,3 +2095,110 @@ impl<T: Clone + 'static> Op for Merge2<T> {
         })
     }
 }
+
+/// A source that never ticks — the classic `never` node. It has no upstreams
+/// and never schedules itself, so it stays [`Tick::Quiet`] for the whole run;
+/// its unit value is never observed downstream. The idiomatic inert trigger —
+/// e.g. a [`DelayWithReset`] that never resets degrades to a plain [`Delay`].
+///
+/// Kept a plain `Op` (no `#[op]`, hand-written `Builder::never`) because it is
+/// a zero-input source, the shape the single-input `#[op]` scope does not
+/// cover.
+pub struct Never;
+
+impl Op for Never {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = ();
+    type Out = ();
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(_cfg: &mut (), _state: &mut (), _input: (), _ctx: &mut Ctx<'_>) -> Result<Tick<()>> {
+        Ok(Tick::Quiet)
+    }
+}
+
+/// Pending state for a [`DelayWithReset`] op: the queue of not-yet-due values
+/// and whether the first upstream value has been stored into the slot (via
+/// [`Tick::Silent`], as [`Delay`] does).
+pub struct DelayWithResetState<T: PartialEq> {
+    queue: TimeQueue<T>,
+    initialized: bool,
+}
+
+impl<T: PartialEq> Default for DelayWithResetState<T> {
+    fn default() -> Self {
+        Self {
+            queue: TimeQueue::new(),
+            initialized: false,
+        }
+    }
+}
+
+/// [`Delay`] with a reset trigger — the classic `delay_with_reset` node. When
+/// the trigger ticks, the output snaps to the *current* upstream value and the
+/// pending queue is cleared; otherwise it behaves exactly like [`Delay`]. The
+/// two active inputs (upstream value and the trigger's tick) arrive as input
+/// data — `(&value, upstream_ticked, trigger_ticked)` — mirroring the way
+/// [`Delay`] receives its upstream tick flag; `SCHEDULES` grants the delayed
+/// re-emit its `Ctx::schedule`.
+///
+/// Hand-written `Builder` (no `#[op]`): two tick-flag inputs plus custom state
+/// seeding put it outside the single-input `#[op]` scope, like [`Delay`].
+pub struct DelayWithReset<T>(PhantomData<T>);
+
+impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
+    type Cfg = Duration;
+    type State = DelayWithResetState<T>;
+    /// Upstream value, whether the upstream ticked, and whether the reset
+    /// trigger ticked, this cycle.
+    type In<'a> = (&'a T, bool, bool);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
+
+    fn cycle(
+        cfg: &mut Duration,
+        state: &mut DelayWithResetState<T>,
+        input: (&T, bool, bool),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let (value, upstream_ticked, trigger_ticked) = input;
+        // Reset wins over a same-cycle upstream tick (classic checks the
+        // trigger first): snap to the live upstream value, drop the queue.
+        if trigger_ticked {
+            state.queue.clear();
+            state.initialized = true;
+            return Ok(Tick::Value(value.clone()));
+        }
+        let delay = NanoTime::from(*cfg);
+        // Classic parity: a zero delay emits inline in the *same* cycle.
+        if delay == NanoTime::ZERO {
+            return Ok(if upstream_ticked {
+                Tick::Value(value.clone())
+            } else {
+                Tick::Quiet
+            });
+        }
+        let mut seed_first = false;
+        if upstream_ticked {
+            if !state.initialized {
+                state.initialized = true;
+                seed_first = true;
+            }
+            let at = ctx.time() + delay;
+            state.queue.push(value.clone(), at);
+            ctx.schedule(at);
+        }
+        let mut out = Tick::Quiet;
+        while let Some(due) = state.queue.pop_if_pending(ctx.time()) {
+            out = Tick::Value(due);
+        }
+        // Classic parity: the first upstream value is stored into the slot
+        // *without* ticking, so passive readers see it before the delay
+        // elapses (identical to `Delay`'s first-value seeding).
+        if matches!(out, Tick::Quiet) && seed_first {
+            return Ok(Tick::Silent(value.clone()));
+        }
+        Ok(out)
+    }
+}
