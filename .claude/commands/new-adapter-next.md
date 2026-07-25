@@ -295,23 +295,36 @@ Doc every public item, including `# Errors` sections on fallible factories
 
 ### Channel replay (file / batch / query results — both run modes)
 
+**Use the `GraphBuilder::replay_results` primitive** — don't hand-roll the
+`channel` → `send_at` loop → `close` bookkeeping. It queues a finite
+`Result<(value, time)>` sequence onto a channel source, forwards a decode error
+via `send_error` (then stops), and closes:
+
 ```rust
-pub fn $ARGUMENTS_read<T, F>(g: &GraphBuilder, /* params */) -> Result<Stream<Burst<T>>>
+pub fn $ARGUMENTS_read<T>(g: &GraphBuilder, /* params */) -> Result<Stream<Burst<T>>>
 where
     T: Clone + Default + 'static,
-    F: Fn(&T) -> NanoTime,
 {
-    // 1. open + read the input at wiring time (error -> Err, before the run)
-    let (stream, sender) = g.channel::<T>();
-    for record in records {
-        match record {
-            Ok(rec) => { sender.send_at(rec, get_time(&rec)); }     // non-decreasing!
-            Err(e) => { sender.send_error(anyhow::Error::new(e).context("...")); break; }
-        }
-    }
-    sender.close();   // the historical receiver needs the end-of-stream
-    Ok(stream)
+    // open + read the input at wiring time (an open error -> Err, before the run)
+    let rows = read_rows(/* … */)?;   // Iterator<Item = Result<(T, NanoTime)>>, non-decreasing times
+    Ok(g.replay_results(rows))
 }
+```
+
+Non-decreasing timestamps are still your responsibility (sort or reject before
+yielding; turn index overflow into a clear error, as `csv_read`/`replay_lines`
+do). Under the hood `replay_results` is exactly the loop below — shown only so
+you know what it does; call the primitive, don't copy it:
+
+```rust
+let (stream, sender) = g.channel::<T>();
+for row in rows {
+    match row {
+        Ok((rec, t)) => { sender.send_at(rec, t); }                // non-decreasing!
+        Err(e) => { sender.send_error(e.context("...")); break; }
+    }
+}
+sender.close();   // the historical receiver needs the end-of-stream
 ```
 
 ### Background thread over the channel (sync streaming client — realtime)
@@ -397,6 +410,11 @@ without a realtime run (`poll_line` precedent).
 
 ### Synchronous writer (files, blocking clients with cheap writes)
 
+**Use the `StreamOps::for_each_mut` primitive** for a sink that owns a mutable
+resource — don't hand-roll the `RefCell`-wrap-for-a-`Fn`-closure dance.
+`for_each_mut(writer, |w, v| …)` wraps the writer, runs the closure per tick
+with `&mut` access, and aborts the run on an `Err`:
+
 ```rust
 pub trait <Name>SinkOps<T> {
     /// <what it writes, truncate-vs-append, header behaviour>. Returns the
@@ -410,9 +428,7 @@ where
 {
     fn $ARGUMENTS_write(&self, /* params */) -> Result<Stream<()>> {
         let writer = open_at_wiring_time()?;          // Err before the run
-        let writer = RefCell::new(writer);            // Fn closure needs &mut
-        Ok(self.for_each(move |burst: &Burst<T>| {
-            let mut w = writer.borrow_mut();
+        Ok(self.for_each_mut(writer, move |w, burst: &Burst<T>| {
             for record in burst.iter() {
                 w.write(record).with_context(|| format!("$ARGUMENTS: writing ..."))?;
             }
@@ -424,20 +440,50 @@ where
 ```
 
 Need the graph time per row? Chain `with_time()` before `for_each` and take
-`(NanoTime, Burst<T>)` (the `csv_write` pattern). Single-value streams wrap
-into bursts at the call site: `stream.map(|v| burst![v.clone()])`.
+`(NanoTime, Burst<T>)` (the `csv_write` pattern).
 
-### Threaded writer (async clients, slow/blocking writes)
+For ergonomics, offer a **single-value convenience impl** alongside the
+`Stream<Burst<T>>` one, so callers with a plain `Stream<T>` don't wrap manually
+(`impl <Name>SinkOps for Stream<T> { … self.map(|v| burst![v]).$ARGUMENTS_write() }`
+— csv and etcd both do this). **Caveat:** skip it when the element type's own
+trait bound (`Display`/`Serialize`) is *also* satisfied by `Burst<T>` itself —
+`Burst<T>` is a `tinyvec` that implements `Display`, so a `Stream<Burst<T>>`
+*is* a `Stream<T: Display>` and the two impls become ambiguous (E0283) or, as an
+inherent method, silently shadow the burst form (writing `[ALPHA]` instead of
+`ALPHA`). That is why `lines` stays burst-only while `csv` can offer both.
 
-Keep the graph thread non-blocking: `for_each` pushes each burst into an
-`std::sync::mpsc` (or tokio channel) drained by a writer thread/task spawned
-at wiring time. Propagate writer failures by having the background writer park
-the error in a shared slot (`Arc<Mutex<Option<anyhow::Error>>>` — the lock is
-touched on the *error* path and by the background thread, and `for_each` does
-a cheap `Arc<AtomicBool>` check per cycle before taking it), so the **next**
-cycle aborts the run with context rather than the error vanishing. On `stop`
-semantics: dropping the sender at teardown ends the writer loop; if the
-protocol needs an explicit end-of-stream message, send it from the drain
+### Threaded / async writer (async clients, slow/blocking writes)
+
+**Async client → use the `consume_async` primitive** (the sink mirror of
+`produce_async`, `async` feature). It hands each burst's values to a background
+tokio task over a **bounded** channel (`buffer_size` back-pressure), drains with
+a **single** consumer task so write **order is preserved**, propagates write
+errors back into the graph to abort the run on the next cycle, and flushes
+queued writes at teardown — all off the graph thread. Wire it via `for_each`:
+
+```rust
+let sink = consume_async(handle, Some(buffer_size), move |value| async move {
+    client.write(value).await.context("$ARGUMENTS: writing")
+});
+Ok(self.for_each(sink))
+```
+
+This is how a networked sink avoids `handle.block_on(...)` inside `cycle`
+(which stalls the single-threaded engine on I/O every burst). Note the one
+place it can't help: an op that must return an `Err` *synchronously* within the
+firing cycle (e.g. a conditional write under `RunFor::Cycles(1)`) — an
+off-thread write reports failure only after the cycle, so keep those on a
+blocking path and document why.
+
+**Sync client, slow/blocking writes** → keep the graph thread non-blocking:
+`for_each` pushes each burst into an `std::sync::mpsc` drained by a writer
+thread spawned at wiring time. Propagate writer failures by having the
+background writer park the error in a shared slot (`Arc<Mutex<Option<Error>>>` —
+the lock is touched on the *error* path and by the background thread, and
+`for_each` does a cheap `Arc<AtomicBool>` check per cycle before taking it), so
+the **next** cycle aborts the run with context rather than the error vanishing.
+On `stop` semantics: dropping the sender at teardown ends the writer loop; if
+the protocol needs an explicit end-of-stream message, send it from the drain
 thread when the channel closes.
 
 ### Server / exporter sink (scraped or push telemetry)
