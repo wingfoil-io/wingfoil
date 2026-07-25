@@ -1,0 +1,27 @@
+[package]
+name = "wingfoil-next-python"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "Python interop boundary for wingfoil-next: the PyElement erased value type"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The erased boundary value. pyo3 stays without `extension-module` here so the
+# rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
+# `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
+pyo3 = "0.29"
+anyhow = { workspace = true }
+
+[dev-dependencies]
+# `auto-initialize` starts an embedded interpreter so the boundary type can be
+# exercised (and flowed through a real next graph) under plain `cargo test`.
+# It is dev-only: the shipped rlib never embeds an interpreter.
+pyo3 = { version = "0.29", features = ["auto-initialize"] }
+# Prove PyElement satisfies next's stream-value bounds by running it through
+# the interpreted engine.
+wingfoil-next = { path = "../wingfoil-next" }
+wingfoil = { path = "../../../wingfoil" }

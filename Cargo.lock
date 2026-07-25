@@ -7695,6 +7695,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wingfoil-next-python"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pyo3",
+ "wingfoil",
+ "wingfoil-next",
+]
+
+[[package]]
 name = "wingfoil-python"
 version = "8.0.0"
 dependencies = [
