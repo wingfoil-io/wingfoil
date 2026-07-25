@@ -458,7 +458,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 
 1. **statistics** — pure computation, the largest single chunk, huge test
    suite, zero IO. Best stress test of engine-owned state; do it first.
-   🟡 *started*: the statistics families are largely ported with parity
+   ✅ *done*: the statistics families are ported with parity
    tests — exponential (`Ewma`, PerTick + clock-driven HalfLife,
    `tests/statistics.rs`); count-windowed rolling
    (`RollingSum`/`Mean`/`Min`/`Max`/`Var`/`Std`/`Median` — monotonic-deque and
@@ -472,12 +472,13 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (`Weighting::Time`, mean/var/std over all three windows —
    `{Cumulative,Rolling,TimeWindowed}{Mean,Var,Std}TimeWeighted`, West's
    incremental weighted moments with an exact `remove` inverse for the sliding
-   windows, `tests/statistics_time_weighted.rs`) is now ported too. Remaining:
-   the time-*weighted* **median** (`median(_, Weighting::Time)` → the classic
-   `WindowStream::weighted_median`) — the count-weighted medians are ported but
-   the time-weighted median is not yet; it is a distinct path (recompute-per-tick
-   weighted median, not a moment) and the last classic statistics capability
-   outstanding.
+   windows, `tests/statistics_time_weighted.rs`) is ported. The final classic
+   statistics capability — the time-*weighted* **median**
+   (`median(_, Weighting::Time)` → the classic `WindowStream::weighted_median`;
+   `{Cumulative,Rolling,TimeWindowed}MedianTimeWeighted`, a recompute-per-tick
+   weighted median over the retained `(value, time)` window rather than a moment
+   accumulator, `tests/statistics_time_weighted_median.rs`) is now ported too, so
+   the statistics adapter is complete.
 2. **cache**, **common** (WindowFilter) — small, pure.
    ✅ *done*: **common** ports the always-compiled `TimeWindow`/`WindowFilter`
    out-of-window row filter (`adapters::common`, `tests/common_adapter.rs`);

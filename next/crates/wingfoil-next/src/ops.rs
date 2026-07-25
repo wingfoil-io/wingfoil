@@ -2176,6 +2176,195 @@ impl Op for TimeWindowedStdTimeWeighted {
     }
 }
 
+// ── time-weighted median (Weighting::Time) ───────────────────────────────────
+//
+// The time-*weighted* twin of the count-weighted median ops (cumulative,
+// count-windowed, and time-windowed). Unlike the moment ops above it is **not**
+// an incremental West's-algorithm accumulator: the median has no cheap
+// incremental form, so — like the classic `WindowStream::weighted_median` — it
+// retains the `(value, time)` samples in the window and recomputes over them
+// each tick. Ported verbatim from `wingfoil/src/adapters/statistics.rs`
+// (`WindowStream` + `for_each_weight` + `weighted_median`, `Weighting::Time`).
+// Semantics reproduced:
+//
+//   * each retained sample is weighted by the interval it was in effect — the
+//     gap to its successor in the buffer, and the most recent sample by the gap
+//     to `now` (which is zero, since it was just pushed at `now`, so the newest
+//     sample carries no weight until the next tick advances the clock);
+//   * zero-weight samples (a Δt of 0, e.g. the newest sample or simultaneous
+//     ticks) are dropped; if *every* retained sample has zero weight the latest
+//     value is returned;
+//   * the samples are sorted by value and the result is the value at which
+//     cumulative weight first crosses half the total; a crossing landing exactly
+//     on a boundary averages the two straddling values (so unit-length intervals
+//     reproduce the even-count average, matching the count-weighted median);
+//   * the leading edge uses only retained samples, so a value in effect *before*
+//     the window opened is not carried in (the count/time eviction happens first).
+
+/// Recompute-per-tick buffer for the time-weighted median: the `(value, time)`
+/// samples currently in the window. Each tick pushes the new sample, evicts per
+/// the window rule, then recomputes the weighted median over what remains — the
+/// same `VecDeque<(f64, NanoTime)>` and algorithm as the classic `WindowStream`
+/// under `Weighting::Time`; only the eviction rule differs between the three
+/// windows.
+#[derive(Default)]
+pub struct TimeWeightedMedianState {
+    buffer: VecDeque<(f64, NanoTime)>,
+}
+
+impl TimeWeightedMedianState {
+    /// Time-weighted median of the retained samples: weight each by the gap to
+    /// its successor (the newest by the gap to `now`, i.e. zero), drop zero
+    /// weights, then return the value at which cumulative weight crosses half the
+    /// total (averaging the two straddling values on an exact boundary). Ported
+    /// verbatim from the classic `WindowStream::weighted_median`.
+    fn weighted_median(&self, now: NanoTime) -> f64 {
+        let n = self.buffer.len();
+        let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let (v, t) = self.buffer[i];
+            let next_t = if i + 1 < n { self.buffer[i + 1].1 } else { now };
+            let w = f64::from(next_t - t);
+            // Drop zero-weight samples (a time-weighted newest sample with Δt 0).
+            if w > 0.0 {
+                pairs.push((v, w));
+            }
+        }
+        if pairs.is_empty() {
+            // Every retained sample had zero weight; fall back to the latest.
+            return self.buffer.back().expect("invariant: buffer non-empty").0;
+        }
+        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let half = pairs.iter().map(|&(_, w)| w).sum::<f64>() / 2.0;
+        let mut cumulative = 0.0;
+        for (i, &(v, w)) in pairs.iter().enumerate() {
+            cumulative += w;
+            if cumulative > half {
+                return v;
+            }
+            if cumulative == half {
+                // Crossing lands exactly on a boundary: average with the next
+                // value if there is one (the even-count unit-weight median).
+                return match pairs.get(i + 1) {
+                    Some(&(next, _)) => (v + next) / 2.0,
+                    None => v,
+                };
+            }
+        }
+        // Only reachable through floating-point rounding; the last value wins.
+        pairs.last().expect("invariant: pairs non-empty").0
+    }
+
+    /// Push a sample under an **unbounded** (cumulative) window — every sample is
+    /// retained, so memory grows with the stream — and return the median.
+    fn push_cumulative(&mut self, now: NanoTime, sample: f64) -> f64 {
+        self.buffer.push_back((sample, now));
+        self.weighted_median(now)
+    }
+
+    /// Push a sample under a **count** window (clamped to at least one), evicting
+    /// the oldest once more than `window` samples are retained, and return the
+    /// median.
+    fn push_count(&mut self, now: NanoTime, sample: f64, window: usize) -> f64 {
+        let window = window.max(1);
+        self.buffer.push_back((sample, now));
+        while self.buffer.len() > window {
+            self.buffer.pop_front();
+        }
+        self.weighted_median(now)
+    }
+
+    /// Push a sample under a **time** window, evicting every front sample aged
+    /// strictly past `window` nanoseconds (the just-pushed sample has age 0, so
+    /// the buffer never empties), and return the median.
+    fn push_time(&mut self, now: NanoTime, sample: f64, window: u64) -> f64 {
+        self.buffer.push_back((sample, now));
+        while self
+            .buffer
+            .front()
+            .is_some_and(|&(_, t)| aged_out(now, t, window))
+        {
+            self.buffer.pop_front();
+        }
+        self.weighted_median(now)
+    }
+}
+
+/// Cumulative time-weighted median over every sample seen so far — each sample
+/// weighted by how long it was in effect (Δt from the graph clock). Recomputed
+/// per tick (O(n log n)); retains all samples, so its memory grows with the
+/// stream. Mirrors the classic `median(Window::Unbounded, Weighting::Time)`.
+pub struct CumulativeMedianTimeWeighted;
+
+#[op(build = cumulative_median_time_weighted)]
+impl Op for CumulativeMedianTimeWeighted {
+    type Cfg = ();
+    type State = TimeWeightedMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut TimeWeightedMedianState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push_cumulative(ctx.time(), *input.0)))
+    }
+}
+
+/// Time-weighted median over the most recent `window` samples (a count window),
+/// each weighted by how long it was in effect. Recomputed per tick (O(w log w)).
+/// Mirrors the classic `median(Window::Count(_), Weighting::Time)`.
+pub struct RollingMedianTimeWeighted;
+
+#[op(build = rolling_median_time_weighted)]
+impl Op for RollingMedianTimeWeighted {
+    type Cfg = usize;
+    type State = TimeWeightedMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut TimeWeightedMedianState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push_count(ctx.time(), *input.0, *cfg)))
+    }
+}
+
+/// Time-weighted median over a bounded time window — the samples seen in the last
+/// `window` of graph time, each weighted by how long it was in effect. Recomputed
+/// per tick (O(w log w) over the `w` retained samples). Mirrors the classic
+/// `median(Window::Time(_), Weighting::Time)`.
+pub struct TimeWindowedMedianTimeWeighted;
+
+#[op(build = time_windowed_median_time_weighted)]
+impl Op for TimeWindowedMedianTimeWeighted {
+    type Cfg = NanoTime;
+    type State = TimeWeightedMedianState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut TimeWeightedMedianState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        Ok(Tick::Value(state.push_time(
+            ctx.time(),
+            *input.0,
+            u64::from(*cfg),
+        )))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
