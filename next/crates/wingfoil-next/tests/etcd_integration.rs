@@ -364,8 +364,16 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
 
     {
         let g = GraphBuilder::new();
+        // Drive the write from a ticker rather than a bare `constant`: under
+        // `RunFor::Duration` a `constant` source emits no wake, so the graph
+        // would never run the cycle that fires the PUT. Re-writing the same key
+        // under the lease every 500ms is idempotent — and it is keepalive, not
+        // the re-write, that holds the lease open past its 3s TTL (a PUT does not
+        // reset the lease timer; if keepalive stalled the lease would expire and
+        // the next PUT with the dead lease id would abort the run).
         let _sink = g
-            .constant(burst![entry("/lease/heartbeat", b"alive")])
+            .ticker(Duration::from_millis(500))
+            .map(|_: &()| burst![entry("/lease/heartbeat", b"alive")])
             .etcd_pub(
                 rt.handle(),
                 EtcdConnection::new(&endpoint),
