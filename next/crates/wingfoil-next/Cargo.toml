@@ -67,6 +67,13 @@ required-features = ["async"]
 name = "produce_async_feed"
 required-features = ["async"]
 
+# Port of the classic `async` example: an async `produce_async` producer driving
+# the graph (the graph itself is the consumer). Needs tokio + futures.
+[[example]]
+name = "async"
+path = "examples/async/main.rs"
+required-features = ["async"]
+
 [[bench]]
 name = "tiers"
 harness = false
@@ -108,3 +115,10 @@ path = "examples/order_book/main.rs"
 [[example]]
 name = "statistics"
 path = "examples/statistics/main.rs"
+
+# Multi-threaded execution: a producer sub-graph on a worker thread feeds the
+# main graph through the channel layer (next's take on classic `producer()` /
+# `mapper()`). Uses only default features.
+[[example]]
+name = "threading"
+path = "examples/threading/main.rs"

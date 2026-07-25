@@ -375,9 +375,16 @@ values and tick times.
   classic. `tests/produce_async.rs` (deterministic historical replay,
   same-time-one-burst, mid-stream error abort) + `produce_async_feed`
   example.
-- ⬜ Re-implement classic `threading`/`async` examples on next; bounded-buffer
-  back-pressure; the `RunParams` are snapshotted at wiring (classic passes
-  them at setup) — align if a producer needs run-time bounds.
+- ✅ Classic `threading`/`async` examples re-implemented on next. `threading`
+  (`examples/threading/`) offloads a producer sub-graph to a worker thread that
+  feeds the main graph over the channel layer — next's take on classic
+  `producer()`/`mapper()`, which stay out of the fluent vocabulary (the channel
+  primitive replaces the sugar) — and runs in both modes (realtime bursts,
+  deterministic historical replay). `async` (`examples/async/`, gated on the
+  `async` feature) drives the graph from a `produce_async` producer with the
+  graph as consumer. Bounded-buffer back-pressure (`produce_async_bounded`) and
+  wiring-time `RunParams` (validated against the real run in historical mode)
+  landed with the `produce_async` ergonomic above.
 
 ## Phase 4 — adapters, easiest-first
 
