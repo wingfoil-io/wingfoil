@@ -49,6 +49,10 @@
 //!   stream + `ZeroMqPub::zmq_pub` sink), with optional etcd service discovery,
 //!   behind the `zmq` feature. Synchronous/poll-based, so it uses a background
 //!   thread over the `channel` layer (not `async`); the source is realtime-only.
+//! - [`otlp`] — a realtime, push-based OpenTelemetry metrics sink exporting
+//!   stream values as OTLP gauge metrics (`OtlpSinkOps::otlp_push`) to any
+//!   OTLP-compatible backend, behind the `otlp` feature. A sink only; a no-op
+//!   under historical replay.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
@@ -62,6 +66,8 @@ pub mod etcd;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 pub mod lines;
+#[cfg(feature = "otlp")]
+pub mod otlp;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "prometheus")]

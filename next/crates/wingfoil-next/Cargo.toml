@@ -128,6 +128,25 @@ reqwest = { version = "0.12", features = [
 # trees don't drift; the `zmq` crate links the system `libzmq` (Debian/Ubuntu:
 # `libzmq3-dev`).
 zmq = { version = "0.10.0", optional = true }
+# `otlp` feature: a realtime, push-based OpenTelemetry metrics sink. Exports
+# stream values as OTLP gauge metrics over HTTP/protobuf to any OTLP-compatible
+# backend (Grafana Alloy, Datadog, Honeycomb, New Relic, …). Built on the async
+# `consume_async` ergonomic so exports run off the graph thread (the OTel SDK's
+# `rt-tokio` PeriodicReader needs a tokio runtime). Versions mirror the classic
+# `wingfoil` crate's otlp adapter so the two trees don't drift; only the metrics
+# features are enabled (the classic trace/span exporter is a deferred deviation —
+# it needs the `Traced`/`HasLatency` latency infrastructure, not yet ported to
+# next; see `src/adapters/otlp.rs`).
+opentelemetry = { version = "0.28", optional = true }
+opentelemetry_sdk = { version = "0.28", features = [
+    "metrics",
+    "rt-tokio",
+], optional = true }
+opentelemetry-otlp = { version = "0.28", features = [
+    "http-proto",
+    "reqwest-blocking-client",
+    "metrics",
+], optional = true }
 
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
@@ -176,6 +195,17 @@ zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
 # the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
+# Realtime push-based OpenTelemetry (OTLP) metrics sink. Reuses `async` for the
+# tokio runtime `consume_async` needs. Mirrors classic wingfoil's `otlp`.
+otlp = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "async",
+]
+# Adds the self-contained OTLP integration test (a testcontainers OTel collector
+# the sink exports to). Mirrors classic wingfoil.
+otlp-integration-test = ["otlp", "dep:testcontainers"]
 # Runtime graph dynamism: append nodes and splice edges into a live graph
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors classic wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
@@ -242,6 +272,10 @@ required-features = ["prometheus"]
 [[example]]
 name = "zmq_adapter"
 required-features = ["zmq"]
+
+[[example]]
+name = "otlp_adapter"
+required-features = ["otlp", "prometheus"]
 
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.

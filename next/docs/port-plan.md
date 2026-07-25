@@ -695,6 +695,31 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `anyhow::Result<u16>` with `.context`, not `Result<u16, io::Error>`. The one
    engine addition is `Ctx::run_mode()` (a realtime-only IO sink needs to see the
    run mode; reported as `RealTime` inside an island, like `is_last_cycle`).
+   ✅ **otlp** *(metrics done; traces deferred)*: a realtime, push-based
+   OpenTelemetry metrics **sink** — the `OtlpSinkOps::otlp_push` extension trait
+   on any `Stream<T: Display>` exports each tick as an OTLP `f64` gauge over
+   HTTP/protobuf, behind the `otlp` feature. Built on `consume_async` so the OTel
+   SDK export (an `rt-tokio` 500 ms `PeriodicReader`) runs off the graph thread;
+   the meter provider is built lazily in that task and dropped at teardown to
+   flush (matching classic's drop-not-`shutdown()`). No-op under historical
+   replay (reads `Ctx::run_mode()`, so no provider is built and no network calls
+   are made). Self-contained parity tests in `tests/otlp_adapter.rs` (classic
+   `push` unit tests: historical no-connect + bad-endpoint-graceful); the
+   end-to-end export test is `tests/otlp_integration.rs` behind
+   `otlp-integration-test` (a testcontainers OTel collector;
+   `otlp-next-integration.yml`). **Deviations** (metrics capabilities all
+   preserved): (a) the tokio runtime is the caller's — `otlp_push` takes a
+   `&tokio::runtime::Handle` (the etcd/`consume_async` convention), so the graph
+   must be driven from a non-async thread; (b) the sink is the `OtlpSinkOps`
+   extension trait (`stream.otlp_push(&handle, name, config)`), not a classic
+   `OtlpPush` on `dyn Stream<T>`. **Capability gap — trace/span export
+   (`OtlpSpans`) not ported:** classic's span exporter emits OTel spans from
+   `Stream<P: HasLatency>` values; that path depends on the `Traced` /
+   `HasLatency` / `latency_stages!` latency infrastructure, which is **not yet
+   ported to next** (a separate roadmap item; latency stamps "ride values as a
+   payload" per the Phase 6 notes). Once the latency types land, `otlp_spans`
+   ports mechanically onto the same `consume_async` shape. Until then only the
+   metrics push is available; `otlp_push` itself is at full parity.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
