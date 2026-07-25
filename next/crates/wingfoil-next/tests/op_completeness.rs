@@ -47,14 +47,28 @@
 //!     ARE expressible; covered in `surface_sugar` below.)
 //!
 //! **3. Currently interpreted-only — candidate follow-up, not by design:**
-//!   * `join_passive`, `try_join_passive` — passive-edge joins; the passive
-//!     variant carries no `#[op]` forwarder yet (the active `join` / `try_join`
-//!     do — covered below).
-//!   * `delay_with_reset` — a hand-written builder method (no `#[op]`), so no
-//!     forwarder yet.
-//!   * `with_time` — a hand-written builder method (its `(NanoTime, T)` output
-//!     is seeded from the input, so it dodges `T: Default` and can't be a plain
-//!     `#[op]`); no forwarder yet.
+//!   * *(empty — all four former members are now dual-mode.)* `join_passive`,
+//!     `try_join_passive`, `delay_with_reset`, and `with_time` were once
+//!     interpreted-only for want of a `graph!` forwarder; they now carry one
+//!     (see `surface_passive_delay` below, exercised across all three engines)
+//!     and moved out of this list. The mechanism, for each:
+//!     - `join_passive` / `try_join_passive` — the passive-edge join shape. A
+//!       second `#[op]` cannot attach to `Join` / `TryJoin` (only the passive
+//!       mask differs), so a thin forwarder-witness op (`JoinPassive` /
+//!       `TryJoinPassive` in `ops.rs`, `#[op(passive = [1])]`, delegating its
+//!       `cycle` to `Join` / `TryJoin`) emits the `__wf_op_join_passive_*` /
+//!       `__wf_op_try_join_passive_*` forwarders.
+//!     - `delay_with_reset` — the real op's `In = (&T, bool, bool)` (two tick
+//!       flags, the trigger's value unread) is unparseable by `#[op]`; a
+//!       witness op (`DelayWithResetFwd`) restates it in the two-edge
+//!       `(&T, bool, &U, bool)` form `#[op]` parses and delegates to
+//!       `DelayWithReset::cycle`.
+//!     - `with_time` — `#[op(build = with_time, no_builder)]` on the op itself
+//!       (the hand-written `Builder::with_time` stays for its `T: Clone`-only
+//!       interpreted seeding). Inside `graph!`/compiled the output must be
+//!       `Default` (`(NanoTime, T): Default`), which holds for every value type
+//!       used here; the differing pre-first-tick seed is never observed because
+//!       the op ticks in lockstep with its source.
 //!
 //! This file is the single place that classification is written down; the
 //! *enforcement* is that everything in category (none) — i.e. every op meant to
@@ -175,6 +189,42 @@ wingfoil_next::graph! {
     }
 }
 
+// Formerly-interpreted-only surface, now dual-mode: `with_time`,
+// `join_passive`, `try_join_passive`, and `delay_with_reset`. Each reaches
+// `graph!`/compiled through a forwarder added alongside its op (see the module
+// doc, category 3). Exercising them here — and in the `nested` parity test
+// below — is exactly the two-sided guard: a dropped forwarder fails to resolve
+// `__wf_op_<name>_cycle` at these call sites.
+wingfoil_next::graph! {
+    fn surface_passive_delay(g: &GraphBuilder) -> Stream<Vec<u64>> {
+        let count = g.ticker(P).count();
+        // `with_time`: (NanoTime, u64) folded back to a single u64 stream. The
+        // engine clock is deterministic in historical mode, so the stamped time
+        // agrees across engines.
+        let stamped = count
+            .with_time()
+            .map(|pair: &(NanoTime, u64)| u64::from(pair.0) + pair.1);
+        // Two derived streams to join; `passive_src` is read passively.
+        let base = count.map(|i| i * 2);
+        let passive_src = count.map(|i| i * 100);
+        // `join_passive` / `try_join_passive`: `base` active, `passive_src`
+        // read passively (does not activate the node).
+        let joined = base.join_passive(&passive_src, |x: &u64, y: &u64| x + y);
+        let tried = base.try_join_passive(&passive_src, |x: &u64, y: &u64| Ok(x + y));
+        // `delay_with_reset`: delay `count`, snapping to the live value whenever
+        // the reset trigger (even counts) ticks.
+        let flag = count.map(|i| i.is_multiple_of(2));
+        let trigger = count.filter(&flag);
+        let delayed = count.delay_with_reset(Duration::from_millis(25), &trigger);
+        let out = joined
+            .merge(&tried)
+            .merge(&delayed)
+            .merge(&stamped)
+            .accumulate();
+        out
+    }
+}
+
 // --- Three-engine agreement across the surface ------------------------------
 //
 // Each block above compiled (proving fluent + forwarder both exist for every op
@@ -235,4 +285,41 @@ fn sugar_surface_three_engine_parity() {
 #[test]
 fn lifecycle_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_lifecycle);
+}
+
+#[test]
+fn passive_delay_surface_interp_eq_compiled() {
+    assert_interp_eq_compiled!(surface_passive_delay);
+}
+
+/// Full three-engine agreement for the formerly-interpreted-only ops
+/// (`with_time`, `join_passive`, `try_join_passive`, `delay_with_reset`):
+/// `interpreted() == compiled() == nested()`. The self-contained graph is a
+/// source island, so it exposes all three expansions; `nested` mounts it as one
+/// node in an interpreted outer graph (following `nested_islands.rs`).
+#[test]
+fn passive_delay_surface_three_engine_parity() {
+    let (mut runner, out) = surface_passive_delay::interpreted();
+    runner.run(HISTORICAL, RUN).unwrap();
+    let interp = runner.value(out);
+    assert!(
+        !interp.is_empty(),
+        "surface_passive_delay produced no values"
+    );
+
+    let (compiled,) = surface_passive_delay::compiled(HISTORICAL, RUN).unwrap();
+    assert_eq!(
+        interp, compiled,
+        "interpreted vs compiled drift in surface_passive_delay"
+    );
+
+    let g = GraphBuilder::new();
+    let island = surface_passive_delay::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, RUN).unwrap();
+    assert_eq!(
+        interp,
+        r.value(&island),
+        "interpreted vs nested drift in surface_passive_delay"
+    );
 }

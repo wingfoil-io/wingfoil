@@ -580,8 +580,19 @@ where
 }
 
 /// Pairs each value with the current engine time: emits `(time, value)`.
+///
+/// `no_builder`: a hand-written [`Builder::with_time`](crate::interp::Builder::with_time)
+/// seeds the output `(NanoTime, T)` slot from the input's current value, so the
+/// interpreted path needs only `T: Clone` (never `T: Default`). The `#[op]`
+/// attribute is kept for its `graph!` forwarders, which seed the value slot
+/// with `Default::default()` — so inside `graph!`/compiled the output type must
+/// be `Default` (`(NanoTime, T): Default`, i.e. `T: Default`). That pre-first-tick
+/// seed is only ever read by a passive downstream before the first tick; the op
+/// itself ticks in lockstep with its source, so the observed values agree across
+/// all three engines.
 pub struct WithTime<T>(PhantomData<T>);
 
+#[op(build = with_time, no_builder)]
 impl<T: Clone + 'static> Op for WithTime<T> {
     type Cfg = ();
     type State = ();
@@ -1998,6 +2009,61 @@ where
     }
 }
 
+/// The `graph!`/compiled forwarder witness for [`join_passive`] — [`Join`]'s
+/// semantics with the **second** edge passive (read but not activating: the
+/// `bimap(Active, Passive)` shape a feedback input takes). The interpreted path
+/// wires this shape through [`Builder::bimap`](crate::interp::Builder::bimap)
+/// (`join_passive` = `bimap(_, true, _, false)`); this separate witness exists
+/// only so `#[op(passive = [1])]` can emit the `__wf_op_join_passive_*`
+/// forwarders — a second `#[op]` cannot be attached to [`Join`], and the
+/// passive mask is the only thing that differs. `cycle` delegates to [`Join`]
+/// so the semantics are single-sourced.
+pub struct JoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
+
+#[op(build = join_passive, no_builder, passive = [1])]
+impl<A, B, C, F> Op for JoinPassive<A, B, C, F>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> C + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B);
+    type Out = C;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, state: &mut (), input: (&A, &B), ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
+        <Join<A, B, C, F> as Op>::cycle(cfg, state, input, ctx)
+    }
+}
+
+/// The `graph!`/compiled forwarder witness for [`try_join_passive`] — the
+/// `try_` counterpart to [`JoinPassive`], delegating to [`TryJoin`] with the
+/// second edge passive. See [`JoinPassive`] for why a separate witness is
+/// needed.
+pub struct TryJoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
+
+#[op(build = try_join_passive, no_builder, passive = [1])]
+impl<A, B, C, F> Op for TryJoinPassive<A, B, C, F>
+where
+    A: 'static,
+    B: 'static,
+    C: Clone + 'static,
+    F: Fn(&A, &B) -> Result<C> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A, &'a B);
+    type Out = C;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, state: &mut (), input: (&A, &B), ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
+        <TryJoin<A, B, C, F> as Op>::cycle(cfg, state, input, ctx)
+    }
+}
+
 /// Delays its source by a fixed interval. The op that forced the retrofit's
 /// `cycle_typed` tier — here it needs nothing special: `SCHEDULES` grants it
 /// `Ctx::schedule`, its queue is ordinary `State`, and the upstream tick
@@ -2200,5 +2266,41 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
             return Ok(Tick::Silent(value.clone()));
         }
         Ok(out)
+    }
+}
+
+/// The `graph!`/compiled forwarder witness for [`delay_with_reset`] — a thin
+/// adapter over [`DelayWithReset`], delegating so its scheduling/seeding
+/// semantics are single-sourced. The real op's `In = (&T, bool, bool)` (source
+/// value, source tick, reset tick — the trigger's *value* is never read) is a
+/// shape `#[op]` cannot parse from tokens (two consecutive tick flags with no
+/// second value edge). This witness restates `In` in the uniform two-edge form
+/// `(&T, bool, &U, bool)` that `#[op]` *does* parse — one `(value, tick)` pair
+/// per edge — then drops the trigger's value when delegating. Both engines run
+/// identical [`DelayWithReset::cycle`] logic.
+///
+/// `U` is the trigger stream's value type; it is generic because the reset
+/// trigger may carry any payload (only its tick matters), matching the fluent
+/// [`delay_with_reset`](crate::fluent::StreamOps::delay_with_reset)`<U>`.
+pub struct DelayWithResetFwd<T, U>(PhantomData<(T, U)>);
+
+#[op(build = delay_with_reset, no_builder)]
+impl<T: Clone + PartialEq + 'static, U: 'static> Op for DelayWithResetFwd<T, U> {
+    type Cfg = Duration;
+    type State = DelayWithResetState<T>;
+    /// Source value, source tick, trigger value (ignored), trigger tick — the
+    /// two-edge `(value, tick)`-per-edge form `#[op]` parses.
+    type In<'a> = (&'a T, bool, &'a U, bool);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
+
+    fn cycle(
+        cfg: &mut Duration,
+        state: &mut DelayWithResetState<T>,
+        input: (&T, bool, &U, bool),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let (value, upstream_ticked, _trigger_value, trigger_ticked) = input;
+        <DelayWithReset<T> as Op>::cycle(cfg, state, (value, upstream_ticked, trigger_ticked), ctx)
     }
 }
