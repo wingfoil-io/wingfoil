@@ -6,8 +6,21 @@ rust-version.workspace = true
 publish = false
 description = "Python interop boundary for wingfoil-next: the PyElement erased value type"
 
+[lib]
+# cdylib: the importable Python extension module (built by maturin with the
+# `extension-module` feature). rlib: so the object form stays usable as a normal
+# Rust dependency (tests here, and the future `#[pyop]` macro crate).
+crate-type = ["cdylib", "rlib"]
+
 [lints]
 workspace = true
+
+[features]
+# Turned on only by the maturin build (see pyproject.toml). Off by default so
+# the rlib and `cargo test` link libpython normally and the embedded-interpreter
+# dev tests run; the shipped wheel sets it so the module resolves Python symbols
+# at load time instead.
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the

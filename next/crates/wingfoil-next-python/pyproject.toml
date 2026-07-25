@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "wingfoil-next-python"
+dynamic = ["version"]
+description = "Python interop prototype for wingfoil-next (the Op-pattern engine)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+dev = ["maturin>=1.4,<2.0", "pytest>=7"]
+
+[tool.maturin]
+# `extension-module` resolves Python symbols at load time (no libpython link in
+# the wheel). Importing `wingfoil_next` gives the Graph / Stream classes.
+features = ["extension-module"]
+module-name = "wingfoil_next"
+include = ["Cargo.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
