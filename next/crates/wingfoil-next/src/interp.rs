@@ -23,15 +23,18 @@
 //! full-index sweep it replaces), but per-cycle work is proportional to the
 //! nodes that actually fire, not the graph size `N`.
 //!
-//! Value slots are individual `Rc<RefCell<T>>`s; the arena/SoA store is a
-//! deliberately separate follow-on (the slot boundary is frozen here so the
-//! catalog and adapter ports are not touched twice — see the Phase 4.5
-//! coupling note in the port plan). `run` is fallible — it returns the first
+//! Value slots are reached only through [`SlotRef<T>`] — the frozen access
+//! boundary between ops and the value store. Each `SlotRef` wraps an individual
+//! `Rc<RefCell<T>>` today, but ops only `borrow()`/`borrow_mut()` it, never the
+//! concrete cell, so the store can move to a contiguous arena/SoA later as an
+//! internal swap without touching a single capture site (the Phase 4.5
+//! "freeze the slot boundary" mitigation, made *by type* not just convention;
+//! see the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the classic engine.
 
 use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
@@ -110,6 +113,58 @@ impl Builder {
             builder_id: self.id,
             _t: PhantomData,
         }
+    }
+}
+
+/// The frozen access boundary between an op and the value store.
+///
+/// Every op registration closure reads and writes its slots **only** through a
+/// `SlotRef` — `borrow()` for a shared read of the current value, `borrow_mut()`
+/// for the write — never through the concrete backing cell. Today a `SlotRef`
+/// wraps one `Rc<RefCell<T>>`, but because no capture site names that type, the
+/// store can move to a contiguous arena / structure-of-arrays later (Phase 4.5)
+/// as an internal swap of this struct's innards, without touching a single
+/// registration or emission path. This is the "freeze the slot API boundary"
+/// mitigation from the port plan, made *by type* rather than by convention.
+///
+/// Cheap to clone (clones the underlying handle), so a `move` cycle closure
+/// captures its own `SlotRef` by value, exactly as it captured an `Rc` before.
+///
+/// `pub` + `#[doc(hidden)]` (like [`Stream::__slot`](crate::fluent::Stream::__slot)
+/// and the other codegen hooks): the `graph!` macro's `nested` expansion, which
+/// lands in downstream crates, reads island inputs through `SlotRef::borrow`.
+#[doc(hidden)]
+pub struct SlotRef<T> {
+    cell: Rc<RefCell<T>>,
+}
+
+// Hand-written `Clone` (not `#[derive]`) for the same reason as `Handle`: a
+// `SlotRef` shares a handle to storage, so it is cloneable for *every* `T`,
+// with no spurious `T: Clone` bound.
+impl<T> Clone for SlotRef<T> {
+    fn clone(&self) -> Self {
+        Self {
+            cell: self.cell.clone(),
+        }
+    }
+}
+
+impl<T> SlotRef<T> {
+    fn new(cell: Rc<RefCell<T>>) -> Self {
+        Self { cell }
+    }
+
+    /// Shared read of the slot's current value. `pub` (doc-hidden) because the
+    /// `graph!` `nested` expansion calls it from downstream crates.
+    #[doc(hidden)]
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.cell.borrow()
+    }
+
+    /// Exclusive write access to the slot. Crate-internal — only op
+    /// registration writes a slot; downstream codegen only ever reads.
+    pub(crate) fn borrow_mut(&self) -> RefMut<'_, T> {
+        self.cell.borrow_mut()
     }
 }
 
@@ -471,21 +526,23 @@ impl Builder {
         (self.make_handle(idx), sender)
     }
 
-    pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> Rc<RefCell<T>> {
+    pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
         debug_assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Builder than the one that minted it"
         );
-        self.slots[h.idx]
-            .clone()
-            .downcast::<RefCell<T>>()
-            .expect("invariant: Handle<T> indexes a slot of type T")
+        SlotRef::new(
+            self.slots[h.idx]
+                .clone()
+                .downcast::<RefCell<T>>()
+                .expect("invariant: Handle<T> indexes a slot of type T"),
+        )
     }
 
-    fn new_slot<T: 'static>(&mut self, init: T) -> Rc<RefCell<T>> {
-        let slot = Rc::new(RefCell::new(init));
-        self.slots.push(slot.clone() as Rc<dyn Any>);
-        slot
+    fn new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
+        let cell = Rc::new(RefCell::new(init));
+        self.slots.push(cell.clone() as Rc<dyn Any>);
+        SlotRef::new(cell)
     }
 
     /// Register a node: its slot must already have been pushed (so slot and

@@ -4,8 +4,9 @@ Status: **porting in progress** — the Phase 0 contract spikes have landed and
 several later phases are underway (see the ✅/🟡 markers throughout the body).
 The `wingfoil-next` and `wingfoil-next-macros` crates now live on this branch
 (with tests and lints passing) and implement the target pattern: `Op` trait
-(pure semantics, engine-owned state), an
-interpreted engine, a fully monomorphized `compiled()` expansion, compiled
+(pure semantics, engine-owned state), a sparse dirty-list
+interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
+`compiled()` expansion, compiled
 islands (`nested()`) mountable in interpreted graphs, busy-spin `poll`
 sources, and the `graph!` macro deriving all of it from one fluent wiring
 function. This document plans the port of the entire classic codebase onto
@@ -38,31 +39,36 @@ What each execution path supports, per wingfoil pattern. Legend: ✅ works ·
 🟡 partial · 📅 planned · ❌ not supported **by design** (not a missing
 feature — the path's value depends on the constraint).
 
-Classic is the reference the next engine converges toward: the two
-interpreted columns aim to *match* it, while compiled/island add new fast
+Classic is the reference the next engine converges toward: the interpreted
+engine aims to *match* it, while compiled/island add new fast
 paths that trade generality for speed (the ❌s are by-design, not gaps).
 
-| Pattern / capability | Classic wingfoil | Interpreted (today) | Interpreted + dirty-list (4.5) | Compiled | Island |
-|---|:--:|:--:|:--:|:--:|:--:|
-| Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Feedback / cycles | ✅ | ✅¹ | ✅ | ❌ | ❌ |
-| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| External / channel / async sources (`THREADED`) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Bursts (never latest-wins) | ✅ | ✅ | ✅ | ❌² | ❌² |
-| Historical replay | ✅ | ✅ | ✅ | ✅³ | ✅ |
-| Realtime | ✅ | ✅ | ✅ | 🟡³ | ✅ |
-| Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Lifecycle start/stop/teardown | ✅ | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
-| Observe arbitrary intermediate streams | ✅ | ✅ | ✅ | ❌⁵ | ❌⁵ |
-| Runtime-valued config (params/captures from caller) | ✅ | ✅ | ✅ | ❌⁶ | ❌⁶ |
-| Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
-| Re-run (independent repeated runs) | ✅⁸ | ❌⁸ | 📅⁸ | ✅⁹ | ✅⁹ |
-| Dynamic graph (runtime add/remove) | ✅ | ❌ | 📅 | ❌ | 🟡¹⁰ |
-| Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ❌¹² | ✅ | 🟡¹³ | ✅¹⁴ |
-| Dense hot-path speed (measured) | 1× | 1× | ~1× | 3–4×¹⁵ | interior 3–4×¹⁵ |
+The two former interpreted columns ("today" vs "+ dirty-list (4.5)") have
+collapsed into one: the **sparse dirty-list scheduler has landed** as the
+default interpreted dispatch (see Phase 4.5), so what was the 4.5 column *is*
+today's interpreted engine.
+
+| Pattern / capability | Classic wingfoil | Interpreted | Compiled | Island |
+|---|:--:|:--:|:--:|:--:|
+| Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ |
+| Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ |
+| Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ |
+| Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ |
+| Feedback / cycles | ✅ | ✅¹ | ❌ | ❌ |
+| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ❌ | ❌ |
+| External / channel / async sources (`THREADED`) | ✅ | ✅ | ❌ | ❌ |
+| Bursts (never latest-wins) | ✅ | ✅ | ❌² | ❌² |
+| Historical replay | ✅ | ✅ | ✅³ | ✅ |
+| Realtime | ✅ | ✅ | 🟡³ | ✅ |
+| Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
+| Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
+| Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
+| Re-run (independent repeated runs) | ✅⁸ | ❌⁸ | ✅⁹ | ✅⁹ |
+| Dynamic graph (runtime add/remove) | ✅ | 📅¹⁰ | ❌ | 🟡¹⁰ |
+| Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ✅¹² | 🟡¹³ | ✅¹⁴ |
+| Dense hot-path speed (measured) | 1× | ~1×¹² | 3–4×¹⁵ | interior 3–4×¹⁵ |
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
@@ -85,12 +91,18 @@ paths that trade generality for speed (the ❌s are by-design, not gaps).
   `setup`. next's v1 Runner is single-run (spike 0.4); matching classic's
   re-run needs the per-node reset hook (planned).
 ⁹ `compiled()` is a plain fn — each call is a fresh independent run.
-¹⁰ Island interior is fixed at compile time, but the island *itself* can be
-  wired dynamically into the interpreted graph once 4.5 lands.
+¹⁰ The sparse dirty-list engine — the mutable-frontier *enabler* for runtime
+  add/remove — has landed, but graph *mutation* itself (`Runner::extend`) is
+  not yet built (📅). The compiled/island interior stays fixed by design, but
+  an island can be wired dynamically into the interpreted graph.
 ¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
-  4.5 arena rework can also improve on.
-¹² `O(N)` topological sweep every cycle — the Phase 4.5 gap.
+  deferred 4.5 arena rework can also improve on.
+¹² Sparse dirty-list dispatch (classic's `dirty_nodes_by_layer` model) has
+  landed as the default: per-cycle work ∝ active nodes, results byte-identical
+  to classic and to the old full sweep (retained as `Dispatch::FullSweep`, an
+  executable oracle). The arena/SoA value store — the remaining dense-path
+  speedup — is a deferred follow-on with the slot boundary frozen (Phase 4.5).
 ¹³ Straight-line per-node `if cond` checks (cheap, but every node); region
   gating (skip quiet sub-graphs) is the planned compiled counterpart.
 ¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
@@ -403,83 +415,89 @@ untouched (still shipping) until Phase 7.
 
 ## Phase 4.5 — engine execution model: breadth-first dirty-list parity
 
-**Gap (must close):** the interpreted engine currently sweeps **all** nodes in
-wiring (topological) order every cycle, testing each node's dispatch condition.
-Classic wingfoil instead propagates **breadth-first from the ticked source
-nodes through a dirty-list / layered schedule**, touching only nodes that can
-actually fire this cycle. The two are *observably identical* — both are
-glitch-free and fire each node exactly once after its upstreams (macro-parity
-tests confirm byte-identical output) — but the mechanisms differ, and the
-`O(N)`-per-cycle sweep does not match classic's sparse-graph performance: a
-large graph where only a handful of nodes tick still pays for a full node scan
-each cycle.
+**Scheduling: ✅ landed.** The interpreted engine now runs a sparse dirty-list
+by default (`interp.rs`, `Dispatch::Sparse`), reproducing classic wingfoil's
+`dirty_nodes_by_layer` model. Each cycle seeds a work set from the frontier —
+`always` busy-poll ops plus kernel-marked callback-activated ops (tickers,
+`delay` pops, the feedback source, channel replay) — then propagates the tick
+frontier forward: a node that ticks marks its active downstream neighbours
+dirty. The work set drains in ascending node-index order (a valid topological
+order, since the fluent API forces a stream to exist before it is referenced),
+so each node fires exactly once after everything it reads — glitch-free, and
+with per-cycle work proportional to the nodes that *actually fire*, not the
+graph size `N`. Results are **byte-identical** to classic and to the old
+`O(N)` full-index sweep, which is retained as `Dispatch::FullSweep` — an
+executable reference oracle (`runner.with_dispatch(Dispatch::FullSweep)`) the
+parity suite can cross-check against. This closes the sparse-graph performance
+gap against classic (pending the benchmark below as the standing gate).
 
-**Target:** reproduce classic's execution model in the interpreted engine —
-source-driven breadth-first propagation over a dirty-list (or layer-ordered
-work set), so per-cycle work is proportional to the nodes that actually fire,
-not the graph size. Concretely:
+**Two follow-ons remain, both deliberately separated from the scheduler:**
 
-- Assign each node a layer (longest path from a source) at `build()`, or keep
-  an explicit ready/dirty set; either way process in an order that preserves
-  the existing glitch-free single-fire guarantee (a recombine node fires once,
-  after every upstream that fires this cycle).
-- Seed each cycle's work set from the kernel's due callbacks
-  (`schedules`/`threaded`/`always` sources) and the tick-propagation frontier,
-  then expand breadth-first through active downstream edges only.
-- Preserve everything already correct: burst delivery, feedback's `+1`
-  scheduled edge, `Activation`-driven dispatch (callback-activated / always),
-  passive edges (read-not-triggering), and the `is_last_cycle` boundary flush.
+### Arena / SoA value store — deferred perf follow-on (boundary frozen by type)
+
+**Decision: do the arena later, not now.** It's a pure perf follow-on; the
+interpreted engine is already at parity with classic (the dirty-list did that),
+and nothing correctness- or cutover-related depends on it. The critical path to
+cutover is *breadth* — catalog, adapters, facade, python — so the arena waits
+for a measured need. Two cheap de-risking steps were done now instead (below),
+so "later" stays free and evidence-driven.
+
+Moving the per-slot `Rc<RefCell<T>>`s to a contiguous arena / structure-of-arrays
+store is a **pure memory/throughput optimisation** (semantics unchanged) that
+lands the "dense hot-path speed" number and enables the zero-copy passthrough
+(a node that provably forwards its input aliases the upstream slot handle
+instead of cloning — see the ref/aliasing note below).
+
+The rework-trap the review flagged — every `Builder` registration closure
+captures the concrete slot type, so a naive swap touches the whole ported
+catalog + adapters **twice** — is **resolved: the slot API boundary is now
+frozen by type.** ✅ `SlotRef<T>` (`interp.rs`) is the sole access boundary:
+`slot()`/`new_slot()` return it, and every registration closure reads/writes
+only through `SlotRef::borrow`/`borrow_mut`, never the concrete cell. Today it
+wraps an `Rc<RefCell<T>>`; the arena becomes an internal swap of that innards
+with **zero capture sites touched**. Audited: the macro crate never names the
+slot type (compiled uses locals), and the one other hook —
+`Stream::__slot` for `nested` islands — now returns `SlotRef<T>` too. So the
+bulk catalog/adapter port proceeds against the frozen boundary and the arena
+lands whenever a measured need appears.
+
+**Measured baseline** (`benches/store_baseline.rs`, added now): on a large
+forwarding graph (8 KiB `Vec` payload through 16 `filter` hops), the owned-`Vec`
+run is ~5× an `Rc<Vec>` run of the identical graph — i.e. the per-hop clone tax
+that slot-aliasing would remove is *large* for big-payload forwarding, so the
+arena+aliasing has real teeth there (ratio is machine-dependent; regenerate
+before deciding). The same bench's `sparse_dispatch` group is the standing gate
+for the dirty-list: `Dispatch::Sparse` runs ~8× faster than the `FullSweep`
+oracle on a graph padded with cold nodes, confirming work ∝ active, not `N`.
+
+### Dynamic graphs (runtime add/remove) — enabler landed, feature not built
+
+The sparse dirty-list maintains a mutable frontier of active nodes — the
+natural home for classic's `graph_node` / `dynamic_group` (add/remove nodes
+and sub-graphs mid-run), which the old all-nodes sweep could not cleanly
+express. The **enabler is now in place**; the feature itself (a
+`Runner::extend` appending nodes + slots and splicing edges at runtime, with
+layer/dirty bookkeeping updated for the affected region) is **not yet built**.
+This is the one open *decision*, not just execution: **is runtime mutation a
+cutover blocker under the superset objective, or a documented v1 deviation?**
+Classic `graph_node` users force the call. The compiled and island paths stay
+static by design (their whole value is a fixed monomorphized schedule);
+dynamism is an interpreted-engine capability, matching classic.
 
 **Scope notes:**
-- Pure mechanism/performance change — observable results must stay identical,
-  so the full existing parity suite (catalog, macro, feedback, channel) is the
-  regression gate, plus a new large-sparse-graph benchmark asserting per-cycle
-  cost tracks the *active* node count, not `N`.
-- The value store is orthogonal but naturally paired: individual
-  `Rc<RefCell<T>>` slots → a contiguous arena/SoA (the other prototype
-  simplification the interp module doc flags), which the dirty-list rework is
-  the right moment to land. **⚠ Coupling / rework trap:** the arena/SoA change
-  alters the slot representation that *every* `Builder` registration closure
-  and *every* macro emission path captures today (`Rc<RefCell<T>>` handed into
-  the emitted `cycle`). Porting the ~40-node catalog and the adapters against
-  the current slot shape first, then landing the arena, means touching all of
-  that code **twice**. Two ways out, pick one before the Phase 2/4 volume
-  ramps: **(a)** land Phase 4.5 (at least the value-store half) *before* the
-  bulk catalog/adapter port, or **(b)** freeze the slot API boundary now — a
-  stable handle/accessor that registrations and emissions target — so the
-  arena swap is internal and registrations survive it unchanged. This coupling
-  is real work either way; do not treat the store swap as a free rider on the
-  dirty-list pass.
+- The scheduler change was pure mechanism/performance — observable results
+  stayed identical, so the full existing parity suite (catalog, macro,
+  feedback, channel) plus the `FullSweep` oracle guard it. Still owed: a
+  large-sparse-graph benchmark asserting per-cycle cost tracks the *active*
+  node count, not `N`, as the standing gate for the perf-parity claim.
 - The **compiled**/island path is unaffected in shape (it already emits
   straight-line per-node dispatch, the static-schedule analogue), but this is
   where branch-1's *region gating* idea (skip whole quiet sub-graphs) becomes
-  the compiled counterpart of the dirty-list — worth doing in the same pass.
+  the compiled counterpart of the dirty-list — worth doing alongside the
+  arena/perf pass.
 - Bench gate ties to Phase 6: `next-interpreted ≥ classic-interpreted` on the
-  sparse workloads is only achievable **after** this phase; until then next's
-  interpreted engine is knowingly slower on large sparse graphs.
-
-**Dynamism rides on this.** A dirty-list engine that already maintains a
-mutable frontier of active nodes is the natural home for **runtime graph
-mutation** — classic's `graph_node` / `dynamic_group` (add/remove nodes and
-sub-graphs mid-run) live on exactly this machinery, which the topological
-all-nodes sweep cannot cleanly express. So the dynamic-graph capability
-(previously fenced out of v1) folds in here: once the engine propagates from
-a mutable ready-set instead of scanning a fixed node vector, appending nodes
-+ slots and splicing edges at runtime becomes tractable, with layer/dirty
-bookkeeping updated for the affected region. The compiled and island paths
-stay static by design (their whole value is a fixed monomorphized schedule);
-dynamism is an interpreted-engine capability, matching classic.
-
-Sequencing: the *dirty-list mechanism* is observably independent of the
-catalog/adapter volume (Phases 2/4) and must land before claiming
-interpreted-engine performance parity with classic. But the **arena/SoA value
-store bundled into this phase is not schedule-independent** — it changes the
-slot shape the whole catalog and adapter port captures (see the coupling
-warning above). So this phase does *not* "land any time before Phase 6": either
-its value-store half lands before the Phase 2/4 bulk, or the slot API boundary
-is frozen first so registrations survive the arena swap unchanged. The
-dirty-list scheduling change proper, and dynamic-graph support, can still be
-follow-on increments once that boundary question is settled.
+  sparse workloads is now achievable in principle (the mechanism has landed);
+  the benchmark confirms it.
 
 ## Phase 5 — infrastructure
 
@@ -561,23 +579,24 @@ follow-on increments once that boundary question is settled.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Engine-owned init / evaluation-timing drift across the three emission paths | silent wrong values — the macro crate's interpreted/compiled/nested paths are the biggest drift surface; op-`cycle` semantics agree but engine-owned *seeding* and *timing* do not (fold init, closure-factory re-eval) | table-driven three-engine parity test (one micro-graph per macro-supported combinator, `interpreted == compiled == nested`); seed with the known divergences; single seed/init field per op so all three paths read one source |
-| Interpreted engine slower than classic on sparse graphs | perf parity claim; `O(N)`/cycle sweep vs classic's dirty-list | **Phase 4.5** breadth-first dirty-list rework; sparse-graph benchmark as gate; results already parity-identical, so it's mechanism/perf only |
-| Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — every `Builder` registration + macro emission captures `Rc<RefCell<T>>` today | land Phase 4.5's value-store half before the Phase 2/4 bulk, **or** freeze the slot API boundary now so registrations survive the swap unchanged (see Phase 4.5 coupling warning) |
+| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; remaining: the sparse-graph benchmark as the standing gate |
+| Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — registrations capture the slot type | ✅ **resolved: boundary frozen by type.** `SlotRef<T>` (`interp.rs`) is the sole access path (`slot()`/`new_slot()` return it; ops only `borrow`/`borrow_mut`); the arena is an internal swap of its innards, zero capture sites touched. Macro uses locals; `Stream::__slot` returns `SlotRef` too |
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
-| Dynamic graph expectations | `graph_node` users | **Phase 4.5** dirty-list engine is the enabler (mutable frontier); islands cover static composition today |
+| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; the mutation feature (`Runner::extend`) is **not yet built** — open decision: cutover blocker vs documented v1 deviation. Islands cover static composition today |
 | Python API drift | downstream breakage | facade keeps bindings stable; pytest as gate |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
 ## Explicitly out of scope (v1)
 
 - Feedback inside `graph!` / islands (fluent only).
-- Runtime graph mutation — now targeted at **Phase 4.5** (the dirty-list
-  engine is its enabler), not a permanent exclusion.
-- Arena value store for the interpreted engine — now folded into **Phase
-  4.5** (the dirty-list rework is the right moment to land it), no longer
-  indefinitely deferred.
+- Runtime graph mutation — the **Phase 4.5** dirty-list enabler has landed;
+  the mutation feature itself is still to be built (open blocker-vs-deviation
+  decision), not a permanent exclusion.
+- Arena value store for the interpreted engine — a deferred **Phase 4.5** perf
+  follow-on with the slot boundary frozen so it stays internal; no longer
+  indefinitely deferred and no longer a sequencing risk.
 - wingfoil-wasm / wingfoil-js changes (protocol-level, engine-agnostic).
 
 ### Nice-to-have (post-v1)
@@ -585,11 +604,35 @@ follow-on increments once that boundary question is settled.
 - **Emit-by-reference / zero-copy passthrough.** Today an op reads its
   upstreams by reference (`In<'a> = (&'a A,)`, no clone to inspect) but must
   *produce* an owned value into its own slot — a passthrough or a big-value
-  forward costs a clone (cheap only if the element is `Rc`/`Arc`). A future
-  optimisation could let a node that provably forwards its input unchanged
-  *alias* the upstream slot instead of owning a copy (or, with the Phase 4.5
-  arena, hand out a slot handle rather than a value). Purely a memory/throughput
-  win — semantics are unchanged — so it stays out of the correctness-first path.
+  forward costs a clone (cheap only if the element is `Rc`/`Arc`; `store_baseline`
+  measures the tax). A node that provably forwards its input unchanged could
+  *alias* the upstream slot instead of owning a copy. Purely a memory/throughput
+  win — semantics unchanged — so it stays off the correctness-first path.
+
+  **Shape (decided): op-declared aliasing on the frozen slot handle, *not* a
+  threaded `'cycle` lifetime.** The clean encoding is a per-op fact —
+  `Aliases(input_k)` vs `Owns` — that both engines honour identically:
+  interpreted redirects the output `SlotRef` (or arena handle) to the upstream
+  slot; compiled reuses the upstream local. The materialize/alias boundary falls
+  out correctly: structural passthroughs (`filter`/`sample`/`merge`, and
+  `fold`'s publish) alias; retainers (`delay`/`buffer`/`window`) and producers
+  (`map`) own — `map` is the case `Rc` could never have helped anyway (it's new
+  data). **Soundness rides on the single-fire guarantee**: each node writes its
+  slot once per cycle before its readers run, so a within-cycle alias can't be
+  mutated out from under a reader; the feature would be unsound in a re-fire
+  engine. The alias fact must be a property of the *op* (structurally a
+  passthrough), never inferred from a user `map` closure the engine can't see
+  into — that keeps the two engines in agreement.
+
+  The type-level alternative — a `'cycle` lifetime threaded through `Op::Out`
+  so the borrow checker enforces "can't retain a `&'cycle T`" — was considered
+  and **set aside**: it collides with the interpreted engine's `Rc<dyn Any>` /
+  `Box<dyn Fn>` erasure (neither is `'static`-free), needs GAT-over-HRTB
+  gymnastics, and — worst — an op written with a borrowing `Out<'cycle>` may not
+  be expressible identically on both engines, cracking the single-source /
+  dual-execution invariant. The op-declared form gets ~all the benefit with
+  none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
+  natural home).
 
 ## Sequencing and parallelism
 
