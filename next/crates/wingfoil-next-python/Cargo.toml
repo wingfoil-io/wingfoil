@@ -1,0 +1,42 @@
+[package]
+name = "wingfoil-next-python"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "Python interop boundary for wingfoil-next: the PyElement erased value type"
+
+[lib]
+# cdylib: the importable Python extension module (built by maturin with the
+# `extension-module` feature). rlib: so the object form stays usable as a normal
+# Rust dependency (tests here, and the future `#[pyop]` macro crate).
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+# Turned on only by the maturin build (see pyproject.toml). Off by default so
+# the rlib and `cargo test` link libpython normally and the embedded-interpreter
+# dev tests run; the shipped wheel sets it so the module resolves Python symbols
+# at load time instead.
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+# The erased boundary value. pyo3 stays without `extension-module` here so the
+# rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
+# `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
+pyo3 = "0.29"
+anyhow = { workspace = true }
+# The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
+wingfoil-next = { path = "../wingfoil-next" }
+# The #[pyop] proc macro, re-exported so users depend only on this crate.
+wingfoil-next-python-macros = { path = "../wingfoil-next-python-macros" }
+# Run-mode and clock types (NanoTime / RunMode / RunFor) named by the object form.
+wingfoil = { path = "../../../wingfoil" }
+
+[dev-dependencies]
+# `auto-initialize` starts an embedded interpreter so the boundary type and the
+# object form can be exercised under plain `cargo test`. It is dev-only: the
+# shipped rlib never embeds an interpreter.
+pyo3 = { version = "0.29", features = ["auto-initialize"] }

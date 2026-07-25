@@ -122,25 +122,34 @@ where A: Into<f64> + Clone + 'static {
 }
 ```
 
-`#[pyop]` emits (sketch):
+**A user op becomes a free `#[pyfunction]`, not a `Stream` method.** pyo3 forbids
+adding `#[pymethods]` to a *foreign* pyclass, so a user op in another crate
+cannot become `stream.zscore(window)`. The feasible shape — the same one polars
+expression plugins use — is a free function `module.zscore(stream, window)`.
+`#[pyop]` (and, today, the `pyop!` declarative macro) emit that, wiring through
+the public seam [`PyStream::wire_op1`], which erases at the edge:
 
 ```rust
-#[pymethods]
-impl PyStream {
-    #[pyo3(name = "zscore")]
-    fn py_zscore(&self, window: usize) -> PyResult<PyStream> {
-        // monomorphized at PyElement; edge-converts PyElement -> f64 in, f64 -> PyElement out
-        let out = self.builder.borrow_mut().register_op1(
-            self.handle, "zscore", Activation::NONE,
-            window, RollingStats::default(),
-            |w, s, a: &PyElement, ctx| {
-                let x: f64 = a.try_into()?;
-                Ok(ZScore::cycle(w, s, (&x,), ctx)?.map(PyElement::from))
-            });
-        Ok(self.wrap(out))
-    }
+// what `pyop!`/`#[pyop]` generate — a free function in the user's module:
+#[pyfunction]
+fn zscore(stream: PyRef<'_, Stream>, window: usize) -> Stream {
+    Stream::from(stream.object().wire_op1::<f64, _, _, f64, _>(
+        "zscore", Activation::NONE, window, RollingStats::default(),
+        // op computes on f64; wire_op1 does f64 <- PyElement in, f64 -> PyElement out
+        |cfg, state, a: &f64, ctx| ZScore::cycle(cfg, state, (&a,), ctx),
+    ))
 }
+// Python:  z = wingfoil_next.zscore(stream, window=100)
 ```
+
+**Status (shipped):** `PyStream::wire_op1` (the seam), the `pyop_fn!`
+*declarative* macro, and the `#[pyop]` *proc* macro (reads an `Op` impl's
+associated types + `cycle`, generates the `#[pyfunction]`) are implemented and
+tested — Rust unit + cross-crate integration tests and pytest, including user
+ops composed between built-in combinators, and both `scale` (`pyop_fn!`) and
+`square` (`#[pyop]`) demos. `#[pyop]` v1 covers stateless single-input concrete
+ops; stateful/multi-input shapes and `Cfg`-tuple arg naming call `wire_op1`
+directly and are the remaining extensions.
 
 ### `#[pyadapter]` — expose a user adapter trait
 
@@ -225,10 +234,14 @@ form.
 
 | Piece | Notes | Status |
 |---|---|---|
-| `PyElement` boundary type in a `wingfoil-next-python` crate | move/adapt the legacy type; `Element` + `Add/Sub/Not/PartialEq` + `From<PyObject>`/`IntoPyObject` | legacy proves it |
-| Python-held open `GraphBuilder` + erased `PyStream` object | **same deliverable** as the port plan's "true `Rc<dyn Stream>` object form" | 🟡 flagged in plan |
-| `#[pyop]` / `#[pyadapter]` / `#[pygraph]` macros | fourth emission target beside `#[op]`'s interpreted/compiled/nested | new |
-| Edge-conversion trait bounds | `PyElement <-> f64/Trade/…` at the seams only | legacy proves it |
+| `PyElement` boundary type in a `wingfoil-next-python` crate | `Clone/Default/Debug/PartialEq` + `Add/Sub/Not` + scalar/`Py<PyAny>` edge conversions | ✅ done (`element.rs`) |
+| Python-held open `GraphBuilder` + erased `PyStream` object | `PyGraph`/`PyStream` over the `Rc`-shared builder + runner slot | ✅ done (`graph.rs`) |
+| `#[pyclass]` module (`Graph`/`Stream`) + maturin build + pytest | importable `wingfoil_next` module | ✅ done (`python.rs`, `pyproject.toml`) |
+| `pyop_fn!` seam + declarative macro | `PyStream::wire_op1` + `pyop_fn!` for stateless single-input ops | ✅ done (`macros.rs`) |
+| `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
+| `#[pyop]` extensions | stateful/multi-input shapes; `Cfg`-tuple arg names | ⬜ |
+| `#[pyadapter]` / `#[pygraph]` macros | source/sink + wiring-reuse emission (needs burst/`Vec` edge erasure for channel sources) | ⬜ |
+| Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |
 
 ## Constraints / non-goals
