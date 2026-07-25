@@ -2126,12 +2126,15 @@ fn expand_nested(def: &GraphDef) -> TokenStream2 {
             let mut __q = ::wingfoil_next::wingfoil::TimeQueue::<usize>::new();
             let mut __dirty = [false; #n];
             let mut __active: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
+            let mut __passive: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
             #(
                 if #input_active_exprs {
                     __active.push(#ix_ids);
+                } else {
+                    __passive.push(#ix_ids);
                 }
             )*
-            __g.__composite(__active, #callback_activated, move |__ctx, __phase| {
+            __g.__composite(__active, __passive, #callback_activated, move |__ctx, __phase| {
                 let __now = __ctx.time();
                 let __start_time = __ctx.start_time();
                 match __phase {

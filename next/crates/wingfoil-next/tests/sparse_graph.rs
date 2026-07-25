@@ -229,3 +229,63 @@ fn wide_fanout_is_correct() {
         );
     }
 }
+
+/// Regression guard for the layered dispatch key: a node that reads a value
+/// **passively** must still drain *after* that value updates, even when the
+/// passive source sits **deeper** than the node's own active trigger.
+///
+/// `trigger.sample(deep_chain)` is the minimal case — the sample's only active
+/// edge is a shallow trigger (layer 1), yet it passively reads a layer-4 chain.
+/// A dispatch `layer` computed from *active* edges alone would sort the sample
+/// (layer 1) ahead of the chain (layers 2..4) and read a **stale** value; the
+/// layer must count passive edges too, matching classic wingfoil where every
+/// upstream — active or passive — raises the layer (`graph.rs:794`, and
+/// `fix_layers` at `graph.rs:1153`). The random-graph oracle only hits this
+/// probabilistically; this pins it deterministically.
+#[test]
+fn passive_read_of_deeper_node_sees_current_value() {
+    // Returns (sampled series, deep series). Both tickers run at the same 1ns
+    // period, so they fire on the same instants: every cycle the deep chain
+    // updates *and* the trigger fires, so a correct sample sees the current
+    // deep value and the two series are identical.
+    fn wire(g: &GraphBuilder) -> (Stream<Vec<u64>>, Stream<Vec<u64>>) {
+        let src = g.ticker(Duration::from_nanos(1)).count();
+        let deep = src
+            .map(|v| v.wrapping_mul(2)) // layer 2
+            .map(|v| v.wrapping_add(1)) // layer 3
+            .map(|v| v.wrapping_mul(10)); // layer 4
+        let trigger = g.ticker(Duration::from_nanos(1));
+        let sampled = deep.sample(&trigger);
+        (sampled.accumulate(), deep.accumulate())
+    }
+
+    // Differential: the layered sparse engine vs the index-order full-sweep
+    // oracle must agree.
+    let g_sparse = GraphBuilder::new();
+    let (sampled_sparse, _deep_sparse) = wire(&g_sparse);
+    let mut r_sparse = g_sparse.build();
+    r_sparse.run(HISTORICAL, RunFor::Cycles(20)).unwrap();
+
+    let g_full = GraphBuilder::new();
+    let (sampled_full, _deep_full) = wire(&g_full);
+    let mut r_full = g_full.build().with_dispatch(Dispatch::FullSweep);
+    r_full.run(HISTORICAL, RunFor::Cycles(20)).unwrap();
+
+    assert_eq!(
+        r_sparse.value(&sampled_sparse),
+        r_full.value(&sampled_full),
+        "layered sparse and full-sweep disagree on a passive read of a deeper node"
+    );
+
+    // Direct freshness check: the sampled series must equal the deep series —
+    // i.e. the sample observed the *current* (not lagged) deep value each cycle.
+    let g = GraphBuilder::new();
+    let (sampled, deep) = wire(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(20)).unwrap();
+    assert_eq!(
+        r.value(&sampled),
+        r.value(&deep),
+        "sample read a stale deep value — the passive edge did not raise its layer"
+    );
+}

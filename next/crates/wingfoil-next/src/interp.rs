@@ -203,6 +203,16 @@ struct NodeRt {
     /// edges). A cycle runs when any of these ticked — see the dispatch loop
     /// in [`Runner::run`].
     active_ups: Vec<usize>,
+    /// Indices of upstream nodes this node **reads but is not triggered by**
+    /// (the passive edges — `sample`'s data leg, a `bimap`/`trimap` inactive
+    /// input). They never appear in `active_downs` (no tick propagates along
+    /// them), but they *do* count toward the node's dispatch `layer`: a passive
+    /// reader must run after the value it reads, exactly as an active one must.
+    /// Classic tracks the same fact (every upstream, active or passive, raises
+    /// the layer — `graph.rs:794`, `fix_layers` at `graph.rs:1153`); the
+    /// index-order engine got this for free from wiring order, but the layered
+    /// engine (and dynamic `fix_layers`) needs it explicit.
+    passive_ups: Vec<usize>,
     /// The op's `ACTIVATION` — this contract drives dispatch: nodes without
     /// `callback_activated()` skip the dirty check entirely, and `always`
     /// nodes are cycled unconditionally (busy-poll sources).
@@ -585,6 +595,7 @@ impl Builder {
     ) {
         self.nodes.push(NodeRt {
             active_ups,
+            passive_ups: Vec::new(),
             activation,
             label,
             cycle,
@@ -605,6 +616,17 @@ impl Builder {
             .last_mut()
             .expect("invariant: set_reset called immediately after push_node")
             .reset = reset;
+    }
+
+    /// Record the passive upstream edges of the node at `idx` (the node just
+    /// pushed by [`push_node`](Self::push_node)). Passive edges are read but do
+    /// not trigger, so they stay out of `active_ups`/`active_downs`; they are
+    /// tracked only so `build()` (and dynamic `fix_layers`) can raise the
+    /// node's dispatch `layer` above every value it reads. Called by the
+    /// handful of passive-capable builders (`sample`, `bimap`, `trimap`, and
+    /// their `try_` variants); all-active shapes leave it empty.
+    fn set_passive_ups(&mut self, idx: usize, passive_ups: Vec<usize>) {
+        self.nodes[idx].passive_ups = passive_ups;
     }
 
     /// Shared cfg+state cell, used by both the cycle and start adapters.
@@ -1048,14 +1070,21 @@ impl Builder {
         let cs = Self::cell(f, ());
         let out_reset = out.clone();
         let mut active = Vec::with_capacity(3);
+        let mut passive = Vec::with_capacity(3);
         if a_active {
             active.push(a.idx);
+        } else {
+            passive.push(a.idx);
         }
         if b_active {
             active.push(b.idx);
+        } else {
+            passive.push(b.idx);
         }
         if c_active {
             active.push(c.idx);
+        } else {
+            passive.push(c.idx);
         }
         self.push_node(
             active,
@@ -1086,6 +1115,7 @@ impl Builder {
         self.set_reset(Box::new(move || {
             *out_reset.borrow_mut() = D::default();
         }));
+        self.set_passive_ups(idx, passive);
         self.make_handle(idx)
     }
 
@@ -1118,14 +1148,21 @@ impl Builder {
         let cs = Self::cell(f, ());
         let out_reset = out.clone();
         let mut active = Vec::with_capacity(3);
+        let mut passive = Vec::with_capacity(3);
         if a_active {
             active.push(a.idx);
+        } else {
+            passive.push(a.idx);
         }
         if b_active {
             active.push(b.idx);
+        } else {
+            passive.push(b.idx);
         }
         if c_active {
             active.push(c.idx);
+        } else {
+            passive.push(c.idx);
         }
         self.push_node(
             active,
@@ -1156,6 +1193,7 @@ impl Builder {
         self.set_reset(Box::new(move || {
             *out_reset.borrow_mut() = D::default();
         }));
+        self.set_passive_ups(idx, passive);
         self.make_handle(idx)
     }
 
@@ -1278,6 +1316,10 @@ impl Builder {
         self.set_reset(Box::new(move || {
             *out_reset.borrow_mut() = T::default();
         }));
+        // `src` is read passively (only `trigger` activates the sample), so it
+        // does not appear in `active_ups`; record it as a passive edge so the
+        // sample's layer sits above the value it samples.
+        self.set_passive_ups(idx, vec![src.idx]);
         self.make_handle(idx)
     }
 
@@ -1317,11 +1359,16 @@ impl Builder {
         let cs = Self::cell(f, ());
         let out_reset = out.clone();
         let mut active = Vec::with_capacity(2);
+        let mut passive = Vec::with_capacity(2);
         if a_active {
             active.push(a.idx);
+        } else {
+            passive.push(a.idx);
         }
         if b_active {
             active.push(b.idx);
+        } else {
+            passive.push(b.idx);
         }
         self.push_node(
             active,
@@ -1353,6 +1400,7 @@ impl Builder {
         self.set_reset(Box::new(move || {
             *out_reset.borrow_mut() = C::default();
         }));
+        self.set_passive_ups(idx, passive);
         self.make_handle(idx)
     }
 
@@ -1380,11 +1428,16 @@ impl Builder {
         let cs = Self::cell(f, ());
         let out_reset = out.clone();
         let mut active = Vec::with_capacity(2);
+        let mut passive = Vec::with_capacity(2);
         if a_active {
             active.push(a.idx);
+        } else {
+            passive.push(a.idx);
         }
         if b_active {
             active.push(b.idx);
+        } else {
+            passive.push(b.idx);
         }
         self.push_node(
             active,
@@ -1416,6 +1469,7 @@ impl Builder {
         self.set_reset(Box::new(move || {
             *out_reset.borrow_mut() = C::default();
         }));
+        self.set_passive_ups(idx, passive);
         self.make_handle(idx)
     }
 
@@ -1854,6 +1908,7 @@ impl Builder {
     pub fn composite<T, F>(
         &mut self,
         active_ups: Vec<usize>,
+        passive_ups: Vec<usize>,
         callback_activated: bool,
         node: F,
     ) -> Handle<T>
@@ -1918,6 +1973,10 @@ impl Builder {
             (cell_teardown.borrow_mut())(&mut ctx, CompositePhase::Teardown)?;
             Ok(())
         });
+        // An island can read outer streams passively (a `graph!` input marked
+        // `passive`); those edges do not trigger the composite but must still
+        // raise its layer above the values it reads.
+        self.set_passive_ups(idx, passive_ups);
         self.make_handle(idx)
     }
 
@@ -1945,13 +2004,37 @@ impl Builder {
         // every node after everything it reads. That is what lets passive
         // reads (e.g. `sample` of a `delay`ed slot) observe the same value the
         // old full-index sweep produced, without tracking passive edges here.
+        //
+        // The work set drains by ascending **`(layer, index)`** (see
+        // `Runner::run`), where `layer[i]` is the longest path to `i` over
+        // *all* upstream edges — active and passive. This is classic wingfoil's
+        // layer-order dispatch (`dirty_nodes_by_layer`, `graph.rs:205`); for a
+        // statically wired graph index order is already a valid layer order, so
+        // `(layer, index)` is a linear extension of the read relation identical
+        // to the old pure-index order (the `Dispatch::FullSweep` oracle pins
+        // this). The explicit `layer` is what lets *dynamic* additions splice a
+        // new node beneath an existing lower-indexed caller: `fix_layers` bumps
+        // the caller's layer above the new node so it still drains after it —
+        // the reorder index order alone cannot express.
         let n = self.nodes.len();
         let mut active_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut seed_nodes: Vec<usize> = Vec::new();
+        let mut layer: Vec<usize> = vec![0; n];
         for i in 0..n {
+            let mut lyr = 0usize;
             for &u in &self.nodes[i].active_ups {
                 active_downs[u].push(i);
+                lyr = lyr.max(layer[u] + 1);
             }
+            // Passive edges do not propagate ticks (absent from `active_downs`)
+            // but still raise the layer: a passive reader must drain after the
+            // value it reads, exactly as classic counts every upstream
+            // (`graph.rs:794`). Index order is topological over all edges, so
+            // `layer[u]` is already final here.
+            for &u in &self.nodes[i].passive_ups {
+                lyr = lyr.max(layer[u] + 1);
+            }
+            layer[i] = lyr;
             let act = self.nodes[i].activation;
             if act.always || act.callback_activated() {
                 seed_nodes.push(i);
@@ -1969,6 +2052,7 @@ impl Builder {
             id: self.id,
             active_downs,
             seed_nodes,
+            layer,
             dispatch: Dispatch::default(),
             re_runnable: self.re_runnable,
             has_run: false,
@@ -2023,6 +2107,11 @@ pub struct Runner {
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
+    /// `layer[i]` = longest path to `i` over all upstream edges (active and
+    /// passive); the primary sparse-dispatch sort key. `(layer, index)` is a
+    /// valid topological order that survives dynamic edge splices (which index
+    /// order alone cannot — see [`build`](Builder::build) and `fix_layers`).
+    layer: Vec<usize>,
     /// Which dispatch loop `run` uses. `Sparse` by default; see [`Dispatch`].
     dispatch: Dispatch,
     /// Whether every node can restore itself for a re-run (see
@@ -2186,17 +2275,20 @@ impl Runner {
         let n = self.nodes.len();
         let mut dirty = vec![false; n];
         // Sparse dirty-list scratch, allocated once and reused every cycle:
-        //   * `queue` — the dirty work set, a min-heap on node index so it
-        //     drains in ascending (wiring/topological) order. Every active
-        //     downstream has a higher index than its upstream, so a node
-        //     enqueued while processing `i` is always popped after `i` — the
-        //     heap never revisits a processed node.
+        //   * `queue` — the dirty work set, a min-heap on `(layer, index)` so it
+        //     drains in ascending layer order (ties broken by index — classic's
+        //     within-layer wiring order). Every active downstream has a strictly
+        //     greater layer than its upstream, so a node enqueued while
+        //     processing `i` is always popped after `i` — the heap never
+        //     revisits a processed node. Keying on `layer` (not raw index) is
+        //     what keeps this invariant after a dynamic splice bumps a caller's
+        //     layer above a newly added upstream.
         //   * `node_dirty[i]` — guards a recombine node against being enqueued
         //     twice, so it fires exactly once per cycle.
         //   * `fired` — every node cycled this tick; the per-cycle `ticked` and
         //     `node_dirty` resets touch only these, not all `N`, so per-cycle
         //     work stays proportional to the active node count.
-        let mut queue: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+        let mut queue: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
         let mut node_dirty = vec![false; n];
         let mut fired: Vec<usize> = Vec::new();
         // Check `finished` *before* `begin_cycle` parks: a channel that received
@@ -2212,14 +2304,14 @@ impl Runner {
             for &i in &self.seed_nodes {
                 if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
                     node_dirty[i] = true;
-                    queue.push(Reverse(i));
+                    queue.push(Reverse((self.layer[i], i)));
                 }
             }
-            // Drain in ascending index order. A node that ticks marks its
-            // active downstream neighbours (all at higher indices, so still
-            // ahead in the drain) dirty — propagating the tick frontier, each
-            // node firing once after everything it reads.
-            while let Some(Reverse(i)) = queue.pop() {
+            // Drain in ascending `(layer, index)` order. A node that ticks marks
+            // its active downstream neighbours (all at strictly higher layers,
+            // so still ahead in the drain) dirty — propagating the tick
+            // frontier, each node firing once after everything it reads.
+            while let Some(Reverse((_layer, i))) = queue.pop() {
                 let did = match (self.nodes[i].cycle)(kernel) {
                     Ok(did) => did,
                     Err(e) => {
@@ -2237,7 +2329,7 @@ impl Runner {
                     for &d in &self.active_downs[i] {
                         if !node_dirty[d] {
                             node_dirty[d] = true;
-                            queue.push(Reverse(d));
+                            queue.push(Reverse((self.layer[d], d)));
                         }
                     }
                 }

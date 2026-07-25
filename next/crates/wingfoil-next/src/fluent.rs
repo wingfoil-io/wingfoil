@@ -103,15 +103,16 @@ impl GraphBuilder {
     pub fn __composite<T: Clone + Default + 'static>(
         &self,
         active_ups: Vec<usize>,
+        passive_ups: Vec<usize>,
         callback_activated: bool,
         node: impl FnMut(&mut crate::op::Ctx, crate::op::CompositePhase) -> Result<crate::op::Tick<T>>
         + 'static,
     ) -> Stream<T> {
         self.assert_not_built();
-        let handle = self
-            .inner
-            .borrow_mut()
-            .composite(active_ups, callback_activated, node);
+        let handle =
+            self.inner
+                .borrow_mut()
+                .composite(active_ups, passive_ups, callback_activated, node);
         self.wrap(handle)
     }
 
