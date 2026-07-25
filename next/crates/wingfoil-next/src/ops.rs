@@ -1750,6 +1750,432 @@ impl Op for TimeWindowedMedian {
     }
 }
 
+// ── time-weighted moments (Weighting::Time) ──────────────────────────────────
+//
+// The time-*weighted* twin of the count-weighted moment ops above (cumulative,
+// count-windowed, and time-windowed mean/var/std): each sample is weighted by
+// how long it was in effect — the elapsed Δt until its successor, read from
+// engine time via `ctx.time()` — rather than by a unit count. Ported verbatim
+// from the classic `MomentStream` / `RollingMomentStream` under
+// `Weighting::Time` (`wingfoil/src/adapters/statistics.rs`). Semantics
+// reproduced:
+//
+//   * on each tick the *previous* sample is credited with the elapsed Δt before
+//     the new sample takes over — the correct treatment of a left-continuous
+//     step signal, so the newest sample contributes nothing until the next tick
+//     advances the clock (a value in effect for twice as long counts twice);
+//   * a windowed sample's committed interval is reverted when it leaves the
+//     window (an exact `remove` inverse keeps a tick O(1));
+//   * mean seeds to the current sample until any weight has accumulated (rather
+//     than emitting NaN); variance is the time-weighted *population* form
+//     (`m2 / w_sum`, no ddof correction — reliability-weighted variance has no
+//     clean ddof), `0.0` until weight is present; std clamps at zero.
+
+/// Incremental weighted mean and variance via West's algorithm (the weighted
+/// generalisation of Welford's — numerically stable, single pass), with an
+/// exact `remove` inverse so a sliding window can evict a contribution in O(1).
+/// Ported verbatim from the classic statistics adapter's `WeightedMoments`.
+#[derive(Default)]
+struct WeightedMoments {
+    w_sum: f64,
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl WeightedMoments {
+    /// Fold a `(value, weight)` sample into the moments. Zero-duration
+    /// (simultaneous ticks) or non-positive weights add nothing.
+    fn push(&mut self, x: f64, weight: f64) {
+        if weight <= 0.0 {
+            return;
+        }
+        self.w_sum += weight;
+        self.count += 1;
+        let mean_old = self.mean;
+        self.mean += (weight / self.w_sum) * (x - mean_old);
+        self.m2 += weight * (x - mean_old) * (x - self.mean);
+    }
+
+    /// Exact inverse of [`push`](Self::push): drop a `(value, weight)` previously
+    /// pushed, so a sliding window can evict its oldest contribution in O(1).
+    /// Like any revert-based scheme this can accumulate floating-point error, so
+    /// `m2` is clamped at zero.
+    fn remove(&mut self, x: f64, weight: f64) {
+        if weight <= 0.0 {
+            return;
+        }
+        let w_new = self.w_sum - weight;
+        // Removing the final contribution empties the accumulator; reset cleanly
+        // rather than dividing by a weight at (or below) zero.
+        if self.count <= 1 || w_new <= 0.0 {
+            *self = Self::default();
+            return;
+        }
+        self.count -= 1;
+        // Recover the pre-push mean, then invert the M2 update with it.
+        let mean_old = (self.w_sum * self.mean - weight * x) / w_new;
+        self.m2 -= weight * (x - mean_old) * (x - self.mean);
+        if self.m2 < 0.0 {
+            self.m2 = 0.0;
+        }
+        self.mean = mean_old;
+        self.w_sum = w_new;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.w_sum <= 0.0
+    }
+
+    fn mean(&self) -> f64 {
+        self.mean
+    }
+
+    /// Time-weighted (population) variance — `m2 / w_sum`, `0.0` until weight is
+    /// present. Reliability-weighted variance has no clean ddof correction, so
+    /// this is the population form (matching the classic `Weighting::Time`).
+    fn variance(&self) -> f64 {
+        if self.w_sum <= 0.0 {
+            return 0.0;
+        }
+        self.m2 / self.w_sum
+    }
+}
+
+/// State for the cumulative time-weighted moment ops: the running
+/// [`WeightedMoments`] plus the previous sample and the time it was last seen,
+/// so each tick credits the previous value with the elapsed Δt before the new
+/// sample takes over. Mirrors the classic `MomentStream` under
+/// `Weighting::Time`.
+#[derive(Default)]
+pub struct CumulativeTimeWeightedMomentState {
+    moments: WeightedMoments,
+    last_time: Option<NanoTime>,
+    prev_value: f64,
+}
+
+impl CumulativeTimeWeightedMomentState {
+    /// Credit the previous sample with the Δt since it arrived, then record the
+    /// new sample as current. (`prev_value` is only read once `last_time` is
+    /// set — i.e. after a prior tick wrote it — so its initial value is unused.)
+    fn push(&mut self, now: NanoTime, sample: f64) {
+        if let Some(prev_t) = self.last_time {
+            let dt = f64::from(now - prev_t);
+            self.moments.push(self.prev_value, dt);
+        }
+        self.prev_value = sample;
+        self.last_time = Some(now);
+    }
+
+    /// Time-weighted mean — seeds to `sample` until any weight has accumulated.
+    fn mean(&self, sample: f64) -> f64 {
+        if self.moments.is_empty() {
+            sample
+        } else {
+            self.moments.mean()
+        }
+    }
+
+    fn variance(&self) -> f64 {
+        self.moments.variance()
+    }
+}
+
+/// Cumulative time-weighted mean over every sample seen so far — each sample
+/// weighted by how long it was in effect (Δt from the graph clock). The most
+/// recent sample only starts contributing once the next tick advances the
+/// clock. Mirrors the classic `mean(Window::Unbounded, Weighting::Time)`.
+pub struct CumulativeMeanTimeWeighted;
+
+#[op(build = cumulative_mean_time_weighted)]
+impl Op for CumulativeMeanTimeWeighted {
+    type Cfg = ();
+    type State = CumulativeTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        state.push(ctx.time(), sample);
+        Ok(Tick::Value(state.mean(sample)))
+    }
+}
+
+/// Cumulative time-weighted **population** variance over every sample seen so
+/// far — `m2 / w_sum` (no ddof correction), `0.0` until weight is present.
+/// Mirrors the classic `variance(Window::Unbounded, Weighting::Time)`.
+pub struct CumulativeVarTimeWeighted;
+
+#[op(build = cumulative_var_time_weighted)]
+impl Op for CumulativeVarTimeWeighted {
+    type Cfg = ();
+    type State = CumulativeTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(ctx.time(), *input.0);
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Cumulative time-weighted standard deviation over every sample seen so far —
+/// the square root of [`CumulativeVarTimeWeighted`], clamped at zero before the
+/// root so a constant stream yields `0.0`, not `NaN`. Mirrors the classic
+/// `std(Window::Unbounded, Weighting::Time)`.
+pub struct CumulativeStdTimeWeighted;
+
+#[op(build = cumulative_std_time_weighted)]
+impl Op for CumulativeStdTimeWeighted {
+    type Cfg = ();
+    type State = CumulativeTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut CumulativeTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push(ctx.time(), *input.0);
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// State shared by the count- and time-windowed time-weighted moment ops: the
+/// `(value, time)` samples currently in the window plus the incrementally
+/// maintained [`WeightedMoments`]. Each sample's weight is the Δt until its
+/// successor, committed when that successor arrives (so the newest sample
+/// contributes nothing until the next tick) and reverted when the sample leaves
+/// the window. Mirrors the classic `RollingMomentStream` under
+/// `Weighting::Time`; only the eviction rule differs between the count and time
+/// windows.
+#[derive(Default)]
+pub struct WindowedTimeWeightedMomentState {
+    buffer: VecDeque<(f64, NanoTime)>,
+    moments: WeightedMoments,
+}
+
+impl WindowedTimeWeightedMomentState {
+    /// Commit the interval the previous sample held (crediting it with the Δt to
+    /// `now`), then append the new sample. The new sample opens an interval that
+    /// only commits once its successor arrives.
+    fn open(&mut self, now: NanoTime, sample: f64) {
+        if let Some(&(prev_v, prev_t)) = self.buffer.back() {
+            self.moments.push(prev_v, f64::from(now - prev_t));
+        }
+        self.buffer.push_back((sample, now));
+    }
+
+    /// Evict the front sample, reverting its committed interval (the gap to the
+    /// new front). An empty buffer after the pop means the sample never had a
+    /// committed interval (it was the lone/newest sample), so nothing to revert.
+    fn evict_front(&mut self) {
+        let (old_v, old_t) = self
+            .buffer
+            .pop_front()
+            .expect("invariant: caller checked the buffer is non-empty");
+        if let Some(&(_, next_t)) = self.buffer.front() {
+            self.moments.remove(old_v, f64::from(next_t - old_t));
+        }
+    }
+
+    /// Push a sample under a **count** window (clamped to at least one),
+    /// evicting once more than `window` samples are retained.
+    fn push_count(&mut self, now: NanoTime, sample: f64, window: usize) {
+        let window = window.max(1);
+        self.open(now, sample);
+        while self.buffer.len() > window {
+            self.evict_front();
+        }
+    }
+
+    /// Push a sample under a **time** window, evicting every front sample aged
+    /// strictly past `window` nanoseconds (the just-pushed sample has age 0, so
+    /// the buffer never empties).
+    fn push_time(&mut self, now: NanoTime, sample: f64, window: u64) {
+        self.open(now, sample);
+        while self
+            .buffer
+            .front()
+            .is_some_and(|&(_, t)| aged_out(now, t, window))
+        {
+            self.evict_front();
+        }
+    }
+
+    /// Time-weighted mean — seeds to `sample` until any weight has accumulated.
+    fn mean(&self, sample: f64) -> f64 {
+        if self.moments.is_empty() {
+            sample
+        } else {
+            self.moments.mean()
+        }
+    }
+
+    fn variance(&self) -> f64 {
+        self.moments.variance()
+    }
+}
+
+/// Time-weighted mean over the most recent `window` samples (a count window).
+/// Mirrors the classic `mean(Window::Count(_), Weighting::Time)`.
+pub struct RollingMeanTimeWeighted;
+
+#[op(build = rolling_mean_time_weighted)]
+impl Op for RollingMeanTimeWeighted {
+    type Cfg = usize;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        state.push_count(ctx.time(), sample, *cfg);
+        Ok(Tick::Value(state.mean(sample)))
+    }
+}
+
+/// Time-weighted **population** variance over the most recent `window` samples
+/// (a count window). Mirrors the classic `variance(Window::Count(_),
+/// Weighting::Time)`.
+pub struct RollingVarTimeWeighted;
+
+#[op(build = rolling_var_time_weighted)]
+impl Op for RollingVarTimeWeighted {
+    type Cfg = usize;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push_count(ctx.time(), *input.0, *cfg);
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Time-weighted standard deviation over the most recent `window` samples (a
+/// count window) — the square root of [`RollingVarTimeWeighted`], clamped at
+/// zero. Mirrors the classic `std(Window::Count(_), Weighting::Time)`.
+pub struct RollingStdTimeWeighted;
+
+#[op(build = rolling_std_time_weighted)]
+impl Op for RollingStdTimeWeighted {
+    type Cfg = usize;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push_count(ctx.time(), *input.0, *cfg);
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
+/// Time-weighted mean over a bounded time window of the last `window` (a
+/// [`NanoTime`] duration) of graph time. Mirrors the classic
+/// `mean(Window::Time(_), Weighting::Time)`.
+pub struct TimeWindowedMeanTimeWeighted;
+
+#[op(build = time_windowed_mean_time_weighted)]
+impl Op for TimeWindowedMeanTimeWeighted {
+    type Cfg = NanoTime;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        let sample = *input.0;
+        state.push_time(ctx.time(), sample, u64::from(*cfg));
+        Ok(Tick::Value(state.mean(sample)))
+    }
+}
+
+/// Time-weighted **population** variance over a bounded time window. Mirrors the
+/// classic `variance(Window::Time(_), Weighting::Time)`.
+pub struct TimeWindowedVarTimeWeighted;
+
+#[op(build = time_windowed_var_time_weighted)]
+impl Op for TimeWindowedVarTimeWeighted {
+    type Cfg = NanoTime;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push_time(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(state.variance()))
+    }
+}
+
+/// Time-weighted standard deviation over a bounded time window — the square root
+/// of [`TimeWindowedVarTimeWeighted`], clamped at zero. Mirrors the classic
+/// `std(Window::Time(_), Weighting::Time)`.
+pub struct TimeWindowedStdTimeWeighted;
+
+#[op(build = time_windowed_std_time_weighted)]
+impl Op for TimeWindowedStdTimeWeighted {
+    type Cfg = NanoTime;
+    type State = WindowedTimeWeightedMomentState;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut NanoTime,
+        state: &mut WindowedTimeWeightedMomentState,
+        input: (&f64,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<f64>> {
+        state.push_time(ctx.time(), *input.0, u64::from(*cfg));
+        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+    }
+}
+
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 

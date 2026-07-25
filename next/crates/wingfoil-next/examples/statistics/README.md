@@ -39,6 +39,10 @@ second, and printed:
   a chain of `join`s building a `Vec<f64>` row. A variadic `combine`/`zip` op is
   a known gap.
 - **Time-weighting** — the classic example also showed a *time-weighted* mean
-  (`Weighting::Time` / TWAP). The next `StatisticsOps` trait currently exposes
-  the count-weighted rolling ops (`rolling_mean/std/min/max/median`, `ewma`); a
-  time-weighted aggregation family is not yet ported, so this column is omitted.
+  (`Weighting::Time` / TWAP). The `StatisticsOps` trait now exposes the
+  time-weighted moment family alongside the count-weighted ops —
+  `{cumulative,rolling,time_windowed}_{mean,var,std}_time_weighted` (each sample
+  weighted by how long it was in effect, read from the graph clock) — so a TWAP
+  column is expressible; this example keeps the count-weighted columns for
+  brevity. The only classic statistic still unported is the time-weighted
+  *median*.

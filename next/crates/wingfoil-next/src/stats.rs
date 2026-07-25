@@ -114,6 +114,54 @@ pub trait StatisticsOps {
     /// Median over a bounded time window (an even count averages its two middle
     /// values). Recomputed per tick over the retained window.
     fn time_windowed_median(&self, window: Duration) -> Stream<f64>;
+
+    // ── time-weighted moments (Weighting::Time) ──────────────────────────────
+    //
+    // The time-*weighted* twin of the moment ops above: each sample is weighted
+    // by how long it was in effect (the Δt until its successor, read from engine
+    // time) rather than by a unit count, so a value that persisted twice as long
+    // counts twice. Ported from the classic `MomentStream` / `RollingMomentStream`
+    // under `Weighting::Time`. The most recent sample only starts contributing
+    // once the next tick advances the clock (left-continuous step signal), the
+    // mean seeds to the current sample until any weight has accumulated, and the
+    // variance is the time-weighted **population** form (`m2 / w_sum`, no ddof
+    // correction), `0.0` until weight is present (`std` clamps at zero).
+
+    /// Cumulative time-weighted mean over every sample seen so far (an unbounded
+    /// window) — each sample weighted by how long it was in effect.
+    fn cumulative_mean_time_weighted(&self) -> Stream<f64>;
+
+    /// Cumulative time-weighted **population** variance over every sample seen so
+    /// far — `m2 / w_sum`, `0.0` until weight is present.
+    fn cumulative_var_time_weighted(&self) -> Stream<f64>;
+
+    /// Cumulative time-weighted standard deviation over every sample seen so far
+    /// — the square root of [`cumulative_var_time_weighted`](Self::cumulative_var_time_weighted).
+    fn cumulative_std_time_weighted(&self) -> Stream<f64>;
+
+    /// Time-weighted mean over the most recent `window` samples (a count window).
+    fn rolling_mean_time_weighted(&self, window: usize) -> Stream<f64>;
+
+    /// Time-weighted **population** variance over the most recent `window`
+    /// samples (a count window).
+    fn rolling_var_time_weighted(&self, window: usize) -> Stream<f64>;
+
+    /// Time-weighted standard deviation over the most recent `window` samples (a
+    /// count window) — the square root of
+    /// [`rolling_var_time_weighted`](Self::rolling_var_time_weighted).
+    fn rolling_std_time_weighted(&self, window: usize) -> Stream<f64>;
+
+    /// Time-weighted mean over a bounded time window — the samples seen in the
+    /// last `window` of graph time, each weighted by how long it was in effect.
+    fn time_windowed_mean_time_weighted(&self, window: Duration) -> Stream<f64>;
+
+    /// Time-weighted **population** variance over a bounded time window.
+    fn time_windowed_var_time_weighted(&self, window: Duration) -> Stream<f64>;
+
+    /// Time-weighted standard deviation over a bounded time window — the square
+    /// root of
+    /// [`time_windowed_var_time_weighted`](Self::time_windowed_var_time_weighted).
+    fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64>;
 }
 
 impl StatisticsOps for Stream<f64> {
@@ -222,5 +270,44 @@ impl StatisticsOps for Stream<f64> {
     fn time_windowed_median(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
         self.wire(move |b, h| b.time_windowed_median(h, window))
+    }
+
+    fn cumulative_mean_time_weighted(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_mean_time_weighted(h))
+    }
+
+    fn cumulative_var_time_weighted(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_var_time_weighted(h))
+    }
+
+    fn cumulative_std_time_weighted(&self) -> Stream<f64> {
+        self.wire(|b, h| b.cumulative_std_time_weighted(h))
+    }
+
+    fn rolling_mean_time_weighted(&self, window: usize) -> Stream<f64> {
+        self.wire(move |b, h| b.rolling_mean_time_weighted(h, window))
+    }
+
+    fn rolling_var_time_weighted(&self, window: usize) -> Stream<f64> {
+        self.wire(move |b, h| b.rolling_var_time_weighted(h, window))
+    }
+
+    fn rolling_std_time_weighted(&self, window: usize) -> Stream<f64> {
+        self.wire(move |b, h| b.rolling_std_time_weighted(h, window))
+    }
+
+    fn time_windowed_mean_time_weighted(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_mean_time_weighted(h, window))
+    }
+
+    fn time_windowed_var_time_weighted(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_var_time_weighted(h, window))
+    }
+
+    fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64> {
+        let window = NanoTime::from(window);
+        self.wire(move |b, h| b.time_windowed_std_time_weighted(h, window))
     }
 }

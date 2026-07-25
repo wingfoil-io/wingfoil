@@ -468,8 +468,16 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    and **time-windowed** rolling (`TimeWindowedSum`/`Mean`/`Min`/`Max`/`Var`/
    `Std`/`Median` over a bounded `Window::Time`, count-weighted — incremental
    sum/moments, monotonic-deque min/max, recompute median,
-   `tests/statistics_time_windowed.rs`). Remaining: the time-*weighted* moment
-   path (`Weighting::Time`, both cumulative and windowed).
+   `tests/statistics_time_windowed.rs`). The time-*weighted* moment path
+   (`Weighting::Time`, mean/var/std over all three windows —
+   `{Cumulative,Rolling,TimeWindowed}{Mean,Var,Std}TimeWeighted`, West's
+   incremental weighted moments with an exact `remove` inverse for the sliding
+   windows, `tests/statistics_time_weighted.rs`) is now ported too. Remaining:
+   the time-*weighted* **median** (`median(_, Weighting::Time)` → the classic
+   `WindowStream::weighted_median`) — the count-weighted medians are ported but
+   the time-weighted median is not yet; it is a distinct path (recompute-per-tick
+   weighted median, not a moment) and the last classic statistics capability
+   outstanding.
 2. **cache**, **common** (WindowFilter) — small, pure.
    ✅ *done*: **common** ports the always-compiled `TimeWindow`/`WindowFilter`
    out-of-window row filter (`adapters::common`, `tests/common_adapter.rs`);
