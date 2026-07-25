@@ -66,7 +66,7 @@ today's interpreted engine.
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
 | Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
 | Re-run (independent repeated runs) | ✅⁸ | ✅⁸ | ✅⁹ | ✅⁹ |
-| Dynamic graph (runtime add/remove) | ✅ | 📅¹⁰ | ❌ | 🟡¹⁰ |
+| Dynamic graph (runtime add/remove) | ✅ | ✅¹⁰ | ❌ | 🟡¹⁰ |
 | Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ✅¹² | 🟡¹³ | ✅¹⁴ |
 | Dense hot-path speed (measured) | 1× | ~1×¹² | 3–4×¹⁵ | interior 3–4×¹⁵ |
 
@@ -96,10 +96,18 @@ today's interpreted engine.
   construction (consumed producer channels/wakers/interiors) — a second `run`
   errors rather than misbehaving.
 ⁹ `compiled()` is a plain fn — each call is a fresh independent run.
-¹⁰ The sparse dirty-list engine — the mutable-frontier *enabler* for runtime
-  add/remove — has landed, but graph *mutation* itself (`Runner::extend`) is
-  not yet built (📅). The compiled/island interior stays fixed by design, but
-  an island can be wired dynamically into the interpreted graph.
+¹⁰ **Landed** behind the `dynamic-graph` cargo feature. The layered
+  `(layer, index)` dispatch (always on) makes it possible: a node appended at
+  the highest index can be spliced beneath an existing lower-indexed caller,
+  `fix_layers` lifting the caller above it. Surfaces: `Runner::run_dynamic` with
+  an `Extension` scope (`map`/`fold`/`filter_value`/`add_upstream`/`remove`,
+  active/passive + `recycle`), an in-graph `Builder::dynamic_group` (classic's
+  `dynamic_group_stream` twin) that stages insert/remove from its own `cycle`,
+  and `Builder::demux` (fixed-topology dynamic *routing* on a same-cycle
+  mark-dirty primitive — no add/remove). Parity tests in
+  `tests/dynamic_graph.rs`; removed slots are tombstoned, not freed (classic
+  parity). The compiled/island interior stays fixed by design, but an island
+  can be wired dynamically into the interpreted graph. See the Phase 4.5 note.
 ¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
   deferred 4.5 arena rework can also improve on.
@@ -112,7 +120,6 @@ today's interpreted engine.
   gating (skip quiet sub-graphs) is the planned compiled counterpart.
 ¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
 ¹⁵ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
-
 ## Phase 0 — design spikes
 
 Four contract questions, each resolved with a spike + parity test before any
@@ -502,15 +509,50 @@ by default (`interp.rs`, `Dispatch::Sparse`), reproducing classic wingfoil's
 `always` busy-poll ops plus kernel-marked callback-activated ops (tickers,
 `delay` pops, the feedback source, channel replay) — then propagates the tick
 frontier forward: a node that ticks marks its active downstream neighbours
-dirty. The work set drains in ascending node-index order (a valid topological
-order, since the fluent API forces a stream to exist before it is referenced),
-so each node fires exactly once after everything it reads — glitch-free, and
-with per-cycle work proportional to the nodes that *actually fire*, not the
-graph size `N`. Results are **byte-identical** to classic and to the old
-`O(N)` full-index sweep, which is retained as `Dispatch::FullSweep` — an
+dirty. The work set drains in ascending **`(layer, index)`** order — `layer[i]`
+is the longest path to `i` over active *and* passive edges (classic's layer
+order); it collapses to plain index order on a static graph (a valid
+topological order, since the fluent API forces a stream to exist before it is
+referenced), so each node fires exactly once after everything it reads —
+glitch-free, and with per-cycle work proportional to the nodes that *actually
+fire*, not the graph size `N`. Results are **byte-identical** to classic and to
+the old `O(N)` full-index sweep, which is retained as `Dispatch::FullSweep` — an
 executable reference oracle (`runner.with_dispatch(Dispatch::FullSweep)`) the
 parity suite can cross-check against. This closes the sparse-graph performance
 gap against classic (pending the benchmark below as the standing gate).
+
+**Dynamism: ✅ landed** (behind the `dynamic-graph` feature). The `(layer,
+index)` key is what makes runtime mutation possible — a node appended at the
+highest index can be spliced beneath an existing lower-indexed caller, with
+`fix_layers` lifting the caller's layer above the new upstream (the reorder
+plain index order cannot express). Surfaces: `Runner::run_dynamic` + an
+`Extension` scope (append / active-passive splice / remove / recycle), an
+in-graph `Builder::dynamic_group` (classic's `dynamic_group_stream` twin) that
+stages insert/remove from its own `cycle`, and `Builder::demux` (fixed-topology
+routing on a same-cycle mark-dirty primitive — no add/remove). Removed slots are
+tombstoned, not freed (classic parity). Parity tests in
+`tests/dynamic_graph.rs`.
+
+**Known parity gaps (for the cutover audit).** The runtime *behaviour* is a
+faithful twin (values + tick times match classic's oracles); what next omits so
+far is ergonomic surface, not mechanism:
+
+- **`StreamStore` (pluggable `dynamic_group` backing store).** next's
+  `dynamic_group` hardcodes a `BTreeMap` (so `K: Ord`); classic is generic over
+  a `StreamStore` trait with `BTreeMap`/`HashMap` blanket impls. This is
+  deliberately deferred, not just unfinished. The only capability it actually
+  unlocks is a key type that is `Hash + Eq` but **not** `Ord` (the container
+  choice is otherwise near-irrelevant to cost — the per-cycle work is iterating
+  *live* members, O(members), regardless of backing store). And `HashMap`'s
+  nondeterministic iteration order is a mild footgun against backtest
+  determinism, so `BTreeMap`-only is arguably the *safer* default, not merely a
+  smaller one. Re-add the trait (a mechanical ~20-min change: one trait param +
+  two blanket impls, touching no engine/staging code) if the cutover requires
+  strict signature parity or a real non-`Ord` key appears — not speculatively.
+- **`DemuxMap` key lifecycle + `demux_it`.** next's `demux` exposes the raw
+  routing primitive (`route(value) -> slot` + overflow); classic's
+  auto-assigning/`Close`-releasing `DemuxMap` and the `Burst` `demux_it` variant
+  layer on top of it and can be added without engine changes.
 
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 

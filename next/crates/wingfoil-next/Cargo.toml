@@ -76,6 +76,12 @@ csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
+# Runtime graph dynamism: append nodes and splice edges into a live graph
+# mid-run (`Runner::run_dynamic` + `Extension`). Mirrors classic wingfoil's
+# `dynamic-graph` feature; off the default hot path until wired in. The layered
+# `(layer, index)` dispatch it relies on is always on (it is byte-identical to
+# the old index order on static graphs).
+dynamic-graph = []
 
 [[example]]
 name = "async_source"
