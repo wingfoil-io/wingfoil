@@ -244,9 +244,17 @@ pub fn etcd_sub(
         // 4. Return the combined snapshot + live stream. `watch_stream` is moved
         //    in and kept alive for the stream's lifetime so the watch stays open.
         Ok(async_stream::stream! {
-            // Phase 1: emit snapshot events.
+            // Phase 1: emit the snapshot as a single atomic burst. Every
+            // snapshot KV shares ONE timestamp so they are grouped into one
+            // burst (never latest-wins, never split across cycles) — matching
+            // classic's single `HistoricalValue` snapshot burst. Stamping each
+            // event with its own `NanoTime::now()` would scatter them across
+            // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
+            // could observe only the first key — an intermittent "missing key"
+            // under load.
+            let snapshot_time = NanoTime::now();
             for event in snapshot {
-                yield Ok((NanoTime::now(), event));
+                yield Ok((snapshot_time, event));
             }
 
             // Phase 2: drain the watch stream, deduplicating against the snapshot.
