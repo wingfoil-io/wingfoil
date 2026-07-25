@@ -97,6 +97,18 @@ shape), do not hand-roll window clamping or slicing: port the classic
 build on those. First such adapter pays the porting cost; every later one
 reuses it.
 
+### Live sources are realtime-only — reject historical at wiring
+
+A **live, never-closing source** (a subscription / watch / consumer that
+streams until the service disconnects — `etcd_sub`, `redis_sub`, `kafka_sub`)
+must **reject `RunMode::HistoricalFrom` at wiring time** with a clear,
+adapter-named error, and return `Result`. It cannot replay historically: the
+historical channel receiver block-collects the whole stream up front, so an
+unbounded live producer deadlocks the graph at `start` (this is the etcd bug
+the port fixed). Only a *finite, timestamped* source (`replay_results` over
+file/query rows) runs historically. State this in the module docs, and read the
+run mode from the `RunParams` the factory already takes.
+
 ### Fallibility, with context
 
 - **Wiring-time I/O** (open file, bind socket, connect) happens in the factory
@@ -693,6 +705,12 @@ and `augurs` entries read.
 
 ## 14. Pre-commit checklist
 
+**Run every command in the FOREGROUND and wait for it to finish. Do NOT
+background `cargo lint-all` (or anything else) and move on** — it is slow
+(it builds every feature), and backgrounding it then ending the turn is the
+single most common way these ports strand with nothing committed. One command
+at a time, blocking, until it returns.
+
 ```bash
 cargo fmt --all
 cargo lint                                   # default features
@@ -703,9 +721,20 @@ cargo test -p wingfoil-next --features $ARGUMENTS-integration-test -- --test-thr
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
-only lint pass that sees your feature-gated code. Run each command in the
-**foreground** and wait for it — `cargo lint-all` is slow (it builds every
-feature), but backgrounding it and moving on tends to strand the commit.
+only lint pass that sees your feature-gated code.
+
+**Sandbox caveat:** `cargo lint-all` is a *workspace* all-features build, so it
+also compiles the classic **aeron** adapter's C library — which fails to build
+in a dev sandbox without the native toolchain (`CMake "Inappropriate ioctl for
+device"`), unrelated to your change. When that blocks you, run the scoped
+equivalent that still lints every `wingfoil-next` feature/target:
+
+```bash
+cargo clippy -p wingfoil-next --all-features --all-targets -- -D warnings
+```
+
+That covers all of your adapter's code; the full workspace `lint-all` runs in
+CI where aeron's deps are present. Note it in the PR if you substituted.
 
 ## 15. Self-review with a fresh context
 
@@ -730,9 +759,10 @@ parent context stays clean) with these tasks:
    (step 13).
 3. **Check the invariants**: no `Mutex`/`RwLock` on the graph path (an
    ad-hoc-reader hand-off uses `ArcSwap`, not a lock); channel
-   sources send non-decreasing timestamps and `close()`; errors carry
-   context; no `.unwrap()` outside tests; producer loops exit quietly when
-   `send` returns `false`; nothing added to the prelude.
+   sources send non-decreasing timestamps and `close()`; a live never-closing
+   source rejects `RunMode::HistoricalFrom` at wiring (returns `Result`);
+   errors carry context; no `.unwrap()` outside tests; producer loops exit
+   quietly when `send` returns `false`; nothing added to the prelude.
 4. **Check parity**: rerun the step-13 diff against the classic adapter and
    confirm the deviations list in the module docs is complete.
 5. **Run the pre-commit checklist from step 14** and confirm every command
