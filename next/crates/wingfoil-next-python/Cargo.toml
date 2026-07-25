@@ -30,6 +30,8 @@ pyo3 = "0.29"
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
 wingfoil-next = { path = "../wingfoil-next" }
+# The #[pyop] proc macro, re-exported so users depend only on this crate.
+wingfoil-next-python-macros = { path = "../wingfoil-next-python-macros" }
 # Run-mode and clock types (NanoTime / RunMode / RunFor) named by the object form.
 wingfoil = { path = "../../../wingfoil" }
 

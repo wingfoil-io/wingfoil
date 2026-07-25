@@ -1,9 +1,9 @@
-//! `pyop!` — generate a Python-callable op from a Rust step function.
+//! `pyop_fn!` — generate a Python-callable op from a Rust step function.
 //!
 //! pyo3 forbids adding `#[pymethods]` to a *foreign* pyclass, so a user op in
 //! another crate cannot become `stream.myop()`. The feasible shape — the same
 //! one polars expression plugins use — is a free function: `module.myop(stream
-//! [, cfg])`. `pyop!` generates exactly that `#[pyfunction]`, wiring the op onto
+//! [, cfg])`. `pyop_fn!` generates exactly that `#[pyfunction]`, wiring the op onto
 //! the stream via [`PyStream::wire_op1`](crate::PyStream::wire_op1) so only the
 //! edges convert between [`PyElement`](crate::PyElement) and the op's concrete
 //! types.
@@ -14,13 +14,13 @@
 //! an `Op` impl and derives this is the planned sugar on top.
 //!
 //! ```ignore
-//! use wingfoil_next_python::{pyop, Tick};
+//! use wingfoil_next_python::{pyop_fn, Tick};
 //!
-//! pyop! {
+//! pyop_fn! {
 //!     /// Multiply each value by `factor`.
 //!     fn scale(factor: f64): f64 => f64 = |cfg, _state, a, _ctx| Ok(Tick::Value(*a * *cfg))
 //! }
-//! pyop! {
+//! pyop_fn! {
 //!     /// Negate each value.
 //!     fn negate(): f64 => f64 = |_cfg, _state, a, _ctx| Ok(Tick::Value(-*a))
 //! }
@@ -32,7 +32,7 @@
 /// Generate a `#[pyfunction]` for a stateless single-input op. See the module
 /// docs for the two forms (with / without a config argument).
 #[macro_export]
-macro_rules! pyop {
+macro_rules! pyop_fn {
     (
         $(#[$meta:meta])*
         fn $name:ident ( $cfg:ident : $cfg_ty:ty ) : $in_ty:ty => $out_ty:ty = $body:expr

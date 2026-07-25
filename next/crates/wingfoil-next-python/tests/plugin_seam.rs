@@ -6,7 +6,37 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next_python::{Activation, PyElement, PyGraph, Tick};
+use wingfoil_next_python::{Activation, Ctx, Op, PyElement, PyGraph, Tick, pyop};
+
+// Compile-level proof that `#[pyop]` works from an *external* crate: the paths
+// the macro emits (`::wingfoil_next_python::...`) resolve here, and the
+// generated `#[pyfunction]` `triple` is a real item. If this file compiles, a
+// third-party op crate can use `#[pyop]`.
+struct Triple;
+
+#[pyop(name = triple)]
+impl Op for Triple {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 * 3.0))
+    }
+}
+
+#[test]
+fn pyop_generates_a_function_in_an_external_crate() {
+    // Referencing the generated function as a value proves it expanded.
+    let _f = triple;
+}
 
 #[test]
 fn external_crate_can_wire_a_custom_op() {

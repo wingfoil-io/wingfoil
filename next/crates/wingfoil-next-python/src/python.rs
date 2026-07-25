@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::graph::{PyGraph, PyStream};
-use crate::{PyElement, Tick};
+use crate::{Activation, Ctx, Op, PyElement, Tick, pyop};
 
 fn to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(format!("{err:#}"))
@@ -130,14 +130,36 @@ impl Stream {
     }
 }
 
-// A demonstration op authored the way a third-party crate would: a plain Rust
-// step function exposed to Python by `pyop!` as a free function
-// `wingfoil_next.scale(stream, factor)`. It edge-converts f64 <-> PyElement and
-// wires onto the shared graph — proving the "author an op in Rust, call it from
-// Python" path end to end.
-crate::pyop! {
+// Two demonstration ops authored the way a third-party crate would, proving the
+// "author an op in Rust, call it from Python" path end to end.
+
+// `scale` — the lightweight `pyop_fn!` form: an inline step, no `Op` struct.
+crate::pyop_fn! {
     /// Multiply each value by `factor`.
     fn scale(factor: f64): f64 => f64 = |cfg, _state, a, _ctx| Ok(Tick::Value(*a * *cfg))
+}
+
+// `square` — the `#[pyop]` proc-macro form over a real `Op` impl. `#[pyop]`
+// reads `In`/`Out`/`Cfg`/`State`/`cycle` off the impl and generates the same
+// `#[pyfunction]` `pyop_fn!` writes by hand.
+struct Square;
+
+#[pyop(name = square)]
+impl Op for Square {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 * input.0))
+    }
 }
 
 /// The `wingfoil_next` Python module.
@@ -146,5 +168,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
     m.add_function(wrap_pyfunction!(scale, m)?)?;
+    m.add_function(wrap_pyfunction!(square, m)?)?;
     Ok(())
 }

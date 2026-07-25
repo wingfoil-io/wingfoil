@@ -19,6 +19,10 @@
 //! is lifted into the next tree so the interpreted engine has a boundary lane of
 //! its own.
 
+// So `#[pyop]`-generated code — which names `::wingfoil_next_python::...` for
+// downstream crates — also resolves when the macro is used inside this crate.
+extern crate self as wingfoil_next_python;
+
 pub mod element;
 pub mod graph;
 #[macro_use]
@@ -29,6 +33,11 @@ pub use element::PyElement;
 pub use graph::{PyGraph, PyStream};
 pub use python::{Graph, Stream};
 
-// Re-exported so third-party op crates (and the `pyop!` macro) can name the op
-// vocabulary without depending on `wingfoil-next` directly.
-pub use wingfoil_next::op::{Activation, Ctx, Tick};
+/// Derive a Python-callable function from an `Op` impl. See
+/// [`wingfoil_next_python_macros`] — placed on `impl Op for MyOp`, it generates
+/// a free `#[pyfunction]` wiring the op at the erased boundary.
+pub use wingfoil_next_python_macros::pyop;
+
+// Re-exported so third-party op crates (and the `pyop!`/`#[pyop]` macros) can
+// name the op vocabulary without depending on `wingfoil-next` directly.
+pub use wingfoil_next::op::{Activation, Ctx, Op, Tick};

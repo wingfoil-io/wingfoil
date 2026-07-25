@@ -142,12 +142,14 @@ fn zscore(stream: PyRef<'_, Stream>, window: usize) -> Stream {
 // Python:  z = wingfoil_next.zscore(stream, window=100)
 ```
 
-**Status (shipped):** `PyStream::wire_op1` (the seam), the `pyop!` *declarative*
-macro for stateless single-input ops, and the `scale` demo op are implemented
-and tested (Rust + pytest, incl. a user op composed between built-in
-combinators). The `#[pyop]` *proc* macro — reading an `Op` impl and deriving the
-`pyop!` invocation (including stateful/multi-input shapes and `Cfg`-tuple arg
-naming) — is the planned sugar on top.
+**Status (shipped):** `PyStream::wire_op1` (the seam), the `pyop_fn!`
+*declarative* macro, and the `#[pyop]` *proc* macro (reads an `Op` impl's
+associated types + `cycle`, generates the `#[pyfunction]`) are implemented and
+tested — Rust unit + cross-crate integration tests and pytest, including user
+ops composed between built-in combinators, and both `scale` (`pyop_fn!`) and
+`square` (`#[pyop]`) demos. `#[pyop]` v1 covers stateless single-input concrete
+ops; stateful/multi-input shapes and `Cfg`-tuple arg naming call `wire_op1`
+directly and are the remaining extensions.
 
 ### `#[pyadapter]` — expose a user adapter trait
 
@@ -235,8 +237,9 @@ form.
 | `PyElement` boundary type in a `wingfoil-next-python` crate | `Clone/Default/Debug/PartialEq` + `Add/Sub/Not` + scalar/`Py<PyAny>` edge conversions | ✅ done (`element.rs`) |
 | Python-held open `GraphBuilder` + erased `PyStream` object | `PyGraph`/`PyStream` over the `Rc`-shared builder + runner slot | ✅ done (`graph.rs`) |
 | `#[pyclass]` module (`Graph`/`Stream`) + maturin build + pytest | importable `wingfoil_next` module | ✅ done (`python.rs`, `pyproject.toml`) |
-| `pyop!` seam + declarative macro | `PyStream::wire_op1` + `pyop!` for stateless single-input ops | ✅ done (`macros.rs`) |
-| `#[pyop]` **proc** macro | derive `pyop!` from an `Op` impl; stateful/multi-input; `Cfg`-tuple arg names | ⬜ next |
+| `pyop_fn!` seam + declarative macro | `PyStream::wire_op1` + `pyop_fn!` for stateless single-input ops | ✅ done (`macros.rs`) |
+| `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
+| `#[pyop]` extensions | stateful/multi-input shapes; `Cfg`-tuple arg names | ⬜ |
 | `#[pyadapter]` / `#[pygraph]` macros | source/sink + wiring-reuse emission (needs burst/`Vec` edge erasure for channel sources) | ⬜ |
 | Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |
