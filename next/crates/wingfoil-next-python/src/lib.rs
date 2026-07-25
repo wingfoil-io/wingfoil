@@ -20,5 +20,7 @@
 //! its own.
 
 pub mod element;
+pub mod graph;
 
 pub use element::PyElement;
+pub use graph::{PyGraph, PyStream};

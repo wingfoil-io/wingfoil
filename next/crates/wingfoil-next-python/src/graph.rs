@@ -1,0 +1,268 @@
+//! The erased object form: [`PyGraph`] and [`PyStream`].
+//!
+//! Python needs to *hold* a graph and keep wiring into it across the FFI
+//! boundary, then run it and read values back. The interpreted engine's
+//! [`GraphBuilder`] is already a shared, still-open builder (`Rc<RefCell<..>>`
+//! under the hood — every clone appends to the *same* graph), so the object
+//! form is a thin, **non-generic** wrapper over it at [`PyElement`]:
+//!
+//! - [`PyGraph`] owns the shared builder plus a runner slot, and hands out
+//!   sources as [`PyStream`]s.
+//! - [`PyStream`] wraps a `Stream<PyElement>` and the same runner slot, so
+//!   `value()` reads back whichever stream you kept after the graph ran.
+//!
+//! Non-generic on purpose: this is the exact shape a `#[pyclass]` will expose
+//! (pyclasses can't be generic), and it keeps every Python-composable edge on
+//! the single erased [`PyElement`] type so any node wires to any node.
+//!
+//! Combinators that consume a *typed* input (e.g. [`filter`](PyStream::filter)
+//! needs a `Stream<bool>`) convert at the seam — the erased surface never
+//! leaks a concrete type to Python. A Python callable passed to
+//! [`map`](PyStream::map) runs through [`try_map`](StreamOps::try_map) so a
+//! raised exception aborts the run with context rather than panicking.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use anyhow::{Result, bail};
+use pyo3::prelude::*;
+use wingfoil::{RunFor, RunMode};
+use wingfoil_next::interp::Runner;
+use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps};
+
+use crate::PyElement;
+
+/// The runner produced by [`PyGraph::run`], shared by the graph and every
+/// [`PyStream`] wired from it so `value()` works on whichever you kept.
+type RunnerSlot = Rc<RefCell<Option<Runner>>>;
+
+/// A held graph with the classic `run` / read-value ergonomics, erased to
+/// [`PyElement`]. Clones share the same underlying builder and runner slot.
+#[derive(Default, Clone)]
+pub struct PyGraph {
+    builder: GraphBuilder,
+    runner: RunnerSlot,
+}
+
+impl PyGraph {
+    /// A fresh, empty graph.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn wrap(&self, stream: Stream<PyElement>) -> PyStream {
+        PyStream {
+            stream,
+            runner: self.runner.clone(),
+        }
+    }
+
+    /// A source that ticks once with `value` on the first cycle.
+    pub fn constant(&self, value: PyElement) -> PyStream {
+        self.wrap(self.builder.constant(value))
+    }
+
+    /// A source that emits the running tick count `1, 2, 3, …` (as an integer
+    /// [`PyElement`]) every `period`. Sugar over `ticker(period).count()`,
+    /// giving Python a simple erased multi-tick source without exposing the
+    /// `()`/`u64` interior types.
+    pub fn counter(&self, period: Duration) -> PyStream {
+        let counted = self.builder.ticker(period).count();
+        self.wrap(counted.map(|n: &u64| PyElement::from(*n as i64)))
+    }
+
+    /// Build and run the graph to its bound, storing the runner so retained
+    /// [`PyStream`]s can be read with [`PyStream::value`].
+    ///
+    /// Re-running is not yet supported: the shared builder is consumed by the
+    /// first run (a second `build()` would return an empty graph). Until the
+    /// per-node reset hook lands (`next/docs/port-plan.md`, Phase 1) a second
+    /// call is a *reachable* user error, surfaced as an `Err` rather than the
+    /// builder's internal panic. The first run's runner stays in place.
+    pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
+        if self.runner.borrow().is_some() {
+            bail!(
+                "PyGraph::run called more than once: re-running a graph is not \
+                 yet supported (the builder is consumed by the first run)"
+            );
+        }
+        let mut runner = self.builder.build();
+        let result = runner.run(run_mode, run_for);
+        *self.runner.borrow_mut() = Some(runner);
+        result
+    }
+}
+
+/// A stream in a [`PyGraph`], erased to [`PyElement`]. Combinators mirror the
+/// fluent [`StreamOps`] surface; each returns a new `PyStream` on the same
+/// graph.
+#[derive(Clone)]
+pub struct PyStream {
+    stream: Stream<PyElement>,
+    runner: RunnerSlot,
+}
+
+impl PyStream {
+    fn wrap(&self, stream: Stream<PyElement>) -> PyStream {
+        PyStream {
+            stream,
+            runner: self.runner.clone(),
+        }
+    }
+
+    /// Apply a Python callable to each value. The callable is invoked with the
+    /// current value and its result becomes the new value; a raised exception
+    /// aborts the run with context (via [`try_map`](StreamOps::try_map)).
+    pub fn map(&self, func: Py<PyAny>) -> PyStream {
+        let mapped = self.stream.try_map(move |e: &PyElement| {
+            Python::attach(|py| {
+                let result = func
+                    .call1(py, (e.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python map callable raised: {err}"))?;
+                Ok(PyElement::new(result))
+            })
+        });
+        self.wrap(mapped)
+    }
+
+    /// Emit only when `condition`'s current value is truthy. The condition is a
+    /// [`PyStream`]; its Python value is extracted to `bool` at the seam so the
+    /// public surface stays erased.
+    pub fn filter(&self, condition: &PyStream) -> PyStream {
+        let cond: Stream<bool> = condition.stream.try_map(|e: &PyElement| bool::try_from(e));
+        self.wrap(self.stream.filter(&cond))
+    }
+
+    /// Merge with another stream; the earliest-supplied ticked input wins.
+    pub fn merge(&self, other: &PyStream) -> PyStream {
+        self.wrap(self.stream.merge(&other.stream))
+    }
+
+    /// Re-emit each value `delay` later.
+    pub fn delay(&self, delay: Duration) -> PyStream {
+        self.wrap(self.stream.delay(delay))
+    }
+
+    /// Suppress consecutive duplicate values (emit on change only).
+    pub fn distinct(&self) -> PyStream {
+        self.wrap(self.stream.distinct())
+    }
+
+    /// The stream's current value after [`PyGraph::run`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before the owning graph has run — there is no value to
+    /// read yet. This mirrors the classic infallible `peek_value`; the
+    /// precondition is documented and enforced with an explanatory panic.
+    pub fn value(&self) -> PyElement {
+        self.runner
+            .borrow()
+            .as_ref()
+            .expect("invariant: PyGraph::run must be called before PyStream::value")
+            .value(&self.stream)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wingfoil::NanoTime;
+
+    /// Build a Python callable from a `lambda` source string.
+    fn lambda(src: &str) -> Py<PyAny> {
+        Python::attach(|py| {
+            py.eval(&std::ffi::CString::new(src).unwrap(), None, None)
+                .unwrap()
+                .unbind()
+        })
+    }
+
+    fn run_cycles(g: &PyGraph, n: u32) {
+        g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(n))
+            .unwrap();
+    }
+
+    #[test]
+    fn constant_maps_via_python_callable() {
+        let g = PyGraph::new();
+        let out = g
+            .constant(PyElement::from(4.0_f64))
+            .map(lambda("lambda x: x * x"));
+        run_cycles(&g, 1);
+        let v: f64 = (&out.value()).try_into().unwrap();
+        assert_eq!(16.0, v);
+    }
+
+    #[test]
+    fn counter_source_ticks_and_reads_final() {
+        let g = PyGraph::new();
+        let doubled = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n * 2"));
+        run_cycles(&g, 3);
+        let v: i64 = (&doubled.value()).try_into().unwrap();
+        assert_eq!(6, v); // 3rd tick -> 3 * 2
+    }
+
+    #[test]
+    fn filter_by_python_predicate() {
+        let g = PyGraph::new();
+        let counter = g.counter(Duration::from_nanos(100));
+        let gt2 = counter.map(lambda("lambda n: n > 2"));
+        let filtered = counter.filter(&gt2);
+
+        let seen = Rc::new(RefCell::new(Vec::<i64>::new()));
+        let sink = seen.clone();
+        let _observed = filtered.stream.inspect(move |e: &PyElement| {
+            sink.borrow_mut().push(i64::try_from(e).unwrap());
+        });
+
+        run_cycles(&g, 5);
+        assert_eq!(vec![3, 4, 5], *seen.borrow());
+    }
+
+    #[test]
+    fn distinct_suppresses_consecutive_duplicates() {
+        let g = PyGraph::new();
+        // 1,2,3,4,5,6 -> n//2 -> 0,1,1,2,2,3 -> distinct -> 0,1,2,3
+        let stepped = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n // 2"))
+            .distinct();
+
+        let seen = Rc::new(RefCell::new(Vec::<i64>::new()));
+        let sink = seen.clone();
+        let _observed = stepped.stream.inspect(move |e: &PyElement| {
+            sink.borrow_mut().push(i64::try_from(e).unwrap());
+        });
+
+        run_cycles(&g, 6);
+        assert_eq!(vec![0, 1, 2, 3], *seen.borrow());
+    }
+
+    #[test]
+    fn map_callable_error_aborts_run() {
+        let g = PyGraph::new();
+        let out = g
+            .constant(PyElement::from("not a number"))
+            .map(lambda("lambda x: x + 1")); // str + int raises TypeError
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python map callable raised"));
+        let _ = out;
+    }
+
+    #[test]
+    fn second_run_is_an_error_not_a_panic() {
+        let g = PyGraph::new();
+        let _ = g.constant(PyElement::from(1.0_f64));
+        run_cycles(&g, 1);
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err}").contains("more than once"));
+    }
+}
