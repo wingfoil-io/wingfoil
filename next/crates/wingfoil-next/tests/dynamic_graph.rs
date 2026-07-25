@@ -403,3 +403,185 @@ fn demux_routes_excess_to_overflow() {
         "overflow (slots >= size)"
     );
 }
+
+/// A key type that is `Hash + Eq` but deliberately **not** `Ord` — so it cannot
+/// back a `BTreeMap`. `dynamic_group_with_store(HashMap::new(), …)` must accept
+/// it (and would fail to compile if a `K: Ord` bound leaked through).
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
+struct SymbolId(u64);
+
+/// `StreamStore` parity: the same live-price-book group as
+/// `dynamic_group_maintains_a_live_price_book`, but backed by a `HashMap` keyed
+/// by a non-`Ord` `SymbolId`. Proves the pluggable backing store lets a
+/// `Hash + Eq` key flow through where the default `BTreeMap` (`K: Ord`) could
+/// not. The final assertion compares whole `HashMap`s, so `HashMap`'s
+/// nondeterministic iteration order does not affect it.
+#[test]
+fn dynamic_group_with_store_supports_non_ord_hashmap_key() {
+    use std::collections::HashMap;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    // Shared feed: (SymbolId(key), price) with key alternating 1,0,1,0,… and
+    // price = 10*cycle.
+    let feed = n.map(|c: &u64| (SymbolId(c % 2), c * 10)).handle();
+    // Same schedule as the BTreeMap oracle: add key0 at cycle 1, key1 at cycle
+    // 2; delete key0 at cycle 4, with a no-op delete of a missing key at cycle 5
+    // to trigger the group early (the fix_layers exercise).
+    let add = n
+        .map_filter(|c: &u64| (SymbolId(if *c == 1 { 0 } else { 1 }), *c == 1 || *c == 2))
+        .handle();
+    let del = n
+        .map_filter(|c: &u64| (SymbolId(if *c == 4 { 0 } else { 99 }), *c == 4 || *c == 5))
+        .handle();
+
+    let book = g.with_builder(|b| {
+        b.dynamic_group_with_store(
+            add,
+            del,
+            move |ext: &mut Extension<'_>, k: SymbolId| {
+                let selected = ext.filter_value(feed, move |(i, _): &(SymbolId, u64)| *i == k);
+                ext.map(selected, |(_, px): &(SymbolId, u64)| *px)
+            },
+            // Members store: a HashMap keyed by the non-Ord SymbolId. Its value
+            // type (the engine's internal LiveStream) is inferred, so no private
+            // type is named here.
+            HashMap::new(),
+            // Output book (the aggregated value V).
+            HashMap::<SymbolId, u64>::new(),
+            |book: &mut HashMap<SymbolId, u64>, key: &SymbolId, price: &u64| {
+                book.insert(key.clone(), *price);
+            },
+            |book: &mut HashMap<SymbolId, u64>, key: &SymbolId| {
+                book.remove(key);
+            },
+        )
+    });
+
+    let mut runner = g.build();
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |_ext, _cycle| Ok(()))
+        .unwrap();
+
+    // key0 tracked on cycle 2 (20), removed at cycle 4; key1 tracked on cycles 3
+    // (30) and 5 (50). Final book holds only the live key 1 at 50.
+    let final_book = runner.value(book);
+    assert_eq!(
+        final_book,
+        HashMap::from([(SymbolId(1), 50u64)]),
+        "final price book (HashMap-backed, non-Ord key)"
+    );
+}
+
+/// `demux_map` (twin of classic `StreamOperators::demux`): the auto-assigning
+/// `DemuxMap` key lifecycle over the raw `demux` primitive. Each new key claims
+/// a free slot from the pool of `capacity`; `DemuxEvent::Close` routes to the
+/// key's current slot then frees it; a key with no slot free lands on overflow.
+///
+/// With `capacity = 2`, feeding `(key, payload = cycle)`:
+/// c1 (1,None)→slot0, c2 (2,None)→slot1, c3 (3,None)→overflow (pool full),
+/// c4 (1,Close)→slot0 then frees it, c5 (4,None)→slot0 (reused), c6 (2,None)→slot1.
+#[test]
+fn demux_map_auto_assigns_and_releases_slots() {
+    use wingfoil_next::interp::DemuxEvent;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1..=6
+    // (key, event) schedule indexed by cycle; payload is the cycle number.
+    let src = n
+        .map(|c: &u64| {
+            let (key, close) = match *c {
+                1 => (1u64, false),
+                2 => (2, false),
+                3 => (3, false),
+                4 => (1, true), // Close releases key 1's slot
+                5 => (4, false),
+                _ => (2, false),
+            };
+            (key, *c, close)
+        })
+        .handle();
+
+    let (children, overflow) = g.with_builder(|b| {
+        b.demux_map(src, 2, |(key, _payload, close): &(u64, u64, bool)| {
+            let event = if *close {
+                DemuxEvent::Close
+            } else {
+                DemuxEvent::None
+            };
+            (*key, event)
+        })
+    });
+    // Collect the payload routed to each child.
+    let c0 = g
+        .wrap(children[0])
+        .map(|(_, p, _): &(u64, u64, bool)| *p)
+        .accumulate();
+    let c1 = g
+        .wrap(children[1])
+        .map(|(_, p, _): &(u64, u64, bool)| *p)
+        .accumulate();
+    let ov = g
+        .wrap(overflow)
+        .map(|(_, p, _): &(u64, u64, bool)| *p)
+        .accumulate();
+
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    assert_eq!(
+        runner.value(&c0),
+        vec![1u64, 4, 5],
+        "slot 0: key1, key1 close, key4"
+    );
+    assert_eq!(runner.value(&c1), vec![2u64, 6], "slot 1: key2 twice");
+    assert_eq!(runner.value(&ov), vec![3u64], "overflow: key3 (pool full)");
+}
+
+/// `demux_it` (twin of classic `StreamOperators::demux_it`): routes *each item*
+/// of an iterable source value to its keyed child, and every selected child
+/// re-emits a `Burst` of exactly the items routed to it this cycle. Same
+/// `DemuxMap` lifecycle as `demux_map`; unselected children stay quiet.
+///
+/// With `capacity = 2` and keys = the item value: cycle 1 emits `[10, 20]` (key
+/// 10 → slot0, key 20 → slot1); cycle 2 emits `[10, 20, 30]` (30 is new with the
+/// pool full → overflow).
+#[test]
+fn demux_it_routes_each_item_to_a_burst_per_child() {
+    use wingfoil_next::interp::DemuxEvent;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2
+    let src = n
+        .map(|c: &u64| {
+            if *c == 1 {
+                vec![10u64, 20]
+            } else {
+                vec![10u64, 20, 30]
+            }
+        })
+        .handle();
+
+    let (children, overflow) =
+        g.with_builder(|b| b.demux_it(src, 2, |v: &u64| (*v, DemuxEvent::None)));
+    let c0 = g.wrap(children[0]).accumulate();
+    let c1 = g.wrap(children[1]).accumulate();
+    let ov = g.wrap(overflow).accumulate();
+
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(2)).unwrap();
+
+    // child0 (key 10) and child1 (key 20) fire both cycles; overflow (key 30)
+    // only cycle 2. Each burst holds exactly the items routed to that child.
+    assert_eq!(
+        runner.value(&c0),
+        vec![burst![10u64], burst![10u64]],
+        "child 0 (key 10)"
+    );
+    assert_eq!(
+        runner.value(&c1),
+        vec![burst![20u64], burst![20u64]],
+        "child 1 (key 20)"
+    );
+    assert_eq!(runner.value(&ov), vec![burst![30u64]], "overflow (key 30)");
+}
