@@ -97,6 +97,16 @@ shape), do not hand-roll window clamping or slicing: port the classic
 build on those. First such adapter pays the porting cost; every later one
 reuses it.
 
+**If the slicer already exists** (postgres ported it in Phase 4), you are the
+*reusing* adapter: **do not duplicate it — widen its cfg gate.** postgres left
+the helpers gated `#[cfg(feature = "postgres")]` (a `kdb`/your-feature cfg
+didn't exist yet, and an unknown-feature cfg trips `unexpected_cfgs`), so change
+that to `#[cfg(any(feature = "postgres", feature = "$ARGUMENTS"))]` and call the
+same functions. The `WindowFilter` row-clamp is always-compiled; only the
+*slicer* is feature-gated. postgres's reader (query every slice at wiring →
+clamp each row through `WindowFilter` → feed the finite rows into
+`replay_results`) is the template for yours.
+
 ### Live sources are realtime-only — reject historical at wiring
 
 A **live, never-closing source** (a subscription / watch / consumer that
@@ -122,6 +132,14 @@ run mode from the `RunParams` the factory already takes.
 - No `.unwrap()` outside `#[cfg(test)]` and doc examples (repo-wide rule).
 - A closed receiver is a **normal teardown race**, not an error: `send`/`send_at`
   return `false` once the graph is gone — exit the producer loop quietly.
+- **Never leak credentials into error context.** A connection string / DSN /
+  URL often embeds a password or token (`password=...`, `redis://user:pass@…`),
+  and `.context("connecting to {conn}")` would spill it into logs and the
+  graph-abort error. Give the connection config a `redacted()` method that masks
+  the secret (`password=***`) and use it at **every** `connect()` error site;
+  assert in a no-service test that the raw secret never appears. (This is the
+  classic postgres password-redaction fix — reproduce it for any networked
+  adapter with credentials: redis, kafka, zmq, kdb, …)
 
 ### Layering: extension traits, out of the prelude
 
