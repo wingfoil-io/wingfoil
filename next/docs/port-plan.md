@@ -632,6 +632,37 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    - **kdb** reuses the `postgres`-ported time slicer in `adapters::common` —
      add `feature = "kdb"` to the `#[cfg]` gate on `compute_time_slices` /
      `compute_validated_time_slices` and their tests.
+   ✅ **kafka** *(done)*: a streaming topic-consume source (`kafka_sub`) on
+   `produce_async` and a topic-produce sink (`KafkaSinkOps::kafka_pub`) on
+   `consume_async`, behind the `kafka` feature (`rdkafka` 0.37, mirroring
+   classic). Parity port of the classic adapter's tests as
+   `tests/kafka_integration.rs` (testcontainers/Redpanda, gated on
+   `kafka-integration-test`; `kafka-next-integration.yml`) plus no-service tests
+   in `tests/kafka_adapter.rs`, and the round-trip example (`kafka_adapter`).
+   **Deviations** (capabilities all preserved): (a) the tokio runtime is the
+   caller's — `kafka_sub`/`kafka_pub` take a `&tokio::runtime::Handle` (and
+   `kafka_sub` a `RunParams`), matching next's `produce_async` convention rather
+   than classic's hidden global runtime; (b) the sink is the `KafkaSinkOps` trait
+   only (classic's free `kafka_pub` fn folded into the trait, per next's
+   sink-as-trait convention), creating the `FutureProducer` at wiring and
+   returning `Result`; (c) records in a burst are produced **sequentially**
+   (single ordered `consume_async` consumer, each `send` awaited to delivery
+   confirmation) rather than concurrently via `FuturesUnordered` — order is
+   preserved at the cost of N roundtrips per burst, and the explicit
+   `producer.flush()` at upstream end is dropped as unnecessary (every send is
+   already awaited to its ack; `consume_async` drains queued writes at teardown).
+   - **Historical mode unsupported:** like `etcd_sub`, `kafka_sub` is a live,
+     unbounded, wall-clock-stamped consumer with no historical timeline to
+     replay, and the historical channel path would block-collect its never-ending
+     `recv()` loop up front and deadlock at `start`. `kafka_sub` returns `Result`
+     and **rejects `RunMode::HistoricalFrom` at wiring time** with a clear error;
+     run it under `RunMode::RealTime`. (Classic technically permitted a
+     historical run with wall-clock timestamps.)
+   - **`async` feature fix:** enabling `async` now also enables `tokio/sync`
+     (which `consume_async`'s sink channels need). Previously the `async` feature
+     compiled only because a companion adapter (`etcd-client`) pulled `tokio/sync`
+     in transitively; `kafka` is the first async adapter that does not, so the
+     feature is now self-contained.
 6. **fix** — codec-heavy; fallibility with context.
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.

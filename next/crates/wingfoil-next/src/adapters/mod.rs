@@ -20,6 +20,10 @@
 //!   a key-value PUT sink (`EtcdSinkOps::etcd_pub`) for the etcd key-value
 //!   store, behind the `etcd` feature (built on the async `produce_async`
 //!   ergonomic).
+//! - [`kafka`] — a streaming topic-consume source (`kafka_sub`) and a
+//!   topic-produce sink (`KafkaSinkOps::kafka_pub`) for Apache Kafka, behind the
+//!   `kafka` feature (built on the async `produce_async` / `consume_async`
+//!   ergonomics).
 //! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
 //!   time-sliced historical readers, behind the `cache` feature. A pure utility
 //!   (async `get`/`put`), not a source/sink op.
@@ -55,6 +59,8 @@ pub mod common;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "kafka")]
+pub mod kafka;
 pub mod lines;
 #[cfg(feature = "postgres")]
 pub mod postgres;

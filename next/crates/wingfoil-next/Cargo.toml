@@ -85,6 +85,15 @@ redis = { version = "0.27", features = [
     "aio",
     "streams",
 ], optional = true }
+# `kafka` feature: a streaming topic-consume source and a topic-produce sink for
+# Apache Kafka, built on the async `produce_async` / `consume_async` ergonomics
+# (`rdkafka` is a tokio client). Version mirrors the classic `wingfoil` crate's
+# kafka adapter so the two trees don't drift. As classic does, the bundled
+# `librdkafka` uses rdkafka's default build path (`./configure` + `make`); the
+# `cmake-build` feature is deliberately not enabled (its curl.h dependency breaks
+# CI). `testcontainers` (used only by the integration tests) is already an
+# optional [dependencies] entry above, shared with the etcd adapter.
+rdkafka = { version = "0.37", optional = true }
 
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
@@ -127,7 +136,10 @@ criterion = "0.8.1"
 
 [features]
 default = []
-async = ["dep:tokio", "dep:futures"]
+# `tokio/sync` backs `consume_async`'s bounded/unbounded sink channels; it is
+# part of the async module, so the feature enables it directly rather than
+# relying on a companion adapter (etcd-client) to pull it in transitively.
+async = ["dep:tokio", "dep:futures", "tokio/sync"]
 csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
@@ -145,6 +157,11 @@ redis-integration-test = ["redis", "dep:testcontainers"]
 # timestamp column conversions.
 postgres = ["dep:tokio-postgres", "dep:chrono", "dep:async-stream", "async"]
 postgres-integration-test = ["postgres", "dep:testcontainers"]
+# Streaming Kafka consume source + produce sink. Built on the async
+# `produce_async` / `consume_async` ergonomics; needs `async-stream` for the
+# consumer's `recv()` loop. Mirrors classic wingfoil's `kafka` deps.
+kafka = ["dep:rdkafka", "dep:async-stream", "async"]
+kafka-integration-test = ["kafka", "dep:testcontainers"]
 # Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
 prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
@@ -213,6 +230,10 @@ required-features = ["redis"]
 name = "postgres_adapter"
 path = "examples/postgres_adapter/main.rs"
 required-features = ["postgres"]
+
+[[example]]
+name = "kafka_adapter"
+required-features = ["kafka"]
 
 [[example]]
 name = "prometheus_adapter"
