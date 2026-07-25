@@ -162,7 +162,7 @@ where
             "produce_async::validate",
             Activation::NONE,
             (),
-            (),
+            || (),
             move |_cfg: &mut (), _state: &mut (), input: &Burst<T>, ctx| {
                 if !checked {
                     checked = true;

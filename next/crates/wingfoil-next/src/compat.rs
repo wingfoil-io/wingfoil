@@ -124,24 +124,21 @@ impl<T: 'static> Signal<T> {
 
     /// Run the graph to its bound, storing the runner for `peek_value`.
     ///
-    /// Re-running is not supported: the shared [`GraphBuilder`] is consumed by
-    /// the first `run`, so a second call would build — and silently run — an
-    /// empty graph, then read a now-dangling handle out of bounds. Until re-run
-    /// support lands (deferred — see `next/docs/fable-review.md`, plan point 3) a
-    /// second call is a *reachable* user error, not an unreachable invariant,
-    /// so it is surfaced as an error rather than a panic. The first run's
-    /// runner is left in place, so `peek_value` keeps working.
+    /// **Re-runnable**: the graph is built once (on the first call) and the
+    /// [`Runner`] is retained, so a second `run` reuses it —
+    /// [`Runner::run`](crate::interp::Runner::run) restores every node's state
+    /// and value slot to its wiring-time initial value first, giving each run
+    /// independent, reproducible results (classic's setup-per-run semantics).
+    /// This is what the wingfoil-python pytest suite — and any classic-idiom
+    /// code that runs a stream more than once — depends on.
     pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
-        if self.runner.borrow().is_some() {
-            anyhow::bail!(
-                "Signal::run called more than once: re-running a graph is not \
-                 supported (the builder is consumed by the first run)"
-            );
+        let mut slot = self.runner.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(self.graph.build());
         }
-        let mut runner = self.graph.build();
-        let result = runner.run(run_mode, run_for);
-        *self.runner.borrow_mut() = Some(runner);
-        result
+        slot.as_mut()
+            .expect("runner just built")
+            .run(run_mode, run_for)
     }
 
     /// The stream's current value after a [`run`](Signal::run).

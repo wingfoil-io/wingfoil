@@ -428,9 +428,14 @@ trait CustomOps {
 impl CustomOps for Stream<f64> {
     fn scale(&self, factor: f64) -> Stream<f64> {
         self.wire(|b, h| {
-            b.register_op1(h, "scale", Scale::ACTIVATION, factor, (), |c, s, a, ctx| {
-                <Scale as Op>::cycle(c, s, (a,), ctx)
-            })
+            b.register_op1(
+                h,
+                "scale",
+                Scale::ACTIVATION,
+                factor,
+                || (),
+                |c, s, a, ctx| <Scale as Op>::cycle(c, s, (a,), ctx),
+            )
         })
     }
 
@@ -441,7 +446,7 @@ impl CustomOps for Stream<f64> {
                 "delta",
                 <Delta<f64> as Op>::ACTIVATION,
                 (),
-                None,
+                || None,
                 |c, s, a, ctx| <Delta<f64> as Op>::cycle(c, s, (a,), ctx),
             )
         })
@@ -454,7 +459,7 @@ impl CustomOps for Stream<f64> {
                 "apply",
                 <Apply<F> as Op>::ACTIVATION,
                 f,
-                (),
+                || (),
                 |c, s, a, ctx| <Apply<F> as Op>::cycle(c, s, (a,), ctx),
             )
         })
@@ -469,7 +474,7 @@ impl CustomOps for Stream<f64> {
                 "spread",
                 Spread::ACTIVATION,
                 (),
-                (),
+                || (),
                 |c, s, a, b, ctx| <Spread as Op>::cycle(c, s, (a, b), ctx),
             )
         })
@@ -488,7 +493,7 @@ impl CustomOps for Stream<f64> {
                 "combine",
                 <Combine<f64, f64, f64, F> as Op>::ACTIVATION,
                 f,
-                (),
+                || (),
                 |c, s, a, b, ctx| <Combine<f64, f64, f64, F> as Op>::cycle(c, s, (a, b), ctx),
             )
         })
