@@ -93,7 +93,7 @@ fn add_upstream_deep_resorts_caller_layer() {
     runner
         .run_dynamic(HISTORICAL, RunFor::Cycles(2), |ext, cycle| {
             if cycle == 1 {
-                ext.add_upstream(caller, deep, true);
+                ext.add_upstream(caller, deep, true, false);
             }
             Ok(())
         })
@@ -128,7 +128,7 @@ fn add_upstream_passive_does_not_trigger() {
         .run_dynamic(HISTORICAL, RunFor::Cycles(6), |ext, cycle| {
             if cycle == 2 {
                 // Passive splice: caller reads `other` but is not triggered by it.
-                ext.add_upstream(caller, other, false);
+                ext.add_upstream(caller, other, false, false);
             }
             Ok(())
         })
@@ -140,5 +140,153 @@ fn add_upstream_passive_does_not_trigger() {
         runner.value(caller),
         6,
         "a passive upstream must not add activations"
+    );
+}
+
+/// Twin of classic's `remove_node_stops_firing_and_calls_lifecycle`
+/// (`graph.rs:2064`): a node removed mid-run stops cycling immediately, and its
+/// value freezes at whatever it last held.
+///
+/// A `fold` counter appended at cycle 1 fires on cycles 2, 3, 4 (→ 3), then is
+/// removed at the cycle-4 boundary; over the remaining cycles it must not fire
+/// again, so its final value stays 3 (not the 7 it would reach unremoved).
+#[test]
+fn removed_node_stops_firing_and_value_freezes() {
+    let g = GraphBuilder::new();
+    let src = g.ticker(Duration::from_nanos(1)).count().handle();
+    let mut runner = g.build();
+
+    let mut counter = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(8), |ext, cycle| {
+            if cycle == 1 {
+                counter = Some(ext.fold(src, 0u64, |acc, _| *acc += 1));
+            }
+            if cycle == 4 {
+                ext.remove(counter.expect("counter appended at cycle 1"))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let counter = counter.unwrap();
+    // Fired on cycles 2, 3, 4 → 3; removed at the cycle-4 boundary, frozen after.
+    // Its slot is tombstoned (not freed), so the value is still readable.
+    assert_eq!(
+        runner.value(counter),
+        3,
+        "removed node stops firing; value freezes"
+    );
+}
+
+/// The lifecycle half of the removal oracle: a removed node runs its `stop`
+/// then `teardown` exactly once, at removal — not again at run shutdown. Uses a
+/// `finally` node (whose whole purpose is an observable teardown hook) and
+/// checks the count both immediately after removal and after the run ends.
+#[test]
+fn remove_runs_teardown_once_at_removal() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let teardowns = Rc::new(Cell::new(0u64));
+    let g = GraphBuilder::new();
+    let src = g.ticker(Duration::from_nanos(1)).count().handle();
+    let tc = teardowns.clone();
+    // `finally`'s closure runs at teardown; count how many times.
+    let fin = g.with_builder(|b| {
+        b.finally(src, move |_| {
+            tc.set(tc.get() + 1);
+            Ok(())
+        })
+    });
+    let mut runner = g.build();
+
+    let mut teardowns_at_removal = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |ext, cycle| {
+            if cycle == 3 {
+                ext.remove(fin)?;
+                teardowns_at_removal = Some(teardowns.get());
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    // Teardown ran once, *at* removal (observed mid-run) …
+    assert_eq!(
+        teardowns_at_removal,
+        Some(1),
+        "teardown runs when the node is removed"
+    );
+    // … and was not called a second time by the end-of-run cleanup.
+    assert_eq!(
+        teardowns.get(),
+        1,
+        "teardown is not called again at shutdown"
+    );
+}
+
+/// Twin of classic's `add_upstream_with_recycle_delivers_first_value`
+/// (`graph.rs:2164`): with `recycle = true`, a node appended over a *quiet*
+/// source is scheduled to fire at `time + 1`, so it observes the source's real
+/// current value rather than the `Default` it would otherwise hold.
+///
+/// The source is a `constant`, which ticks once at t=0 then stays quiet. A `map`
+/// of it spliced in at cycle 3 would never fire on its own (the constant never
+/// ticks again); recycle forces one evaluation, delivering `42 + 1 = 43`.
+#[test]
+fn recycle_delivers_first_value_from_quiet_source() {
+    let g = GraphBuilder::new();
+    let c = g.constant(42u64).handle(); // ticks once at t=0, then quiet
+    let trigger = g.ticker(Duration::from_nanos(1));
+    let caller = trigger.fold(0u64, |acc, _| *acc += 1).handle();
+    let mut runner = g.build();
+
+    let mut mapped = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |ext, cycle| {
+            if cycle == 3 {
+                let m = ext.map(c, |v: &u64| v + 1);
+                ext.add_upstream(caller, m, true, true); // recycle = true
+                mapped = Some(m);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        runner.value(mapped.unwrap()),
+        43,
+        "recycle scheduled the appended node to observe the constant's value"
+    );
+}
+
+/// The negative control for recycle: without it, a node appended over the same
+/// *quiet* source never fires and keeps its `Default` — proving the previous
+/// test's `43` is the recycle schedule at work, not natural propagation.
+#[test]
+fn without_recycle_quiet_source_stays_default() {
+    let g = GraphBuilder::new();
+    let c = g.constant(42u64).handle();
+    let trigger = g.ticker(Duration::from_nanos(1));
+    let caller = trigger.fold(0u64, |acc, _| *acc += 1).handle();
+    let mut runner = g.build();
+
+    let mut mapped = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |ext, cycle| {
+            if cycle == 3 {
+                let m = ext.map(c, |v: &u64| v + 1);
+                ext.add_upstream(caller, m, true, false); // recycle = false
+                mapped = Some(m);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        runner.value(mapped.unwrap()),
+        0,
+        "without recycle the quiet source never re-ticks the appended node"
     );
 }

@@ -2055,6 +2055,7 @@ impl Builder {
             id: self.id,
             active_downs,
             passive_downs,
+            removed: vec![false; n],
             seed_nodes,
             layer,
             dispatch: Dispatch::default(),
@@ -2115,6 +2116,15 @@ pub struct Runner {
     /// passive). Inert unless the graph is mutated at runtime.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     passive_downs: Vec<Vec<usize>>,
+    /// `removed[i]` — a tombstone set when a node is deleted at runtime
+    /// (`Extension::remove`). Its edges are unlinked and it is dropped from
+    /// `seed_nodes` so it never cycles again; the flag additionally stops the
+    /// end-of-run cleanup from calling its `stop`/`teardown` a second time
+    /// (they already ran at removal — classic parity, `graph.rs:1015-1028`).
+    /// Slots are tombstoned, never freed, so a `Handle` stays valid. Always
+    /// all-false on a static run.
+    #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
+    removed: Vec<bool>,
     /// Frontier sources seeded each cycle: `always` ops and callback-activated
     /// ops (the latter only fire when the kernel marks them dirty).
     seed_nodes: Vec<usize>,
@@ -2542,7 +2552,11 @@ impl Runner {
                 cycles += 1;
                 // Apply staged mutations at the boundary, matching classic's
                 // end-of-cycle `process_pending_*` (`graph.rs:934-939`).
-                let mut ext = Extension { runner: self };
+                let mut ext = Extension {
+                    runner: self,
+                    kernel: &mut kernel,
+                    appended: Vec::new(),
+                };
                 if let Err(e) = between(&mut ext, cycles) {
                     first_err = Some(e);
                     break;
@@ -2551,16 +2565,24 @@ impl Runner {
         }
 
         // Cleanup always runs; a stop/teardown error only surfaces if no
-        // earlier error already won.
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.stop)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) stop", node.label));
+        // earlier error already won. A node removed mid-run already ran its
+        // `stop`/`teardown` at removal (classic parity), so the tombstone skips
+        // it here — no double call.
+        for i in 0..self.nodes.len() {
+            if self.removed[i] {
+                continue;
+            }
+            if let Err(e) = (self.nodes[i].stop)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
                 first_err.get_or_insert(e);
             }
         }
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.teardown)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) teardown", node.label));
+        for i in 0..self.nodes.len() {
+            if self.removed[i] {
+                continue;
+            }
+            if let Err(e) = (self.nodes[i].teardown)(&mut kernel) {
+                let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
                 first_err.get_or_insert(e);
             }
         }
@@ -2632,6 +2654,7 @@ impl Runner {
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
         self.passive_downs.push(Vec::new());
+        self.removed.push(false);
         self.layer.push(lyr);
         if activation.always || activation.callback_activated() {
             self.seed_nodes.push(idx);
@@ -2686,6 +2709,91 @@ impl Runner {
             }
         }
     }
+
+    /// Unlink node `idx` from the live graph and run its lifecycle teardown.
+    /// Removes it from every upstream's down-list and every downstream's
+    /// up-list (both active and passive), drops it from `seed_nodes`, runs
+    /// `stop` then `teardown` once, and tombstones it (`removed[idx] = true`).
+    /// Because it no longer appears in any frontier or reverse-edge list it can
+    /// never be enqueued again. Port of classic's `process_pending_removals`
+    /// (`graph.rs:992-1028`). No-op if already removed.
+    fn remove_node(&mut self, idx: usize, kernel: &mut Kernel) -> Result<()> {
+        if self.removed[idx] {
+            return Ok(());
+        }
+        // Unlink from upstreams' down-lists.
+        let active_ups = std::mem::take(&mut self.nodes[idx].active_ups);
+        for &u in &active_ups {
+            self.active_downs[u].retain(|&x| x != idx);
+        }
+        let passive_ups = std::mem::take(&mut self.nodes[idx].passive_ups);
+        for &u in &passive_ups {
+            self.passive_downs[u].retain(|&x| x != idx);
+        }
+        // Unlink from downstreams' up-lists.
+        let active_downs = std::mem::take(&mut self.active_downs[idx]);
+        for &d in &active_downs {
+            self.nodes[d].active_ups.retain(|&x| x != idx);
+        }
+        let passive_downs = std::mem::take(&mut self.passive_downs[idx]);
+        for &d in &passive_downs {
+            self.nodes[d].passive_ups.retain(|&x| x != idx);
+        }
+        // Drop from the dispatch frontier so it is never seeded again.
+        self.seed_nodes.retain(|&x| x != idx);
+        self.removed[idx] = true;
+        // Lifecycle teardown, once, with node context — stop then teardown.
+        let label = self.nodes[idx].label;
+        (self.nodes[idx].stop)(kernel)
+            .map_err(|e| e.context(format!("node {idx} ({label}) stop (dynamic removal)")))?;
+        (self.nodes[idx].teardown)(kernel)
+            .map_err(|e| e.context(format!("node {idx} ({label}) teardown (dynamic removal)")))?;
+        Ok(())
+    }
+
+    /// Schedule the attachment points of a freshly appended region to fire at
+    /// `time + 1`, in dependency order — the `recycle` first-value guarantee.
+    /// Walks `new`'s upstream cone, bounded to nodes in `appended` (this
+    /// boundary's new nodes); a node is an *attachment point* if it reads a
+    /// pre-existing (non-`appended`) upstream or is a source. Each attachment
+    /// point is scheduled and, if not already a dispatch seed, added to
+    /// `seed_nodes` so the scheduled dirty flag actually fires it (a plain
+    /// `map`/`fold` is otherwise reached only by upstream propagation).
+    /// Downstream appended nodes then fire by normal tick propagation, so the
+    /// region evaluates in order and reads real values, not `Default`. Mirrors
+    /// classic's attachment-point walk (`graph.rs:1092-1115`).
+    fn recycle_schedule(&mut self, new: usize, appended: &[usize], kernel: &mut Kernel) {
+        let time = kernel.time() + 1;
+        let mut stack = vec![new];
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        while let Some(ix) = stack.pop() {
+            if !visited.insert(ix) {
+                continue;
+            }
+            let has_preexisting = self.nodes[ix]
+                .active_ups
+                .iter()
+                .chain(self.nodes[ix].passive_ups.iter())
+                .any(|u| !appended.contains(u));
+            let is_source =
+                self.nodes[ix].active_ups.is_empty() && self.nodes[ix].passive_ups.is_empty();
+            if has_preexisting || is_source {
+                kernel.schedule(ix, time);
+                if !self.seed_nodes.contains(&ix) {
+                    self.seed_nodes.push(ix);
+                }
+            }
+            for &u in self.nodes[ix]
+                .active_ups
+                .iter()
+                .chain(self.nodes[ix].passive_ups.iter())
+            {
+                if appended.contains(&u) {
+                    stack.push(u);
+                }
+            }
+        }
+    }
 }
 
 /// A scoped mutation session over a *live* [`Runner`], handed to the
@@ -2695,6 +2803,13 @@ impl Runner {
 #[cfg(feature = "dynamic-graph")]
 pub struct Extension<'r> {
     runner: &'r mut Runner,
+    /// The live kernel, so `add_upstream(recycle = true)` can schedule the new
+    /// region's attachment points to fire at `time + 1`.
+    kernel: &'r mut Kernel,
+    /// Indices appended through *this* boundary scope, so a subsequent
+    /// `add_upstream(recycle = true)` knows which of `new`'s upstream cone is
+    /// freshly added (walk into) vs. pre-existing (an attachment point).
+    appended: Vec<usize>,
 }
 
 #[cfg(feature = "dynamic-graph")]
@@ -2739,6 +2854,7 @@ impl Extension<'_> {
             cycle,
             Box::new(|_| Ok(())),
         );
+        self.appended.push(idx);
         self.runner.rt_make_handle(idx)
     }
 
@@ -2781,6 +2897,7 @@ impl Extension<'_> {
             cycle,
             Box::new(|_| Ok(())),
         );
+        self.appended.push(idx);
         self.runner.rt_make_handle(idx)
     }
 
@@ -2788,15 +2905,37 @@ impl Extension<'_> {
     /// edge re-fires `caller` whenever `new` ticks and lifts `caller`'s layer
     /// above `new` (via `fix_layers`) so dispatch order stays correct even
     /// though `caller` has the lower index; a passive edge is read-only but
-    /// still raises the layer. Takes effect next cycle.
+    /// still raises the layer.
+    ///
+    /// With `recycle = true`, the newly appended region feeding `new` is
+    /// scheduled to fire at `time + 1` in dependency order (its attachment
+    /// points — nodes reading a pre-existing upstream, or new sources — are
+    /// seeded), so `caller` observes real current values on the next cycle
+    /// rather than the `Default` a not-yet-run node would hold. Mirrors classic
+    /// `add_upstream(recycle)` (`graph.rs:1092-1116`). Takes effect next cycle.
     pub fn add_upstream<C, N>(
         &mut self,
         caller: impl AsHandle<C>,
         new: impl AsHandle<N>,
         active: bool,
+        recycle: bool,
     ) {
         let caller = caller.as_handle();
         let new = new.as_handle();
         self.runner.splice_upstream(caller.idx, new.idx, active);
+        if recycle {
+            self.runner
+                .recycle_schedule(new.idx, &self.appended, self.kernel);
+        }
+    }
+
+    /// Remove a node from the live graph: unlink its edges, drop it from the
+    /// dispatch frontier so it never cycles again, and run its `stop` then
+    /// `teardown` exactly once (now, not at run end). The slot is tombstoned
+    /// (never freed), so the handle stays valid and its last value is still
+    /// readable — classic parity (`graph.rs:992-1028`). Idempotent: removing an
+    /// already-removed node is a no-op.
+    pub fn remove<T>(&mut self, node: impl AsHandle<T>) -> Result<()> {
+        self.runner.remove_node(node.as_handle().idx, self.kernel)
     }
 }
