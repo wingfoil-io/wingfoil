@@ -30,6 +30,11 @@ jobs:
     uses: ./.github/workflows/redis-integration.yml
     secrets: inherit
 
+  redis-next-integration:
+    name: redis (next) Integration Tests
+    uses: ./.github/workflows/redis-next-integration.yml
+    secrets: inherit
+
   postgres-integration:
     name: postgres Integration Tests
     uses: ./.github/workflows/postgres-integration.yml

@@ -30,6 +30,11 @@
 //!   `GET /metrics` endpoint in Prometheus text format (register streams as
 //!   gauges via `PrometheusSinkOps::prometheus_gauge`), behind the `prometheus`
 //!   feature. A sink only; a no-op under historical replay.
+//! - [`redis`] — Redis Pub/Sub (`redis_sub` source + `RedisSinkOps::redis_pub`
+//!   sink) and Streams (`redis_stream_read` source +
+//!   `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature
+//!   (built on the async `produce_async` / `consume_async` ergonomics). The
+//!   sources are realtime-only.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
@@ -43,3 +48,5 @@ pub mod etcd;
 pub mod lines;
 #[cfg(feature = "prometheus")]
 pub mod prometheus;
+#[cfg(feature = "redis")]
+pub mod redis;
