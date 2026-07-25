@@ -62,6 +62,16 @@ poll state). To communicate between a background thread and the graph, use the
 channel layer (`g.channel()` + `ChannelSender`) or `produce_async` — never a
 shared `Mutex<T>` read from a closure.
 
+When the hand-off is the *other* direction — the graph publishes a whole
+current value that a background thread reads ad-hoc (not a stream of deltas the
+graph consumes) — use `arc_swap::ArcSwap<T>` for a lock-free atomic pointer
+swap. The sink `for_each` calls `slot.store(Arc::new(v))` per cycle (no lock on
+the graph path) and the background thread `.load()`s the latest off-thread.
+This is exactly the **pull-based exporter** shape (a Prometheus `/metrics`
+scraper thread reading per-metric slots): see the per-slot pattern in classic
+`wingfoil/src/adapters/prometheus/exporter.rs`, ported to next's
+`adapters::prometheus`.
+
 ### Historical replay must be deterministic
 
 Any source that replays historical data over the [`channel`] must:
@@ -120,6 +130,8 @@ reuses it.
 | Pub/sub or event streaming | `_sub` / `_pub` | classic etcd, zmq |
 | Batch/file replay | `_read` / `_write` | csv (`csv_read`/`csv_write`) |
 | File tail / live follow | `replay_*` / `tail_*` | lines |
+| Push-only telemetry | `_pub` / `_push` sink trait method | otlp |
+| Pull-based exporter | `_gauge`/`_counter` sink trait method + an exporter handle | prometheus |
 | Pure compute | domain verb on a trait | `augurs_forecast`, `ewma` |
 
 Use `impl Into<Config>` + `From` impls for any parameter callers might supply
@@ -129,9 +141,15 @@ signature, several natural call sites (see `AugursForecastConfig`'s
 
 ## 1. Branch
 
+**All next work cuts from and merges into `next`, never `main`** (see
+`next/CLAUDE.md`). Cut the feature branch from `next`:
+
 ```bash
-git checkout main && git pull origin main && git checkout -b $ARGUMENTS-next
+git checkout next && git pull origin next && git checkout -b $ARGUMENTS-next
 ```
+
+When you open the PR, its **base branch must be `next`** — not `main`. Only the
+eventual next→main cutover PRs target `main`.
 
 ## 2. Choose the adapter shape
 
@@ -144,6 +162,8 @@ load-bearing decision:
 | Synchronous streaming client (blocking recv) | background `std::thread` feeding a `ChannelSender` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | pattern below |
 | Async client library (tokio-based) | `produce_async` / `produce_async_bounded` (`async` feature) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
+| Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (classic), step 8 |
+| Pull-based exporter (scraped, no source) | n/a | `for_each` → `ArcSwap` slot read by a background HTTP thread | prometheus, step 8 |
 | Pure compute (no external service) | n/a — transform ops | n/a | `augurs.rs`, step 9 |
 
 An adapter may offer **multiple strategies behind a mode enum** (the classic
@@ -153,6 +173,14 @@ returning the same `Result<Stream<Burst<T>>>` either way. Document the
 latency/CPU trade-off on each variant. Note the engine-level constraints:
 `poll` and `external`-fed sources are **realtime-only**; the `channel` source
 works in **both** modes (that's what makes replay adapters deterministic).
+
+**Realtime-only sinks** (exporters, servers, push telemetry — anything whose
+side effect only makes sense against a live clock) should **no-op under
+historical replay** so a backtest that happens to include the sink stays inert
+and deterministic. A `for_each`/`register_op1` sink reads the run mode from its
+`Ctx` — `ctx.run_mode()` — and returns early when it isn't `RunMode::RealTime`
+(inside an island the ctx reports `RealTime`, consistent with `is_last_cycle`).
+This mirrors classic's `state.run_mode()` guard in spin-mode adapters.
 
 ## 3. Feature flags — `next/crates/wingfoil-next/Cargo.toml`
 
@@ -175,6 +203,30 @@ testcontainers = { version = "0.27", features = ["blocking"], optional = true }
   gate dev-deps). Skip the `-integration-test` flag entirely for file-based
   and pure-compute adapters (Option C in step 10).
 - A dependency-free adapter (like `lines`) needs no feature at all.
+
+**Pluggable backends behind their own feature.** If the adapter can swap an
+underlying library for the *same* concern — a discovery backend, a TLS
+provider, an alternative codec — gate each behind its own feature and select
+with `#[cfg(feature = "...")]`, exposing a trait for the pluggable concern:
+
+```toml
+[features]
+$ARGUMENTS = ["dep:primary-client"]
+$ARGUMENTS-alt-backend = ["$ARGUMENTS", "dep:alt-backend-crate"]
+```
+
+```rust
+pub trait <Name>Backend: Send + 'static { /* ... */ }
+
+#[cfg(feature = "$ARGUMENTS-alt-backend")]
+impl <Name>Backend for AltBackend { /* ... */ }
+```
+
+This is the classic zmq pattern — `zmq` works standalone for direct TCP
+addresses, but with the `etcd` feature also enabled `EtcdRegistry` becomes a
+`ZmqRegistry` discovery backend. Model the choice as an `impl Into<Config>`
+wrapper with `From` impls (bare address vs `(service, backend)`), not an
+`Option`, so one factory signature serves every call-site shape.
 
 ## 4. Module registration — `src/adapters/mod.rs`
 
@@ -388,6 +440,66 @@ semantics: dropping the sender at teardown ends the writer loop; if the
 protocol needs an explicit end-of-stream message, send it from the drain
 thread when the channel closes.
 
+### Server / exporter sink (scraped or push telemetry)
+
+An exporter (Prometheus) or push-telemetry (OTLP) sink has no data *source* —
+it's a `Stream<Burst<T>> → Stream<()>` that publishes the graph's current
+values outward. The shape:
+
+- An **exporter handle** built at wiring time (`PrometheusExporter` = registry
+  + a hand-rolled `GET /metrics` HTTP server on a background thread; an OTLP
+  collector client). Binding the socket / connecting happens here and returns
+  `Result`, so failure surfaces before the run.
+- A **sink trait** on `Stream<Burst<T>>` (`prometheus_gauge` / `otlp_push`)
+  wired over `for_each`/`register_op1`. Each cycle it publishes the current
+  value: for a *scraped* exporter, `slot.store(Arc::new(v))` into a per-metric
+  `ArcSwap` the server thread reads (no lock, per the invariant above); for
+  *push* telemetry, hand the burst to the collector client (or an mpsc drained
+  by a sender thread if the export blocks).
+- **Realtime-only**: guard on `ctx.run_mode()` and no-op under historical
+  replay (see step 2) — a backtest that includes the sink stays inert.
+
+Reference: classic `wingfoil/src/adapters/{prometheus,otlp}/`, ported to next's
+`adapters::prometheus`. Both are single-direction, so there is no source
+function and no `_read`/`_sub`.
+
+## 8a. Optional: on-graph status / lifecycle streams
+
+Adapters with a connection lifecycle (connect / disconnect / back-pressure /
+close) can expose that state as a **first-class stream** alongside the data
+stream, so downstream ops react to transport health on-graph — circuit
+breakers, health gates, reconnect metrics — without reaching outside the graph.
+Classic's Aeron adapter is the reference (`status.rs`, `status_stream.rs`).
+
+Build it as a **parallel-additive sibling** — never change the primary
+factory's signature:
+
+1. **Status enum** — a small `#[non_exhaustive]` enum with a `#[default]`
+   "disconnected" variant, `Copy` so transitions forward cheaply
+   (`Connected` / `Disconnected` / `BackPressured` / `Closed`).
+2. **Transition-only emission** — the status source emits **only when the value
+   changes** (dedup against the last), so a downstream gate ticks on real
+   transitions, not every cycle.
+3. **`*_with_status` factory** — returns a tuple `(data, status)` rather than
+   overloading the primary factory:
+   ```rust
+   pub fn $ARGUMENTS_sub_with_status(g: &GraphBuilder, /* … */)
+       -> Result<(Stream<Burst<T>>, Stream<<Name>Status>)>
+   ```
+   Record the new status **after** a successful poll/offer (in a fixed order,
+   terminal states first) so a transient I/O error doesn't register a phantom
+   transition.
+4. **Threaded mode** — if the sub runs a background thread, multiplex status
+   transitions **in-band** with data over the one `channel` (an
+   `enum Item { Data(T), Status(S) }`), so a `Connected` transition stays
+   correctly ordered before the fragments that followed it; the data node
+   splits the two back out.
+
+In next this rides the existing vocabulary — the status stream is just another
+`channel`/`poll` source the producer also feeds — so no engine change is
+needed. Port the classic behaviour (transition-only, post-success recording)
+exactly; it's the parity oracle.
+
 ## 9. Pure-compute adapters (custom `Op`s)
 
 For a compute library (forecasting, analytics, codecs) there is no I/O edge —
@@ -486,6 +598,15 @@ Container infrastructure — choose one:
   time you land, add a row; today the canonical index is the
   `src/adapters/mod.rs` doc list from step 4.
 
+### Optional: benchmarks (low-latency adapters)
+
+For a latency- or throughput-sensitive adapter (a poll/spin source, an IPC
+transport), add a Criterion suite under `next/crates/wingfoil-next/benches/`
+and register it with `harness = false` + `required-features = ["$ARGUMENTS"]`.
+Skip it when throughput is bounded by the remote service rather than the
+adapter glue — benches only earn their keep where the adapter itself is on the
+hot path.
+
 ## 12. CI — only for service-backed adapters
 
 If (and only if) the adapter has `-integration-test` tests, wire them into the
@@ -536,25 +657,33 @@ cargo test -p wingfoil-next --features $ARGUMENTS-integration-test -- --test-thr
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
-only lint pass that sees your feature-gated code.
+only lint pass that sees your feature-gated code. Run each command in the
+**foreground** and wait for it — `cargo lint-all` is slow (it builds every
+feature), but backgrounding it and moving on tends to strand the commit.
 
 ## 15. Self-review with a fresh context
 
 Before opening a PR, run a clean-context review pass as a subagent (so the
 parent context stays clean) with these tasks:
 
-1. **Re-read this skill file end to end**, then walk `git diff main...HEAD`
+1. **Re-read this skill file end to end**, then walk `git diff next...HEAD`
    against steps 1–14 and produce a checklist: present / missing / diverged.
    Flag every divergence, even intentional ones.
-2. **Validate the artifacts exist**: feature flags (step 3); both
+2. **Validate the artifacts exist**: branch cut from `next` and the PR targets
+   base `next`, not `main` (step 1); feature flags (step 3); both
    `mod.rs` edits — gate *and* doc bullet (step 4); module docs with the
    Layering section (step 6); factory returns `Result` for wiring-time I/O
-   and the trait is out of the prelude (steps 7–8); tests assert values *and*
+   and the trait is out of the prelude (steps 7–8); a realtime-only sink
+   (exporter/server/push) guards on `ctx.run_mode()` and no-ops in historical
+   replay (steps 2, 8); if the adapter exposes a status stream, it's a
+   `*_with_status` tuple factory emitting transition-only, leaving the primary
+   signature unchanged (step 8a); tests assert values *and*
    tick times, temp paths unique, correct file-level `cfg` gates (step 10);
    example registered with `required-features` (step 11); CI workflow +
    hub registration for service adapters (step 12); port-plan updated
    (step 13).
-3. **Check the invariants**: no `Mutex`/`RwLock` on the graph path; channel
+3. **Check the invariants**: no `Mutex`/`RwLock` on the graph path (an
+   ad-hoc-reader hand-off uses `ArcSwap`, not a lock); channel
    sources send non-decreasing timestamps and `close()`; errors carry
    context; no `.unwrap()` outside tests; producer loops exit quietly when
    `send` returns `false`; nothing added to the prelude.
