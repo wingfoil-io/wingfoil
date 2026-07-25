@@ -23,6 +23,7 @@
 //! the full ~40-method surface is mechanical from here.
 
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
@@ -93,6 +94,70 @@ impl<T: 'static> Signal<T> {
         F: Fn(&T) -> B + 'static,
     {
         self.wrap(self.stream.map(f))
+    }
+
+    /// Apply a fallible closure to each value; a returned `Err` aborts the
+    /// run with context.
+    pub fn try_map<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Result<B> + 'static,
+    {
+        self.wrap(self.stream.try_map(f))
+    }
+
+    /// Map and filter in one pass: `f` returns `(value, emit?)` — emit the
+    /// value only when the flag is true.
+    pub fn map_filter<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> (B, bool) + 'static,
+    {
+        self.wrap(self.stream.map_filter(f))
+    }
+
+    /// Map and filter with an `Option` (the classic `filter_map`): tick the
+    /// returned `Some`, drop `None`. Delegates to the fluent
+    /// [`map_filter`](StreamOps::map_filter).
+    pub fn filter_map<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Option<B> + 'static,
+    {
+        self.wrap(self.stream.map_filter(move |v| match f(v) {
+            Some(out) => (out, true),
+            None => (B::default(), false),
+        }))
+    }
+
+    /// Emit the result of `f()` on each tick, ignoring the value (the classic
+    /// `produce`). Sugar over [`map`](StreamOps::map).
+    pub fn produce<B, F>(&self, f: F) -> Signal<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn() -> B + 'static,
+    {
+        self.wrap(self.stream.map(move |_| f()))
+    }
+
+    /// Run a side-effecting fallible closure on each tick — the graph's
+    /// outbound edge (the classic `for_each` / `try_for_each`). A returned
+    /// `Err` aborts the run with context; emits `()` per tick.
+    pub fn for_each<F>(&self, f: F) -> Signal<()>
+    where
+        F: Fn(&T) -> Result<()> + 'static,
+    {
+        self.wrap(self.stream.for_each(f))
+    }
+
+    /// Collapse a burst/iterator value into a single tick of its **last** item
+    /// (the classic `collapse`); stays quiet when the iterator is empty.
+    pub fn collapse<OUT>(&self) -> Signal<OUT>
+    where
+        T: Clone + IntoIterator<Item = OUT>,
+        OUT: Clone + Default + 'static,
+    {
+        self.wrap(self.stream.collapse())
     }
 
     /// Fold values into an accumulator, emitting it after each fold.
@@ -204,6 +269,53 @@ impl<T: Clone + Default + 'static> Signal<T> {
     pub fn buffer(&self, capacity: usize) -> Signal<Vec<T>> {
         self.wrap(self.stream.buffer(capacity))
     }
+
+    /// Drop values contingent on a predicate (the classic `filter_value`):
+    /// keep a value only when `predicate` returns true. Delegates to the
+    /// fluent [`map_filter`](StreamOps::map_filter).
+    pub fn filter_value<F>(&self, predicate: F) -> Signal<T>
+    where
+        F: Fn(&T) -> bool + 'static,
+    {
+        self.wrap(self.stream.map_filter(move |v| (v.clone(), predicate(v))))
+    }
+
+    /// Fold values into an accumulator seeded from `T::default()`, applying
+    /// `f(acc, value)` (the classic `reduce`). Delegates to the fluent
+    /// [`fold`](StreamOps::fold).
+    pub fn reduce<F>(&self, f: F) -> Signal<T>
+    where
+        F: Fn(&T, &T) -> T + 'static,
+    {
+        self.wrap(self.stream.fold(T::default(), move |acc, val| {
+            *acc = f(acc, val);
+        }))
+    }
+
+    /// Observe each value with a side-effecting closure, passing it through
+    /// unchanged (a debug tap — the classic `inspect`).
+    pub fn inspect<F>(&self, f: F) -> Signal<T>
+    where
+        F: Fn(&T) + 'static,
+    {
+        self.wrap(self.stream.inspect(f))
+    }
+
+    /// Pass each value through unchanged, printing a performance summary at
+    /// the end of the run (the classic `timed`).
+    pub fn timed(&self) -> Signal<T> {
+        self.wrap(self.stream.timed())
+    }
+
+    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
+    /// it (the classic `finally`). Observes this signal's last value; emits
+    /// nothing.
+    pub fn finally<F>(&self, f: F) -> Signal<()>
+    where
+        F: Fn(&T) -> Result<()> + 'static,
+    {
+        self.wrap(self.stream.finally(f))
+    }
 }
 
 impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
@@ -215,6 +327,47 @@ impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
     /// Suppress consecutive duplicate values (emit on change only).
     pub fn distinct(&self) -> Signal<T> {
         self.wrap(self.stream.distinct())
+    }
+
+    /// [`delay`](Signal::delay) with a reset trigger (the classic
+    /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
+    /// current value and any pending (delayed) values are dropped. `trigger`
+    /// is read for its tick only, so its value type is irrelevant.
+    pub fn delay_with_reset<U: 'static>(&self, delay: Duration, trigger: &Signal<U>) -> Signal<T> {
+        self.wrap(self.stream.delay_with_reset(delay, &trigger.stream))
+    }
+}
+
+impl<T: Clone + Default + Debug + 'static> Signal<T> {
+    /// Pass each value through unchanged while buffering it, then print the
+    /// whole buffer at teardown (the classic `print`).
+    pub fn print(&self) -> Signal<T> {
+        self.wrap(self.stream.print())
+    }
+}
+
+impl<A, B> Signal<(A, B)>
+where
+    A: Clone + Default + 'static,
+    B: Clone + Default + 'static,
+{
+    /// Decompose a signal of pairs into its two component signals (the classic
+    /// `split`). Both branches tick whenever the source does.
+    pub fn split(&self) -> (Signal<A>, Signal<B>) {
+        let (a, b) = self.stream.split();
+        (self.wrap(a), self.wrap(b))
+    }
+}
+
+impl<T: Clone + Default + 'static> Signal<Option<T>> {
+    /// Drop `None` values, yielding a `Signal<T>` of just the `Some` payloads
+    /// (the classic `filter_none`). Delegates to the fluent
+    /// [`map_filter`](StreamOps::map_filter).
+    pub fn filter_none(&self) -> Signal<T> {
+        self.wrap(self.stream.map_filter(|opt: &Option<T>| match opt.clone() {
+            Some(v) => (v, true),
+            None => (T::default(), false),
+        }))
     }
 }
 
