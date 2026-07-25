@@ -55,10 +55,22 @@ legacy capability, example, or test case.
 
 ## Branching: all next work merges into `next`, not `main`
 
-Cut branches from the `next` branch (`git checkout next && git pull origin
-next && git checkout -b <branch-name>`) and open pull requests with **base
-`next`** — never `main`. `main` only receives the eventual next→main
-cutover/sync PRs.
+Everything under `next/` is built up on the long-lived **`next` branch** to
+stage the replacement engine in one place; when it reaches parity we swap it
+in for the legacy tree wholesale. Until that cutover, `next` is the
+integration branch for all next work — treat it the way you would treat
+`main` for legacy work.
+
+So the workflow for any change under `next/` is:
+
+1. Cut a feature branch **from `next`**:
+   `git checkout next && git pull origin next && git checkout -b <branch-name>`.
+2. Do the work, commit, and push the feature branch.
+3. Open a pull request with **base `next`** — never `main`. The PR merges the
+   feature branch back into `next`.
+
+`main` only ever receives the eventual next→main cutover/sync PRs; no
+day-to-day next work targets `main`.
 
 ## Working conventions
 
