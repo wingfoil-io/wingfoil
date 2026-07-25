@@ -1,0 +1,93 @@
+//! etcd adapter example — watch a key prefix, transform values, write back.
+//!
+//! A port of the classic `wingfoil/examples/etcd` example onto the next engine.
+//! Two independent graph roots share one [`GraphBuilder`]:
+//!
+//! - `seed`       — writes source keys once via `constant` + `etcd_pub`.
+//! - `round_trip` — watches the source prefix, uppercases each value, and writes
+//!   the result to a destination prefix.
+//!
+//! Unlike classic, the runtime is the caller's: we build a tokio runtime and
+//! hand its `handle()` to `etcd_sub` / `etcd_pub` (see the module docs).
+//!
+//! # Prerequisites
+//!
+//! A running etcd instance:
+//! ```sh
+//! docker run --rm -p 2379:2379 \
+//!   -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+//!   -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+//!   gcr.io/etcd-development/etcd:v3.5.0
+//! ```
+//!
+//! # Run
+//!
+//! ```sh
+//! cargo run -p wingfoil-next --example etcd_adapter --features etcd
+//! ```
+
+use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::adapters::etcd::{EtcdConnection, EtcdEntry, EtcdSinkOps, etcd_sub};
+use wingfoil_next::async_source::RunParams;
+use wingfoil_next::prelude::*;
+
+const ENDPOINT: &str = "http://localhost:2379";
+const SOURCE_PREFIX: &str = "/example/source/";
+const DEST_PREFIX: &str = "/example/dest/";
+
+fn main() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let handle = rt.handle();
+    let conn = EtcdConnection::new(ENDPOINT);
+
+    let g = GraphBuilder::new();
+
+    // Seed the source prefix with two keys, once.
+    let _seed = g
+        .constant(burst![
+            EtcdEntry {
+                key: format!("{SOURCE_PREFIX}greeting"),
+                value: b"hello".to_vec(),
+            },
+            EtcdEntry {
+                key: format!("{SOURCE_PREFIX}subject"),
+                value: b"world".to_vec(),
+            },
+        ])
+        .etcd_pub(handle, conn.clone(), None, true)?;
+
+    // Watch the source prefix, uppercase each value, write to the dest prefix.
+    let params = RunParams {
+        run_mode: RunMode::RealTime,
+        run_for: RunFor::Cycles(3),
+        start_time: NanoTime::ZERO,
+    };
+    let _round_trip = etcd_sub(&g, handle, params, conn.clone(), SOURCE_PREFIX)
+        .map(|burst: &Burst<_>| {
+            burst
+                .iter()
+                .map(|event: &wingfoil_next::adapters::etcd::EtcdEvent| {
+                    let dest_key = event.entry.key.replacen(SOURCE_PREFIX, DEST_PREFIX, 1);
+                    let upper = event
+                        .entry
+                        .value_str()
+                        .unwrap_or("")
+                        .to_uppercase()
+                        .into_bytes();
+                    println!(
+                        "  {} → {}",
+                        event.entry.key,
+                        String::from_utf8_lossy(&upper)
+                    );
+                    EtcdEntry {
+                        key: dest_key,
+                        value: upper,
+                    }
+                })
+                .collect::<Burst<EtcdEntry>>()
+        })
+        .etcd_pub(handle, conn, None, true)?;
+
+    g.build().run(RunMode::RealTime, RunFor::Cycles(3))?;
+    Ok(())
+}

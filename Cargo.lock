@@ -7673,12 +7673,16 @@ name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "augurs",
  "criterion",
  "csv",
+ "etcd-client",
  "futures",
  "serde",
  "serde-aux",
+ "testcontainers",
+ "tinyvec",
  "tokio",
  "trybuild",
  "wingfoil",

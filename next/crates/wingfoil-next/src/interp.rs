@@ -796,7 +796,7 @@ impl Builder {
     ) -> Handle<Burst<T>> {
         let idx = self.nodes.len();
         let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
-        let slots: Vec<Rc<RefCell<T>>> = srcs.iter().map(|h| self.slot(*h)).collect();
+        let slots: Vec<SlotRef<T>> = srcs.iter().map(|h| self.slot(*h)).collect();
         let out = self.new_slot(Burst::<T>::new());
         let ticked = self.ticked.clone();
         self.push_node(
