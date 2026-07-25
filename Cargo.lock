@@ -7673,6 +7673,7 @@ name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-stream",
  "augurs",
  "bincode",
@@ -7681,6 +7682,7 @@ dependencies = [
  "etcd-client",
  "futures",
  "log",
+ "reqwest",
  "serde",
  "serde-aux",
  "sha2 0.10.9",

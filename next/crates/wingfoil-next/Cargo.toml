@@ -74,6 +74,18 @@ testcontainers = { version = "0.27", features = [
     "blocking",
 ], optional = true }
 
+# `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
+# `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
+# lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
+# scrape integration test) is an optional [dependencies] entry because feature
+# flags cannot gate dev-dependencies. Versions mirror the classic `wingfoil`
+# crate's prometheus adapter so the two trees don't drift.
+arc-swap = { version = "1.7", optional = true }
+reqwest = { version = "0.12", features = [
+    "json",
+    "blocking",
+], optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -90,6 +102,11 @@ cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
+# Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
+prometheus = ["dep:arc-swap"]
+# Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
+# `reqwest` (blocking) queries Prometheus. Mirrors classic wingfoil.
+prometheus-integration-test = ["prometheus", "dep:reqwest"]
 # Runtime graph dynamism: append nodes and splice edges into a live graph
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors classic wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
@@ -135,6 +152,10 @@ required-features = ["augurs"]
 [[example]]
 name = "etcd_adapter"
 required-features = ["etcd"]
+
+[[example]]
+name = "prometheus_adapter"
+required-features = ["prometheus"]
 
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.

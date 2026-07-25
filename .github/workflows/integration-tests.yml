@@ -40,6 +40,11 @@ jobs:
     uses: ./.github/workflows/prometheus-integration.yml
     secrets: inherit
 
+  prometheus-next-integration:
+    name: Prometheus (next) Integration Tests
+    uses: ./.github/workflows/prometheus-next-integration.yml
+    secrets: inherit
+
   otlp-integration:
     name: OTLP Integration Tests
     uses: ./.github/workflows/otlp-integration.yml

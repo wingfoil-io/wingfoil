@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use wingfoil::codegen::Kernel;
-use wingfoil::{NanoTime, TimeQueue};
+use wingfoil::{NanoTime, RunMode, TimeQueue};
 
 /// Static declaration of how the engine must activate an op — beyond a plain
 /// upstream data-tick.
@@ -121,6 +121,7 @@ pub struct Ctx<'a> {
     time: NanoTime,
     start_time: NanoTime,
     is_last_cycle: bool,
+    run_mode: RunMode,
     sink: Sink<'a>,
 }
 
@@ -142,6 +143,7 @@ impl<'a> Ctx<'a> {
             time: kernel.time(),
             start_time: kernel.start_time(),
             is_last_cycle: kernel.is_last_cycle(),
+            run_mode: kernel.run_mode(),
             sink: Sink::Kernel { kernel, node },
         }
     }
@@ -151,7 +153,10 @@ impl<'a> Ctx<'a> {
     /// `is_last_cycle` is not propagated into islands (the composite runs its
     /// own inner schedule), so a boundary-flush op inside an island flushes
     /// only on window boundaries, not at the outer run's end — a documented
-    /// island limitation.
+    /// island limitation. For the same reason `run_mode` inside an island is
+    /// reported as [`RunMode::RealTime`]: no macro-expressible op is run-mode
+    /// gated (a run-mode-gated IO sink cannot live inside a straight-line
+    /// island), so islands never observe the distinction.
     #[doc(hidden)]
     pub fn nested(
         time: NanoTime,
@@ -163,6 +168,7 @@ impl<'a> Ctx<'a> {
             time,
             start_time,
             is_last_cycle: false,
+            run_mode: RunMode::RealTime,
             sink: Sink::Queue { queue, node },
         }
     }
@@ -181,6 +187,15 @@ impl<'a> Ctx<'a> {
     /// pending contents when true.
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
+    }
+
+    /// The [`RunMode`] the graph is being driven with. Lets a realtime-only IO
+    /// op (e.g. the prometheus metrics sink) no-op under
+    /// [`RunMode::HistoricalFrom`] rather than publish backtest values to a
+    /// live endpoint. Reported as [`RunMode::RealTime`] inside an island (see
+    /// [`nested`](Ctx::nested)).
+    pub fn run_mode(&self) -> RunMode {
+        self.run_mode
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops
