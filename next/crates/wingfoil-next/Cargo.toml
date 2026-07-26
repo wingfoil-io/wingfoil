@@ -324,3 +324,10 @@ path = "examples/threading/main.rs"
 name = "dynamic"
 path = "examples/dynamic/main.rs"
 required-features = ["dynamic-graph"]
+
+# Statically-wired counterpart to `dynamic`: the same price book, but routed
+# through a fixed slot pool with `demux_it` instead of runtime graph mutation.
+[[example]]
+name = "demux"
+path = "examples/demux/main.rs"
+required-features = ["dynamic-graph"]

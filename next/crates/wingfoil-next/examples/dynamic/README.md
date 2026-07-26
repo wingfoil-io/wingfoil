@@ -38,3 +38,6 @@ cleanly to ticker ticks) rather than `RunFor::Cycles`. See
 `tests/dynamic_graph.rs` for the full set of primitives (`dynamic_group`,
 `demux`, `demux_it`, `demux_map`, and the low-level `add_upstream` /
 `remove_node` driver hooks).
+
+For the same price book built **without** mutating the graph — a fixed slot pool
+routed by `demux_it` — see the [`demux`](../demux) example.
