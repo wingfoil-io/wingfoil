@@ -203,6 +203,15 @@ macro_rules! from_scalar {
 }
 from_scalar!(f64, i64, bool);
 
+/// The unit type erases to Python `None` — so a **sink** adapter that produces a
+/// `Stream<()>` (a terminal, no meaningful value) can cross the boundary like
+/// any other, its Python-facing value simply being `None`.
+impl From<()> for PyElement {
+    fn from((): ()) -> Self {
+        PyElement::none()
+    }
+}
+
 impl From<String> for PyElement {
     fn from(value: String) -> Self {
         Python::attach(|py| PyElement(Some(boxed(py, value))))

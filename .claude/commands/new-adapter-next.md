@@ -800,10 +800,40 @@ existing hub exactly as the classic adapters do:
    (`uses: ./.github/workflows/$ARGUMENTS-next-integration.yml`,
    `secrets: inherit`). Do **not** add it to `release.yml` directly.
 
-No Python step: `wingfoil-python` binds the **legacy** crate only. Bindings
-for next arrive with the facade/cutover phase (`next/docs/port-plan.md`,
-Phase 6) — do not add per-adapter bindings now, and say so in the PR
-description so reviewers don't flag it as missing.
+### Exposing the adapter to Python — `#[pyadapter]`
+
+`wingfoil-next-python` is now the go-forward Python binding (it **supersedes**
+the legacy `wingfoil-python`; see `next/docs/python-interop.md`). A next adapter
+reaches Python through the `#[pyadapter]` proc macro — values erase to
+`PyElement` at the boundary, the adapter's interior stays natively typed:
+
+- **Source** — `#[pyadapter(name = $ARGUMENTS_read, source)]` on
+  `impl <Name>SourceOps for GraphBuilder { fn $ARGUMENTS_read(&self, args…) ->
+  Stream<T> }` emits `wingfoil_next.$ARGUMENTS_read(graph, args…) -> Stream`.
+- **Sink** — `#[pyadapter(name = $ARGUMENTS_write)]` (no `source` marker) on
+  `impl <Name>SinkOps for Stream<T> { fn $ARGUMENTS_write(&self, args…) ->
+  Stream<()> }` emits `wingfoil_next.$ARGUMENTS_write(stream, args…)`.
+
+Register the generated `#[pyfunction]` in the `wingfoil_next` `#[pymodule]` and
+add a pytest case in `crates/wingfoil-next-python/tests/test_interop.py`; the
+`ramp_source` (source) and `list_sink` (sink) demos in `src/python.rs` are the
+templates, and `tests/plugin_seam.rs` shows the same from an external crate.
+
+**Current limitation — burst adapters aren't wired yet.** `#[pyadapter]` v1
+only handles single-value `Stream<T>`. The layering conventions above make most
+real adapters **burst-based** (`Stream<Burst<T>>` sources/sinks), and burst →
+Python-`list` edge erasure is **not built yet** — so a burst adapter cannot get
+a `#[pyadapter]` binding today (this is the next plugin-SDK task). Other v1
+constraints: the method's params become `#[pyfunction]` params, so they must be
+`FromPyObject` (`i64`/`f64`/`String`/`Py<PyAny>`/… — a Rust-only handle like
+`Rc<RefCell<…>>` can't cross); and `T`/`U` edge-convert (`T: TryFrom<&PyElement>`,
+`U: Into<PyElement>`).
+
+So: **if your adapter is single-value**, expose it via `#[pyadapter]` and add
+the pytest case in the same PR. **If it's burst-based** (most are), note in the
+PR that the Python binding waits on burst-erasure support, rather than
+hand-rolling one. Service-backed integration bindings likewise follow once the
+binding exists.
 
 ## 13. Superset audit + roadmap bookkeeping
 

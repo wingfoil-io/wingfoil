@@ -143,6 +143,24 @@ def test_pyadapter_source():
     assert out.value() == [10.0, 12.0, 14.0]
 
 
+def test_pyadapter_sink():
+    # list_sink is a Rust sink adapter (#[pyadapter], no source marker): it
+    # consumes the stream into a Python list.
+    out = []
+    g = wf.Graph()
+    wf.list_sink(g.counter(period_nanos=100), out)  # counter 1,2,3 -> f64
+    g.run(cycles=3)
+    assert out == [1.0, 2.0, 3.0]
+
+
+def test_pyadapter_source_and_sink_together():
+    out = []
+    g = wf.Graph()
+    wf.list_sink(wf.ramp_source(g, 10.0, 5.0), out)  # 10, 15, 20
+    g.run(cycles=3)
+    assert out == [10.0, 15.0, 20.0]
+
+
 def test_pyadapter_source_feeds_combinators():
     g = wf.Graph()
     out = wf.ramp_source(g, 1.0, 1.0).sum()  # 1,2,3 -> cumulative 1,3,6

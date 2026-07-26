@@ -3,9 +3,11 @@
 //! *public* API to author and wire a custom op. If it compiles and passes, a
 //! third-party op crate can do the same.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
-use pyo3::Python;
+use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next_python::{
     Activation, Ctx, Op, PyElement, PyGraph, Tick, pyadapter, pygraph, pyop,
@@ -114,6 +116,57 @@ impl CountUpOps for wingfoil_next::prelude::GraphBuilder {
             .count()
             .map(move |n: &u64| from + (*n as f64))
     }
+}
+
+// A sink `#[pyadapter]` from an external crate (a trait on `Stream<f64>`). Its
+// params must be Python-passable (they become `#[pyfunction]` params), so the
+// sink target is a `Py<PyAny>` list. Compile proof the macro emits the sink
+// `#[pyfunction]` cross-crate for a `Stream<()>` terminal.
+trait PyPushSinkOps {
+    fn py_push_sink(&self, target: Py<PyAny>) -> wingfoil_next::prelude::Stream<()>;
+}
+
+#[pyadapter(name = py_push_sink)]
+impl PyPushSinkOps for wingfoil_next::prelude::Stream<f64> {
+    fn py_push_sink(&self, target: Py<PyAny>) -> wingfoil_next::prelude::Stream<()> {
+        use wingfoil_next::prelude::StreamOps;
+        self.for_each(move |v: &f64| {
+            Python::attach(|py| {
+                target
+                    .bind(py)
+                    .call_method1("append", (*v,))
+                    .map_err(|err| anyhow::anyhow!("py_push_sink append raised: {err}"))?;
+                Ok(())
+            })
+        })
+    }
+}
+
+#[test]
+fn pyadapter_sink_macro_compiles_in_an_external_crate() {
+    // The generated sink function exists: `#[pyadapter]` (no `source` marker)
+    // expanded for a `Stream<T> -> Stream<()>` adapter.
+    let _f = py_push_sink;
+}
+
+#[test]
+fn pyadapter_sink_seam_from_an_external_crate() {
+    // The typed-in/erased-out seam the sink macro builds on: extract to native
+    // f64, run a `for_each` terminal, erase the `Stream<()>` output.
+    use wingfoil_next::prelude::StreamOps;
+    let seen = Rc::new(RefCell::new(Vec::<f64>::new()));
+    let target = seen.clone();
+    let g = PyGraph::new();
+    let src = g.counter(Duration::from_nanos(100));
+    let unit = src.typed_input::<f64>().for_each(move |v: &f64| {
+        target.borrow_mut().push(*v);
+        Ok(())
+    });
+    let _erased = src.erased_output::<()>(unit);
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    assert_eq!(vec![1.0, 2.0, 3.0], *seen.borrow());
 }
 
 #[test]
