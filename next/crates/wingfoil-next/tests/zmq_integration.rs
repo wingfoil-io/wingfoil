@@ -138,6 +138,44 @@ fn first_message_not_dropped() {
 }
 
 #[test]
+fn first_message_not_dropped_no_delay() {
+    // Faithful port of classic's `zmq_first_message_not_dropped_no_delay` — the
+    // sibling of `first_message_not_dropped` with NO artificial startup delay on
+    // the publisher. Publisher and subscriber share ONE graph (so they start
+    // together) and the publisher begins ticking immediately, isolating the
+    // publisher's buffer-until-accept slow-joiner path: it buffers outgoing
+    // messages until the first subscriber connects (up to `BUFFER_TIMEOUT`, plus
+    // the post-accept subscription-propagation window), so counter value 1 must
+    // never be lost even without a settle delay to have the subscription live
+    // before the first message. Run generously (2 s) as CI-load headroom for
+    // next's `channel`-based subscriber to connect within the buffering window.
+    let port = 5716;
+    let address = format!("tcp://127.0.0.1:{port}");
+    let period = Duration::from_millis(50);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(period)
+        .count()
+        .map(|n: &u64| format!("{n}").into_bytes())
+        .zmq_pub(port, ());
+    let (data, _status) = zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, &address).unwrap();
+    let received = data.collapse_accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
+        .unwrap();
+    let values: Vec<u64> = runner
+        .value(&received)
+        .into_iter()
+        .map(|b| String::from_utf8(b).expect("utf8").parse().expect("u64"))
+        .collect();
+    assert!(!values.is_empty(), "no values received");
+    assert_eq!(values[0], 1, "first message dropped: got {values:?}");
+}
+
+#[test]
 fn reports_connected_status() {
     // The subscriber's socket monitor surfaces a `Connected` transition on the
     // status stream — parity of classic `zmq_reports_connected_status`.

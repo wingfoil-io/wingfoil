@@ -36,13 +36,27 @@
 //! into one burst (use `.collapse_accumulate()` when the source is strictly
 //! ascending and you want a flat `Vec<T>`).
 //!
-//! Two consequences of using the channel source (deviations from classic):
-//! record timestamps must be **non-decreasing**
-//! (the historical receiver rejects out-of-order sends), and a row that fails
-//! to deserialize is propagated as a [`Message::Error`](crate::channel::Message)
-//! so it still aborts the run — the same observable outcome as classic (the run
-//! fails with a "failed to deserialize row" context), just surfaced at the
-//! start of the replay rather than mid-stream.
+//! # Deviations from classic
+//!
+//! - **Whole-file read / non-decreasing timestamps.** The channel source reads
+//!   and deserializes the whole file up front and queues each record via
+//!   `send_at`, so record timestamps must be **non-decreasing** (the historical
+//!   receiver rejects out-of-order sends). Classic's `TryIteratorStream` pulls
+//!   rows lazily per tick and imposes no such ordering constraint at the source.
+//! - **Malformed-row timing.** A row that fails to deserialize is propagated as
+//!   a [`Message::Error`](crate::channel::Message) so it still aborts the run —
+//!   the same observable outcome as classic (the run fails with a "failed to
+//!   deserialize row" context), just surfaced at the start of the replay rather
+//!   than mid-stream.
+//! - **Eager header write.** [`csv_write`](CsvSinkOps::csv_write) opens the file
+//!   and writes the CSV header at wiring time (before `for_each_mut`), whereas
+//!   classic defers the header to the first tick via a `headers_written` flag in
+//!   `CsvWriterNode` (see `wingfoil/src/adapters/csv/write.rs`). Observable
+//!   difference for a named-struct record: a graph that wires `csv_write` but
+//!   produces zero rows leaves a header-only file in next, but an empty file in
+//!   classic (whose `cycle` never runs, so the header is never written). For a
+//!   positional-tuple record no header is written in either, so there is no
+//!   difference.
 //!
 //! # Sink
 //!
