@@ -38,6 +38,11 @@ pub use python::{Graph, Stream};
 /// a free `#[pyfunction]` wiring the op at the erased boundary.
 pub use wingfoil_next_python_macros::pyop;
 
+/// Expose a Rust-authored sub-graph wiring function (`fn(&Stream<T>) ->
+/// Stream<U>`) as a Python callable that splices its nodes into the caller's
+/// graph. See [`wingfoil_next_python_macros::pygraph`].
+pub use wingfoil_next_python_macros::pygraph;
+
 // Re-exported so third-party op crates (and the `pyop!`/`#[pyop]` macros) can
 // name the op vocabulary without depending on `wingfoil-next` directly.
 pub use wingfoil_next::op::{Activation, Ctx, Op, Tick};

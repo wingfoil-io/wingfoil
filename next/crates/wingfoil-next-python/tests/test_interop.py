@@ -117,6 +117,42 @@ def test_pyop_macro_op_square():
     assert out.value() == 25.0
 
 
+def test_pyop_stateful_running_total():
+    # running_total is a stateful #[pyop] (accumulator in the op's State).
+    g = wf.Graph()
+    out = wf.running_total(g.counter(period_nanos=100))  # 1,2,3 -> 1,3,6
+    g.run(cycles=3)
+    assert out.value() == 6.0
+
+
+def test_pyop_stateful_state_reseeds_on_rerun():
+    g = wf.Graph()
+    out = wf.running_total(g.counter(period_nanos=100))
+    g.run(cycles=3)
+    assert out.value() == 6.0
+    g.run(cycles=3)  # engine re-seeds State from Default (0.0); restart, not continue
+    assert out.value() == 6.0
+
+
+def test_pygraph_reuses_a_rust_subgraph():
+    # doubled_running_total is a Rust-authored sub-graph (#[pygraph]) spliced in.
+    g = wf.Graph()
+    out = wf.doubled_running_total(g.counter(period_nanos=100))
+    g.run(cycles=3)
+    # 1,2,3 -> double -> 2,4,6 -> cumulative sum -> 2,6,12
+    assert out.value() == 12.0
+
+
+def test_pyop_two_input_op():
+    # weighted_add is a two-input #[pyop]: module.weighted_add(stream, other).
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)  # 1,2,3
+    b = g.counter(period_nanos=100).map(lambda n: n * 10)  # 10,20,30
+    out = wf.weighted_add(a, b)
+    g.run(cycles=3)
+    assert out.value() == 33.0  # 3 + 30
+
+
 def test_pyop_and_pyop_fn_compose():
     # Both macro forms, chained: counter -> square -> scale x2.
     g = wf.Graph()

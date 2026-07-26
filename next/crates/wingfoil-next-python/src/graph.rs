@@ -674,6 +674,79 @@ impl PyStream {
         self.wrap(wired)
     }
 
+    /// Wire a **two-input op** onto this stream and `other` at the erased
+    /// boundary — the two-active-input counterpart of [`wire_op1`](Self::wire_op1)
+    /// (the `#[pyop]` seam for `In<'a> = (&'a A, &'a B)` ops). Both inputs are
+    /// extracted from [`PyElement`] (`A`/`B: TryFrom`), both trigger the op, and
+    /// the output is boxed back to `PyElement`; a `TryFrom`/`step` error aborts
+    /// the run with context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wire_op2<A, B, C, S, Out, Step, SInit>(
+        &self,
+        other: &PyStream,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        mut step: Step,
+    ) -> PyStream
+    where
+        A: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        B: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        C: 'static,
+        S: 'static,
+        Out: Into<PyElement> + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let other_handle = other.stream.handle();
+        let wired = self
+            .stream
+            .wire(move |b: &mut Builder, this: Handle<PyElement>| {
+                b.register_op2(
+                    this,
+                    other_handle,
+                    label,
+                    activation,
+                    cfg,
+                    state_init,
+                    move |c, s, a: &PyElement, bb: &PyElement, ctx| {
+                        let input_a = A::try_from(a)?;
+                        let input_b = B::try_from(bb)?;
+                        Ok(match step(c, s, &input_a, &input_b, ctx)? {
+                            Tick::Value(v) => Tick::Value(v.into()),
+                            Tick::Silent(v) => Tick::Silent(v.into()),
+                            Tick::Quiet => Tick::Quiet,
+                        })
+                    },
+                )
+            });
+        self.wrap(wired)
+    }
+
+    /// Extract this erased stream to a natively-typed `Stream<T>` — the input
+    /// half of the `#[pygraph]` seam. Each value is converted from [`PyElement`]
+    /// via `T: TryFrom<&PyElement>` at the boundary (a conversion error aborts
+    /// the run), so a Rust-authored sub-graph runs over concrete `T` internally
+    /// while Python only ever sees the erased edge. Splices onto the caller's
+    /// builder (same graph) like any other combinator.
+    pub fn typed_input<T>(&self) -> Stream<T>
+    where
+        T: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + Clone + Default + 'static,
+    {
+        self.stream.try_map(|e: &PyElement| T::try_from(e))
+    }
+
+    /// Box a natively-typed `Stream<U>` (a `#[pygraph]` sub-graph's output) back
+    /// to the erased boundary as a [`PyStream`] on this graph — the output half
+    /// of the seam.
+    pub fn erased_output<U>(&self, typed: Stream<U>) -> PyStream
+    where
+        U: Clone + Into<PyElement> + 'static,
+    {
+        self.wrap(typed.map(|u: &U| u.clone().into()))
+    }
+
     /// The stream's current value after [`PyGraph::run`].
     ///
     /// # Panics
