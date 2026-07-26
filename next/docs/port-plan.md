@@ -75,7 +75,8 @@ today's interpreted engine.
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
-  ingestion, which the compiled path excludes anyway.
+  ingestion, which the compiled path excludes anyway. Lifting this (with
+  busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
 ⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
@@ -414,10 +415,10 @@ Inventory (classic `nodes/` → target), grouped by effort:
 
 **Dynamic graphs** (`graph_node`, `dynamic_group`, the dynamic examples):
 islands already cover *static* subgraphs composed procedurally (including in
-loops). Runtime graph *mutation* is a separate feature: either
-`Runner::extend` on the interpreted engine (design here, implement if the
-demand is real) or an explicit out-of-scope ruling for v1. Do not let this
-block the catalog — decide, document, move on.
+loops). Runtime graph *mutation* has since landed as a separate feature
+(behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope
+(append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
+and `Builder::demux` on the interpreted engine.
 
 **Engine coverage note:** `never`, `combine`, and `delay_with_reset` land as
 interpreted-engine (fluent) ports — like `feedback` — since a zero-input
@@ -997,7 +998,7 @@ tests covered — not "legacy pytest passes unchanged."
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
-| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; the mutation feature (`Runner::extend`) is **not yet built** — open decision: cutover blocker vs documented v1 deviation. Islands cover static composition today |
+| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; ✅ **the mutation feature has landed** (behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope (append / splice / remove / recycle), `Builder::dynamic_group`, and `Builder::demux`. Islands also cover static composition |
 | Python API change (next-python supersedes legacy `wingfoil-python`) | existing `import wingfoil` code must migrate — an accepted breaking change, not drift to avoid | new object-form binding at parity before cutover; next-python `test_interop.py` pytest as gate; migration guide + `wingfoil` module-name takeover at cutover |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
@@ -1046,6 +1047,71 @@ tests covered — not "legacy pytest passes unchanged."
   dual-execution invariant. The op-declared form gets ~all the benefit with
   none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
   natural home).
+
+## Deferred / post-v1 work (migrated from tracking issues)
+
+The items below were tracked as GitHub issues (#502, #503, #507) and folded back
+into this plan (2026-07-26) so all next-port planning lives in one place. Each is
+deferred by design, not dropped.
+
+### Compiled-path IO ingestion — busy-poll sources + bursts (was #502, #503)
+
+One theme: letting the `compiled()` / `graph!` path ingest external /
+timestamped data, which it excludes today (capability-matrix rows "Busy-poll
+ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
+footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
+`poll`) and feed a compiled island through its inputs.
+
+**Busy-poll ingest (`ALWAYS` sources — classic `poll`/`producer`).**
+- *Current state:* excluded — `compiled()` runs its own closed monomorphized
+  loop with no external wake, and `graph!` forbids IO-edge sources; `poll` lives
+  at the fluent/interpreted layer and feeds a compiled island through its inputs.
+- *Why it's now more tractable:* after #496, per-op activation is a monomorphic
+  const (`__WF_OP__ACTIVATION`), so `ALWAYS` dispatch already folds correctly for
+  ops the compiled path drives (scheduling/always custom ops work). Remaining:
+  (a) let an IO-edge/source op live in the compiled graph, and (b) a driving loop
+  that re-polls each cycle at a realtime cadence.
+- *Open questions:* does compiled keep its "no external wake" character
+  (busy-spin only, realtime-timer-driven) or gain a wake channel? Interaction
+  with `run_mode` (historical replay of a poll source vs realtime busy-spin)?
+  Worth the complexity vs. keeping IO at the interpreted boundary + compiled
+  islands?
+
+**Bursts (never latest-wins) in compiled.**
+- Every value at one instant grouped and delivered atomically in one cycle —
+  never latest-wins, never dropped. Excluded from compiled because no burst
+  *sources* exist in the macro vocabulary and the burst pattern is about IO
+  ingestion (which compiled excludes). Works on the interpreted engine today
+  (`Burst`, matching classic `Burst`/`HistoricalValue`).
+- *Scope:* a burst-source shape the `graph!` macro can express and the compiled
+  path can drive, delivering same-time-grouped values in one cycle (identical to
+  interpreted/classic burst semantics — same-time values ride one burst, not
+  coalesced, not split by a monotonic bump).
+
+**Coupling & first decision:** these land together or the exclusion stays —
+burst sources are the natural payload of a busy-poll/IO ingest edge. The gating
+decision for both: does compiled gain a wake channel, or stay busy-spin +
+realtime-timer only? The busy-spin answer fits the compiled-perf story. Tracked
+as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
+
+### Engine architecture / orientation doc (was #507)
+
+An evidence-backed `docs/wingfoil-next-architecture.md` orienting a new
+contributor/agent to the Op-pattern engine, citing source at `file:line`.
+Deliberately a *current-state snapshot*, not a migration guide — so it is
+deferred until after the incoming refactor settles (a snapshot written now would
+go stale through it). Sections to regenerate against the post-refactor code:
+- The `Op` trait + engine-owned state; `Tick::{Value,Silent,Quiet}`; lifecycle
+  hooks.
+- The three execution tiers: interpreted sparse dirty-list (`Dispatch::Sparse`,
+  default) + full-sweep oracle; fully-monomorphized `compiled()`; `nested()`
+  islands.
+- Fluent API + `compat::Signal` facade.
+- Sources/edges (ticker/constant/poll/external/channel/feedback), bursts, the
+  shared `Kernel`.
+- Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,
+  no macro op-table).
+- Testing strategy: parity-oracle vs classic + three-engine agreement.
 
 ## Sequencing and parallelism
 
