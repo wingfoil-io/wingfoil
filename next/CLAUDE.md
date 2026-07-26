@@ -83,8 +83,28 @@ day-to-day next work targets `main`.
   `use wingfoil_next::adapters::<name>::...;`.
 - No locks on the graph execution path (`cycle` / `start` etc.); use the
   channel layer to talk to background threads.
-- New adapters: follow the `/new-adapter-next` skill
-  (`.claude/commands/new-adapter-next.md`).
+
+## Skills — and they are living documents
+
+Two skills carry the step-by-step recipes for the two kinds of surface you
+add to next. **Use them for their respective tasks:**
+
+- **`/new-op-next`** (`.claude/commands/new-op-next.md`) — adding a node/op to
+  the catalog (`ops.rs` / `stats.rs`): the `Op` shape, `#[op(build = …)]`, the
+  fluent extension-trait method, `graph!`/compiled coverage, the `#[pyop]` /
+  `pyop_fn!` Python bindings, and the parity + completeness tests.
+- **`/new-adapter-next`** (`.claude/commands/new-adapter-next.md`) — adding an
+  I/O adapter under `src/adapters/`: source/sink shapes, feature gating, the
+  parity obligation, and the adapter tests.
+
+**Both files are living documents — keep them current.** Every time you
+onboard a new op or adapter, *or change an existing one*, check whether the
+work surfaced something the matching skill doesn't yet capture — a recurring
+pitfall, a new invariant, a CI gate, a pattern worth codifying, a deviation
+that should become a rule — and fold it back into that skill (ideally in the
+same PR). The adapter skill already grew several of its rules exactly this
+way. A skill that has drifted from how we actually build ops/adapters is a
+bug; treat updating it as part of "done", not an optional extra.
 
 ## Pre-commit checklist (same as repo root)
 
