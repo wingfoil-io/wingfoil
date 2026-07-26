@@ -256,3 +256,54 @@ def test_collect_gathers_time_value_tuples():
     out = g.counter(period_nanos=100).collect()
     g.run(cycles=2)
     assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_fold_accumulates():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).fold(0, lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6  # 1+2+3
+
+
+def test_fold_restarts_on_rerun():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).fold(0, lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6
+    g.run(cycles=3)  # engine re-seeds the accumulator; restart, not continue
+    assert out.value() == 6
+
+
+def test_fold_exception_aborts_run():
+    def boom(acc, v):
+        raise ValueError("boom")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).fold(0, boom)
+    with pytest.raises(RuntimeError, match="Python fold callable raised"):
+        g.run(cycles=1)
+
+
+def test_filter_map_keeps_non_none():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).filter_map(
+        lambda n: n * 10 if n % 2 == 0 else None
+    )
+    g.run(cycles=4)
+    assert out.value() == 40  # even counts scaled: 20, 40
+
+
+def test_filter_value_keeps_on_predicate():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).filter_value(lambda n: n > 2)
+    g.run(cycles=5)
+    assert out.value() == 5  # 3, 4, 5 pass
+
+
+def test_filter_none_drops_python_none():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).map(
+        lambda n: n if n % 2 == 0 else None
+    ).filter_none()
+    g.run(cycles=6)
+    assert out.value() == 6  # 2, 4, 6 pass

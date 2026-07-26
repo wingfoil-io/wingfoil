@@ -197,6 +197,29 @@ impl Stream {
         Stream(self.0.collect())
     }
 
+    /// Fold values into an accumulator with `func(acc, value)`, seeded from
+    /// `init`, emitting the accumulator after each fold. A raised exception
+    /// aborts the run.
+    fn fold(&self, init: Py<PyAny>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.fold(PyElement::from(init), func))
+    }
+
+    /// Map-and-filter: `func(value)` returning `None` drops the tick, any other
+    /// result is emitted. A raised exception aborts the run.
+    fn filter_map(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.filter_map(func))
+    }
+
+    /// Keep a value only when `predicate(value)` is truthy; drop it otherwise.
+    fn filter_value(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.filter_value(predicate))
+    }
+
+    /// Drop values whose payload is Python `None`.
+    fn filter_none(&self) -> Stream {
+        Stream(self.0.filter_none())
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()

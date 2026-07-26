@@ -337,6 +337,105 @@ impl PyStream {
         self.wrap(collected)
     }
 
+    /// Fold values into an accumulator with a Python callable, emitting the
+    /// accumulator after each fold (the classic `fold`). `func(acc, value)`
+    /// returns the new accumulator, seeded from `init`. The accumulator is
+    /// **engine-owned state** re-seeded from `init` on a graph reset, so a
+    /// re-run restarts the fold (it does not continue). A raised exception
+    /// aborts the run with context.
+    pub fn fold(&self, init: PyElement, func: Py<PyAny>) -> PyStream {
+        let folded = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "fold",
+                Activation::NONE,
+                func,                 // cfg: the Python reducer
+                move || init.clone(), // state factory: accumulator seeded to init (resets on re-run)
+                move |func: &mut Py<PyAny>, acc: &mut PyElement, value: &PyElement, _ctx| {
+                    Python::attach(|py| {
+                        let next = func
+                            .call1(py, (acc.value(), value.value()))
+                            .map_err(|err| anyhow::anyhow!("Python fold callable raised: {err}"))?;
+                        *acc = PyElement::new(next);
+                        Ok(Tick::Value(acc.clone()))
+                    })
+                },
+            )
+        });
+        self.wrap(folded)
+    }
+
+    /// Map-and-filter with a Python callable (the classic `filter_map`):
+    /// `func(value)` returning Python `None` drops the tick, any other result
+    /// is emitted. A raised exception aborts the run with context.
+    pub fn filter_map(&self, func: Py<PyAny>) -> PyStream {
+        self.wire_stateless("filter_map", move |value| {
+            Python::attach(|py| {
+                let result = func
+                    .call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python filter_map callable raised: {err}"))?;
+                Ok(if result.is_none(py) {
+                    Tick::Quiet
+                } else {
+                    Tick::Value(PyElement::new(result))
+                })
+            })
+        })
+    }
+
+    /// Keep a value only when a Python predicate returns truthy (the classic
+    /// `filter_value`); drop it otherwise. A raised exception aborts the run.
+    pub fn filter_value(&self, predicate: Py<PyAny>) -> PyStream {
+        self.wire_stateless("filter_value", move |value| {
+            Python::attach(|py| {
+                let keep = predicate
+                    .call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python filter_value predicate raised: {err}"))?
+                    .is_truthy(py)
+                    .map_err(|err| anyhow::anyhow!("Python filter_value predicate: {err}"))?;
+                Ok(if keep {
+                    Tick::Value(value.clone())
+                } else {
+                    Tick::Quiet
+                })
+            })
+        })
+    }
+
+    /// Drop values whose payload is Python `None`, passing everything else
+    /// through unchanged (the classic `filter_none`).
+    pub fn filter_none(&self) -> PyStream {
+        self.wire_stateless("filter_none", |value| {
+            let is_py_none = Python::attach(|py| value.object().is_none(py));
+            Ok(if is_py_none {
+                Tick::Quiet
+            } else {
+                Tick::Value(value.clone())
+            })
+        })
+    }
+
+    /// Wire a **stateless, fallible** single-input op that maps each value to a
+    /// [`Tick`] — the shared plumbing for `filter_map`/`filter_value`/
+    /// `filter_none`. Runs over the engine's `register_op1` so a returned `Err`
+    /// aborts the run with node context; carries no state, so it re-runs cleanly.
+    fn wire_stateless<F>(&self, label: &'static str, mut step: F) -> PyStream
+    where
+        F: FnMut(&PyElement) -> Result<Tick<PyElement>> + 'static,
+    {
+        let wired = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                label,
+                Activation::NONE,
+                (),
+                || (),
+                move |_cfg: &mut (), _state: &mut (), value: &PyElement, _ctx| step(value),
+            )
+        });
+        self.wrap(wired)
+    }
+
     /// Wire a **single-input op** onto this stream at the erased boundary — the
     /// extensibility primitive third-party ops (and the `pyop!` macro) build
     /// on. The op computes on its own concrete types: the input is extracted
@@ -533,6 +632,69 @@ mod tests {
         let rows: Vec<(i64, i64)> =
             Python::attach(|py| collected.value().value().extract(py).unwrap());
         assert_eq!(vec![(0, 1), (100, 2)], rows);
+    }
+
+    #[test]
+    fn fold_accumulates_and_resets_on_rerun() {
+        let g = PyGraph::new();
+        let summed = g
+            .counter(Duration::from_nanos(100))
+            .fold(PyElement::from(0_i64), lambda("lambda acc, v: acc + v"));
+        run_cycles(&g, 3);
+        let first: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(6, first); // 1+2+3
+        // Re-run restarts the fold (engine re-seeds the accumulator), not continue.
+        run_cycles(&g, 3);
+        let second: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(6, second);
+    }
+
+    #[test]
+    fn fold_exception_aborts_run() {
+        let g = PyGraph::new();
+        let _bad = g.counter(Duration::from_nanos(100)).fold(
+            PyElement::from(0_i64),
+            lambda("lambda acc, v: (_ for _ in ()).throw(ValueError())"),
+        );
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python fold callable raised"));
+    }
+
+    #[test]
+    fn filter_map_keeps_non_none() {
+        let g = PyGraph::new();
+        // Keep even counts, scaled; drop odd (None).
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .filter_map(lambda("lambda n: n * 10 if n % 2 == 0 else None"));
+        run_cycles(&g, 4);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(40, v); // last kept: 4 -> 40
+    }
+
+    #[test]
+    fn filter_value_keeps_on_predicate() {
+        let g = PyGraph::new();
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .filter_value(lambda("lambda n: n > 2"));
+        run_cycles(&g, 5);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(5, v); // 3,4,5 pass; last is 5
+    }
+
+    #[test]
+    fn filter_none_drops_python_none() {
+        let g = PyGraph::new();
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n if n % 2 == 0 else None"))
+            .filter_none();
+        run_cycles(&g, 6);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(6, v); // 2,4,6 pass; last is 6
     }
 
     #[test]
