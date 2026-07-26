@@ -12,7 +12,7 @@ use std::time::Duration;
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
-    Row, ToSql, postgres_read, postgres_sub,
+    PostgresSourceConfig, Row, ToSql, postgres_read, postgres_source, postgres_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
@@ -201,4 +201,93 @@ fn write_connection_refused_redacts_password() {
     let msg = format!("{err:#}");
     assert!(!msg.contains("hunter2"), "password leaked in error: {msg}");
     assert!(msg.contains("password=***"), "password not redacted: {msg}");
+}
+
+// ---- postgres_source: mode dispatch (no connection needed) ----
+
+fn realtime() -> RunParams {
+    RunParams {
+        run_mode: RunMode::RealTime,
+        run_for: RunFor::Forever,
+        start_time: NanoTime::ZERO,
+    }
+}
+
+/// A `HistoricalFrom` run with only a live half configured errors at wiring,
+/// naming the missing historical half — before any connection is attempted.
+#[test]
+fn source_missing_historical_half_errors_under_historical_mode() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = PostgresSourceConfig::new().live("chan", NanoTime::ZERO, |_cursor| String::new());
+    let err = postgres_source::<TestTrade>(
+        &g,
+        historical(NanoTime::from_kdb_timestamp(0), 86400),
+        "host=127.0.0.1 dbname=db",
+        cfg,
+    )
+    .err()
+    .expect("HistoricalFrom without a historical config must be rejected");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("postgres_source"), "names the adapter: {msg}");
+    assert!(
+        msg.contains("historical"),
+        "names the missing historical half: {msg}"
+    );
+}
+
+/// A `RealTime` run with only a historical half configured errors at wiring,
+/// naming the missing live half.
+#[test]
+fn source_missing_live_half_errors_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let err = postgres_source::<TestTrade>(&g, realtime(), "host=127.0.0.1 dbname=db", cfg)
+        .err()
+        .expect("RealTime without a live config must be rejected");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("postgres_source"), "names the adapter: {msg}");
+    assert!(msg.contains("live"), "names the missing live half: {msg}");
+}
+
+/// A `HistoricalFrom` run dispatches to the `postgres_read` mechanism, so it
+/// inherits that mechanism's bounded-window validation: `RunFor::Forever` (an
+/// unbounded slice set) is rejected with `postgres_read`'s message — proof the
+/// dispatch reached the historical primitive.
+#[test]
+fn source_dispatches_to_read_under_historical_mode() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let params = RunParams {
+        run_mode: RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+        run_for: RunFor::Forever,
+        start_time: NanoTime::from_kdb_timestamp(0),
+    };
+    let err = postgres_source::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", cfg)
+        .err()
+        .expect("Forever must be rejected by the read mechanism");
+    assert!(
+        format!("{err:#}").contains("RunFor::Forever"),
+        "dispatched to postgres_read's validation: {err:#}"
+    );
+}
+
+/// A `RealTime` run with a live half dispatches to the `postgres_sub` mechanism,
+/// which connects lazily in its producer task — so wiring succeeds (the graph is
+/// never run here). Proof the realtime dispatch reaches the live primitive.
+#[test]
+fn source_dispatches_to_sub_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = PostgresSourceConfig::new().live("chan", NanoTime::ZERO, |cursor: NanoTime| {
+        format!("SELECT time, sym, price, qty FROM trades WHERE time > '{cursor:?}' ORDER BY time")
+    });
+    let wired = postgres_source::<TestTrade>(&g, realtime(), "host=127.0.0.1 dbname=db", cfg);
+    assert!(
+        wired.is_ok(),
+        "RealTime with a live config wires (sub connects lazily): {:?}",
+        wired.err()
+    );
 }

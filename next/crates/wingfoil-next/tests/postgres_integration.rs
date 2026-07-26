@@ -16,7 +16,8 @@ use tokio_postgres::NoTls;
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
-    Row, ToSql, postgres_notify_trigger_sql, postgres_read, postgres_sub, postgres_timestamp,
+    PostgresSourceConfig, Row, ToSql, postgres_notify_trigger_sql, postgres_read, postgres_source,
+    postgres_sub, postgres_timestamp,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
@@ -175,6 +176,38 @@ fn test_read_time_sliced() -> anyhow::Result<()> {
         .map(|i| NanoTime::from_kdb_timestamp(i * HOUR_NANOS))
         .collect();
     assert_eq!(times, expected, "rows must tick at their row timestamps");
+    Ok(())
+}
+
+/// The mode-agnostic `postgres_source` dispatches a `HistoricalFrom` run to the
+/// bounded read mechanism — identical result to `postgres_read` (the primitive it
+/// wires through) for the same window.
+#[test]
+fn test_source_historical_dispatches_to_read() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let (_container, conn) = start_postgres()?;
+    seed_trades(&conn, 5)?; // rows at 00:00..04:00
+
+    let start = NanoTime::from_kdb_timestamp(0);
+    let dur = Duration::from_secs(86400);
+    let params = RunParams {
+        run_mode: RunMode::HistoricalFrom(start),
+        run_for: RunFor::Duration(dur),
+        start_time: start,
+    };
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let acc = postgres_source::<TestTrade>(&g, params, conn, cfg)?
+        .collapse()
+        .with_time()
+        .accumulate();
+    let mut runner = g.build();
+    runner.run(RunMode::HistoricalFrom(start), RunFor::Duration(dur))?;
+    let rows = runner.value(&acc);
+
+    assert_eq!(rows.len(), 5, "source (historical) reads all 5 rows");
+    let syms: Vec<String> = rows.iter().map(|(_, t)| t.sym.clone()).collect();
+    assert_eq!(syms, vec!["SYM0", "SYM1", "SYM2", "SYM3", "SYM4"]);
     Ok(())
 }
 
