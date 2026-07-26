@@ -44,7 +44,7 @@ has its own decision record in
 |---|---|:--:|---|
 | B1 | ~~**`etcd_pub` blocks the graph thread** — `Handle::block_on` per burst.~~ | ✅ | **Resolved.** `consume_async` now returns a `flush` teardown (wired via `finally`) that closes the sink, joins the consumer task, and — unlike a `Drop` — surfaces the **final** write error as the run's `Err`. This is the "teardown-hook story for synchronous-error ops" B1 was blocked on: it lets `etcd_pub`'s `force:false` conditional abort a single-cycle run at teardown (exactly as classic's `AsyncConsumerNode::teardown` does), so the per-write `block_on` is gone and the PUTs run off the graph thread on the shared consumer task. The wiring-time connect + `LeaseGuard` revoke keep their (teardown-time, graph-thread) `block_on` — the ordinary `consume_async` footgun (A5a). The same `flush` upgrade also closes the "final-cycle write error swallowed" gap for kafka/postgres/redis/otlp. |
 | B2 | **Live sources reject `RunMode::HistoricalFrom` at wiring** (etcd/redis/kafka/postgres `_sub`, zmq_sub). | 🟡 | Live tails are unbounded wall-clock streams; a historical run would block-collect the whole stream and deadlock at `start`, so next rejects at wiring with a pointer to the bounded reader. **Classic parity for postgres** — classic `postgres_sub` already required `RunMode::RealTime` and bailed otherwise (`adapters/postgres/sub.rs`), so next's rejection is parity, *not* a deviation there; the "classic permitted a wall-clock historical run" gap is real only for `zmq_sub` and the etcd/redis/kafka `_sub` sources, which had no such guard. **Split ruling (agreed plan below):** (a) **ratified reject** for live-only sources with no bounded historical twin (`zmq_sub`, `etcd_sub`, both redis sources, `kafka_sub` today); (b) for adapters that *do* have a bounded historical read alongside the live tail, replace the mode-locked `_read`/`_sub` function pair with a single mode-agnostic `<adapter>_source` that dispatches on `run_mode`. → plan §B2. |
-| B3 | **`kafka_pub` produces sequentially** (single ordered `consume_async` consumer, N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst). | 🟡 | Order-preserving but a throughput deviation. `adapters/kafka.rs` deviation #4. |
+| B3 | ~~**`kafka_pub` produces sequentially** (N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst).~~ | ✅ | **Resolved.** Added `consume_async_bursts` — a variant that hands the consumer a whole burst at a time (order preserved *across* bursts, concurrency within one left to the sink). `kafka_pub` now drains a burst's sends together via `FuturesUnordered` (~one broker roundtrip/burst), at throughput parity with classic. `adapters/kafka.rs` sink docs. |
 | B4 | **csv reads the whole file up front** vs classic's lazy row streaming. | 🟡 | Unbounded-memory for a huge file under `RunFor::Forever`. `adapters/csv.rs` "consequences of using the channel source". |
 | B5 | **`postgres_read` queries all slices at wiring** onto `replay_results` vs classic's lazy `produce_async`. | 🟢🟡 | "Identical for a bounded historical run," but buffers the whole result set (memory). Same family as A1. `adapters/postgres.rs` deviation #2. |
 | B6 | **`spawn_map` historical is lock-step by graph time** (twin of classic `mapper()`). | 🟢🟡 | Values + tick times match classic. Two benign artifacts: (a) the sub-graph is expected to emit a result per input instant (a filtering/delaying sub-graph desynchronises the lock-step — classic's `graph_node` delay case likewise fails); (b) the lock-step reader spends one no-op poll cycle between instants (next's monotonic-clock re-arm), so bound runs by **duration**, not a raw cycle count. `fluent.rs::spawn_map`, `tests/spawn.rs`. |
@@ -126,7 +126,7 @@ motivated the reject only ever required two *mechanisms*, not two public
 | D2 | Factories return `anyhow::Result` (+ `.context`) vs classic's typed `io::Error` (e.g. `prometheus::serve`). | 🟢 | Fallible-with-context convention. |
 | D3 | postgres/redis sinks take a `consume_async` `buffer_size`. | 🟢 | Added back-pressure knob. |
 | D4 | `DemuxMap` uses a `BTreeSet` slot pool (lowest free slot, deterministic) vs classic's `HashSet`. | 🟢 | An *improvement* — aids backtest determinism (#529). |
-| D5 | **otlp pins opentelemetry 0.32; classic still on 0.28.** | 🟡 | Deliberate divergence for security (GHSA-w9wp-h8wv-79jx, #543). **Drift** — bump classic to match to restore lockstep + fix the advisory there. |
+| D5 | **otlp pins opentelemetry 0.32; classic still on 0.28.** | 🟢 | **Won't-fix — moot at cutover.** Deliberate divergence for security (GHSA-w9wp-h8wv-79jx, #543). Classic is retired wholesale at cutover, so next's 0.32 is the surviving version and the classic-side advisory disappears with the legacy tree; bumping classic to restore lockstep is not worth the churn. |
 | D6 | csv malformed-row error surfaces at replay start vs classic mid-stream. | 🟢 | Same run-failure outcome + context string; documented. |
 | D7 | `FileCache` log messages drop the classic "KDB " prefix. | 🟢 | The cache isn't kdb-specific in next. |
 
@@ -138,10 +138,9 @@ motivated the reject only ever required two *mechanisms*, not two public
    and the `zmq_sub` migration landed (#547); finish it by migrating the
    `produce_async` family + the plain `external`/`channel` feeders, then reopen
    §0.4 to make I/O sources **re-runnable** (A2) — the remaining structural win.
-2. **D5** — bump classic's opentelemetry to restore lockstep with next.
-3. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
-   matter for the "strict superset" claim, or are acceptable documented trade-offs.
-4. **A6** — measure the channel-sub startup latency to either explain or close it.
+2. **B4** — decide whether the csv whole-file memory deviation matters for the
+   "strict superset" claim, or is an acceptable documented trade-off.
+3. **A6** — measure the channel-sub startup latency to either explain or close it.
 
 **Resolved / ratified since this register was written:** **A5** (graph-owned
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
@@ -150,7 +149,8 @@ final-cycle write errors, so `etcd_pub` moved off the graph thread — also clos
 the swallowed-final-error gap for kafka/postgres/redis/otlp); **B2** (split
 ruling, #557: reject ratified for live-only sources; adapters with a bounded
 historical twin move to a unified mode-dispatching `<adapter>_source` — see
-plan §B2, postgres first).
+plan §B2, postgres first); **B3** (`consume_async_bursts` restores kafka's
+concurrent per-burst publish).
 
 ## Keeping this current
 

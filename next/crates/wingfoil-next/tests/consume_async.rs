@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::async_source::consume_async;
+use wingfoil_next::async_source::{consume_async, consume_async_bursts};
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -208,5 +208,49 @@ fn consume_async_drop_safety_net_still_drains_without_flush() {
         vec![10, 20, 30],
         *collected.lock().expect("sink values mutex poisoned"),
         "the Drop safety-net drains all queued writes even without an explicit flush",
+    );
+}
+
+/// `consume_async_bursts` hands the consumer a whole burst at a time (an owned
+/// `Vec<T>`), so a sink can process a burst's values concurrently, while the
+/// single consumer still preserves order *across* bursts. Two same-instant groups
+/// arrive as two distinct `Vec`s, in order — never flattened, never reordered.
+#[test]
+fn consume_async_bursts_delivers_whole_bursts_in_order() {
+    let collected = Arc::new(Mutex::new(Vec::<Vec<u64>>::new()));
+    {
+        let sink_batches = collected.clone();
+        let g = GraphBuilder::new();
+        let (sink, flush) = consume_async_bursts(&g, None, move |batch: Vec<u64>| {
+            let sink_batches = sink_batches.clone();
+            async move {
+                sink_batches
+                    .lock()
+                    .expect("sink batches mutex poisoned")
+                    .push(batch);
+                Ok(())
+            }
+        })
+        .unwrap();
+
+        // A historical channel groups same-instant `send_at` values into one
+        // burst: {1,2,3} at t=100, then {4,5} at t=200.
+        let (stream, sender) = g.channel::<u64>();
+        for v in [1u64, 2, 3] {
+            sender.send_at(v, NanoTime::new(100));
+        }
+        for v in [4u64, 5] {
+            sender.send_at(v, NanoTime::new(200));
+        }
+        sender.close();
+
+        let _sink = stream.for_each(sink).finally(flush);
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Forever).unwrap();
+    }
+    assert_eq!(
+        vec![vec![1, 2, 3], vec![4, 5]],
+        *collected.lock().expect("sink batches mutex poisoned"),
+        "each burst arrives as one whole Vec, grouped by instant and in order",
     );
 }
