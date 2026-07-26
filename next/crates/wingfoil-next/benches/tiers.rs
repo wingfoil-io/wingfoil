@@ -34,14 +34,15 @@
 //! slower); running `cargo bench --bench tiers` puts `classic` and `interpreted`
 //! side by side per workload so that relationship is directly readable.
 //!
-//! Measured relationship at the time of writing (relative, not absolute — the
-//! numbers move with hardware): next-interpreted *beats* classic on the
-//! dispatch-bound `dense_chain` and the loop-bound `accumulate`, but *trails* it
-//! on the wide `fanout` (every node fires every cycle, so the sparse dirty-list
-//! path can't help). The compiled/nested tiers win decisively across the board
-//! — the compiled fan-out runs ~25x faster than either interpreter. The `fanout`
-//! interpreted gap is a standing perf item, tracked in `docs/port-plan.md`; this
-//! bench is the scaffold that keeps it honest.
+//! Measured relationship (relative, not absolute — the numbers move with
+//! hardware): next-interpreted **meets or beats** classic on all three
+//! workloads — the dispatch-bound `dense_chain`, the loop-bound `accumulate`,
+//! and the wide `fanout` (every node fires every cycle). The compiled/nested
+//! tiers win decisively across the board — the compiled fan-out runs ~25x faster
+//! than either interpreter. (An earlier `fanout` gap where next-interpreted
+//! trailed classic ~40% was the sparse dispatch's per-node `BinaryHeap`
+//! push/pop; replacing it with classic's layer-bucketed drain closed it. This
+//! bench is the scaffold that keeps the relationship honest.)
 
 use std::rc::Rc;
 use std::time::Duration;
