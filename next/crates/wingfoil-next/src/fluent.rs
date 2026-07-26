@@ -859,6 +859,14 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + 'static,
         F: Fn(&T) + 'static;
 
+    /// Log each value as it ticks — `"{time} {label} {value:?}"` at `level`,
+    /// through the `log` crate (target `"wingfoil"`) — passing it through
+    /// unchanged (the classic `logged` debug tap). Wire up any `log`-compatible
+    /// backend (e.g. `env_logger`) to see the output.
+    fn logged(&self, label: &str, level: log::Level) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static;
+
     /// Suppress consecutive duplicate values (emit on change only).
     fn distinct(&self) -> Stream<T>
     where
@@ -874,8 +882,10 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + Not<Output = T> + 'static;
 
-    /// Pass each value through unchanged while buffering it, then print the
-    /// whole buffer (`{value:?}` per line) at teardown (the classic `print`).
+    /// Pass each value through unchanged, printing it (`{value:?}` per line) to
+    /// stdout as it ticks (the classic `print`). Unlike classic, which buffers
+    /// and dumps at teardown, next prints per-tick — a justified deviation (see
+    /// the [`Print`](crate::ops::Print) op docs).
     fn print(&self) -> Stream<T>
     where
         T: Clone + Default + Debug + 'static;
@@ -1187,6 +1197,13 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T) + 'static,
     {
         self.wire(|b, h| b.inspect(h, f))
+    }
+
+    fn logged(&self, label: &str, level: log::Level) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static,
+    {
+        self.wire(|b, h| b.logged(h, (label.to_string(), level)))
     }
 
     fn distinct(&self) -> Stream<T>

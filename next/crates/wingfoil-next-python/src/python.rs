@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -194,6 +194,22 @@ impl Stream {
     /// a raised exception aborts the run.
     fn inspect(&self, func: Py<PyAny>) -> Stream {
         Stream(self.0.inspect(func))
+    }
+
+    /// Print each value to stdout as it ticks, passing it through unchanged
+    /// (the classic `print` debug tap).
+    fn print(&self) -> Stream {
+        Stream(self.0.print())
+    }
+
+    /// Log each value (`"{time} {label} {value:?}"`) as it ticks, passing it
+    /// through unchanged (the classic `logged` debug tap). `level` is one of
+    /// `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"` (case-insensitive),
+    /// defaulting to `"info"`; wire up any `log` backend to see the output.
+    #[pyo3(signature = (label, level = "info"))]
+    fn logged(&self, label: &str, level: &str) -> PyResult<Stream> {
+        let level = parse_log_level(level)?;
+        Ok(Stream(self.0.logged(label, level)))
     }
 
     /// Collect every emitted value into a growing `list`, re-emitted each tick.
@@ -477,6 +493,22 @@ impl BurstListSinkOps for ::wingfoil_next::prelude::Stream<::wingfoil_next::Burs
                 Ok(())
             })
         })
+    }
+}
+
+/// Parse a case-insensitive level name into a [`log::Level`] for
+/// [`Stream::logged`]. A ValueError names the accepted set on a bad input.
+fn parse_log_level(level: &str) -> PyResult<log::Level> {
+    match level.to_ascii_lowercase().as_str() {
+        "trace" => Ok(log::Level::Trace),
+        "debug" => Ok(log::Level::Debug),
+        "info" => Ok(log::Level::Info),
+        "warn" | "warning" => Ok(log::Level::Warn),
+        "error" => Ok(log::Level::Error),
+        other => Err(PyValueError::new_err(format!(
+            "unknown log level {other:?}; expected one of \
+             trace, debug, info, warn, error"
+        ))),
     }
 }
 

@@ -34,6 +34,9 @@ wingfoil-next = { path = "../wingfoil-next" }
 wingfoil-next-python-macros = { path = "../wingfoil-next-python-macros" }
 # Run-mode and clock types (NanoTime / RunMode / RunFor) named by the object form.
 wingfoil = { path = "../../../wingfoil" }
+# `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
+# matches the `log` the `wingfoil-next` fluent signature names.
+log = { workspace = true }
 
 [dev-dependencies]
 # `auto-initialize` starts an embedded interpreter so the boundary type and the

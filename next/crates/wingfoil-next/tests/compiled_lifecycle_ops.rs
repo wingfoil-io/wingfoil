@@ -136,16 +136,17 @@ fn teardown_order_matches_across_engines() {
 wingfoil_next::graph! {
     fn print_then_timed(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(PERIOD).count();
-        // `print` buffers and flushes at teardown; `timed` records at start
-        // and prints a summary at stop. Both pass their value through
-        // unchanged, so the output stream is identical to `count`.
+        // `print` prints each value per tick (deviation D8 — no teardown
+        // buffer); `timed` records at start and prints a summary at stop. Both
+        // pass their value through unchanged, so the output stream is identical
+        // to `count`.
         let printed = count.print();
         let out = printed.timed();
         out
     }
 }
 
-/// `print` (teardown flush) and `timed` (start + stop hooks) pass values
+/// `print` (per-tick print) and `timed` (start + stop hooks) pass values
 /// through unchanged; every engine completes cleanly and yields the same
 /// output as the interpreted reference.
 #[test]

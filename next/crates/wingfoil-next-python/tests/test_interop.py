@@ -350,6 +350,35 @@ def test_accumulate_grows_a_list():
     assert out.value() == [1, 2, 3]
 
 
+def test_print_passes_through_values():
+    # `print` is a stdout debug tap; the value stream is unchanged.
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).print().accumulate()
+    g.run(cycles=3)
+    assert out.value() == [1, 2, 3]
+
+
+def test_logged_passes_through_values():
+    # `logged` is a debug tap through the `log` crate; pass-through by design.
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).logged("count").accumulate()
+    g.run(cycles=3)
+    assert out.value() == [1, 2, 3]
+
+
+def test_logged_accepts_explicit_level():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).logged("count", "warn").accumulate()
+    g.run(cycles=2)
+    assert out.value() == [1, 2]
+
+
+def test_logged_rejects_unknown_level():
+    g = wf.Graph()
+    with pytest.raises(ValueError):
+        g.counter(period_nanos=100).logged("count", "verbose")
+
+
 def test_buffer_flushes_at_capacity():
     g = wf.Graph()
     out = g.counter(period_nanos=100).buffer(2)

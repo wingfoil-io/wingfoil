@@ -189,6 +189,22 @@ that is allowed, but it must be *consciously* placed: either give it an
 equivalent forwarder, or add it to the documented fluent-only allowlist in
 `tests/op_completeness.rs` (see step 6). Never leave it silently in neither.
 
+**Gotcha — an ergonomic fluent signature that differs from the op's `Cfg`
+forces fluent-only.** `graph!`/compiled emission uses the **call-site argument
+types verbatim** as the op's `Cfg` (a plain arg → `__cfg` local, tuple in call
+order), then hands them to `__wf_op_<name>_cycle(__cfg: &mut <Cfg>)`. So a
+call-site type must *equal* the `Cfg` type. If the fluent method takes a
+different, more ergonomic type and converts — the classic pattern being a
+`&str` label the method turns into an owned `String` `Cfg` (`logged`) — the
+**same tokens cannot satisfy both**: `wire()`/interpreted wants the `&str`
+fluent param, compiled wants the `String` cfg. Such an op stays **fluent-only**
+even though `#[op]` emits its forwarders (harmless, unused). Options: (a) accept
+it as fluent-only and record it in the `op_completeness.rs` allowlist (category
+"ergonomic fluent signature ≠ `Cfg`"); or (b) make the `Cfg` *be* the
+call-site type (e.g. `Cfg = (&'static str, …)`) — only viable when a borrowed,
+`'static` config is acceptable, which it usually is not (dynamic `format!`
+labels need an owned `String`). `logged` took (a).
+
 ## 6. Tests
 
 ### Parity / catalog tests — `tests/catalog*.rs`
