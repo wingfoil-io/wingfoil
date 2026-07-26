@@ -5,8 +5,11 @@
 
 use std::time::Duration;
 
+use pyo3::Python;
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next_python::{Activation, Ctx, Op, PyElement, PyGraph, Tick, pygraph, pyop};
+use wingfoil_next_python::{
+    Activation, Ctx, Op, PyElement, PyGraph, Tick, pyadapter, pygraph, pyop,
+};
 
 // Compile-level proof that `#[pyop]` works from an *external* crate: the paths
 // the macro emits (`::wingfoil_next_python::...`) resolve here, and the
@@ -94,6 +97,40 @@ fn build_triple_subgraph(
 ) -> wingfoil_next::prelude::Stream<f64> {
     use wingfoil_next::prelude::StreamOps;
     input.map(|x: &f64| x * 3.0)
+}
+
+// A source `#[pyadapter]` authored from an external crate: a trait on
+// `GraphBuilder` exposed to Python. Proves the macro emits the source
+// `#[pyfunction]` and the builder/erase_source seam works cross-crate.
+trait CountUpOps {
+    fn count_up(&self, from: f64) -> wingfoil_next::prelude::Stream<f64>;
+}
+
+#[pyadapter(name = count_up, source)]
+impl CountUpOps for wingfoil_next::prelude::GraphBuilder {
+    fn count_up(&self, from: f64) -> wingfoil_next::prelude::Stream<f64> {
+        use wingfoil_next::prelude::{SourceOps, StreamOps};
+        self.ticker(Duration::from_nanos(100))
+            .count()
+            .map(move |n: &u64| from + (*n as f64))
+    }
+}
+
+#[test]
+fn pyadapter_source_from_an_external_crate() {
+    // The generated function exists (compile proof).
+    let _f = count_up;
+
+    // The builder/erase_source seam it builds on splices a native source in
+    // (`count_up` is the trait method above, in scope in this file).
+    let g = PyGraph::new();
+    let typed = g.builder().count_up(100.0);
+    let src = g.erase_source::<f64>(typed);
+    let acc = src.accumulate();
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+    let v: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+    assert_eq!(vec![101.0, 102.0], v);
 }
 
 #[test]

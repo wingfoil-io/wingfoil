@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::graph::{PyGraph, PyStream};
-use crate::{Activation, Ctx, Op, PyElement, Tick, pygraph, pyop};
+use crate::{Activation, Ctx, Op, PyElement, Tick, pyadapter, pygraph, pyop};
 
 fn to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(format!("{err:#}"))
@@ -31,6 +31,15 @@ fn to_pyerr(err: anyhow::Error) -> PyErr {
 /// [`Stream`] combinators, then [`run`](Graph::run).
 #[pyclass(name = "Graph", unsendable)]
 pub struct Graph(PyGraph);
+
+impl Graph {
+    /// The underlying erased object form — the seam a `#[pyadapter]` source
+    /// `#[pyfunction]` in any crate uses to reach the builder and erase its
+    /// result.
+    pub fn object(&self) -> &PyGraph {
+        &self.0
+    }
+}
 
 #[pymethods]
 impl Graph {
@@ -376,6 +385,26 @@ fn build_doubled_running_total(
     input.map(|x: &f64| x * 2.0).cumulative_sum()
 }
 
+// `ramp_source` — a **source `#[pyadapter]`**: a user-style adapter trait
+// implemented on `GraphBuilder`, exposed as `module.ramp_source(graph, start,
+// step)`. This synthetic source (no real IO) emits `start, start+step, …` as
+// `f64` every tick; a real adapter would open a socket/consumer here instead.
+// The fluent `Stream`/`GraphBuilder` are named fully-qualified to avoid the
+// `Stream` pyclass clash in this module.
+trait RampSourceOps {
+    fn ramp_source(&self, start: f64, step: f64) -> ::wingfoil_next::prelude::Stream<f64>;
+}
+
+#[pyadapter(name = ramp_source, source)]
+impl RampSourceOps for ::wingfoil_next::prelude::GraphBuilder {
+    fn ramp_source(&self, start: f64, step: f64) -> ::wingfoil_next::prelude::Stream<f64> {
+        use ::wingfoil_next::prelude::{SourceOps, StreamOps};
+        self.ticker(Duration::from_nanos(100))
+            .count()
+            .map(move |n: &u64| start + step * ((*n - 1) as f64))
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -386,5 +415,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(running_total, m)?)?;
     m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
+    m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
     Ok(())
 }

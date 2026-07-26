@@ -43,8 +43,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    Error, FnArg, GenericArgument, Ident, ImplItem, ItemFn, ItemImpl, PathArguments, ReturnType,
-    Token, Type, parse_macro_input,
+    Error, FnArg, GenericArgument, Ident, ImplItem, ItemFn, ItemImpl, Pat, PathArguments,
+    ReturnType, Token, Type, parse_macro_input,
 };
 
 /// Parsed `#[pyop(name = <fn>, [arg = <cfg param>])]`.
@@ -203,6 +203,136 @@ fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2
             let __typed = __obj.typed_input::<#t_ty>();
             let __out = #fn_name(&__typed);
             ::wingfoil_next_python::Stream::from(__obj.erased_output::<#u_ty>(__out))
+        }
+    })
+}
+
+/// Parsed `#[pyadapter(name = <py fn>, source)]`.
+struct PyAdapterArgs {
+    name: Ident,
+    is_source: bool,
+}
+
+impl Parse for PyAdapterArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut name = None;
+        let mut is_source = false;
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            match key.to_string().as_str() {
+                "name" => {
+                    input.parse::<Token![=]>()?;
+                    name = Some(input.parse()?);
+                }
+                "source" => is_source = true,
+                other => {
+                    return Err(Error::new(
+                        key.span(),
+                        format!("unknown #[pyadapter] key `{other}`; expected `name` or `source`"),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        let name = name.ok_or_else(|| {
+            Error::new(input.span(), "#[pyadapter] requires `name = <py fn name>`")
+        })?;
+        Ok(PyAdapterArgs { name, is_source })
+    }
+}
+
+/// `#[pyadapter(name = ..., source)]` — expose a user **source** adapter method
+/// (`impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T> }`) as a
+/// Python callable `module.name(graph, args…)` that runs the adapter's native
+/// wiring on the caller's graph and returns the erased output (`T:
+/// Into<PyElement>`). v1 covers single-value source methods; sink/transform and
+/// burst (`Stream<Burst<T>>`) sources are not yet emitted.
+#[proc_macro_attribute]
+pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as PyAdapterArgs);
+    let imp = parse_macro_input!(item as ItemImpl);
+    match expand_pyadapter(&args, &imp) {
+        Ok(extra) => quote! { #imp #extra }.into(),
+        Err(e) => {
+            let e = e.to_compile_error();
+            quote! { #imp #e }.into()
+        }
+    }
+}
+
+fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
+    if !args.is_source {
+        return Err(Error::new(
+            args.name.span(),
+            "#[pyadapter] v1 supports source adapters only; add the `source` marker \
+             (`#[pyadapter(name = ..., source)]`)",
+        ));
+    }
+    // The single adapter method in the impl.
+    let mut methods = imp.items.iter().filter_map(|it| match it {
+        ImplItem::Fn(f) => Some(f),
+        _ => None,
+    });
+    let method = methods.next().ok_or_else(|| {
+        Error::new(
+            imp.span(),
+            "#[pyadapter] impl must contain the adapter method",
+        )
+    })?;
+    if methods.next().is_some() {
+        return Err(Error::new(
+            imp.span(),
+            "#[pyadapter] v1 expects exactly one adapter method in the impl",
+        ));
+    }
+    let method_name = &method.sig.ident;
+
+    // Non-receiver params: (name, type), forwarded to the method verbatim.
+    let mut param_decls = Vec::new();
+    let mut param_names = Vec::new();
+    for arg in &method.sig.inputs {
+        match arg {
+            FnArg::Receiver(_) => {}
+            FnArg::Typed(pt) => {
+                let name = match &*pt.pat {
+                    Pat::Ident(pi) => pi.ident.clone(),
+                    _ => {
+                        return Err(Error::new(
+                            pt.pat.span(),
+                            "#[pyadapter] method params must be simple identifiers",
+                        ));
+                    }
+                };
+                let ty = &pt.ty;
+                param_decls.push(quote! { #name: #ty });
+                param_names.push(name);
+            }
+        }
+    }
+
+    let out_ty = match &method.sig.output {
+        ReturnType::Type(_, ty) => &**ty,
+        ReturnType::Default => {
+            return Err(Error::new(
+                method.sig.span(),
+                "#[pyadapter] source method must return `Stream<T>`",
+            ));
+        }
+    };
+    let t_ty = stream_inner(out_ty)?;
+    let py_name = &args.name;
+
+    Ok(quote! {
+        #[pyo3::pyfunction]
+        fn #py_name(
+            graph: pyo3::PyRef<'_, ::wingfoil_next_python::Graph>,
+            #(#param_decls),*
+        ) -> ::wingfoil_next_python::Stream {
+            let __obj = graph.object();
+            let __typed = __obj.builder().#method_name(#(#param_names),*);
+            ::wingfoil_next_python::Stream::from(__obj.erase_source::<#t_ty>(__typed))
         }
     })
 }
