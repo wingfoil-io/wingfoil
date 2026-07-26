@@ -42,7 +42,7 @@ has its own decision record in
 
 | id | dev | class | notes / source |
 |---|---|:--:|---|
-| B1 | **`etcd_pub` blocks the graph thread** — `Handle::block_on` per burst. The `consume_async` reland was deferred. | 🔴 | The one place next puts blocking network I/O on the single-threaded engine. `adapters/etcd.rs` "Why `etcd_pub` still blocks the graph thread (deferred follow-up)". Needs a teardown-hook story for synchronous-error ops (the general problem `consume_async` couldn't cover — the `force:false` conditional write). |
+| B1 | ~~**`etcd_pub` blocks the graph thread** — `Handle::block_on` per burst.~~ | ✅ | **Resolved.** `consume_async` now returns a `flush` teardown (wired via `finally`) that closes the sink, joins the consumer task, and — unlike a `Drop` — surfaces the **final** write error as the run's `Err`. This is the "teardown-hook story for synchronous-error ops" B1 was blocked on: it lets `etcd_pub`'s `force:false` conditional abort a single-cycle run at teardown (exactly as classic's `AsyncConsumerNode::teardown` does), so the per-write `block_on` is gone and the PUTs run off the graph thread on the shared consumer task. The wiring-time connect + `LeaseGuard` revoke keep their (teardown-time, graph-thread) `block_on` — the ordinary `consume_async` footgun (A5a). The same `flush` upgrade also closes the "final-cycle write error swallowed" gap for kafka/postgres/redis/otlp. |
 | B2 | **Live sources reject `RunMode::HistoricalFrom` at wiring** (etcd/redis/kafka/postgres `_sub`, zmq_sub). | 🟡✅ | **Ratified — accepted deviation.** Classic *technically permitted* a historical run with wall-clock timestamps, but a live tail has no deterministic timeline to replay: wall-clock-stamped rows give neither reproducible values nor reproducible tick times, so the classic path was an unguarded footgun, not a real capability. Deterministic historical replay is served by the paired time-sliced `_read` sources (e.g. `postgres_read`). next rejects at wiring with a clear message pointing to the `_read` source — a strictly better failure mode than the block-collect deadlock at `start`. Wall-clock historical is **not** restored. |
 | B3 | **`kafka_pub` produces sequentially** (single ordered `consume_async` consumer, N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst). | 🟡 | Order-preserving but a throughput deviation. `adapters/kafka.rs` deviation #4. |
 | B4 | **csv reads the whole file up front** vs classic's lazy row streaming. | 🟡 | Unbounded-memory for a huge file under `RunFor::Forever`. `adapters/csv.rs` "consequences of using the channel source". |
@@ -77,17 +77,17 @@ has its own decision record in
    and the `zmq_sub` migration landed (#547); finish it by migrating the
    `produce_async` family + the plain `external`/`channel` feeders, then reopen
    §0.4 to make I/O sources **re-runnable** (A2) — the remaining structural win.
-2. **B1** — get `etcd_pub` off the graph thread. Blocked on a teardown-hook story
-   for synchronous-error ops; solving it generalises `consume_async`.
-3. **B2** — ratify historical-rejection for the cutover superset claim (accept as
-   documented, or restore wall-clock historical for live sources).
-4. **D5** — bump classic's opentelemetry to restore lockstep with next.
-5. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
+2. **D5** — bump classic's opentelemetry to restore lockstep with next.
+3. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
    matter for the "strict superset" claim, or are acceptable documented trade-offs.
-6. **A6** — measure the channel-sub startup latency to either explain or close it.
+4. **A6** — measure the channel-sub startup latency to either explain or close it.
 
-**Resolved since this register was written:** **A5** (graph-owned runtime, #548);
-**A1/A4 for `zmq_sub`** (deferred to `start()` via `source_at_start`, #547).
+**Resolved / ratified since this register was written:** **A5** (graph-owned
+runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
+`source_at_start`, #547); **B1** (`consume_async` `flush` teardown surfaces
+final-cycle write errors, so `etcd_pub` moved off the graph thread — also closes
+the swallowed-final-error gap for kafka/postgres/redis/otlp); **B2** (ratified as
+an accepted deviation — live sources reject `HistoricalFrom`, #557).
 
 ## Keeping this current
 

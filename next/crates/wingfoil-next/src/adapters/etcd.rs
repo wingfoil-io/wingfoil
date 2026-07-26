@@ -45,27 +45,33 @@
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!
-//! Because the sink drives its writes with [`Handle::block_on`] on the graph
-//! thread (and the [`LeaseGuard`] revokes on `Drop` the same way), **the graph
-//! must be built, run, and dropped from a non-async thread** — the ordinary
-//! case (`main`, a `#[test]` fn). Driving it from *inside* an async context
-//! (e.g. `rt.block_on(async { g.build().run(..) })`) makes those `block_on`
-//! calls panic, and a panic in the `Drop` revoke during unwinding would abort.
-//! The producer and keepalive tasks, by contrast, run on the runtime's own
-//! workers via [`Handle::spawn`] and have no such constraint.
+//! The per-write PUTs run **off** the graph thread on the shared
+//! [`consume_async`](crate::async_source::consume_async) consumer task (see
+//! below); but the wiring-time `Client::connect`/`lease_grant` and the
+//! [`LeaseGuard`]'s revoke-on-`Drop` still drive the runtime with
+//! [`Handle::block_on`] on the graph thread, so **the graph must be built, run,
+//! and dropped from a non-async thread** — the ordinary case (`main`, a
+//! `#[test]` fn). Driving it from *inside* an async context (e.g.
+//! `rt.block_on(async { g.build().run(..) })`) makes those `block_on` calls
+//! panic, and a panic in the `Drop` revoke during unwinding would abort. This is
+//! the same constraint every `consume_async` sink carries. The producer and
+//! keepalive tasks, by contrast, run on the runtime's own workers via
+//! [`Handle::spawn`] and have no such constraint.
 //!
-//! ## Why `etcd_pub` still blocks the graph thread (deferred follow-up)
+//! ## Writes run off the graph thread (via `consume_async`)
 //!
-//! The general async-sink primitive [`consume_async`](crate::async_source::consume_async)
-//! now exists to move a networked sink's writes off the graph thread. `etcd_pub`
-//! does **not** yet use it: `consume_async` writes off-thread and surfaces a write
-//! error only on a *later* cycle (or swallows it in the teardown flush), whereas
-//! `etcd_pub`'s `force: false` conditional-write test aborts a **single-cycle**
-//! (`RunFor::Cycles(1)`) run on the very write that fails — a guarantee off-thread
-//! writes cannot preserve. Migrating `etcd_pub` to `consume_async` is a tracked
-//! follow-up (see `docs/port-plan.md`); until then the sink keeps its
-//! `Handle::block_on` per-write path so that per-write failures still abort the
-//! run deterministically.
+//! `etcd_pub` drives its PUTs through the shared async-sink primitive
+//! [`consume_async`](crate::async_source::consume_async), so the network writes
+//! run on a background consumer task rather than blocking a `cycle`. A single
+//! consumer awaits each write to completion before the next, preserving burst
+//! order. A `force: false` conditional-write conflict returns an error that
+//! aborts the run — surfaced on a later cycle, or, for the **final** write, by
+//! the sink's `flush` teardown (`consume_async` returns it, wired here as
+//! [`finally`](crate::fluent::StreamOps::finally)). That teardown-time surfacing
+//! is exactly how classic aborts a single-cycle (`RunFor::Cycles(1)`) run whose
+//! only write conflicts (`AsyncConsumerNode::teardown` joins the consumer and
+//! propagates its error), so the `force: false` guarantee is preserved without a
+//! per-write `block_on`.
 //!
 //! # Subscribing to a key prefix (the snapshot→watch handoff)
 //!
@@ -84,10 +90,10 @@
 //! # Sink
 //!
 //! [`EtcdSinkOps::etcd_pub`] connects at wiring time (a connection error surfaces
-//! before the run) and issues one PUT per [`EtcdEntry`] in each burst, blocking
-//! the graph thread on the runtime for the write so any failure aborts the run
-//! deterministically with context — matching the classic consumer's ordering
-//! guarantees.
+//! before the run) and issues one PUT per [`EtcdEntry`] in each burst on the
+//! off-thread [`consume_async`](crate::async_source::consume_async) consumer, in
+//! order, so any failure aborts the run with context — matching the classic
+//! consumer's ordering and error-surfacing guarantees.
 //!
 //! - `lease_ttl: None` writes plain keys that persist until deleted.
 //! - `lease_ttl: Some(ttl)` attaches an etcd lease with a background keepalive
@@ -117,7 +123,7 @@ use tokio::runtime::Handle;
 use wingfoil::{NanoTime, RunMode};
 
 use crate::Burst;
-use crate::async_source::{RunParams, produce_async};
+use crate::async_source::{RunParams, consume_async, produce_async};
 use crate::burst;
 use crate::fluent::{GraphBuilder, Stream, StreamOps};
 
@@ -460,51 +466,65 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
         };
 
         let lease_id = guard.as_ref().map(|g| g.lease_id);
-        let handle = handle.clone();
-        // `for_each` takes an `Fn`; the etcd `Client` needs `&mut` per PUT, so it
-        // lives behind a `RefCell`. The lease guard is moved in so its revoke
-        // fires when the sink is dropped at graph teardown.
-        let client = RefCell::new(client);
-        Ok(self.for_each(move |burst: &Burst<EtcdEntry>| {
-            // Load-bearing: referencing `guard` is what makes this `move` closure
-            // capture (and thus own) it, so the lease is revoked only when the
-            // sink is dropped at teardown — not immediately at the end of wiring.
-            let _lease = &guard;
-            let mut client = client.borrow_mut();
-            handle.block_on(async {
-                for entry in burst.iter() {
-                    let opts = lease_id.map(|id| PutOptions::new().with_lease(id));
-                    if force {
-                        client
-                            .put(entry.key.clone(), entry.value.clone(), opts)
-                            .await
-                            .with_context(|| format!("etcd_pub: PUT {} failed", entry.key))?;
-                    } else {
-                        // Conditional put: succeed only if the key is absent.
-                        // create_revision == 0 is etcd's canonical "key absent".
-                        let key_absent = vec![Compare::create_revision(
-                            entry.key.as_bytes(),
-                            CompareOp::Equal,
-                            0,
-                        )];
-                        let put_op =
-                            vec![TxnOp::put(entry.key.as_bytes(), entry.value.as_slice(), opts)];
-                        let txn = Txn::new().when(key_absent).and_then(put_op);
-                        let resp = client
-                            .txn(txn)
-                            .await
-                            .with_context(|| format!("etcd_pub: conditional PUT {} failed", entry.key))?;
-                        if !resp.succeeded() {
-                            anyhow::bail!(
-                                "etcd_pub: conditional write failed: key already exists (use force=true to overwrite): {}",
-                                entry.key
-                            );
-                        }
+
+        // Each `EtcdEntry` is written by the shared `consume_async` consumer task,
+        // off the graph thread (single consumer, so PUTs preserve burst order). A
+        // per-entry client clone is cheap (the etcd `Client` is an `Arc` inside)
+        // and lets each write own its `&mut`. A `force:false` conflict returns an
+        // error that aborts the run — on a later cycle, or, for the final write,
+        // via the `flush` teardown wired below (matching classic's teardown-time
+        // surfacing).
+        let write_client = client.clone();
+        let (sink, flush) = consume_async(&self.graph(), None, move |entry: EtcdEntry| {
+            let mut client = write_client.clone();
+            async move {
+                let opts = lease_id.map(|id| PutOptions::new().with_lease(id));
+                if force {
+                    client
+                        .put(entry.key.clone(), entry.value.clone(), opts)
+                        .await
+                        .with_context(|| format!("etcd_pub: PUT {} failed", entry.key))?;
+                } else {
+                    // Conditional put: succeed only if the key is absent.
+                    // create_revision == 0 is etcd's canonical "key absent".
+                    let key_absent = vec![Compare::create_revision(
+                        entry.key.as_bytes(),
+                        CompareOp::Equal,
+                        0,
+                    )];
+                    let put_op = vec![TxnOp::put(
+                        entry.key.as_bytes(),
+                        entry.value.as_slice(),
+                        opts,
+                    )];
+                    let txn = Txn::new().when(key_absent).and_then(put_op);
+                    let resp = client.txn(txn).await.with_context(|| {
+                        format!("etcd_pub: conditional PUT {} failed", entry.key)
+                    })?;
+                    if !resp.succeeded() {
+                        anyhow::bail!(
+                            "etcd_pub: conditional write failed: key already exists (use force=true to overwrite): {}",
+                            entry.key
+                        );
                     }
                 }
-                anyhow::Ok(())
-            })?;
-            Ok(())
+                Ok(())
+            }
+        })?;
+
+        // Teardown: drain every queued write (surfacing a final-cycle error),
+        // *then* drop the lease guard so its revoke fires only after the writes
+        // complete — the classic order (loop ends → abort keepalive → revoke).
+        // The guard revokes via `block_on` on the graph thread, so it must not
+        // drop inside the async consumer task; holding it here keeps it on the
+        // graph thread. Revoke runs regardless of a write error.
+        let guard_cell = RefCell::new(guard);
+        Ok(self.for_each(sink).finally(move |u: &()| {
+            let flush_result = flush(u);
+            // Load-bearing: `take()` drops the `LeaseGuard` (aborting keepalive
+            // and revoking the lease) here at teardown rather than at graph drop.
+            guard_cell.borrow_mut().take();
+            flush_result
         }))
     }
 }

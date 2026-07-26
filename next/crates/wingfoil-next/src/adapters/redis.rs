@@ -447,7 +447,7 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
             .block_on(client.get_multiplexed_async_connection())
             .with_context(|| format!("redis_pub: connecting to {:?}", conn.url))?;
 
-        let sink = consume_async(&g, buffer_size, move |entry: RedisEntry| {
+        let (sink, flush) = consume_async(&g, buffer_size, move |entry: RedisEntry| {
             let mut connection = connection.clone();
             async move {
                 redis::cmd("PUBLISH")
@@ -459,7 +459,7 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
                 Ok(())
             }
         })?;
-        Ok(self.for_each(sink))
+        Ok(self.for_each(sink).finally(flush))
     }
 }
 
@@ -519,7 +519,7 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
             .block_on(client.get_multiplexed_async_connection())
             .with_context(|| format!("redis_stream_write: connecting to {:?}", conn.url))?;
 
-        let sink = consume_async(&g, buffer_size, move |record: RedisStreamRecord| {
+        let (sink, flush) = consume_async(&g, buffer_size, move |record: RedisStreamRecord| {
             let mut connection = connection.clone();
             async move {
                 let mut cmd = redis::cmd("XADD");
@@ -535,7 +535,7 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
                 Ok(())
             }
         })?;
-        Ok(self.for_each(sink))
+        Ok(self.for_each(sink).finally(flush))
     }
 }
 
