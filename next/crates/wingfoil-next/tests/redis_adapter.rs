@@ -110,8 +110,8 @@ fn stream_read_rejects_historical_mode() {
     );
 }
 
-/// The Pub/Sub sink must surface a connection failure — at wiring (eager connect)
-/// or, if the client connects lazily, during the run.
+/// The Pub/Sub sink connects lazily on the first write, so wiring succeeds and
+/// an unreachable endpoint aborts the *run*.
 #[test]
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -122,17 +122,17 @@ fn pub_connection_refused_surfaces_an_error() {
     }]);
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
 
-    let outcome = match source.redis_pub(conn, None) {
-        Err(_) => return, // errored at wiring (eager connect) — acceptable
-        Ok(_sink) => g.build().run(RunMode::RealTime, RunFor::Cycles(1)),
-    };
+    let _sink = source
+        .redis_pub(conn, None)
+        .expect("wiring must succeed (connect is deferred to the run)");
+    let outcome = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
     assert!(
         outcome.is_err(),
-        "an unreachable Redis endpoint must surface an error at wiring or during the run"
+        "an unreachable Redis endpoint must abort the run"
     );
 }
 
-/// The stream sink must surface a connection failure the same way.
+/// The stream sink connects lazily the same way.
 #[test]
 fn stream_write_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -140,12 +140,12 @@ fn stream_write_connection_refused_surfaces_an_error() {
     let source = g.constant(burst![RedisStreamRecord::single("key", "f", b"v".to_vec())]);
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
 
-    let outcome = match source.redis_stream_write(conn, None) {
-        Err(_) => return, // errored at wiring (eager connect) — acceptable
-        Ok(_sink) => g.build().run(RunMode::RealTime, RunFor::Cycles(1)),
-    };
+    let _sink = source
+        .redis_stream_write(conn, None)
+        .expect("wiring must succeed (connect is deferred to the run)");
+    let outcome = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
     assert!(
         outcome.is_err(),
-        "an unreachable Redis endpoint must surface an error at wiring or during the run"
+        "an unreachable Redis endpoint must abort the run"
     );
 }
