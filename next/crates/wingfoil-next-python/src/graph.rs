@@ -112,6 +112,24 @@ impl PyGraph {
         )
     }
 
+    /// The underlying fluent [`GraphBuilder`] — the seam a `#[pyadapter]` source
+    /// method wires onto. The adapter runs its native wiring against this
+    /// builder (splicing into the same graph), then the typed result is erased
+    /// with [`erase_source`](Self::erase_source).
+    pub fn builder(&self) -> &GraphBuilder {
+        &self.builder
+    }
+
+    /// Erase a natively-typed source `Stream<T>` to a [`PyStream`] on this graph
+    /// — the output half of the `#[pyadapter]` source seam (the interior stays
+    /// native `T`; only the Python-facing edge erases).
+    pub fn erase_source<T>(&self, typed: Stream<T>) -> PyStream
+    where
+        T: Clone + Into<PyElement> + 'static,
+    {
+        self.wrap(typed.map(|v: &T| v.clone().into()))
+    }
+
     /// Run the graph to its bound, storing the runner so retained
     /// [`PyStream`]s can be read with [`PyStream::value`].
     ///

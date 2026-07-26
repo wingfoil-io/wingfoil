@@ -134,6 +134,22 @@ def test_pyop_stateful_state_reseeds_on_rerun():
     assert out.value() == 6.0
 
 
+def test_pyadapter_source():
+    # ramp_source is a Rust source adapter (#[pyadapter]) exposed as a callable.
+    g = wf.Graph()
+    out = wf.ramp_source(g, 10.0, 2.0).accumulate()
+    g.run(cycles=3)
+    # start=10, step=2 -> 10, 12, 14
+    assert out.value() == [10.0, 12.0, 14.0]
+
+
+def test_pyadapter_source_feeds_combinators():
+    g = wf.Graph()
+    out = wf.ramp_source(g, 1.0, 1.0).sum()  # 1,2,3 -> cumulative 1,3,6
+    g.run(cycles=3)
+    assert out.value() == 6.0
+
+
 def test_pygraph_reuses_a_rust_subgraph():
     # doubled_running_total is a Rust-authored sub-graph (#[pygraph]) spliced in.
     g = wf.Graph()
