@@ -29,7 +29,7 @@ use anyhow::Result;
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::interp::{Builder, Runner, SlotRef};
+use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 use wingfoil_next::stats::StatisticsOps;
@@ -434,6 +434,41 @@ impl PyStream {
         self.wrap(as_f64.cumulative_mean().map(|v: &f64| PyElement::from(*v)))
     }
 
+    /// Combine this stream with `other` through a Python callable (the classic
+    /// `bimap`): whenever either input ticks, `func(this_value, other_value)` is
+    /// called with both inputs' current values and its result is emitted. Both
+    /// inputs are active. A raised exception aborts the run with context — so
+    /// this one method also covers the classic `try_bimap` (a Python callable
+    /// always propagates its exception).
+    pub fn bimap(&self, other: &PyStream, func: Py<PyAny>) -> PyStream {
+        let other_handle = other.stream.handle();
+        let joined = self
+            .stream
+            .wire(move |b: &mut Builder, this: Handle<PyElement>| {
+                b.register_op2(
+                    this,
+                    other_handle,
+                    "bimap",
+                    Activation::NONE,
+                    func, // cfg: the Python combiner
+                    || (),
+                    move |func: &mut Py<PyAny>,
+                          _state: &mut (),
+                          a: &PyElement,
+                          b: &PyElement,
+                          _ctx| {
+                        Python::attach(|py| {
+                            let result = func.call1(py, (a.value(), b.value())).map_err(|err| {
+                                anyhow::anyhow!("Python bimap callable raised: {err}")
+                            })?;
+                            Ok(Tick::Value(PyElement::new(result)))
+                        })
+                    },
+                )
+            });
+        self.wrap(joined)
+    }
+
     /// Wire a **stateless, fallible** single-input op that maps each value to a
     /// [`Tick`] — the shared plumbing for `filter_map`/`filter_value`/
     /// `filter_none`. Runs over the engine's `register_op1` so a returned `Err`
@@ -714,6 +749,34 @@ mod tests {
         run_cycles(&g, 6);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn bimap_combines_two_inputs() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(100)); // 1,2,3
+        let b = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n * 10")); // 10,20,30
+        let summed = a.bimap(&b, lambda("lambda x, y: x + y"));
+        run_cycles(&g, 3);
+        let v: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(33, v); // 3 + 30
+    }
+
+    #[test]
+    fn bimap_exception_aborts_run() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(100));
+        let b = g.counter(Duration::from_nanos(100));
+        let _bad = a.bimap(
+            &b,
+            lambda("lambda x, y: (_ for _ in ()).throw(ValueError())"),
+        );
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python bimap callable raised"));
     }
 
     #[test]

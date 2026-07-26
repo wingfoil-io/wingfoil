@@ -236,6 +236,13 @@ impl Stream {
         Stream(self.0.mean())
     }
 
+    /// Combine with `other` through `func(this_value, other_value)`, called
+    /// whenever either input ticks (the classic `bimap`). A raised exception
+    /// aborts the run.
+    fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.bimap(&other.0, func))
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()

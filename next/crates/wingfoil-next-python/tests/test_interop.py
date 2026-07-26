@@ -330,3 +330,24 @@ def test_sum_of_non_numeric_aborts_run():
     g.constant("x").sum()
     with pytest.raises(RuntimeError, match="not a f64"):
         g.run(cycles=1)
+
+
+def test_bimap_combines_two_inputs():
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)  # 1,2,3
+    b = g.counter(period_nanos=100).map(lambda n: n * 10)  # 10,20,30
+    out = a.bimap(b, lambda x, y: x + y)
+    g.run(cycles=3)
+    assert out.value() == 33  # 3 + 30
+
+
+def test_bimap_exception_aborts_run():
+    def boom(x, y):
+        raise ValueError("boom")
+
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = g.counter(period_nanos=100)
+    a.bimap(b, boom)
+    with pytest.raises(RuntimeError, match="Python bimap callable raised"):
+        g.run(cycles=1)
