@@ -10,25 +10,17 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::async_source::{RunParams, produce_async, produce_async_bounded};
+use wingfoil_next::async_source::{produce_async, produce_async_bounded};
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
-
-fn params() -> RunParams {
-    RunParams {
-        run_mode: HISTORICAL,
-        run_for: RunFor::Forever,
-        start_time: NanoTime::ZERO,
-    }
-}
 
 /// A finite async producer of timestamped values replays deterministically on
 /// the graph clock — the classic `produce_async` historical contract.
 #[test]
 fn produce_async_replays_deterministically() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, params(), |_p| async {
+    let values = produce_async(&g, |_p| async {
         Ok(futures::stream::iter(vec![
             Ok((NanoTime::new(100), 1u64)),
             Ok((NanoTime::new(200), 2u64)),
@@ -59,7 +51,7 @@ fn produce_async_replays_deterministically() {
 #[test]
 fn produce_async_groups_same_time_into_a_burst() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, params(), |_p| async {
+    let values = produce_async(&g, |_p| async {
         Ok(futures::stream::iter(vec![
             Ok((NanoTime::new(100), 1u64)),
             Ok((NanoTime::new(100), 2u64)),
@@ -77,7 +69,7 @@ fn produce_async_groups_same_time_into_a_burst() {
 #[test]
 fn produce_async_error_aborts_the_run() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, params(), |_p| async {
+    let values = produce_async(&g, |_p| async {
         Ok(futures::stream::iter(vec![
             Ok((NanoTime::new(100), 1u64)),
             Err(anyhow::anyhow!("feed dropped")),
@@ -95,42 +87,13 @@ fn produce_async_error_aborts_the_run() {
     );
 }
 
-/// Caller-supplied `RunParams` that disagree with the actual run are rejected,
-/// not silently trusted: declaring a historical `start_time` that the run does
-/// not use aborts the run with context naming the mismatch.
-#[test]
-fn produce_async_rejects_mismatched_start_time() {
-    let g = GraphBuilder::new();
-    // Caller declares start_time = 999, but the run below starts at ZERO.
-    let bogus = RunParams {
-        run_mode: HISTORICAL,
-        run_for: RunFor::Forever,
-        start_time: NanoTime::new(999),
-    };
-    let values = produce_async(&g, bogus, |_p| async {
-        Ok(futures::stream::iter(vec![Ok((NanoTime::new(100), 1u64))]))
-    })
-    .unwrap();
-    let _acc = values.collapse_accumulate();
-    let mut r = g.build();
-    let err = r
-        .run(HISTORICAL, RunFor::Forever)
-        .expect_err("mismatched RunParams.start_time must abort the run");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("start_time"), "names the mismatch: {msg}");
-    assert!(
-        msg.contains("does not match"),
-        "explains the disagreement: {msg}"
-    );
-}
-
 /// Matching params replay fine even when a `buffer_size` is supplied for a
 /// historical run — the up-front collection is never throttled (no deadlock),
 /// so the bound is simply not applied in historical replay.
 #[test]
 fn produce_async_buffer_size_ignored_in_historical() {
     let g = GraphBuilder::new();
-    let values = produce_async_bounded(&g, params(), Some(1), |_p| async {
+    let values = produce_async_bounded(&g, Some(1), |_p| async {
         Ok(futures::stream::iter(vec![
             Ok((NanoTime::new(100), 1u64)),
             Ok((NanoTime::new(200), 2u64)),
@@ -150,13 +113,8 @@ fn produce_async_buffer_size_ignored_in_historical() {
 #[test]
 fn produce_async_realtime_bounded_buffer_delivers_all_in_order() {
     let g = GraphBuilder::new();
-    let realtime = RunParams {
-        run_mode: RunMode::RealTime,
-        run_for: RunFor::Forever,
-        start_time: NanoTime::ZERO,
-    };
     // buffer_size = 2, but ten values must all arrive across the run.
-    let values = produce_async_bounded(&g, realtime, Some(2), |_p| async {
+    let values = produce_async_bounded(&g, Some(2), |_p| async {
         Ok(futures::stream::unfold(1u64, |i| async move {
             if i > 10 {
                 return None;
@@ -195,7 +153,7 @@ fn produce_async_defers_producer_to_run() {
     let started = Arc::new(AtomicBool::new(false));
     let started_producer = started.clone();
     let g = GraphBuilder::new();
-    let values = produce_async(&g, params(), move |_p| async move {
+    let values = produce_async(&g, move |_p| async move {
         started_producer.store(true, Ordering::SeqCst);
         Ok(futures::stream::iter(vec![Ok((NanoTime::new(100), 1u64))]))
     })
@@ -227,7 +185,7 @@ fn produce_async_defers_producer_to_run() {
 fn produce_async_honours_caller_runtime_override() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let values = produce_async(&g, params(), |_p| async {
+    let values = produce_async(&g, |_p| async {
         Ok(futures::stream::iter(vec![
             Ok((NanoTime::new(100), 1u64)),
             Ok((NanoTime::new(200), 2u64)),

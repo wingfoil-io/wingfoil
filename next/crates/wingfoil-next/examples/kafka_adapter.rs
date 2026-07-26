@@ -67,7 +67,7 @@ fn main() -> anyhow::Result<()> {
         run_for: RunFor::Cycles(3),
         start_time: NanoTime::ZERO,
     };
-    let _round_trip = kafka_sub(&g, params, BROKERS, SOURCE_TOPIC, "example-group")?
+    let _round_trip = kafka_sub(&g, params.run_mode, BROKERS, SOURCE_TOPIC, "example-group")?
         .map(|burst: &Burst<KafkaEvent>| {
             burst
                 .iter()

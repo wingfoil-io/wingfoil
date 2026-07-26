@@ -173,8 +173,14 @@ fn consume_with_sub(
         run_for: RunFor::Duration(Duration::from_secs(secs)),
         start_time: NanoTime::ZERO,
     };
-    let events =
-        kafka_sub(&g, params, KafkaConnection::new(brokers), topic, group)?.collapse_accumulate();
+    let events = kafka_sub(
+        &g,
+        params.run_mode,
+        KafkaConnection::new(brokers),
+        topic,
+        group,
+    )?
+    .collapse_accumulate();
     let mut runner = g.build();
     runner.run(
         RunMode::RealTime,

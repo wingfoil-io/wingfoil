@@ -96,8 +96,13 @@ fn test_sub_empty_snapshot_then_live_write() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events =
-        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/empty/")?.collapse_accumulate();
+    let events = etcd_sub(
+        &g,
+        realtime(1).run_mode,
+        EtcdConnection::new(&endpoint),
+        "/empty/",
+    )?
+    .collapse_accumulate();
 
     let endpoint_clone = endpoint.clone();
     let writer = std::thread::spawn(move || {
@@ -124,8 +129,13 @@ fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
     seed_keys(&endpoint, &[("/snap/a", "1"), ("/snap/b", "2")])?;
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events =
-        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/snap/")?.collapse_accumulate();
+    let events = etcd_sub(
+        &g,
+        realtime(1).run_mode,
+        EtcdConnection::new(&endpoint),
+        "/snap/",
+    )?
+    .collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -154,8 +164,13 @@ fn test_sub_live_updates() -> anyhow::Result<()> {
     });
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events =
-        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/live/")?.collapse_accumulate();
+    let events = etcd_sub(
+        &g,
+        realtime(1).run_mode,
+        EtcdConnection::new(&endpoint),
+        "/live/",
+    )?
+    .collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -184,8 +199,13 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     // Cycles(2): 1 snapshot Put + 1 live Delete.
-    let events =
-        etcd_sub(&g, realtime(2), EtcdConnection::new(&endpoint), "/del/")?.collapse_accumulate();
+    let events = etcd_sub(
+        &g,
+        realtime(2).run_mode,
+        EtcdConnection::new(&endpoint),
+        "/del/",
+    )?
+    .collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(2))?;
@@ -214,8 +234,13 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     writer.join().unwrap();
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events =
-        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/race/")?.collapse_accumulate();
+    let events = etcd_sub(
+        &g,
+        realtime(1).run_mode,
+        EtcdConnection::new(&endpoint),
+        "/race/",
+    )?
+    .collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;

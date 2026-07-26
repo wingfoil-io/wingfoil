@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     let processor = std::thread::spawn(move || -> anyhow::Result<()> {
         // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
         let g = GraphBuilder::new();
-        let _sink = redis_sub(&g, realtime(2), processor_conn.clone(), SOURCE)?
+        let _sink = redis_sub(&g, realtime(2).run_mode, processor_conn.clone(), SOURCE)?
             .map(|burst: &Burst<_>| {
                 burst
                     .iter()
@@ -85,7 +85,7 @@ fn main() -> anyhow::Result<()> {
     let verifier = std::thread::spawn(move || -> anyhow::Result<()> {
         // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
         let g = GraphBuilder::new();
-        let _print = redis_sub(&g, realtime(2), verifier_conn, DEST)?
+        let _print = redis_sub(&g, realtime(2).run_mode, verifier_conn, DEST)?
             .collapse()
             .for_each(|event: &wingfoil_next::adapters::redis::RedisEvent| {
                 println!(

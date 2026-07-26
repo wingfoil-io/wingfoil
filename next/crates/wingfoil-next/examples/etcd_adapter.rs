@@ -66,7 +66,7 @@ fn main() -> anyhow::Result<()> {
         run_for: RunFor::Cycles(3),
         start_time: NanoTime::ZERO,
     };
-    let _round_trip = etcd_sub(&g, params, conn.clone(), SOURCE_PREFIX)?
+    let _round_trip = etcd_sub(&g, params.run_mode, conn.clone(), SOURCE_PREFIX)?
         .map(|burst: &Burst<_>| {
             burst
                 .iter()

@@ -36,8 +36,9 @@
 //!    one runtime, created lazily on first async use and dropped at teardown,
 //!    shared by every async adapter — so the common call needs no `&Handle` and
 //!    there is no leaked global (see `docs/runtime-ownership.md`). The sources
-//!    still take a [`RunParams`]. Embed in an existing runtime by installing an
-//!    override with
+//!    take a [`RunMode`] (only to reject a historical run at wiring); the producer
+//!    spawns in `start()` and derives its `RunParams` from the actual run. Embed
+//!    in an existing runtime by installing an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **The sinks connect eagerly, at wiring time.** `redis_pub` /
 //!    `redis_stream_write` return `Result` and a connection failure surfaces
@@ -249,23 +250,24 @@ fn to_event(key: &str, id: &StreamId) -> RedisStreamEvent {
 /// connection or subscribe error aborts the run with context. Use `.collapse()`
 /// for single-event processing.
 ///
-/// `handle` is the caller's tokio runtime handle and `params` describes the run
-/// the graph will be driven with (see [`produce_async`] and the module docs).
+/// `run_mode` is used only to reject a historical run at wiring; the producer's
+/// full [`RunParams`] are derived from the actual run at start (see
+/// [`produce_async`] and the module docs). The graph owns the tokio runtime.
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if `params.run_mode` is
+/// Returns an error at **wiring time** if `run_mode` is
 /// [`RunMode::HistoricalFrom`]: Pub/Sub is a live, unbounded, wall-clock-stamped
 /// stream with no historical timeline to replay, and the historical channel path
 /// would block-collect it up front and deadlock at `start`. Run under
 /// [`RunMode::RealTime`].
 pub fn redis_sub(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,
     conn: impl Into<RedisConnection>,
     channel: impl Into<String>,
 ) -> Result<Stream<Burst<RedisEvent>>> {
-    if let RunMode::HistoricalFrom(_) = params.run_mode {
+    if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
             "redis_sub: RunMode::HistoricalFrom is unsupported — Redis Pub/Sub is a \
              live, unbounded, wall-clock-stamped stream with no historical timeline \
@@ -274,7 +276,7 @@ pub fn redis_sub(
     }
     let conn = conn.into();
     let channel = channel.into();
-    produce_async(g, params, move |_p: RunParams| async move {
+    produce_async(g, move |_p: RunParams| async move {
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_sub: opening client for {:?}", conn.url))?;
         let mut pubsub = client
@@ -313,23 +315,24 @@ pub fn redis_sub(
 /// exact snapshot boundary, no entry is missed or duplicated in the handoff. Use
 /// `.collapse()` for single-event processing.
 ///
-/// `params` describes the run the graph will be driven with (see
-/// [`produce_async`] and the module docs); the graph owns the tokio runtime.
+/// `run_mode` is used only to reject a historical run at wiring; the producer's
+/// full [`RunParams`] are derived from the actual run at start (see
+/// [`produce_async`] and the module docs). The graph owns the tokio runtime.
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if `params.run_mode` is
+/// Returns an error at **wiring time** if `run_mode` is
 /// [`RunMode::HistoricalFrom`]: the stream tail (`XREAD BLOCK 0`) is a live,
 /// unbounded, wall-clock-stamped stream with no historical timeline to replay,
 /// and the historical channel path would block-collect it up front and deadlock
 /// at `start`. Run under [`RunMode::RealTime`].
 pub fn redis_stream_read(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,
     conn: impl Into<RedisConnection>,
     key: impl Into<String>,
 ) -> Result<Stream<Burst<RedisStreamEvent>>> {
-    if let RunMode::HistoricalFrom(_) = params.run_mode {
+    if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
             "redis_stream_read: RunMode::HistoricalFrom is unsupported — the stream \
              tail (XREAD BLOCK 0) is a live, unbounded, wall-clock-stamped stream \
@@ -339,7 +342,7 @@ pub fn redis_stream_read(
     }
     let conn = conn.into();
     let key = key.into();
-    produce_async(g, params, move |_p: RunParams| async move {
+    produce_async(g, move |_p: RunParams| async move {
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_stream_read: opening client for {:?}", conn.url))?;
         let mut connection = client
