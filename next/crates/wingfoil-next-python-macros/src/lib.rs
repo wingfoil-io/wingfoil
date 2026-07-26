@@ -254,8 +254,11 @@ impl Parse for PyAdapterArgs {
 ///   to native `T`, runs the adapter, and erases the `U` output (a sink's
 ///   `Stream<()>` erases to Python `None`).
 ///
-/// v1 covers single-value streams; burst (`Stream<Burst<T>>`) adapters are not
-/// yet emitted.
+/// **Burst shapes** are handled too: a `Stream<Burst<T>>` erases to a Python
+/// `list` per tick (same-instant values grouped), and a burst *sink* input is
+/// fed single-element bursts. So `Stream<Burst<T>>` may appear as a source's
+/// return, a sink's `Self`, or a transform's output. Adapter method params
+/// become `#[pyfunction]` params, so they must be `FromPyObject`.
 #[proc_macro_attribute]
 pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PyAdapterArgs);
@@ -325,8 +328,13 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
     let py_name = &args.name;
 
     if args.is_source {
-        // Source: `impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T> }`
-        // => `module.name(graph, args…)`: run the adapter on the builder, erase T.
+        // Source: `impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T>
+        // | Stream<Burst<T>> }` => `module.name(graph, args…)`: run the adapter
+        // on the builder, erase the output (a `Burst<T>` becomes a Python list).
+        let erase = match burst_inner(&out_inner) {
+            Some(t) => quote! { __obj.erase_burst_source::<#t>(__typed) },
+            None => quote! { __obj.erase_source::<#out_inner>(__typed) },
+        };
         Ok(quote! {
             #[pyo3::pyfunction]
             fn #py_name(
@@ -335,15 +343,24 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
             ) -> ::wingfoil_next_python::Stream {
                 let __obj = graph.object();
                 let __typed = __obj.builder().#method_name(#(#param_names),*);
-                ::wingfoil_next_python::Stream::from(__obj.erase_source::<#out_inner>(__typed))
+                ::wingfoil_next_python::Stream::from(#erase)
             }
         })
     } else {
-        // Sink / transform: `impl Trait for Stream<T> { fn m(&self, args…) ->
-        // Stream<U> }` => `module.name(stream, args…)`: extract the input to
-        // native `T`, run the adapter, erase the `U` output (a sink's `Stream<()>`
-        // erases to Python `None`).
+        // Sink / transform: `impl Trait for Stream<T> | Stream<Burst<T>> { fn
+        // m(&self, args…) -> Stream<U> | Stream<Burst<U>> }` => `module.name(
+        // stream, args…)`: extract the input to native `T` (a burst self type
+        // feeds single-element bursts), run the adapter, erase the output (a
+        // sink's `Stream<()>` erases to Python `None`; a `Burst<U>` to a list).
         let in_inner = stream_inner(&imp.self_ty)?;
+        let typed_in = match burst_inner(&in_inner) {
+            Some(t) => quote! { __obj.typed_burst_input::<#t>() },
+            None => quote! { __obj.typed_input::<#in_inner>() },
+        };
+        let erase = match burst_inner(&out_inner) {
+            Some(u) => quote! { __obj.erased_burst_output::<#u>(__out) },
+            None => quote! { __obj.erased_output::<#out_inner>(__out) },
+        };
         Ok(quote! {
             #[pyo3::pyfunction]
             fn #py_name(
@@ -351,12 +368,26 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
                 #(#param_decls),*
             ) -> ::wingfoil_next_python::Stream {
                 let __obj = stream.object();
-                let __typed = __obj.typed_input::<#in_inner>();
+                let __typed = #typed_in;
                 let __out = __typed.#method_name(#(#param_names),*);
-                ::wingfoil_next_python::Stream::from(__obj.erased_output::<#out_inner>(__out))
+                ::wingfoil_next_python::Stream::from(#erase)
             }
         })
     }
+}
+
+/// If `ty` is `Burst<X>` (last path segment literally `Burst`), the `X`; else
+/// `None`. Distinguishes a burst-shaped adapter stream from a single-value one.
+fn burst_inner(ty: &Type) -> Option<Type> {
+    if let Type::Path(p) = ty
+        && let Some(seg) = p.path.segments.last()
+        && seg.ident == "Burst"
+        && let PathArguments::AngleBracketed(a) = &seg.arguments
+        && let Some(GenericArgument::Type(t)) = a.args.first()
+    {
+        return Some(t.clone());
+    }
+    None
 }
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`

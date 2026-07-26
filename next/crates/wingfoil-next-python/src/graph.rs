@@ -130,6 +130,20 @@ impl PyGraph {
         self.wrap(typed.map(|v: &T| v.clone().into()))
     }
 
+    /// Erase a `Stream<Burst<T>>` source to a [`PyStream`] — each burst (the
+    /// same-instant group) becomes a Python `list` of its erased values. The
+    /// burst counterpart of [`erase_source`](Self::erase_source), for adapters
+    /// whose source produces the burst shape (`$name_read`/`$name_sub`).
+    pub fn erase_burst_source<T>(&self, typed: Stream<Burst<T>>) -> PyStream
+    where
+        T: Clone + Default + Into<PyElement> + 'static,
+    {
+        self.wrap(typed.map(|burst: &Burst<T>| {
+            let items: Vec<PyElement> = burst.iter().map(|v| v.clone().into()).collect();
+            PyElement::list(&items)
+        }))
+    }
+
     /// Run the graph to its bound, storing the runner so retained
     /// [`PyStream`]s can be read with [`PyStream::value`].
     ///
@@ -763,6 +777,35 @@ impl PyStream {
         U: Clone + Into<PyElement> + 'static,
     {
         self.wrap(typed.map(|u: &U| u.clone().into()))
+    }
+
+    /// Extract this erased stream to a `Stream<Burst<T>>` — the input half of
+    /// the **burst** adapter seam. Each erased value becomes a **single-element**
+    /// burst (`T: TryFrom<&PyElement>`), so a Python stream of scalars feeds a
+    /// burst-shaped sink; a conversion error aborts the run.
+    pub fn typed_burst_input<T>(&self) -> Stream<Burst<T>>
+    where
+        T: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + Clone + Default + 'static,
+    {
+        self.stream.try_map(|e: &PyElement| {
+            let value = T::try_from(e)?;
+            let mut burst: Burst<T> = Burst::default();
+            burst.push(value);
+            Ok(burst)
+        })
+    }
+
+    /// Box a `Stream<Burst<U>>` back to the erased boundary — each burst becomes
+    /// a Python `list` of its erased values. The burst counterpart of
+    /// [`erased_output`](Self::erased_output).
+    pub fn erased_burst_output<U>(&self, typed: Stream<Burst<U>>) -> PyStream
+    where
+        U: Clone + Default + Into<PyElement> + 'static,
+    {
+        self.wrap(typed.map(|burst: &Burst<U>| {
+            let items: Vec<PyElement> = burst.iter().map(|v| v.clone().into()).collect();
+            PyElement::list(&items)
+        }))
     }
 
     /// The stream's current value after [`PyGraph::run`].

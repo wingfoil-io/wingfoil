@@ -186,6 +186,44 @@ fn pyadapter_source_from_an_external_crate() {
     assert_eq!(vec![101.0, 102.0], v);
 }
 
+// A **burst** source `#[pyadapter]` from an external crate: returns
+// `Stream<Burst<f64>>`, so each tick erases to a Python list.
+trait BurstDoubleOps {
+    fn burst_double(&self) -> wingfoil_next::prelude::Stream<wingfoil_next::Burst<f64>>;
+}
+
+#[pyadapter(name = burst_double, source)]
+impl BurstDoubleOps for wingfoil_next::prelude::GraphBuilder {
+    fn burst_double(&self) -> wingfoil_next::prelude::Stream<wingfoil_next::Burst<f64>> {
+        use wingfoil_next::prelude::{SourceOps, StreamOps};
+        let a = self
+            .ticker(Duration::from_nanos(100))
+            .count()
+            .map(|n: &u64| *n as f64);
+        let b = self
+            .ticker(Duration::from_nanos(100))
+            .count()
+            .map(|n: &u64| *n as f64 + 0.5);
+        self.combine(&[a, b])
+    }
+}
+
+#[test]
+fn pyadapter_burst_source_from_an_external_crate() {
+    // The generated burst-source function exists (compile proof).
+    let _f = burst_double;
+
+    // The erase_burst_source seam maps each Burst<f64> to a Python list.
+    let g = PyGraph::new();
+    let typed = g.builder().burst_double();
+    let src = g.erase_burst_source::<f64>(typed);
+    let acc = src.accumulate();
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+    let rows: Vec<Vec<f64>> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+    assert_eq!(vec![vec![1.0, 1.5], vec![2.0, 2.5]], rows);
+}
+
 #[test]
 fn pygraph_exposes_a_subgraph_from_an_external_crate() {
     // The generated function exists: `#[pygraph]` expanded.
