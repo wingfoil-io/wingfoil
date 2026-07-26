@@ -8,6 +8,7 @@
 #![cfg(feature = "csv")]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::csv::{CsvSinkOps, csv_read};
@@ -20,10 +21,15 @@ fn get_time(r: &Record) -> NanoTime {
     r.0
 }
 
-/// Stage a CSV fixture in a uniquely-named temp file (unique per test so
-/// parallel runs don't collide).
+/// Stage a CSV fixture in a uniquely-named temp file. Uniqueness keys on the
+/// pid *and* a process-wide `AtomicU64` counter (mirroring `tests/lines_adapter.rs`)
+/// as well as the call-site `name`, so parallel runs — and any future test that
+/// reuses a `name` — never collide.
 fn write_tmp(name: &str, contents: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("wf_next_csv_{}_{name}", std::process::id()));
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("wf_next_csv_{}_{}_{name}", std::process::id(), n));
     std::fs::write(&path, contents).expect("write temp fixture");
     path
 }
