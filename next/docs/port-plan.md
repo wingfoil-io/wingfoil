@@ -265,6 +265,16 @@ subset, restoring per-node state + slots to their wiring-time values, and
 `compat::Signal::run` is re-runnable. Single-run graphs (external/poll/channel/
 island) error on a second `run` rather than misbehaving.
 
+**Single-run I/O is classic parity (verified 2026).** The single-run restriction
+for I/O sources is *not* a deviation from classic: classic is single-run for
+them too. Classic builds a fresh `Graph` over the shared node tree each `.run()`,
+and its `AsyncProducerStream::setup` (`wingfoil/src/nodes/async_io.rs:214`) takes
+its `func`/sender with `.take().ok_or_else(|| "func is already taken")?` — so a
+second run **errors**; `ChannelReceiverStream::setup` (`nodes/channel.rs`) drains
+its receiver and consumes its notifier, so a second run produces nothing. next's
+explicit single-run error is therefore parity (and clearer). See deviation
+register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
+
 **Gate 0:** all four spikes land with classic-parity tests green.
 
 ## Phase 1 — contract completion

@@ -30,8 +30,8 @@ has its own decision record in
 
 | id | dev | class | notes |
 |---|---|:--:|---|
-| A1 | **Wiring-time I/O establishment.** Every adapter now establishes its I/O at run start, not wiring. The only "wiring-time establishment" left is the `external` + plain `channel` feeders (caller-owned producers), which is really the re-run question (see A2), not a connect-at-wiring deviation. | ✅🔴 | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. **Resolved across every I/O adapter:** the `source_at_start` primitive landed and `zmq_sub` migrated (#547); the **`produce_async` family (etcd/kafka/redis/postgres `_sub`)** spawns its producer in `start()` (deferred via `source_at_start_with_params`), `produce_async` no longer takes `RunParams`, and the `_sub` sources take only a `RunMode` (for the wiring historical rejection). **Every sink is migrated:** the streaming sinks connect lazily inside their `consume_async` consumer on the first write — **`postgres_write` (#577)**, **`redis_pub` / `redis_stream_write`** (#578), **`etcd_pub`** (connect + `lease_grant` + keepalive on first write; the lease revoke stays a teardown-time graph-thread `block_on`, the ordinary A5a footgun); **`kafka_pub`** was already compliant (`ClientConfig::create()` opens no socket; librdkafka connects lazily on first `send()`). **`postgres_read`** now defers its connect + slice queries to the run via `produce_async` (B5) — the window is still validated + sliced at wiring, a pure check. **`prometheus::serve`** is classic-parity (synchronous pre-run bind, like classic; the `anyhow::Result` return is **D2**). Only the re-run gap (A2) and the caller-owned `external`/`channel` feeders remain, both tracked under A2. |
-| A2 | **I/O sources are single-run.** A second `run()` errors; classic re-runs. | 🔴 | A *consequence* of A1 (the channel/waker/thread is consumed). Real superset gap. Still open: `source_at_start` (#547) defers establishment but inherits the single-run channel, so even `zmq_sub` is not yet re-runnable — re-run is the tracked follow-on (port-plan §0.4 reopened). → plan. |
+| A1 | **Wiring-time I/O establishment.** Every adapter now establishes its I/O at run start, not wiring. The only "wiring-time establishment" left is the `external` + plain `channel` feeders (caller-owned producers), which is the single-run question (see A2 — now confirmed **parity**, classic is single-run for I/O too), not a connect-at-wiring deviation. | ✅ | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. **Resolved across every I/O adapter:** the `source_at_start` primitive landed and `zmq_sub` migrated (#547); the **`produce_async` family (etcd/kafka/redis/postgres `_sub`)** spawns its producer in `start()` (deferred via `source_at_start_with_params`), `produce_async` no longer takes `RunParams`, and the `_sub` sources take only a `RunMode` (for the wiring historical rejection). **Every sink is migrated:** the streaming sinks connect lazily inside their `consume_async` consumer on the first write — **`postgres_write` (#577)**, **`redis_pub` / `redis_stream_write`** (#578), **`etcd_pub`** (connect + `lease_grant` + keepalive on first write; the lease revoke stays a teardown-time graph-thread `block_on`, the ordinary A5a footgun); **`kafka_pub`** was already compliant (`ClientConfig::create()` opens no socket; librdkafka connects lazily on first `send()`). **`postgres_read`** now defers its connect + slice queries to the run via `produce_async` (B5) — the window is still validated + sliced at wiring, a pure check. **`prometheus::serve`** is classic-parity (synchronous pre-run bind, like classic; the `anyhow::Result` return is **D2**). Only the re-run gap (A2) and the caller-owned `external`/`channel` feeders remain, both tracked under A2. |
+| A2 | ~~**I/O sources are single-run.** A second `run()` errors; classic re-runs.~~ | ✅ | **Not a gap — parity, verified against classic source.** The premise ("classic re-runs") was **wrong**: classic is *also* single-run for I/O sources. Classic's `AsyncProducerStream::setup` (`wingfoil/src/nodes/async_io.rs:214`) takes its `func` (an `FnOnce`) and sender with `.take().ok_or_else(\|\| "func is already taken")?`, so a second `run()` (classic builds a fresh `Graph` over the shared nodes each call) **errors** — the etcd/kafka/redis/postgres/`produce_async` family; and `ChannelReceiverStream::setup` (`nodes/channel.rs:257`) `.take()`s its notifier and drains its receiver on the first run, so a channel/external source produces nothing on a second. next's explicit single-run error is therefore parity — and strictly clearer than classic's silent-nothing on the channel path. The **deterministic** subset (tickers/constants/combinators/feedback) re-runs in *both* (next via the `reset` hook, #Phase-1) — that parity is real and already delivered. Re-run of I/O sources was never a classic capability, so nothing to port; `port-plan.md §0.4` already records I/O graphs as single-run by decision. |
 | A3 | ~~**`zmq_pub` binds its socket lazily on its first cycle**, not `start()`.~~ | ✅ | **Resolved.** `zmq_pub` now binds its `PUB` socket (and runs the run-mode check) at graph `start()` via `compose_spawn_at_start`, matching classic's `start`. This is what closes A6: the subscriber connects and propagates its subscription filter during the startup window instead of racing the first publish. `adapters/zmq.rs`. |
 | A4 | **Error-surfacing timing shifted to wiring** — connection errors surface during graph construction, not at run start / first op. | ✅ | **Resolved for every I/O adapter.** `zmq_sub` (#547), the **`produce_async` `_sub` family**, and all the sinks — **`postgres_write` / `redis_pub` / `redis_stream_write` / `etcd_pub`** (each connects during the run, on the consumer's first write) and **`kafka_pub`** (never connected at wiring — librdkafka connects lazily on first `send()`): a connect/subscribe/lease failure now surfaces during the run (via `send_error` / the `consume_async` error channel), not at wiring — classic-consistent. (The historical-mode *rejection* for the `_sub` sources still fires at wiring, a deliberate fail-fast; `postgres_read`'s connect is at wiring but that's the B5 whole-query-at-wiring item, not a live connection.) |
 | A5 | ~~**Caller-owned tokio runtime**~~ — etcd/redis/kafka/postgres/otlp took `&Handle`. | ✅ | **Resolved (#548).** The `GraphBuilder` now owns one tokio runtime (lazy, shared, dropped at teardown) with a `with_async_runtime` override; the `&Handle` param is gone from every async factory. Decision record: [`runtime-ownership.md`](./runtime-ownership.md). *Residual (A5a below) is unchanged.* |
@@ -139,15 +139,12 @@ motivated the reject only ever required two *mechanisms*, not two public
 
 ## Recommended priorities
 
-1. **A2 — re-runnable I/O sources** — the remaining structural win of the
-   defer-to-start plan. A1 is now done (every adapter establishes its I/O at run
-   start, not wiring; B5 included), but the deferred sources still inherit
-   `channel`'s single-run restriction, so a second `run()` errors where classic
-   re-runs. Needs port-plan §0.4 reopened (the plan flags it as a reviewer
-   ratification) + the engine work to re-create the single-run channel/waker on
-   re-run.
-2. **B4** — decide whether the csv whole-file memory deviation matters for the
+1. **B4** — decide whether the csv whole-file memory deviation matters for the
    "strict superset" claim, or is an acceptable documented trade-off.
+2. **A6 is closed** (pinned to A3); **A2 is closed** (parity — classic is
+   single-run for I/O sources too, verified against classic source). The
+   defer-to-start plan (A1) is complete. What's left is the non-code rulings
+   (B4, and the cutover-audit sweep of any remaining 🟡).
 
 **Resolved / ratified since this register was written:** **A5** (graph-owned
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
@@ -161,7 +158,11 @@ concurrent per-burst publish); **A3 / A6** (`zmq_pub` binds at `start()`, which
 pins and fixes the `first_message_not_dropped` slow-joiner flakiness); **A1 /
 A4** (defer-to-start complete for every I/O adapter — all `_sub` sources, all
 sinks, and `postgres_read` (B5) now establish I/O at run start, so no adapter
-touches the network at wiring; only re-run, A2, remains).
+touches the network at wiring); **A2** (single-run I/O sources is **parity**, not
+a gap — classic also throws / produces nothing on a second `run()` of an I/O
+source, verified against `wingfoil/src/nodes/async_io.rs` + `channel.rs`; the
+register's "classic re-runs" was incorrect; the deterministic re-run subset was
+already at parity via the Phase-1 `reset` hook).
 
 ## Keeping this current
 
