@@ -42,7 +42,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Error, Ident, ImplItem, ItemImpl, Token, Type, parse_macro_input};
+use syn::{
+    Error, FnArg, GenericArgument, Ident, ImplItem, ItemFn, ItemImpl, PathArguments, ReturnType,
+    Token, Type, parse_macro_input,
+};
 
 /// Parsed `#[pyop(name = <fn>, [arg = <cfg param>])]`.
 struct PyOpArgs {
@@ -89,6 +92,119 @@ pub fn pyop(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote! { #imp #e }.into()
         }
     }
+}
+
+/// Parsed `#[pygraph(name = <py fn>)]`.
+struct PyGraphArgs {
+    name: Ident,
+}
+
+impl Parse for PyGraphArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let key: Ident = input.parse()?;
+        if key != "name" {
+            return Err(Error::new(
+                key.span(),
+                "#[pygraph] requires `name = <py fn name>`",
+            ));
+        }
+        input.parse::<Token![=]>()?;
+        let name: Ident = input.parse()?;
+        Ok(PyGraphArgs { name })
+    }
+}
+
+/// `#[pygraph(name = ...)]` — expose a Rust-authored sub-graph wiring function
+/// (`fn(&Stream<T>) -> Stream<U>`) as a Python callable `module.name(stream)`
+/// that splices the sub-graph's nodes into the caller's builder and returns the
+/// erased output. `T`/`U` edge-convert at the boundary (`T: TryFrom<&PyElement>`,
+/// `U: Into<PyElement>`); the interior runs at native types.
+///
+/// The `name` must differ from the wiring function's own name (the macro emits a
+/// `#[pyfunction]` of that name alongside the untouched function). Single-input,
+/// single-output in v1.
+#[proc_macro_attribute]
+pub fn pygraph(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as PyGraphArgs);
+    let func = parse_macro_input!(item as ItemFn);
+    match expand_pygraph(&args, &func) {
+        Ok(extra) => quote! { #func #extra }.into(),
+        Err(e) => {
+            let e = e.to_compile_error();
+            quote! { #func #e }.into()
+        }
+    }
+}
+
+/// The `X` of a `Stream<X>` (or `&Stream<X>`) type — the first generic argument
+/// of the (optionally referenced) stream path, however that path is named or
+/// qualified (`Stream`, `fluent::Stream`, an alias, …).
+fn stream_inner(ty: &Type) -> syn::Result<Type> {
+    let bare = match ty {
+        Type::Reference(r) => &*r.elem,
+        other => other,
+    };
+    if let Type::Path(p) = bare
+        && let Some(seg) = p.path.segments.last()
+        && let PathArguments::AngleBracketed(a) = &seg.arguments
+        && let Some(GenericArgument::Type(t)) = a.args.first()
+    {
+        return Ok(t.clone());
+    }
+    Err(Error::new(
+        ty.span(),
+        "#[pygraph] expects a `&Stream<T>` argument and a `Stream<U>` return type",
+    ))
+}
+
+fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2> {
+    let fn_name = &func.sig.ident;
+    let py_name = &args.name;
+    if fn_name == py_name {
+        return Err(Error::new(
+            py_name.span(),
+            "#[pygraph] `name` must differ from the function's own name (the macro emits a \
+             `#[pyfunction]` of that name)",
+        ));
+    }
+    if func.sig.inputs.len() != 1 {
+        return Err(Error::new(
+            func.sig.span(),
+            "#[pygraph] supports a single-input wiring fn (`fn(&Stream<T>) -> Stream<U>`) in v1",
+        ));
+    }
+    let in_ty = match func.sig.inputs.first() {
+        Some(FnArg::Typed(pt)) => &*pt.ty,
+        _ => {
+            return Err(Error::new(
+                func.sig.span(),
+                "#[pygraph] wiring fn takes a `&Stream<T>` argument",
+            ));
+        }
+    };
+    let t_ty = stream_inner(in_ty)?;
+    let out_ty = match &func.sig.output {
+        ReturnType::Type(_, ty) => &**ty,
+        ReturnType::Default => {
+            return Err(Error::new(
+                func.sig.span(),
+                "#[pygraph] wiring fn must return `Stream<U>`",
+            ));
+        }
+    };
+    let u_ty = stream_inner(out_ty)?;
+
+    Ok(quote! {
+        #[pyo3::pyfunction]
+        fn #py_name(
+            stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
+        ) -> ::wingfoil_next_python::Stream {
+            let __obj = stream.object();
+            let __typed = __obj.typed_input::<#t_ty>();
+            let __out = #fn_name(&__typed);
+            ::wingfoil_next_python::Stream::from(__obj.erased_output::<#u_ty>(__out))
+        }
+    })
 }
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`

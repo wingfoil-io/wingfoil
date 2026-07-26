@@ -724,6 +724,29 @@ impl PyStream {
         self.wrap(wired)
     }
 
+    /// Extract this erased stream to a natively-typed `Stream<T>` — the input
+    /// half of the `#[pygraph]` seam. Each value is converted from [`PyElement`]
+    /// via `T: TryFrom<&PyElement>` at the boundary (a conversion error aborts
+    /// the run), so a Rust-authored sub-graph runs over concrete `T` internally
+    /// while Python only ever sees the erased edge. Splices onto the caller's
+    /// builder (same graph) like any other combinator.
+    pub fn typed_input<T>(&self) -> Stream<T>
+    where
+        T: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + Clone + Default + 'static,
+    {
+        self.stream.try_map(|e: &PyElement| T::try_from(e))
+    }
+
+    /// Box a natively-typed `Stream<U>` (a `#[pygraph]` sub-graph's output) back
+    /// to the erased boundary as a [`PyStream`] on this graph — the output half
+    /// of the seam.
+    pub fn erased_output<U>(&self, typed: Stream<U>) -> PyStream
+    where
+        U: Clone + Into<PyElement> + 'static,
+    {
+        self.wrap(typed.map(|u: &U| u.clone().into()))
+    }
+
     /// The stream's current value after [`PyGraph::run`].
     ///
     /// # Panics

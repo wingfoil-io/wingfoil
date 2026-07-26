@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::graph::{PyGraph, PyStream};
-use crate::{Activation, Ctx, Op, PyElement, Tick, pyop};
+use crate::{Activation, Ctx, Op, PyElement, Tick, pygraph, pyop};
 
 fn to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(format!("{err:#}"))
@@ -362,6 +362,20 @@ impl Op for WeightedAdd {
     }
 }
 
+// `doubled_running_total` — a **`#[pygraph]`**: a whole Rust-authored sub-graph
+// (double each value, then cumulative-sum) exposed as one Python callable that
+// splices its nodes into the caller's graph. The interior runs at native `f64`;
+// only the edge erases. The wiring fn names the fluent `Stream` fully-qualified
+// to avoid clashing with the `Stream` pyclass in this module.
+#[pygraph(name = doubled_running_total)]
+fn build_doubled_running_total(
+    input: &::wingfoil_next::prelude::Stream<f64>,
+) -> ::wingfoil_next::prelude::Stream<f64> {
+    use ::wingfoil_next::prelude::StreamOps;
+    use ::wingfoil_next::stats::StatisticsOps;
+    input.map(|x: &f64| x * 2.0).cumulative_sum()
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -371,5 +385,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(square, m)?)?;
     m.add_function(wrap_pyfunction!(running_total, m)?)?;
     m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
+    m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
     Ok(())
 }

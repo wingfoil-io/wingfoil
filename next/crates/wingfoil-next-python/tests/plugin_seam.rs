@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next_python::{Activation, Ctx, Op, PyElement, PyGraph, Tick, pyop};
+use wingfoil_next_python::{Activation, Ctx, Op, PyElement, PyGraph, Tick, pygraph, pyop};
 
 // Compile-level proof that `#[pyop]` works from an *external* crate: the paths
 // the macro emits (`::wingfoil_next_python::...`) resolve here, and the
@@ -83,6 +83,33 @@ impl Op for AddStreams {
     ) -> anyhow::Result<Tick<f64>> {
         Ok(Tick::Value(input.0 + input.1))
     }
+}
+
+// A `#[pygraph]` from an external crate: a Rust-authored sub-graph (triple each
+// value) exposed as a Python callable. Proves the macro emits the splice
+// wrapper and the typed-in/erased-out seam works from a third-party crate.
+#[pygraph(name = triple_subgraph)]
+fn build_triple_subgraph(
+    input: &wingfoil_next::prelude::Stream<f64>,
+) -> wingfoil_next::prelude::Stream<f64> {
+    use wingfoil_next::prelude::StreamOps;
+    input.map(|x: &f64| x * 3.0)
+}
+
+#[test]
+fn pygraph_exposes_a_subgraph_from_an_external_crate() {
+    // The generated function exists: `#[pygraph]` expanded.
+    let _f = triple_subgraph;
+
+    // The seam it builds on splices a typed sub-graph in and erases the output.
+    let g = PyGraph::new();
+    let src = g.counter(Duration::from_nanos(100));
+    let out = src.erased_output(build_triple_subgraph(&src.typed_input::<f64>()));
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+    let v: f64 = (&out.value()).try_into().unwrap();
+    assert_eq!(6.0, v); // second cycle: 2 * 3
 }
 
 #[test]

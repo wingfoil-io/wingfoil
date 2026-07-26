@@ -134,6 +134,15 @@ def test_pyop_stateful_state_reseeds_on_rerun():
     assert out.value() == 6.0
 
 
+def test_pygraph_reuses_a_rust_subgraph():
+    # doubled_running_total is a Rust-authored sub-graph (#[pygraph]) spliced in.
+    g = wf.Graph()
+    out = wf.doubled_running_total(g.counter(period_nanos=100))
+    g.run(cycles=3)
+    # 1,2,3 -> double -> 2,4,6 -> cumulative sum -> 2,6,12
+    assert out.value() == 12.0
+
+
 def test_pyop_two_input_op():
     # weighted_add is a two-input #[pyop]: module.weighted_add(stream, other).
     g = wf.Graph()
