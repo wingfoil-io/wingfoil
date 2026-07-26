@@ -23,10 +23,12 @@
 //!   helper.
 //! - [`FileCache`] — the async `get`/`put` store with LRU eviction.
 //!
-//! Every public capability of the classic module is preserved; the only change
-//! is the crate path (`wingfoil::NanoTime` for the time type) — there are no
-//! behavioural deviations, so the classic unit tests port across verbatim
-//! (`tests/cache_adapter.rs`).
+//! Every public capability of the classic module is preserved, so the classic
+//! unit tests port across verbatim (`tests/cache_adapter.rs`). The one
+//! behavioural deviation is cosmetic: next's `FileCache` log messages drop the
+//! classic "KDB " prefix (the cache is not kdb-specific in next) — deviation
+//! register D7. The only surface change is the crate path (`wingfoil::NanoTime`
+//! for the time type).
 
 use anyhow::Result;
 use log::info;

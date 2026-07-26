@@ -116,10 +116,11 @@ motivated the reject only ever required two *mechanisms*, not two public
 
 | id | gap | class | notes |
 |---|---|:--:|---|
-| C1 | **otlp trace/span export (`OtlpSpans`) not ported.** | ⚪ | Needs the `Traced`/`HasLatency`/`latency_stages!` infra (Phase 5). Metrics push is at full parity. `adapters/otlp.rs` deviation #3. |
+| C1 | ~~**otlp trace/span export (`OtlpSpans`) not ported.**~~ | ✅ | **Resolved.** `OtlpSpanOps::otlp_spans` is fully ported — it landed with the Phase-5 latency infrastructure (`Traced`/`HasLatency`/`latency_stages!`): one parent span per tick + one child span per stage hop, caller-supplied attributes via `OtlpAttributeBuffer`, silent skip of all-zero/backwards timestamps, same off-thread `consume_async` model as `otlp_push`. Metrics push was already at full parity. `adapters/otlp.rs` deviation #3; port-plan Phase-4 otlp "Trace/span export ✅ ported". |
 | C2 | **zmq cross-language interop not ported.** | ⚪ | The `bincode` wire envelope is next-local; not wire-compatible with a classic/Python peer. Deferred with the Python bindings (Phase 6). `adapters/zmq.rs`. |
 | C3 | **Structural gaps** — multi-output islands; runtime graph-mutation surface; (closed: `StreamStore`, `demux_it` in #529). | ⚪ | See `port-plan.md` Phase 4.5 "Known parity gaps" and Phase 1 multi-output note. |
 | C4 | **Compiled-path IO ingestion** — busy-poll (`ALWAYS`) sources + bursts are not expressible in `compiled()`/`graph!`. | ⚪ | Deliberate exclusion; IO stays at the interpreted boundary + compiled islands. Full design + the gating decision (wake channel vs busy-spin) in `port-plan.md` "Deferred / post-v1 work". (was #502/#503) |
+| C5 | **augurs ports only `augurs_forecast` + `augurs_outlier`; `augurs_changepoint` / `augurs_seasons` / `augurs_dtw` / `augurs_cluster` are not ported.** | ⚪ | Deferred capability gap — 2 of classic's 6 operators ported; the 4 remaining are not yet needed downstream and have no next twin. `adapters/augurs.rs`; port-plan Phase-4 augurs. |
 
 ## D. Cosmetic / API — deliberate-and-benign (low review priority)
 
@@ -162,7 +163,9 @@ touches the network at wiring); **A2** (single-run I/O sources is **parity**, no
 a gap — classic also throws / produces nothing on a second `run()` of an I/O
 source, verified against `wingfoil/src/nodes/async_io.rs` + `channel.rs`; the
 register's "classic re-runs" was incorrect; the deterministic re-run subset was
-already at parity via the Phase-1 `reset` hook).
+already at parity via the Phase-1 `reset` hook); **C1** (otlp trace/span export
+`OtlpSpanOps::otlp_spans` fully ported, landed with the Phase-5 latency
+infrastructure — was a ⚪ capability gap, now at metrics-parity).
 
 ## Keeping this current
 

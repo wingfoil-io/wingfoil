@@ -81,7 +81,11 @@
 //!    provider-drop-flush shape as [`otlp_push`](OtlpSinkOps::otlp_push). Every
 //!    classic span capability is preserved: one parent span per tick, one child
 //!    per stage hop, caller-supplied attributes via [`OtlpAttributeBuffer`], and
-//!    the silent skip of all-zero / backwards timestamps.
+//!    the silent skip of all-zero / backwards timestamps. The argument order
+//!    differs from classic: next is
+//!    [`otlp_spans`](OtlpSpanOps::otlp_spans)`(span_name, config, attrs)`
+//!    (grouping the two `&'static str`-ish leading args before the config),
+//!    whereas classic was `otlp_spans(config, span_name, attrs)`.
 //!
 //! # Setup (integration test)
 //!
@@ -151,7 +155,7 @@ impl From<(String, String)> for OtlpConfig {
 /// A realtime, push-based OpenTelemetry metrics sink — an extension trait on any
 /// `Stream<T>` whose values are [`Display`](std::fmt::Display).
 ///
-/// `use`ing it enables `stream.otlp_push(&handle, name, config)` chaining,
+/// `use`ing it enables `stream.otlp_push(name, config)` chaining,
 /// layered over the [`register_op1`](crate::interp::Builder::register_op1)
 /// primitive (for the run-mode guard) plus
 /// [`consume_async`](crate::async_source::consume_async) (for the off-thread
