@@ -780,18 +780,40 @@ impl PyStream {
     }
 
     /// Extract this erased stream to a `Stream<Burst<T>>` — the input half of
-    /// the **burst** adapter seam. Each erased value becomes a **single-element**
-    /// burst (`T: TryFrom<&PyElement>`), so a Python stream of scalars feeds a
-    /// burst-shaped sink; a conversion error aborts the run.
+    /// the **burst** adapter seam. Each erased value becomes one burst
+    /// (`T: TryFrom<&PyElement>`); a conversion error aborts the run:
+    ///
+    /// - a Python **`list`/`tuple`** becomes a **multi-value** burst, one member
+    ///   per item — so a burst *source*'s per-tick list (from
+    ///   [`erase_burst_source`](Self::erase_burst_source)) round-trips back into
+    ///   a multi-value burst;
+    /// - any other value becomes a **single-element** burst — so a plain Python
+    ///   stream of scalars also feeds a burst-shaped sink.
     pub fn typed_burst_input<T>(&self) -> Stream<Burst<T>>
     where
         T: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + Clone + Default + 'static,
     {
+        use pyo3::prelude::PyAnyMethods;
+        use pyo3::types::{PyList, PyTuple};
         self.stream.try_map(|e: &PyElement| {
-            let value = T::try_from(e)?;
-            let mut burst: Burst<T> = Burst::default();
-            burst.push(value);
-            Ok(burst)
+            Python::attach(|py| {
+                let obj = e.object().bind(py);
+                let mut burst: Burst<T> = Burst::default();
+                // A list/tuple is a same-instant group -> a multi-value burst.
+                // (Checked explicitly, so a `str` — itself a Python sequence —
+                // stays a single scalar value.)
+                if obj.is_instance_of::<PyList>() || obj.is_instance_of::<PyTuple>() {
+                    let items: Vec<Py<PyAny>> = obj
+                        .extract()
+                        .map_err(|err| anyhow::anyhow!("burst input: reading list/tuple: {err}"))?;
+                    for item in items {
+                        burst.push(T::try_from(&PyElement::new(item))?);
+                    }
+                } else {
+                    burst.push(T::try_from(e)?);
+                }
+                Ok(burst)
+            })
         })
     }
 

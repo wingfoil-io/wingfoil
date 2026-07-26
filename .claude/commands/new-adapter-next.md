@@ -822,10 +822,12 @@ templates, and `tests/plugin_seam.rs` shows the same from an external crate.
 `#[pyadapter]` handles **burst** adapters too — the common shape, since the
 layering conventions above make most real adapters `Stream<Burst<T>>`
 sources/sinks. A `Stream<Burst<T>>` erases to a Python **`list`** per tick
-(same-instant values grouped), and a burst sink is fed single-element bursts;
-`Burst<T>` may appear as a source's return, a sink's `Self`, or a transform's
-output. The `pair_source` demo in `src/python.rs` and `burst_double` in
-`tests/plugin_seam.rs` are the burst-source templates.
+(same-instant values grouped); on the way *in* a Python `list`/`tuple` rebuilds
+a multi-value burst (else a single-element burst), so a burst source
+round-trips into a burst sink. `Burst<T>` may appear as a source's return, a
+sink's `Self`, or a transform's output. Templates: the `pair_source` (burst
+source) and `burst_list_sink` (burst sink) demos in `src/python.rs`, and
+`burst_double` in `tests/plugin_seam.rs`.
 
 Constraints: the method's params become `#[pyfunction]` params, so they must be
 `FromPyObject` (`i64`/`f64`/`String`/`Py<PyAny>`/… — a Rust-only handle like

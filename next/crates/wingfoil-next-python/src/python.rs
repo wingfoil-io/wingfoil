@@ -454,6 +454,32 @@ impl PairSourceOps for ::wingfoil_next::prelude::GraphBuilder {
     }
 }
 
+// `burst_list_sink` — a **burst sink `#[pyadapter]`** on `Stream<Burst<f64>>`:
+// appends each burst (as a Python list) to a target list. Its `typed_burst_input`
+// rebuilds a multi-value burst from each Python list, so a burst source
+// round-trips into it (`Burst` -> list -> `Burst`); a scalar Python stream
+// arrives as single-element bursts.
+trait BurstListSinkOps {
+    fn burst_list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()>;
+}
+
+#[pyadapter(name = burst_list_sink)]
+impl BurstListSinkOps for ::wingfoil_next::prelude::Stream<::wingfoil_next::Burst<f64>> {
+    fn burst_list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()> {
+        use ::wingfoil_next::prelude::StreamOps;
+        self.for_each(move |burst: &::wingfoil_next::Burst<f64>| {
+            Python::attach(|py| {
+                let items: Vec<f64> = burst.iter().copied().collect();
+                target
+                    .bind(py)
+                    .call_method1("append", (items,))
+                    .map_err(|err| anyhow::anyhow!("burst_list_sink append raised: {err}"))?;
+                Ok(())
+            })
+        })
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -467,5 +493,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;
+    m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
     Ok(())
 }

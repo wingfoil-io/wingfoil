@@ -255,10 +255,12 @@ impl Parse for PyAdapterArgs {
 ///   `Stream<()>` erases to Python `None`).
 ///
 /// **Burst shapes** are handled too: a `Stream<Burst<T>>` erases to a Python
-/// `list` per tick (same-instant values grouped), and a burst *sink* input is
-/// fed single-element bursts. So `Stream<Burst<T>>` may appear as a source's
-/// return, a sink's `Self`, or a transform's output. Adapter method params
-/// become `#[pyfunction]` params, so they must be `FromPyObject`.
+/// `list` per tick (same-instant values grouped), and on the way *in* a Python
+/// `list`/`tuple` rebuilds a multi-value burst (any other value → a
+/// single-element burst) — so a burst source round-trips into a burst sink. So
+/// `Stream<Burst<T>>` may appear as a source's return, a sink's `Self`, or a
+/// transform's output. Adapter method params become `#[pyfunction]` params, so
+/// they must be `FromPyObject`.
 #[proc_macro_attribute]
 pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PyAdapterArgs);
@@ -350,8 +352,9 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
         // Sink / transform: `impl Trait for Stream<T> | Stream<Burst<T>> { fn
         // m(&self, args…) -> Stream<U> | Stream<Burst<U>> }` => `module.name(
         // stream, args…)`: extract the input to native `T` (a burst self type
-        // feeds single-element bursts), run the adapter, erase the output (a
-        // sink's `Stream<()>` erases to Python `None`; a `Burst<U>` to a list).
+        // rebuilds a burst from each Python list/tuple, else a single-element
+        // burst), run the adapter, erase the output (a sink's `Stream<()>` erases
+        // to Python `None`; a `Burst<U>` to a list).
         let in_inner = stream_inner(&imp.self_ty)?;
         let typed_in = match burst_inner(&in_inner) {
             Some(t) => quote! { __obj.typed_burst_input::<#t>() },
