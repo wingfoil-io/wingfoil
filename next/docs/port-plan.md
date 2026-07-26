@@ -718,11 +718,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `OtlpPush` on `dyn Stream<T>`. **Capability gap — trace/span export
    (`OtlpSpans`) not ported:** classic's span exporter emits OTel spans from
    `Stream<P: HasLatency>` values; that path depends on the `Traced` /
-   `HasLatency` / `latency_stages!` latency infrastructure, which is **not yet
-   ported to next** (a separate roadmap item; latency stamps "ride values as a
-   payload" per the Phase 6 notes). Once the latency types land, `otlp_spans`
-   ports mechanically onto the same `consume_async` shape. Until then only the
-   metrics push is available; `otlp_push` itself is at full parity.
+   `HasLatency` / `latency_stages!` latency infrastructure, which ✅ **has now
+   landed** (Phase 5, `src/latency.rs`). `otlp_spans` can now port mechanically
+   onto the same `consume_async` shape; until it does, only the metrics push is
+   available, and `otlp_push` itself is at full parity.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
@@ -861,9 +860,18 @@ dynamism is an interpreted-engine capability, matching classic.
 
 ## Phase 5 — infrastructure
 
-- **Latency**: stamps ride values as today (`Traced` is just a payload);
-  `Ctx` gains a wall-clock accessor for `stamp_precise`-style ops.
-  `latency_stages` derive unchanged.
+- **Latency** ✅ **landed** (`src/latency.rs`): stamps ride values as today
+  (`Traced` is just a payload, re-exported from classic together with
+  `Latency`/`Stage`/`HasLatency`/`StageStats`/`LatencyStats` and the
+  `latency_stages!` derive — all engine-agnostic, unchanged). `Ctx` gained
+  `wall_time()` (a per-cycle snap, from a new `Kernel::wall_time`) and
+  `wall_time_precise()` (fresh TSC read); the node layer is re-implemented as
+  ops — `stamp`/`stamp_precise` (over `register_op1`) and the `latency_report`
+  sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
+  **Deviation**: fluent/interpreted only (matching classic, which exposes
+  latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
+  *type* parameter, which does not map onto the `graph!` value-dispatch table,
+  so compiled/nested support is out of scope for this op family.
 - **Graph export**: GML from `Builder` topology + debug labels.
 - **`#[node]` retirement**: replaced by `Op` impls.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the

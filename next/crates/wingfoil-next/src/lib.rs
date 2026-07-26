@@ -80,6 +80,7 @@ pub mod channel;
 pub mod compat;
 pub mod fluent;
 pub mod interp;
+pub mod latency;
 pub mod op;
 pub mod ops;
 pub mod stats;

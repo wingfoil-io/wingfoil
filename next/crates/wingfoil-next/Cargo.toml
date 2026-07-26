@@ -158,6 +158,9 @@ opentelemetry-otlp = { version = "0.32", features = [
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
+# The `latency_stages!` macro derives serde on the generated record, so a crate
+# invoking it (here, the latency tests) needs serde in scope.
+serde = { version = "1.0", features = ["derive"] }
 
 [features]
 default = []

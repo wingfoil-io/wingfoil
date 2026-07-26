@@ -52,6 +52,7 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message};
+use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
     Const, Delay, DelayState, DelayWithReset, DelayWithResetState, Filter, Finally, Fold, Join,
@@ -1987,6 +1988,74 @@ impl Builder {
         self.set_reset(Box::new(move || {
             cs_reset.borrow_mut().1 = TimedState::<T>::default();
             *out_reset.borrow_mut() = T::default();
+        }));
+        self.make_handle(idx)
+    }
+
+    /// The classic `latency_report`: a sink that observes each payload's
+    /// embedded latency record into the caller-provided `stats`, and prints a
+    /// summary at `stop` when `print_on_teardown`. Hand-written (not
+    /// `register_op1`) because it carries a stop hook. The stats handle is
+    /// passed in so the fluent [`LatencyReportOps`](crate::latency::LatencyReportOps)
+    /// method can return it to the caller alongside the sink stream.
+    pub fn latency_report<P>(
+        &mut self,
+        src: Handle<P>,
+        print_on_teardown: bool,
+        stats: Rc<RefCell<LatencyStats<P::L>>>,
+    ) -> Handle<()>
+    where
+        P: Clone + Default + HasLatency + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(());
+        let cs = Self::cell(
+            LatencyReportCfg {
+                stats,
+                print_on_teardown,
+            },
+            (),
+        );
+        let cs_stop = cs.clone();
+        let cs_reset = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            LatencyReport::<P>::ACTIVATION,
+            "latency_report",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match LatencyReport::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        // `latency_report`'s summary prints at stop, after the last cycle.
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: latency_report node just pushed");
+        node.stop = Box::new(move |k| {
+            let (cfg, state) = &mut *cs_stop.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            LatencyReport::<P>::stop(cfg, state, &mut ctx)
+        });
+        // On a second `Runner::run`, start the aggregation fresh.
+        self.set_reset(Box::new(move || {
+            *cs_reset.borrow_mut().0.stats.borrow_mut() = LatencyStats::new();
         }));
         self.make_handle(idx)
     }
