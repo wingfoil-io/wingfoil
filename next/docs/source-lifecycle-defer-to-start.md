@@ -1,10 +1,14 @@
 # Deferring I/O source establishment to `start()`
 
-Status: **spike landed (steps 1 & the zmq migration); re-run still a follow-on.**
-This was a design plan for a handover — it describes a change to the
-wingfoil-next *source lifecycle model*, not a bug fix. Read `port-plan.md` §0.4
-(the single-run decision) and §1 (the `reset` hook) first; this proposal
-revisits both.
+Status: **COMPLETE for every I/O adapter. Re-run is NOT part of it — that turned
+out to be a non-gap (classic is single-run for I/O sources too; see §3 below).**
+Every source (`zmq_sub`, the `produce_async` `_sub` family, `postgres_read`) and
+every sink (`postgres_write`, redis, `etcd_pub`; `kafka_pub` was already lazy)
+now establishes its I/O at run start, not wiring — wiring is pure. What remains
+of the original plan's "re-run" ambition is deliberately **dropped**, because it
+was based on an incorrect premise (that classic re-runs I/O sources — it does
+not). This doc is kept as the design record; read `port-plan.md` §0.4 (the
+single-run decision, which stands) for the re-run contract.
 
 ## Implemented so far (the spike)
 
@@ -73,17 +77,32 @@ execute. Deferring collapses that window — nothing happens until `run()`;
 `run()` starts everything; teardown stops everything. This is classic wingfoil's
 model and simply has fewer states to hold in your head.
 
-### 3. Re-run (the deep one)
-next's I/O sources are single-run **as a consequence of** spawn-at-wiring: the
-producer channel / waker / thread is created once and consumed by the first run
-(`interp.rs` documents exactly this — see the single-run note around the
-`Runner` docs, ~`interp.rs:327`). That is *not* a fundamental limit. If sources
-establish their I/O in `start()`, then `start()` can re-establish on each run,
-lifting the single-run restriction for I/O sources and matching classic.
+### 3. Re-run — **NOT a parity gap** (correction, verified 2026)
+An earlier draft of this plan (and deviation-register A2) claimed classic
+re-runs its I/O sources and that next's single-run restriction was therefore a
+parity gap. **That was wrong.** Verified against the classic source:
 
-Given next's governing objective — a **strict superset of classic** — and that
-classic re-runs these sources, this is a genuine parity gap, not merely a
-missing convenience.
+- **Async sources** (`produce_async` → etcd/kafka/redis/postgres): classic's
+  `AsyncProducerStream::setup` (`wingfoil/src/nodes/async_io.rs:214`) takes its
+  `func` (an `FnOnce`) and sender via `.take().ok_or_else(|| "func is already
+  taken")?`. Classic builds a fresh `Graph` over the shared node tree on each
+  `.run()`, so a second run re-enters `setup` and **errors "func is already
+  taken."**
+- **Channel/external sources**: `ChannelReceiverStream::setup`
+  (`nodes/channel.rs:257`) `.take()`s its notifier and the receiver drains on
+  the first run, so a second run produces nothing.
+
+So classic is **single-run for I/O sources**, exactly like next — next's
+explicit single-run *error* is parity (and clearer than classic's silent-nothing
+on the channel path). The **deterministic** subset (tickers/constants/
+combinators/feedback) re-runs in both, and next already delivers that via the
+Phase-1 `reset` hook. **There is no re-run work to do for the superset claim.**
+
+The remaining value of deferring I/O establishment to `start()` is purely
+motivations 1 and 2 (testable, side-effect-free wiring; a simpler lifecycle) —
+both of which have now landed for every I/O adapter. Re-run is **not** a reason
+to do it, and the channel/waker-recreation interlock ("the hard part" below) is
+**not needed**.
 
 ### Two extra wins (not obvious up front)
 - **Kills the `produce_async` `RunParams` validation dance.** Because
@@ -164,7 +183,14 @@ Semantics:
 | Stop signalling, revoke registration, flush | **`stop`/`teardown`** (already there) |
 | Channel/waker recreation | **`reset`** (new) |
 
-## The hard part: the re-run / reset / channel-recreation interlock
+## The hard part: the re-run / reset / channel-recreation interlock — **DROPPED**
+
+> **This whole section is obsolete.** It was the design for making I/O sources
+> re-runnable, on the belief that classic re-runs them. Classic does **not** (see
+> §3 above — verified), so next's single-run I/O sources are already at parity and
+> **none of the channel/waker-recreation interlock below is needed or will be
+> built.** Kept only as a record of the investigation. The text below is the
+> original (now-abandoned) plan.
 
 Everything above except re-run is mechanical. Re-run is where the real design
 work is:
@@ -188,35 +214,35 @@ work is:
    `start()` should *simplify* this (collection happens per run), but verify the
    historical determinism tests still pass — this is the highest-risk migration.
 
-## Migration order
+## Migration order — **DONE (re-run steps struck)**
 
-Do it **spike-first**, smallest surface first:
+The defer + testability work shipped incrementally, smallest surface first:
 
-1. **Spike** — add the `source_at_start` primitive and convert **one** source.
-   Recommended: the bare `external`/`channel` source, or `zmq_sub` (self-
-   contained, has a real socket + the `ThreadStopGuard` already). Prove:
-   (a) the factory is now side-effect-free and unit-testable without I/O;
-   (b) a two-run test actually re-subscribes and produces on both runs;
-   (c) teardown still stops the thread. Write the short design note off the back
-   of the spike.
-2. **`external`** and the plain `channel` feeders.
-3. **`produce_async` / `produce_async_bounded`** (highest risk — the historical
-   determinism + `RunParams` simplification). Migrate etcd/kafka/redis/postgres
-   as they ride on it.
-4. **`zmq_sub`** (if not the spike) and any remaining adapter feeders.
-5. **Flip the capability matrix**: `port-plan.md` "Re-run" row for I/O sources,
-   and rewrite §0.4's single-run ruling to reflect the new model.
+1. **Spike** ✅ — `source_at_start` primitive + `zmq_sub` migrated (#547): the
+   factory is side-effect-free/unit-testable, `setup` runs at start, the
+   `StopHandle` stops the thread at teardown. (The originally-planned "two-run
+   re-subscribe" proof was dropped — re-run is a non-gap; see §3.)
+2. **`external`** and the plain `channel` feeders — caller-owned; single-run,
+   which is parity (§3).
+3. **`produce_async` / `produce_async_bounded`** ✅ — deferred to `start()` via
+   `source_at_start_with_params`, `RunParams` dropped from `produce_async`
+   (derived from the actual run). etcd/kafka/redis/postgres `_sub` ride it.
+4. **`zmq_sub`** ✅ (was the spike). **Sinks** (`postgres_write`, redis,
+   `etcd_pub`; `kafka_pub` already lazy) and **`postgres_read`** now defer their
+   connect to the run too.
+5. ~~Flip the capability matrix "Re-run" row~~ — **not applicable**: re-run of
+   I/O sources is a non-gap (classic is single-run too), so §0.4's single-run
+   ruling **stands unchanged**.
 
-## Decisions to ratify (call these out to the reviewer)
+## Decisions — resolved
 
-- **Reopening the Phase 0.4 single-run decision** for I/O sources. This was a
-  deliberate v1 scoping call; this proposal changes it. Confirm it's wanted now
-  vs. documented-for-later.
-- **`poll` sources** (busy-spin, realtime-only): do they also defer to `start()`?
-  They currently establish in a `start`-ish path already; audit for consistency.
-- **Eager-connect-for-fail-fast** deviation (e.g. `etcd_pub` connects at wiring
-  "so a connection error surfaces before the run"): accept that these errors now
-  surface at run-start instead. Confirm that's acceptable (it matches classic).
+- ~~**Reopening the Phase 0.4 single-run decision** for I/O sources.~~
+  **Resolved: no reopening.** Verified that classic is single-run for I/O
+  sources (§3), so next's single-run behaviour is parity; §0.4 stands.
+- **`poll` sources** (busy-spin, realtime-only): establish in a `start`-ish path
+  already; single-run, parity — no change needed.
+- **Eager-connect-for-fail-fast**: accepted — every sink now connects at
+  run-start (errors surface during the run), matching classic. Done.
 - **Naming** of the primitive and whether it's a new method or a `start`-hook
   parameter on the existing `channel`/`external`.
 
@@ -229,8 +255,10 @@ Do it **spike-first**, smallest surface first:
 - I/O + connect happen in `start()`; a `start` error aborts the run with node
   context.
 - Teardown stops the producer (existing `ThreadStopGuard` behaviour preserved).
-- **Re-run**: a test that calls `runner.run(RealTime, …)` twice re-subscribes and
-  produces on both runs (no "already run" error for the migrated source).
+- ~~**Re-run**: a test that calls `runner.run(RealTime, …)` twice re-subscribes~~
+  — **dropped.** Re-run of I/O sources is a non-gap (classic is single-run too,
+  §3); the migrated sources stay single-run, matching classic, and a second
+  `run()` errors clearly (parity).
 - No regression in the existing parity suites, especially `produce_async`'s
   historical determinism tests and the zmq integration suite.
 - `cargo fmt` / `cargo lint` / `cargo lint-all` (or the scoped
