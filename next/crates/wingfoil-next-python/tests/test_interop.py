@@ -332,6 +332,17 @@ def test_sum_of_non_numeric_aborts_run():
         g.run(cycles=1)
 
 
+def test_dataframe_from_stream():
+    pd = pytest.importorskip("pandas")
+    g = wf.Graph()
+    df = g.counter(period_nanos=100).dataframe()
+    g.run(cycles=3)
+    frame = df.value()
+    assert isinstance(frame, pd.DataFrame)
+    assert list(frame["time"]) == [0, 100, 200]
+    assert list(frame["value"]) == [1, 2, 3]
+
+
 def test_reduce_runs_from_first_value():
     g = wf.Graph()
     out = g.counter(period_nanos=100).reduce(lambda acc, v: acc + v)

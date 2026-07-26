@@ -255,6 +255,13 @@ impl Stream {
         (Stream(a), Stream(b))
     }
 
+    /// Build a pandas `DataFrame` (columns `time`, `value`) from every value and
+    /// its engine time; the final value (after the run) is the frame. Requires
+    /// pandas at run time.
+    fn dataframe(&self) -> Stream {
+        Stream(self.0.dataframe())
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()

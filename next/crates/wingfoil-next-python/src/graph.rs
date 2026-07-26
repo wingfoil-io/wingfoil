@@ -469,6 +469,53 @@ impl PyStream {
         self.wrap(joined)
     }
 
+    /// Build a pandas `DataFrame` (columns `time`, `value`) from every emitted
+    /// value paired with its engine time (the classic `dataframe`). The frame is
+    /// assembled **once, on the last cycle**, so the stream's final value is the
+    /// completed `DataFrame`; earlier cycles stay quiet. Rows are engine-owned
+    /// state re-seeded on a graph reset, so a re-run rebuilds cleanly.
+    ///
+    /// `pandas` is imported lazily here — only a graph that actually calls
+    /// `dataframe` needs it; if it is not importable the run aborts with context.
+    pub fn dataframe(&self) -> PyStream {
+        let framed = self.stream.with_time().wire(|b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "dataframe",
+                Activation::NONE,
+                (),
+                Vec::<(i64, Py<PyAny>)>::new, // state: accumulated (nanos, value) rows
+                move |_cfg: &mut (),
+                      rows: &mut Vec<(i64, Py<PyAny>)>,
+                      (time, value): &(NanoTime, PyElement),
+                      ctx| {
+                    Python::attach(|py| {
+                        rows.push((u64::from(*time) as i64, value.object().clone_ref(py)));
+                        if !ctx.is_last_cycle() {
+                            return Ok(Tick::Quiet);
+                        }
+                        let pandas = py
+                            .import("pandas")
+                            .map_err(|err| anyhow::anyhow!("dataframe() needs pandas: {err}"))?;
+                        let times: Vec<i64> = rows.iter().map(|(t, _)| *t).collect();
+                        let values: Vec<Py<PyAny>> =
+                            rows.iter().map(|(_, v)| v.clone_ref(py)).collect();
+                        let columns = pyo3::types::PyDict::new(py);
+                        columns
+                            .set_item("time", times)
+                            .and_then(|()| columns.set_item("value", values))
+                            .map_err(|err| anyhow::anyhow!("dataframe() column build: {err}"))?;
+                        let frame = pandas
+                            .call_method1("DataFrame", (columns,))
+                            .map_err(|err| anyhow::anyhow!("pandas.DataFrame raised: {err}"))?;
+                        Ok(Tick::Value(PyElement::new(frame.unbind())))
+                    })
+                },
+            )
+        });
+        self.wrap(framed)
+    }
+
     /// Reduce values with a Python callable, emitting the running result (the
     /// classic `reduce`). The **first** value seeds the accumulator and is
     /// emitted as-is; each later value emits `func(acc, value)`
@@ -807,6 +854,40 @@ mod tests {
         run_cycles(&g, 6);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn dataframe_builds_on_last_cycle() {
+        // Skip when pandas isn't installed (parity with pytest's importorskip),
+        // so this test doesn't fail in a bare CI environment.
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        let g = PyGraph::new();
+        let df = g.counter(Duration::from_nanos(100)).dataframe();
+        run_cycles(&g, 3);
+        // The final value is a pandas DataFrame with time/value columns.
+        let (times, values): (Vec<i64>, Vec<i64>) = Python::attach(|py| {
+            let frame = df.value().value();
+            let bound = frame.bind(py);
+            let t = bound
+                .call_method1("__getitem__", ("time",))
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let v = bound
+                .call_method1("__getitem__", ("value",))
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap();
+            (t, v)
+        });
+        assert_eq!(vec![0, 100, 200], times);
+        assert_eq!(vec![1, 2, 3], values);
     }
 
     #[test]
