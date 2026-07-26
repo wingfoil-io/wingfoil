@@ -97,6 +97,24 @@ const VEC_LEN: usize = 1024; // 8 KiB per payload
 const HOPS: usize = 16; // forwarding filters, one clone each per cycle
 const FWD_CYCLES: u32 = 5_000;
 
+// --- Workload 3: scalar forwarding — the aliasing *floor* --------------------
+//
+// The counterpoint to `forward_clone`. That workload brackets the *ceiling* of
+// the arena+aliasing win on a pathological 8 KiB payload; this one brackets the
+// *floor* — the common case where a wingfoil value is a scalar (`f64`, a small
+// struct). Here a per-hop clone is a register copy, so the payload-copy axis
+// that `forward_clone` measures has effectively collapsed: whatever this chain
+// costs is dispatch, not copying, and aliasing the slot cannot recover it.
+//
+// Same graph shape as `forward_clone` (source → N forwarding `filter` hops →
+// fold) so the numbers are directly comparable per hop. If `forward_scalar`
+// lands near `forward_clone/rc_vec` (a refcount bump per hop — already
+// copy-free), then scalar graphs have almost nothing for slot-aliasing to
+// remove, and the arena's only remaining lever on them is SoA cache locality
+// (not isolated here). The realistic per-graph win therefore lives *between*
+// this floor and the `forward_clone` ceiling, weighted by how much payload a
+// real graph actually forwards by clone.
+
 fn forward_clone(c: &mut Criterion) {
     let mut g = c.benchmark_group("forward_clone");
     g.sample_size(20);
@@ -141,5 +159,33 @@ fn forward_clone(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, sparse_dispatch, forward_clone);
+fn forward_scalar(c: &mut Criterion) {
+    let mut g = c.benchmark_group("forward_scalar");
+    g.sample_size(20);
+    // Same per-hop throughput unit as forward_clone, for a direct comparison.
+    g.throughput(Throughput::Elements(FWD_CYCLES as u64 * HOPS as u64));
+
+    // f64 payload: each filter hop forwards its input by a register-cheap copy.
+    // There is no vec/rc contrast to draw — a scalar clone is already free — so
+    // the single number is the copy-free floor the arena cannot beat by aliasing.
+    g.bench_function("f64", |b| {
+        b.iter(|| {
+            let g = GraphBuilder::new();
+            let src = g.ticker(STEP).count();
+            let keep = src.map(|_: &u64| true);
+            let mut cur = src.map(|i: &u64| *i as f64);
+            for _ in 0..HOPS {
+                cur = cur.filter(&keep);
+            }
+            let out = cur.fold(0u64, |acc, v| *acc = acc.wrapping_add(*v as u64));
+            let mut runner = g.build();
+            runner.run(HISTORICAL, RunFor::Cycles(FWD_CYCLES)).unwrap();
+            black_box(runner.value(&out));
+        })
+    });
+
+    g.finish();
+}
+
+criterion_group!(benches, sparse_dispatch, forward_clone, forward_scalar);
 criterion_main!(benches);

@@ -824,28 +824,45 @@ slot type (compiled uses locals), and the one other hook —
 bulk catalog/adapter port proceeds against the frozen boundary and the arena
 lands whenever a measured need appears.
 
-**Measured baseline** (`benches/store_baseline.rs`, added now): on a large
-forwarding graph (8 KiB `Vec` payload through 16 `filter` hops), the owned-`Vec`
-run is ~5× an `Rc<Vec>` run of the identical graph — i.e. the per-hop clone tax
-that slot-aliasing would remove is *large* for big-payload forwarding, so the
-arena+aliasing has real teeth there (ratio is machine-dependent; regenerate
-before deciding). The same bench's `sparse_dispatch` group is the standing gate
-for the dirty-list: `Dispatch::Sparse` runs ~8× faster than the `FullSweep`
-oracle on a graph padded with cold nodes, confirming work ∝ active, not `N`.
+**Measured baseline** (`benches/store_baseline.rs`). The go/no-go is now
+bracketed by numbers rather than the earlier ~1.1–1.5× estimate (all ratios are
+machine-dependent — regenerate before deciding, but the *shape* is the point):
 
-### Dynamic graphs (runtime add/remove) — enabler landed, feature not built
+- **Ceiling** (`forward_clone`, 8 KiB `Vec` through 16 `filter` hops): the
+  owned-`Vec` run is **~7.4×** an `Rc<Vec>` run of the identical graph (≈20.8 ms
+  vs ≈2.79 ms). The per-hop clone tax slot-aliasing would remove is *large* for
+  big-payload forwarding — the arena+aliasing has real teeth **there**.
+- **Floor** (`forward_scalar`, the same shape with an `f64` payload): ≈1.84 ms —
+  *faster* than even the `Rc<Vec>` path, because a scalar clone is a register
+  copy. Aliasing the slot recovers **nothing** here; the only lever left on
+  scalar graphs is SoA cache locality (not isolated by this bench).
+
+So the realistic per-graph win lives *between* this floor and that ceiling,
+weighted by how much payload the graph actually forwards by clone. Typical
+wingfoil workloads (scalars, small structs, statistics) sit near the floor —
+**evidence for keeping the arena deferred until a real big-payload-forwarding
+graph appears.** The same bench's `sparse_dispatch` group is the standing gate
+for the dirty-list: `Dispatch::Sparse` runs **~7.3×** faster than the
+`FullSweep` oracle (≈11.2 ms vs ≈81.6 ms) on a graph padded with cold nodes,
+confirming work ∝ active, not `N`.
+
+### Dynamic graphs (runtime add/remove) — ✅ landed
 
 The sparse dirty-list maintains a mutable frontier of active nodes — the
 natural home for classic's `graph_node` / `dynamic_group` (add/remove nodes
 and sub-graphs mid-run), which the old all-nodes sweep could not cleanly
-express. The **enabler is now in place**; the feature itself (a
-`Runner::extend` appending nodes + slots and splicing edges at runtime, with
-layer/dirty bookkeeping updated for the affected region) is **not yet built**.
-This is the one open *decision*, not just execution: **is runtime mutation a
-cutover blocker under the superset objective, or a documented v1 deviation?**
-Classic `graph_node` users force the call. The compiled and island paths stay
-static by design (their whole value is a fixed monomorphized schedule);
-dynamism is an interpreted-engine capability, matching classic.
+express. The enabler *and* the feature are now both in place, behind the
+`dynamic-graph` cargo feature: `Runner::run_dynamic` appends nodes + slots and
+splices active/passive edges at runtime (with `fix_layers` updating the layer
+bookkeeping for the affected region), plus the in-graph `Builder::dynamic_group`
+(classic's `dynamic_group_stream` twin, with a pluggable `StreamStore`) and the
+`Builder::demux` routing primitive (`demux_map` / `demux_it` layered on top).
+Parity tests in `tests/dynamic_graph.rs`. The open *decision* the plan flagged —
+is runtime mutation a cutover blocker or a v1 deviation — is thereby settled by
+building it: it is supported, matching classic. The compiled and island paths
+stay static by design (their whole value is a fixed monomorphized schedule);
+dynamism is an interpreted-engine capability, matching classic. See the Phase
+4.5 header and capability-matrix note ¹⁰ for the surface detail.
 
 **Scope notes:**
 - The scheduler change was pure mechanism/performance — observable results
