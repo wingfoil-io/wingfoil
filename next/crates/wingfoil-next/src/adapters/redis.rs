@@ -40,10 +40,11 @@
 //!    spawns in `start()` and derives its `RunParams` from the actual run. Embed
 //!    in an existing runtime by installing an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
-//! 2. **The sinks connect eagerly, at wiring time.** `redis_pub` /
-//!    `redis_stream_write` return `Result` and a connection failure surfaces
-//!    *before* the run, whereas classic connected lazily inside the async
-//!    consumer (skill step 8 prefers wiring-time I/O errors).
+//! 2. **The sinks connect lazily, on the first write.** Like classic, `redis_pub`
+//!    / `redis_stream_write` open the socket inside the async consumer on the
+//!    first write (`Client::open` — a pure URL parse — still validates at
+//!    wiring), so wiring does no I/O and a connection failure surfaces during
+//!    the run (via `consume_async`'s error channel), not at graph construction.
 //! 3. **The sinks are traits only.** Classic exposed free `redis_pub` /
 //!    `redis_stream_write` functions *and* operator traits; next folds each into
 //!    a single sink trait ([`RedisSinkOps`] / [`RedisStreamSinkOps`]), per the
@@ -95,6 +96,8 @@
 //! docker run --rm -p 6379:6379 redis:7-alpine
 //! ```
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use redis::AsyncCommands;
@@ -137,6 +140,33 @@ impl From<String> for RedisConnection {
 impl From<&String> for RedisConnection {
     fn from(url: &String) -> Self {
         Self::new(url.clone())
+    }
+}
+
+/// Open (once) or reuse a sink's multiplexed connection, caching it in `cell`.
+///
+/// The socket is opened lazily on the consumer task the first time a sink
+/// writes — deferred off the wiring path — so a connect failure aborts the
+/// *run* (via `consume_async`'s error channel), not graph construction. This
+/// matches classic, which connected lazily inside the async consumer. `who`
+/// names the sink for error context.
+async fn get_or_connect(
+    client: &redis::Client,
+    cell: &tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>,
+    url: &str,
+    who: &str,
+) -> Result<redis::aio::MultiplexedConnection> {
+    let mut guard = cell.lock().await;
+    match guard.as_ref() {
+        Some(c) => Ok(c.clone()),
+        None => {
+            let c = client
+                .get_multiplexed_async_connection()
+                .await
+                .with_context(|| format!("{who}: connecting to {url:?}"))?;
+            *guard = Some(c.clone());
+            Ok(c)
+        }
     }
 }
 
@@ -424,8 +454,10 @@ pub trait RedisSinkOps {
     ///
     /// # Errors
     ///
-    /// Returns an error at wiring time if the Redis connection fails. A per-entry
-    /// publish failure aborts the run with context on a subsequent cycle.
+    /// The connection is opened lazily on the first write, so a connection
+    /// failure aborts the *run* (not wiring) with context; a bad URL still fails
+    /// at wiring (`Client::open`). A per-entry publish failure aborts the run
+    /// with context on a subsequent cycle.
     fn redis_pub(
         &self,
         conn: impl Into<RedisConnection>,
@@ -442,17 +474,21 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
         let conn = conn.into();
         // The graph owns the runtime; the sink connects/publishes on it.
         let g = self.graph();
-        let handle = g.async_runtime_handle()?;
+        // `Client::open` only parses the URL (no socket) — a config error, so it
+        // stays at wiring. The socket opens lazily on the first write (below), so
+        // wiring does no I/O and a connect failure aborts the run, not wiring.
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_pub: opening client for {:?}", conn.url))?;
-        // Connect at wiring time so a connection error surfaces before the run.
-        let connection = handle
-            .block_on(client.get_multiplexed_async_connection())
-            .with_context(|| format!("redis_pub: connecting to {:?}", conn.url))?;
+        let url = conn.url.clone();
+        let conn_cell: Arc<tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
 
         let (sink, flush) = consume_async(&g, buffer_size, move |entry: RedisEntry| {
-            let mut connection = connection.clone();
+            let client = client.clone();
+            let conn_cell = Arc::clone(&conn_cell);
+            let url = url.clone();
             async move {
+                let mut connection = get_or_connect(&client, &conn_cell, &url, "redis_pub").await?;
                 redis::cmd("PUBLISH")
                     .arg(entry.channel.as_str())
                     .arg(entry.payload.as_slice())
@@ -496,8 +532,10 @@ pub trait RedisStreamSinkOps {
     ///
     /// # Errors
     ///
-    /// Returns an error at wiring time if the Redis connection fails. A per-record
-    /// append failure aborts the run with context on a subsequent cycle.
+    /// The connection is opened lazily on the first write, so a connection
+    /// failure aborts the *run* (not wiring) with context; a bad URL still fails
+    /// at wiring (`Client::open`). A per-record append failure aborts the run
+    /// with context on a subsequent cycle.
     fn redis_stream_write(
         &self,
         conn: impl Into<RedisConnection>,
@@ -514,17 +552,22 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
         let conn = conn.into();
         // The graph owns the runtime; the sink connects/appends on it.
         let g = self.graph();
-        let handle = g.async_runtime_handle()?;
+        // `Client::open` only parses the URL (no socket) — a config error, so it
+        // stays at wiring. The socket opens lazily on the first write (below), so
+        // wiring does no I/O and a connect failure aborts the run, not wiring.
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_stream_write: opening client for {:?}", conn.url))?;
-        // Connect at wiring time so a connection error surfaces before the run.
-        let connection = handle
-            .block_on(client.get_multiplexed_async_connection())
-            .with_context(|| format!("redis_stream_write: connecting to {:?}", conn.url))?;
+        let url = conn.url.clone();
+        let conn_cell: Arc<tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
 
         let (sink, flush) = consume_async(&g, buffer_size, move |record: RedisStreamRecord| {
-            let mut connection = connection.clone();
+            let client = client.clone();
+            let conn_cell = Arc::clone(&conn_cell);
+            let url = url.clone();
             async move {
+                let mut connection =
+                    get_or_connect(&client, &conn_cell, &url, "redis_stream_write").await?;
                 let mut cmd = redis::cmd("XADD");
                 cmd.arg(record.key.as_str()).arg("*");
                 for (field, value) in &record.fields {
