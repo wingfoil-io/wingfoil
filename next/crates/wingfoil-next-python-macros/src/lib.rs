@@ -243,12 +243,19 @@ impl Parse for PyAdapterArgs {
     }
 }
 
-/// `#[pyadapter(name = ..., source)]` — expose a user **source** adapter method
-/// (`impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T> }`) as a
-/// Python callable `module.name(graph, args…)` that runs the adapter's native
-/// wiring on the caller's graph and returns the erased output (`T:
-/// Into<PyElement>`). v1 covers single-value source methods; sink/transform and
-/// burst (`Stream<Burst<T>>`) sources are not yet emitted.
+/// `#[pyadapter(name = ...[, source])]` — expose a user adapter method as a
+/// Python callable, edge-converting at the boundary. Two shapes:
+///
+/// - **source** (`source` marker): `impl Trait for GraphBuilder { fn m(&self,
+///   args…) -> Stream<T> }` => `module.name(graph, args…)` — runs the adapter on
+///   the caller's builder and erases the `T` output.
+/// - **sink / transform** (no marker): `impl Trait for Stream<T> { fn m(&self,
+///   args…) -> Stream<U> }` => `module.name(stream, args…)` — extracts the input
+///   to native `T`, runs the adapter, and erases the `U` output (a sink's
+///   `Stream<()>` erases to Python `None`).
+///
+/// v1 covers single-value streams; burst (`Stream<Burst<T>>`) adapters are not
+/// yet emitted.
 #[proc_macro_attribute]
 pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PyAdapterArgs);
@@ -263,13 +270,6 @@ pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
-    if !args.is_source {
-        return Err(Error::new(
-            args.name.span(),
-            "#[pyadapter] v1 supports source adapters only; add the `source` marker \
-             (`#[pyadapter(name = ..., source)]`)",
-        ));
-    }
     // The single adapter method in the impl.
     let mut methods = imp.items.iter().filter_map(|it| match it {
         ImplItem::Fn(f) => Some(f),
@@ -317,24 +317,46 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
         ReturnType::Default => {
             return Err(Error::new(
                 method.sig.span(),
-                "#[pyadapter] source method must return `Stream<T>`",
+                "#[pyadapter] adapter method must return `Stream<T>`",
             ));
         }
     };
-    let t_ty = stream_inner(out_ty)?;
+    let out_inner = stream_inner(out_ty)?;
     let py_name = &args.name;
 
-    Ok(quote! {
-        #[pyo3::pyfunction]
-        fn #py_name(
-            graph: pyo3::PyRef<'_, ::wingfoil_next_python::Graph>,
-            #(#param_decls),*
-        ) -> ::wingfoil_next_python::Stream {
-            let __obj = graph.object();
-            let __typed = __obj.builder().#method_name(#(#param_names),*);
-            ::wingfoil_next_python::Stream::from(__obj.erase_source::<#t_ty>(__typed))
-        }
-    })
+    if args.is_source {
+        // Source: `impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T> }`
+        // => `module.name(graph, args…)`: run the adapter on the builder, erase T.
+        Ok(quote! {
+            #[pyo3::pyfunction]
+            fn #py_name(
+                graph: pyo3::PyRef<'_, ::wingfoil_next_python::Graph>,
+                #(#param_decls),*
+            ) -> ::wingfoil_next_python::Stream {
+                let __obj = graph.object();
+                let __typed = __obj.builder().#method_name(#(#param_names),*);
+                ::wingfoil_next_python::Stream::from(__obj.erase_source::<#out_inner>(__typed))
+            }
+        })
+    } else {
+        // Sink / transform: `impl Trait for Stream<T> { fn m(&self, args…) ->
+        // Stream<U> }` => `module.name(stream, args…)`: extract the input to
+        // native `T`, run the adapter, erase the `U` output (a sink's `Stream<()>`
+        // erases to Python `None`).
+        let in_inner = stream_inner(&imp.self_ty)?;
+        Ok(quote! {
+            #[pyo3::pyfunction]
+            fn #py_name(
+                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
+                #(#param_decls),*
+            ) -> ::wingfoil_next_python::Stream {
+                let __obj = stream.object();
+                let __typed = __obj.typed_input::<#in_inner>();
+                let __out = __typed.#method_name(#(#param_names),*);
+                ::wingfoil_next_python::Stream::from(__obj.erased_output::<#out_inner>(__out))
+            }
+        })
+    }
 }
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`

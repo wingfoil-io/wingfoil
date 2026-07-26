@@ -405,6 +405,31 @@ impl RampSourceOps for ::wingfoil_next::prelude::GraphBuilder {
     }
 }
 
+// `list_sink` — a **sink `#[pyadapter]`**: a user-style adapter authored as a
+// trait on the fluent `Stream<f64>`, exposed as `module.list_sink(stream,
+// target)`. It appends each value to a Python list (a real sink would write to
+// a socket/DB); it produces a `Stream<()>` terminal (Python `None`). A raised
+// append aborts the run.
+trait ListSinkOps {
+    fn list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()>;
+}
+
+#[pyadapter(name = list_sink)]
+impl ListSinkOps for ::wingfoil_next::prelude::Stream<f64> {
+    fn list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()> {
+        use ::wingfoil_next::prelude::StreamOps;
+        self.for_each(move |v: &f64| {
+            Python::attach(|py| {
+                target
+                    .bind(py)
+                    .call_method1("append", (*v,))
+                    .map_err(|err| anyhow::anyhow!("list_sink append raised: {err}"))?;
+                Ok(())
+            })
+        })
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -416,5 +441,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
+    m.add_function(wrap_pyfunction!(list_sink, m)?)?;
     Ok(())
 }
