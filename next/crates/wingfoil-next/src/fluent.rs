@@ -31,7 +31,9 @@ use wingfoil::NanoTime;
 
 use crate::Burst;
 use crate::channel::ChannelSender;
-use crate::interp::{AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef};
+use crate::interp::{
+    AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef, StopHandle,
+};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -223,6 +225,20 @@ pub trait SourceOps {
         T: Clone + Default + 'static,
         F: Fn() -> Option<T> + 'static;
 
+    /// A [`channel`](SourceOps::channel)-fed source whose producer (thread /
+    /// socket) is established in `start()` rather than at wiring — the
+    /// **deferred-connection** primitive for I/O adapters. `setup` runs on each
+    /// run start, is handed the [`ChannelSender`], connects/spawns the live
+    /// producer, and returns a [`StopHandle`] dropped at teardown to stop it.
+    /// The factory itself does **no** I/O, so adapter wiring (address parse,
+    /// registry lookup, historical-mode rejection) stays pure and unit-testable;
+    /// a `setup` error aborts the run at start with node context. See
+    /// [`Builder::source_at_start`](crate::interp::Builder::source_at_start).
+    fn source_at_start<T, Setup>(&self, setup: Setup) -> Stream<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+        Setup: FnMut(ChannelSender<T>) -> Result<StopHandle> + 'static;
+
     /// Open a feedback edge: a source stream (no upstreams — the graph stays
     /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
     /// [`StreamOps::feedback`]; values arrive on the source one cycle later.
@@ -261,6 +277,15 @@ impl SourceOps for GraphBuilder {
         F: Fn() -> Option<T> + 'static,
     {
         self.source(|b| b.poll(f))
+    }
+
+    fn source_at_start<T, Setup>(&self, setup: Setup) -> Stream<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+        Setup: FnMut(ChannelSender<T>) -> Result<StopHandle> + 'static,
+    {
+        let handle = self.with_builder(|b| b.source_at_start(setup));
+        self.wrap(handle)
     }
 
     fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
