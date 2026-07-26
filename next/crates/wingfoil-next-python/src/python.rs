@@ -339,6 +339,29 @@ impl Op for RunningTotal {
     }
 }
 
+// `weighted_add` — a **two-input** `#[pyop]` (`In<'a> = (&'a f64, &'a f64)`):
+// combines two streams, proving the proc macro handles the two-input shape and
+// emits a `module.weighted_add(stream, other)` function.
+struct WeightedAdd;
+
+#[pyop(name = weighted_add)]
+impl Op for WeightedAdd {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 + input.1))
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -347,5 +370,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scale, m)?)?;
     m.add_function(wrap_pyfunction!(square, m)?)?;
     m.add_function(wrap_pyfunction!(running_total, m)?)?;
+    m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
     Ok(())
 }

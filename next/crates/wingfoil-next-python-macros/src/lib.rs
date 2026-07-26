@@ -29,11 +29,13 @@
 //! // => wingfoil_next.square(stream)   (register: wrap_pyfunction!(square, m)?)
 //! ```
 //!
-//! **Scope:** single-input (`In<'a> = (&'a A,)`), concrete (non-generic) ops,
-//! with `Cfg = ()` or a single `FromPyObject` type. State may be any
+//! **Scope:** one- or two-input (`In<'a> = (&'a A,)` → `module.name(stream)`,
+//! `(&'a A, &'a B)` → `module.name(stream, other)`), concrete (non-generic)
+//! ops, with `Cfg = ()` or a single `FromPyObject` type. State may be any
 //! `Default`-seedable type (`State = ()` for stateless, or e.g. `State = f64`
 //! for an accumulator — the engine re-seeds it from `Default` on each run, so
-//! re-runs start clean). Multi-input ops use `PyStream::wire_op1` directly.
+//! re-runs start clean). Ops with 3+ inputs use `PyStream::wire_op1`/`wire_op2`
+//! (or the object form) directly.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -89,18 +91,30 @@ pub fn pyop(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// The `T` of a single-element reference tuple `(&'a T,)`.
-fn single_ref_tuple_elem(ty: &Type) -> syn::Result<Type> {
-    if let Type::Tuple(t) = ty
-        && t.elems.len() == 1
-        && let Type::Reference(r) = &t.elems[0]
-    {
-        return Ok((*r.elem).clone());
+/// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`
+/// supports one- or two-input ops.
+fn ref_tuple_elems(ty: &Type) -> syn::Result<Vec<Type>> {
+    if let Type::Tuple(t) = ty {
+        let mut elems = Vec::with_capacity(t.elems.len());
+        for e in &t.elems {
+            match e {
+                Type::Reference(r) => elems.push((*r.elem).clone()),
+                _ => {
+                    return Err(Error::new(
+                        e.span(),
+                        "#[pyop] op inputs must be references (`&'a T`)",
+                    ));
+                }
+            }
+        }
+        if matches!(elems.len(), 1 | 2) {
+            return Ok(elems);
+        }
     }
     Err(Error::new(
         ty.span(),
-        "#[pyop] supports single-input ops (`type In<'a> = (&'a T,)`); use \
-         `PyStream::wire_op1` for other shapes",
+        "#[pyop] supports one- or two-input ops (`type In<'a> = (&'a A,)` or \
+         `(&'a A, &'a B)`); use `PyStream::wire_op1`/`wire_op2` for other shapes",
     ))
 }
 
@@ -137,7 +151,7 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let cfg_ty = cfg_ty.ok_or_else(|| missing("Cfg"))?;
     let state_ty = state_ty.ok_or_else(|| missing("State"))?;
 
-    let a_ty = single_ref_tuple_elem(&in_ty)?;
+    let elems = ref_tuple_elems(&in_ty)?;
 
     let name = &args.name;
     let name_str = name.to_string();
@@ -151,25 +165,57 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             .unwrap_or_else(|| Ident::new("cfg", name.span()));
         (quote! { , #arg: #cfg_ty }, quote! { #arg })
     };
+    let state_seed = quote! { || <#state_ty as ::core::default::Default>::default() };
 
-    Ok(quote! {
-        #[pyo3::pyfunction]
-        fn #name(
-            stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
-            #param
-        ) -> ::wingfoil_next_python::Stream {
-            ::wingfoil_next_python::Stream::from(
-                ::wingfoil_next_python::PyStream::wire_op1::<#a_ty, _, _, #out_ty, _, _>(
-                    stream.object(),
-                    #name_str,
-                    <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
-                    #cfg_value,
-                    || <#state_ty as ::core::default::Default>::default(),
-                    |__c, __s, __a: &#a_ty, __ctx| {
-                        <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
-                    },
+    let body = if elems.len() == 1 {
+        let a_ty = &elems[0];
+        quote! {
+            #[pyo3::pyfunction]
+            fn #name(
+                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
+                #param
+            ) -> ::wingfoil_next_python::Stream {
+                ::wingfoil_next_python::Stream::from(
+                    ::wingfoil_next_python::PyStream::wire_op1::<#a_ty, _, _, #out_ty, _, _>(
+                        stream.object(),
+                        #name_str,
+                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
+                        #cfg_value,
+                        #state_seed,
+                        |__c, __s, __a: &#a_ty, __ctx| {
+                            <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
+                        },
+                    )
                 )
-            )
+            }
         }
-    })
+    } else {
+        let a_ty = &elems[0];
+        let b_ty = &elems[1];
+        quote! {
+            #[pyo3::pyfunction]
+            fn #name(
+                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
+                other: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
+                #param
+            ) -> ::wingfoil_next_python::Stream {
+                ::wingfoil_next_python::Stream::from(
+                    ::wingfoil_next_python::PyStream::wire_op2::<#a_ty, #b_ty, _, _, #out_ty, _, _>(
+                        stream.object(),
+                        other.object(),
+                        #name_str,
+                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
+                        #cfg_value,
+                        #state_seed,
+                        |__c, __s, __a: &#a_ty, __b: &#b_ty, __ctx| {
+                            <#self_ty as ::wingfoil_next_python::Op>::cycle(
+                                __c, __s, (__a, __b), __ctx,
+                            )
+                        },
+                    )
+                )
+            }
+        }
+    };
+    Ok(body)
 }

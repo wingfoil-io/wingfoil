@@ -62,6 +62,55 @@ impl Op for Accumulate {
     }
 }
 
+// A **two-input** external `#[pyop]` (`In<'a> = (&'a f64, &'a f64)`) — compile
+// proof that the macro emits a two-stream `#[pyfunction]` from a third-party
+// crate.
+struct AddStreams;
+
+#[pyop(name = add_streams)]
+impl Op for AddStreams {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 + input.1))
+    }
+}
+
+#[test]
+fn pyop_supports_two_input_ops_in_an_external_crate() {
+    // The generated two-stream function exists: `#[pyop]` expanded for a
+    // two-input op.
+    let _f = add_streams;
+
+    // The two-input shape runs via the public `wire_op2` seam the macro builds
+    // on: combine two counters.
+    let g = PyGraph::new();
+    let a = g.counter(Duration::from_nanos(100));
+    let b = g.counter(Duration::from_nanos(100));
+    let summed = a.wire_op2::<f64, f64, _, _, f64, _, _>(
+        &b,
+        "add_streams",
+        Activation::NONE,
+        (),
+        || (),
+        |_cfg, _state, x: &f64, y: &f64, _ctx| Ok(Tick::Value(*x + *y)),
+    );
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+    let v: f64 = (&summed.value()).try_into().unwrap();
+    assert_eq!(4.0, v); // 2 + 2 on the second cycle
+}
+
 #[test]
 fn pyop_supports_stateful_ops_in_an_external_crate() {
     // The generated function exists: `#[pyop]` expanded for a stateful op.
