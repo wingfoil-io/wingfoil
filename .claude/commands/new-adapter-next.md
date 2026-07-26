@@ -38,6 +38,20 @@ a **strict superset of legacy wingfoil**. If a classic adapter named
 If no classic adapter exists, you are defining new surface: keep the naming
 and layering conventions below so a future legacy backport stays mechanical.
 
+## Feed lessons back into this skill
+
+Adapter development keeps surfacing things this skill doesn't yet capture — a
+recurring pitfall, a CI gate you didn't expect, a pattern worth codifying, a
+deviation that should be a rule. **When you hit one, consider baking it into
+this file** (`.claude/commands/new-adapter-next.md`), ideally in the same PR, or
+flag it for a follow-up skill update. This skill is meant to grow with every
+port: several rules below (credential redaction, live-source rejection, the
+slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
+after a port hit them. Record cross-cutting classic↔next differences in
+`next/docs/deviation-register.md`, and note open design items you brushed up
+against (e.g. `next/docs/source-lifecycle-defer-to-start.md`,
+`next/docs/runtime-ownership.md`).
+
 ## Invariants
 
 These rules apply to every step below.
@@ -243,6 +257,24 @@ testcontainers = { version = "0.27", features = ["blocking"], optional = true }
   gate dev-deps). Skip the `-integration-test` flag entirely for file-based
   and pure-compute adapters (Option C in step 10).
 - A dependency-free adapter (like `lines`) needs no feature at all.
+
+**The `dependency-review` gate — expect it, and prefer rolling forward.** CI's
+`dependency-review` job (`.github/workflows/security-audit.yml`, fails on
+`moderate`+) flags a **newly added** dependency that carries a known advisory —
+**even if the classic `wingfoil` crate already ships that exact version**,
+because it's new *to this PR's diff*. So pinning to classic's version can still
+turn the gate red. Two fixes, in order of preference:
+1. **Roll the dependency forward** to a fixed version if one exists, and note the
+   deliberate divergence from classic in the dep's Cargo.toml comment (then bump
+   classic to match in a follow-up, to restore lockstep). This is the real fix —
+   the advisory is gone, not suppressed. (otlp did this: opentelemetry 0.28→0.32
+   for GHSA-w9wp-h8wv-79jx.)
+2. If you genuinely can't roll forward, **allowlist the specific advisory** with
+   `allow-ghsas: GHSA-…` in the workflow and a comment explaining *why it's safe*
+   (e.g. classic already ships it; the vulnerable code path is unused). A
+   last resort, not the default.
+Run `cargo audit` too (a separate CI job) — it catches advisories
+`dependency-review` may not, and vice-versa.
 
 **Pluggable backends behind their own feature.** If the adapter can swap an
 underlying library for the *same* concern — a discovery backend, a TLS
@@ -460,6 +492,18 @@ at **wiring** time, so `params` must describe the run the caller will actually
 invoke — historical `start_time` mismatches are validated and abort the run;
 use `produce_async_bounded` when a fast realtime producer needs `buffer_size`
 back-pressure (not applied in historical mode, by design).
+
+**Runtime ownership — current convention, with a pending change.** Today async
+adapters take the caller's `&tokio::runtime::Handle` (caller-owned runtime), and
+the graph must be built, run, and dropped from a **non-async thread** (a
+`block_on` footgun — see the etcd/postgres module docs). Follow that convention
+for now. But be aware of an **open design proposal** to move to a
+`Runner`/`Graph`-owned runtime *with an override* — which would drop the
+`&Handle`/`RunParams` factory params and hand the handle to the adapter at
+`start()` instead (it's coupled to the defer-I/O-to-`start()` change). See
+`next/docs/runtime-ownership.md` and `next/docs/source-lifecycle-defer-to-start.md`;
+if you're adding an async adapter while that's in flight, check whether the new
+primitive has landed before hardcoding the `&Handle` signature.
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
