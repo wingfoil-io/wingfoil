@@ -59,6 +59,10 @@ pub struct Kernel {
     end_time: NanoTime,
     end_cycle: u32,
     time: NanoTime,
+    /// Wall-clock snap taken once at the start of each cycle (see
+    /// [`Kernel::wall_time`]). Distinct from `time`, which is source-driven
+    /// (logical) in historical mode.
+    wall_time: NanoTime,
     first_cycle: bool,
     is_last_cycle: bool,
     cycles: u32,
@@ -104,6 +108,7 @@ impl Kernel {
             end_time,
             end_cycle,
             time: NanoTime::ZERO,
+            wall_time: NanoTime::ZERO,
             first_cycle: true,
             is_last_cycle: false,
             cycles: 0,
@@ -144,6 +149,17 @@ impl Kernel {
     /// Current engine time.
     pub fn time(&self) -> NanoTime {
         self.time
+    }
+
+    /// Wall-clock time snapped once at the start of the current cycle.
+    ///
+    /// The same in both realtime and historical mode — always a wall-clock
+    /// snap — so latency stamping and perf telemetry mean "wall-clock time
+    /// spent" regardless of run mode. Mirrors classic `GraphState::wall_time`.
+    /// Never use for business logic (use [`time`](Self::time) for
+    /// deterministic replay).
+    pub fn wall_time(&self) -> NanoTime {
+        self.wall_time
     }
 
     /// The run mode (realtime vs historical) — lets a source op choose
@@ -205,6 +221,7 @@ impl Kernel {
                     if !progressed {
                         return false;
                     }
+                    self.wall_time = NanoTime::now();
                     return true;
                 }
                 RunMode::RealTime => {
@@ -218,6 +235,7 @@ impl Kernel {
                         while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
                             dirty[ix] = true;
                         }
+                        self.wall_time = NanoTime::now();
                         return true;
                     }
                     if !progressed {
@@ -293,6 +311,7 @@ impl Kernel {
                         progressed = true;
                     }
                     if progressed {
+                        self.wall_time = NanoTime::now();
                         return true;
                     }
                     // Nothing due yet (e.g. woke at the end bound): re-check

@@ -698,7 +698,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `anyhow::Result<u16>` with `.context`, not `Result<u16, io::Error>`. The one
    engine addition is `Ctx::run_mode()` (a realtime-only IO sink needs to see the
    run mode; reported as `RealTime` inside an island, like `is_last_cycle`).
-   ✅ **otlp** *(metrics done; traces deferred)*: a realtime, push-based
+   ✅ **otlp** *(metrics + traces done)*: a realtime, push-based
    OpenTelemetry metrics **sink** — the `OtlpSinkOps::otlp_push` extension trait
    on any `Stream<T: Display>` exports each tick as an OTLP `f64` gauge over
    HTTP/protobuf, behind the `otlp` feature. Built on `consume_async` so the OTel
@@ -715,14 +715,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `&tokio::runtime::Handle` (the etcd/`consume_async` convention), so the graph
    must be driven from a non-async thread; (b) the sink is the `OtlpSinkOps`
    extension trait (`stream.otlp_push(&handle, name, config)`), not a classic
-   `OtlpPush` on `dyn Stream<T>`. **Capability gap — trace/span export
-   (`OtlpSpans`) not ported:** classic's span exporter emits OTel spans from
-   `Stream<P: HasLatency>` values; that path depends on the `Traced` /
-   `HasLatency` / `latency_stages!` latency infrastructure, which is **not yet
-   ported to next** (a separate roadmap item; latency stamps "ride values as a
-   payload" per the Phase 6 notes). Once the latency types land, `otlp_spans`
-   ports mechanically onto the same `consume_async` shape. Until then only the
-   metrics push is available; `otlp_push` itself is at full parity.
+   `OtlpPush` on `dyn Stream<T>`. **Trace/span export ✅ ported** (`OtlpSpanOps::otlp_spans`):
+   emits one parent span per tick plus one child span per stage hop from
+   `Stream<P: HasLatency>` values (now that the Phase 5 latency infrastructure
+   has landed), with caller-supplied attributes via `OtlpAttributeBuffer` and
+   the silent skip of all-zero / backwards timestamps. Same off-thread
+   `consume_async` model as `otlp_push` (the tracer provider is built lazily on
+   the first exported value and dropped at teardown to flush; no-op under
+   historical replay); the same `&tokio::runtime::Handle` and extension-trait
+   deviations apply. Parity tests: `spans_historical_mode_drains_without_connecting`
+   in `tests/otlp_adapter.rs` and `otlp_spans_sends_successfully` in
+   `tests/otlp_integration.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
@@ -861,10 +864,22 @@ dynamism is an interpreted-engine capability, matching classic.
 
 ## Phase 5 — infrastructure
 
-- **Latency**: stamps ride values as today (`Traced` is just a payload);
-  `Ctx` gains a wall-clock accessor for `stamp_precise`-style ops.
-  `latency_stages` derive unchanged.
-- **Graph export**: GML from `Builder` topology + debug labels.
+- **Latency** ✅ **landed** (`src/latency.rs`): stamps ride values as today
+  (`Traced` is just a payload, re-exported from classic together with
+  `Latency`/`Stage`/`HasLatency`/`StageStats`/`LatencyStats` and the
+  `latency_stages!` derive — all engine-agnostic, unchanged). `Ctx` gained
+  `wall_time()` (a per-cycle snap, from a new `Kernel::wall_time`) and
+  `wall_time_precise()` (fresh TSC read); the node layer is re-implemented as
+  ops — `stamp`/`stamp_precise` (over `register_op1`) and the `latency_report`
+  sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
+  **Deviation**: fluent/interpreted only (matching classic, which exposes
+  latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
+  *type* parameter, which does not map onto the `graph!` value-dispatch table,
+  so compiled/nested support is out of scope for this op family.
+- **Graph export**: ❌ **not doing this** (GML from `Builder` topology + debug
+  labels). Deferred deliberately — we want a better introspection/visualization
+  story than a one-off GML dump, to be designed and scoped separately later
+  rather than ported as-is from classic.
 - **`#[node]` retirement**: replaced by `Op` impls.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
   interpreted `Builder` method (over `register_op1`) for single-input ops;
