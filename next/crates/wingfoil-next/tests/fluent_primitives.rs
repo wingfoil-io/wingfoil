@@ -194,3 +194,45 @@ fn source_at_start_setup_error_aborts_the_run() {
         "error carries node start context: {msg}"
     );
 }
+
+/// In historical mode `setup` is composed **ahead** of the channel node's own
+/// up-front collect (the `prev_start` composition), so a deferred producer that
+/// `send_at`s timestamped values and then `close()`s replays them on the graph
+/// clock at their timestamps — exactly like a plain `channel`. This also pins
+/// the documented contract that a historical producer must `close()` explicitly:
+/// the source retains a live sender, so `EndOfStream` (not sender-drop) is what
+/// ends the collect.
+#[test]
+fn source_at_start_historical_replays_timestamped_sends() {
+    let g = GraphBuilder::new();
+    let source = g.source_at_start::<u64, _>(|sender: ChannelSender<u64>| {
+        // Stand in for a deferred historical producer: emit timestamped values
+        // (same-instant ones group into one burst), then close so the up-front
+        // collect terminates. Dropping the sender alone would not — the source
+        // keeps one alive for the run.
+        sender.send_at(1, NanoTime::new(10));
+        sender.send_at(2, NanoTime::new(10));
+        sender.send_at(3, NanoTime::new(20));
+        sender.close();
+        Ok(StopHandle::new(()))
+    });
+    let stamped = source.with_time().accumulate();
+
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+
+    let got: Vec<(NanoTime, Vec<u64>)> = r
+        .value(&stamped)
+        .into_iter()
+        .map(|(t, b)| (t, b.iter().copied().collect()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (NanoTime::new(10), vec![1, 2]),
+            (NanoTime::new(20), vec![3]),
+        ],
+        "deferred historical sends replay grouped, on the graph clock",
+    );
+}

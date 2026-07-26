@@ -307,7 +307,13 @@ impl<T> Clone for FeedbackSink<T> {
 /// `ThreadStopGuard` pattern, generalised and made start-scoped. Wrap any
 /// `'static` value whose `Drop` signals your producer to stop (a stop-flag
 /// guard, a `JoinHandle` wrapper, an owned socket).
-pub struct StopHandle(#[allow(dead_code)] Box<dyn Any>);
+pub struct StopHandle(
+    // Held only for its `Drop`; never read or downcast. Dropping the
+    // `Box<dyn Any>` runs the wrapped guard's own `Drop`, which is what stops
+    // the producer — `Any` (rather than, say, `Box<dyn FnOnce()>`) just so any
+    // `'static` guard type can be wrapped without naming it.
+    #[allow(dead_code)] Box<dyn Any>,
+);
 
 impl StopHandle {
     /// Wrap a teardown guard; its `Drop` runs when the run tears down.
@@ -632,6 +638,16 @@ impl Builder {
     /// waker are consumed by the first run, so — like `channel` — a graph built
     /// with this source is single-run for now (re-run is a documented follow-on;
     /// see `docs/source-lifecycle-defer-to-start.md`).
+    ///
+    /// **A historical producer must `close()` explicitly.** Unlike
+    /// [`channel`](Self::channel) — whose sender is handed to the caller — this
+    /// source *retains* a live [`ChannelSender`] for the whole run (it clones one
+    /// into `setup` at each start). A historical up-front collect therefore ends
+    /// only on an explicit `close()` / `EndOfStream`, never on the
+    /// all-senders-dropped path (the retained sender keeps the channel open), so
+    /// a producer that finishes by merely dropping its sender would deadlock the
+    /// collect. Realtime live sources — the primary use — are unaffected: they
+    /// terminate on `close()` or the run bound.
     pub fn source_at_start<T, Setup>(&mut self, setup: Setup) -> Handle<Burst<T>>
     where
         T: Clone + Default + 'static,
@@ -647,6 +663,11 @@ impl Builder {
         // realtime live source the collect branch is a no-op, so the order is
         // moot there.
         let mut prev_start = std::mem::replace(&mut node.start, Box::new(|_| Ok(())));
+        // Compose (don't clobber) the channel node's teardown as well: it is a
+        // no-op today, but replacing it outright would silently drop any teardown
+        // hook `channel` grows later. Our guard-drop runs first, then the
+        // previous teardown — symmetric with the `start` composition above.
+        let mut prev_teardown = std::mem::replace(&mut node.teardown, Box::new(|_| Ok(())));
         let mut setup = setup;
         // Holds the `setup`-returned guard for the duration of the run; the
         // teardown hook drops it to stop the producer.
@@ -657,10 +678,11 @@ impl Builder {
             *stop_at_start.borrow_mut() = Some(guard);
             prev_start(k)
         });
-        node.teardown = Box::new(move |_k| {
-            // Drop the StopHandle → its `Drop` signals the producer to stop.
+        node.teardown = Box::new(move |k| {
+            // Drop the StopHandle → its `Drop` signals the producer to stop,
+            // then run the channel node's own teardown.
             stop.borrow_mut().take();
-            Ok(())
+            prev_teardown(k)
         });
         handle
     }
