@@ -75,6 +75,16 @@ impl Graph {
         };
         self.0.run(run_mode, run_for).map_err(to_pyerr)
     }
+
+    /// Wire a Python object as a graph node. The object is activated by its
+    /// `upstreams`' ticks and each cycle must implement the protocol
+    /// `cycle(values) -> bool` (given the upstreams' current values, return
+    /// whether it ticked) and `peek()` (its output value when it ticked). A
+    /// raised exception aborts the run. See [`PyGraph::custom_node`].
+    fn custom_node(&self, upstreams: Vec<PyRef<'_, Stream>>, obj: Py<PyAny>) -> Stream {
+        let ups: Vec<PyStream> = upstreams.iter().map(|s| s.0.clone()).collect();
+        Stream(self.0.custom_node(ups, obj))
+    }
 }
 
 /// A stream in a [`Graph`]. Combinators return new streams on the same graph;

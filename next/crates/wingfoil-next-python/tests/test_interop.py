@@ -101,3 +101,58 @@ def test_pyop_and_pyop_fn_compose():
     out = wf.scale(wf.square(g.counter(period_nanos=100)), 2.0)
     g.run(cycles=3)  # 3rd tick: 3^2 * 2
     assert out.value() == 18.0
+
+
+def test_custom_node_python_object_as_graph_node():
+    # A Python object acting as a graph node (the classic CustomStream shape):
+    # sum two upstream counters each cycle via the cycle(values)/peek protocol.
+    class Adder:
+        def __init__(self):
+            self.total = 0
+
+        def cycle(self, values):
+            self.total = sum(values)
+            return True
+
+        def peek(self):
+            return self.total
+
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = g.counter(period_nanos=100)
+    summed = g.custom_node([a, b], Adder())
+    g.run(cycles=3)
+    assert summed.value() == 6  # 3rd tick: 3 + 3
+
+
+def test_custom_node_can_stay_quiet():
+    # Returning False from cycle suppresses the tick (classic "did I tick?").
+    class Evens:
+        def __init__(self):
+            self.v = 0
+
+        def cycle(self, values):
+            self.v = values[0]
+            return self.v % 2 == 0
+
+        def peek(self):
+            return self.v
+
+    g = wf.Graph()
+    evens = g.custom_node([g.counter(period_nanos=100)], Evens())
+    g.run(cycles=6)
+    assert evens.value() == 6  # last even value passed through
+
+
+def test_custom_node_exception_aborts_run():
+    class Boom:
+        def cycle(self, values):
+            raise ValueError("boom")
+
+        def peek(self):
+            return 0
+
+    g = wf.Graph()
+    g.custom_node([g.counter(period_nanos=100)], Boom())
+    with pytest.raises(RuntimeError, match="Python custom node cycle raised"):
+        g.run(cycles=1)
