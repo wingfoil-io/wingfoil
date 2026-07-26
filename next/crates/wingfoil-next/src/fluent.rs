@@ -281,6 +281,19 @@ pub trait SourceOps {
     /// [`Builder::channel`](crate::interp::Builder::channel)).
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
+    /// [`channel`](Self::channel) with an optional transport bound. `None` is the
+    /// unbounded default; `Some(n)` makes the producer→graph transport a bounded
+    /// `sync_channel(n)`, so a producer sending faster than the graph drains
+    /// **blocks** on `send` (back-pressure) instead of queueing an unbounded
+    /// backlog. **Do not** bound a producer that fills the buffer *before the run
+    /// starts* (e.g. a `replay_results` feed queued at wiring — with no running
+    /// consumer to drain it, a bounded send blocks at wiring); use plain
+    /// [`channel`](Self::channel) there.
+    fn channel_bounded<T: Clone + Default + 'static>(
+        &self,
+        buffer: Option<usize>,
+    ) -> (Stream<Burst<T>>, ChannelSender<T>);
+
     /// A busy-poll source: `f` runs once per engine cycle, ticking on `Some`.
     /// Lossless and ordered — one value per cycle, no coalescing. The graph
     /// becomes a busy-spin loop: the kernel never parks. Realtime runs only.
@@ -330,6 +343,15 @@ pub trait SourceOps {
     /// `graph_node`. It wraps the channel + `send_at` + `close` + join plumbing
     /// the `threading` example otherwise spells out by hand.
     fn spawn<U, F>(&self, build: F) -> Stream<Burst<U>>
+    where
+        U: Clone + Default + Send + 'static,
+        F: FnOnce(&GraphBuilder) -> Stream<U> + Send + 'static;
+
+    /// [`spawn`](Self::spawn) with an optional bound on the worker→graph channel:
+    /// `None` unbounded (default), `Some(n)` back-pressures the worker (it blocks
+    /// producing once `n` values are queued unread, in realtime — historical
+    /// drains in lock-step regardless).
+    fn spawn_bounded<U, F>(&self, buffer: Option<usize>, build: F) -> Stream<Burst<U>>
     where
         U: Clone + Default + Send + 'static,
         F: FnOnce(&GraphBuilder) -> Stream<U> + Send + 'static;
@@ -406,6 +428,7 @@ fn run_worker_map<I, O, F>(
     build: F,
     to_main: ChannelSender<O>,
     sender_back: std::sync::mpsc::Sender<ChannelSender<I>>,
+    buffer: Option<usize>,
     run_mode: RunMode,
     run_for: RunFor,
 ) where
@@ -416,7 +439,7 @@ fn run_worker_map<I, O, F>(
     let wg = GraphBuilder::new();
     // Lock-step input: one value per instant, no read-ahead, so the worker never
     // blocks on input the driving graph cannot send while it awaits this output.
-    let (in_handle, sender_in) = wg.with_builder(|b| b.channel_lockstep::<I>());
+    let (in_handle, sender_in) = wg.with_builder(|b| b.channel_lockstep::<I>(buffer));
     let in_stream: Stream<Burst<I>> = wg.wrap(in_handle);
     // Hand the input sender back; if the driving graph has gone, there is nothing
     // to run.
@@ -455,7 +478,14 @@ impl SourceOps for GraphBuilder {
     }
 
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>) {
-        let (handle, sender) = self.with_builder(|b| b.channel::<T>());
+        self.channel_bounded(None)
+    }
+
+    fn channel_bounded<T: Clone + Default + 'static>(
+        &self,
+        buffer: Option<usize>,
+    ) -> (Stream<Burst<T>>, ChannelSender<T>) {
+        let (handle, sender) = self.with_builder(|b| b.channel_bounded::<T>(buffer));
         (self.wrap(handle), sender)
     }
 
@@ -493,13 +523,21 @@ impl SourceOps for GraphBuilder {
         U: Clone + Default + Send + 'static,
         F: FnOnce(&GraphBuilder) -> Stream<U> + Send + 'static,
     {
+        self.spawn_bounded(None, build)
+    }
+
+    fn spawn_bounded<U, F>(&self, buffer: Option<usize>, build: F) -> Stream<Burst<U>>
+    where
+        U: Clone + Default + Send + 'static,
+        F: FnOnce(&GraphBuilder) -> Stream<U> + Send + 'static,
+    {
         // `build` runs once, on the worker thread, at run start; wrap it so the
         // `FnMut` setup can move it out (the backing channel source is single-run,
         // so `setup` fires exactly once). The `Rc` stays on this thread; only the
         // moved-out `F` (which is `Send`) crosses to the worker.
         let build = Rc::new(RefCell::new(Some(build)));
         let handle = self.with_builder(move |b| {
-            b.source_at_start_with_params(move |sender, run_mode, run_for, _start_time| {
+            b.source_at_start_with_params(buffer, move |sender, run_mode, run_for, _start_time| {
                 let build = build.borrow_mut().take().expect(
                     "invariant: spawn worker built once per run (backing channel is single-run)",
                 );
@@ -925,6 +963,17 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + Send + 'static,
         O: Clone + Default + Send + 'static,
         F: FnOnce(Stream<Burst<T>>) -> Stream<O> + Send + 'static;
+
+    /// [`spawn_map`](Self::spawn_map) with an optional bound (`None` unbounded,
+    /// the default) applied to **both** worker channels — this graph's input to
+    /// the worker and the worker's result back — so a slow side back-pressures the
+    /// other in realtime. Historical mode is already lock-step, so the bound only
+    /// caps in-flight messages there.
+    fn spawn_map_bounded<O, F>(&self, buffer: Option<usize>, build: F) -> Stream<Burst<O>>
+    where
+        T: Clone + Default + Send + 'static,
+        O: Clone + Default + Send + 'static,
+        F: FnOnce(Stream<Burst<T>>) -> Stream<O> + Send + 'static;
 }
 
 impl<T: 'static> StreamOps<T> for Stream<T> {
@@ -1246,6 +1295,15 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         O: Clone + Default + Send + 'static,
         F: FnOnce(Stream<Burst<T>>) -> Stream<O> + Send + 'static,
     {
+        self.spawn_map_bounded(None, build)
+    }
+
+    fn spawn_map_bounded<O, F>(&self, buffer: Option<usize>, build: F) -> Stream<Burst<O>>
+    where
+        T: Clone + Default + Send + 'static,
+        O: Clone + Default + Send + 'static,
+        F: FnOnce(Stream<Burst<T>>) -> Stream<O> + Send + 'static,
+    {
         // The worker's input sender, handed back at run start; the send-sink
         // reads it each cycle. Stays on this thread (not `Send`).
         let to_worker: Rc<RefCell<Option<ChannelSender<T>>>> = Rc::new(RefCell::new(None));
@@ -1260,8 +1318,12 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
             Ok(())
         });
         let trigger_idx = sink.handle.index();
-        // Triggered output receiver + the sender the worker writes results to.
-        let (out_handle, to_main) = self.inner.borrow_mut().channel_triggered::<O>(trigger_idx);
+        // Triggered output receiver + the sender the worker writes results to
+        // (the worker→graph direction of the bound).
+        let (out_handle, to_main) = self
+            .inner
+            .borrow_mut()
+            .channel_triggered::<O>(trigger_idx, buffer);
         let recv_idx = out_handle.index();
         // Launch the worker at run start (the run params are known only then); it
         // hands its input sender back over a one-shot, which we store for the sink.
@@ -1276,7 +1338,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
                 let (back_tx, back_rx) = std::sync::mpsc::channel::<ChannelSender<T>>();
                 let to_main = to_main.clone();
                 let worker = std::thread::spawn(move || {
-                    run_worker_map(build, to_main, back_tx, run_mode, run_for);
+                    // `buffer` bounds the graph→worker direction too.
+                    run_worker_map(build, to_main, back_tx, buffer, run_mode, run_for);
                 });
                 let sender_in = back_rx
                     .recv()

@@ -51,7 +51,7 @@ use anyhow::{Result, bail};
 static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
-use crate::channel::{ChannelSender, Message};
+use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
@@ -614,10 +614,25 @@ impl Builder {
     pub fn channel<T: Clone + Default + 'static>(
         &mut self,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        self.channel_bounded(None)
+    }
+
+    /// [`channel`](Self::channel) with an optional transport bound. `None` is the
+    /// unbounded default; `Some(n)` makes the producer→graph transport a bounded
+    /// `sync_channel(n)`, so a producer sending faster than the graph drains
+    /// **blocks** on `send` (back-pressure) instead of accumulating an unbounded
+    /// backlog. **Do not** bound a producer that fills the buffer *before the run
+    /// starts* (e.g. `replay_results`, which queues its whole feed at wiring —
+    /// there is no running consumer to drain it, so a bounded send would block at
+    /// wiring); those keep the unbounded path.
+    pub fn channel_bounded<T: Clone + Default + 'static>(
+        &mut self,
+        buffer: Option<usize>,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
         // Self-driven, read-ahead: an independent producer may batch several
         // values at one instant, so read one timestamp past `now` to close the
         // same-time burst before delivering it.
-        self.channel_inner(None, true)
+        self.channel_inner(None, true, buffer)
     }
 
     /// A channel receiver driven by an upstream `trigger` node rather than
@@ -632,8 +647,9 @@ impl Builder {
     pub(crate) fn channel_triggered<T: Clone + Default + 'static>(
         &mut self,
         trigger: usize,
+        buffer: Option<usize>,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
-        self.channel_inner(Some(trigger), false)
+        self.channel_inner(Some(trigger), false, buffer)
     }
 
     /// A self-driven channel receiver that delivers one instant at a time with
@@ -645,19 +661,32 @@ impl Builder {
     /// a single value per instant (no same-time burst to close).
     pub(crate) fn channel_lockstep<T: Clone + Default + 'static>(
         &mut self,
+        buffer: Option<usize>,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
-        self.channel_inner(None, false)
+        self.channel_inner(None, false, buffer)
     }
 
     fn channel_inner<T: Clone + Default + 'static>(
         &mut self,
         trigger: Option<usize>,
         read_ahead: bool,
+        buffer: Option<usize>,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
         let triggered = trigger.is_some();
         let idx = self.nodes.len();
         let out = self.new_slot(Burst::<T>::new());
-        let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+        // Unbounded by default; `Some(n)` bounds the transport to `sync_channel(n)`
+        // so a producer outrunning the graph blocks on `send` (back-pressure).
+        let (tx, rx) = match buffer {
+            None => {
+                let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+                (Tx::Unbounded(tx), rx)
+            }
+            Some(n) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Message<T>>(n);
+                (Tx::Bounded(tx), rx)
+            }
+        };
         self.has_channel = true;
         // The receiver is drained (historical) or waker-driven (realtime) by
         // the first run; a second run would see an empty channel.
@@ -831,7 +860,7 @@ impl Builder {
         T: Clone + Default + 'static,
         Setup: FnMut(ChannelSender<T>) -> Result<StopHandle> + 'static,
     {
-        self.source_at_start_with_params(move |sender, _run_mode, _run_for, _start_time| {
+        self.source_at_start_with_params(None, move |sender, _run_mode, _run_for, _start_time| {
             setup(sender)
         })
     }
@@ -843,12 +872,16 @@ impl Builder {
     /// its worker thread builds and runs its own graph and can only learn the run
     /// parameters here (they do not exist at wiring). The composed `start`/
     /// `teardown` semantics are identical to `source_at_start`.
-    pub(crate) fn source_at_start_with_params<T, Setup>(&mut self, setup: Setup) -> Handle<Burst<T>>
+    pub(crate) fn source_at_start_with_params<T, Setup>(
+        &mut self,
+        buffer: Option<usize>,
+        setup: Setup,
+    ) -> Handle<Burst<T>>
     where
         T: Clone + Default + 'static,
         Setup: FnMut(ChannelSender<T>, RunMode, RunFor, NanoTime) -> Result<StopHandle> + 'static,
     {
-        let (handle, sender) = self.channel::<T>();
+        let (handle, sender) = self.channel_bounded::<T>(buffer);
         let idx = handle.idx;
         let node = &mut self.nodes[idx];
         // The channel node already carries a `start` hook (the historical

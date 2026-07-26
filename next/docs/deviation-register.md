@@ -59,6 +59,11 @@ has its own decision record in
   bounded memory and unblocking concurrent producer↔consumer (this is what makes
   `spawn_map` historical possible). B4/B5 (csv/postgres reading everything at
   wiring) are now adapter-side pre-queueing, no longer amplified by the channel.
+  The transport itself is still unbounded by default, but opt-in back-pressure is
+  available — `SourceOps::channel_bounded` / `spawn_bounded` / `spawn_map_bounded`
+  take `Option<usize>` (`None` = unbounded, `Some(n)` = `sync_channel(n)`). Not for
+  producers that fill the buffer before the run starts (`replay_results`, csv,
+  `postgres_read`) — those stay on the unbounded path.
 
 ## C. Capability gaps — tracked, deferred by design
 

@@ -73,11 +73,40 @@ impl<T: PartialEq> PartialEq for Message<T> {
     }
 }
 
+/// The sending half of a channel — either the unbounded `mpsc::Sender` or the
+/// bounded `mpsc::SyncSender`. Both have an infallible-until-disconnected `send`;
+/// the bounded one **blocks** when the buffer is full (that block *is* the
+/// back-pressure). Kept private; callers see only [`ChannelSender`].
+pub(crate) enum Tx<T> {
+    Unbounded(std::sync::mpsc::Sender<Message<T>>),
+    Bounded(std::sync::mpsc::SyncSender<Message<T>>),
+}
+
+impl<T> Clone for Tx<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Tx::Unbounded(s) => Tx::Unbounded(s.clone()),
+            Tx::Bounded(s) => Tx::Bounded(s.clone()),
+        }
+    }
+}
+
+impl<T> Tx<T> {
+    fn send(&self, message: Message<T>) -> bool {
+        match self {
+            Tx::Unbounded(s) => s.send(message).is_ok(),
+            // Blocks here when the buffer is full — the graph-facing sink or the
+            // producer thread waits until the consuming graph drains.
+            Tx::Bounded(s) => s.send(message).is_ok(),
+        }
+    }
+}
+
 /// The write end of a [`channel`](crate::fluent::SourceOps::channel).
 /// Clone-able and `Send`, so it can be moved to any thread or async task.
 /// Every method wakes the paired receiver's kernel.
 pub struct ChannelSender<T> {
-    tx: std::sync::mpsc::Sender<Message<T>>,
+    tx: Tx<T>,
     waker: wingfoil::codegen::KernelWaker,
     index: usize,
 }
@@ -93,16 +122,12 @@ impl<T> Clone for ChannelSender<T> {
 }
 
 impl<T> ChannelSender<T> {
-    pub(crate) fn new(
-        tx: std::sync::mpsc::Sender<Message<T>>,
-        waker: wingfoil::codegen::KernelWaker,
-        index: usize,
-    ) -> Self {
+    pub(crate) fn new(tx: Tx<T>, waker: wingfoil::codegen::KernelWaker, index: usize) -> Self {
         Self { tx, waker, index }
     }
 
     fn deliver(&self, message: Message<T>) -> bool {
-        self.tx.send(message).is_ok() && self.waker.wake(self.index)
+        self.tx.send(message) && self.waker.wake(self.index)
     }
 
     /// Send a value (realtime) or a value at the current time (historical).

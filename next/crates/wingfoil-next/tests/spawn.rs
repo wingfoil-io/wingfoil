@@ -137,3 +137,43 @@ fn spawn_map_delivers_all_values_in_realtime() {
     let flat: Vec<u64> = runner.value(&collected).into_iter().flatten().collect();
     assert_eq!(flat, vec![10, 20, 30, 40, 50]);
 }
+
+/// `spawn_bounded` / `spawn_map_bounded`: a small transport bound applies
+/// back-pressure but never changes the delivered values or tick times.
+#[test]
+fn bounded_spawn_and_spawn_map_match_the_unbounded_result() {
+    let period = Duration::from_millis(10);
+    let n = 5u64;
+
+    let g = GraphBuilder::new();
+    // Bound the producer→graph channel to 2 (worker blocks if it gets >2 ahead).
+    let counts: Stream<Burst<u64>> =
+        g.spawn_bounded(Some(2), move |wg| wg.ticker(period).count().limit(n as u32));
+    let flat = counts.map(|b: &Burst<u64>| b.iter().sum::<u64>());
+    // Bound both worker channels to 2 as well.
+    let scaled: Stream<Burst<u64>> = flat.spawn_map_bounded(Some(2), |s: Stream<Burst<u64>>| {
+        s.map(|b: &Burst<u64>| b.iter().sum::<u64>() * 10)
+    });
+    let collected = scaled
+        .map(|b: &Burst<u64>| b.iter().copied().collect::<Vec<u64>>())
+        .with_time()
+        .accumulate();
+    let mut runner = g.build();
+
+    runner
+        .run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Duration(period * (n as u32 + 3)),
+        )
+        .expect("bounded historical run");
+
+    let out = runner.value(&collected);
+    let values: Vec<Vec<u64>> = out.iter().map(|(_, v)| v.clone()).collect();
+    let times: Vec<u64> = out.iter().map(|(t, _)| u64::from(*t)).collect();
+    assert_eq!(
+        values,
+        vec![vec![10], vec![20], vec![30], vec![40], vec![50]]
+    );
+    let p = period.as_nanos() as u64;
+    assert_eq!(times, vec![0, p, 2 * p, 3 * p, 4 * p]);
+}
