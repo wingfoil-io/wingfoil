@@ -75,7 +75,8 @@ today's interpreted engine.
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
-  ingestion, which the compiled path excludes anyway.
+  ingestion, which the compiled path excludes anyway. Lifting this (with
+  busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
 ⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
@@ -433,10 +434,10 @@ monotonic-clock artifact with no effect on values/times).
 **Dynamic graphs** (`dynamic_group`, the dynamic examples): distinct from
 `graph_node` above — this is runtime graph *mutation* (add/remove nodes mid-run),
 not thread-offload. islands already cover *static* subgraphs composed procedurally
-(including in loops); `dynamic_group`/`demux` landed behind `dynamic-graph`. The
-remaining open item is the general `Runner::extend` mutation surface — decide
-cutover-blocker vs v1 deviation (see the Phase 4.5 note); it does not block the
-catalog.
+(including in loops). Runtime mutation has since landed as a separate feature
+(behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope
+(append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
+and `Builder::demux` on the interpreted engine.
 
 **Engine coverage note:** `never`, `combine`, and `delay_with_reset` land as
 interpreted-engine (fluent) ports — like `feedback` — since a zero-input
@@ -718,7 +719,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `anyhow::Result<u16>` with `.context`, not `Result<u16, io::Error>`. The one
    engine addition is `Ctx::run_mode()` (a realtime-only IO sink needs to see the
    run mode; reported as `RealTime` inside an island, like `is_last_cycle`).
-   ✅ **otlp** *(metrics done; traces deferred)*: a realtime, push-based
+   ✅ **otlp** *(metrics + traces done)*: a realtime, push-based
    OpenTelemetry metrics **sink** — the `OtlpSinkOps::otlp_push` extension trait
    on any `Stream<T: Display>` exports each tick as an OTLP `f64` gauge over
    HTTP/protobuf, behind the `otlp` feature. Built on `consume_async` so the OTel
@@ -735,14 +736,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `&tokio::runtime::Handle` (the etcd/`consume_async` convention), so the graph
    must be driven from a non-async thread; (b) the sink is the `OtlpSinkOps`
    extension trait (`stream.otlp_push(&handle, name, config)`), not a classic
-   `OtlpPush` on `dyn Stream<T>`. **Capability gap — trace/span export
-   (`OtlpSpans`) not ported:** classic's span exporter emits OTel spans from
-   `Stream<P: HasLatency>` values; that path depends on the `Traced` /
-   `HasLatency` / `latency_stages!` latency infrastructure, which is **not yet
-   ported to next** (a separate roadmap item; latency stamps "ride values as a
-   payload" per the Phase 6 notes). Once the latency types land, `otlp_spans`
-   ports mechanically onto the same `consume_async` shape. Until then only the
-   metrics push is available; `otlp_push` itself is at full parity.
+   `OtlpPush` on `dyn Stream<T>`. **Trace/span export ✅ ported** (`OtlpSpanOps::otlp_spans`):
+   emits one parent span per tick plus one child span per stage hop from
+   `Stream<P: HasLatency>` values (now that the Phase 5 latency infrastructure
+   has landed), with caller-supplied attributes via `OtlpAttributeBuffer` and
+   the silent skip of all-zero / backwards timestamps. Same off-thread
+   `consume_async` model as `otlp_push` (the tracer provider is built lazily on
+   the first exported value and dropped at teardown to flush; no-op under
+   historical replay); the same `&tokio::runtime::Handle` and extension-trait
+   deviations apply. Parity tests: `spans_historical_mode_drains_without_connecting`
+   in `tests/otlp_adapter.rs` and `otlp_spans_sends_successfully` in
+   `tests/otlp_integration.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
@@ -841,28 +845,45 @@ slot type (compiled uses locals), and the one other hook —
 bulk catalog/adapter port proceeds against the frozen boundary and the arena
 lands whenever a measured need appears.
 
-**Measured baseline** (`benches/store_baseline.rs`, added now): on a large
-forwarding graph (8 KiB `Vec` payload through 16 `filter` hops), the owned-`Vec`
-run is ~5× an `Rc<Vec>` run of the identical graph — i.e. the per-hop clone tax
-that slot-aliasing would remove is *large* for big-payload forwarding, so the
-arena+aliasing has real teeth there (ratio is machine-dependent; regenerate
-before deciding). The same bench's `sparse_dispatch` group is the standing gate
-for the dirty-list: `Dispatch::Sparse` runs ~8× faster than the `FullSweep`
-oracle on a graph padded with cold nodes, confirming work ∝ active, not `N`.
+**Measured baseline** (`benches/store_baseline.rs`). The go/no-go is now
+bracketed by numbers rather than the earlier ~1.1–1.5× estimate (all ratios are
+machine-dependent — regenerate before deciding, but the *shape* is the point):
 
-### Dynamic graphs (runtime add/remove) — enabler landed, feature not built
+- **Ceiling** (`forward_clone`, 8 KiB `Vec` through 16 `filter` hops): the
+  owned-`Vec` run is **~7.4×** an `Rc<Vec>` run of the identical graph (≈20.8 ms
+  vs ≈2.79 ms). The per-hop clone tax slot-aliasing would remove is *large* for
+  big-payload forwarding — the arena+aliasing has real teeth **there**.
+- **Floor** (`forward_scalar`, the same shape with an `f64` payload): ≈1.84 ms —
+  *faster* than even the `Rc<Vec>` path, because a scalar clone is a register
+  copy. Aliasing the slot recovers **nothing** here; the only lever left on
+  scalar graphs is SoA cache locality (not isolated by this bench).
+
+So the realistic per-graph win lives *between* this floor and that ceiling,
+weighted by how much payload the graph actually forwards by clone. Typical
+wingfoil workloads (scalars, small structs, statistics) sit near the floor —
+**evidence for keeping the arena deferred until a real big-payload-forwarding
+graph appears.** The same bench's `sparse_dispatch` group is the standing gate
+for the dirty-list: `Dispatch::Sparse` runs **~7.3×** faster than the
+`FullSweep` oracle (≈11.2 ms vs ≈81.6 ms) on a graph padded with cold nodes,
+confirming work ∝ active, not `N`.
+
+### Dynamic graphs (runtime add/remove) — ✅ landed
 
 The sparse dirty-list maintains a mutable frontier of active nodes — the
 natural home for classic's `graph_node` / `dynamic_group` (add/remove nodes
 and sub-graphs mid-run), which the old all-nodes sweep could not cleanly
-express. The **enabler is now in place**; the feature itself (a
-`Runner::extend` appending nodes + slots and splicing edges at runtime, with
-layer/dirty bookkeeping updated for the affected region) is **not yet built**.
-This is the one open *decision*, not just execution: **is runtime mutation a
-cutover blocker under the superset objective, or a documented v1 deviation?**
-Classic `graph_node` users force the call. The compiled and island paths stay
-static by design (their whole value is a fixed monomorphized schedule);
-dynamism is an interpreted-engine capability, matching classic.
+express. The enabler *and* the feature are now both in place, behind the
+`dynamic-graph` cargo feature: `Runner::run_dynamic` appends nodes + slots and
+splices active/passive edges at runtime (with `fix_layers` updating the layer
+bookkeeping for the affected region), plus the in-graph `Builder::dynamic_group`
+(classic's `dynamic_group_stream` twin, with a pluggable `StreamStore`) and the
+`Builder::demux` routing primitive (`demux_map` / `demux_it` layered on top).
+Parity tests in `tests/dynamic_graph.rs`. The open *decision* the plan flagged —
+is runtime mutation a cutover blocker or a v1 deviation — is thereby settled by
+building it: it is supported, matching classic. The compiled and island paths
+stay static by design (their whole value is a fixed monomorphized schedule);
+dynamism is an interpreted-engine capability, matching classic. See the Phase
+4.5 header and capability-matrix note ¹⁰ for the surface detail.
 
 **Scope notes:**
 - The scheduler change was pure mechanism/performance — observable results
@@ -881,10 +902,22 @@ dynamism is an interpreted-engine capability, matching classic.
 
 ## Phase 5 — infrastructure
 
-- **Latency**: stamps ride values as today (`Traced` is just a payload);
-  `Ctx` gains a wall-clock accessor for `stamp_precise`-style ops.
-  `latency_stages` derive unchanged.
-- **Graph export**: GML from `Builder` topology + debug labels.
+- **Latency** ✅ **landed** (`src/latency.rs`): stamps ride values as today
+  (`Traced` is just a payload, re-exported from classic together with
+  `Latency`/`Stage`/`HasLatency`/`StageStats`/`LatencyStats` and the
+  `latency_stages!` derive — all engine-agnostic, unchanged). `Ctx` gained
+  `wall_time()` (a per-cycle snap, from a new `Kernel::wall_time`) and
+  `wall_time_precise()` (fresh TSC read); the node layer is re-implemented as
+  ops — `stamp`/`stamp_precise` (over `register_op1`) and the `latency_report`
+  sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
+  **Deviation**: fluent/interpreted only (matching classic, which exposes
+  latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
+  *type* parameter, which does not map onto the `graph!` value-dispatch table,
+  so compiled/nested support is out of scope for this op family.
+- **Graph export**: ❌ **not doing this** (GML from `Builder` topology + debug
+  labels). Deferred deliberately — we want a better introspection/visualization
+  story than a one-off GML dump, to be designed and scoped separately later
+  rather than ported as-is from classic.
 - **`#[node]` retirement**: replaced by `Op` impls.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
   interpreted `Builder` method (over `register_op1`) for single-input ops;
@@ -985,7 +1018,7 @@ tests covered — not "legacy pytest passes unchanged."
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
-| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; the mutation feature (`Runner::extend`) is **not yet built** — open decision: cutover blocker vs documented v1 deviation. Islands cover static composition today |
+| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; ✅ **the mutation feature has landed** (behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope (append / splice / remove / recycle), `Builder::dynamic_group`, and `Builder::demux`. Islands also cover static composition |
 | Python API change (next-python supersedes legacy `wingfoil-python`) | existing `import wingfoil` code must migrate — an accepted breaking change, not drift to avoid | new object-form binding at parity before cutover; next-python `test_interop.py` pytest as gate; migration guide + `wingfoil` module-name takeover at cutover |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
@@ -1034,6 +1067,71 @@ tests covered — not "legacy pytest passes unchanged."
   dual-execution invariant. The op-declared form gets ~all the benefit with
   none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
   natural home).
+
+## Deferred / post-v1 work (migrated from tracking issues)
+
+The items below were tracked as GitHub issues (#502, #503, #507) and folded back
+into this plan (2026-07-26) so all next-port planning lives in one place. Each is
+deferred by design, not dropped.
+
+### Compiled-path IO ingestion — busy-poll sources + bursts (was #502, #503)
+
+One theme: letting the `compiled()` / `graph!` path ingest external /
+timestamped data, which it excludes today (capability-matrix rows "Busy-poll
+ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
+footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
+`poll`) and feed a compiled island through its inputs.
+
+**Busy-poll ingest (`ALWAYS` sources — classic `poll`/`producer`).**
+- *Current state:* excluded — `compiled()` runs its own closed monomorphized
+  loop with no external wake, and `graph!` forbids IO-edge sources; `poll` lives
+  at the fluent/interpreted layer and feeds a compiled island through its inputs.
+- *Why it's now more tractable:* after #496, per-op activation is a monomorphic
+  const (`__WF_OP__ACTIVATION`), so `ALWAYS` dispatch already folds correctly for
+  ops the compiled path drives (scheduling/always custom ops work). Remaining:
+  (a) let an IO-edge/source op live in the compiled graph, and (b) a driving loop
+  that re-polls each cycle at a realtime cadence.
+- *Open questions:* does compiled keep its "no external wake" character
+  (busy-spin only, realtime-timer-driven) or gain a wake channel? Interaction
+  with `run_mode` (historical replay of a poll source vs realtime busy-spin)?
+  Worth the complexity vs. keeping IO at the interpreted boundary + compiled
+  islands?
+
+**Bursts (never latest-wins) in compiled.**
+- Every value at one instant grouped and delivered atomically in one cycle —
+  never latest-wins, never dropped. Excluded from compiled because no burst
+  *sources* exist in the macro vocabulary and the burst pattern is about IO
+  ingestion (which compiled excludes). Works on the interpreted engine today
+  (`Burst`, matching classic `Burst`/`HistoricalValue`).
+- *Scope:* a burst-source shape the `graph!` macro can express and the compiled
+  path can drive, delivering same-time-grouped values in one cycle (identical to
+  interpreted/classic burst semantics — same-time values ride one burst, not
+  coalesced, not split by a monotonic bump).
+
+**Coupling & first decision:** these land together or the exclusion stays —
+burst sources are the natural payload of a busy-poll/IO ingest edge. The gating
+decision for both: does compiled gain a wake channel, or stay busy-spin +
+realtime-timer only? The busy-spin answer fits the compiled-perf story. Tracked
+as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
+
+### Engine architecture / orientation doc (was #507)
+
+An evidence-backed `docs/wingfoil-next-architecture.md` orienting a new
+contributor/agent to the Op-pattern engine, citing source at `file:line`.
+Deliberately a *current-state snapshot*, not a migration guide — so it is
+deferred until after the incoming refactor settles (a snapshot written now would
+go stale through it). Sections to regenerate against the post-refactor code:
+- The `Op` trait + engine-owned state; `Tick::{Value,Silent,Quiet}`; lifecycle
+  hooks.
+- The three execution tiers: interpreted sparse dirty-list (`Dispatch::Sparse`,
+  default) + full-sweep oracle; fully-monomorphized `compiled()`; `nested()`
+  islands.
+- Fluent API + `compat::Signal` facade.
+- Sources/edges (ticker/constant/poll/external/channel/feedback), bursts, the
+  shared `Kernel`.
+- Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,
+  no macro op-table).
+- Testing strategy: parity-oracle vs classic + three-engine agreement.
 
 ## Sequencing and parallelism
 

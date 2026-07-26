@@ -50,6 +50,14 @@ impl Graph {
         Stream(self.0.counter(Duration::from_nanos(period_nanos)))
     }
 
+    /// A source that replays a finite list of values, one per tick,
+    /// `period_nanos` apart (first at t=0). The way to feed real data into a
+    /// graph from Python. A graph containing it is single-run.
+    fn values(&self, values: Vec<Py<PyAny>>, period_nanos: u64) -> Stream {
+        let elements: Vec<PyElement> = values.into_iter().map(PyElement::from).collect();
+        Stream(self.0.values(elements, Duration::from_nanos(period_nanos)))
+    }
+
     /// Run the graph to its bound.
     ///
     /// `realtime` selects wall-clock vs historical replay (from `start_nanos`).
@@ -122,6 +130,13 @@ impl Stream {
     /// Merge with another stream; the earliest-supplied ticked input wins.
     fn merge(&self, other: PyRef<'_, Stream>) -> Stream {
         Stream(self.0.merge(&other.0))
+    }
+
+    /// Merge with several other streams at once; the earliest-supplied ticked
+    /// input wins.
+    fn merge_all(&self, others: Vec<PyRef<'_, Stream>>) -> Stream {
+        let streams: Vec<PyStream> = others.iter().map(|s| s.0.clone()).collect();
+        Stream(self.0.merge_all(&streams))
     }
 
     /// Re-emit each value `delay_nanos` nanoseconds later.
@@ -241,6 +256,25 @@ impl Stream {
     /// aborts the run.
     fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
         Stream(self.0.bimap(&other.0, func))
+    }
+
+    /// Reduce values with `func(acc, value)`, emitting the running result. The
+    /// first value seeds the accumulator; a raised exception aborts the run.
+    fn reduce(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.reduce(func))
+    }
+
+    /// Decompose a stream of 2-tuples into its two component streams.
+    fn split(&self) -> (Stream, Stream) {
+        let (a, b) = self.0.split();
+        (Stream(a), Stream(b))
+    }
+
+    /// Build a pandas `DataFrame` (columns `time`, `value`) from every value and
+    /// its engine time; the final value (after the run) is the frame. Requires
+    /// pandas at run time.
+    fn dataframe(&self) -> Stream {
+        Stream(self.0.dataframe())
     }
 
     /// The current value after the owning [`Graph`] has run.

@@ -132,10 +132,10 @@ zmq = { version = "0.10.0", optional = true }
 # stream values as OTLP gauge metrics over HTTP/protobuf to any OTLP-compatible
 # backend (Grafana Alloy, Datadog, Honeycomb, New Relic, …). Built on the async
 # `consume_async` ergonomic so exports run off the graph thread (the OTel SDK's
-# `rt-tokio` PeriodicReader needs a tokio runtime). Only the metrics features are
-# enabled (the classic trace/span exporter is a deferred deviation — it needs the
-# `Traced`/`HasLatency` latency infrastructure, not yet ported to next; see
-# `src/adapters/otlp.rs`).
+# `rt-tokio` PeriodicReader needs a tokio runtime). Both the `metrics` and
+# `trace` features are enabled: the metrics gauge sink (`otlp_push`) and the
+# trace/span exporter (`otlp_spans`, over the ported `Traced`/`HasLatency`
+# latency infrastructure) — see `src/adapters/otlp.rs`.
 #
 # NOTE — deliberate divergence from classic: next pins opentelemetry* 0.32 while
 # classic still ships 0.28. This is to clear GHSA-w9wp-h8wv-79jx (opentelemetry_sdk
@@ -146,18 +146,23 @@ zmq = { version = "0.10.0", optional = true }
 opentelemetry = { version = "0.32", optional = true }
 opentelemetry_sdk = { version = "0.32", features = [
     "metrics",
+    "trace",
     "rt-tokio",
 ], optional = true }
 opentelemetry-otlp = { version = "0.32", features = [
     "http-proto",
     "reqwest-blocking-client",
     "metrics",
+    "trace",
 ], optional = true }
 
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
+# The `latency_stages!` macro derives serde on the generated record, so a crate
+# invoking it (here, the latency tests) needs serde in scope.
+serde = { version = "1.0", features = ["derive"] }
 
 [features]
 default = []

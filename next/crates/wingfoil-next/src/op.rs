@@ -119,6 +119,7 @@ pub enum CompositePhase {
 /// private queue instead of the outer kernel.
 pub struct Ctx<'a> {
     time: NanoTime,
+    wall_time: NanoTime,
     start_time: NanoTime,
     is_last_cycle: bool,
     run_mode: RunMode,
@@ -141,6 +142,7 @@ impl<'a> Ctx<'a> {
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
         Self {
             time: kernel.time(),
+            wall_time: kernel.wall_time(),
             start_time: kernel.start_time(),
             is_last_cycle: kernel.is_last_cycle(),
             run_mode: kernel.run_mode(),
@@ -166,6 +168,10 @@ impl<'a> Ctx<'a> {
     ) -> Self {
         Self {
             time,
+            // A composite has no per-cycle wall snap of its own; latency ops
+            // are fluent/interpreted-only and never run inside an island, so a
+            // fresh snap here is a correct (if slightly pricier) fallback.
+            wall_time: NanoTime::now(),
             start_time,
             is_last_cycle: false,
             run_mode: RunMode::RealTime,
@@ -176,6 +182,24 @@ impl<'a> Ctx<'a> {
     /// Current engine time.
     pub fn time(&self) -> NanoTime {
         self.time
+    }
+
+    /// Wall-clock time snapped once at the start of the current cycle. The
+    /// same in both realtime and historical mode (unlike [`time`](Self::time),
+    /// which is source-driven in historical replay) — so latency stamps and
+    /// perf telemetry always mean "wall-clock time spent". One `u64` load;
+    /// ops that stamp in the same engine cycle share the value. Use
+    /// [`wall_time_precise`](Self::wall_time_precise) for intra-cycle
+    /// resolution.
+    pub fn wall_time(&self) -> NanoTime {
+        self.wall_time
+    }
+
+    /// Wall-clock time snapped fresh right now (a TSC read, ~5-10 ns on x86).
+    /// Gives distinct stamps to stages that run in the same engine cycle,
+    /// where [`wall_time`](Self::wall_time) would return one shared value.
+    pub fn wall_time_precise(&self) -> NanoTime {
+        NanoTime::now()
     }
 
     /// The run's start time.

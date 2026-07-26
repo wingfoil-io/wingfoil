@@ -243,10 +243,13 @@ form.
 | `PyElement` boundary type in a `wingfoil-next-python` crate | `Clone/Default/Debug/PartialEq` + `Add/Sub/Not` + scalar/`Py<PyAny>` edge conversions | ✅ done (`element.rs`) |
 | Python-held open `GraphBuilder` + erased `PyStream` object | `PyGraph`/`PyStream` over the `Rc`-shared builder + runner slot | ✅ done (`graph.rs`) |
 | `#[pyclass]` module (`Graph`/`Stream`) + maturin build + pytest | importable `wingfoil_next` module | ✅ done (`python.rs`, `pyproject.toml`) |
+| Built-in combinator surface on `PyStream` (legacy `test_streams` parity) | `map`/`filter`/`merge`/`merge_all`/`delay`/`distinct`/`count`/`limit`/`throttle`/`sample`/`difference`/`not`/`inspect`/`accumulate`/`buffer`/`window`/`with_time`/`collect`/`fold`/`reduce`/`filter_map`/`filter_value`/`filter_none`/`sum`/`mean`/`average`/`bimap`/`split`/`dataframe` — all with Python-exception propagation; `Vec`→list & `(nanos,value)` tuple edge conversions | ✅ done (`graph.rs`, `python.rs`; PRs #549/#551 + follow-ups) |
+| Python-defined custom node (legacy `CustomStream`) | `Graph.custom_node(upstreams, obj)` over `GraphBuilder::custom_node` (the `MutableNode`+`StreamPeekRef` twin); `cycle(values)->bool` + `peek()` protocol; single-run | ✅ done (`graph.rs`, PR #549) |
 | `pyop_fn!` seam + declarative macro | `PyStream::wire_op1` + `pyop_fn!` for stateless single-input ops | ✅ done (`macros.rs`) |
 | `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
 | `#[pyop]` extensions | stateful/multi-input shapes; `Cfg`-tuple arg names | ⬜ |
 | `#[pyadapter]` / `#[pygraph]` macros | source/sink + wiring-reuse emission (needs burst/`Vec` edge erasure for channel sources) | ⬜ |
+| POC: call a fixed `compiled()` graph from Python | Wire `wingfoil-next` as a path dep; expose one fixed `graph!` wiring (`ticker → count → map(i*i) → accumulate`) as `compiled_squares`/`interpreted_squares` (both from a single wiring so they can't drift). Proved **compiled == interpreted output from Python** across cycle- and duration-bound runs; GIL released for the run; no `.unwrap()` in binding code. Honest limit: **one fixed, compile-time graph** — not general Python-defined-graph codegen (timing ~neutral at that ticker-bound size; a dispatch-heavy graph shows `compiled()`'s win). Consistent with the non-goal below (`compiled()`/`nested()` expose as single island nodes). Revisit against the post-refactor `compiled()` API. | ⬜ (was #506) |
 | Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |
 

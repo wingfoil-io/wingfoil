@@ -18,6 +18,28 @@ def test_constant_maps_via_python_lambda():
     assert out.value() == 16.0
 
 
+def test_values_source_replays_a_sequence():
+    g = wf.Graph()
+    out = g.values([10, 20, 30], period_nanos=100).accumulate()
+    g.run(cycles=3)
+    assert out.value() == [10, 20, 30]
+
+
+def test_values_source_feeds_combinators():
+    # Feed real data from Python, run it through a chain.
+    g = wf.Graph()
+    out = g.values([1, 2, 3, 4], period_nanos=100).filter_value(lambda n: n % 2 == 0).sum()
+    g.run(cycles=4)
+    assert out.value() == 6.0  # keep 2, 4 -> cumulative sum 6
+
+
+def test_values_source_carries_strings():
+    g = wf.Graph()
+    out = g.values(["a", "b", "c"], period_nanos=100).map(lambda s: s.upper()).accumulate()
+    g.run(cycles=3)
+    assert out.value() == ["A", "B", "C"]
+
+
 def test_counter_source_ticks():
     g = wf.Graph()
     doubled = g.counter(period_nanos=100).map(lambda n: n * 2)
@@ -330,6 +352,43 @@ def test_sum_of_non_numeric_aborts_run():
     g.constant("x").sum()
     with pytest.raises(RuntimeError, match="not a f64"):
         g.run(cycles=1)
+
+
+def test_merge_all_combines_streams():
+    g = wf.Graph()
+    a = g.counter(period_nanos=300)  # ticks at 0,300,600
+    b = g.counter(period_nanos=300).map(lambda n: n + 100)
+    c = g.counter(period_nanos=300).map(lambda n: n + 200)
+    out = a.merge_all([b, c])
+    g.run(cycles=3)  # all tick together; earliest-supplied (a) wins the tie
+    assert out.value() == 3  # a's running count
+
+
+def test_dataframe_from_stream():
+    pd = pytest.importorskip("pandas")
+    g = wf.Graph()
+    df = g.counter(period_nanos=100).dataframe()
+    g.run(cycles=3)
+    frame = df.value()
+    assert isinstance(frame, pd.DataFrame)
+    assert list(frame["time"]) == [0, 100, 200]
+    assert list(frame["value"]) == [1, 2, 3]
+
+
+def test_reduce_runs_from_first_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).reduce(lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6  # 1, then 1+2=3, then 3+3=6
+
+
+def test_split_decomposes_tuples():
+    g = wf.Graph()
+    pairs = g.counter(period_nanos=100).map(lambda n: (n, n * 10))
+    left, right = pairs.split()
+    g.run(cycles=3)
+    assert left.value() == 3
+    assert right.value() == 30
 
 
 def test_bimap_combines_two_inputs():
