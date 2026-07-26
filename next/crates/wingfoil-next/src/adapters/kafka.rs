@@ -319,10 +319,11 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
 
         // `consume_async` drains each burst's records through a single consumer
         // task (order preserved) off the graph thread; a write error propagates
-        // back into the graph on the next cycle. The producer is cloned per send
-        // (it is an `Arc` internally, cheap to clone and `Send`). The graph owns
-        // the runtime the consumer task runs on.
-        let sink = consume_async(&self.graph(), None, move |record: KafkaRecord| {
+        // back into the graph on the next cycle, and the final cycle's error is
+        // surfaced by the `flush` teardown wired below. The producer is cloned
+        // per send (it is an `Arc` internally, cheap to clone and `Send`). The
+        // graph owns the runtime the consumer task runs on.
+        let (sink, flush) = consume_async(&self.graph(), None, move |record: KafkaRecord| {
             let producer = producer.clone();
             async move {
                 let mut fut_record = FutureRecord::to(&record.topic).payload(&record.value);
@@ -338,7 +339,7 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
                 Ok(())
             }
         })?;
-        Ok(self.for_each(sink))
+        Ok(self.for_each(sink).finally(flush))
     }
 }
 

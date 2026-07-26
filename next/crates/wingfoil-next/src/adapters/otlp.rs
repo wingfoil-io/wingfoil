@@ -109,7 +109,7 @@ use wingfoil::RunMode;
 
 use crate::async_source::consume_async;
 use crate::burst;
-use crate::fluent::Stream;
+use crate::fluent::{Stream, StreamOps};
 use crate::latency::{HasLatency, Latency};
 use crate::op::{Activation, Ctx, Tick};
 
@@ -211,7 +211,7 @@ where
         // dropped at teardown), never in historical mode (no value reaches here).
         let mut gauge: Option<opentelemetry::metrics::Gauge<f64>> = None;
         let mut provider: Option<SdkMeterProvider> = None;
-        let sink = consume_async(&self.graph(), None, move |value: T| {
+        let (sink, flush) = consume_async(&self.graph(), None, move |value: T| {
             let result = build_and_record(
                 &mut gauge,
                 &mut provider,
@@ -225,8 +225,9 @@ where
         // The run-mode guard rides `register_op1` (`for_each` cannot see the
         // `Ctx`). In historical mode the value is never handed to `consume_async`,
         // so the background task stays idle and makes no network calls — the
-        // prometheus-sink pattern.
-        Ok(self.wire(move |b, h| {
+        // prometheus-sink pattern. The `flush` teardown drains the consumer at
+        // run end and surfaces a final-cycle export error.
+        let sink_stream = self.wire(move |b, h| {
             b.register_op1(
                 h,
                 "otlp_push",
@@ -241,7 +242,8 @@ where
                     Ok(Tick::Value(()))
                 },
             )
-        }))
+        });
+        Ok(sink_stream.finally(flush))
     }
 }
 
@@ -405,7 +407,7 @@ where
         let mut tracer: Option<opentelemetry_sdk::trace::Tracer> = None;
         let mut provider: Option<SdkTracerProvider> = None;
         let mut attr_buffer = OtlpAttributeBuffer::default();
-        let sink = consume_async(&self.graph(), None, move |value: P| {
+        let (sink, flush) = consume_async(&self.graph(), None, move |value: P| {
             let result = build_and_emit(
                 &mut tracer,
                 &mut provider,
@@ -420,7 +422,7 @@ where
             async move { result }
         })?;
 
-        Ok(self.wire(move |b, h| {
+        let sink_stream = self.wire(move |b, h| {
             b.register_op1(
                 h,
                 "otlp_spans",
@@ -435,7 +437,8 @@ where
                     Ok(Tick::Value(()))
                 },
             )
-        }))
+        });
+        Ok(sink_stream.finally(flush))
     }
 }
 

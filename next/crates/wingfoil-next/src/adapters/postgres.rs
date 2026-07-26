@@ -724,7 +724,7 @@ where
         let stmt_cache: Arc<tokio::sync::Mutex<Option<Statement>>> =
             Arc::new(tokio::sync::Mutex::new(None));
 
-        let sink = consume_async(&g, buffer_size, move |batch: WriteBatch<T>| {
+        let (sink, flush) = consume_async(&g, buffer_size, move |batch: WriteBatch<T>| {
             let client = Arc::clone(&client);
             let stmt_cache = Arc::clone(&stmt_cache);
             let table_sql = table_sql.clone();
@@ -792,7 +792,8 @@ where
                     }]
                 },
             )
-            .for_each(sink))
+            .for_each(sink)
+            .finally(flush))
     }
 }
 
