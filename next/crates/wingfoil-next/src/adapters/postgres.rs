@@ -32,10 +32,11 @@
 //! [`compute_validated_time_slices`](crate::adapters::common) slicer (the same
 //! routine the KDB+ reader will reuse), and calls `query_fn` once per slice with
 //! `((t0, t1), date, iteration)`. Each query must filter on `time >= t0 AND time
-//! < t1` and `ORDER BY time`. All slices are queried at **wiring** time (the
-//! async client is driven with [`Handle::block_on`](tokio::runtime::Handle::block_on)); the decoded, in-window
-//! rows are then fed to the finite [`replay_results`](crate::fluent::GraphBuilder::replay_results)
-//! source, so replay is deterministic and needs no producer thread.
+//! < t1` and `ORDER BY time`. The window is validated + sliced at **wiring** (a
+//! pure check, no I/O); the connect and slice queries then run at the **start of
+//! the run** via [`produce_async`](crate::async_source::produce_async), which
+//! replays the decoded, in-window rows at their timestamps — deterministic, and
+//! with no network I/O at graph construction.
 //!
 //! The first slice begins at the period boundary at or before `start_time`, so
 //! when `start_time` is not period-aligned a `time >= t0` filter can return rows
@@ -99,19 +100,23 @@
 //!    (see `docs/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    [`postgres_read`] takes a [`RunParams`] (it needs the run's `[start, end)`
-//!    window to slice queries at wiring); the live [`postgres_sub`] takes only a
-//!    [`RunMode`] (to reject a historical run at wiring — its producer derives its
-//!    `RunParams` from the actual run at start). The reader and the sink drive the
-//!    client with [`Handle::block_on`](tokio::runtime::Handle::block_on), so the
-//!    graph must be built, run, and dropped from a **non-async thread** (`main`,
-//!    a `#[test]` fn).
-//! 2. **The reader queries at wiring time onto `replay_results`.** Classic
-//!    `postgres_read` streams rows lazily through `produce_async`; next queries
-//!    every slice up front and feeds the finite row set to `replay_results`.
-//!    Behaviour is identical for a bounded historical run (both collect the whole
-//!    stream before the graph advances); a connection or query error surfaces at
-//!    wiring rather than mid-run, while a decode or non-monotonic-time error
-//!    still aborts the run (forwarded through `replay_results`).
+//!    window to slice queries at wiring — the slicing is pure; the queries
+//!    themselves run at the start of the run); the live [`postgres_sub`] takes
+//!    only a [`RunMode`] (to reject a historical run at wiring — its producer
+//!    derives its `RunParams` from the actual run at start). The **sink** drives
+//!    its client with [`Handle::block_on`](tokio::runtime::Handle::block_on) at
+//!    teardown, so the graph must be built, run, and dropped from a **non-async
+//!    thread** (`main`, a `#[test]` fn).
+//! 2. **The reader defers its connect + queries to the run, like classic.** Both
+//!    next and classic run `postgres_read` through
+//!    [`produce_async`](crate::async_source::produce_async), so wiring does no
+//!    I/O and a connection or slice-query error aborts the *run*, not graph
+//!    construction (as does a decode or non-monotonic-time error). The run window
+//!    is still validated + sliced at wiring (a pure, fail-fast check). Memory is
+//!    identical for a bounded historical run: like `replay_results` / csv, the
+//!    historical producer collects the whole stream up front, so `postgres_read`
+//!    stays on the unbounded historical path (the whole-result-set buffering is
+//!    inherent to the historical channel, not this reader).
 //! 3. **The sink is a trait only and pipelines per burst via `consume_async`.**
 //!    Classic exposed a free `postgres_write` fn *and* a `PostgresWriteOperators`
 //!    trait; next folds the entry point into [`PostgresSinkOps`]. Like classic,
@@ -334,29 +339,31 @@ impl PostgresRowExt for Row {
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if:
-/// - `params` does not describe a bounded historical run (`RunMode::RealTime`, a
-///   zero start, `RunFor::Forever`, or `RunFor::Cycles`) — the slice set would be
-///   unbounded or undefined (message from the shared validator);
-/// - the connection fails (with the password redacted), or a slice query fails.
+/// Returns an error at **wiring time** only if `params` does not describe a
+/// bounded historical run (`RunMode::RealTime`, a zero start, `RunFor::Forever`,
+/// or `RunFor::Cycles`) — the slice set would be unbounded or undefined (message
+/// from the shared validator). This is a pure check; wiring does no I/O.
 ///
-/// A row that fails to decode, or a non-monotonic timestamp, is forwarded through
-/// `replay_results` and **aborts the run** (not wiring).
+/// The connect + slice queries run at the start of the run (via
+/// [`produce_async`](crate::async_source::produce_async)), so a connection
+/// failure (with the password redacted) or a slice-query failure **aborts the
+/// run**, not wiring — as does a row that fails to decode or a non-monotonic
+/// timestamp.
 pub fn postgres_read<T>(
     g: &GraphBuilder,
     params: RunParams,
     connection: impl Into<PostgresConnection>,
     period: Duration,
-    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String,
+    query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
 ) -> Result<Stream<Burst<T>>>
 where
-    T: PostgresDeserialize + Clone + Default + 'static,
+    T: PostgresDeserialize + Clone + Default + Send + 'static,
 {
     let connection = connection.into();
-    // The graph owns the runtime; the reader block_on's it at wiring.
-    let handle = g.async_runtime_handle()?;
-    // The authoritative run start (a RealTime run yields ZERO, which the shared
-    // validator rejects with a "use RunMode::HistoricalFrom" message).
+    // Validate the run window and split it into slices at wiring — a pure,
+    // fail-fast check with no I/O. The authoritative run start (a RealTime run
+    // yields ZERO, which the shared validator rejects with a "use
+    // RunMode::HistoricalFrom" message).
     let start_time = match params.run_mode {
         RunMode::HistoricalFrom(t) => t,
         RunMode::RealTime => NanoTime::ZERO,
@@ -375,23 +382,34 @@ where
     let end_time =
         end_time_bound.expect("compute_validated_time_slices accepted a bounded end_time");
 
-    let rows = handle.block_on(read_slices::<T>(
-        &connection,
-        &slices,
-        start_time,
-        end_time,
-        query_fn,
-    ))?;
-    Ok(g.replay_results(rows))
+    // Defer the connect + slice queries to the run via `produce_async`: nothing
+    // touches the network at wiring, so a connection or query failure aborts the
+    // *run* (not graph construction) — matching classic's lazy `produce_async`
+    // reader. `read_slices` (the whole window-clamp / ordering / decode logic) is
+    // unchanged; its `Vec<Result<(record, time)>>` is handed to `produce_async`
+    // as a timestamped `(time, record)` stream, which groups same-instant rows
+    // into bursts exactly as `replay_results` did. (Like `replay_results` / csv,
+    // the historical producer still collects up front — `postgres_read` stays on
+    // the unbounded historical path; this closes the A1 wiring-side-effect, not
+    // the whole-result-set buffering.) The run's window is fixed at wiring (as
+    // before — run with the `params` you passed), so the producer's own
+    // `RunParams` are unused.
+    produce_async(g, move |_params: RunParams| async move {
+        let rows = read_slices::<T>(&connection, &slices, start_time, end_time, query_fn).await?;
+        Ok(futures::stream::iter(
+            rows.into_iter()
+                .map(|r| r.map(|(record, time)| (time, record))),
+        ))
+    })
 }
 
 /// Connect, run every slice query, decode + window-clamp the rows, and return the
 /// finite `Result<(record, time)>` sequence for `replay_results`.
 ///
-/// Connection and query failures return `Err` (surfaced at wiring); a decode or
-/// non-monotonic-time failure is pushed as a trailing `Err` in the returned Vec
-/// so it aborts the run through `replay_results` (matching classic's per-row
-/// abort semantics).
+/// Connection and query failures return `Err` (surfaced during the run, via
+/// `produce_async`'s `send_error`); a decode or non-monotonic-time failure is
+/// pushed as a trailing `Err` in the returned Vec so it aborts the run through
+/// the producer stream (matching classic's per-row abort semantics).
 async fn read_slices<T>(
     connection: &PostgresConnection,
     slices: &[((NanoTime, NanoTime), i32, usize)],
@@ -666,7 +684,7 @@ pub struct PostgresSourceConfig {
 /// The historical half — see [`PostgresSourceConfig::historical`].
 struct HistoricalSpec {
     period: Duration,
-    query_fn: Box<dyn FnMut((NanoTime, NanoTime), i32, usize) -> String>,
+    query_fn: Box<dyn FnMut((NanoTime, NanoTime), i32, usize) -> String + Send>,
 }
 
 /// The live half — see [`PostgresSourceConfig::live`].
@@ -690,7 +708,7 @@ impl PostgresSourceConfig {
     pub fn historical(
         mut self,
         period: Duration,
-        query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + 'static,
+        query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
     ) -> Self {
         self.historical = Some(HistoricalSpec {
             period,

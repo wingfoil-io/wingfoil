@@ -62,9 +62,8 @@ fn sub_rejects_historical_mode() {
     );
 }
 
-/// The sink must surface a connection failure — at wiring (eager connect) or, if
-/// the client connects lazily, on the first PUT during the run. Either way the
-/// caller sees an error rather than a silent success.
+/// The sink connects lazily on the first PUT, so wiring succeeds and an
+/// unreachable etcd endpoint aborts the *run* rather than failing silently.
 #[test]
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -75,14 +74,12 @@ fn pub_connection_refused_surfaces_an_error() {
     }]);
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
 
-    let outcome = match source.etcd_pub(conn, None, true) {
-        // Errored at wiring (eager connect) — acceptable.
-        Err(_) => return,
-        // Connected lazily: the failure must surface when the first PUT runs.
-        Ok(_sink) => g.build().run(RunMode::RealTime, RunFor::Cycles(1)),
-    };
+    let _sink = source
+        .etcd_pub(conn, None, true)
+        .expect("wiring must succeed (connect is deferred to the run)");
+    let outcome = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
     assert!(
         outcome.is_err(),
-        "an unreachable etcd endpoint must surface an error at wiring or during the run"
+        "an unreachable etcd endpoint must abort the run"
     );
 }

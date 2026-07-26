@@ -123,8 +123,9 @@ fn read_rejects_cycles() {
     assert!(format!("{err:#}").contains("RunFor::Cycles"));
 }
 
-/// An unreachable endpoint aborts `postgres_read` at wiring time, and the error
-/// context must **redact** the password (parity with classic PR #433).
+/// `postgres_read` connects at the start of the run (not wiring), so an
+/// unreachable endpoint aborts the *run*, and the error context must **redact**
+/// the password (parity with classic PR #433).
 #[test]
 fn read_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -132,15 +133,23 @@ fn read_connection_refused_redacts_password() {
     let conn = PostgresConnection::new(
         "host=127.0.0.1 port=59999 user=postgres password=s3cr3t dbname=postgres connect_timeout=2",
     );
-    let err = postgres_read::<TestTrade>(
+    // Wiring is a pure validate + slice — no I/O, so it succeeds.
+    let _stream = postgres_read::<TestTrade>(
         &g,
         historical(NanoTime::from_kdb_timestamp(0), 86400),
         conn,
         HOUR,
         read_query,
     )
-    .err()
-    .expect("an unreachable endpoint must abort at wiring");
+    .expect("wiring must succeed (connect is deferred to the run)");
+    // The connect runs at start; the unreachable endpoint aborts the run.
+    let err = g
+        .build()
+        .run(
+            RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
+            RunFor::Duration(Duration::from_secs(86400)),
+        )
+        .expect_err("an unreachable endpoint must abort the run");
     let msg = format!("{err:#}");
     assert!(!msg.contains("s3cr3t"), "password leaked in error: {msg}");
     assert!(msg.contains("password=***"), "password not redacted: {msg}");

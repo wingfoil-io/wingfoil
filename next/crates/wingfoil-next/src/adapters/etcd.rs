@@ -34,12 +34,11 @@
 //!    the
 //!    graph in an existing runtime, install it as an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
-//! 2. **The sink connects eagerly, at wiring time.** `etcd_pub` returns
-//!    `Result` and a connection (or `lease_grant`) failure surfaces *before* the
-//!    run, whereas classic connected lazily inside the async consumer so the
-//!    error surfaced *during* the run. (Skill step 8 prefers wiring-time I/O
-//!    errors; a lazily-connecting client still surfaces the failure on the first
-//!    PUT.)
+//! 2. **The sink connects lazily, on the first write.** Like classic, `etcd_pub`
+//!    connects (and grants any lease) inside the async consumer on the first
+//!    PUT, so wiring opens no socket and a connection or `lease_grant` failure
+//!    surfaces *during* the run (via `consume_async`'s error channel), not at
+//!    graph construction. If the stream is empty, nothing is connected or leased.
 //! 3. **The sink is a trait only.** Classic exposed both a free `etcd_pub`
 //!    function and an `EtcdPubOperators` trait; next folds the single public
 //!    entry point into the [`EtcdSinkOps`] trait (renamed for the sink-as-trait
@@ -48,18 +47,16 @@
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!
-//! The per-write PUTs run **off** the graph thread on the shared
+//! The connect, `lease_grant`, keepalive, and per-write PUTs all run **on** the
+//! runtime's own workers — the connect + PUTs on the shared
 //! [`consume_async`](crate::async_source::consume_async) consumer task (see
-//! below); but the wiring-time `Client::connect`/`lease_grant` and the
-//! [`LeaseGuard`]'s revoke-on-`Drop` still drive the runtime with
-//! [`Handle::block_on`] on the graph thread, so **the graph must be built, run,
-//! and dropped from a non-async thread** — the ordinary case (`main`, a
-//! `#[test]` fn). Driving it from *inside* an async context (e.g.
-//! `rt.block_on(async { g.build().run(..) })`) makes those `block_on` calls
-//! panic, and a panic in the `Drop` revoke during unwinding would abort. This is
-//! the same constraint every `consume_async` sink carries. The producer and
-//! keepalive tasks, by contrast, run on the runtime's own workers via
-//! [`Handle::spawn`] and have no such constraint.
+//! below), the keepalive via `tokio::spawn`. The one graph-thread `block_on` is
+//! the **lease revoke at teardown** (`consume_async` sinks all `block_on` the
+//! graph thread at teardown), so **the graph must be built, run, and dropped
+//! from a non-async thread** — the ordinary case (`main`, a `#[test]` fn).
+//! Driving it from *inside* an async context (e.g.
+//! `rt.block_on(async { g.build().run(..) })`) makes that `block_on` panic. This
+//! is the same constraint every `consume_async` sink carries.
 //!
 //! ## Writes run off the graph thread (via `consume_async`)
 //!
@@ -92,11 +89,11 @@
 //!
 //! # Sink
 //!
-//! [`EtcdSinkOps::etcd_pub`] connects at wiring time (a connection error surfaces
-//! before the run) and issues one PUT per [`EtcdEntry`] in each burst on the
-//! off-thread [`consume_async`](crate::async_source::consume_async) consumer, in
-//! order, so any failure aborts the run with context — matching the classic
-//! consumer's ordering and error-surfacing guarantees.
+//! [`EtcdSinkOps::etcd_pub`] connects lazily on the first write (a connection
+//! error surfaces during the run) and issues one PUT per [`EtcdEntry`] in each
+//! burst on the off-thread [`consume_async`](crate::async_source::consume_async)
+//! consumer, in order, so any failure aborts the run with context — matching the
+//! classic consumer's ordering and error-surfacing guarantees.
 //!
 //! - `lease_ttl: None` writes plain keys that persist until deleted.
 //! - `lease_ttl: Some(ttl)` attaches an etcd lease with a background keepalive
@@ -116,13 +113,12 @@
 //!   gcr.io/etcd-development/etcd:v3.5.0
 //! ```
 
-use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use etcd_client::{Client, Compare, CompareOp, GetOptions, PutOptions, Txn, TxnOp, WatchOptions};
 use futures::StreamExt;
-use tokio::runtime::Handle;
 use wingfoil::{NanoTime, RunMode};
 
 use crate::Burst;
@@ -352,34 +348,15 @@ pub fn etcd_sub(
 
 /// Holds a granted lease alive and revokes it on drop.
 ///
-/// Moved into the sink's `for_each` closure, so it is dropped when the sink (and
-/// with it the whole graph) is torn down: the keepalive task is aborted and the
-/// lease revoked, matching classic's "leased keys vanish on clean shutdown".
-struct LeaseGuard {
-    handle: Handle,
+/// Lazily-established sink state, shared between the `consume_async` consumer
+/// (which connects — and grants any lease — on the **first write**) and the
+/// teardown closure (which revokes the lease). A single consumer task
+/// establishes and uses it, and teardown runs only after that task has drained,
+/// so the `Mutex` is never contended and is never locked across an `.await`.
+struct EtcdSinkState {
     client: Client,
-    lease_id: i64,
+    lease_id: Option<i64>,
     keepalive: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for LeaseGuard {
-    fn drop(&mut self) {
-        let keepalive = self.keepalive.take();
-        let mut client = self.client.clone();
-        let lease_id = self.lease_id;
-        // Best-effort revoke on teardown; a failure here (e.g. the connection is
-        // already gone) is not worth aborting a shutting-down graph over.
-        let _ = self.handle.block_on(async move {
-            // Stop keepalive fully before revoking (as classic does), so a
-            // renewal can't race the revoke. Awaiting an aborted handle resolves
-            // immediately with a Cancelled error, which we ignore.
-            if let Some(ka) = keepalive {
-                ka.abort();
-                let _ = ka.await;
-            }
-            client.lease_revoke(lease_id).await
-        });
-    }
 }
 
 /// Extension trait providing a fluent API for writing streams to etcd via PUT.
@@ -400,9 +377,10 @@ pub trait EtcdSinkOps {
     ///
     /// # Errors
     ///
-    /// Returns an error at wiring time if the etcd connection (or, when a lease
-    /// is requested, the `lease_grant`) fails. A per-write failure (including a
-    /// `force: false` conflict) aborts the run with context.
+    /// The connection (and any lease) is established lazily on the first write,
+    /// so an etcd connection or `lease_grant` failure aborts the *run* (not
+    /// wiring) with context. A per-write failure (including a `force: false`
+    /// conflict) likewise aborts the run with context.
     fn etcd_pub(
         &self,
         conn: impl Into<EtcdConnection>,
@@ -419,69 +397,94 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
         force: bool,
     ) -> Result<Stream<()>> {
         let conn = conn.into();
-        // The graph owns the runtime; the sink connects/keepalives on it.
+        // The graph owns the runtime; the sink connects/keepalives/revokes on it.
         let handle = self.graph().async_runtime_handle()?;
-        // Connect at wiring time so a connection error surfaces before the run.
-        let mut client = handle
-            .block_on(Client::connect(&conn.endpoints, None))
-            .with_context(|| format!("etcd_pub: connecting to etcd at {:?}", conn.endpoints))?;
 
-        // Optionally grant a lease and start a background keepalive task.
-        let guard = match lease_ttl {
-            None => None,
-            Some(ttl) => {
-                // etcd's minimum TTL is 1 second; sub-second durations round up.
-                let ttl_secs = ttl.as_secs().max(1) as i64;
-                let lease_id = handle
-                    .block_on(client.lease_grant(ttl_secs, None))
-                    .context("etcd_pub: lease_grant failed")?
-                    .id();
-
-                // Keepalive runs on a clone so the sink's client stays free for
-                // PUTs; it renews at ttl/3 (>= 1s) until the task is aborted.
-                let mut ka_client = client.clone();
-                let renew_interval = (ttl / 3).max(Duration::from_secs(1));
-                let keepalive = handle.spawn(async move {
-                    let (mut keeper, mut ka_stream) =
-                        match ka_client.lease_keep_alive(lease_id).await {
-                            Ok(pair) => pair,
-                            Err(_) => return,
-                        };
-                    loop {
-                        tokio::time::sleep(renew_interval).await;
-                        if keeper.keep_alive().await.is_err() {
-                            break;
-                        }
-                        // Drain the server ack to keep the stream healthy.
-                        match ka_stream.message().await {
-                            Ok(Some(_)) => {}
-                            _ => break,
-                        }
-                    }
-                });
-
-                Some(LeaseGuard {
-                    handle: handle.clone(),
-                    client: client.clone(),
-                    lease_id,
-                    keepalive: Some(keepalive),
-                })
-            }
-        };
-
-        let lease_id = guard.as_ref().map(|g| g.lease_id);
+        // The connection (and any lease + keepalive) is established lazily on the
+        // first write, on the consumer task — not here — so wiring opens no socket
+        // and a connect/lease failure aborts the run, not graph construction
+        // (matching classic's connect-lazily-in-consumer). The established state
+        // is shared back to the teardown closure so it can revoke the lease after
+        // the writes drain. If no write ever runs, nothing is connected or leased.
+        let endpoints = Arc::new(conn.endpoints.clone());
+        let state: Arc<Mutex<Option<EtcdSinkState>>> = Arc::new(Mutex::new(None));
 
         // Each `EtcdEntry` is written by the shared `consume_async` consumer task,
         // off the graph thread (single consumer, so PUTs preserve burst order). A
-        // per-entry client clone is cheap (the etcd `Client` is an `Arc` inside)
-        // and lets each write own its `&mut`. A `force:false` conflict returns an
-        // error that aborts the run — on a later cycle, or, for the final write,
-        // via the `flush` teardown wired below (matching classic's teardown-time
-        // surfacing).
-        let write_client = client.clone();
+        // `force:false` conflict returns an error that aborts the run — on a later
+        // cycle, or, for the final write, via the `flush` teardown wired below
+        // (matching classic's teardown-time surfacing).
+        let consumer_state = Arc::clone(&state);
         let (sink, flush) = consume_async(&self.graph(), None, move |entry: EtcdEntry| {
-            let mut client = write_client.clone();
+            let state = Arc::clone(&consumer_state);
+            let endpoints = Arc::clone(&endpoints);
             async move {
+                // Establish (connect + optional lease + keepalive) on the first
+                // write. Bind the check to a `let` so the `Mutex` guard drops
+                // before the `.await`s below (never held across an await).
+                let needs_connect = state
+                    .lock()
+                    .expect("etcd_pub sink mutex poisoned")
+                    .is_none();
+                if needs_connect {
+                    let mut client = Client::connect(endpoints.as_slice(), None)
+                        .await
+                        .with_context(|| {
+                            format!("etcd_pub: connecting to etcd at {endpoints:?}")
+                        })?;
+                    let (lease_id, keepalive) = match lease_ttl {
+                        None => (None, None),
+                        Some(ttl) => {
+                            // etcd's minimum TTL is 1 second; sub-second rounds up.
+                            let ttl_secs = ttl.as_secs().max(1) as i64;
+                            let lease_id = client
+                                .lease_grant(ttl_secs, None)
+                                .await
+                                .context("etcd_pub: lease_grant failed")?
+                                .id();
+                            // Keepalive runs on a clone so the sink's client stays
+                            // free for PUTs; it renews at ttl/3 (>= 1s) until
+                            // aborted. We are on the runtime, so `tokio::spawn`.
+                            let mut ka_client = client.clone();
+                            let renew_interval = (ttl / 3).max(Duration::from_secs(1));
+                            let keepalive = tokio::spawn(async move {
+                                let (mut keeper, mut ka_stream) =
+                                    match ka_client.lease_keep_alive(lease_id).await {
+                                        Ok(pair) => pair,
+                                        Err(_) => return,
+                                    };
+                                loop {
+                                    tokio::time::sleep(renew_interval).await;
+                                    if keeper.keep_alive().await.is_err() {
+                                        break;
+                                    }
+                                    // Drain the server ack to keep the stream healthy.
+                                    match ka_stream.message().await {
+                                        Ok(Some(_)) => {}
+                                        _ => break,
+                                    }
+                                }
+                            });
+                            (Some(lease_id), Some(keepalive))
+                        }
+                    };
+                    *state.lock().expect("etcd_pub sink mutex poisoned") = Some(EtcdSinkState {
+                        client,
+                        lease_id,
+                        keepalive,
+                    });
+                }
+
+                // Clone the client and read the lease id for this write (guard
+                // dropped before the `.await`); the etcd `Client` is an `Arc`
+                // inside, so the clone is cheap and lets the write own its `&mut`.
+                let (mut client, lease_id) = {
+                    let guard = state.lock().expect("etcd_pub sink mutex poisoned");
+                    let s = guard
+                        .as_ref()
+                        .expect("invariant: sink state established above");
+                    (s.client.clone(), s.lease_id)
+                };
                 let opts = lease_id.map(|id| PutOptions::new().with_lease(id));
                 if force {
                     client
@@ -517,17 +520,35 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
         })?;
 
         // Teardown: drain every queued write (surfacing a final-cycle error),
-        // *then* drop the lease guard so its revoke fires only after the writes
-        // complete — the classic order (loop ends → abort keepalive → revoke).
-        // The guard revokes via `block_on` on the graph thread, so it must not
-        // drop inside the async consumer task; holding it here keeps it on the
-        // graph thread. Revoke runs regardless of a write error.
-        let guard_cell = RefCell::new(guard);
+        // *then* revoke any lease so the revoke fires only after the writes
+        // complete — the classic order (writes end → abort keepalive → revoke).
+        // The revoke runs via `block_on` on the graph thread (an A5a footgun,
+        // like every `consume_async` sink), regardless of a write error, and is
+        // best-effort (a failure on an already-gone connection is not worth
+        // aborting a shutting-down graph over). If no write ever ran, no
+        // connection was made and there is nothing to revoke.
         Ok(self.for_each(sink).finally(move |u: &()| {
             let flush_result = flush(u);
-            // Load-bearing: `take()` drops the `LeaseGuard` (aborting keepalive
-            // and revoking the lease) here at teardown rather than at graph drop.
-            guard_cell.borrow_mut().take();
+            // Take the established state (guard dropped before `block_on`). A
+            // `None` means no write ever ran — nothing was connected or leased.
+            let established = state.lock().expect("etcd_pub sink mutex poisoned").take();
+            if let Some(EtcdSinkState {
+                mut client,
+                lease_id: Some(lease_id),
+                keepalive,
+            }) = established
+            {
+                let _ = handle.block_on(async move {
+                    // Stop keepalive fully before revoking (as classic does), so a
+                    // renewal can't race the revoke. Awaiting an aborted handle
+                    // resolves immediately with Cancelled, ignored.
+                    if let Some(ka) = keepalive {
+                        ka.abort();
+                        let _ = ka.await;
+                    }
+                    client.lease_revoke(lease_id).await
+                });
+            }
             flush_result
         }))
     }
