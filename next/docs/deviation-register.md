@@ -55,6 +55,7 @@ has its own decision record in
 | C1 | **otlp trace/span export (`OtlpSpans`) not ported.** | ⚪ | Needs the `Traced`/`HasLatency`/`latency_stages!` infra (Phase 5). Metrics push is at full parity. `adapters/otlp.rs` deviation #3. |
 | C2 | **zmq cross-language interop not ported.** | ⚪ | The `bincode` wire envelope is next-local; not wire-compatible with a classic/Python peer. Deferred with the Python bindings (Phase 6). `adapters/zmq.rs`. |
 | C3 | **Structural gaps** — multi-output islands; runtime graph-mutation surface; (closed: `StreamStore`, `demux_it` in #529). | ⚪ | See `port-plan.md` Phase 4.5 "Known parity gaps" and Phase 1 multi-output note. |
+| C4 | **Compiled-path IO ingestion** — busy-poll (`ALWAYS`) sources + bursts are not expressible in `compiled()`/`graph!`. | ⚪ | Deliberate exclusion; IO stays at the interpreted boundary + compiled islands. Full design + the gating decision (wake channel vs busy-spin) in `port-plan.md` "Deferred / post-v1 work". (was #502/#503) |
 
 ## D. Cosmetic / API — deliberate-and-benign (low review priority)
 

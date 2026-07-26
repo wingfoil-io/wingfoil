@@ -75,7 +75,8 @@ today's interpreted engine.
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
-  ingestion, which the compiled path excludes anyway.
+  ingestion, which the compiled path excludes anyway. Lifting this (with
+  busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
 ⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
@@ -1046,6 +1047,71 @@ tests covered — not "legacy pytest passes unchanged."
   dual-execution invariant. The op-declared form gets ~all the benefit with
   none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
   natural home).
+
+## Deferred / post-v1 work (migrated from tracking issues)
+
+The items below were tracked as GitHub issues (#502, #503, #507) and folded back
+into this plan (2026-07-26) so all next-port planning lives in one place. Each is
+deferred by design, not dropped.
+
+### Compiled-path IO ingestion — busy-poll sources + bursts (was #502, #503)
+
+One theme: letting the `compiled()` / `graph!` path ingest external /
+timestamped data, which it excludes today (capability-matrix rows "Busy-poll
+ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
+footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
+`poll`) and feed a compiled island through its inputs.
+
+**Busy-poll ingest (`ALWAYS` sources — classic `poll`/`producer`).**
+- *Current state:* excluded — `compiled()` runs its own closed monomorphized
+  loop with no external wake, and `graph!` forbids IO-edge sources; `poll` lives
+  at the fluent/interpreted layer and feeds a compiled island through its inputs.
+- *Why it's now more tractable:* after #496, per-op activation is a monomorphic
+  const (`__WF_OP__ACTIVATION`), so `ALWAYS` dispatch already folds correctly for
+  ops the compiled path drives (scheduling/always custom ops work). Remaining:
+  (a) let an IO-edge/source op live in the compiled graph, and (b) a driving loop
+  that re-polls each cycle at a realtime cadence.
+- *Open questions:* does compiled keep its "no external wake" character
+  (busy-spin only, realtime-timer-driven) or gain a wake channel? Interaction
+  with `run_mode` (historical replay of a poll source vs realtime busy-spin)?
+  Worth the complexity vs. keeping IO at the interpreted boundary + compiled
+  islands?
+
+**Bursts (never latest-wins) in compiled.**
+- Every value at one instant grouped and delivered atomically in one cycle —
+  never latest-wins, never dropped. Excluded from compiled because no burst
+  *sources* exist in the macro vocabulary and the burst pattern is about IO
+  ingestion (which compiled excludes). Works on the interpreted engine today
+  (`Burst`, matching classic `Burst`/`HistoricalValue`).
+- *Scope:* a burst-source shape the `graph!` macro can express and the compiled
+  path can drive, delivering same-time-grouped values in one cycle (identical to
+  interpreted/classic burst semantics — same-time values ride one burst, not
+  coalesced, not split by a monotonic bump).
+
+**Coupling & first decision:** these land together or the exclusion stays —
+burst sources are the natural payload of a busy-poll/IO ingest edge. The gating
+decision for both: does compiled gain a wake channel, or stay busy-spin +
+realtime-timer only? The busy-spin answer fits the compiled-perf story. Tracked
+as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
+
+### Engine architecture / orientation doc (was #507)
+
+An evidence-backed `docs/wingfoil-next-architecture.md` orienting a new
+contributor/agent to the Op-pattern engine, citing source at `file:line`.
+Deliberately a *current-state snapshot*, not a migration guide — so it is
+deferred until after the incoming refactor settles (a snapshot written now would
+go stale through it). Sections to regenerate against the post-refactor code:
+- The `Op` trait + engine-owned state; `Tick::{Value,Silent,Quiet}`; lifecycle
+  hooks.
+- The three execution tiers: interpreted sparse dirty-list (`Dispatch::Sparse`,
+  default) + full-sweep oracle; fully-monomorphized `compiled()`; `nested()`
+  islands.
+- Fluent API + `compat::Signal` facade.
+- Sources/edges (ticker/constant/poll/external/channel/feedback), bursts, the
+  shared `Kernel`.
+- Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,
+  no macro op-table).
+- Testing strategy: parity-oracle vs classic + three-engine agreement.
 
 ## Sequencing and parallelism
 
