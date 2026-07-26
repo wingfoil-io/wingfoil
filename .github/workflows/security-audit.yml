@@ -89,12 +89,3 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate
-          # GHSA-w9wp-h8wv-79jx: opentelemetry_sdk 0.28 unbounded allocation in
-          # W3C Baggage propagation (fixed in 0.29). The classic `wingfoil` crate
-          # already ships opentelemetry_sdk 0.28 (wingfoil/Cargo.toml), so this is
-          # not a newly introduced risk — dependency-review only flags it because
-          # wingfoil-next adds the same pinned dep. The next otlp sink is
-          # metrics-only and never uses Baggage propagation (the vulnerable path).
-          # Pinned to 0.28 to stay in lockstep with the classic tree; revisit when
-          # the classic otlp adapter bumps to >= 0.29.
-          allow-ghsas: GHSA-w9wp-h8wv-79jx
