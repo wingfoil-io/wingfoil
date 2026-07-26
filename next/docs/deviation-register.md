@@ -43,10 +43,54 @@ has its own decision record in
 | id | dev | class | notes / source |
 |---|---|:--:|---|
 | B1 | ~~**`etcd_pub` blocks the graph thread** — `Handle::block_on` per burst.~~ | ✅ | **Resolved.** `consume_async` now returns a `flush` teardown (wired via `finally`) that closes the sink, joins the consumer task, and — unlike a `Drop` — surfaces the **final** write error as the run's `Err`. This is the "teardown-hook story for synchronous-error ops" B1 was blocked on: it lets `etcd_pub`'s `force:false` conditional abort a single-cycle run at teardown (exactly as classic's `AsyncConsumerNode::teardown` does), so the per-write `block_on` is gone and the PUTs run off the graph thread on the shared consumer task. The wiring-time connect + `LeaseGuard` revoke keep their (teardown-time, graph-thread) `block_on` — the ordinary `consume_async` footgun (A5a). The same `flush` upgrade also closes the "final-cycle write error swallowed" gap for kafka/postgres/redis/otlp. |
-| B2 | **Live sources reject `RunMode::HistoricalFrom` at wiring** (etcd/redis/kafka/postgres `_sub`, zmq_sub). | 🟡✅ | **Ratified — accepted deviation.** Classic *technically permitted* a historical run with wall-clock timestamps, but a live tail has no deterministic timeline to replay: wall-clock-stamped rows give neither reproducible values nor reproducible tick times, so the classic path was an unguarded footgun, not a real capability. Deterministic historical replay is served by the paired time-sliced `_read` sources (e.g. `postgres_read`). next rejects at wiring with a clear message pointing to the `_read` source — a strictly better failure mode than the block-collect deadlock at `start`. Wall-clock historical is **not** restored. |
+| B2 | **Live sources reject `RunMode::HistoricalFrom` at wiring** (etcd/redis/kafka/postgres `_sub`, zmq_sub). | 🟡 | Live tails are unbounded wall-clock streams; a historical run would block-collect the whole stream and deadlock at `start`, so next rejects at wiring with a pointer to the bounded reader. **Classic parity for postgres** — classic `postgres_sub` already required `RunMode::RealTime` and bailed otherwise (`adapters/postgres/sub.rs`), so next's rejection is parity, *not* a deviation there; the "classic permitted a wall-clock historical run" gap is real only for `zmq_sub` and the etcd/redis/kafka `_sub` sources, which had no such guard. **Split ruling (agreed plan below):** (a) **ratified reject** for live-only sources with no bounded historical twin (`zmq_sub`, `etcd_sub`, both redis sources, `kafka_sub` today); (b) for adapters that *do* have a bounded historical read alongside the live tail, replace the mode-locked `_read`/`_sub` function pair with a single mode-agnostic `<adapter>_source` that dispatches on `run_mode`. → plan §B2. |
 | B3 | **`kafka_pub` produces sequentially** (single ordered `consume_async` consumer, N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst). | 🟡 | Order-preserving but a throughput deviation. `adapters/kafka.rs` deviation #4. |
 | B4 | **csv reads the whole file up front** vs classic's lazy row streaming. | 🟡 | Unbounded-memory for a huge file under `RunFor::Forever`. `adapters/csv.rs` "consequences of using the channel source". |
 | B5 | **`postgres_read` queries all slices at wiring** onto `replay_results` vs classic's lazy `produce_async`. | 🟢🟡 | "Identical for a bounded historical run," but buffers the whole result set (memory). Same family as A1. `adapters/postgres.rs` deviation #2. |
+
+### B2 — agreed plan: unified `<adapter>_source`
+
+**Why.** `RunMode` is a *run-time* choice: build the graph once, pick real-time
+vs historical at `run()`. Mode-agnostic sources (`ticker`, `constant`,
+`channel`) honour that, but the mode-locked `_read`/`_sub` split forces the
+switch into *wiring* — flipping modes means editing the graph, not the run
+call, and duplicating downstream wiring across two source functions. Classic
+had the same split; next's superset mandate lets it improve without dropping
+the primitives.
+
+**Design.** For any adapter with **both** a bounded historical read and a live
+tail, add a single mode-agnostic `<adapter>_source(cfg)` that inspects
+`params.run_mode` at wiring time and constructs the right mechanism:
+
+- `RunMode::HistoricalFrom` → the bounded, time-sliced replay (the `_read`
+  mechanism — deterministic, no deadlock).
+- `RunMode::RealTime` → the `LISTEN`/`NOTIFY`-style live tail (the `_sub`
+  mechanism).
+
+`cfg` carries both halves, each **optional**: a historical windowed-query spec
+and a live-tail spec. Supply both → a fully mode-agnostic graph (flip the mode
+at `run()`, downstream wiring unchanged); supply one → works in that mode and
+errors in the other with a message naming the missing half. This strictly
+dominates today, where the two modes can't even be *expressed* without swapping
+function names. Keep `_read` / `_sub` as low-level primitives; `_source` wires
+through them.
+
+**Feasibility.** `run_mode` is already available to source builders at wiring
+(`params.run_mode`), so the dispatch is a wiring-time branch. The deadlock that
+motivated the reject only ever required two *mechanisms*, not two public
+*functions*.
+
+**Scope — where `_source` applies.**
+
+- **postgres** — the only adapter with both forms today (`postgres_read` +
+  `postgres_sub`). First target: add `postgres_source`.
+- **kafka** — candidate *once* it gains a bounded offset-range replay reader
+  (the durable log makes this feasible); only `kafka_sub` exists now, so it
+  stays under ruling (a) until then.
+- **Live-only, reject ratified as-is:** `zmq_sub`, `etcd_sub`, and both redis
+  sources (`redis_sub` Pub/Sub and `redis_stream_read` are live/unbounded with
+  no historical timeline). Nothing to dispatch to under historical, so the
+  wiring-time reject is the honest behaviour and B2 is accepted for these.
 
 ## C. Capability gaps — tracked, deferred by design
 
@@ -86,8 +130,10 @@ has its own decision record in
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
 `source_at_start`, #547); **B1** (`consume_async` `flush` teardown surfaces
 final-cycle write errors, so `etcd_pub` moved off the graph thread — also closes
-the swallowed-final-error gap for kafka/postgres/redis/otlp); **B2** (ratified as
-an accepted deviation — live sources reject `HistoricalFrom`, #557).
+the swallowed-final-error gap for kafka/postgres/redis/otlp); **B2** (split
+ruling, #557: reject ratified for live-only sources; adapters with a bounded
+historical twin move to a unified mode-dispatching `<adapter>_source` — see
+plan §B2, postgres first).
 
 ## Keeping this current
 
