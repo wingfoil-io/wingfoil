@@ -178,10 +178,10 @@ fn sub_rejects_historical_mode() {
     );
 }
 
-// ---- postgres_write: eager connect surfaces (and redacts) a failure ----
+// ---- postgres_write: deferred connect surfaces (and redacts) a failure ----
 
-/// The sink connects eagerly at wiring; an unreachable endpoint surfaces an error
-/// there, again with the password redacted.
+/// The sink connects lazily on the first write, so wiring succeeds and an
+/// unreachable endpoint aborts the *run* — with the password redacted.
 #[test]
 fn write_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -194,10 +194,14 @@ fn write_connection_refused_redacts_password() {
     let conn = PostgresConnection::new(
         "host=127.0.0.1 port=59999 user=postgres password=hunter2 dbname=postgres connect_timeout=2",
     );
-    let err = source
+    // Wiring opens no socket — the connect is deferred to the run.
+    let _sink = source
         .postgres_write(conn, "trades", None)
-        .err()
-        .expect("an unreachable endpoint must abort at wiring");
+        .expect("wiring must succeed (connect is deferred to the run)");
+    let mut runner = g.build();
+    let err = runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .expect_err("an unreachable endpoint must abort the run");
     let msg = format!("{err:#}");
     assert!(!msg.contains("hunter2"), "password leaked in error: {msg}");
     assert!(msg.contains("password=***"), "password not redacted: {msg}");
