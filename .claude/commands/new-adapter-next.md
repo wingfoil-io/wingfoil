@@ -11,6 +11,9 @@ reference implementations; read them before writing code:
   realtime `poll` tail + sink), dependency-free.
 - `src/adapters/csv.rs` — the serde-typed parsing cousin (feature-gated deps,
   wiring-time `Result`, header introspection).
+- `src/adapters/zmq.rs` — a live sync-streaming subscriber over a background
+  thread, using [`source_at_start`] to **defer the socket connect + thread spawn
+  to graph `start()`** (see the source shape in step 7); plus a status stream.
 - `src/adapters/augurs.rs` — a pure-compute adapter (custom `Op`s +
   `#[op(build = ...)]` + config builder types, no I/O).
 - `src/async_source.rs` — `produce_async` for async client libraries.
@@ -123,7 +126,14 @@ run mode from the `RunParams` the factory already takes.
 
 - **Wiring-time I/O** (open file, bind socket, connect) happens in the factory
   function, which returns `anyhow::Result<Stream<...>>` — errors surface at
-  wiring, before the run (see `csv_read`, `sink_lines`).
+  wiring, before the run (see `csv_read`, `sink_lines`). **Exception — a live
+  socket/subscription source's connect + thread spawn belongs in `start()`, not
+  the factory**: wire it with [`source_at_start`] so wiring stays pure (parse /
+  registry lookup / historical rejection only) and the connect+spawn happen in
+  the `setup` closure at run start (see step 7). The factory still returns
+  `Result` for the pure validation; a *connection* error then surfaces at
+  run-start with node context (classic-consistent) rather than at wiring. `zmq_sub`
+  is the reference.
 - **Run-time errors** flow through the fallible cycle: `for_each`/`try_map`
   closures return `Result`, custom `Op` lifecycle functions return `Result`,
   producer threads use `send_error`. Attach `.context("...")`/`.with_context`
@@ -189,7 +199,7 @@ load-bearing decision:
 | Library / data shape | Source | Sink | Reference |
 |---|---|---|---|
 | File / batch replay (historical) | read fully at wiring → `send_at` per record → `close` | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs` |
-| Synchronous streaming client (blocking recv) | background `std::thread` feeding a `ChannelSender` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | pattern below |
+| Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq.rs`, pattern below |
 | Async client library (tokio-based) | `produce_async` / `produce_async_bounded` (`async` feature) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
 | Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (classic), step 8 |
@@ -359,35 +369,73 @@ sender.close();   // the historical receiver needs the end-of-stream
 
 ### Background thread over the channel (sync streaming client — realtime)
 
+**Use [`source_at_start`], not `g.channel()` + a wiring-time spawn.** A live
+source's socket connect and background thread belong in `start()`, not the
+factory: `source_at_start` allocates the channel at wiring but runs your `setup`
+closure — which connects and spawns the feeder thread — at graph `start()`, and
+returns the running producer as a [`StopHandle`] dropped at teardown to stop it
+(the generalised `ThreadStopGuard`). That keeps wiring side-effect-free and
+unit-testable (no live socket to construct the graph), and surfaces a connection
+error at run-start with node context — classic-consistent. `zmq_sub` is the
+reference.
+
 ```rust
-pub fn $ARGUMENTS_sub<T>(g: &GraphBuilder, conn: impl Into<<Name>Config>) -> Result<Stream<Burst<T>>>
+pub fn $ARGUMENTS_sub<T>(g: &GraphBuilder, run_mode: RunMode, conn: impl Into<<Name>Config>)
+    -> Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
 {
-    let client = connect(conn.into())?;               // wiring-time: Err before the run
-    let (stream, sender) = g.channel::<T>();
-    std::thread::Builder::new()
-        .name("$ARGUMENTS-sub".into())
-        .spawn(move || {
-            loop {
-                match client.recv() {
-                    Ok(msg) => {
+    // Wiring is PURE: reject historical (a live source is realtime-only, see the
+    // invariant), resolve/validate config. No socket, no thread here.
+    if let RunMode::HistoricalFrom(_) = run_mode {
+        anyhow::bail!("$ARGUMENTS_sub: RunMode::HistoricalFrom is unsupported — run realtime");
+    }
+    let cfg = conn.into().resolve()?;                  // parse / registry lookup — Err before the run
+
+    // Deferred to start(): connect + spawn the feeder. `setup` is handed a fresh
+    // ChannelSender each run; whatever it returns is dropped at teardown.
+    Ok(g.source_at_start::<T, _>(move |sender| {
+        let cfg = cfg.clone();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        std::thread::Builder::new()
+            .name("$ARGUMENTS-sub".into())
+            .spawn(move || {
+                let client = match connect(&cfg) {     // connect on the thread → error at run-start
+                    Ok(c) => c,
+                    Err(e) => { sender.send_error(e.context("$ARGUMENTS: connecting")); return; }
+                };
+                loop {
+                    if thread_stop.load(std::sync::atomic::Ordering::Relaxed) { return; }
+                    match client.recv() {
                         // `send` returns false once the receiver is gone —
                         // a normal teardown race; stop producing.
-                        if !sender.send(msg) { return; }
+                        Ok(msg) => if !sender.send(msg) { return; },
+                        Err(e) if is_end_of_stream(&e) => { sender.close(); return; }
+                        Err(e) => { sender.send_error(anyhow::Error::new(e).context("...")); return; }
                     }
-                    Err(e) if is_end_of_stream(&e) => { sender.close(); return; }
-                    Err(e) => { sender.send_error(anyhow::Error::new(e).context("...")); return; }
                 }
-            }
-        })
-        .context("$ARGUMENTS: spawning subscriber thread")?;
-    Ok(stream)
+            })
+            .context("$ARGUMENTS: spawning subscriber thread")?;
+        // Its Drop flips `stop`, so the thread exits on its next loop turn.
+        Ok(StopHandle::new(ThreadStopGuard(stop)))
+    }))
 }
 ```
 
 Each `send` wakes the kernel; values arriving between cycles group into one
 `Burst`. Realtime only — do not offer this path for historical runs.
+`source_at_start` builds on `channel`, so a graph containing it is **single-run**
+for now (the receive channel + waker are consumed by the first run), same as a
+plain `channel` source. `StopHandle`/`source_at_start` are `use
+wingfoil_next::interp::{...}` / the `SourceOps` trait; define `ThreadStopGuard`
+as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
+
+> **Not on `source_at_start` yet:** the `produce_async` and plain
+> `channel`/`external` source shapes still connect/spawn at wiring. If your
+> adapter uses those, follow their sections as written; migrating them to
+> deferred establishment is tracked in
+> `next/docs/source-lifecycle-defer-to-start.md`.
 
 ### `produce_async` (async client library — `async` feature)
 
