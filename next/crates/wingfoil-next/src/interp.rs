@@ -2104,6 +2104,75 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// Register a **custom node** — the public, general-purpose extension point
+    /// for a caller-driven graph node, the next equivalent of classic
+    /// `MutableNode` + `StreamPeekRef`. Where [`register_op1`](Self::register_op1)
+    /// / [`register_op2`](Self::register_op2) fix the arity (1 or 2 active
+    /// inputs) and own the op's state, `custom_node` declares an *arbitrary* set
+    /// of active and passive upstream edges (by node index, so upstreams of any
+    /// value type mix freely — only the indices matter for dispatch) and lets
+    /// the `cycle` closure own whatever state it needs.
+    ///
+    /// The closure produces a [`Tick<T>`] each activation; the engine writes it
+    /// into this node's output slot exactly as the op registrations do
+    /// (`Value` ⇒ tick, `Silent` ⇒ update the value slot without ticking,
+    /// `Quiet` ⇒ nothing). To *read* an upstream's current value, capture its
+    /// [`SlotRef`] at wiring time (via
+    /// [`Stream::value_slot`](crate::fluent::Stream::value_slot)) and
+    /// `borrow()` it inside the closure — the engine never delivers inputs
+    /// through [`Ctx`], which stays narrowed to time + self-scheduling. This
+    /// mirrors classic, where a `MutableNode` reaches its upstreams through the
+    /// `Rc<dyn Stream>`s it holds.
+    ///
+    /// `activation` declares scheduling behaviour ([`Activation::NONE`] for a
+    /// node driven purely by upstream ticks, [`Activation::SCHEDULES`] for one
+    /// that self-schedules via [`Ctx::schedule`], etc.).
+    ///
+    /// **Single-run (v1):** a custom node's state is caller-owned with no engine
+    /// `reset` hook, so — like a mounted island — a graph containing one is
+    /// single-run; a second [`Runner::run`] errors rather than silently
+    /// continuing stale state.
+    pub fn custom_node<T, F>(
+        &mut self,
+        active_ups: Vec<usize>,
+        passive_ups: Vec<usize>,
+        activation: Activation,
+        mut cycle: F,
+    ) -> Handle<T>
+    where
+        T: Clone + Default + 'static,
+        F: FnMut(&mut Ctx<'_>) -> Result<Tick<T>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(T::default());
+        // Caller-owned state has no engine reset hook, so a graph with a custom
+        // node is single-run — the same contract as a mounted island (see the
+        // re-run note in the port plan).
+        self.re_runnable = false;
+        self.push_node(
+            active_ups,
+            activation,
+            "custom",
+            Box::new(move |k| {
+                let mut ctx = Ctx::new(k, idx);
+                match cycle(&mut ctx)? {
+                    Tick::Value(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.set_passive_ups(idx, passive_ups);
+        self.make_handle(idx)
+    }
+
     pub(crate) fn ticked_rc(&self) -> Rc<RefCell<Vec<bool>>> {
         self.ticked.clone()
     }

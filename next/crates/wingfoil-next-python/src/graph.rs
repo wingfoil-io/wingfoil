@@ -28,9 +28,9 @@ use std::time::Duration;
 use anyhow::Result;
 use pyo3::prelude::*;
 use wingfoil::{RunFor, RunMode};
-use wingfoil_next::interp::{Builder, Runner};
+use wingfoil_next::interp::{Builder, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
-use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps};
+use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 
 use crate::PyElement;
 
@@ -91,6 +91,72 @@ impl PyGraph {
             .expect("runner set above")
             .run(run_mode, run_for)
     }
+
+    /// Wire a **Python-defined custom node** — a Python object acting as a graph
+    /// node, the object-form twin of the classic `CustomStream`
+    /// (`MutableNode` + `StreamPeekRef`). This is the erased-boundary use of
+    /// [`GraphBuilder::custom_node`]: the node is activated by its `upstreams`'
+    /// ticks and, each activation, calls the Python object's protocol:
+    ///
+    /// - `cycle(values) -> bool` — invoked with the list of upstream current
+    ///   values; returns whether the node ticked this cycle (the classic
+    ///   `cycle() -> bool` decision). A not-yet-ticked upstream reads as Python
+    ///   `None`.
+    /// - `peek() -> value` — read only when `cycle` returned `True`, producing
+    ///   the node's output value.
+    ///
+    /// Upstream values are read from their value slots captured at wiring time,
+    /// so a custom node sees its inputs **without** re-entering the running
+    /// graph (the runner is mutably borrowed for the duration of a run, so a
+    /// Python `cycle` cannot read a sibling `PyStream.value()` — the values are
+    /// handed in instead). A raised exception aborts the run with context.
+    ///
+    /// A graph containing a custom node is single-run (caller-owned Python state
+    /// has no engine reset hook — see [`GraphBuilder::custom_node`]).
+    pub fn custom_node(&self, upstreams: Vec<PyStream>, obj: Py<PyAny>) -> PyStream {
+        // Capture each upstream's value slot at wiring time. Reading these
+        // during a cycle touches only the slot cells, never the runner, so a
+        // Python custom node reads its inputs with no re-entrancy hazard.
+        let slots: Vec<SlotRef<PyElement>> =
+            upstreams.iter().map(|s| s.stream.value_slot()).collect();
+        let active: Vec<Upstream> = upstreams.iter().map(|s| s.stream.upstream()).collect();
+        let stream = self.builder.custom_node::<PyElement, _>(
+            &active,
+            &[],
+            Activation::NONE,
+            move |_ctx: &mut Ctx<'_>| {
+                Python::attach(|py| {
+                    let values: Vec<Py<PyAny>> = slots
+                        .iter()
+                        .map(|slot| {
+                            let element = slot.borrow();
+                            if element.is_none() {
+                                py.None()
+                            } else {
+                                element.object().clone_ref(py)
+                            }
+                        })
+                        .collect();
+                    let ticked: bool = obj
+                        .call_method1(py, "cycle", (values,))
+                        .map_err(|err| anyhow::anyhow!("Python custom node cycle raised: {err}"))?
+                        .extract(py)
+                        .map_err(|err| {
+                            anyhow::anyhow!("Python custom node cycle must return bool: {err}")
+                        })?;
+                    if ticked {
+                        let value = obj.call_method0(py, "peek").map_err(|err| {
+                            anyhow::anyhow!("Python custom node peek raised: {err}")
+                        })?;
+                        Ok(Tick::Value(PyElement::new(value)))
+                    } else {
+                        Ok(Tick::Quiet)
+                    }
+                })
+            },
+        );
+        self.wrap(stream)
+    }
 }
 
 /// A stream in a [`PyGraph`], erased to [`PyElement`]. Combinators mirror the
@@ -146,6 +212,57 @@ impl PyStream {
     /// Suppress consecutive duplicate values (emit on change only).
     pub fn distinct(&self) -> PyStream {
         self.wrap(self.stream.distinct())
+    }
+
+    /// Emit the running tick count `1, 2, 3, …` (as an integer [`PyElement`]),
+    /// ignoring the values themselves.
+    pub fn count(&self) -> PyStream {
+        let counted = self.stream.map(|_: &PyElement| ()).count();
+        self.wrap(counted.map(|n: &u64| PyElement::from(*n as i64)))
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    pub fn limit(&self, limit: u32) -> PyStream {
+        self.wrap(self.stream.limit(limit))
+    }
+
+    /// Rate-limit: emit at most once per `interval`.
+    pub fn throttle(&self, interval: Duration) -> PyStream {
+        self.wrap(self.stream.throttle(interval))
+    }
+
+    /// Emit this stream's current value whenever `trigger` ticks (a passive
+    /// read of the value; `trigger`'s own value is ignored).
+    pub fn sample(&self, trigger: &PyStream) -> PyStream {
+        let unit = trigger.stream.map(|_: &PyElement| ());
+        self.wrap(self.stream.sample(&unit))
+    }
+
+    /// Emit the successive difference `value - previous` (quiet on the first
+    /// value). Uses [`PyElement`]'s `Sub`, i.e. Python `__sub__`.
+    pub fn difference(&self) -> PyStream {
+        self.wrap(self.stream.difference())
+    }
+
+    /// Negate each value with [`PyElement`]'s `Not`, which maps to Python
+    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the classic
+    /// `not` node's `T: Not` semantics. Named `not` on the Python side.
+    pub fn not_(&self) -> PyStream {
+        self.wrap(self.stream.not())
+    }
+
+    /// Observe each value with a Python callable, passing it through unchanged
+    /// (a debug tap). Routed through [`try_map`](StreamOps::try_map) so a raised
+    /// exception aborts the run with context rather than panicking.
+    pub fn inspect(&self, func: Py<PyAny>) -> PyStream {
+        let observed = self.stream.try_map(move |e: &PyElement| {
+            Python::attach(|py| {
+                func.call1(py, (e.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python inspect callable raised: {err}"))?;
+                Ok(e.clone())
+            })
+        });
+        self.wrap(observed)
     }
 
     /// Wire a **single-input op** onto this stream at the erased boundary — the
@@ -225,6 +342,18 @@ mod tests {
         })
     }
 
+    /// Execute `src` (which must bind a name `obj`) and return that object —
+    /// used to build a Python custom-node object with `cycle`/`peek` methods.
+    fn py_object(src: &str) -> Py<PyAny> {
+        use pyo3::types::PyDict;
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            py.run(&std::ffi::CString::new(src).unwrap(), Some(&globals), None)
+                .unwrap();
+            globals.get_item("obj").unwrap().unwrap().unbind()
+        })
+    }
+
     fn run_cycles(g: &PyGraph, n: u32) {
         g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(n))
             .unwrap();
@@ -239,6 +368,72 @@ mod tests {
         run_cycles(&g, 1);
         let v: f64 = (&out.value()).try_into().unwrap();
         assert_eq!(16.0, v);
+    }
+
+    #[test]
+    fn count_ignores_values() {
+        let g = PyGraph::new();
+        // Values are strings; count only counts ticks.
+        let counted = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: 'x'"))
+            .count();
+        run_cycles(&g, 3);
+        let v: i64 = (&counted.value()).try_into().unwrap();
+        assert_eq!(3, v);
+    }
+
+    #[test]
+    fn limit_caps_ticks() {
+        let g = PyGraph::new();
+        let capped = g.counter(Duration::from_nanos(100)).limit(2);
+        run_cycles(&g, 5);
+        // The value stays at the last value passed before the cap.
+        let v: i64 = (&capped.value()).try_into().unwrap();
+        assert_eq!(2, v);
+    }
+
+    #[test]
+    fn difference_of_counter_is_one() {
+        let g = PyGraph::new();
+        let diff = g.counter(Duration::from_nanos(100)).difference();
+        run_cycles(&g, 4);
+        let v: i64 = (&diff.value()).try_into().unwrap();
+        assert_eq!(1, v); // 1,2,3,4 -> deltas 1,1,1
+    }
+
+    #[test]
+    fn not_negates_value() {
+        let g = PyGraph::new();
+        // `not` maps to __neg__ (arithmetic negation), matching the classic node.
+        let negated = g.constant(PyElement::from(5_i64)).not_();
+        run_cycles(&g, 1);
+        let v: i64 = (&negated.value()).try_into().unwrap();
+        assert_eq!(-5, v);
+    }
+
+    #[test]
+    fn inspect_taps_and_passes_through() {
+        let g = PyGraph::new();
+        let tapped = g
+            .counter(Duration::from_nanos(100))
+            .inspect(lambda("lambda v: None"));
+        run_cycles(&g, 3);
+        // Passes the value through unchanged.
+        let v: i64 = (&tapped.value()).try_into().unwrap();
+        assert_eq!(3, v);
+    }
+
+    #[test]
+    fn inspect_exception_aborts_run() {
+        let g = PyGraph::new();
+        let _tapped = g.counter(Duration::from_nanos(100)).inspect(lambda(
+            "lambda v: (_ for _ in ()).throw(ValueError('boom'))",
+        ));
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python inspect callable raised"));
     }
 
     #[test]
@@ -299,6 +494,81 @@ mod tests {
             .unwrap_err();
         assert!(format!("{err:#}").contains("Python map callable raised"));
         let _ = out;
+    }
+
+    /// A Python object acting as a graph node: sums its two upstream counters
+    /// each cycle. Exercises the `cycle(values) -> bool` + `peek()` protocol and
+    /// that upstream values are handed in correctly.
+    #[test]
+    fn python_custom_node_sums_upstreams() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(100));
+        let b = g.counter(Duration::from_nanos(100));
+        let adder = py_object(
+            "class Adder:\n\
+            \x20   def __init__(self): self.total = 0\n\
+            \x20   def cycle(self, values): self.total = sum(values); return True\n\
+            \x20   def peek(self): return self.total\n\
+            obj = Adder()",
+        );
+        let summed = g.custom_node(vec![a, b], adder);
+
+        let seen = Rc::new(RefCell::new(Vec::<i64>::new()));
+        let sink = seen.clone();
+        let _observed = summed.stream.inspect(move |e: &PyElement| {
+            sink.borrow_mut().push(i64::try_from(e).unwrap());
+        });
+
+        run_cycles(&g, 3);
+        // Both counters tick together: 1+1, 2+2, 3+3.
+        assert_eq!(vec![2, 4, 6], *seen.borrow());
+    }
+
+    /// A custom node returning `False` from `cycle` stays quiet that cycle —
+    /// the classic "did I tick?" decision. Emits only on even counter values.
+    #[test]
+    fn python_custom_node_can_stay_quiet() {
+        let g = PyGraph::new();
+        let counter = g.counter(Duration::from_nanos(100));
+        let evens = py_object(
+            "class Evens:\n\
+            \x20   def __init__(self): self.v = 0\n\
+            \x20   def cycle(self, values):\n\
+            \x20       self.v = values[0]\n\
+            \x20       return self.v % 2 == 0\n\
+            \x20   def peek(self): return self.v\n\
+            obj = Evens()",
+        );
+        let filtered = g.custom_node(vec![counter], evens);
+
+        let seen = Rc::new(RefCell::new(Vec::<i64>::new()));
+        let sink = seen.clone();
+        let _observed = filtered.stream.inspect(move |e: &PyElement| {
+            sink.borrow_mut().push(i64::try_from(e).unwrap());
+        });
+
+        run_cycles(&g, 6);
+        assert_eq!(vec![2, 4, 6], *seen.borrow());
+    }
+
+    /// An exception raised inside a Python custom node's `cycle` aborts the run
+    /// with context, like a raising `map` callable.
+    #[test]
+    fn python_custom_node_error_aborts_run() {
+        let g = PyGraph::new();
+        let counter = g.counter(Duration::from_nanos(100));
+        let boom = py_object(
+            "class Boom:\n\
+            \x20   def cycle(self, values): raise ValueError('boom')\n\
+            \x20   def peek(self): return 0\n\
+            obj = Boom()",
+        );
+        let node = g.custom_node(vec![counter], boom);
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python custom node cycle raised"));
+        let _ = node;
     }
 
     #[test]

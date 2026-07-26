@@ -1,9 +1,15 @@
 # Python interop — user-authored Rust components, composed and extended from Python
 
-**Status:** design sketch. Post-Phase-6 / cutover-era capability. Distinct from
-the Phase 6 "keep the existing bindings stable" facade work (that keeps the
-*current* PyElement-authored surface running on the new engine; this adds a
-*new* capability on top).
+**Status:** partially landed (the plugin-SDK layer — `#[pyop]` and the object
+form — is built; `#[pyadapter]`/`#[pygraph]` remain). **`wingfoil-next-python`
+is the go-forward Python binding: it supersedes the legacy `wingfoil-python`
+bindings (decision 2026-07), it is not a new capability bolted beside a
+preserved legacy surface.** The erased object form and `#[pyop]` seam below are
+the foundation the legacy combinator / custom-stream / adapter surface is being
+re-homed onto; at cutover next-python replaces `import wingfoil` (a breaking
+change for Python users — see Phase 6 in `port-plan.md`). Earlier drafts framed
+this as "distinct from keep-the-bindings-stable facade work"; there is no
+separate legacy-facade track — this binding *is* the Python story.
 
 ## The goal
 

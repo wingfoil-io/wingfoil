@@ -75,6 +75,16 @@ impl Graph {
         };
         self.0.run(run_mode, run_for).map_err(to_pyerr)
     }
+
+    /// Wire a Python object as a graph node. The object is activated by its
+    /// `upstreams`' ticks and each cycle must implement the protocol
+    /// `cycle(values) -> bool` (given the upstreams' current values, return
+    /// whether it ticked) and `peek()` (its output value when it ticked). A
+    /// raised exception aborts the run. See [`PyGraph::custom_node`].
+    fn custom_node(&self, upstreams: Vec<PyRef<'_, Stream>>, obj: Py<PyAny>) -> Stream {
+        let ups: Vec<PyStream> = upstreams.iter().map(|s| s.0.clone()).collect();
+        Stream(self.0.custom_node(ups, obj))
+    }
 }
 
 /// A stream in a [`Graph`]. Combinators return new streams on the same graph;
@@ -122,6 +132,44 @@ impl Stream {
     /// Suppress consecutive duplicate values (emit on change only).
     fn distinct(&self) -> Stream {
         Stream(self.0.distinct())
+    }
+
+    /// Emit the running tick count `1, 2, 3, …`, ignoring the values.
+    fn count(&self) -> Stream {
+        Stream(self.0.count())
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    fn limit(&self, limit: u32) -> Stream {
+        Stream(self.0.limit(limit))
+    }
+
+    /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
+    fn throttle(&self, interval_nanos: u64) -> Stream {
+        Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))
+    }
+
+    /// Emit this stream's current value whenever `trigger` ticks.
+    fn sample(&self, trigger: PyRef<'_, Stream>) -> Stream {
+        Stream(self.0.sample(&trigger.0))
+    }
+
+    /// Emit the successive difference `value - previous` (quiet on the first).
+    fn difference(&self) -> Stream {
+        Stream(self.0.difference())
+    }
+
+    /// Negate each value (arithmetic `__neg__`, e.g. `5 -> -5`). Exposed as
+    /// `not` (a Python keyword, so reach it with `getattr(stream, "not")()`).
+    #[pyo3(name = "not")]
+    fn not_(&self) -> Stream {
+        Stream(self.0.not_())
+    }
+
+    /// Observe each value with a Python callable, passing it through unchanged;
+    /// a raised exception aborts the run.
+    fn inspect(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.inspect(func))
     }
 
     /// The current value after the owning [`Graph`] has run.

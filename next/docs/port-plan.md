@@ -21,8 +21,11 @@ until cutover, so:
 
 - nodes/adapters port one at a time, with the classic test suite as a
   permanent parity oracle;
-- downstream users (including wingfoil-python) see no breakage until the
-  facade is deliberately deprecated;
+- Rust downstreams on the classic `wingfoil` API see no breakage until the
+  facade is deliberately deprecated at cutover. (The **Python** bindings are the
+  exception — they are *replaced*, not facaded: `wingfoil-next-python`
+  supersedes legacy `wingfoil-python`, a deliberate breaking change — see
+  Phase 6.);
 - the port can pause indefinitely at any phase boundary with everything
   shipped still correct.
 
@@ -873,18 +876,39 @@ dynamism is an interpreted-engine capability, matching classic.
   fluent method (only clean as inherent-on-`Stream`, deliberately deferred to
   keep it trait-based).
 
-## Phase 6 — facade, python, examples, benches
+## Phase 6 — Python bindings, examples, benches
 
-- **Facade** 🟡 *started*: `wingfoil_next::compat` proves the thesis — a
-  `Signal<T>` wrapping the fluent `Stream` + the shared graph + a runner
-  slot gives classic-idiom code (free `ticker`/`constant`, `stream.run(..)`,
-  `stream.peek_value()`) running on the new engine. `tests/compat.rs`
-  exercises counter / map-filter-accumulate / fold / constant+delay written
-  exactly as classic code. Remaining: the rest of the ~40-method
-  `StreamOperators`/`NodeOperators` surface (mechanical) and the true
-  `Rc<dyn Stream>` object form if binary-compat with classic is required.
-- **wingfoil-python**: rewire to the facade — should be near-transparent;
-  its pytest suite is the gate.
+**Decision (2026-07): `wingfoil-next-python` supersedes the legacy
+`wingfoil-python` bindings — it is not a compatibility facade over them.** The
+go-forward Python surface is the fresh object-form binding in
+`next/crates/wingfoil-next-python` (`PyGraph`/`PyStream` over the shared
+interpreted `GraphBuilder`, erased to `PyElement`, plus the
+`#[pyop]`/`pyop_fn!` plugin seams — see `docs/python-interop.md`). Legacy
+`wingfoil-python` (`import wingfoil`) is **retired at cutover**, not kept
+running unchanged, so this is a **breaking change** for Python users
+(`import wingfoil` → `import wingfoil_next`; next-python likely claims the
+`wingfoil` module name via a rename at cutover). The gate is next-python's own
+pytest suite (`test_interop.py`) reaching parity with the surface the legacy
+tests covered — not "legacy pytest passes unchanged."
+
+- **Object form** ✅ *landed*: `wingfoil-next-python` `PyGraph`/`PyStream`
+  (`graph.rs`) — the "true `Rc<dyn Stream>` object form" this plan previously
+  listed as remaining facade work — with `PyElement` erasure, re-runnable
+  graphs, and the `#[pyop]`/`pyop_fn!` op-authoring seams.
+- **Custom-node seam** ✅ *landed*: the public `GraphBuilder::custom_node`
+  primitive (the next twin of classic `MutableNode` + `StreamPeekRef`,
+  `tests/custom_node.rs`) plus its next-python exposure (`Graph.custom_node`,
+  a `cycle(values) -> bool` + `peek()` protocol), so a Python object can be a
+  graph node (legacy's `CustomStream`). Single-run in v1 (caller-owned Python
+  state has no engine reset hook); next-python *regular* graphs re-run.
+- **Surface build-out** 🟡 *in progress*: grow `PyStream`/`PyGraph` to cover
+  the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
+  `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
+  bridge), then the per-adapter Python bindings as each Rust adapter lands.
+- **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
+  ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
+  compat.rs`) — it is **not** the Python-binding path (that is the object-form
+  `PyStream` above).
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `graph!`),
   keeping classic versions until Phase 7.
@@ -942,7 +966,7 @@ dynamism is an interpreted-engine capability, matching classic.
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
 | Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; the mutation feature (`Runner::extend`) is **not yet built** — open decision: cutover blocker vs documented v1 deviation. Islands cover static composition today |
-| Python API drift | downstream breakage | facade keeps bindings stable; pytest as gate |
+| Python API change (next-python supersedes legacy `wingfoil-python`) | existing `import wingfoil` code must migrate — an accepted breaking change, not drift to avoid | new object-form binding at parity before cutover; next-python `test_interop.py` pytest as gate; migration guide + `wingfoil` module-name takeover at cutover |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
 ## Explicitly out of scope (v1)
@@ -997,6 +1021,7 @@ Phases 0–1 are serial (contract work, ~15% of the effort). Phase 2 groups
 parallelize once the recipe is proven on one nontrivial node
 (suggested: throttle — scheduling + state + macro row). Phase 4 adapters
 are fully independent of each other; statistics can start as soon as
-Phase 1 lands. Phase 6 facade can be prototyped early (it only needs the
-Phase 1 contract) to de-risk the Python gate. One PR per node group /
-adapter; every PR carries its parity tests.
+Phase 1 lands. The Phase 6 Python binding (`wingfoil-next-python`, the
+object form) can be built out early (it only needs the Phase 1 contract) to
+de-risk the Python gate. One PR per node group / adapter; every PR carries its
+parity tests.

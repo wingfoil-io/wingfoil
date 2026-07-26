@@ -34,6 +34,7 @@ use crate::channel::ChannelSender;
 use crate::interp::{
     AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef, StopHandle,
 };
+use crate::op::{Activation, Ctx, Tick};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -152,6 +153,40 @@ impl GraphBuilder {
     pub fn combine<T: Clone + Default + 'static>(&self, streams: &[Stream<T>]) -> Stream<Burst<T>> {
         let handles: Vec<Handle<T>> = streams.iter().map(|s| s.handle()).collect();
         let handle = self.with_builder(|b| b.combine(&handles));
+        self.wrap(handle)
+    }
+
+    /// Wire a **custom node** — the public extension point for a caller-driven
+    /// graph node (the next equivalent of classic `MutableNode` +
+    /// `StreamPeekRef`). The node is activated by its `active` upstreams' ticks,
+    /// reads any upstream's `passive` value without being triggered by it, and
+    /// runs `cycle` each activation to produce a [`Tick<T>`].
+    ///
+    /// Upstreams are declared type-erased ([`Upstream`]), so inputs of different
+    /// value types mix freely — only their node indices matter for dispatch. To
+    /// read an upstream's value inside `cycle`, capture its
+    /// [`SlotRef`](crate::interp::SlotRef) via [`Stream::value_slot`] at wiring
+    /// time and `borrow()` it. `activation` declares scheduling behaviour
+    /// ([`Activation::NONE`] for tick-driven, [`Activation::SCHEDULES`] for
+    /// self-scheduling via [`Ctx::schedule`], …).
+    ///
+    /// A graph containing a custom node is single-run in v1 (caller-owned state
+    /// has no engine reset hook — see [`Builder::custom_node`]).
+    pub fn custom_node<T, F>(
+        &self,
+        active: &[Upstream],
+        passive: &[Upstream],
+        activation: Activation,
+        cycle: F,
+    ) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: FnMut(&mut Ctx<'_>) -> Result<Tick<T>> + 'static,
+    {
+        let active_ups: Vec<usize> = active.iter().map(|u| u.idx).collect();
+        let passive_ups: Vec<usize> = passive.iter().map(|u| u.idx).collect();
+        let handle =
+            self.with_builder(|b| b.custom_node(active_ups, passive_ups, activation, cycle));
         self.wrap(handle)
     }
 
@@ -374,6 +409,47 @@ impl<T> Stream<T> {
         T: 'static,
     {
         self.inner.borrow().slot(self.handle)
+    }
+
+    /// The value slot backing this stream, for reading its current value from
+    /// inside a [`custom_node`](GraphBuilder::custom_node) cycle closure.
+    ///
+    /// Capture the returned [`SlotRef`] at wiring time and `borrow()` it each
+    /// cycle to read the upstream's current value — this is how a custom node
+    /// reaches its upstreams, the next analogue of a classic `MutableNode`
+    /// reading the `Rc<dyn Stream>`s it holds. The scheduler's single-fire,
+    /// layer-ordered dispatch guarantees the upstream has already written its
+    /// slot this cycle before the custom node reads it.
+    pub fn value_slot(&self) -> SlotRef<T>
+    where
+        T: 'static,
+    {
+        self.inner.borrow().slot(self.handle)
+    }
+
+    /// Erase this stream to an [`Upstream`] edge for
+    /// [`custom_node`](GraphBuilder::custom_node). A custom node's upstreams may
+    /// have different value types, so they are declared type-erased; only the
+    /// node index matters for dispatch.
+    pub fn upstream(&self) -> Upstream {
+        Upstream {
+            idx: self.handle.index(),
+        }
+    }
+}
+
+/// A type-erased reference to an already-wired node, used to declare a
+/// [`custom_node`](GraphBuilder::custom_node)'s upstream edges regardless of
+/// the upstreams' value types (only the node index matters for scheduling).
+/// Build one with [`Stream::upstream`] or the `From<&Stream<T>>` impl.
+#[derive(Clone, Copy)]
+pub struct Upstream {
+    idx: usize,
+}
+
+impl<T> From<&Stream<T>> for Upstream {
+    fn from(stream: &Stream<T>) -> Self {
+        stream.upstream()
     }
 }
 

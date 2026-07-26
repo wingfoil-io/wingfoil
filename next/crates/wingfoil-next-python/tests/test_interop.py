@@ -101,3 +101,123 @@ def test_pyop_and_pyop_fn_compose():
     out = wf.scale(wf.square(g.counter(period_nanos=100)), 2.0)
     g.run(cycles=3)  # 3rd tick: 3^2 * 2
     assert out.value() == 18.0
+
+
+def test_custom_node_python_object_as_graph_node():
+    # A Python object acting as a graph node (the classic CustomStream shape):
+    # sum two upstream counters each cycle via the cycle(values)/peek protocol.
+    class Adder:
+        def __init__(self):
+            self.total = 0
+
+        def cycle(self, values):
+            self.total = sum(values)
+            return True
+
+        def peek(self):
+            return self.total
+
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = g.counter(period_nanos=100)
+    summed = g.custom_node([a, b], Adder())
+    g.run(cycles=3)
+    assert summed.value() == 6  # 3rd tick: 3 + 3
+
+
+def test_custom_node_can_stay_quiet():
+    # Returning False from cycle suppresses the tick (classic "did I tick?").
+    class Evens:
+        def __init__(self):
+            self.v = 0
+
+        def cycle(self, values):
+            self.v = values[0]
+            return self.v % 2 == 0
+
+        def peek(self):
+            return self.v
+
+    g = wf.Graph()
+    evens = g.custom_node([g.counter(period_nanos=100)], Evens())
+    g.run(cycles=6)
+    assert evens.value() == 6  # last even value passed through
+
+
+def test_custom_node_exception_aborts_run():
+    class Boom:
+        def cycle(self, values):
+            raise ValueError("boom")
+
+        def peek(self):
+            return 0
+
+    g = wf.Graph()
+    g.custom_node([g.counter(period_nanos=100)], Boom())
+    with pytest.raises(RuntimeError, match="Python custom node cycle raised"):
+        g.run(cycles=1)
+
+
+def test_count_ignores_values():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).map(lambda n: "x").count()
+    g.run(cycles=3)
+    assert out.value() == 3
+
+
+def test_limit_caps_ticks():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).limit(2)
+    g.run(cycles=5)
+    assert out.value() == 2  # last value passed before the cap
+
+
+def test_difference_of_counter_is_one():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).difference()
+    g.run(cycles=4)
+    assert out.value() == 1  # 1,2,3,4 -> deltas 1,1,1
+
+
+def test_not_negates_value():
+    # `not` is arithmetic negation (__neg__) and is a Python keyword.
+    g = wf.Graph()
+    out = getattr(g.constant(5), "not")()
+    g.run(cycles=1)
+    assert out.value() == -5
+
+
+def test_sample_emits_held_value_on_trigger():
+    # A constant (ticks once) sampled on every counter tick re-emits its value.
+    g = wf.Graph()
+    held = g.constant(42)
+    out = held.sample(g.counter(period_nanos=100))
+    g.run(cycles=3)
+    assert out.value() == 42
+
+
+def test_throttle_rate_limits():
+    # counter ticks 1..9 at 100..900; throttle(250) emits at 100, 400, 700.
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).throttle(250)
+    g.run(cycles=9)
+    assert out.value() == 7  # last emission at t=700
+
+
+def test_inspect_taps_and_passes_through():
+    seen = []
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).inspect(seen.append)
+    g.run(cycles=3)
+    assert seen == [1, 2, 3]
+    assert out.value() == 3
+
+
+def test_inspect_exception_aborts_run():
+    def boom(v):
+        raise ValueError("boom")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).inspect(boom)
+    with pytest.raises(RuntimeError, match="Python inspect callable raised"):
+        g.run(cycles=1)
