@@ -1,0 +1,87 @@
+# wingfoil-next → classic: deviation register
+
+Status: **living checklist** for the eventual Phase-7 cutover audit. Every place
+wingfoil-next's behaviour or surface deviates from the classic `wingfoil` tree,
+collected in one place and classified so each can be given an explicit
+accept/fix ruling before cutover.
+
+**Sources:** (1) each ported adapter's `# Deviations from classic` module-doc
+block — regenerate with
+`git grep -n "Deviations from classic" next/crates/wingfoil-next/src/adapters`;
+(2) `next/docs/port-plan.md` (capability matrix + Phase 4.5 "Known parity gaps");
+(3) a manual **lifecycle/timing audit** (Category A) — the systemic engine-model
+behaviours the per-adapter deviation lists do **not** capture (the wiring-time
+pattern below was in *no* adapter's list, which is why it needs its own audit).
+
+**Legend:** 🔴 potential regression / needs a decision · 🟡 deliberate deviation,
+confirm acceptable for the superset claim · 🟢 cosmetic / benign · ⚪ tracked
+capability gap (deferred by design).
+
+---
+
+## A. Systemic lifecycle & timing
+
+Engine-model behaviours, pervasive across adapters — **not** in the per-adapter
+deviation lists. All of Category A (except A6) is the subject of
+[`source-lifecycle-defer-to-start.md`](./source-lifecycle-defer-to-start.md).
+
+| id | dev | class | notes |
+|---|---|:--:|---|
+| A1 | **Wiring-time I/O establishment.** Sources (`produce_async`/`external`/`channel`/`zmq_sub`) spawn their thread/task + connect at wiring; sinks (`etcd_pub`, redis, `kafka_pub`, `postgres_write`) connect eagerly at wiring; `postgres_read` runs its whole query at wiring; `prometheus::serve` binds at wiring. | 🟡🔴 | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. |
+| A2 | **I/O sources are single-run.** A second `run()` errors; classic re-runs. | 🔴 | A *consequence* of A1 (the channel/waker/thread is consumed). Real superset gap. → plan. |
+| A3 | **`zmq_pub` binds its socket lazily on its first cycle**, not `start()`. | 🟡 | Another "when does I/O happen" quirk; interacts with the slow-joiner window. |
+| A4 | **Error-surfacing timing shifted to wiring** — connection errors surface during graph construction, not at run start / first op. | 🟡 | Pervasive (all eager-connect sources/sinks). Deferring to `start()` moves them to run-start (classic-consistent). |
+| A5 | **Caller-owned tokio runtime + "drive from a non-async thread".** etcd/redis/kafka/postgres/otlp take `&Handle`; the block_on sinks/readers panic if driven inside an async context. | 🟡 | Documented per-adapter. API + usage footgun vs classic's hidden global runtime. |
+| A6 | **channel-sub establishes slower than classic's `ReceiverStream`** (the zmq first-message test needed a ~600 ms settle vs classic's 200 ms). | ❓ | Behavioural difference; **mechanism not pinned** (see the zmq fix PR #542 discussion). Worth a measured investigation. |
+
+## B. Behavioural / capability deviations — need a decision
+
+| id | dev | class | notes / source |
+|---|---|:--:|---|
+| B1 | **`etcd_pub` blocks the graph thread** — `Handle::block_on` per burst. The `consume_async` reland was deferred. | 🔴 | The one place next puts blocking network I/O on the single-threaded engine. `adapters/etcd.rs` "Why `etcd_pub` still blocks the graph thread (deferred follow-up)". Needs a teardown-hook story for synchronous-error ops (the general problem `consume_async` couldn't cover — the `force:false` conditional write). |
+| B2 | **Live sources reject `RunMode::HistoricalFrom` at wiring** (etcd/redis/kafka/postgres `_sub`, zmq_sub). | 🟡 | Classic *technically permitted* a historical run with wall-clock timestamps. next rejects (deliberate, avoids the block-collect deadlock). Ratify as an accepted deviation, or restore wall-clock historical. |
+| B3 | **`kafka_pub` produces sequentially** (single ordered `consume_async` consumer, N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst). | 🟡 | Order-preserving but a throughput deviation. `adapters/kafka.rs` deviation #4. |
+| B4 | **csv reads the whole file up front** vs classic's lazy row streaming. | 🟡 | Unbounded-memory for a huge file under `RunFor::Forever`. `adapters/csv.rs` "consequences of using the channel source". |
+| B5 | **`postgres_read` queries all slices at wiring** onto `replay_results` vs classic's lazy `produce_async`. | 🟢🟡 | "Identical for a bounded historical run," but buffers the whole result set (memory). Same family as A1. `adapters/postgres.rs` deviation #2. |
+
+## C. Capability gaps — tracked, deferred by design
+
+| id | gap | class | notes |
+|---|---|:--:|---|
+| C1 | **otlp trace/span export (`OtlpSpans`) not ported.** | ⚪ | Needs the `Traced`/`HasLatency`/`latency_stages!` infra (Phase 5). Metrics push is at full parity. `adapters/otlp.rs` deviation #3. |
+| C2 | **zmq cross-language interop not ported.** | ⚪ | The `bincode` wire envelope is next-local; not wire-compatible with a classic/Python peer. Deferred with the Python bindings (Phase 6). `adapters/zmq.rs`. |
+| C3 | **Structural gaps** — multi-output islands; runtime graph-mutation surface; (closed: `StreamStore`, `demux_it` in #529). | ⚪ | See `port-plan.md` Phase 4.5 "Known parity gaps" and Phase 1 multi-output note. |
+
+## D. Cosmetic / API — deliberate-and-benign (low review priority)
+
+| id | dev | class | notes |
+|---|---|:--:|---|
+| D1 | Sink-as-trait vs classic's free fn + operator trait (every adapter). | 🟢 | Convention. |
+| D2 | Factories return `anyhow::Result` (+ `.context`) vs classic's typed `io::Error` (e.g. `prometheus::serve`). | 🟢 | Fallible-with-context convention. |
+| D3 | postgres/redis sinks take a `consume_async` `buffer_size`. | 🟢 | Added back-pressure knob. |
+| D4 | `DemuxMap` uses a `BTreeSet` slot pool (lowest free slot, deterministic) vs classic's `HashSet`. | 🟢 | An *improvement* — aids backtest determinism (#529). |
+| D5 | **otlp pins opentelemetry 0.32; classic still on 0.28.** | 🟡 | Deliberate divergence for security (GHSA-w9wp-h8wv-79jx, #543). **Drift** — bump classic to match to restore lockstep + fix the advisory there. |
+| D6 | csv malformed-row error surfaces at replay start vs classic mid-stream. | 🟢 | Same run-failure outcome + context string; documented. |
+| D7 | `FileCache` log messages drop the classic "KDB " prefix. | 🟢 | The cache isn't kdb-specific in next. |
+
+---
+
+## Recommended priorities
+
+1. **A1 / A2 (+ B5)** — the defer-to-start plan. Buys testable wiring, re-runnable
+   I/O sources, and removes the pre-run window. Biggest structural win.
+2. **B1** — get `etcd_pub` off the graph thread. Blocked on a teardown-hook story
+   for synchronous-error ops; solving it generalises `consume_async`.
+3. **B2** — ratify historical-rejection for the cutover superset claim (accept as
+   documented, or restore wall-clock historical for live sources).
+4. **D5** — bump classic's opentelemetry to restore lockstep with next.
+5. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
+   matter for the "strict superset" claim, or are acceptable documented trade-offs.
+6. **A6** — measure the channel-sub startup latency to either explain or close it.
+
+## Keeping this current
+
+Re-run the two greps in **Sources** above after each adapter/engine PR and add
+any new `# Deviations from classic` entry here with a class. Category A is a
+manual audit — re-examine it whenever the source/sink lifecycle or the channel
+machinery changes. At cutover, every 🔴 and 🟡 needs an explicit ruling.
