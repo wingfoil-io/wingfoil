@@ -15,23 +15,27 @@ pattern below was in *no* adapter's list, which is why it needs its own audit).
 
 **Legend:** 🔴 potential regression / needs a decision · 🟡 deliberate deviation,
 confirm acceptable for the superset claim · 🟢 cosmetic / benign · ⚪ tracked
-capability gap (deferred by design).
+capability gap (deferred by design) · ✅ **resolved** since this register was
+written (kept for the audit trail, no ruling needed).
 
 ---
 
 ## A. Systemic lifecycle & timing
 
 Engine-model behaviours, pervasive across adapters — **not** in the per-adapter
-deviation lists. All of Category A (except A6) is the subject of
-[`source-lifecycle-defer-to-start.md`](./source-lifecycle-defer-to-start.md).
+deviation lists. The lifecycle items (A1–A4) are the subject of
+[`source-lifecycle-defer-to-start.md`](./source-lifecycle-defer-to-start.md); A5
+has its own decision record in
+[`runtime-ownership.md`](./runtime-ownership.md).
 
 | id | dev | class | notes |
 |---|---|:--:|---|
-| A1 | **Wiring-time I/O establishment.** Sources (`produce_async`/`external`/`channel`/`zmq_sub`) spawn their thread/task + connect at wiring; sinks (`etcd_pub`, redis, `kafka_pub`, `postgres_write`) connect eagerly at wiring; `postgres_read` runs its whole query at wiring; `prometheus::serve` binds at wiring. | 🟡🔴 | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. |
-| A2 | **I/O sources are single-run.** A second `run()` errors; classic re-runs. | 🔴 | A *consequence* of A1 (the channel/waker/thread is consumed). Real superset gap. → plan. |
+| A1 | **Wiring-time I/O establishment.** Sources still eager: `produce_async` (etcd/kafka/redis/postgres `_sub`), `external`, plain `channel` feeders spawn their thread/task + connect at wiring; sinks (`etcd_pub`, redis, `kafka_pub`, `postgres_write`) connect eagerly at wiring; `postgres_read` runs its whole query at wiring; `prometheus::serve` binds at wiring. | 🟡🔴 | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. **Partially resolved:** the `source_at_start` primitive landed and `zmq_sub` now establishes its socket + thread in `start()`, not wiring (#547); the sources/sinks above are the remaining migrations. |
+| A2 | **I/O sources are single-run.** A second `run()` errors; classic re-runs. | 🔴 | A *consequence* of A1 (the channel/waker/thread is consumed). Real superset gap. Still open: `source_at_start` (#547) defers establishment but inherits the single-run channel, so even `zmq_sub` is not yet re-runnable — re-run is the tracked follow-on (port-plan §0.4 reopened). → plan. |
 | A3 | **`zmq_pub` binds its socket lazily on its first cycle**, not `start()`. | 🟡 | Another "when does I/O happen" quirk; interacts with the slow-joiner window. |
-| A4 | **Error-surfacing timing shifted to wiring** — connection errors surface during graph construction, not at run start / first op. | 🟡 | Pervasive (all eager-connect sources/sinks). Deferring to `start()` moves them to run-start (classic-consistent). |
-| A5 | **Caller-owned tokio runtime + "drive from a non-async thread".** etcd/redis/kafka/postgres/otlp take `&Handle`; the block_on sinks/readers panic if driven inside an async context. | 🟡 | Documented per-adapter. API + usage footgun vs classic's hidden global runtime. |
+| A4 | **Error-surfacing timing shifted to wiring** — connection errors surface during graph construction, not at run start / first op. | 🟡 | Still applies to the eager-connect sources/sinks in A1. **Resolved for `zmq_sub`:** a `source_at_start` setup error now aborts at run-start with node context (classic-consistent) (#547). Deferring the rest moves them the same way. |
+| A5 | ~~**Caller-owned tokio runtime**~~ — etcd/redis/kafka/postgres/otlp took `&Handle`. | ✅ | **Resolved (#548).** The `GraphBuilder` now owns one tokio runtime (lazy, shared, dropped at teardown) with a `with_async_runtime` override; the `&Handle` param is gone from every async factory. Decision record: [`runtime-ownership.md`](./runtime-ownership.md). *Residual (A5a below) is unchanged.* |
+| A5a | **"Drive from a non-async thread."** The `block_on` sinks/readers still panic if the graph is built/run/dropped inside an async context. | 🟡 | Inherent to `block_on`-on-the-graph-thread (an owned runtime doesn't change it — its workers are separate threads either way). Documented per-adapter; matches classic's constraint. Not removed by #548. |
 | A6 | **channel-sub establishes slower than classic's `ReceiverStream`** (the zmq first-message test needed a ~600 ms settle vs classic's 200 ms). | ❓ | Behavioural difference; **mechanism not pinned** (see the zmq fix PR #542 discussion). Worth a measured investigation. |
 
 ## B. Behavioural / capability deviations — need a decision
@@ -68,8 +72,10 @@ deviation lists. All of Category A (except A6) is the subject of
 
 ## Recommended priorities
 
-1. **A1 / A2 (+ B5)** — the defer-to-start plan. Buys testable wiring, re-runnable
-   I/O sources, and removes the pre-run window. Biggest structural win.
+1. **A1 / A2 (+ B5)** — the defer-to-start plan. The primitive (`source_at_start`)
+   and the `zmq_sub` migration landed (#547); finish it by migrating the
+   `produce_async` family + the plain `external`/`channel` feeders, then reopen
+   §0.4 to make I/O sources **re-runnable** (A2) — the remaining structural win.
 2. **B1** — get `etcd_pub` off the graph thread. Blocked on a teardown-hook story
    for synchronous-error ops; solving it generalises `consume_async`.
 3. **B2** — ratify historical-rejection for the cutover superset claim (accept as
@@ -78,6 +84,9 @@ deviation lists. All of Category A (except A6) is the subject of
 5. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
    matter for the "strict superset" claim, or are acceptable documented trade-offs.
 6. **A6** — measure the channel-sub startup latency to either explain or close it.
+
+**Resolved since this register was written:** **A5** (graph-owned runtime, #548);
+**A1/A4 for `zmq_sub`** (deferred to `start()` via `source_at_start`, #547).
 
 ## Keeping this current
 
