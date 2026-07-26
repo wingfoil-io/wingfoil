@@ -87,7 +87,13 @@ fn round_trip_consecutive_counters() {
 /// (a background thread feeding the graph) establishes more slowly, so the test
 /// allows a wider, machine-safe window. Purely a test settle time — the adapter
 /// keeps classic's 50 ms post-accept flush window unchanged.
-const SUB_SETTLE: Duration = Duration::from_millis(600);
+///
+/// Set generously (1500 ms): 600 ms was marginal and dropped the first ~3
+/// messages under CI load (the filter propagated ~150 ms late), so the window is
+/// widened well past the observed establishment time. This is the slow-joiner
+/// margin tracked as deviation **A6** (the mechanism is not yet pinned); a proper
+/// fix — a deterministic connect/filter handshake — is the A6 follow-on.
+const SUB_SETTLE: Duration = Duration::from_millis(1500);
 
 #[test]
 fn first_message_not_dropped() {

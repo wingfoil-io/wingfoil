@@ -182,6 +182,44 @@ fn produce_async_realtime_bounded_buffer_delivers_all_in_order() {
     );
 }
 
+/// The producer is established at `start()`, not at wiring: the async closure
+/// does not run until `run()` is called. Wiring stays side-effect-free (an
+/// adapter's connect/subscribe no longer fires during graph construction) —
+/// deviation-register A1. The sleep gives a would-be wiring-spawned producer
+/// ample time to run, so this fails against the old spawn-at-wiring model.
+#[test]
+fn produce_async_defers_producer_to_run() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let started = Arc::new(AtomicBool::new(false));
+    let started_producer = started.clone();
+    let g = GraphBuilder::new();
+    let values = produce_async(&g, params(), move |_p| async move {
+        started_producer.store(true, Ordering::SeqCst);
+        Ok(futures::stream::iter(vec![Ok((NanoTime::new(100), 1u64))]))
+    })
+    .unwrap();
+    let acc = values.collapse_accumulate();
+    let mut r = g.build();
+
+    // After wiring + build, the producer must not have run. The graph owns a live
+    // runtime by now, so a wiring-spawned task would execute during this sleep;
+    // the deferral means no task exists until `start()`.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        !started.load(Ordering::SeqCst),
+        "producer must not run until run() — wiring stays side-effect-free"
+    );
+
+    r.run(HISTORICAL, RunFor::Forever).unwrap();
+    assert!(
+        started.load(Ordering::SeqCst),
+        "producer runs once the graph starts"
+    );
+    assert_eq!(vec![1u64], r.value(&acc));
+}
+
 /// The caller-runtime override: a producer wired onto a graph built with
 /// [`GraphBuilder::with_async_runtime`] spawns on the caller's runtime, not a
 /// graph-created one — the escape hatch for embedding in an existing async app.

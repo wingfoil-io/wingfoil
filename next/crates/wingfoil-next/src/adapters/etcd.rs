@@ -28,8 +28,9 @@
 //!    and dropped at teardown, shared by every async adapter in the graph — so
 //!    the common call needs no `&Handle` and there is no leaked global (see
 //!    `docs/runtime-ownership.md`). `etcd_sub` still takes [`RunParams`] (the
-//!    producer task spawns at wiring time, before the run). To embed the graph in
-//!    an existing runtime, install it as an override with
+//!    producer task now spawns in `start()`, deferred via `source_at_start`, so
+//!    the etcd connect + watch happen at run start, not at wiring). To embed the
+//!    graph in an existing runtime, install it as an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **The sink connects eagerly, at wiring time.** `etcd_pub` returns
 //!    `Result` and a connection (or `lease_grant`) failure surfaces *before* the

@@ -28,8 +28,9 @@
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
 //!    `docs/runtime-ownership.md`). `kafka_sub` still takes a [`RunParams`]
-//!    (the producer task spawns at wiring time). Embed in an existing runtime by
-//!    installing an override with
+//!    (the producer task now spawns in `start()`, deferred via `source_at_start`,
+//!    so the broker consumer starts at run start, not at wiring). Embed in an
+//!    existing runtime by installing an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **`kafka_sub` is realtime-only, rejected at wiring time under historical
 //!    replay.** The consumer is a live, unbounded, wall-clock-stamped stream
