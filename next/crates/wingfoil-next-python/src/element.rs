@@ -55,6 +55,22 @@ impl PyElement {
     pub fn value(&self) -> Py<PyAny> {
         Python::attach(|py| self.object().clone_ref(py))
     }
+
+    /// Box a slice of elements into a Python `list` — the edge conversion for
+    /// the collection ops (`accumulate`/`buffer`/`window`), which produce a
+    /// `Vec<PyElement>` that must cross into Python-composable space as one
+    /// value. Empty (`None`) members become Python `None`.
+    pub fn list(items: &[PyElement]) -> Self {
+        Python::attach(|py| {
+            let objects = items.iter().map(|item| match &item.0 {
+                Some(obj) => obj.clone_ref(py),
+                None => py.None(),
+            });
+            let list = pyo3::types::PyList::new(py, objects)
+                .expect("invariant: PyList::new from an exact-size iterator of owned objects");
+            PyElement::new(list.into_any().unbind())
+        })
+    }
 }
 
 impl std::fmt::Debug for PyElement {

@@ -26,17 +26,32 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
+use pyo3::IntoPyObject;
 use pyo3::prelude::*;
-use wingfoil::{RunFor, RunMode};
-use wingfoil_next::interp::{Builder, Runner, SlotRef};
+use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
+use wingfoil_next::stats::StatisticsOps;
 
 use crate::PyElement;
 
 /// The runner produced by [`PyGraph::run`], shared by the graph and every
 /// [`PyStream`] wired from it so `value()` works on whichever you kept.
 type RunnerSlot = Rc<RefCell<Option<Runner>>>;
+
+/// Box a `(time, value)` pair into a Python `(nanos, value)` tuple element —
+/// the edge conversion shared by `with_time` and `collect` (nanoseconds as an
+/// int).
+fn time_value_tuple(time: NanoTime, value: &PyElement) -> PyElement {
+    Python::attach(|py| {
+        let nanos = u64::from(time) as i64;
+        let tuple = (nanos, value.value())
+            .into_pyobject(py)
+            .expect("invariant: (i64, PyObject) is always tuple-convertible");
+        PyElement::new(tuple.into_any().unbind())
+    })
+}
 
 /// A held graph with the classic `run` / read-value ergonomics, erased to
 /// [`PyElement`]. Clones share the same underlying builder and runner slot.
@@ -265,6 +280,216 @@ impl PyStream {
         self.wrap(observed)
     }
 
+    /// Collect every emitted value into a growing Python `list`, re-emitted each
+    /// tick (the classic `accumulate`).
+    pub fn accumulate(&self) -> PyStream {
+        let acc = self
+            .stream
+            .accumulate()
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(acc)
+    }
+
+    /// Buffer values and flush them as a Python `list` once `capacity`
+    /// accumulate (and once more on the last cycle).
+    pub fn buffer(&self, capacity: usize) -> PyStream {
+        let buffered = self
+            .stream
+            .buffer(capacity)
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(buffered)
+    }
+
+    /// Buffer values and flush them as a Python `list` on each `interval`
+    /// boundary (and once more on the last cycle).
+    pub fn window(&self, interval: Duration) -> PyStream {
+        let windowed = self
+            .stream
+            .window(interval)
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(windowed)
+    }
+
+    /// Pair each value with the current engine time as a Python `(nanos, value)`
+    /// tuple (the classic `with_time`, nanoseconds as an int).
+    pub fn with_time(&self) -> PyStream {
+        let timed = self
+            .stream
+            .with_time()
+            .map(|(time, value): &(NanoTime, PyElement)| time_value_tuple(*time, value));
+        self.wrap(timed)
+    }
+
+    /// Collect every `(nanos, value)` pair into a growing Python `list` of
+    /// tuples, re-emitted each tick (the classic `collect` — value + time,
+    /// what `dataframe` builds on).
+    pub fn collect(&self) -> PyStream {
+        let collected =
+            self.stream
+                .with_time()
+                .accumulate()
+                .map(|rows: &Vec<(NanoTime, PyElement)>| {
+                    let tuples: Vec<PyElement> = rows
+                        .iter()
+                        .map(|(time, value)| time_value_tuple(*time, value))
+                        .collect();
+                    PyElement::list(&tuples)
+                });
+        self.wrap(collected)
+    }
+
+    /// Fold values into an accumulator with a Python callable, emitting the
+    /// accumulator after each fold (the classic `fold`). `func(acc, value)`
+    /// returns the new accumulator, seeded from `init`. The accumulator is
+    /// **engine-owned state** re-seeded from `init` on a graph reset, so a
+    /// re-run restarts the fold (it does not continue). A raised exception
+    /// aborts the run with context.
+    pub fn fold(&self, init: PyElement, func: Py<PyAny>) -> PyStream {
+        let folded = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "fold",
+                Activation::NONE,
+                func,                 // cfg: the Python reducer
+                move || init.clone(), // state factory: accumulator seeded to init (resets on re-run)
+                move |func: &mut Py<PyAny>, acc: &mut PyElement, value: &PyElement, _ctx| {
+                    Python::attach(|py| {
+                        let next = func
+                            .call1(py, (acc.value(), value.value()))
+                            .map_err(|err| anyhow::anyhow!("Python fold callable raised: {err}"))?;
+                        *acc = PyElement::new(next);
+                        Ok(Tick::Value(acc.clone()))
+                    })
+                },
+            )
+        });
+        self.wrap(folded)
+    }
+
+    /// Map-and-filter with a Python callable (the classic `filter_map`):
+    /// `func(value)` returning Python `None` drops the tick, any other result
+    /// is emitted. A raised exception aborts the run with context.
+    pub fn filter_map(&self, func: Py<PyAny>) -> PyStream {
+        self.wire_stateless("filter_map", move |value| {
+            Python::attach(|py| {
+                let result = func
+                    .call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python filter_map callable raised: {err}"))?;
+                Ok(if result.is_none(py) {
+                    Tick::Quiet
+                } else {
+                    Tick::Value(PyElement::new(result))
+                })
+            })
+        })
+    }
+
+    /// Keep a value only when a Python predicate returns truthy (the classic
+    /// `filter_value`); drop it otherwise. A raised exception aborts the run.
+    pub fn filter_value(&self, predicate: Py<PyAny>) -> PyStream {
+        self.wire_stateless("filter_value", move |value| {
+            Python::attach(|py| {
+                let keep = predicate
+                    .call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python filter_value predicate raised: {err}"))?
+                    .is_truthy(py)
+                    .map_err(|err| anyhow::anyhow!("Python filter_value predicate: {err}"))?;
+                Ok(if keep {
+                    Tick::Value(value.clone())
+                } else {
+                    Tick::Quiet
+                })
+            })
+        })
+    }
+
+    /// Drop values whose payload is Python `None`, passing everything else
+    /// through unchanged (the classic `filter_none`).
+    pub fn filter_none(&self) -> PyStream {
+        self.wire_stateless("filter_none", |value| {
+            let is_py_none = Python::attach(|py| value.object().is_none(py));
+            Ok(if is_py_none {
+                Tick::Quiet
+            } else {
+                Tick::Value(value.clone())
+            })
+        })
+    }
+
+    /// Cumulative running **sum** over the values (the classic `sum`,
+    /// `Window::Unbounded`). Each value is read as `f64` at the edge — a
+    /// non-numeric value aborts the run with context — and the running total is
+    /// re-boxed as a float [`PyElement`].
+    pub fn sum(&self) -> PyStream {
+        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
+        self.wrap(as_f64.cumulative_sum().map(|v: &f64| PyElement::from(*v)))
+    }
+
+    /// Cumulative running **mean** over the values (the classic `mean` /
+    /// `average`, `Window::Unbounded`, count-weighted). Values are read as `f64`
+    /// at the edge (a non-numeric value aborts the run) and the running mean is
+    /// re-boxed as a float [`PyElement`].
+    pub fn mean(&self) -> PyStream {
+        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
+        self.wrap(as_f64.cumulative_mean().map(|v: &f64| PyElement::from(*v)))
+    }
+
+    /// Combine this stream with `other` through a Python callable (the classic
+    /// `bimap`): whenever either input ticks, `func(this_value, other_value)` is
+    /// called with both inputs' current values and its result is emitted. Both
+    /// inputs are active. A raised exception aborts the run with context — so
+    /// this one method also covers the classic `try_bimap` (a Python callable
+    /// always propagates its exception).
+    pub fn bimap(&self, other: &PyStream, func: Py<PyAny>) -> PyStream {
+        let other_handle = other.stream.handle();
+        let joined = self
+            .stream
+            .wire(move |b: &mut Builder, this: Handle<PyElement>| {
+                b.register_op2(
+                    this,
+                    other_handle,
+                    "bimap",
+                    Activation::NONE,
+                    func, // cfg: the Python combiner
+                    || (),
+                    move |func: &mut Py<PyAny>,
+                          _state: &mut (),
+                          a: &PyElement,
+                          b: &PyElement,
+                          _ctx| {
+                        Python::attach(|py| {
+                            let result = func.call1(py, (a.value(), b.value())).map_err(|err| {
+                                anyhow::anyhow!("Python bimap callable raised: {err}")
+                            })?;
+                            Ok(Tick::Value(PyElement::new(result)))
+                        })
+                    },
+                )
+            });
+        self.wrap(joined)
+    }
+
+    /// Wire a **stateless, fallible** single-input op that maps each value to a
+    /// [`Tick`] — the shared plumbing for `filter_map`/`filter_value`/
+    /// `filter_none`. Runs over the engine's `register_op1` so a returned `Err`
+    /// aborts the run with node context; carries no state, so it re-runs cleanly.
+    fn wire_stateless<F>(&self, label: &'static str, mut step: F) -> PyStream
+    where
+        F: FnMut(&PyElement) -> Result<Tick<PyElement>> + 'static,
+    {
+        let wired = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                label,
+                Activation::NONE,
+                (),
+                || (),
+                move |_cfg: &mut (), _state: &mut (), value: &PyElement, _ctx| step(value),
+            )
+        });
+        self.wrap(wired)
+    }
+
     /// Wire a **single-input op** onto this stream at the erased boundary — the
     /// extensibility primitive third-party ops (and the `pyop!` macro) build
     /// on. The op computes on its own concrete types: the input is extracted
@@ -422,6 +647,167 @@ mod tests {
         // Passes the value through unchanged.
         let v: i64 = (&tapped.value()).try_into().unwrap();
         assert_eq!(3, v);
+    }
+
+    #[test]
+    fn accumulate_grows_a_list() {
+        let g = PyGraph::new();
+        let acc = g.counter(Duration::from_nanos(100)).accumulate();
+        run_cycles(&g, 3);
+        let v: Vec<i64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+        assert_eq!(vec![1, 2, 3], v);
+    }
+
+    #[test]
+    fn buffer_flushes_a_list_at_capacity() {
+        let g = PyGraph::new();
+        let buffered = g.counter(Duration::from_nanos(100)).buffer(2);
+        run_cycles(&g, 4);
+        // Last full flush is [3, 4].
+        let v: Vec<i64> = Python::attach(|py| buffered.value().value().extract(py).unwrap());
+        assert_eq!(vec![3, 4], v);
+    }
+
+    #[test]
+    fn with_time_pairs_nanos_and_value() {
+        let g = PyGraph::new();
+        let timed = g.counter(Duration::from_nanos(100)).with_time();
+        run_cycles(&g, 3);
+        // Ticks fire at t=0,100,200 — 3rd tick is value 3 at t=200.
+        let pair: (i64, i64) = Python::attach(|py| timed.value().value().extract(py).unwrap());
+        assert_eq!((200, 3), pair);
+    }
+
+    #[test]
+    fn collect_gathers_time_value_tuples() {
+        let g = PyGraph::new();
+        let collected = g.counter(Duration::from_nanos(100)).collect();
+        run_cycles(&g, 2);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| collected.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 1), (100, 2)], rows);
+    }
+
+    #[test]
+    fn fold_accumulates_and_resets_on_rerun() {
+        let g = PyGraph::new();
+        let summed = g
+            .counter(Duration::from_nanos(100))
+            .fold(PyElement::from(0_i64), lambda("lambda acc, v: acc + v"));
+        run_cycles(&g, 3);
+        let first: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(6, first); // 1+2+3
+        // Re-run restarts the fold (engine re-seeds the accumulator), not continue.
+        run_cycles(&g, 3);
+        let second: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(6, second);
+    }
+
+    #[test]
+    fn fold_exception_aborts_run() {
+        let g = PyGraph::new();
+        let _bad = g.counter(Duration::from_nanos(100)).fold(
+            PyElement::from(0_i64),
+            lambda("lambda acc, v: (_ for _ in ()).throw(ValueError())"),
+        );
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python fold callable raised"));
+    }
+
+    #[test]
+    fn filter_map_keeps_non_none() {
+        let g = PyGraph::new();
+        // Keep even counts, scaled; drop odd (None).
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .filter_map(lambda("lambda n: n * 10 if n % 2 == 0 else None"));
+        run_cycles(&g, 4);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(40, v); // last kept: 4 -> 40
+    }
+
+    #[test]
+    fn filter_value_keeps_on_predicate() {
+        let g = PyGraph::new();
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .filter_value(lambda("lambda n: n > 2"));
+        run_cycles(&g, 5);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(5, v); // 3,4,5 pass; last is 5
+    }
+
+    #[test]
+    fn filter_none_drops_python_none() {
+        let g = PyGraph::new();
+        let kept = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n if n % 2 == 0 else None"))
+            .filter_none();
+        run_cycles(&g, 6);
+        let v: i64 = (&kept.value()).try_into().unwrap();
+        assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn bimap_combines_two_inputs() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(100)); // 1,2,3
+        let b = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: n * 10")); // 10,20,30
+        let summed = a.bimap(&b, lambda("lambda x, y: x + y"));
+        run_cycles(&g, 3);
+        let v: i64 = (&summed.value()).try_into().unwrap();
+        assert_eq!(33, v); // 3 + 30
+    }
+
+    #[test]
+    fn bimap_exception_aborts_run() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(100));
+        let b = g.counter(Duration::from_nanos(100));
+        let _bad = a.bimap(
+            &b,
+            lambda("lambda x, y: (_ for _ in ()).throw(ValueError())"),
+        );
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python bimap callable raised"));
+    }
+
+    #[test]
+    fn sum_is_cumulative() {
+        let g = PyGraph::new();
+        let total = g.counter(Duration::from_nanos(100)).sum();
+        run_cycles(&g, 4);
+        let v: f64 = (&total.value()).try_into().unwrap();
+        assert_eq!(10.0, v); // 1+2+3+4
+    }
+
+    #[test]
+    fn mean_is_cumulative() {
+        let g = PyGraph::new();
+        let avg = g.counter(Duration::from_nanos(100)).mean();
+        run_cycles(&g, 4);
+        let v: f64 = (&avg.value()).try_into().unwrap();
+        assert_eq!(2.5, v); // (1+2+3+4)/4
+    }
+
+    #[test]
+    fn sum_of_non_numeric_aborts_run() {
+        let g = PyGraph::new();
+        let _bad = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: 'x'"))
+            .sum();
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("not a f64"));
     }
 
     #[test]

@@ -221,3 +221,133 @@ def test_inspect_exception_aborts_run():
     g.counter(period_nanos=100).inspect(boom)
     with pytest.raises(RuntimeError, match="Python inspect callable raised"):
         g.run(cycles=1)
+
+
+def test_accumulate_grows_a_list():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).accumulate()
+    g.run(cycles=3)
+    assert out.value() == [1, 2, 3]
+
+
+def test_buffer_flushes_at_capacity():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).buffer(2)
+    g.run(cycles=4)
+    assert out.value() == [3, 4]  # last full flush
+
+
+def test_window_flushes_on_interval():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).window(interval_nanos=200)
+    g.run(cycles=6)
+    assert out.value() == [5, 6]  # last window boundary flush
+
+
+def test_with_time_pairs_nanos_and_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).with_time()
+    g.run(cycles=3)
+    assert out.value() == (200, 3)  # ticks at t=0,100,200
+
+
+def test_collect_gathers_time_value_tuples():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).collect()
+    g.run(cycles=2)
+    assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_fold_accumulates():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).fold(0, lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6  # 1+2+3
+
+
+def test_fold_restarts_on_rerun():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).fold(0, lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6
+    g.run(cycles=3)  # engine re-seeds the accumulator; restart, not continue
+    assert out.value() == 6
+
+
+def test_fold_exception_aborts_run():
+    def boom(acc, v):
+        raise ValueError("boom")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).fold(0, boom)
+    with pytest.raises(RuntimeError, match="Python fold callable raised"):
+        g.run(cycles=1)
+
+
+def test_filter_map_keeps_non_none():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).filter_map(
+        lambda n: n * 10 if n % 2 == 0 else None
+    )
+    g.run(cycles=4)
+    assert out.value() == 40  # even counts scaled: 20, 40
+
+
+def test_filter_value_keeps_on_predicate():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).filter_value(lambda n: n > 2)
+    g.run(cycles=5)
+    assert out.value() == 5  # 3, 4, 5 pass
+
+
+def test_filter_none_drops_python_none():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).map(
+        lambda n: n if n % 2 == 0 else None
+    ).filter_none()
+    g.run(cycles=6)
+    assert out.value() == 6  # 2, 4, 6 pass
+
+
+def test_sum_is_cumulative():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).sum()
+    g.run(cycles=4)
+    assert out.value() == 10.0  # 1+2+3+4
+
+
+def test_mean_and_average_are_cumulative():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).mean()
+    avg = g.counter(period_nanos=100).average()
+    g.run(cycles=4)
+    assert out.value() == 2.5  # (1+2+3+4)/4
+    assert avg.value() == 2.5  # average is an alias for mean
+
+
+def test_sum_of_non_numeric_aborts_run():
+    g = wf.Graph()
+    g.constant("x").sum()
+    with pytest.raises(RuntimeError, match="not a f64"):
+        g.run(cycles=1)
+
+
+def test_bimap_combines_two_inputs():
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)  # 1,2,3
+    b = g.counter(period_nanos=100).map(lambda n: n * 10)  # 10,20,30
+    out = a.bimap(b, lambda x, y: x + y)
+    g.run(cycles=3)
+    assert out.value() == 33  # 3 + 30
+
+
+def test_bimap_exception_aborts_run():
+    def boom(x, y):
+        raise ValueError("boom")
+
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = g.counter(period_nanos=100)
+    a.bimap(b, boom)
+    with pytest.raises(RuntimeError, match="Python bimap callable raised"):
+        g.run(cycles=1)

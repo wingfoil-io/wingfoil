@@ -172,6 +172,77 @@ impl Stream {
         Stream(self.0.inspect(func))
     }
 
+    /// Collect every emitted value into a growing `list`, re-emitted each tick.
+    fn accumulate(&self) -> Stream {
+        Stream(self.0.accumulate())
+    }
+
+    /// Flush a `list` once `capacity` values accumulate (and on the last cycle).
+    fn buffer(&self, capacity: usize) -> Stream {
+        Stream(self.0.buffer(capacity))
+    }
+
+    /// Flush a `list` on each `interval_nanos` boundary (and on the last cycle).
+    fn window(&self, interval_nanos: u64) -> Stream {
+        Stream(self.0.window(Duration::from_nanos(interval_nanos)))
+    }
+
+    /// Pair each value with the engine time as a `(nanos, value)` tuple.
+    fn with_time(&self) -> Stream {
+        Stream(self.0.with_time())
+    }
+
+    /// Collect every `(nanos, value)` pair into a growing `list` of tuples.
+    fn collect(&self) -> Stream {
+        Stream(self.0.collect())
+    }
+
+    /// Fold values into an accumulator with `func(acc, value)`, seeded from
+    /// `init`, emitting the accumulator after each fold. A raised exception
+    /// aborts the run.
+    fn fold(&self, init: Py<PyAny>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.fold(PyElement::from(init), func))
+    }
+
+    /// Map-and-filter: `func(value)` returning `None` drops the tick, any other
+    /// result is emitted. A raised exception aborts the run.
+    fn filter_map(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.filter_map(func))
+    }
+
+    /// Keep a value only when `predicate(value)` is truthy; drop it otherwise.
+    fn filter_value(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.filter_value(predicate))
+    }
+
+    /// Drop values whose payload is Python `None`.
+    fn filter_none(&self) -> Stream {
+        Stream(self.0.filter_none())
+    }
+
+    /// Cumulative running sum over the numeric values.
+    fn sum(&self) -> Stream {
+        Stream(self.0.sum())
+    }
+
+    /// Cumulative running mean over the numeric values.
+    fn mean(&self) -> Stream {
+        Stream(self.0.mean())
+    }
+
+    /// Cumulative running mean over the numeric values (alias for `mean`, the
+    /// classic method name).
+    fn average(&self) -> Stream {
+        Stream(self.0.mean())
+    }
+
+    /// Combine with `other` through `func(this_value, other_value)`, called
+    /// whenever either input ticks (the classic `bimap`). A raised exception
+    /// aborts the run.
+    fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.bimap(&other.0, func))
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()
