@@ -24,11 +24,12 @@ fn historical_mode_drains_without_connecting() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let config = OtlpConfig::new("http://127.0.0.1:1", "test");
 
-    let g = GraphBuilder::new();
-    let _sink =
-        g.ticker(Duration::from_millis(10))
-            .count()
-            .otlp_push(rt.handle(), "test_metric", config);
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let _sink = g
+        .ticker(Duration::from_millis(10))
+        .count()
+        .otlp_push("test_metric", config)
+        .unwrap();
 
     g.build()
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
@@ -44,12 +45,12 @@ fn bad_endpoint_is_handled_gracefully() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let config = OtlpConfig::new("http://127.0.0.1:1", "test");
 
-    let g = GraphBuilder::new();
-    let _sink = g.ticker(Duration::from_millis(50)).count().otlp_push(
-        rt.handle(),
-        "bad_endpoint_metric",
-        config,
-    );
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let _sink = g
+        .ticker(Duration::from_millis(50))
+        .count()
+        .otlp_push("bad_endpoint_metric", config)
+        .unwrap();
 
     // Errors from the background exporter are non-fatal; ignore the result.
     let _ = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
@@ -62,12 +63,12 @@ fn bad_endpoint_is_handled_gracefully() {
 fn config_accepts_a_tuple() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let g = GraphBuilder::new();
-    let _sink = g.ticker(Duration::from_millis(10)).count().otlp_push(
-        rt.handle(),
-        "tuple_metric",
-        ("http://127.0.0.1:1", "test"),
-    );
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let _sink = g
+        .ticker(Duration::from_millis(10))
+        .count()
+        .otlp_push("tuple_metric", ("http://127.0.0.1:1", "test"))
+        .unwrap();
 
     g.build()
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))

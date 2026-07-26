@@ -19,7 +19,6 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 /// queued writes have landed before the run returns.
 #[test]
 fn consume_async_preserves_order() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let collected = Arc::new(Mutex::new(Vec::<u64>::new()));
 
     {
@@ -27,7 +26,7 @@ fn consume_async_preserves_order() {
         let g = GraphBuilder::new();
         // Unbounded buffer: every item is enqueued in one cycle, then drained in
         // order by the single consumer task.
-        let consume = consume_async(rt.handle(), None, move |v: u64| {
+        let consume = consume_async(&g, None, move |v: u64| {
             let sink_values = sink_values.clone();
             async move {
                 sink_values
@@ -36,7 +35,8 @@ fn consume_async_preserves_order() {
                     .push(v);
                 Ok(())
             }
-        });
+        })
+        .unwrap();
         let _sink = g.constant(burst![1u64, 2, 3, 4, 5]).for_each(consume);
         let mut r = g.build();
         r.run(HISTORICAL, RunFor::Cycles(1)).unwrap();
@@ -57,7 +57,6 @@ fn consume_async_preserves_order() {
 /// (nothing dropped, no deadlock).
 #[test]
 fn consume_async_applies_backpressure() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let collected = Arc::new(Mutex::new(Vec::<u64>::new()));
 
     {
@@ -66,7 +65,7 @@ fn consume_async_applies_backpressure() {
         // Twenty values through a bounded channel of 2, with a slow sink so the
         // channel keeps filling and the graph thread blocks on `send` until the
         // consumer drains — exercising the back-pressure path.
-        let consume = consume_async(rt.handle(), Some(2), move |v: u64| {
+        let consume = consume_async(&g, Some(2), move |v: u64| {
             let sink_values = sink_values.clone();
             async move {
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -76,7 +75,8 @@ fn consume_async_applies_backpressure() {
                     .push(v);
                 Ok(())
             }
-        });
+        })
+        .unwrap();
         let values: Vec<u64> = (1..=20).collect();
         let mut burst = wingfoil::Burst::new();
         for v in values {
@@ -100,7 +100,6 @@ fn consume_async_applies_backpressure() {
 /// the failure deterministically.
 #[test]
 fn consume_async_error_aborts_the_run() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let collected = Arc::new(Mutex::new(Vec::<u64>::new()));
 
     let sink_values = collected.clone();
@@ -117,7 +116,7 @@ fn consume_async_error_aborts_the_run() {
     // buffer_size = 1 so a send blocks until the consumer takes the prior value;
     // once the consumer errors on `2` and stops, a later send hits the closed
     // channel and the run aborts — no reliance on async timing.
-    let consume = consume_async(rt.handle(), Some(1), move |v: u64| {
+    let consume = consume_async(&g, Some(1), move |v: u64| {
         let sink_values = sink_values.clone();
         async move {
             if v == 2 {
@@ -129,7 +128,8 @@ fn consume_async_error_aborts_the_run() {
                 .push(v);
             Ok(())
         }
-    });
+    })
+    .unwrap();
     let _sink = stream.for_each(consume);
 
     let mut r = g.build();

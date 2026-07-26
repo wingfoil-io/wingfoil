@@ -7,11 +7,10 @@ example onto the next engine. Demonstrates the on-graph time model
 (`(NanoTime, T)` tuples) and the shared time-slicing logic used for historical
 replay.
 
-Unlike classic, the tokio runtime is the caller's: this example builds a
-`tokio::runtime::Runtime` and hands its `handle()` to `postgres_read` /
-`postgres_write` (see the module docs). Because the reader and sink drive the
-async client with `Handle::block_on`, each graph is built, run, and dropped from
-the (non-async) main thread.
+The graph owns the tokio runtime the adapters use — created lazily, so no
+`&Handle` is threaded in (see the module docs). Because the reader and sink drive
+the async client with `Handle::block_on`, each graph is built, run, and dropped
+from the (non-async) main thread.
 
 ## Setup
 
@@ -28,22 +27,21 @@ cargo run -p wingfoil-next --example postgres_adapter --features postgres
 ## Code
 
 ```rust
-let rt = tokio::runtime::Runtime::new()?;
 let start = NanoTime::from_kdb_timestamp(0);
 
 // Write — replay generated trades at their timestamps into the table.
 {
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new(); // owns the tokio runtime lazily
     let rows = baseline.iter().cloned().map(|(time, trade)| Ok((trade, time)));
     let _sink = g
         .replay_results(rows)
-        .postgres_write(rt.handle(), conn.clone(), "example_trades", None)?;
+        .postgres_write(conn.clone(), "example_trades", None)?;
     g.build().run(run_mode, run_for)?;
 }
 
 // Read — time-sliced, one query per day (a single 24h slice covers the run).
 let params = RunParams { run_mode, run_for, start_time: start };
-let read = postgres_read::<Trade>(&g, rt.handle(), params, conn,
+let read = postgres_read::<Trade>(&g, params, conn,
     Duration::from_secs(86400),
     |(t0, t1), _date, _iter| format!(
         "SELECT time, sym, price, qty FROM example_trades \

@@ -74,22 +74,15 @@ fn historical(start: NanoTime, secs: u64) -> RunParams {
 #[test]
 fn read_rejects_realtime_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::RealTime,
         run_for: RunFor::Duration(HOUR),
         start_time: NanoTime::ZERO,
     };
-    let err = postgres_read::<TestTrade>(
-        &g,
-        rt.handle(),
-        params,
-        "host=127.0.0.1 dbname=db",
-        HOUR,
-        read_query,
-    )
-    .err()
-    .expect("RealTime must be rejected");
+    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
+        .err()
+        .expect("RealTime must be rejected");
     let msg = format!("{err:#}");
     assert!(msg.contains("postgres_read"), "names the adapter: {msg}");
     assert!(
@@ -102,22 +95,15 @@ fn read_rejects_realtime_mode() {
 #[test]
 fn read_rejects_forever() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         run_for: RunFor::Forever,
         start_time: NanoTime::from_kdb_timestamp(0),
     };
-    let err = postgres_read::<TestTrade>(
-        &g,
-        rt.handle(),
-        params,
-        "host=127.0.0.1 dbname=db",
-        HOUR,
-        read_query,
-    )
-    .err()
-    .expect("Forever must be rejected");
+    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
+        .err()
+        .expect("Forever must be rejected");
     assert!(format!("{err:#}").contains("RunFor::Forever"));
 }
 
@@ -125,22 +111,15 @@ fn read_rejects_forever() {
 #[test]
 fn read_rejects_cycles() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         run_for: RunFor::Cycles(1),
         start_time: NanoTime::from_kdb_timestamp(0),
     };
-    let err = postgres_read::<TestTrade>(
-        &g,
-        rt.handle(),
-        params,
-        "host=127.0.0.1 dbname=db",
-        HOUR,
-        read_query,
-    )
-    .err()
-    .expect("Cycles must be rejected");
+    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
+        .err()
+        .expect("Cycles must be rejected");
     assert!(format!("{err:#}").contains("RunFor::Cycles"));
 }
 
@@ -149,13 +128,12 @@ fn read_rejects_cycles() {
 #[test]
 fn read_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let conn = PostgresConnection::new(
         "host=127.0.0.1 port=59999 user=postgres password=s3cr3t dbname=postgres connect_timeout=2",
     );
     let err = postgres_read::<TestTrade>(
         &g,
-        rt.handle(),
         historical(NanoTime::from_kdb_timestamp(0), 86400),
         conn,
         HOUR,
@@ -175,7 +153,7 @@ fn read_connection_refused_redacts_password() {
 #[test]
 fn sub_rejects_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         run_for: RunFor::Cycles(1),
@@ -183,7 +161,6 @@ fn sub_rejects_historical_mode() {
     };
     let err = match postgres_sub::<TestTrade, _>(
         &g,
-        rt.handle(),
         params,
         "host=127.0.0.1 dbname=db",
         "chan",
@@ -208,7 +185,7 @@ fn sub_rejects_historical_mode() {
 #[test]
 fn write_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let source = g.constant(burst![TestTrade {
         sym: "T".into(),
         price: 1.0,
@@ -218,7 +195,7 @@ fn write_connection_refused_redacts_password() {
         "host=127.0.0.1 port=59999 user=postgres password=hunter2 dbname=postgres connect_timeout=2",
     );
     let err = source
-        .postgres_write(rt.handle(), conn, "trades", None)
+        .postgres_write(conn, "trades", None)
         .err()
         .expect("an unreachable endpoint must abort at wiring");
     let msg = format!("{err:#}");

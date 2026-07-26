@@ -38,9 +38,9 @@ fn historical() -> RunParams {
 #[test]
 fn sub_connection_refused_aborts_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
-    let _events = redis_sub(&g, rt.handle(), realtime(1), conn, "ch")
+    let _events = redis_sub(&g, realtime(1), conn, "ch")
         .expect("realtime redis_sub wires without error")
         .collapse_accumulate();
 
@@ -56,9 +56,9 @@ fn sub_connection_refused_aborts_the_run() {
 #[test]
 fn stream_read_connection_refused_aborts_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
-    let _events = redis_stream_read(&g, rt.handle(), realtime(1), conn, "key")
+    let _events = redis_stream_read(&g, realtime(1), conn, "key")
         .expect("realtime redis_stream_read wires without error")
         .collapse_accumulate();
 
@@ -75,9 +75,9 @@ fn stream_read_connection_refused_aborts_the_run() {
 #[test]
 fn sub_rejects_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let conn = RedisConnection::new("redis://127.0.0.1:6379");
-    let err = match redis_sub(&g, rt.handle(), historical(), conn, "ch") {
+    let err = match redis_sub(&g, historical(), conn, "ch") {
         Ok(_) => panic!("HistoricalFrom must be rejected at wiring time"),
         Err(e) => e,
     };
@@ -93,9 +93,9 @@ fn sub_rejects_historical_mode() {
 #[test]
 fn stream_read_rejects_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let conn = RedisConnection::new("redis://127.0.0.1:6379");
-    let err = match redis_stream_read(&g, rt.handle(), historical(), conn, "key") {
+    let err = match redis_stream_read(&g, historical(), conn, "key") {
         Ok(_) => panic!("HistoricalFrom must be rejected at wiring time"),
         Err(e) => e,
     };
@@ -115,14 +115,14 @@ fn stream_read_rejects_historical_mode() {
 #[test]
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let source = g.constant(burst![RedisEntry {
         channel: "ch".to_string(),
         payload: b"v".to_vec(),
     }]);
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
 
-    let outcome = match source.redis_pub(rt.handle(), conn, None) {
+    let outcome = match source.redis_pub(conn, None) {
         Err(_) => return, // errored at wiring (eager connect) — acceptable
         Ok(_sink) => g.build().run(RunMode::RealTime, RunFor::Cycles(1)),
     };
@@ -136,11 +136,11 @@ fn pub_connection_refused_surfaces_an_error() {
 #[test]
 fn stream_write_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let source = g.constant(burst![RedisStreamRecord::single("key", "f", b"v".to_vec())]);
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
 
-    let outcome = match source.redis_stream_write(rt.handle(), conn, None) {
+    let outcome = match source.redis_stream_write(conn, None) {
         Err(_) => return, // errored at wiring (eager connect) — acceptable
         Ok(_sink) => g.build().run(RunMode::RealTime, RunFor::Cycles(1)),
     };

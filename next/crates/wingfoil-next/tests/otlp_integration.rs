@@ -38,12 +38,11 @@ fn otlp_push_sends_successfully() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let config = OtlpConfig::new(endpoint, "wingfoil-next-test");
 
-    let g = GraphBuilder::new();
-    let _sink = g.ticker(Duration::from_millis(100)).count().otlp_push(
-        rt.handle(),
-        "wingfoil_next_integration_counter",
-        config,
-    );
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let _sink = g
+        .ticker(Duration::from_millis(100))
+        .count()
+        .otlp_push("wingfoil_next_integration_counter", config)?;
 
     g.build()
         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;

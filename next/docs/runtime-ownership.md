@@ -1,18 +1,35 @@
 # Async runtime ownership: caller-passed `&Handle` → Graph-owned with override
 
-Status: **proposal.** Coupled to
-[`source-lifecycle-defer-to-start.md`](./source-lifecycle-defer-to-start.md) —
-these two should be decided and executed together. Tracks deviation **A5** in
+Status: **implemented.** Tracks deviation **A5** in
 [`deviation-register.md`](./deviation-register.md).
 
-> **Update (spike landed):** the `source_at_start` primitive from the
-> lifecycle plan has since landed on `next` (PR #547) and `zmq_sub` now
-> establishes its socket + producer thread in `start()`. That directly
-> unblocks the runtime work below — the migration can build on the *landed*
-> primitive rather than a proposed one. The `produce_async` / `consume_async`
-> family (etcd/redis/kafka/postgres/otlp) still spawns at wiring and still
-> takes `&Handle`, so the analysis and recommendation are unchanged; only the
-> "current state" and "migration sketch" are updated to reflect the spike.
+> **Landed.** The recommendation below shipped: the `GraphBuilder` owns a
+> tokio runtime — created lazily on first async use, dropped at teardown — with
+> a caller override. The `&Handle` parameter is gone from every async adapter
+> factory and from `produce_async` / `produce_async_bounded` / `consume_async`.
+>
+> **What shipped (and where it differs from the original plan below):**
+> - `GraphBuilder` carries an `AsyncRuntimeSlot` (executor-free core: it is an
+>   opaque field until the `async` feature names the tokio types). On first
+>   `async_runtime_handle()` call it lazily creates one `tokio::runtime::Runtime`
+>   and caches its handle; every async adapter in the graph shares it.
+> - The runtime is **carried into the `Runner`** at `build()` and is the
+>   `Runner`'s **last field**, so it is dropped only *after* the nodes — an
+>   offloaded sink's teardown `block_on` still sees a live runtime.
+> - Override: `GraphBuilder::with_async_runtime(handle)` installs a caller
+>   runtime; the graph then creates/owns nothing.
+> - **Decoupled from defer-to-start.** The plan framed runtime-ownership and
+>   [defer-to-start](./source-lifecycle-defer-to-start.md) as "one decision."
+>   In fact they separated cleanly: `produce_async` / `consume_async` still
+>   spawn/connect at **wiring**, but now on the *graph's* runtime rather than a
+>   caller-passed handle — so the ergonomic win landed without waiting for
+>   defer-to-start. `zmq_sub` already defers via `source_at_start` (#547); when
+>   the `produce_async` family follows, it will pull its handle from the engine
+>   at `start()` instead of the builder at wiring, and the wiring-time
+>   `RunParams` will fall away — but that is now a *further* refinement, not a
+>   prerequisite.
+>
+> The original proposal is kept below as the design record.
 
 ## The question
 

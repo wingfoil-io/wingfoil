@@ -16,8 +16,8 @@ The key call is **`produce_async`**, which maps an async `futures::Stream` of
 `(NanoTime, T)` onto a graph source. The graph itself is the consumer: classic
 hands the stream to an async `consume_async` closure, whereas on next an
 on-graph `for_each` plays that role — keeping the consumer in the
-explicitly-timed, breadth-first world. The producer runs on the caller's tokio
-runtime and each yielded value wakes the kernel.
+explicitly-timed, breadth-first world. The producer runs on the graph's own tokio
+runtime (created lazily) and each yielded value wakes the kernel.
 
 `produce_async` also carries the two guarantees classic gives for free:
 **back-pressure** (`produce_async_bounded` bounds how far a realtime producer

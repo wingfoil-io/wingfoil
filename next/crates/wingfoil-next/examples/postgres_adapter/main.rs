@@ -87,9 +87,9 @@ fn main() -> Result<()> {
     );
     let num_rows = 10;
     let start = NanoTime::from_kdb_timestamp(0);
-    // The caller owns the tokio runtime; each graph is built, run, and dropped on
-    // this (non-async) thread so the reader/sink `block_on`s are safe.
-    let rt = tokio::runtime::Runtime::new()?;
+    // The graph owns the tokio runtime (created lazily); each graph is built,
+    // run, and dropped on this (non-async) thread so the reader/sink `block_on`s
+    // are safe.
 
     reset_table(&conn)?;
 
@@ -103,9 +103,9 @@ fn main() -> Result<()> {
             .iter()
             .cloned()
             .map(|(time, trade)| Ok((trade, time)));
-        let _sink =
-            g.replay_results(rows)
-                .postgres_write(rt.handle(), conn.clone(), TABLE, None)?;
+        let _sink = g
+            .replay_results(rows)
+            .postgres_write(conn.clone(), TABLE, None)?;
         let mut runner = g.build();
         runner.run(
             RunMode::HistoricalFrom(start),
@@ -122,7 +122,6 @@ fn main() -> Result<()> {
     };
     let read = postgres_read::<Trade>(
         &g,
-        rt.handle(),
         params,
         conn,
         Duration::from_secs(86400),

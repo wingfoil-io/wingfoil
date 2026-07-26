@@ -474,16 +474,15 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 ```rust
 pub fn $ARGUMENTS_sub(
     g: &GraphBuilder,
-    handle: &tokio::runtime::Handle,
     params: RunParams,
     conn: <Name>Config,
-) -> Stream<Burst<<Name>Event>> {
-    produce_async(g, handle, params, move |_p| async move {
+) -> anyhow::Result<Stream<Burst<<Name>Event>>> {
+    produce_async(g, params, move |_p| async move {
         // connect; optionally snapshot-then-watch (see below)
         Ok(async_stream::stream! {
             // yield Ok((NanoTime, event)); yield Err(e) to abort the run
         })
-    })
+    }) // returns Result — propagate with `?` (runtime creation is fallible)
 }
 ```
 
@@ -493,17 +492,22 @@ invoke — historical `start_time` mismatches are validated and abort the run;
 use `produce_async_bounded` when a fast realtime producer needs `buffer_size`
 back-pressure (not applied in historical mode, by design).
 
-**Runtime ownership — current convention, with a pending change.** Today async
-adapters take the caller's `&tokio::runtime::Handle` (caller-owned runtime), and
-the graph must be built, run, and dropped from a **non-async thread** (a
-`block_on` footgun — see the etcd/postgres module docs). Follow that convention
-for now. But be aware of an **open design proposal** to move to a
-`Runner`/`Graph`-owned runtime *with an override* — which would drop the
-`&Handle`/`RunParams` factory params and hand the handle to the adapter at
-`start()` instead (it's coupled to the defer-I/O-to-`start()` change). See
-`next/docs/runtime-ownership.md` and `next/docs/source-lifecycle-defer-to-start.md`;
-if you're adding an async adapter while that's in flight, check whether the new
-primitive has landed before hardcoding the `&Handle` signature.
+**Runtime ownership — the graph owns the runtime; pass no `&Handle`.** The
+`GraphBuilder` owns one tokio runtime, created lazily on first async use and
+dropped at teardown, shared by every async adapter in the graph
+(`next/docs/runtime-ownership.md`, landed). So your factory takes **no**
+`&tokio::runtime::Handle`: `produce_async` / `produce_async_bounded` /
+`consume_async` pull the handle from `g` themselves and return `Result` (the
+first, owned-runtime creation is the only fallible part — propagate with `?`).
+For a **sink trait** (method on `Stream<…>`, no `&g` in hand), get a builder
+view with `self.graph()` and, if you need the handle directly for a wiring-time
+`block_on` connect, `self.graph().async_runtime_handle()?`. The graph must still
+be built, run, and dropped from a **non-async thread** (the `block_on` footgun —
+see the etcd/postgres module docs). A caller embeds their own runtime with
+`GraphBuilder::new().with_async_runtime(handle)` (the override). `RunParams` is
+still a source factory param (the producer spawns at wiring); it will fall away
+only if/when the `produce_async` family also defers to `start()`
+(`next/docs/source-lifecycle-defer-to-start.md`).
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
@@ -584,9 +588,11 @@ errors back into the graph to abort the run on the next cycle, and flushes
 queued writes at teardown — all off the graph thread. Wire it via `for_each`:
 
 ```rust
-let sink = consume_async(handle, Some(buffer_size), move |value| async move {
+// `consume_async` takes the graph (not a `&Handle`) and returns `Result`; from a
+// sink trait method use `&self.graph()`. Propagate with `?`.
+let sink = consume_async(&self.graph(), Some(buffer_size), move |value| async move {
     client.write(value).await.context("$ARGUMENTS: writing")
-});
+})?;
 Ok(self.for_each(sink))
 ```
 

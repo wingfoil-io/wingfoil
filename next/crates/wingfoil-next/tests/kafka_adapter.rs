@@ -22,7 +22,7 @@ use wingfoil_next::prelude::*;
 #[test]
 fn sub_rejects_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::ZERO),
         run_for: RunFor::Cycles(1),
@@ -30,7 +30,6 @@ fn sub_rejects_historical_mode() {
     };
     let err = match kafka_sub(
         &g,
-        rt.handle(),
         params,
         KafkaConnection::new("127.0.0.1:9092"),
         "topic",
@@ -54,7 +53,7 @@ fn sub_rejects_historical_mode() {
 #[test]
 fn sub_connection_refused_terminates() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::RealTime,
         run_for: RunFor::Duration(Duration::from_secs(3)),
@@ -62,7 +61,6 @@ fn sub_connection_refused_terminates() {
     };
     let _events = kafka_sub(
         &g,
-        rt.handle(),
         params,
         KafkaConnection::new("127.0.0.1:59999"),
         "nonexistent",
@@ -85,13 +83,13 @@ fn sub_connection_refused_terminates() {
 #[test]
 fn pub_wires_from_single_record_stream() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let _sink = g
         .constant(KafkaRecord {
             topic: "t".to_string(),
             key: Some(b"k".to_vec()),
             value: b"v".to_vec(),
         })
-        .kafka_pub(rt.handle(), "127.0.0.1:9092")
+        .kafka_pub("127.0.0.1:9092")
         .expect("kafka_pub wires from a single-record stream");
 }

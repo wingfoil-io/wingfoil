@@ -52,18 +52,18 @@
 //! non-numeric-records-`0.0` fallback, the historical no-op, provider-drop
 //! flush) is preserved. The surface differs in three deliberate ways:
 //!
-//! 1. **The tokio runtime is the caller's.** Classic hid a global runtime inside
-//!    its own `consume_async`; next's
-//!    [`consume_async`](crate::async_source::consume_async) takes the runtime
-//!    [`Handle`](tokio::runtime::Handle) explicitly, so
-//!    [`otlp_push`](OtlpSinkOps::otlp_push) takes a `&tokio::runtime::Handle` —
-//!    the same convention as [`etcd`](crate::adapters::etcd). The graph must be
-//!    built, run, and dropped from a non-async thread (a `consume_async`
-//!    footgun; see its docs).
+//! 1. **The graph owns the tokio runtime.** Classic hid a never-dropped global
+//!    runtime inside its own `consume_async`; next's `GraphBuilder` owns one
+//!    runtime, created lazily on first async use and dropped at teardown, shared
+//!    by every async adapter — so [`otlp_push`](OtlpSinkOps::otlp_push) takes no
+//!    `&Handle` (see `docs/runtime-ownership.md`; embed in your own runtime with
+//!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
+//!    The graph must be built, run, and dropped from a non-async thread (a
+//!    `consume_async` footgun; see its docs).
 //! 2. **The sink is an extension trait.** Classic exposed an `OtlpPush` trait on
 //!    `dyn Stream<T>`; next uses the sink-as-trait convention shared with
-//!    [`prometheus`](crate::adapters::prometheus): `stream.otlp_push(&handle,
-//!    name, config)` on a `Stream<T>`, returning the sink `Stream<()>`.
+//!    [`prometheus`](crate::adapters::prometheus): `stream.otlp_push(name,
+//!    config)` on a `Stream<T>`, returning the sink `Stream<()>`.
 //! 3. **The trace/span exporter is not yet ported.** Classic's `OtlpSpans` emits
 //!    OpenTelemetry spans from `Stream<P: HasLatency>` values. That path depends
 //!    on the `Traced` / `HasLatency` / `latency_stages!` latency infrastructure,
@@ -84,11 +84,11 @@
 
 use std::time::Duration;
 
+use anyhow::Result;
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry_otlp::{MetricExporter, WithExportConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use tokio::runtime::Handle;
 use wingfoil::RunMode;
 
 use crate::async_source::consume_async;
@@ -149,10 +149,11 @@ pub trait OtlpSinkOps<T> {
     /// `T::to_string().parse::<f64>()`; a value that does not format as a bare
     /// number records `0.0` and emits a `log::warn`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs — the
-    ///   graph must be driven from a non-async thread).
     /// - `config`: the OTLP endpoint and service name (accepts an
     ///   [`OtlpConfig`], or a `(endpoint, service_name)` tuple).
+    ///
+    /// The graph owns the tokio runtime (see the module docs — the graph must be
+    /// driven from a non-async thread).
     ///
     /// The sink is a **no-op** under
     /// [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom): no value
@@ -161,13 +162,17 @@ pub trait OtlpSinkOps<T> {
     ///
     /// The returned `Stream<()>` **must** be added to the graph (or built and
     /// run) for metrics to be exported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error at wiring time only if the graph's async runtime cannot be
+    /// created.
     #[must_use = "otlp_push returns a sink Stream that must be added to the graph"]
     fn otlp_push(
         &self,
-        handle: &Handle,
         metric_name: &'static str,
         config: impl Into<OtlpConfig>,
-    ) -> Stream<()>;
+    ) -> Result<Stream<()>>;
 }
 
 impl<T> OtlpSinkOps<T> for Stream<T>
@@ -176,21 +181,20 @@ where
 {
     fn otlp_push(
         &self,
-        handle: &Handle,
         metric_name: &'static str,
         config: impl Into<OtlpConfig>,
-    ) -> Stream<()> {
+    ) -> Result<Stream<()>> {
         let config = config.into();
 
         // The off-thread export. `consume_async`'s consumer task runs on the
-        // caller's runtime, so building the `rt-tokio` PeriodicReader and
+        // graph's runtime, so building the `rt-tokio` PeriodicReader and
         // recording on the gauge both happen inside a tokio context. The meter
         // provider is built lazily on the first value (kept alive in `provider`
         // so it flushes when this closure — and thus the consumer task — is
         // dropped at teardown), never in historical mode (no value reaches here).
         let mut gauge: Option<opentelemetry::metrics::Gauge<f64>> = None;
         let mut provider: Option<SdkMeterProvider> = None;
-        let sink = consume_async(handle, None, move |value: T| {
+        let sink = consume_async(&self.graph(), None, move |value: T| {
             let result = build_and_record(
                 &mut gauge,
                 &mut provider,
@@ -199,13 +203,13 @@ where
                 &value.to_string(),
             );
             async move { result }
-        });
+        })?;
 
         // The run-mode guard rides `register_op1` (`for_each` cannot see the
         // `Ctx`). In historical mode the value is never handed to `consume_async`,
         // so the background task stays idle and makes no network calls — the
         // prometheus-sink pattern.
-        self.wire(move |b, h| {
+        Ok(self.wire(move |b, h| {
             b.register_op1(
                 h,
                 "otlp_push",
@@ -220,7 +224,7 @@ where
                     Ok(Tick::Value(()))
                 },
             )
-        })
+        }))
     }
 }
 

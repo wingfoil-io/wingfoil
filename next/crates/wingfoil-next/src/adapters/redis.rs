@@ -31,13 +31,14 @@
 //! append, all four value types) is preserved. The surface differs in three
 //! deliberate ways, mirroring the [`etcd`](crate::adapters::etcd) port:
 //!
-//! 1. **The tokio runtime is the caller's.** Classic hides a global runtime
-//!    inside `produce_async`/`consume_async`. Next's
-//!    [`produce_async`](crate::async_source::produce_async) and
-//!    [`consume_async`](crate::async_source::consume_async) take the runtime
-//!    [`Handle`](tokio::runtime::Handle) explicitly (and the sources a
-//!    [`RunParams`]), so the caller owns a `tokio::runtime::Runtime` and hands
-//!    in its `handle()`.
+//! 1. **The graph owns the tokio runtime.** Classic hides a never-dropped global
+//!    runtime inside `produce_async`/`consume_async`. Next's `GraphBuilder` owns
+//!    one runtime, created lazily on first async use and dropped at teardown,
+//!    shared by every async adapter — so the common call needs no `&Handle` and
+//!    there is no leaked global (see `docs/runtime-ownership.md`). The sources
+//!    still take a [`RunParams`]. Embed in an existing runtime by installing an
+//!    override with
+//!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **The sinks connect eagerly, at wiring time.** `redis_pub` /
 //!    `redis_stream_write` return `Result` and a connection failure surfaces
 //!    *before* the run, whereas classic connected lazily inside the async
@@ -97,7 +98,6 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use redis::AsyncCommands;
 use redis::streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply};
-use tokio::runtime::Handle;
 use wingfoil::{NanoTime, RunMode};
 
 use crate::async_source::{RunParams, consume_async, produce_async};
@@ -261,7 +261,6 @@ fn to_event(key: &str, id: &StreamId) -> RedisStreamEvent {
 /// [`RunMode::RealTime`].
 pub fn redis_sub(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     conn: impl Into<RedisConnection>,
     channel: impl Into<String>,
@@ -275,38 +274,33 @@ pub fn redis_sub(
     }
     let conn = conn.into();
     let channel = channel.into();
-    Ok(produce_async(
-        g,
-        handle,
-        params,
-        move |_p: RunParams| async move {
-            let client = redis::Client::open(conn.url.as_str())
-                .with_context(|| format!("redis_sub: opening client for {:?}", conn.url))?;
-            let mut pubsub = client
-                .get_async_pubsub()
-                .await
-                .with_context(|| format!("redis_sub: connecting to {:?}", conn.url))?;
-            pubsub
-                .subscribe(channel.as_str())
-                .await
-                .with_context(|| format!("redis_sub: subscribing to {channel:?}"))?;
+    produce_async(g, params, move |_p: RunParams| async move {
+        let client = redis::Client::open(conn.url.as_str())
+            .with_context(|| format!("redis_sub: opening client for {:?}", conn.url))?;
+        let mut pubsub = client
+            .get_async_pubsub()
+            .await
+            .with_context(|| format!("redis_sub: connecting to {:?}", conn.url))?;
+        pubsub
+            .subscribe(channel.as_str())
+            .await
+            .with_context(|| format!("redis_sub: subscribing to {channel:?}"))?;
 
-            Ok(async_stream::stream! {
-                let mut messages = pubsub.on_message();
-                while let Some(msg) = messages.next().await {
-                    let event = RedisEvent {
-                        channel: msg.get_channel_name().to_string(),
-                        payload: msg.get_payload_bytes().to_vec(),
-                    };
-                    yield Ok((NanoTime::now(), event));
-                }
-                // `on_message` ends only when the connection drops.
-                yield Err(anyhow::anyhow!(
-                    "redis_sub: subscription stream closed unexpectedly"
-                ));
-            })
-        },
-    ))
+        Ok(async_stream::stream! {
+            let mut messages = pubsub.on_message();
+            while let Some(msg) = messages.next().await {
+                let event = RedisEvent {
+                    channel: msg.get_channel_name().to_string(),
+                    payload: msg.get_payload_bytes().to_vec(),
+                };
+                yield Ok((NanoTime::now(), event));
+            }
+            // `on_message` ends only when the connection drops.
+            yield Err(anyhow::anyhow!(
+                "redis_sub: subscription stream closed unexpectedly"
+            ));
+        })
+    })
 }
 
 /// Read a Redis stream `key`: emit a snapshot of all existing entries, then tail
@@ -319,8 +313,8 @@ pub fn redis_sub(
 /// exact snapshot boundary, no entry is missed or duplicated in the handoff. Use
 /// `.collapse()` for single-event processing.
 ///
-/// `handle` is the caller's tokio runtime handle and `params` describes the run
-/// the graph will be driven with (see [`produce_async`] and the module docs).
+/// `params` describes the run the graph will be driven with (see
+/// [`produce_async`] and the module docs); the graph owns the tokio runtime.
 ///
 /// # Errors
 ///
@@ -331,7 +325,6 @@ pub fn redis_sub(
 /// at `start`. Run under [`RunMode::RealTime`].
 pub fn redis_stream_read(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     conn: impl Into<RedisConnection>,
     key: impl Into<String>,
@@ -346,66 +339,61 @@ pub fn redis_stream_read(
     }
     let conn = conn.into();
     let key = key.into();
-    Ok(produce_async(
-        g,
-        handle,
-        params,
-        move |_p: RunParams| async move {
-            let client = redis::Client::open(conn.url.as_str())
-                .with_context(|| format!("redis_stream_read: opening client for {:?}", conn.url))?;
-            let mut connection = client
-                .get_multiplexed_async_connection()
-                .await
-                .with_context(|| format!("redis_stream_read: connecting to {:?}", conn.url))?;
+    produce_async(g, params, move |_p: RunParams| async move {
+        let client = redis::Client::open(conn.url.as_str())
+            .with_context(|| format!("redis_stream_read: opening client for {:?}", conn.url))?;
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .with_context(|| format!("redis_stream_read: connecting to {:?}", conn.url))?;
 
-            // 1. Snapshot all existing entries and capture the last ID.
-            let snapshot: StreamRangeReply = connection
-                .xrange(&key, "-", "+")
-                .await
-                .with_context(|| format!("redis_stream_read: XRANGE on {key:?} failed"))?;
-            // "0" means "from the beginning" — used when the stream is empty so the
-            // tail picks up the very first appended entry.
-            let mut last_id = snapshot
-                .ids
-                .last()
-                .map(|id| id.id.clone())
-                .unwrap_or_else(|| "0".to_string());
-            let snapshot_events: Vec<RedisStreamEvent> =
-                snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
+        // 1. Snapshot all existing entries and capture the last ID.
+        let snapshot: StreamRangeReply = connection
+            .xrange(&key, "-", "+")
+            .await
+            .with_context(|| format!("redis_stream_read: XRANGE on {key:?} failed"))?;
+        // "0" means "from the beginning" — used when the stream is empty so the
+        // tail picks up the very first appended entry.
+        let mut last_id = snapshot
+            .ids
+            .last()
+            .map(|id| id.id.clone())
+            .unwrap_or_else(|| "0".to_string());
+        let snapshot_events: Vec<RedisStreamEvent> =
+            snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
 
-            Ok(async_stream::stream! {
-                // Phase 1: emit the snapshot as one atomic burst — every entry
-                // shares ONE timestamp so a bounded run cannot observe only the
-                // first (the etcd snapshot-burst reasoning).
-                let snapshot_time = NanoTime::now();
-                for event in snapshot_events {
-                    yield Ok((snapshot_time, event));
-                }
+        Ok(async_stream::stream! {
+            // Phase 1: emit the snapshot as one atomic burst — every entry
+            // shares ONE timestamp so a bounded run cannot observe only the
+            // first (the etcd snapshot-burst reasoning).
+            let snapshot_time = NanoTime::now();
+            for event in snapshot_events {
+                yield Ok((snapshot_time, event));
+            }
 
-                // Phase 2: tail live appends from the snapshot boundary.
-                let opts = StreamReadOptions::default().block(0);
-                loop {
-                    let reply: redis::RedisResult<StreamReadReply> =
-                        connection.xread_options(&[&key], &[&last_id], &opts).await;
-                    match reply {
-                        Ok(reply) => {
-                            for stream_key in &reply.keys {
-                                for id in &stream_key.ids {
-                                    last_id = id.id.clone();
-                                    yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
-                                }
+            // Phase 2: tail live appends from the snapshot boundary.
+            let opts = StreamReadOptions::default().block(0);
+            loop {
+                let reply: redis::RedisResult<StreamReadReply> =
+                    connection.xread_options(&[&key], &[&last_id], &opts).await;
+                match reply {
+                    Ok(reply) => {
+                        for stream_key in &reply.keys {
+                            for id in &stream_key.ids {
+                                last_id = id.id.clone();
+                                yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
                             }
                         }
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e)
-                                .context(format!("redis_stream_read: XREAD on {key:?} failed")));
-                            break;
-                        }
+                    }
+                    Err(e) => {
+                        yield Err(anyhow::Error::new(e)
+                            .context(format!("redis_stream_read: XREAD on {key:?} failed")));
+                        break;
                     }
                 }
-            })
-        },
-    ))
+            }
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -422,14 +410,14 @@ pub trait RedisSinkOps {
     /// Publish this stream to Redis via `PUBLISH`, issuing one `PUBLISH` per
     /// [`RedisEntry`] to the channel it names. Returns the sink `Stream<()>`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs).
     /// - `buffer_size`: back-pressure bound handed to
     ///   [`consume_async`](crate::async_source::consume_async) — `Some(n)` blocks
     ///   the graph once ~`n` entries are unwritten; `None` is unbounded.
     ///
-    /// Publishing runs off the graph thread; writes land in order and are flushed
-    /// at teardown. `PUBLISH` returns the number of clients that received the
-    /// message (which may be zero); this count is not surfaced.
+    /// The graph owns the tokio runtime (see the module docs). Publishing runs
+    /// off the graph thread; writes land in order and are flushed at teardown.
+    /// `PUBLISH` returns the number of clients that received the message (which
+    /// may be zero); this count is not surfaced.
     ///
     /// # Errors
     ///
@@ -437,7 +425,6 @@ pub trait RedisSinkOps {
     /// publish failure aborts the run with context on a subsequent cycle.
     fn redis_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>>;
@@ -446,11 +433,13 @@ pub trait RedisSinkOps {
 impl RedisSinkOps for Stream<Burst<RedisEntry>> {
     fn redis_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>> {
         let conn = conn.into();
+        // The graph owns the runtime; the sink connects/publishes on it.
+        let g = self.graph();
+        let handle = g.async_runtime_handle()?;
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_pub: opening client for {:?}", conn.url))?;
         // Connect at wiring time so a connection error surfaces before the run.
@@ -458,7 +447,7 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
             .block_on(client.get_multiplexed_async_connection())
             .with_context(|| format!("redis_pub: connecting to {:?}", conn.url))?;
 
-        let sink = consume_async(handle, buffer_size, move |entry: RedisEntry| {
+        let sink = consume_async(&g, buffer_size, move |entry: RedisEntry| {
             let mut connection = connection.clone();
             async move {
                 redis::cmd("PUBLISH")
@@ -469,7 +458,7 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
                     .with_context(|| format!("redis_pub: PUBLISH to {:?} failed", entry.channel))?;
                 Ok(())
             }
-        });
+        })?;
         Ok(self.for_each(sink))
     }
 }
@@ -477,12 +466,11 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
 impl RedisSinkOps for Stream<RedisEntry> {
     fn redis_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>> {
         self.map(|entry: &RedisEntry| burst![entry.clone()])
-            .redis_pub(handle, conn, buffer_size)
+            .redis_pub(conn, buffer_size)
     }
 }
 
@@ -497,12 +485,11 @@ pub trait RedisStreamSinkOps {
     /// per [`RedisStreamRecord`] (Redis assigns the entry ID). Returns the sink
     /// `Stream<()>`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs).
     /// - `buffer_size`: back-pressure bound handed to
     ///   [`consume_async`](crate::async_source::consume_async).
     ///
-    /// Appending runs off the graph thread; writes land in order and are flushed
-    /// at teardown.
+    /// The graph owns the tokio runtime (see the module docs). Appending runs off
+    /// the graph thread; writes land in order and are flushed at teardown.
     ///
     /// # Errors
     ///
@@ -510,7 +497,6 @@ pub trait RedisStreamSinkOps {
     /// append failure aborts the run with context on a subsequent cycle.
     fn redis_stream_write(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>>;
@@ -519,11 +505,13 @@ pub trait RedisStreamSinkOps {
 impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
     fn redis_stream_write(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>> {
         let conn = conn.into();
+        // The graph owns the runtime; the sink connects/appends on it.
+        let g = self.graph();
+        let handle = g.async_runtime_handle()?;
         let client = redis::Client::open(conn.url.as_str())
             .with_context(|| format!("redis_stream_write: opening client for {:?}", conn.url))?;
         // Connect at wiring time so a connection error surfaces before the run.
@@ -531,7 +519,7 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
             .block_on(client.get_multiplexed_async_connection())
             .with_context(|| format!("redis_stream_write: connecting to {:?}", conn.url))?;
 
-        let sink = consume_async(handle, buffer_size, move |record: RedisStreamRecord| {
+        let sink = consume_async(&g, buffer_size, move |record: RedisStreamRecord| {
             let mut connection = connection.clone();
             async move {
                 let mut cmd = redis::cmd("XADD");
@@ -546,7 +534,7 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
                     })?;
                 Ok(())
             }
-        });
+        })?;
         Ok(self.for_each(sink))
     }
 }
@@ -554,12 +542,11 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
 impl RedisStreamSinkOps for Stream<RedisStreamRecord> {
     fn redis_stream_write(
         &self,
-        handle: &Handle,
         conn: impl Into<RedisConnection>,
         buffer_size: Option<usize>,
     ) -> Result<Stream<()>> {
         self.map(|record: &RedisStreamRecord| burst![record.clone()])
-            .redis_stream_write(handle, conn, buffer_size)
+            .redis_stream_write(conn, buffer_size)
     }
 }
 

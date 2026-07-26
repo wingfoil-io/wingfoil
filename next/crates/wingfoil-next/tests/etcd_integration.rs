@@ -95,15 +95,9 @@ fn test_sub_empty_snapshot_then_live_write() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let (_container, endpoint) = start_etcd()?;
 
-    let g = GraphBuilder::new();
-    let events = etcd_sub(
-        &g,
-        rt.handle(),
-        realtime(1),
-        EtcdConnection::new(&endpoint),
-        "/empty/",
-    )?
-    .collapse_accumulate();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let events =
+        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/empty/")?.collapse_accumulate();
 
     let endpoint_clone = endpoint.clone();
     let writer = std::thread::spawn(move || {
@@ -129,15 +123,9 @@ fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/snap/a", "1"), ("/snap/b", "2")])?;
 
-    let g = GraphBuilder::new();
-    let events = etcd_sub(
-        &g,
-        rt.handle(),
-        realtime(1),
-        EtcdConnection::new(&endpoint),
-        "/snap/",
-    )?
-    .collapse_accumulate();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let events =
+        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/snap/")?.collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -165,15 +153,9 @@ fn test_sub_live_updates() -> anyhow::Result<()> {
         seed_keys(&endpoint_clone, &[("/live/x", "hello")]).unwrap();
     });
 
-    let g = GraphBuilder::new();
-    let events = etcd_sub(
-        &g,
-        rt.handle(),
-        realtime(1),
-        EtcdConnection::new(&endpoint),
-        "/live/",
-    )?
-    .collapse_accumulate();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let events =
+        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/live/")?.collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -200,16 +182,10 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
         delete_key(&endpoint_clone, "/del/k").unwrap();
     });
 
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     // Cycles(2): 1 snapshot Put + 1 live Delete.
-    let events = etcd_sub(
-        &g,
-        rt.handle(),
-        realtime(2),
-        EtcdConnection::new(&endpoint),
-        "/del/",
-    )?
-    .collapse_accumulate();
+    let events =
+        etcd_sub(&g, realtime(2), EtcdConnection::new(&endpoint), "/del/")?.collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(2))?;
@@ -237,15 +213,9 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     });
     writer.join().unwrap();
 
-    let g = GraphBuilder::new();
-    let events = etcd_sub(
-        &g,
-        rt.handle(),
-        realtime(1),
-        EtcdConnection::new(&endpoint),
-        "/race/",
-    )?
-    .collapse_accumulate();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let events =
+        etcd_sub(&g, realtime(1), EtcdConnection::new(&endpoint), "/race/")?.collapse_accumulate();
 
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
@@ -268,9 +238,8 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g.constant(burst![entry("/rt/key1", b"value1")]).etcd_pub(
-            rt.handle(),
             EtcdConnection::new(&endpoint),
             None,
             true,
@@ -292,10 +261,10 @@ fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![entry("/nolease/k1", b"persist")])
-            .etcd_pub(rt.handle(), EtcdConnection::new(&endpoint), None, true)?;
+            .etcd_pub(EtcdConnection::new(&endpoint), None, true)?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -314,10 +283,9 @@ fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         // A 30s TTL — the key must still vanish on revoke, not wait 30s.
         let _sink = g.constant(burst![entry("/lease/k1", b"hello")]).etcd_pub(
-            rt.handle(),
             EtcdConnection::new(&endpoint),
             Some(Duration::from_secs(30)),
             true,
@@ -363,7 +331,7 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
     });
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         // Drive the write from a ticker rather than a bare `constant`: under
         // `RunFor::Duration` a `constant` source emits no wake, so the graph
         // would never run the cycle that fires the PUT. Re-writing the same key
@@ -375,7 +343,6 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
             .ticker(Duration::from_millis(500))
             .map(|_: &()| burst![entry("/lease/heartbeat", b"alive")])
             .etcd_pub(
-                rt.handle(),
                 EtcdConnection::new(&endpoint),
                 Some(Duration::from_secs(3)),
                 true,
@@ -396,9 +363,8 @@ fn test_pub_force_true_overwrites() -> anyhow::Result<()> {
     seed_keys(&endpoint, &[("/force/k", "original")])?;
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g.constant(burst![entry("/force/k", b"updated")]).etcd_pub(
-            rt.handle(),
             EtcdConnection::new(&endpoint),
             None,
             true,
@@ -420,10 +386,10 @@ fn test_pub_force_false_fails_if_exists() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/noforce/k", "original")])?;
 
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let _sink = g
         .constant(burst![entry("/noforce/k", b"should-not-overwrite")])
-        .etcd_pub(rt.handle(), EtcdConnection::new(&endpoint), None, false)?;
+        .etcd_pub(EtcdConnection::new(&endpoint), None, false)?;
     let result = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
 
     assert!(result.is_err(), "expected error when key already exists");
@@ -448,10 +414,10 @@ fn test_pub_force_false_succeeds_if_absent() -> anyhow::Result<()> {
     let (_container, endpoint) = start_etcd()?;
 
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![entry("/noforce/new", b"value")])
-            .etcd_pub(rt.handle(), EtcdConnection::new(&endpoint), None, false)?;
+            .etcd_pub(EtcdConnection::new(&endpoint), None, false)?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 

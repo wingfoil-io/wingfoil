@@ -22,14 +22,15 @@
 //! background auto-commit, multi-topic writes from one sink) is preserved. The
 //! surface differs in these deliberate ways:
 //!
-//! 1. **The tokio runtime is the caller's.** Classic `kafka_sub`/`kafka_pub`
-//!    hide a global runtime inside `produce_async`/`consume_async`. Next's
-//!    [`produce_async`](crate::async_source::produce_async) and its sink
-//!    counterpart [`consume_async`](crate::async_source::consume_async) take the
-//!    runtime [`Handle`](tokio::runtime::Handle) explicitly (and `kafka_sub` a
-//!    [`RunParams`], since the producer task spawns at wiring time). Both
-//!    functions here follow that convention: the caller owns a
-//!    `tokio::runtime::Runtime` and hands in its `handle()`.
+//! 1. **The graph owns the tokio runtime.** Classic `kafka_sub`/`kafka_pub` hide
+//!    a never-dropped global runtime inside `produce_async`/`consume_async`.
+//!    Next's `GraphBuilder` owns one runtime, created lazily on first async use
+//!    and dropped at teardown, shared by every async adapter — so the common call
+//!    needs no `&Handle` and there is no leaked global (see
+//!    `docs/runtime-ownership.md`). `kafka_sub` still takes a [`RunParams`]
+//!    (the producer task spawns at wiring time). Embed in an existing runtime by
+//!    installing an override with
+//!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **`kafka_sub` is realtime-only, rejected at wiring time under historical
 //!    replay.** The consumer is a live, unbounded, wall-clock-stamped stream
 //!    with no historical timeline to replay: its `recv()` loop never ends, so
@@ -95,7 +96,6 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::types::RDKafkaErrorCode;
 use std::time::Duration;
-use tokio::runtime::Handle;
 use wingfoil::{NanoTime, RunMode};
 
 use crate::Burst;
@@ -216,7 +216,6 @@ impl KafkaEvent {
 /// front and deadlock at `start`. Run `kafka_sub` under [`RunMode::RealTime`].
 pub fn kafka_sub(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     conn: impl Into<KafkaConnection>,
     topic: impl Into<String>,
@@ -232,47 +231,42 @@ pub fn kafka_sub(
     let conn = conn.into();
     let topic = topic.into();
     let group_id = group_id.into();
-    Ok(produce_async(
-        g,
-        handle,
-        params,
-        move |_p: RunParams| async move {
-            let consumer: StreamConsumer = ClientConfig::new()
-                .set("bootstrap.servers", &conn.brokers)
-                .set("group.id", &group_id)
-                .set("auto.offset.reset", "earliest")
-                .set("enable.auto.commit", "true")
-                .set("session.timeout.ms", "6000")
-                .create()
-                .context("kafka_sub: creating consumer")?;
+    produce_async(g, params, move |_p: RunParams| async move {
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", &conn.brokers)
+            .set("group.id", &group_id)
+            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "true")
+            .set("session.timeout.ms", "6000")
+            .create()
+            .context("kafka_sub: creating consumer")?;
 
-            consumer
-                .subscribe(&[&topic])
-                .with_context(|| format!("kafka_sub: subscribing to {topic}"))?;
+        consumer
+            .subscribe(&[&topic])
+            .with_context(|| format!("kafka_sub: subscribing to {topic}"))?;
 
-            Ok(async_stream::stream! {
-                loop {
-                    match consumer.recv().await {
-                        Ok(msg) => {
-                            let event = KafkaEvent {
-                                topic: msg.topic().to_string(),
-                                partition: msg.partition(),
-                                offset: msg.offset(),
-                                key: msg.key().map(|k| k.to_vec()),
-                                value: msg.payload().unwrap_or_default().to_vec(),
-                            };
-                            yield Ok((NanoTime::now(), event));
-                        }
-                        Err(e) if is_transient_subscribe_error(&e) => continue,
-                        Err(e) => {
-                            yield Err(anyhow::anyhow!("kafka_sub: consume error: {e}"));
-                            break;
-                        }
+        Ok(async_stream::stream! {
+            loop {
+                match consumer.recv().await {
+                    Ok(msg) => {
+                        let event = KafkaEvent {
+                            topic: msg.topic().to_string(),
+                            partition: msg.partition(),
+                            offset: msg.offset(),
+                            key: msg.key().map(|k| k.to_vec()),
+                            value: msg.payload().unwrap_or_default().to_vec(),
+                        };
+                        yield Ok((NanoTime::now(), event));
+                    }
+                    Err(e) if is_transient_subscribe_error(&e) => continue,
+                    Err(e) => {
+                        yield Err(anyhow::anyhow!("kafka_sub: consume error: {e}"));
+                        break;
                     }
                 }
-            })
-        },
-    ))
+            }
+        })
+    })
 }
 
 /// `UnknownTopicOrPartition` is reported while the broker is still catching up on
@@ -296,7 +290,7 @@ pub trait KafkaSinkOps {
     /// target topic, so one sink can write to many topics. Returns the sink
     /// `Stream<()>`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs).
+    /// The graph owns the tokio runtime (see the module docs).
     ///
     /// Records are drained off the graph thread and produced in order, each
     /// awaited to its delivery confirmation. A delivery failure aborts the run
@@ -308,11 +302,11 @@ pub trait KafkaSinkOps {
     /// created (a client-config error). librdkafka connects lazily, so an
     /// unreachable broker surfaces as a produce failure during the run, not at
     /// wiring.
-    fn kafka_pub(&self, handle: &Handle, conn: impl Into<KafkaConnection>) -> Result<Stream<()>>;
+    fn kafka_pub(&self, conn: impl Into<KafkaConnection>) -> Result<Stream<()>>;
 }
 
 impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
-    fn kafka_pub(&self, handle: &Handle, conn: impl Into<KafkaConnection>) -> Result<Stream<()>> {
+    fn kafka_pub(&self, conn: impl Into<KafkaConnection>) -> Result<Stream<()>> {
         let conn = conn.into();
         // Create the producer at wiring time so a config error surfaces before
         // the run (librdkafka connects lazily; a bad broker surfaces on the
@@ -326,8 +320,9 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
         // `consume_async` drains each burst's records through a single consumer
         // task (order preserved) off the graph thread; a write error propagates
         // back into the graph on the next cycle. The producer is cloned per send
-        // (it is an `Arc` internally, cheap to clone and `Send`).
-        let sink = consume_async(handle, None, move |record: KafkaRecord| {
+        // (it is an `Arc` internally, cheap to clone and `Send`). The graph owns
+        // the runtime the consumer task runs on.
+        let sink = consume_async(&self.graph(), None, move |record: KafkaRecord| {
             let producer = producer.clone();
             async move {
                 let mut fut_record = FutureRecord::to(&record.topic).payload(&record.value);
@@ -342,15 +337,15 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
                     })?;
                 Ok(())
             }
-        });
+        })?;
         Ok(self.for_each(sink))
     }
 }
 
 impl KafkaSinkOps for Stream<KafkaRecord> {
-    fn kafka_pub(&self, handle: &Handle, conn: impl Into<KafkaConnection>) -> Result<Stream<()>> {
+    fn kafka_pub(&self, conn: impl Into<KafkaConnection>) -> Result<Stream<()>> {
         self.map(|record: &KafkaRecord| burst![record.clone()])
-            .kafka_pub(handle, conn)
+            .kafka_pub(conn)
     }
 }
 

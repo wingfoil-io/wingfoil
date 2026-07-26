@@ -12,7 +12,7 @@ use wingfoil_next::async_source::{RunParams, produce_async};
 use wingfoil_next::prelude::*;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
     let g = GraphBuilder::new();
 
     let params = RunParams {
@@ -23,7 +23,7 @@ fn main() {
 
     // A producer that awaits (like a socket read) and yields timestamped
     // quotes — a finite feed that closes when exhausted.
-    let quotes = produce_async(&g, rt.handle(), params, |_p| async {
+    let quotes = produce_async(&g, params, |_p| async {
         Ok(futures::stream::unfold(
             (0u32, 100.0_f64),
             |(i, price)| async move {
@@ -37,7 +37,8 @@ fn main() {
                 Some((Ok((t, price)), (i + 1, price)))
             },
         ))
-    });
+    })
+    .expect("produce_async");
 
     let mean = quotes
         .collapse_accumulate()

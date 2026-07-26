@@ -167,21 +167,14 @@ fn consume_with_sub(
     secs: u64,
 ) -> anyhow::Result<Vec<KafkaEvent>> {
     let rt = tokio::runtime::Runtime::new()?;
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::RealTime,
         run_for: RunFor::Duration(Duration::from_secs(secs)),
         start_time: NanoTime::ZERO,
     };
-    let events = kafka_sub(
-        &g,
-        rt.handle(),
-        params,
-        KafkaConnection::new(brokers),
-        topic,
-        group,
-    )?
-    .collapse_accumulate();
+    let events =
+        kafka_sub(&g, params, KafkaConnection::new(brokers), topic, group)?.collapse_accumulate();
     let mut runner = g.build();
     runner.run(
         RunMode::RealTime,
@@ -264,14 +257,14 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
 
     {
         let rt = tokio::runtime::Runtime::new()?;
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![KafkaRecord {
                 topic: topic.to_string(),
                 key: Some(b"rt-key".to_vec()),
                 value: b"rt-value".to_vec(),
             }])
-            .kafka_pub(rt.handle(), KafkaConnection::new(&brokers))?;
+            .kafka_pub(KafkaConnection::new(&brokers))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -291,7 +284,7 @@ fn test_pub_multiple_records_in_burst() -> anyhow::Result<()> {
 
     {
         let rt = tokio::runtime::Runtime::new()?;
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![
                 KafkaRecord {
@@ -305,7 +298,7 @@ fn test_pub_multiple_records_in_burst() -> anyhow::Result<()> {
                     value: b"v2".to_vec(),
                 },
             ])
-            .kafka_pub(rt.handle(), KafkaConnection::new(&brokers))?;
+            .kafka_pub(KafkaConnection::new(&brokers))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -327,14 +320,14 @@ fn test_pub_round_trip_via_sub() -> anyhow::Result<()> {
 
     {
         let rt = tokio::runtime::Runtime::new()?;
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![KafkaRecord {
                 topic: topic.to_string(),
                 key: Some(b"key".to_vec()),
                 value: b"payload".to_vec(),
             }])
-            .kafka_pub(rt.handle(), KafkaConnection::new(&brokers))?;
+            .kafka_pub(KafkaConnection::new(&brokers))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 

@@ -7,8 +7,10 @@
 //! - `round_trip` — consumes the source topic, uppercases each value, and writes
 //!   the result to a destination topic.
 //!
-//! Unlike classic, the runtime is the caller's: we build a tokio runtime and
-//! hand its `handle()` to `kafka_sub` / `kafka_pub` (see the module docs).
+//! The graph owns the tokio runtime the adapters spawn on. This example builds
+//! its own runtime and installs it as the override via `with_async_runtime`;
+//! the simplest usage omits that and lets the graph create one lazily (see the
+//! module docs).
 //!
 //! # Prerequisites
 //!
@@ -37,9 +39,11 @@ const DEST_TOPIC: &str = "example-dest";
 
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    let handle = rt.handle();
 
-    let g = GraphBuilder::new();
+    // The graph owns the runtime the adapters spawn on. Here we hand it our own
+    // (the override); omit `.with_async_runtime(..)` to let the graph create and
+    // own one lazily.
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
 
     // Seed the source topic with two messages, once.
     let _seed = g
@@ -55,7 +59,7 @@ fn main() -> anyhow::Result<()> {
                 value: b"world".to_vec(),
             },
         ])
-        .kafka_pub(handle, BROKERS)?;
+        .kafka_pub(BROKERS)?;
 
     // Consume the source topic, uppercase each value, write to the dest topic.
     let params = RunParams {
@@ -63,7 +67,7 @@ fn main() -> anyhow::Result<()> {
         run_for: RunFor::Cycles(3),
         start_time: NanoTime::ZERO,
     };
-    let _round_trip = kafka_sub(&g, handle, params, BROKERS, SOURCE_TOPIC, "example-group")?
+    let _round_trip = kafka_sub(&g, params, BROKERS, SOURCE_TOPIC, "example-group")?
         .map(|burst: &Burst<KafkaEvent>| {
             burst
                 .iter()
@@ -82,7 +86,7 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect::<Burst<KafkaRecord>>()
         })
-        .kafka_pub(handle, BROKERS)?;
+        .kafka_pub(BROKERS)?;
 
     g.build().run(RunMode::RealTime, RunFor::Cycles(3))?;
     Ok(())
