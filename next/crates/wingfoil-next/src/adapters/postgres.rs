@@ -76,8 +76,9 @@
 //!
 //! # Sink
 //!
-//! [`PostgresSinkOps::postgres_write`] connects at wiring time (a connection
-//! error surfaces before the run) and inserts each record as one row
+//! [`PostgresSinkOps::postgres_write`] connects lazily on the first write (on
+//! the consumer task, so a connection error surfaces during the run, not at
+//! wiring) and inserts each record as one row
 //! `(time, <to_params()…>)`, the graph timestamp prepended as the first column.
 //! Writes are driven off the graph thread with
 //! [`consume_async`](crate::async_source::consume_async); within a burst all
@@ -111,14 +112,14 @@
 //!    stream before the graph advances); a connection or query error surfaces at
 //!    wiring rather than mid-run, while a decode or non-monotonic-time error
 //!    still aborts the run (forwarded through `replay_results`).
-//! 3. **The sink is a trait only, connects eagerly, and pipelines per burst via
-//!    `consume_async`.** Classic exposed a free `postgres_write` fn *and* a
-//!    `PostgresWriteOperators` trait, connected lazily inside the consumer, and
-//!    the classic `consume_async` surfaced write errors on a later cycle; next
-//!    folds the entry point into [`PostgresSinkOps`], connects at wiring
-//!    (`Result`), and rides the shared `consume_async` (which likewise surfaces a
-//!    write error on a subsequent cycle — postgres has no per-write conditional
-//!    that must abort synchronously, so the off-thread sink fits).
+//! 3. **The sink is a trait only and pipelines per burst via `consume_async`.**
+//!    Classic exposed a free `postgres_write` fn *and* a `PostgresWriteOperators`
+//!    trait; next folds the entry point into [`PostgresSinkOps`]. Like classic,
+//!    the connection is opened **lazily inside the consumer** on the first write
+//!    (so wiring opens no socket and a connect failure surfaces during the run),
+//!    and it rides the shared `consume_async` (which surfaces a write error on a
+//!    subsequent cycle — postgres has no per-write conditional that must abort
+//!    synchronously, so the off-thread sink fits).
 //! 4. **The sink takes a `buffer_size`.** Exposed for the `consume_async`
 //!    back-pressure bound (`None` = unbounded), as the redis sinks do.
 //!
@@ -829,9 +830,10 @@ pub trait PostgresSinkOps<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error at wiring time if the connection fails (the connection
-    /// string is redacted). A per-burst insert failure aborts the run with
-    /// context on a subsequent cycle.
+    /// The connection is opened lazily on the first write (on the consumer
+    /// task), so a connection failure aborts the *run* — not wiring — with
+    /// context (the connection string is redacted). A per-burst insert failure
+    /// likewise aborts the run with context on a subsequent cycle.
     fn postgres_write(
         &self,
         conn: impl Into<PostgresConnection>,
@@ -857,22 +859,15 @@ where
 
         // The graph owns the runtime; the sink connects/drives/writes on it.
         let g = self.graph();
-        let handle = g.async_runtime_handle()?;
-        // Connect at wiring time so a connection error surfaces before the run.
-        let (client, driver) = handle
-            .block_on(tokio_postgres::connect(&connection.conn_str, NoTls))
-            .with_context(|| {
-                format!(
-                    "postgres_write: failed to connect: {}",
-                    connection.redacted()
-                )
-            })?;
-        handle.spawn(async move {
-            if let Err(e) = driver.await {
-                log::error!("postgres connection error: {e}");
-            }
-        });
-        let client = Arc::new(client);
+        // The connection is established lazily on the consumer task on the first
+        // write (see below), not here — so wiring opens no socket and a connect
+        // failure surfaces during the run (via `consume_async`'s error channel),
+        // matching classic's connect-at-run behaviour rather than failing at
+        // graph construction.
+        let conn_str = connection.conn_str.clone();
+        let redacted = connection.redacted();
+        let client_cell: Arc<tokio::sync::Mutex<Option<Arc<tokio_postgres::Client>>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
         // Prepared once the column count is known (from the first burst), then
         // reused. `consume_async` runs each write to completion before the next
         // (single consumer), so this cache is never contended; the async Mutex
@@ -882,13 +877,39 @@ where
             Arc::new(tokio::sync::Mutex::new(None));
 
         let (sink, flush) = consume_async(&g, buffer_size, move |batch: WriteBatch<T>| {
-            let client = Arc::clone(&client);
+            let client_cell = Arc::clone(&client_cell);
             let stmt_cache = Arc::clone(&stmt_cache);
             let table_sql = table_sql.clone();
+            let conn_str = conn_str.clone();
+            let redacted = redacted.clone();
             async move {
                 if batch.records.is_empty() {
                     return Ok(());
                 }
+                // Connect on first use (deferred off the wiring path). The socket
+                // opens on the consumer task at run time; a connect failure here
+                // aborts the run with context. Cached for subsequent bursts.
+                let client = {
+                    let mut guard = client_cell.lock().await;
+                    match guard.as_ref() {
+                        Some(c) => Arc::clone(c),
+                        None => {
+                            let (client, driver) = tokio_postgres::connect(&conn_str, NoTls)
+                                .await
+                                .with_context(|| {
+                                    format!("postgres_write: failed to connect: {redacted}")
+                                })?;
+                            tokio::spawn(async move {
+                                if let Err(e) = driver.await {
+                                    log::error!("postgres connection error: {e}");
+                                }
+                            });
+                            let client = Arc::new(client);
+                            *guard = Some(Arc::clone(&client));
+                            client
+                        }
+                    }
+                };
                 // All records in a burst share the graph timestamp.
                 let ts: NaiveDateTime = batch.time.into();
                 // Serialize the whole batch up front so the inserts below can borrow.
