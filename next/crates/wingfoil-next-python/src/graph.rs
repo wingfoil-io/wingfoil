@@ -214,6 +214,57 @@ impl PyStream {
         self.wrap(self.stream.distinct())
     }
 
+    /// Emit the running tick count `1, 2, 3, …` (as an integer [`PyElement`]),
+    /// ignoring the values themselves.
+    pub fn count(&self) -> PyStream {
+        let counted = self.stream.map(|_: &PyElement| ()).count();
+        self.wrap(counted.map(|n: &u64| PyElement::from(*n as i64)))
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    pub fn limit(&self, limit: u32) -> PyStream {
+        self.wrap(self.stream.limit(limit))
+    }
+
+    /// Rate-limit: emit at most once per `interval`.
+    pub fn throttle(&self, interval: Duration) -> PyStream {
+        self.wrap(self.stream.throttle(interval))
+    }
+
+    /// Emit this stream's current value whenever `trigger` ticks (a passive
+    /// read of the value; `trigger`'s own value is ignored).
+    pub fn sample(&self, trigger: &PyStream) -> PyStream {
+        let unit = trigger.stream.map(|_: &PyElement| ());
+        self.wrap(self.stream.sample(&unit))
+    }
+
+    /// Emit the successive difference `value - previous` (quiet on the first
+    /// value). Uses [`PyElement`]'s `Sub`, i.e. Python `__sub__`.
+    pub fn difference(&self) -> PyStream {
+        self.wrap(self.stream.difference())
+    }
+
+    /// Negate each value with [`PyElement`]'s `Not`, which maps to Python
+    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the classic
+    /// `not` node's `T: Not` semantics. Named `not` on the Python side.
+    pub fn not_(&self) -> PyStream {
+        self.wrap(self.stream.not())
+    }
+
+    /// Observe each value with a Python callable, passing it through unchanged
+    /// (a debug tap). Routed through [`try_map`](StreamOps::try_map) so a raised
+    /// exception aborts the run with context rather than panicking.
+    pub fn inspect(&self, func: Py<PyAny>) -> PyStream {
+        let observed = self.stream.try_map(move |e: &PyElement| {
+            Python::attach(|py| {
+                func.call1(py, (e.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python inspect callable raised: {err}"))?;
+                Ok(e.clone())
+            })
+        });
+        self.wrap(observed)
+    }
+
     /// Wire a **single-input op** onto this stream at the erased boundary — the
     /// extensibility primitive third-party ops (and the `pyop!` macro) build
     /// on. The op computes on its own concrete types: the input is extracted
@@ -317,6 +368,72 @@ mod tests {
         run_cycles(&g, 1);
         let v: f64 = (&out.value()).try_into().unwrap();
         assert_eq!(16.0, v);
+    }
+
+    #[test]
+    fn count_ignores_values() {
+        let g = PyGraph::new();
+        // Values are strings; count only counts ticks.
+        let counted = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: 'x'"))
+            .count();
+        run_cycles(&g, 3);
+        let v: i64 = (&counted.value()).try_into().unwrap();
+        assert_eq!(3, v);
+    }
+
+    #[test]
+    fn limit_caps_ticks() {
+        let g = PyGraph::new();
+        let capped = g.counter(Duration::from_nanos(100)).limit(2);
+        run_cycles(&g, 5);
+        // The value stays at the last value passed before the cap.
+        let v: i64 = (&capped.value()).try_into().unwrap();
+        assert_eq!(2, v);
+    }
+
+    #[test]
+    fn difference_of_counter_is_one() {
+        let g = PyGraph::new();
+        let diff = g.counter(Duration::from_nanos(100)).difference();
+        run_cycles(&g, 4);
+        let v: i64 = (&diff.value()).try_into().unwrap();
+        assert_eq!(1, v); // 1,2,3,4 -> deltas 1,1,1
+    }
+
+    #[test]
+    fn not_negates_value() {
+        let g = PyGraph::new();
+        // `not` maps to __neg__ (arithmetic negation), matching the classic node.
+        let negated = g.constant(PyElement::from(5_i64)).not_();
+        run_cycles(&g, 1);
+        let v: i64 = (&negated.value()).try_into().unwrap();
+        assert_eq!(-5, v);
+    }
+
+    #[test]
+    fn inspect_taps_and_passes_through() {
+        let g = PyGraph::new();
+        let tapped = g
+            .counter(Duration::from_nanos(100))
+            .inspect(lambda("lambda v: None"));
+        run_cycles(&g, 3);
+        // Passes the value through unchanged.
+        let v: i64 = (&tapped.value()).try_into().unwrap();
+        assert_eq!(3, v);
+    }
+
+    #[test]
+    fn inspect_exception_aborts_run() {
+        let g = PyGraph::new();
+        let _tapped = g.counter(Duration::from_nanos(100)).inspect(lambda(
+            "lambda v: (_ for _ in ()).throw(ValueError('boom'))",
+        ));
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python inspect callable raised"));
     }
 
     #[test]

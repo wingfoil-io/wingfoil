@@ -134,6 +134,44 @@ impl Stream {
         Stream(self.0.distinct())
     }
 
+    /// Emit the running tick count `1, 2, 3, …`, ignoring the values.
+    fn count(&self) -> Stream {
+        Stream(self.0.count())
+    }
+
+    /// Pass through the first `limit` values, then stay quiet.
+    fn limit(&self, limit: u32) -> Stream {
+        Stream(self.0.limit(limit))
+    }
+
+    /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
+    fn throttle(&self, interval_nanos: u64) -> Stream {
+        Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))
+    }
+
+    /// Emit this stream's current value whenever `trigger` ticks.
+    fn sample(&self, trigger: PyRef<'_, Stream>) -> Stream {
+        Stream(self.0.sample(&trigger.0))
+    }
+
+    /// Emit the successive difference `value - previous` (quiet on the first).
+    fn difference(&self) -> Stream {
+        Stream(self.0.difference())
+    }
+
+    /// Negate each value (arithmetic `__neg__`, e.g. `5 -> -5`). Exposed as
+    /// `not` (a Python keyword, so reach it with `getattr(stream, "not")()`).
+    #[pyo3(name = "not")]
+    fn not_(&self) -> Stream {
+        Stream(self.0.not_())
+    }
+
+    /// Observe each value with a Python callable, passing it through unchanged;
+    /// a raised exception aborts the run.
+    fn inspect(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.inspect(func))
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()
