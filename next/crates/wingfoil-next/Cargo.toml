@@ -316,3 +316,18 @@ path = "examples/statistics/main.rs"
 [[example]]
 name = "threading"
 path = "examples/threading/main.rs"
+
+# Runtime graph mutation: instruments added/removed on a live graph, a price
+# book kept correct across the changes via `dynamic_group`. Feature-gated on
+# `dynamic-graph`.
+[[example]]
+name = "dynamic"
+path = "examples/dynamic/main.rs"
+required-features = ["dynamic-graph"]
+
+# Statically-wired counterpart to `dynamic`: the same price book, but routed
+# through a fixed slot pool with `demux_it` instead of runtime graph mutation.
+[[example]]
+name = "demux"
+path = "examples/demux/main.rs"
+required-features = ["dynamic-graph"]
