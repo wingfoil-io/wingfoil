@@ -1,14 +1,20 @@
 //! Focused tests for the shared adapter-support primitives on the fluent layer:
 //! `GraphBuilder::replay_results` (the historical replay engine behind the
-//! `lines`/`csv` sources) and `StreamOps::for_each_mut` (the `&mut`-writer sink
-//! behind their file sinks). The adapter tests cover them end-to-end through
-//! files; these exercise the primitives directly.
+//! `lines`/`csv` sources), `StreamOps::for_each_mut` (the `&mut`-writer sink
+//! behind their file sinks), and `SourceOps::source_at_start` (the
+//! deferred-connection source behind live adapters like `zmq_sub`). The adapter
+//! tests cover them end-to-end through files/sockets; these exercise the
+//! primitives directly.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::Burst;
+use wingfoil_next::channel::ChannelSender;
+use wingfoil_next::interp::StopHandle;
 use wingfoil_next::prelude::*;
 
 /// `replay_results` queues each `(value, time)` onto a historical source and
@@ -113,5 +119,120 @@ fn for_each_mut_error_aborts_the_run() {
     assert!(
         format!("{err:#}").contains("sink boom"),
         "unexpected error: {err:#}"
+    );
+}
+
+/// `source_at_start` performs **no** I/O at wiring: the `setup` closure runs at
+/// `start()`, not when the source factory is called. A spy counter proves the
+/// deferral — zero after wiring + `build()`, one after a run — and a stop guard
+/// whose `Drop` flips a flag proves the returned `StopHandle` is dropped at
+/// teardown. This is the acceptance test for the deferred-connection primitive
+/// (see `docs/source-lifecycle-defer-to-start.md`).
+#[test]
+fn source_at_start_defers_setup_to_run_and_stops_at_teardown() {
+    /// Its `Drop` (run when the `StopHandle` is dropped at teardown) flips the
+    /// shared flag — the generalised `ThreadStopGuard`.
+    struct Guard(Arc<AtomicBool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    let g = GraphBuilder::new();
+    let setups = Rc::new(Cell::new(0u32));
+    let stopped = Arc::new(AtomicBool::new(false));
+
+    let seen = setups.clone();
+    let stop_flag = stopped.clone();
+    let source = g.source_at_start::<u64, _>(move |sender: ChannelSender<u64>| {
+        seen.set(seen.get() + 1);
+        // Stand in for "connect + spawn the producer": feed one value, then
+        // close so the realtime run terminates promptly.
+        sender.send(7);
+        sender.close();
+        Ok(StopHandle::new(Guard(stop_flag.clone())))
+    });
+    let acc = source.collapse_accumulate();
+    let mut r = g.build();
+
+    // Nothing has run: wiring + build touched no producer.
+    assert_eq!(0, setups.get(), "setup must not run at wiring/build");
+    assert!(
+        !stopped.load(Ordering::Relaxed),
+        "no producer to stop before the run"
+    );
+
+    r.run(RunMode::RealTime, RunFor::Forever).unwrap();
+
+    assert_eq!(1, setups.get(), "setup runs once, at start");
+    assert_eq!(vec![7u64], r.value(&acc), "the deferred producer's value");
+    assert!(
+        stopped.load(Ordering::Relaxed),
+        "the StopHandle guard is dropped at teardown"
+    );
+}
+
+/// A `setup` error aborts the run at start with node context — a deferred
+/// connection failure surfaces when the run begins (classic-consistent), not at
+/// wiring. The factory call itself still succeeds.
+#[test]
+fn source_at_start_setup_error_aborts_the_run() {
+    let g = GraphBuilder::new();
+    let source =
+        g.source_at_start::<u64, _>(|_sender: ChannelSender<u64>| anyhow::bail!("connect boom"));
+    let _acc = source.collapse_accumulate();
+    let mut r = g.build();
+
+    let err = r
+        .run(RunMode::RealTime, RunFor::Cycles(1))
+        .expect_err("a setup error must abort the run");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("connect boom"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("start"),
+        "error carries node start context: {msg}"
+    );
+}
+
+/// In historical mode `setup` is composed **ahead** of the channel node's own
+/// up-front collect (the `prev_start` composition), so a deferred producer that
+/// `send_at`s timestamped values and then `close()`s replays them on the graph
+/// clock at their timestamps — exactly like a plain `channel`. This also pins
+/// the documented contract that a historical producer must `close()` explicitly:
+/// the source retains a live sender, so `EndOfStream` (not sender-drop) is what
+/// ends the collect.
+#[test]
+fn source_at_start_historical_replays_timestamped_sends() {
+    let g = GraphBuilder::new();
+    let source = g.source_at_start::<u64, _>(|sender: ChannelSender<u64>| {
+        // Stand in for a deferred historical producer: emit timestamped values
+        // (same-instant ones group into one burst), then close so the up-front
+        // collect terminates. Dropping the sender alone would not — the source
+        // keeps one alive for the run.
+        sender.send_at(1, NanoTime::new(10));
+        sender.send_at(2, NanoTime::new(10));
+        sender.send_at(3, NanoTime::new(20));
+        sender.close();
+        Ok(StopHandle::new(()))
+    });
+    let stamped = source.with_time().accumulate();
+
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+
+    let got: Vec<(NanoTime, Vec<u64>)> = r
+        .value(&stamped)
+        .into_iter()
+        .map(|(t, b)| (t, b.iter().copied().collect()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (NanoTime::new(10), vec![1, 2]),
+            (NanoTime::new(20), vec![3]),
+        ],
+        "deferred historical sends replay grouped, on the graph clock",
     );
 }
