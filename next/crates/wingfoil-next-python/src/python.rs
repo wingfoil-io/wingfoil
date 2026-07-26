@@ -220,6 +220,22 @@ impl Stream {
         Stream(self.0.filter_none())
     }
 
+    /// Cumulative running sum over the numeric values.
+    fn sum(&self) -> Stream {
+        Stream(self.0.sum())
+    }
+
+    /// Cumulative running mean over the numeric values.
+    fn mean(&self) -> Stream {
+        Stream(self.0.mean())
+    }
+
+    /// Cumulative running mean over the numeric values (alias for `mean`, the
+    /// classic method name).
+    fn average(&self) -> Stream {
+        Stream(self.0.mean())
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()

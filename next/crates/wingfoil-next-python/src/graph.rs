@@ -32,6 +32,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
+use wingfoil_next::stats::StatisticsOps;
 
 use crate::PyElement;
 
@@ -415,6 +416,24 @@ impl PyStream {
         })
     }
 
+    /// Cumulative running **sum** over the values (the classic `sum`,
+    /// `Window::Unbounded`). Each value is read as `f64` at the edge — a
+    /// non-numeric value aborts the run with context — and the running total is
+    /// re-boxed as a float [`PyElement`].
+    pub fn sum(&self) -> PyStream {
+        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
+        self.wrap(as_f64.cumulative_sum().map(|v: &f64| PyElement::from(*v)))
+    }
+
+    /// Cumulative running **mean** over the values (the classic `mean` /
+    /// `average`, `Window::Unbounded`, count-weighted). Values are read as `f64`
+    /// at the edge (a non-numeric value aborts the run) and the running mean is
+    /// re-boxed as a float [`PyElement`].
+    pub fn mean(&self) -> PyStream {
+        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
+        self.wrap(as_f64.cumulative_mean().map(|v: &f64| PyElement::from(*v)))
+    }
+
     /// Wire a **stateless, fallible** single-input op that maps each value to a
     /// [`Tick`] — the shared plumbing for `filter_map`/`filter_value`/
     /// `filter_none`. Runs over the engine's `register_op1` so a returned `Err`
@@ -695,6 +714,37 @@ mod tests {
         run_cycles(&g, 6);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn sum_is_cumulative() {
+        let g = PyGraph::new();
+        let total = g.counter(Duration::from_nanos(100)).sum();
+        run_cycles(&g, 4);
+        let v: f64 = (&total.value()).try_into().unwrap();
+        assert_eq!(10.0, v); // 1+2+3+4
+    }
+
+    #[test]
+    fn mean_is_cumulative() {
+        let g = PyGraph::new();
+        let avg = g.counter(Duration::from_nanos(100)).mean();
+        run_cycles(&g, 4);
+        let v: f64 = (&avg.value()).try_into().unwrap();
+        assert_eq!(2.5, v); // (1+2+3+4)/4
+    }
+
+    #[test]
+    fn sum_of_non_numeric_aborts_run() {
+        let g = PyGraph::new();
+        let _bad = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: 'x'"))
+            .sum();
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("not a f64"));
     }
 
     #[test]

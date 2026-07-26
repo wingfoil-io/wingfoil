@@ -307,3 +307,26 @@ def test_filter_none_drops_python_none():
     ).filter_none()
     g.run(cycles=6)
     assert out.value() == 6  # 2, 4, 6 pass
+
+
+def test_sum_is_cumulative():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).sum()
+    g.run(cycles=4)
+    assert out.value() == 10.0  # 1+2+3+4
+
+
+def test_mean_and_average_are_cumulative():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).mean()
+    avg = g.counter(period_nanos=100).average()
+    g.run(cycles=4)
+    assert out.value() == 2.5  # (1+2+3+4)/4
+    assert avg.value() == 2.5  # average is an alias for mean
+
+
+def test_sum_of_non_numeric_aborts_run():
+    g = wf.Graph()
+    g.constant("x").sum()
+    with pytest.raises(RuntimeError, match="not a f64"):
+        g.run(cycles=1)
