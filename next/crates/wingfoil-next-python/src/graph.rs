@@ -31,7 +31,7 @@ use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
-use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
+use wingfoil_next::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 use wingfoil_next::stats::StatisticsOps;
 
 use crate::PyElement;
@@ -86,6 +86,30 @@ impl PyGraph {
     pub fn counter(&self, period: Duration) -> PyStream {
         let counted = self.builder.ticker(period).count();
         self.wrap(counted.map(|n: &u64| PyElement::from(*n as i64)))
+    }
+
+    /// A source that replays a finite sequence of Python values, one per tick,
+    /// `period` apart (the first at t=0). This is how a Python caller feeds real
+    /// data into a graph rather than a synthetic `counter`/`constant`.
+    ///
+    /// Built on the historical-replay [`channel`](SourceOps::channel) layer, so
+    /// it replays **deterministically** in historical mode and a graph
+    /// containing it is single-run (the producer channel is consumed by the
+    /// first run). Distinct per-tick timestamps mean each value rides its own
+    /// cycle (no same-instant grouping).
+    pub fn values(&self, values: Vec<PyElement>, period: Duration) -> PyStream {
+        let step = period.as_nanos() as u64;
+        let rows = values
+            .into_iter()
+            .enumerate()
+            .map(move |(i, value)| Ok((value, NanoTime::from(i as u64 * step))));
+        let bursts = self.builder.replay_results(rows);
+        // Each burst holds exactly one value (timestamps are distinct); take it.
+        self.wrap(
+            bursts.map(|burst: &Burst<PyElement>| {
+                burst.last().cloned().unwrap_or_else(PyElement::none)
+            }),
+        )
     }
 
     /// Run the graph to its bound, storing the runner so retained
@@ -1010,6 +1034,43 @@ mod tests {
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
             .unwrap_err();
         assert!(format!("{err:#}").contains("Python inspect callable raised"));
+    }
+
+    #[test]
+    fn values_replays_a_sequence() {
+        let g = PyGraph::new();
+        let src = g.values(
+            vec![
+                PyElement::from(10_i64),
+                PyElement::from(20_i64),
+                PyElement::from(30_i64),
+            ],
+            Duration::from_nanos(100),
+        );
+        let acc = src.accumulate();
+        run_cycles(&g, 3);
+        let v: Vec<i64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+        assert_eq!(vec![10, 20, 30], v);
+    }
+
+    #[test]
+    fn values_source_feeds_downstream_ops() {
+        let g = PyGraph::new();
+        // Feed real data and run it through a combinator chain.
+        let doubled = g
+            .values(
+                vec![
+                    PyElement::from(1_i64),
+                    PyElement::from(2_i64),
+                    PyElement::from(3_i64),
+                ],
+                Duration::from_nanos(100),
+            )
+            .map(lambda("lambda x: x * 2"))
+            .sum();
+        run_cycles(&g, 3);
+        let v: f64 = (&doubled.value()).try_into().unwrap();
+        assert_eq!(12.0, v); // (1+2+3)*2
     }
 
     #[test]

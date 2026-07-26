@@ -18,6 +18,28 @@ def test_constant_maps_via_python_lambda():
     assert out.value() == 16.0
 
 
+def test_values_source_replays_a_sequence():
+    g = wf.Graph()
+    out = g.values([10, 20, 30], period_nanos=100).accumulate()
+    g.run(cycles=3)
+    assert out.value() == [10, 20, 30]
+
+
+def test_values_source_feeds_combinators():
+    # Feed real data from Python, run it through a chain.
+    g = wf.Graph()
+    out = g.values([1, 2, 3, 4], period_nanos=100).filter_value(lambda n: n % 2 == 0).sum()
+    g.run(cycles=4)
+    assert out.value() == 6.0  # keep 2, 4 -> cumulative sum 6
+
+
+def test_values_source_carries_strings():
+    g = wf.Graph()
+    out = g.values(["a", "b", "c"], period_nanos=100).map(lambda s: s.upper()).accumulate()
+    g.run(cycles=3)
+    assert out.value() == ["A", "B", "C"]
+
+
 def test_counter_source_ticks():
     g = wf.Graph()
     doubled = g.counter(period_nanos=100).map(lambda n: n * 2)
