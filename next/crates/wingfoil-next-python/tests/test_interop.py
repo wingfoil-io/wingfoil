@@ -117,6 +117,23 @@ def test_pyop_macro_op_square():
     assert out.value() == 25.0
 
 
+def test_pyop_stateful_running_total():
+    # running_total is a stateful #[pyop] (accumulator in the op's State).
+    g = wf.Graph()
+    out = wf.running_total(g.counter(period_nanos=100))  # 1,2,3 -> 1,3,6
+    g.run(cycles=3)
+    assert out.value() == 6.0
+
+
+def test_pyop_stateful_state_reseeds_on_rerun():
+    g = wf.Graph()
+    out = wf.running_total(g.counter(period_nanos=100))
+    g.run(cycles=3)
+    assert out.value() == 6.0
+    g.run(cycles=3)  # engine re-seeds State from Default (0.0); restart, not continue
+    assert out.value() == 6.0
+
+
 def test_pyop_and_pyop_fn_compose():
     # Both macro forms, chained: counter -> square -> scale x2.
     g = wf.Graph()

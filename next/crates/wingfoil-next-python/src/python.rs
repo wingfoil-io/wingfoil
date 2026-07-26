@@ -315,6 +315,30 @@ impl Op for Square {
     }
 }
 
+// `running_total` — a **stateful** `#[pyop]`: the accumulator lives in the op's
+// `State` (an `f64`, `Default`-seeded to 0.0 and re-seeded on each run), proving
+// the proc macro handles state, not just stateless transforms.
+struct RunningTotal;
+
+#[pyop(name = running_total)]
+impl Op for RunningTotal {
+    type Cfg = ();
+    type State = f64;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        total: &mut f64,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        *total += input.0;
+        Ok(Tick::Value(*total))
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -322,5 +346,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Stream>()?;
     m.add_function(wrap_pyfunction!(scale, m)?)?;
     m.add_function(wrap_pyfunction!(square, m)?)?;
+    m.add_function(wrap_pyfunction!(running_total, m)?)?;
     Ok(())
 }

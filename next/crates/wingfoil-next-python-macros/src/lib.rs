@@ -29,9 +29,11 @@
 //! // => wingfoil_next.square(stream)   (register: wrap_pyfunction!(square, m)?)
 //! ```
 //!
-//! **Scope (v1):** stateless (`State = ()`), single-input (`In<'a> = (&'a A,)`),
-//! concrete (non-generic) ops, with `Cfg = ()` or a single `FromPyObject` type.
-//! Stateful / multi-input ops use `PyStream::wire_op1` directly.
+//! **Scope:** single-input (`In<'a> = (&'a A,)`), concrete (non-generic) ops,
+//! with `Cfg = ()` or a single `FromPyObject` type. State may be any
+//! `Default`-seedable type (`State = ()` for stateless, or e.g. `State = f64`
+//! for an accumulator — the engine re-seeds it from `Default` on each run, so
+//! re-runs start clean). Multi-input ops use `PyStream::wire_op1` directly.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -135,13 +137,6 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let cfg_ty = cfg_ty.ok_or_else(|| missing("Cfg"))?;
     let state_ty = state_ty.ok_or_else(|| missing("State"))?;
 
-    if !is_unit(&state_ty) {
-        return Err(Error::new(
-            state_ty.span(),
-            "#[pyop] supports stateless ops (`type State = ()`); use \
-             `PyStream::wire_op1` directly for stateful ops",
-        ));
-    }
     let a_ty = single_ref_tuple_elem(&in_ty)?;
 
     let name = &args.name;
@@ -169,7 +164,7 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                     #name_str,
                     <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
                     #cfg_value,
-                    || (),
+                    || <#state_ty as ::core::default::Default>::default(),
                     |__c, __s, __a: &#a_ty, __ctx| {
                         <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
                     },

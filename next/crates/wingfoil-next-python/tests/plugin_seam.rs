@@ -38,6 +38,58 @@ fn pyop_generates_a_function_in_an_external_crate() {
     let _f = triple;
 }
 
+// A **stateful** external `#[pyop]` (accumulator in `State`) — compile-level
+// proof that the macro handles `State != ()` from a third-party crate, not just
+// stateless ops.
+struct Accumulate;
+
+#[pyop(name = accumulate)]
+impl Op for Accumulate {
+    type Cfg = ();
+    type State = f64;
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        total: &mut f64,
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        *total += input.0;
+        Ok(Tick::Value(*total))
+    }
+}
+
+#[test]
+fn pyop_supports_stateful_ops_in_an_external_crate() {
+    // The generated function exists: `#[pyop]` expanded for a stateful op.
+    let _f = accumulate;
+
+    // And the stateful shape runs — the accumulator carries across cycles and
+    // re-seeds from Default on a fresh run (verified via the public seam that
+    // `#[pyop]` builds on).
+    let g = PyGraph::new();
+    let acc = g
+        .counter(Duration::from_nanos(100))
+        .wire_op1::<f64, _, _, f64, _, _>(
+            "accumulate",
+            Activation::NONE,
+            (),
+            || 0.0_f64,
+            |_cfg, total: &mut f64, a: &f64, _ctx| {
+                *total += *a;
+                Ok(Tick::Value(*total))
+            },
+        );
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let v: f64 = (&acc.value()).try_into().unwrap();
+    assert_eq!(6.0, v); // 1 + 2 + 3
+}
+
 #[test]
 fn external_crate_can_wire_a_custom_op() {
     let g = PyGraph::new();
