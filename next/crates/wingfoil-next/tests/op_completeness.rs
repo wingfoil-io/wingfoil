@@ -178,12 +178,14 @@ wingfoil_next::graph! {
 
 // Lifecycle / passthrough-with-hook surface: `print`, `timed` (each passes
 // values through unchanged while carrying a start/stop/teardown hook the
-// compiled path now emits).
+// compiled path now emits), plus `logged` (a labelled diagnostic tap, also a
+// pass-through).
 wingfoil_next::graph! {
     fn surface_lifecycle(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(P).count();
         let printed = count.print();
-        let timed = printed.timed();
+        let logged = printed.logged(String::from("dbg"), wingfoil_next::Level::Trace);
+        let timed = logged.timed();
         let out = timed.accumulate();
         out
     }

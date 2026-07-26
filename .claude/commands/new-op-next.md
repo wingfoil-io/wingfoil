@@ -176,6 +176,19 @@ the fluent combinator by hand — a one-liner over `Stream::wire` (or
 A source's fluent method goes on `SourceOps` and calls `GraphBuilder::source`
 / the generated `Builder` method.
 
+**Fluent arg type must match the `Cfg` element type for a dual-mode op.**
+`graph!`/compiled does **not** call the fluent method — it passes the call-site
+argument tokens straight into the op's `Cfg`. So the same call expression has to
+type-check both as the fluent method's argument *and* as the `Cfg`. When the
+ergonomic fluent type differs from the stored `Cfg` (e.g. `Cfg = String` but you
+want callers to pass `&str`), reconcile with `impl Into<..>` on the fluent
+param and convert in the body — then direct callers get the ergonomic form and
+`graph!` blocks pass the concrete `Cfg` type explicitly. `logged` does exactly
+this: `Cfg = (String, Level)`, fluent `label: impl Into<String>`, and the
+`op_completeness.rs` block writes `.logged(String::from("dbg"), ..)`. (Config
+enums like `log::Level` should be **re-exported from the crate root** — see
+`lib.rs` — so integration tests and users needn't add the underlying dep.)
+
 ## 5. `graph!` / compiled coverage
 
 For a single-input `#[op]` op this is **zero-touch**: the attribute emits the

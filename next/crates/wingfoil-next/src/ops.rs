@@ -22,6 +22,7 @@ use std::ops::Sub;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use log::Level;
 
 use crate::op::{Activation, Ctx, Op, Tick};
 use wingfoil::{NanoTime, TimeQueue};
@@ -310,6 +311,39 @@ where
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<A>> {
         cfg(input.0);
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
+/// Logs each value — `"<tick-time> <label> <value:?>"` at the configured
+/// [`log::Level`], target `"wingfoil"` — and passes it through unchanged. The
+/// classic `logged` node: a labelled diagnostic tap that stays on the value's
+/// path so it can sit mid-chain. `Cfg` is the `(label, level)` pair.
+///
+/// Deviation from classic: classic `logged` short-circuits at wiring time when
+/// the level is disabled, returning the source unchanged so no node is added.
+/// Next always wires the op (keeping interpreted and compiled topology
+/// identical); the per-cycle `log!` macro still guards the formatting cost, so
+/// a disabled level costs only the level check, and the observable value stream
+/// is identical either way.
+pub struct Logged<T>(PhantomData<T>);
+
+#[op(build = logged)]
+impl<T: Clone + Debug + 'static> Op for Logged<T> {
+    type Cfg = (String, Level);
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut (String, Level),
+        _state: &mut (),
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let (label, level) = &*cfg;
+        log::log!(target: "wingfoil", *level, "{} {} {:?}", ctx.time().pretty(), label, input.0);
         Ok(Tick::Value(input.0.clone()))
     }
 }

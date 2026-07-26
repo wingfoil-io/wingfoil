@@ -344,6 +344,13 @@ impl PyStream {
         self.wrap(observed)
     }
 
+    /// Log each value — `"<tick-time> <label> <value:?>"` at INFO, target
+    /// `"wingfoil"` — and pass it through unchanged (the classic `logged`).
+    /// The level is fixed to INFO, matching legacy `wingfoil-python`.
+    pub fn logged(&self, label: String) -> PyStream {
+        self.wrap(self.stream.logged(label, wingfoil_next::Level::Info))
+    }
+
     /// Collect every emitted value into a growing Python `list`, re-emitted each
     /// tick (the classic `accumulate`).
     pub fn accumulate(&self) -> PyStream {
@@ -939,6 +946,17 @@ mod tests {
         run_cycles(&g, 3);
         // Passes the value through unchanged.
         let v: i64 = (&tapped.value()).try_into().unwrap();
+        assert_eq!(3, v);
+    }
+
+    #[test]
+    fn logged_passes_through() {
+        let g = PyGraph::new();
+        let logged = g.counter(Duration::from_nanos(100)).logged("count".into());
+        run_cycles(&g, 3);
+        // Passes the value through unchanged (the log side effect is not
+        // observable here).
+        let v: i64 = (&logged.value()).try_into().unwrap();
         assert_eq!(3, v);
     }
 

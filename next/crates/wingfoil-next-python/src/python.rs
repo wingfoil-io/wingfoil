@@ -196,6 +196,12 @@ impl Stream {
         Stream(self.0.inspect(func))
     }
 
+    /// Log each value (`"<tick-time> <label> <value>"` at INFO) and pass it
+    /// through unchanged — the classic `logged`.
+    fn logged(&self, label: String) -> Stream {
+        Stream(self.0.logged(label))
+    }
+
     /// Collect every emitted value into a growing `list`, re-emitted each tick.
     fn accumulate(&self) -> Stream {
         Stream(self.0.accumulate())

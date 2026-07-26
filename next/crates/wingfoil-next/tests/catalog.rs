@@ -223,6 +223,18 @@ fn inspect_observes_and_passes_through() {
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
+/// `logged` passes each value through unchanged (the log side effect is not
+/// observable here) — mirrors classic `logged`, a labelled diagnostic tap.
+#[test]
+fn logged_passes_through_values() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let acc = count.logged("count", Level::Info).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], r.value(&acc));
+}
+
 /// `ticked_at_elapsed` emits elapsed engine time (`now - start`) on each tick.
 /// Tested from a **non-zero** start so it is distinguishable from `ticked_at`.
 #[test]

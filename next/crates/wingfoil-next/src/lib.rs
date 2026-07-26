@@ -95,8 +95,12 @@ pub mod stats;
 pub mod prelude {
     pub use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
     pub use crate::op::{Activation, Ctx, Tick};
-    pub use crate::{Burst, burst};
+    pub use crate::{Burst, Level, burst};
 }
+
+/// The log severity for [`StreamOps::logged`](crate::fluent::StreamOps::logged),
+/// re-exported from the [`log`] crate so callers need not depend on it directly.
+pub use log::Level;
 
 /// A group of same-instant values, delivered atomically in one cycle (never
 /// coalesced / latest-wins). The **same type** as the classic engine's

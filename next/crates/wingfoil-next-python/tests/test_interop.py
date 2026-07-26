@@ -47,6 +47,15 @@ def test_counter_source_ticks():
     assert doubled.value() == 6  # 3rd tick -> 3 * 2
 
 
+def test_logged_passes_through():
+    g = wf.Graph()
+    # `logged` is a diagnostic tap: it logs each value and passes it through
+    # unchanged, so the observable stream is identical to the source.
+    logged = g.counter(period_nanos=100).logged("count").map(lambda n: n * 2)
+    g.run(cycles=3)
+    assert logged.value() == 6  # 3rd tick -> 3 * 2
+
+
 def test_filter_by_python_predicate():
     g = wf.Graph()
     counter = g.counter(period_nanos=100)

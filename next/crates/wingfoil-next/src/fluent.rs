@@ -27,6 +27,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
+use log::Level;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
@@ -880,6 +881,12 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + Debug + 'static;
 
+    /// Log each value — `"<tick-time> <label> <value:?>"` at `level`, target
+    /// `"wingfoil"` — and pass it through unchanged (the classic `logged`).
+    fn logged(&self, label: impl Into<String>, level: Level) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static;
+
     /// Pass each value through unchanged, printing a performance summary at
     /// the end of the run (the classic `timed`).
     fn timed(&self) -> Stream<T>
@@ -1215,6 +1222,13 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         T: Clone + Default + Debug + 'static,
     {
         self.wire(|b, h| b.print(h))
+    }
+
+    fn logged(&self, label: impl Into<String>, level: Level) -> Stream<T>
+    where
+        T: Clone + Default + Debug + 'static,
+    {
+        self.wire(|b, h| b.logged(h, (label.into(), level)))
     }
 
     fn timed(&self) -> Stream<T>
