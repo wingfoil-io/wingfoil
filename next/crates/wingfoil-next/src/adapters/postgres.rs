@@ -17,7 +17,10 @@
 //!
 //! - **Sources** — the free builder functions [`postgres_read`] (bounded
 //!   historical replay, one query per time slice) and [`postgres_sub`] (a
-//!   realtime live tail) on a [`GraphBuilder`], emitting `Stream<Burst<T>>`.
+//!   realtime live tail) on a [`GraphBuilder`], emitting `Stream<Burst<T>>`; or
+//!   [`postgres_source`] — a single **mode-agnostic** source that dispatches to
+//!   the right one at `run()` based on the run's [`RunMode`], so the graph need
+//!   not choose real-time vs historical at wiring time.
 //! - **Sink** — the [`PostgresSinkOps`] extension trait on `Stream<Burst<T>>`,
 //!   enabled with `use wingfoil_next::adapters::postgres::PostgresSinkOps;`.
 //!
@@ -56,6 +59,20 @@
 //! stream with no historical timeline to replay, so it **rejects
 //! `RunMode::HistoricalFrom` at wiring time** (use [`postgres_read`] for
 //! historical replay) and runs under [`RunMode::RealTime`] only.
+//!
+//! # One source, either mode ([`postgres_source`])
+//!
+//! `RunMode` is a *run-time* choice — build the graph once, pick real-time vs
+//! historical at `run()`. But `postgres_read`/`postgres_sub` are mode-locked,
+//! forcing that choice into wiring (and duplicating downstream wiring across two
+//! source functions). [`postgres_source`] closes that gap: it takes a
+//! [`PostgresSourceConfig`] carrying an optional historical half and an optional
+//! live half, and dispatches on the run's [`RunMode`] at wiring —
+//! `HistoricalFrom` → [`postgres_read`], `RealTime` → [`postgres_sub`]. Supply
+//! both halves and the graph is fully mode-agnostic (flip the mode at `run()`,
+//! wiring unchanged); supply one and the other mode errors at wiring naming the
+//! missing half. The two primitives stay public for callers that only ever need
+//! one mode. See the deviation register's "B2 — agreed plan".
 //!
 //! # Sink
 //!
@@ -621,6 +638,143 @@ where
             }
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// Source: unified mode-agnostic source (dispatches read vs sub on run_mode)
+// ---------------------------------------------------------------------------
+
+/// The historical and live query specs for [`postgres_source`], each optional.
+///
+/// [`RunMode`] is a *run-time* choice, but [`postgres_read`] / [`postgres_sub`]
+/// are mode-locked — forcing that choice into *wiring*. This config carries both
+/// mechanisms so a single [`postgres_source`] call can dispatch on the run's mode
+/// at wiring: supply **both** halves for a fully mode-agnostic graph (flip the
+/// mode at `run()`, downstream wiring unchanged); supply **one** and the other
+/// mode errors at wiring naming the missing half. See the deviation register's
+/// "B2 — agreed plan: unified `<adapter>_source`".
+#[derive(Default)]
+pub struct PostgresSourceConfig {
+    historical: Option<HistoricalSpec>,
+    live: Option<LiveSpec>,
+}
+
+/// The historical half — see [`PostgresSourceConfig::historical`].
+struct HistoricalSpec {
+    period: Duration,
+    query_fn: Box<dyn FnMut((NanoTime, NanoTime), i32, usize) -> String>,
+}
+
+/// The live half — see [`PostgresSourceConfig::live`].
+struct LiveSpec {
+    channel: String,
+    start_from: NanoTime,
+    query_fn: Box<dyn FnMut(NanoTime) -> String + Send>,
+}
+
+impl PostgresSourceConfig {
+    /// An empty config — add halves with [`historical`](Self::historical) and/or
+    /// [`live`](Self::live).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure the **historical** (bounded, time-sliced replay) half — the
+    /// [`postgres_read`] mechanism. `period` is the slice length; `query_fn` is
+    /// called once per slice with `((t0, t1), date, iteration)` and returns SQL
+    /// filtering `time >= t0 AND time < t1`, ordered by time.
+    pub fn historical(
+        mut self,
+        period: Duration,
+        query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + 'static,
+    ) -> Self {
+        self.historical = Some(HistoricalSpec {
+            period,
+            query_fn: Box::new(query_fn),
+        });
+        self
+    }
+
+    /// Configure the **live** (`LISTEN`/`NOTIFY` tail) half — the [`postgres_sub`]
+    /// mechanism. `channel` is the notify channel, `start_from` the initial cursor,
+    /// and `query_fn(cursor)` returns SQL selecting rows with `time > cursor`,
+    /// ordered by time.
+    pub fn live(
+        mut self,
+        channel: impl Into<String>,
+        start_from: NanoTime,
+        query_fn: impl FnMut(NanoTime) -> String + Send + 'static,
+    ) -> Self {
+        self.live = Some(LiveSpec {
+            channel: channel.into(),
+            start_from,
+            query_fn: Box::new(query_fn),
+        });
+        self
+    }
+}
+
+/// A single **mode-agnostic** PostgreSQL source: dispatches on the run's
+/// [`RunMode`] at wiring time to the bounded historical read ([`postgres_read`])
+/// or the live `LISTEN`/`NOTIFY` tail ([`postgres_sub`]), per the
+/// [`PostgresSourceConfig`] halves.
+///
+/// - [`RunMode::HistoricalFrom`] → the historical half (requires
+///   [`PostgresSourceConfig::historical`]).
+/// - [`RunMode::RealTime`] → the live half (requires
+///   [`PostgresSourceConfig::live`]).
+///
+/// With both halves supplied the graph is fully mode-agnostic — pick real-time vs
+/// historical at `run()` with the wiring unchanged, exactly as `ticker` /
+/// `channel` already allow. [`postgres_read`] / [`postgres_sub`] remain the
+/// low-level primitives; this wires through them. See the deviation register's
+/// "B2 — agreed plan: unified `<adapter>_source`".
+///
+/// # Errors
+///
+/// Returns an error at **wiring time** if the config lacks the half the run's mode
+/// needs (the message names the missing half), or for any error the dispatched
+/// primitive surfaces at wiring (`postgres_read`'s bounded-window validation, or a
+/// connection failure with the password redacted).
+pub fn postgres_source<T>(
+    g: &GraphBuilder,
+    params: RunParams,
+    connection: impl Into<PostgresConnection>,
+    cfg: PostgresSourceConfig,
+) -> Result<Stream<Burst<T>>>
+where
+    T: PostgresDeserialize + Clone + Default + Send + 'static,
+{
+    let connection = connection.into();
+    match params.run_mode {
+        RunMode::HistoricalFrom(_) => {
+            let hist = cfg.historical.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "postgres_source: run mode is RunMode::HistoricalFrom but no historical \
+                     config was supplied — add .historical(period, query_fn), or run under \
+                     RunMode::RealTime with a .live(..) config"
+                )
+            })?;
+            postgres_read::<T>(g, params, connection, hist.period, hist.query_fn)
+        }
+        RunMode::RealTime => {
+            let live = cfg.live.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "postgres_source: run mode is RunMode::RealTime but no live config was \
+                     supplied — add .live(channel, start_from, query_fn), or run under \
+                     RunMode::HistoricalFrom with a .historical(..) config"
+                )
+            })?;
+            postgres_sub::<T, _>(
+                g,
+                params,
+                connection,
+                live.channel,
+                live.start_from,
+                live.query_fn,
+            )
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

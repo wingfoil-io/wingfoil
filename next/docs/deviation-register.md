@@ -100,7 +100,10 @@ motivated the reject only ever required two *mechanisms*, not two public
 **Scope — where `_source` applies.**
 
 - **postgres** — the only adapter with both forms today (`postgres_read` +
-  `postgres_sub`). First target: add `postgres_source`.
+  `postgres_sub`). ✅ **Landed:** `postgres_source(cfg)` with a
+  `PostgresSourceConfig` carrying an optional historical half and an optional
+  live half, dispatching on `params.run_mode` at wiring; the two primitives stay
+  public underneath. `adapters/postgres.rs`.
 - **kafka** — candidate *once* it gains a bounded offset-range replay reader
   (the durable log makes this feasible); only `kafka_sub` exists now, so it
   stays under ruling (a) until then.
