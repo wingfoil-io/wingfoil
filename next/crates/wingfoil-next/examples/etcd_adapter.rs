@@ -7,8 +7,10 @@
 //! - `round_trip` — watches the source prefix, uppercases each value, and writes
 //!   the result to a destination prefix.
 //!
-//! Unlike classic, the runtime is the caller's: we build a tokio runtime and
-//! hand its `handle()` to `etcd_sub` / `etcd_pub` (see the module docs).
+//! The graph owns the tokio runtime the adapters spawn on. This example builds
+//! its own runtime and installs it as the override via `with_async_runtime` (so
+//! it controls the runtime's lifetime); the simplest usage omits that and lets
+//! the graph create one lazily (see the module docs).
 //!
 //! # Prerequisites
 //!
@@ -37,10 +39,12 @@ const DEST_PREFIX: &str = "/example/dest/";
 
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    let handle = rt.handle();
     let conn = EtcdConnection::new(ENDPOINT);
 
-    let g = GraphBuilder::new();
+    // The graph owns the runtime the adapters spawn on. Here we hand it our own
+    // (the override) so this example controls the runtime's lifetime; omit
+    // `.with_async_runtime(..)` to let the graph create and own one lazily.
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
 
     // Seed the source prefix with two keys, once.
     let _seed = g
@@ -54,7 +58,7 @@ fn main() -> anyhow::Result<()> {
                 value: b"world".to_vec(),
             },
         ])
-        .etcd_pub(handle, conn.clone(), None, true)?;
+        .etcd_pub(conn.clone(), None, true)?;
 
     // Watch the source prefix, uppercase each value, write to the dest prefix.
     let params = RunParams {
@@ -62,7 +66,7 @@ fn main() -> anyhow::Result<()> {
         run_for: RunFor::Cycles(3),
         start_time: NanoTime::ZERO,
     };
-    let _round_trip = etcd_sub(&g, handle, params, conn.clone(), SOURCE_PREFIX)?
+    let _round_trip = etcd_sub(&g, params, conn.clone(), SOURCE_PREFIX)?
         .map(|burst: &Burst<_>| {
             burst
                 .iter()
@@ -86,7 +90,7 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect::<Burst<EtcdEntry>>()
         })
-        .etcd_pub(handle, conn, None, true)?;
+        .etcd_pub(conn, None, true)?;
 
     g.build().run(RunMode::RealTime, RunFor::Cycles(3))?;
     Ok(())

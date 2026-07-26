@@ -17,14 +17,14 @@ use wingfoil_next::prelude::*;
 #[test]
 fn sub_connection_refused_aborts_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::RealTime,
         run_for: RunFor::Cycles(1),
         start_time: NanoTime::ZERO,
     };
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
-    let _events = etcd_sub(&g, rt.handle(), params, conn, "/x/")
+    let _events = etcd_sub(&g, params, conn, "/x/")
         .expect("realtime etcd_sub wires without error")
         .collapse_accumulate();
 
@@ -43,14 +43,14 @@ fn sub_connection_refused_aborts_the_run() {
 #[test]
 fn sub_rejects_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::ZERO),
         run_for: RunFor::Cycles(1),
         start_time: NanoTime::ZERO,
     };
     let conn = EtcdConnection::new("http://127.0.0.1:2379");
-    let err = match etcd_sub(&g, rt.handle(), params, conn, "/x/") {
+    let err = match etcd_sub(&g, params, conn, "/x/") {
         Ok(_) => panic!("HistoricalFrom must be rejected at wiring time"),
         Err(e) => e,
     };
@@ -68,14 +68,14 @@ fn sub_rejects_historical_mode() {
 #[test]
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let source = g.constant(burst![EtcdEntry {
         key: "/x/k".to_string(),
         value: b"v".to_vec(),
     }]);
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
 
-    let outcome = match source.etcd_pub(rt.handle(), conn, None, true) {
+    let outcome = match source.etcd_pub(conn, None, true) {
         // Errored at wiring (eager connect) — acceptable.
         Err(_) => return,
         // Connected lazily: the failure must surface when the first PUT runs.

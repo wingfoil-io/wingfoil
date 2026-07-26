@@ -11,10 +11,10 @@
 //! - **verifier**  — subscribes to `dest` and prints what it receives.
 //! - **publisher** — publishes two messages to `source`.
 //!
-//! Unlike classic, the runtime is the caller's: each thread builds a tokio
-//! runtime and hands its `handle()` to `redis_sub` / `redis_pub` (see the module
-//! docs). Because the sinks drive writes with `Handle::block_on`, each graph is
-//! built, run, and dropped from its (non-async) thread.
+//! The graph owns the tokio runtime the adapters spawn on — created lazily, so
+//! no `&Handle` is threaded in (see the module docs). Because the sinks drive
+//! writes with `Handle::block_on`, each graph is built, run, and dropped from
+//! its (non-async) thread.
 //!
 //! # Prerequisites
 //!
@@ -55,9 +55,9 @@ fn main() -> anyhow::Result<()> {
     // processor: source -> uppercase -> dest
     let processor_conn = conn.clone();
     let processor = std::thread::spawn(move || -> anyhow::Result<()> {
-        let rt = tokio::runtime::Runtime::new()?;
+        // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
         let g = GraphBuilder::new();
-        let _sink = redis_sub(&g, rt.handle(), realtime(2), processor_conn.clone(), SOURCE)?
+        let _sink = redis_sub(&g, realtime(2), processor_conn.clone(), SOURCE)?
             .map(|burst: &Burst<_>| {
                 burst
                     .iter()
@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
                     })
                     .collect::<Burst<RedisEntry>>()
             })
-            .redis_pub(rt.handle(), processor_conn, None)?;
+            .redis_pub(processor_conn, None)?;
         g.build()
             .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))?;
         Ok(())
@@ -83,9 +83,9 @@ fn main() -> anyhow::Result<()> {
     // verifier: print everything that lands on dest
     let verifier_conn = conn.clone();
     let verifier = std::thread::spawn(move || -> anyhow::Result<()> {
-        let rt = tokio::runtime::Runtime::new()?;
+        // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
         let g = GraphBuilder::new();
-        let _print = redis_sub(&g, rt.handle(), realtime(2), verifier_conn, DEST)?
+        let _print = redis_sub(&g, realtime(2), verifier_conn, DEST)?
             .collapse()
             .for_each(|event: &wingfoil_next::adapters::redis::RedisEvent| {
                 println!(
@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
     // Give both subscribers time to register before publishing.
     std::thread::sleep(Duration::from_millis(500));
 
-    let rt = tokio::runtime::Runtime::new()?;
+    // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
     let g = GraphBuilder::new();
     let _pub = g
         .constant(burst![
@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
                 payload: b"world".to_vec(),
             },
         ])
-        .redis_pub(rt.handle(), conn, None)?;
+        .redis_pub(conn, None)?;
     g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
 
     processor.join().expect("processor thread panicked")?;

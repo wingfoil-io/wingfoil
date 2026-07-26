@@ -322,6 +322,23 @@ impl StopHandle {
     }
 }
 
+/// Graph-scoped ownership of the async runtime the async adapters spawn onto.
+///
+/// The executor-free core never names a runtime; all tokio-specific state lives
+/// in [`GraphRuntime`](crate::async_source::GraphRuntime), reached only under the
+/// `async` feature. The slot is a field on every [`Builder`]/[`Runner`] (so the
+/// struct shape is uniform regardless of feature) but is inert — zero-sized and
+/// doing nothing — unless `async` is on. When on, it holds the lazily-created
+/// owned runtime, is carried from the builder into the [`Runner`] at
+/// [`build`](Builder::build), and — because it is the **last** field of `Runner`
+/// — is dropped only *after* every node, so an offloaded sink's teardown
+/// `block_on` still has a live runtime. See `docs/runtime-ownership.md`.
+#[derive(Default)]
+pub(crate) struct AsyncRuntimeSlot {
+    #[cfg(feature = "async")]
+    inner: crate::async_source::GraphRuntime,
+}
+
 /// Wires a graph of [`Op`]s. Combinators mirror the classic fluent API but
 /// the engine — not the node — owns state, config and values.
 pub struct Builder {
@@ -371,6 +388,10 @@ pub struct Builder {
     /// Set when any [`demux`](Builder::demux) node is wired, so the dispatch
     /// loop knows to drain `marks`. Off (and the drain skipped) otherwise.
     has_marks: bool,
+    /// Graph-owned async runtime (with caller override) for the async adapters.
+    /// Inert unless the `async` feature is on; carried into the [`Runner`] at
+    /// [`build`](Self::build). See [`AsyncRuntimeSlot`].
+    async_rt: AsyncRuntimeSlot,
 }
 
 impl Default for Builder {
@@ -391,6 +412,7 @@ impl Default for Builder {
             pending: Rc::new(RefCell::new(Vec::new())),
             marks: Rc::new(RefCell::new(Vec::new())),
             has_marks: false,
+            async_rt: AsyncRuntimeSlot::default(),
         }
     }
 }
@@ -685,6 +707,26 @@ impl Builder {
             prev_teardown(k)
         });
         handle
+    }
+
+    /// Resolve the tokio runtime [`Handle`](tokio::runtime::Handle) the async
+    /// adapters spawn onto: the caller override if one was installed via
+    /// [`set_async_runtime_override`](Self::set_async_runtime_override),
+    /// otherwise a runtime this graph creates lazily on first use and owns for
+    /// its lifetime (one per graph — every async adapter shares it). See
+    /// `docs/runtime-ownership.md`.
+    #[cfg(feature = "async")]
+    pub fn async_runtime_handle(&mut self) -> Result<tokio::runtime::Handle> {
+        self.async_rt.inner.handle()
+    }
+
+    /// Install a caller-supplied runtime handle as the override, so the async
+    /// adapters spawn onto the caller's runtime instead of the graph's own. The
+    /// escape hatch for embedding in an existing async application or a custom
+    /// runtime configuration.
+    #[cfg(feature = "async")]
+    pub fn set_async_runtime_override(&mut self, handle: tokio::runtime::Handle) {
+        self.async_rt.inner.set_override(handle);
     }
 
     pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
@@ -2257,6 +2299,7 @@ impl Builder {
             dispatch: Dispatch::default(),
             re_runnable: self.re_runnable,
             has_run: false,
+            async_rt: self.async_rt,
         }
     }
 }
@@ -2349,6 +2392,15 @@ pub struct Runner {
     /// Set after the first [`run`](Runner::run); a subsequent run first calls
     /// [`reset`](Runner::reset) to restore state.
     has_run: bool,
+    /// The graph-owned async runtime (or caller override), moved here from the
+    /// [`Builder`] at [`build`](Builder::build). **Declared last on purpose:**
+    /// Rust drops fields top-to-bottom, so `nodes` — and any offloaded sink whose
+    /// teardown `Drop` does a `block_on` on this runtime's handle — is dropped
+    /// *before* the runtime, keeping the runtime alive through teardown. Inert
+    /// unless the `async` feature is on. Held only for its `Drop` (which stops
+    /// producer tasks by dropping the owned runtime), never read.
+    #[allow(dead_code)]
+    async_rt: AsyncRuntimeSlot,
 }
 
 impl Runner {

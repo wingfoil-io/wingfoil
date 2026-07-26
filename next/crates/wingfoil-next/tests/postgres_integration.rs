@@ -142,8 +142,8 @@ fn collect_hourly_read(
         run_for: RunFor::Duration(dur),
         start_time: start,
     };
-    let g = GraphBuilder::new();
-    let acc = postgres_read::<TestTrade>(&g, handle, params, conn, HOUR, read_query)?
+    let g = GraphBuilder::new().with_async_runtime(handle.clone());
+    let acc = postgres_read::<TestTrade>(&g, params, conn, HOUR, read_query)?
         .collapse()
         .with_time()
         .accumulate();
@@ -270,7 +270,7 @@ fn test_write_round_trip() -> anyhow::Result<()> {
     // them, then drop the runner so the off-thread sink flushes at teardown.
     let start = NanoTime::from_kdb_timestamp(0);
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let rows = (0..3i64).map(|i| {
             Ok((
                 TestTrade {
@@ -281,9 +281,9 @@ fn test_write_round_trip() -> anyhow::Result<()> {
                 NanoTime::from_kdb_timestamp(i * HOUR_NANOS),
             ))
         });
-        let _sink =
-            g.replay_results(rows)
-                .postgres_write(rt.handle(), conn.clone(), "trades", None)?;
+        let _sink = g
+            .replay_results(rows)
+            .postgres_write(conn.clone(), "trades", None)?;
         let mut runner = g.build();
         runner.run(
             RunMode::HistoricalFrom(start),
@@ -313,7 +313,7 @@ fn test_write_burst_multi_row() -> anyhow::Result<()> {
 
     // A single burst with two records — both share the graph timestamp.
     {
-        let g = GraphBuilder::new();
+        let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![
                 TestTrade {
@@ -327,7 +327,7 @@ fn test_write_burst_multi_row() -> anyhow::Result<()> {
                     qty: 2
                 },
             ])
-            .postgres_write(rt.handle(), conn.clone(), "trades", None)?;
+            .postgres_write(conn.clone(), "trades", None)?;
         let mut runner = g.build();
         runner.run(
             RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
@@ -376,11 +376,10 @@ fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
         run_for: RunFor::Duration(Duration::from_secs(3)),
         start_time: NanoTime::ZERO,
     };
-    let g = GraphBuilder::new();
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     // Collect whole bursts: in real-time several rows can arrive in one cycle.
     let acc = postgres_sub::<TestTrade, _>(
         &g,
-        rt.handle(),
         params,
         conn,
         "trades_feed",

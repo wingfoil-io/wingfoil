@@ -27,7 +27,7 @@ use wingfoil_next::async_source::{RunParams, produce_async};
 use wingfoil_next::prelude::*;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.
     let g = GraphBuilder::new();
 
     let period = Duration::from_millis(10);
@@ -44,7 +44,7 @@ fn main() {
     // The async producer: it awaits between yields (as a socket read would),
     // emitting timestamped values. A finite feed of 8 values that ends —
     // closing the stream, which stops the graph.
-    let quotes = produce_async(&g, rt.handle(), params, move |_p| async move {
+    let quotes = produce_async(&g, params, move |_p| async move {
         Ok(futures::stream::unfold(0u32, move |i| async move {
             if i >= 8 {
                 return None;
@@ -55,7 +55,8 @@ fn main() {
             // arrival); a historical producer would drive replay off it.
             Some((Ok((NanoTime::now(), value)), i + 1))
         }))
-    });
+    })
+    .expect("produce_async");
 
     // The consumer, on the graph: print every value in each arriving burst.
     let _printed = quotes.for_each(|burst: &Burst<u32>| {

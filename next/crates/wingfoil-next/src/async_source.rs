@@ -3,7 +3,7 @@
 //! [`channel`](crate::fluent::SourceOps::channel) layer.
 //!
 //! The closure returns a [`futures::Stream`] of `Result<(NanoTime, T)>`. A
-//! task spawned on the caller's tokio runtime drives it, forwarding each
+//! task spawned on the graph's tokio runtime drives it, forwarding each
 //! value to the channel (timestamped, so it works in **both** run modes —
 //! deterministic historical replay on the graph clock, or live realtime) and
 //! closing at end-of-stream. A producer error propagates into the graph and
@@ -47,26 +47,87 @@
 //!   without limit. See [`produce_async`] for the historical caveat.
 //!
 //! ```ignore
-//! let rt = tokio::runtime::Runtime::new()?;
+//! // The graph owns the runtime (lazily created); no `&Handle` to pass. To
+//! // embed in your own runtime instead: `GraphBuilder::new().with_async_runtime(rt.handle().clone())`.
 //! let g = GraphBuilder::new();
-//! let quotes = produce_async_bounded(&g, rt.handle(), params, Some(64), |_p| async {
+//! let quotes = produce_async_bounded(&g, params, Some(64), |_p| async {
 //!     Ok(futures::stream::iter(vec![
 //!         Ok((NanoTime::new(100), 1.0)),
 //!         Ok((NanoTime::new(200), 2.0)),
 //!     ]))
-//! });
+//! })?;
 //! ```
 
 use std::future::Future;
 use std::sync::mpsc;
 
+use anyhow::Context;
 use futures::{SinkExt, StreamExt};
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, Runtime};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
 use crate::fluent::{GraphBuilder, SourceOps, Stream};
 use crate::op::{Activation, Tick};
+
+/// The async runtime a graph's async adapters spawn onto, owned by the graph.
+///
+/// Legacy wingfoil hides a global `lazy_static` runtime; wingfoil-next used to
+/// make every async adapter take a caller-supplied `&Handle`. This is the middle
+/// ground (see `docs/runtime-ownership.md`): the `GraphBuilder` owns **one**
+/// runtime, created lazily the first time an async adapter asks for a handle and
+/// dropped at teardown — so all async adapters in a graph share it, the common
+/// call needs no `&Handle`, and there is no never-dropped global. A caller can
+/// still inject their own runtime via
+/// [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)
+/// (the override) to embed the graph in an existing async application.
+///
+/// Held in the executor-free core only as an opaque
+/// [`AsyncRuntimeSlot`](crate::interp::AsyncRuntimeSlot); all tokio types stay
+/// behind the `async` feature here.
+#[derive(Default)]
+pub struct GraphRuntime {
+    /// Caller override; when set, adapters use this handle and the graph owns
+    /// (and drops) nothing.
+    override_handle: Option<Handle>,
+    /// The graph's own runtime, created lazily on first use when no override is
+    /// set. Dropped when this slot is dropped — i.e. at [`Runner`] teardown,
+    /// after every node — which stops any still-running producer tasks.
+    ///
+    /// [`Runtime`]: tokio::runtime::Runtime
+    /// [`Runner`]: crate::interp::Runner
+    owned: Option<Runtime>,
+    /// Cached handle to `owned`, so repeated `handle()` calls hand every adapter
+    /// the *same* runtime rather than standing up a new one each time.
+    cached: Option<Handle>,
+}
+
+impl GraphRuntime {
+    /// Resolve the handle to spawn async work onto: the caller override if set,
+    /// otherwise the graph's own runtime (created lazily and cached here on first
+    /// use). Fallible only on the first, owned-runtime creation.
+    pub fn handle(&mut self) -> anyhow::Result<Handle> {
+        if let Some(handle) = &self.override_handle {
+            return Ok(handle.clone());
+        }
+        if let Some(handle) = &self.cached {
+            return Ok(handle.clone());
+        }
+        let runtime = Runtime::new()
+            .context("creating the graph-owned tokio runtime for wingfoil-next async adapters")?;
+        let handle = runtime.handle().clone();
+        self.owned = Some(runtime);
+        self.cached = Some(handle.clone());
+        Ok(handle)
+    }
+
+    /// Install a caller-supplied runtime handle as the override. Adapters wired
+    /// afterwards spawn onto it, and the graph creates/owns no runtime of its
+    /// own.
+    pub fn set_override(&mut self, handle: Handle) {
+        self.override_handle = Some(handle);
+    }
+}
 
 /// The run parameters handed to a producer closure (mirrors classic
 /// `RunParams`), so a producer can choose a historical vs live data source.
@@ -100,17 +161,16 @@ pub struct RunParams {
 /// apply `buffer_size` back-pressure in realtime.
 pub fn produce_async<T, F, Fut, S>(
     g: &GraphBuilder,
-    handle: &tokio::runtime::Handle,
     params: RunParams,
     run: F,
-) -> Stream<Burst<T>>
+) -> anyhow::Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
     F: FnOnce(RunParams) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<S>> + Send + 'static,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
 {
-    produce_async_bounded(g, handle, params, None, run)
+    produce_async_bounded(g, params, None, run)
 }
 
 /// [`produce_async`] with `buffer_size` back-pressure (mirrors classic
@@ -131,17 +191,19 @@ where
 /// up-front collection.
 pub fn produce_async_bounded<T, F, Fut, S>(
     g: &GraphBuilder,
-    handle: &tokio::runtime::Handle,
     params: RunParams,
     buffer_size: Option<usize>,
     run: F,
-) -> Stream<Burst<T>>
+) -> anyhow::Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
     F: FnOnce(RunParams) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<S>> + Send + 'static,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
 {
+    // The graph owns the runtime (created lazily here on first async use, or a
+    // caller override); the producer task spawns onto it at wiring time.
+    let handle = g.async_runtime_handle()?;
     let (stream, sender) = g.channel::<T>();
 
     // Realtime backpressure: a bounded permit channel. The producer takes a
@@ -236,7 +298,7 @@ where
             }
         }
     });
-    validated
+    Ok(validated)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,11 +314,11 @@ where
 /// Returns a closure to plug into [`for_each`](crate::fluent::StreamOps::for_each):
 ///
 /// ```ignore
-/// let rt = tokio::runtime::Runtime::new()?;
+/// // The graph owns the runtime (lazily created); pass `&g`, not a `&Handle`.
 /// let g = GraphBuilder::new();
-/// let sink = some_burst_stream.for_each(consume_async(rt.handle(), Some(64), |v| async move {
+/// let sink = some_burst_stream.for_each(consume_async(&g, Some(64), |v| async move {
 ///     write_somewhere(v).await // returns anyhow::Result<()>
-/// }));
+/// })?);
 /// ```
 ///
 /// # Guarantees
@@ -309,15 +371,20 @@ where
 ///
 /// Gated behind the `async` feature, like [`produce_async`].
 pub fn consume_async<T, F, Fut>(
-    handle: &Handle,
+    g: &GraphBuilder,
     buffer_size: Option<usize>,
     run: F,
-) -> impl Fn(&Burst<T>) -> anyhow::Result<()> + use<T, F, Fut>
+) -> anyhow::Result<impl Fn(&Burst<T>) -> anyhow::Result<()> + use<T, F, Fut>>
 where
     T: Clone + Default + Send + 'static,
     F: FnMut(T) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
+    // The graph owns the runtime (created lazily here on first async use, or a
+    // caller override); the consumer task spawns onto it, and the sink closure /
+    // teardown flush drive it with `block_on` on the graph thread.
+    let handle = g.async_runtime_handle()?;
+
     // Error channel: the consumer task reports the first write error here; the
     // sink closure polls it (non-blocking) each cycle and aborts the run. A
     // channel — not a lock — keeps the graph execution path lock-free.
@@ -346,7 +413,7 @@ where
         task: Some(task),
     };
     let send_handle = handle.clone();
-    move |burst: &Burst<T>| -> anyhow::Result<()> {
+    Ok(move |burst: &Burst<T>| -> anyhow::Result<()> {
         // Surface a prior async write error before doing more work.
         if let Ok(msg) = err_rx.try_recv() {
             anyhow::bail!("consume_async: background sink write failed: {msg}");
@@ -370,7 +437,7 @@ where
             }
         }
         Ok(())
-    }
+    })
 }
 
 /// Sender half of the sink's data channel — bounded (back-pressured) or

@@ -90,6 +90,35 @@ impl GraphBuilder {
         f(&mut self.inner.borrow_mut())
     }
 
+    /// Resolve the tokio runtime handle the async adapters spawn onto: the
+    /// caller override installed via [`with_async_runtime`](Self::with_async_runtime)
+    /// if any, otherwise a runtime this graph creates lazily and owns for its
+    /// lifetime (one per graph — every async adapter shares it, dropped at
+    /// teardown). Used by [`produce_async`](crate::async_source::produce_async)
+    /// and [`consume_async`](crate::async_source::consume_async); adapters rarely
+    /// call it directly. See `docs/runtime-ownership.md`.
+    #[cfg(feature = "async")]
+    pub fn async_runtime_handle(&self) -> Result<tokio::runtime::Handle> {
+        self.assert_not_built();
+        self.inner.borrow_mut().async_runtime_handle()
+    }
+
+    /// Embed the graph's async adapters in a caller-supplied runtime instead of
+    /// the graph's own. The override escape hatch (see `docs/runtime-ownership.md`):
+    /// by default a graph lazily creates and owns one runtime shared by all its
+    /// async adapters; call this to point them at your existing runtime for
+    /// embedding in an async application or a custom runtime configuration.
+    ///
+    /// ```ignore
+    /// let rt = tokio::runtime::Runtime::new()?;
+    /// let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    /// ```
+    #[cfg(feature = "async")]
+    pub fn with_async_runtime(self, handle: tokio::runtime::Handle) -> Self {
+        self.inner.borrow_mut().set_async_runtime_override(handle);
+        self
+    }
+
     /// Wrap a handle from this builder as a [`Stream`].
     pub fn wrap<T>(&self, handle: Handle<T>) -> Stream<T> {
         Stream {
@@ -374,6 +403,18 @@ impl<T> Stream<T> {
     /// The underlying engine handle (for [`Runner::value`]).
     pub fn handle(&self) -> Handle<T> {
         self.handle
+    }
+
+    /// A [`GraphBuilder`] view onto the same graph this stream belongs to.
+    /// Sink combinators (e.g. the async adapter `*_pub`/`*_write` traits) use it
+    /// to reach builder-level services such as the graph-owned async runtime,
+    /// since they receive `self: Stream`, not the builder. Cheap — clones the two
+    /// shared `Rc`s.
+    pub fn graph(&self) -> GraphBuilder {
+        GraphBuilder {
+            inner: self.inner.clone(),
+            built: self.built.clone(),
+        }
     }
 
     /// Extension point for combinator traits ([`StreamOps`],

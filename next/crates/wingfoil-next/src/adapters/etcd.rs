@@ -22,14 +22,15 @@
 //! and revoke-on-shutdown, the `force` conditional write) is preserved. The
 //! surface differs in three deliberate ways:
 //!
-//! 1. **The tokio runtime is the caller's.** Classic `etcd_sub`/`etcd_pub` hide
-//!    a global runtime inside `produce_async`/`consume_async`. Next's
-//!    [`produce_async`](crate::async_source::produce_async) (and its sink
-//!    counterpart [`consume_async`](crate::async_source::consume_async)) take
-//!    the runtime [`Handle`](tokio::runtime::Handle) and [`RunParams`]
-//!    explicitly (the producer task is spawned at wiring time, before the run).
-//!    Both functions here follow that convention: the caller owns a
-//!    `tokio::runtime::Runtime` and hands in its `handle()`.
+//! 1. **The graph owns the tokio runtime.** Classic `etcd_sub`/`etcd_pub` hide a
+//!    never-dropped global runtime inside `produce_async`/`consume_async`. Next's
+//!    `GraphBuilder` instead owns one runtime, created lazily on first async use
+//!    and dropped at teardown, shared by every async adapter in the graph — so
+//!    the common call needs no `&Handle` and there is no leaked global (see
+//!    `docs/runtime-ownership.md`). `etcd_sub` still takes [`RunParams`] (the
+//!    producer task spawns at wiring time, before the run). To embed the graph in
+//!    an existing runtime, install it as an override with
+//!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **The sink connects eagerly, at wiring time.** `etcd_pub` returns
 //!    `Result` and a connection (or `lease_grant`) failure surfaces *before* the
 //!    run, whereas classic connected lazily inside the async consumer so the
@@ -210,8 +211,8 @@ pub struct EtcdEvent {
 /// `mod_revision <= snapshot_rev` is filtered out as a duplicate of the
 /// snapshot.
 ///
-/// `handle` is the caller's tokio runtime handle and `params` describes the run
-/// the graph will be driven with (see [`produce_async`] and the module docs).
+/// `params` describes the run the graph will be driven with (see
+/// [`produce_async`] and the module docs); the graph owns the tokio runtime.
 /// Use `.collapse()` for single-event processing.
 ///
 /// # Errors
@@ -223,7 +224,6 @@ pub struct EtcdEvent {
 /// `start`. Run `etcd_sub` under [`RunMode::RealTime`].
 pub fn etcd_sub(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     conn: impl Into<EtcdConnection>,
     prefix: impl Into<String>,
@@ -237,112 +237,107 @@ pub fn etcd_sub(
     }
     let conn = conn.into();
     let prefix = prefix.into();
-    Ok(produce_async(
-        g,
-        handle,
-        params,
-        move |_p: RunParams| async move {
-            let mut client = Client::connect(&conn.endpoints, None)
-                .await
-                .with_context(|| format!("etcd_sub: connecting to etcd at {:?}", conn.endpoints))?;
+    produce_async(g, params, move |_p: RunParams| async move {
+        let mut client = Client::connect(&conn.endpoints, None)
+            .await
+            .with_context(|| format!("etcd_sub: connecting to etcd at {:?}", conn.endpoints))?;
 
-            // 1. Open the watch BEFORE the GET to prevent the snapshot/watch race.
-            let watch_opts = WatchOptions::new().with_prefix();
-            let mut watch_stream = client
-                .watch(prefix.as_bytes(), Some(watch_opts))
-                .await
-                .map_err(|e| anyhow::anyhow!("etcd watch failed: {e}"))?;
+        // 1. Open the watch BEFORE the GET to prevent the snapshot/watch race.
+        let watch_opts = WatchOptions::new().with_prefix();
+        let mut watch_stream = client
+            .watch(prefix.as_bytes(), Some(watch_opts))
+            .await
+            .map_err(|e| anyhow::anyhow!("etcd watch failed: {e}"))?;
 
-            // 2. Read the snapshot and capture its revision.
-            let get_opts = GetOptions::new().with_prefix();
-            let get_resp = client
-                .get(prefix.as_bytes(), Some(get_opts))
-                .await
-                .map_err(|e| anyhow::anyhow!("etcd get failed: {e}"))?;
-            let snapshot_rev = get_resp.header().map(|h| h.revision()).unwrap_or(0);
+        // 2. Read the snapshot and capture its revision.
+        let get_opts = GetOptions::new().with_prefix();
+        let get_resp = client
+            .get(prefix.as_bytes(), Some(get_opts))
+            .await
+            .map_err(|e| anyhow::anyhow!("etcd get failed: {e}"))?;
+        let snapshot_rev = get_resp.header().map(|h| h.revision()).unwrap_or(0);
 
-            // 3. Collect snapshot KVs into owned data to move into the stream.
-            let snapshot: Vec<EtcdEvent> = get_resp
-                .kvs()
-                .iter()
-                .map(|kv| EtcdEvent {
-                    kind: EtcdEventKind::Put,
-                    entry: EtcdEntry {
-                        key: String::from_utf8_lossy(kv.key()).into_owned(),
-                        value: kv.value().to_vec(),
-                    },
-                    revision: snapshot_rev,
-                })
-                .collect();
+        // 3. Collect snapshot KVs into owned data to move into the stream.
+        let snapshot: Vec<EtcdEvent> = get_resp
+            .kvs()
+            .iter()
+            .map(|kv| EtcdEvent {
+                kind: EtcdEventKind::Put,
+                entry: EtcdEntry {
+                    key: String::from_utf8_lossy(kv.key()).into_owned(),
+                    value: kv.value().to_vec(),
+                },
+                revision: snapshot_rev,
+            })
+            .collect();
 
-            // 4. Return the combined snapshot + live stream. `watch_stream` is moved
-            //    in and kept alive for the stream's lifetime so the watch stays open.
-            Ok(async_stream::stream! {
-                // Phase 1: emit the snapshot as a single atomic burst. Every
-                // snapshot KV shares ONE timestamp so they are grouped into one
-                // burst (never latest-wins, never split across cycles) — matching
-                // classic's single `HistoricalValue` snapshot burst. Stamping each
-                // event with its own `NanoTime::now()` would scatter them across
-                // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
-                // could observe only the first key — an intermittent "missing key"
-                // under load.
-                let snapshot_time = NanoTime::now();
-                for event in snapshot {
-                    yield Ok((snapshot_time, event));
-                }
+        // 4. Return the combined snapshot + live stream. `watch_stream` is moved
+        //    in and kept alive for the stream's lifetime so the watch stays open.
+        Ok(async_stream::stream! {
+            // Phase 1: emit the snapshot as a single atomic burst. Every
+            // snapshot KV shares ONE timestamp so they are grouped into one
+            // burst (never latest-wins, never split across cycles) — matching
+            // classic's single `HistoricalValue` snapshot burst. Stamping each
+            // event with its own `NanoTime::now()` would scatter them across
+            // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
+            // could observe only the first key — an intermittent "missing key"
+            // under load.
+            let snapshot_time = NanoTime::now();
+            for event in snapshot {
+                yield Ok((snapshot_time, event));
+            }
 
-                // Phase 2: drain the watch stream, deduplicating against the snapshot.
-                loop {
-                    match watch_stream.next().await {
-                        Some(Ok(resp)) => {
-                            // Skip the initial "watch created" confirmation (no events).
-                            if resp.created() {
+            // Phase 2: drain the watch stream, deduplicating against the snapshot.
+            loop {
+                match watch_stream.next().await {
+                    Some(Ok(resp)) => {
+                        // Skip the initial "watch created" confirmation (no events).
+                        if resp.created() {
+                            continue;
+                        }
+                        if resp.canceled() {
+                            yield Err(anyhow::anyhow!(
+                                "etcd watch cancelled: {}",
+                                resp.cancel_reason()
+                            ));
+                            break;
+                        }
+                        for event in resp.events() {
+                            let kv = match event.kv() {
+                                Some(kv) => kv,
+                                None => continue,
+                            };
+                            let mod_rev = kv.mod_revision();
+                            // Skip events already covered by the snapshot.
+                            if mod_rev <= snapshot_rev {
                                 continue;
                             }
-                            if resp.canceled() {
-                                yield Err(anyhow::anyhow!(
-                                    "etcd watch cancelled: {}",
-                                    resp.cancel_reason()
-                                ));
-                                break;
-                            }
-                            for event in resp.events() {
-                                let kv = match event.kv() {
-                                    Some(kv) => kv,
-                                    None => continue,
-                                };
-                                let mod_rev = kv.mod_revision();
-                                // Skip events already covered by the snapshot.
-                                if mod_rev <= snapshot_rev {
-                                    continue;
-                                }
-                                let kind = match event.event_type() {
-                                    etcd_client::EventType::Put => EtcdEventKind::Put,
-                                    etcd_client::EventType::Delete => EtcdEventKind::Delete,
-                                };
-                                yield Ok((NanoTime::now(), EtcdEvent {
-                                    kind,
-                                    entry: EtcdEntry {
-                                        key: String::from_utf8_lossy(kv.key()).into_owned(),
-                                        value: kv.value().to_vec(),
-                                    },
-                                    revision: mod_rev,
-                                }));
-                            }
-                        }
-                        Some(Err(e)) => {
-                            yield Err(anyhow::anyhow!("etcd watch error: {e}"));
-                            break;
-                        }
-                        None => {
-                            yield Err(anyhow::anyhow!("etcd watch stream closed unexpectedly"));
-                            break;
+                            let kind = match event.event_type() {
+                                etcd_client::EventType::Put => EtcdEventKind::Put,
+                                etcd_client::EventType::Delete => EtcdEventKind::Delete,
+                            };
+                            yield Ok((NanoTime::now(), EtcdEvent {
+                                kind,
+                                entry: EtcdEntry {
+                                    key: String::from_utf8_lossy(kv.key()).into_owned(),
+                                    value: kv.value().to_vec(),
+                                },
+                                revision: mod_rev,
+                            }));
                         }
                     }
+                    Some(Err(e)) => {
+                        yield Err(anyhow::anyhow!("etcd watch error: {e}"));
+                        break;
+                    }
+                    None => {
+                        yield Err(anyhow::anyhow!("etcd watch stream closed unexpectedly"));
+                        break;
+                    }
                 }
-            })
-        },
-    ))
+            }
+        })
+    })
 }
 
 /// Holds a granted lease alive and revokes it on drop.
@@ -385,12 +380,13 @@ impl Drop for LeaseGuard {
 pub trait EtcdSinkOps {
     /// Write this stream to etcd via PUT. Returns the sink `Stream<()>`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs).
     /// - `lease_ttl`: `None` for plain writes; `Some(duration)` to attach a lease
     ///   with automatic keepalive renewal (keys vanish on sink teardown via
     ///   revoke).
     /// - `force`: `true` silently overwrites existing keys; `false` aborts the
     ///   run, naming the key, if it already exists (a conditional transaction).
+    ///
+    /// The graph owns the tokio runtime (see the module docs).
     ///
     /// # Errors
     ///
@@ -399,7 +395,6 @@ pub trait EtcdSinkOps {
     /// `force: false` conflict) aborts the run with context.
     fn etcd_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<EtcdConnection>,
         lease_ttl: Option<Duration>,
         force: bool,
@@ -409,12 +404,13 @@ pub trait EtcdSinkOps {
 impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
     fn etcd_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<EtcdConnection>,
         lease_ttl: Option<Duration>,
         force: bool,
     ) -> Result<Stream<()>> {
         let conn = conn.into();
+        // The graph owns the runtime; the sink connects/keepalives on it.
+        let handle = self.graph().async_runtime_handle()?;
         // Connect at wiring time so a connection error surfaces before the run.
         let mut client = handle
             .block_on(Client::connect(&conn.endpoints, None))
@@ -516,13 +512,12 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
 impl EtcdSinkOps for Stream<EtcdEntry> {
     fn etcd_pub(
         &self,
-        handle: &Handle,
         conn: impl Into<EtcdConnection>,
         lease_ttl: Option<Duration>,
         force: bool,
     ) -> Result<Stream<()>> {
         self.map(|entry: &EtcdEntry| burst![entry.clone()])
-            .etcd_pub(handle, conn, lease_ttl, force)
+            .etcd_pub(conn, lease_ttl, force)
     }
 }
 

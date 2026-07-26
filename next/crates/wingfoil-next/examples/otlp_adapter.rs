@@ -7,8 +7,8 @@
 //! same counter, so metrics can be consumed by both Prometheus scrapers and any
 //! OTLP-compatible backend (Grafana Alloy, Datadog, Honeycomb, New Relic, …).
 //!
-//! Unlike classic, the tokio runtime is the caller's: we build one and hand its
-//! `handle()` to `otlp_push` (see the adapter module docs). The graph is driven
+//! The graph owns the tokio runtime `otlp_push` exports on — created lazily, so
+//! no `&Handle` is threaded in (see the adapter module docs). The graph is driven
 //! from this (non-async) `main`, as `consume_async` requires.
 //!
 //! # Setup
@@ -34,8 +34,6 @@ use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps}
 use wingfoil_next::prelude::*;
 
 fn main() -> anyhow::Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-
     // ── Prometheus exporter (pull) ─────────────────────────────────────────
     let exporter = PrometheusExporter::new("0.0.0.0:9091");
     let port = exporter.serve()?;
@@ -49,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
     let counter = g.ticker(Duration::from_secs(1)).count();
     let _prometheus = counter.prometheus_gauge(&exporter, "wingfoil_ticks_total");
-    let _otlp = counter.otlp_push(rt.handle(), "wingfoil_ticks_total", config);
+    let _otlp = counter.otlp_push("wingfoil_ticks_total", config)?;
 
     println!("Pushing OTLP metrics to {endpoint}");
     g.build().run(RunMode::RealTime, RunFor::Forever)?;

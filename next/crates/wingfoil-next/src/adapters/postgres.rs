@@ -30,7 +30,7 @@
 //! routine the KDB+ reader will reuse), and calls `query_fn` once per slice with
 //! `((t0, t1), date, iteration)`. Each query must filter on `time >= t0 AND time
 //! < t1` and `ORDER BY time`. All slices are queried at **wiring** time (the
-//! async client is driven with [`Handle::block_on`]); the decoded, in-window
+//! async client is driven with [`Handle::block_on`](tokio::runtime::Handle::block_on)); the decoded, in-window
 //! rows are then fed to the finite [`replay_results`](crate::fluent::GraphBuilder::replay_results)
 //! source, so replay is deterministic and needs no producer thread.
 //!
@@ -74,12 +74,16 @@
 //! preserved. The surface differs in four deliberate ways, mirroring the
 //! [`etcd`](crate::adapters::etcd) / [`redis`](crate::adapters::redis) ports:
 //!
-//! 1. **The tokio runtime is the caller's.** `postgres_read` / `postgres_sub` /
-//!    `postgres_write` take the runtime [`Handle`] explicitly (and the sources a
-//!    [`RunParams`]), matching next's async convention rather than classic's
-//!    hidden global runtime. The reader and the sink drive the client with
-//!    [`Handle::block_on`], so the graph must be built, run, and dropped from a
-//!    **non-async thread** (`main`, a `#[test]` fn).
+//! 1. **The graph owns the tokio runtime.** `postgres_read` / `postgres_sub` /
+//!    `postgres_write` no longer take a `&Handle`: the `GraphBuilder` owns one
+//!    runtime, created lazily on first async use and dropped at teardown, shared
+//!    by every async adapter — replacing classic's hidden never-dropped global
+//!    (see `docs/runtime-ownership.md`; embed in your own runtime with
+//!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
+//!    The sources still take a [`RunParams`]. The reader and the sink drive the
+//!    client with [`Handle::block_on`](tokio::runtime::Handle::block_on), so the
+//!    graph must be built, run, and dropped from a **non-async thread** (`main`,
+//!    a `#[test]` fn).
 //! 2. **The reader queries at wiring time onto `replay_results`.** Classic
 //!    `postgres_read` streams rows lazily through `produce_async`; next queries
 //!    every slice up front and feeds the finite row set to `replay_results`.
@@ -112,7 +116,6 @@ use chrono::NaiveDateTime;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use log::info;
-use tokio::runtime::Handle;
 use tokio_postgres::{AsyncMessage, NoTls, Statement};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -299,7 +302,8 @@ impl PostgresRowExt for Row {
 /// midnight-aligned slices of length `period`. `query_fn` is called once per
 /// slice with `((t0, t1), date, iteration)` and must return a SQL query filtering
 /// on `time >= t0 AND time < t1`, ordered by time. Every slice is queried at
-/// wiring time (the async client is driven with [`Handle::block_on`]); the
+/// wiring time (the async client is driven with
+/// [`Handle::block_on`](tokio::runtime::Handle::block_on)); the
 /// decoded rows are clamped to the run window and fed to
 /// [`replay_results`](crate::fluent::GraphBuilder::replay_results).
 ///
@@ -319,7 +323,6 @@ impl PostgresRowExt for Row {
 /// `replay_results` and **aborts the run** (not wiring).
 pub fn postgres_read<T>(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     connection: impl Into<PostgresConnection>,
     period: Duration,
@@ -329,6 +332,8 @@ where
     T: PostgresDeserialize + Clone + Default + 'static,
 {
     let connection = connection.into();
+    // The graph owns the runtime; the reader block_on's it at wiring.
+    let handle = g.async_runtime_handle()?;
     // The authoritative run start (a RealTime run yields ZERO, which the shared
     // validator rejects with a "use RunMode::HistoricalFrom" message).
     let start_time = match params.run_mode {
@@ -513,7 +518,6 @@ pub fn postgres_notify_trigger_sql(table: &str, channel: &str) -> String {
 /// the run with context (the connection string is redacted).
 pub fn postgres_sub<T, F>(
     g: &GraphBuilder,
-    handle: &Handle,
     params: RunParams,
     connection: impl Into<PostgresConnection>,
     channel: impl Into<String>,
@@ -534,94 +538,89 @@ where
     }
     let connection = connection.into();
     let channel = channel.into();
-    Ok(produce_async(
-        g,
-        handle,
-        params,
-        move |_p: RunParams| async move {
-            let mut query_fn = query_fn;
-            let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
-                .await
-                .with_context(|| {
-                    format!("postgres_sub: failed to connect: {}", connection.redacted())
-                })?;
+    produce_async(g, params, move |_p: RunParams| async move {
+        let mut query_fn = query_fn;
+        let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
+            .await
+            .with_context(|| {
+                format!("postgres_sub: failed to connect: {}", connection.redacted())
+            })?;
 
-            // Drive the connection and forward notification wake-ups. Polling
-            // `poll_message` (rather than awaiting the plain connection future) is
-            // what surfaces `AsyncMessage::Notification`s.
-            let (tx, mut rx) = mpsc::unbounded::<()>();
-            tokio::spawn(async move {
-                let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
-                while let Some(message) = messages.next().await {
-                    match message {
-                        Ok(AsyncMessage::Notification(_)) => {
-                            if tx.unbounded_send(()).is_err() {
-                                break; // subscriber gone
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::error!("postgres_sub connection error: {e}");
-                            break;
+        // Drive the connection and forward notification wake-ups. Polling
+        // `poll_message` (rather than awaiting the plain connection future) is
+        // what surfaces `AsyncMessage::Notification`s.
+        let (tx, mut rx) = mpsc::unbounded::<()>();
+        tokio::spawn(async move {
+            let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
+            while let Some(message) = messages.next().await {
+                match message {
+                    Ok(AsyncMessage::Notification(_)) => {
+                        if tx.unbounded_send(()).is_err() {
+                            break; // subscriber gone
                         }
                     }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::error!("postgres_sub connection error: {e}");
+                        break;
+                    }
                 }
-            });
+            }
+        });
 
-            // LISTEN before the catch-up query so an insert committed in the
-            // handoff window still produces a wake-up (watch-before-get).
-            client
-                .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
-                .await
-                .with_context(|| format!("postgres_sub: LISTEN on channel `{channel}` failed"))?;
+        // LISTEN before the catch-up query so an insert committed in the
+        // handoff window still produces a wake-up (watch-before-get).
+        client
+            .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
+            .await
+            .with_context(|| format!("postgres_sub: LISTEN on channel `{channel}` failed"))?;
 
-            Ok(async_stream::stream! {
-                let mut cursor = start_from;
-                loop {
-                    // Drain everything past the cursor. The first pass is the
-                    // catch-up from `start_from`; later passes fetch what the
-                    // wake-up announced.
-                    let query = query_fn(cursor);
-                    info!("postgres_sub query: {query}");
-                    let rows = match client.query(&query, &[]).await {
-                        Ok(rows) => rows,
-                        Err(e) => {
-                            yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
-                            break;
-                        }
+        Ok(async_stream::stream! {
+            let mut cursor = start_from;
+            loop {
+                // Drain everything past the cursor. The first pass is the
+                // catch-up from `start_from`; later passes fetch what the
+                // wake-up announced.
+                let query = query_fn(cursor);
+                info!("postgres_sub query: {query}");
+                let rows = match client.query(&query, &[]).await {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
+                        break;
+                    }
+                };
+                if !rows.is_empty() {
+                    info!("postgres_sub: {} new rows", rows.len());
+                }
+                for row in &rows {
+                    let (time, record) = match T::from_row(row) {
+                        Ok(r) => r,
+                        Err(e) => { yield Err(e); return; }
                     };
-                    if !rows.is_empty() {
-                        info!("postgres_sub: {} new rows", rows.len());
+                    if time > cursor {
+                        cursor = time;
                     }
-                    for row in &rows {
-                        let (time, record) = match T::from_row(row) {
-                            Ok(r) => r,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                        if time > cursor {
-                            cursor = time;
-                        }
-                        yield Ok((time, record));
-                    }
+                    yield Ok((time, record));
+                }
 
-                    // Wait for the next wake-up; coalesce any that queued while we
-                    // were querying (they all mean the same thing: re-query).
-                    match rx.next().await {
-                        Some(()) => {
-                            // Coalesce queued wake-ups; each means "re-query".
-                            while rx.try_recv().is_ok() {}
-                        }
-                        None => {
-                            yield Err(anyhow::anyhow!(
-                                "postgres_sub: connection to postgres closed"
-                            ));
-                            break;
-                        }
+                // Wait for the next wake-up; coalesce any that queued while we
+                // were querying (they all mean the same thing: re-query).
+                match rx.next().await {
+                    Some(()) => {
+                        // Coalesce queued wake-ups; each means "re-query".
+                        while rx.try_recv().is_ok() {}
+                    }
+                    None => {
+                        yield Err(anyhow::anyhow!(
+                            "postgres_sub: connection to postgres closed"
+                        ));
+                        break;
                     }
                 }
-            })
-        },
-    ))
+            }
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -665,10 +664,11 @@ pub trait PostgresSinkOps<T> {
     /// line up positionally: `(timestamp, <business columns in to_params()
     /// order>)`. Returns the sink `Stream<()>`.
     ///
-    /// - `handle`: the caller's tokio runtime handle (see the module docs).
     /// - `buffer_size`: back-pressure bound handed to
     ///   [`consume_async`](crate::async_source::consume_async) — `Some(n)` blocks
     ///   the graph once ~`n` bursts are unwritten; `None` is unbounded.
+    ///
+    /// The graph owns the tokio runtime (see the module docs).
     ///
     /// # Errors
     ///
@@ -677,7 +677,6 @@ pub trait PostgresSinkOps<T> {
     /// context on a subsequent cycle.
     fn postgres_write(
         &self,
-        handle: &Handle,
         conn: impl Into<PostgresConnection>,
         table: &str,
         buffer_size: Option<usize>,
@@ -690,7 +689,6 @@ where
 {
     fn postgres_write(
         &self,
-        handle: &Handle,
         conn: impl Into<PostgresConnection>,
         table: &str,
         buffer_size: Option<usize>,
@@ -700,6 +698,9 @@ where
         // reserved-word table names work; also closes the interpolation hole.
         let table_sql = quote_table(table);
 
+        // The graph owns the runtime; the sink connects/drives/writes on it.
+        let g = self.graph();
+        let handle = g.async_runtime_handle()?;
         // Connect at wiring time so a connection error surfaces before the run.
         let (client, driver) = handle
             .block_on(tokio_postgres::connect(&connection.conn_str, NoTls))
@@ -723,7 +724,7 @@ where
         let stmt_cache: Arc<tokio::sync::Mutex<Option<Statement>>> =
             Arc::new(tokio::sync::Mutex::new(None));
 
-        let sink = consume_async(handle, buffer_size, move |batch: WriteBatch<T>| {
+        let sink = consume_async(&g, buffer_size, move |batch: WriteBatch<T>| {
             let client = Arc::clone(&client);
             let stmt_cache = Arc::clone(&stmt_cache);
             let table_sql = table_sql.clone();
@@ -779,7 +780,7 @@ where
                     .with_context(|| format!("postgres_write: insert into {table_sql} failed"))?;
                 Ok(())
             }
-        });
+        })?;
 
         Ok(self
             .with_time()
