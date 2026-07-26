@@ -2,8 +2,8 @@
 
 **Status:** partially landed (the plugin-SDK layer — `#[pyop]` (stateless,
 stateful, one- and two-input), `#[pygraph]`, source `#[pyadapter]`, and the
-source + sink `#[pyadapter]`, and the object form — is built; burst-shaped
-`#[pyadapter]` adapters remain). **`wingfoil-next-python`
+`#[pyadapter]` (source, sink, and burst), and the object form — is built).
+**`wingfoil-next-python`
 is the go-forward Python binding: it supersedes the legacy `wingfoil-python`
 bindings (decision 2026-07), it is not a new capability bolted beside a
 preserved legacy surface.** The erased object form and `#[pyop]` seam below are
@@ -251,7 +251,7 @@ form.
 | `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
 | `#[pyop]` extensions | **stateful + two-input ops done** — `State` is any `Default`-seedable type (re-seeded per run); `In<'a> = (&A, &B)` emits a `module.name(stream, other)` fn over `wire_op2`. Remaining: 3+ inputs and `Cfg`-tuple arg names | 🟡 stateful + 2-input done |
 | `#[pygraph]` macro (wiring reuse) | expose a Rust `fn(&Stream<T>) -> Stream<U>` sub-graph as `module.name(stream)`, spliced into the caller's graph; interior runs at native `T`, only the edge erases. Single-input/output v1, over the `PyStream::typed_input`/`erased_output` seam | ✅ done |
-| `#[pyadapter]` macro (source + sink) | **source and sink/transform adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. Over the `PyGraph::builder`/`erase_source` and `PyStream::typed_input`/`erased_output` seams; a sink's `Stream<()>` erases to Python `None`. Remaining: burst (`Stream<Burst<T>>`) adapters (needs `Vec`-erasure) | 🟡 single-value done; burst remains |
+| `#[pyadapter]` macro (source + sink + burst) | **source, sink/transform, and burst adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. `Stream<Burst<T>>` erases to a Python `list` per tick (a burst sink is fed single-element bursts). Over the `builder`/`erase_source`/`erase_burst_source` and `typed_input`/`typed_burst_input`/`erased_output`/`erased_burst_output` seams; a sink's `Stream<()>` erases to `None`. Adapter method params must be `FromPyObject` | ✅ done |
 | POC: call a fixed `compiled()` graph from Python | Wire `wingfoil-next` as a path dep; expose one fixed `graph!` wiring (`ticker → count → map(i*i) → accumulate`) as `compiled_squares`/`interpreted_squares` (both from a single wiring so they can't drift). Proved **compiled == interpreted output from Python** across cycle- and duration-bound runs; GIL released for the run; no `.unwrap()` in binding code. Honest limit: **one fixed, compile-time graph** — not general Python-defined-graph codegen (timing ~neutral at that ticker-bound size; a dispatch-heavy graph shows `compiled()`'s win). Consistent with the non-goal below (`compiled()`/`nested()` expose as single island nodes). Revisit against the post-refactor `compiled()` API. | ⬜ (was #506) |
 | Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |

@@ -161,6 +161,15 @@ def test_pyadapter_source_and_sink_together():
     assert out == [10.0, 15.0, 20.0]
 
 
+def test_pyadapter_burst_source():
+    # pair_source is a burst-shaped source adapter: each tick is a Burst<f64> of
+    # two same-instant values, which erases to a Python list.
+    g = wf.Graph()
+    out = wf.pair_source(g).accumulate()
+    g.run(cycles=3)
+    assert out.value() == [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]
+
+
 def test_pyadapter_source_feeds_combinators():
     g = wf.Graph()
     out = wf.ramp_source(g, 1.0, 1.0).sum()  # 1,2,3 -> cumulative 1,3,6

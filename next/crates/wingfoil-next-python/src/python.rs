@@ -430,6 +430,30 @@ impl ListSinkOps for ::wingfoil_next::prelude::Stream<f64> {
     }
 }
 
+// `pair_source` — a **burst source `#[pyadapter]`**: emits a `Burst<f64>` of two
+// values per instant (grouped by `combine`), exposed as `module.pair_source(
+// graph)` yielding a Python **list** per tick. Demonstrates burst-shaped adapter
+// erasure (`Burst<T>` -> Python `list`), the shape most real adapters use.
+trait PairSourceOps {
+    fn pair_source(&self) -> ::wingfoil_next::prelude::Stream<::wingfoil_next::Burst<f64>>;
+}
+
+#[pyadapter(name = pair_source, source)]
+impl PairSourceOps for ::wingfoil_next::prelude::GraphBuilder {
+    fn pair_source(&self) -> ::wingfoil_next::prelude::Stream<::wingfoil_next::Burst<f64>> {
+        use ::wingfoil_next::prelude::{SourceOps, StreamOps};
+        let a = self
+            .ticker(Duration::from_nanos(100))
+            .count()
+            .map(|n: &u64| *n as f64);
+        let b = self
+            .ticker(Duration::from_nanos(100))
+            .count()
+            .map(|n: &u64| *n as f64 * 10.0);
+        self.combine(&[a, b])
+    }
+}
+
 /// The `wingfoil_next` Python module.
 #[pymodule]
 fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -442,5 +466,6 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
+    m.add_function(wrap_pyfunction!(pair_source, m)?)?;
     Ok(())
 }

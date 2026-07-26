@@ -819,21 +819,22 @@ add a pytest case in `crates/wingfoil-next-python/tests/test_interop.py`; the
 `ramp_source` (source) and `list_sink` (sink) demos in `src/python.rs` are the
 templates, and `tests/plugin_seam.rs` shows the same from an external crate.
 
-**Current limitation — burst adapters aren't wired yet.** `#[pyadapter]` v1
-only handles single-value `Stream<T>`. The layering conventions above make most
-real adapters **burst-based** (`Stream<Burst<T>>` sources/sinks), and burst →
-Python-`list` edge erasure is **not built yet** — so a burst adapter cannot get
-a `#[pyadapter]` binding today (this is the next plugin-SDK task). Other v1
-constraints: the method's params become `#[pyfunction]` params, so they must be
-`FromPyObject` (`i64`/`f64`/`String`/`Py<PyAny>`/… — a Rust-only handle like
-`Rc<RefCell<…>>` can't cross); and `T`/`U` edge-convert (`T: TryFrom<&PyElement>`,
-`U: Into<PyElement>`).
+`#[pyadapter]` handles **burst** adapters too — the common shape, since the
+layering conventions above make most real adapters `Stream<Burst<T>>`
+sources/sinks. A `Stream<Burst<T>>` erases to a Python **`list`** per tick
+(same-instant values grouped), and a burst sink is fed single-element bursts;
+`Burst<T>` may appear as a source's return, a sink's `Self`, or a transform's
+output. The `pair_source` demo in `src/python.rs` and `burst_double` in
+`tests/plugin_seam.rs` are the burst-source templates.
 
-So: **if your adapter is single-value**, expose it via `#[pyadapter]` and add
-the pytest case in the same PR. **If it's burst-based** (most are), note in the
-PR that the Python binding waits on burst-erasure support, rather than
-hand-rolling one. Service-backed integration bindings likewise follow once the
-binding exists.
+Constraints: the method's params become `#[pyfunction]` params, so they must be
+`FromPyObject` (`i64`/`f64`/`String`/`Py<PyAny>`/… — a Rust-only handle like
+`Rc<RefCell<…>>` can't cross); and the value type edge-converts
+(`T: TryFrom<&PyElement>` in, `U: Into<PyElement>` out).
+
+So expose your adapter via `#[pyadapter]` (source, sink, or burst) and add the
+pytest case in the same PR — service-backed integration bindings follow the
+same recipe.
 
 ## 13. Superset audit + roadmap bookkeeping
 
