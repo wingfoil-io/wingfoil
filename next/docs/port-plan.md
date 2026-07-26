@@ -546,7 +546,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (queue a finite `Result<(value, time)>` sequence onto a `channel` source and
    close it — the decode-error-then-stop shape `csv_read` needs) and
    `StreamOps::for_each_mut` (the `&mut`-writer sink, wrapping the owned resource
-   in a `RefCell` once instead of in every sink). **Deviation (B3)**: next's
+   in a `RefCell` once instead of in every sink). **Deviation (B4)**: next's
    `csv_read` reads and deserializes the whole file up front (it queues every row
    onto the channel source before the run), whereas classic's `TryIteratorStream`
    streams rows lazily; behaviour is identical for finite files, but next holds
@@ -564,29 +564,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    conditional write, behind the `etcd` feature. Parity port of the classic
    adapter's tests as `tests/etcd_integration.rs` (testcontainers, gated on
    `etcd-integration-test`) plus no-service tests in `tests/etcd_adapter.rs`.
-   **Deviations** (capabilities all preserved): (a) the tokio runtime is the
-   caller's — `etcd_sub`/`etcd_pub` take a `&tokio::runtime::Handle` (and
-   `etcd_sub` a `RunParams`), matching next's `produce_async` convention rather
-   than classic's hidden global runtime; (b) the sink connects eagerly at wiring
-   and returns `Result`, so a connection error surfaces before the run rather
-   than during it (classic connected lazily inside the consumer); (c) the sink
-   is the `EtcdSinkOps` trait only (classic's free `etcd_pub` fn folded into the
-   trait, per next's sink-as-trait convention). The sink drives writes with
-   `Handle::block_on`, so the graph must be driven from a non-async thread.
-   - **Historical mode unsupported:** `etcd_sub` is a live, unbounded,
-     wall-clock-stamped watch with no historical timeline to replay, and the
-     historical channel path would block-collect it up front and deadlock at
-     `start`. `etcd_sub` now returns `Result` and **rejects
-     `RunMode::HistoricalFrom` at wiring time** with a clear error; run it under
-     `RunMode::RealTime`.
-   - **Follow-up — migrate `etcd_pub` to `consume_async`:** the async-sink
-     primitive `consume_async` (Phase 3, landed) exists to move `etcd_pub`'s
-     writes off the graph thread, but the migration is **deferred**:
-     `consume_async` surfaces a write error only on a later cycle (or swallows
-     it in the teardown flush), whereas `etcd_pub`'s `force: false`
-     conditional-write test aborts a single-cycle (`RunFor::Cycles(1)`) run on
-     the very write that fails. Until `consume_async` can preserve that
-     final-write abort, `etcd_pub` keeps its per-write `Handle::block_on` path.
+   **Deviations:** all classic capabilities preserved; after the systemic
+   defer-to-start migrations the snapshot→watch source and the PUT sink both
+   establish their I/O at run start, not wiring — the graph owns the tokio
+   runtime (no `&Handle`; register A5), `etcd_sub` takes only a `RunMode` and
+   **rejects `RunMode::HistoricalFrom` at wiring** (a live, unbounded watch with
+   no historical timeline to replay — register B2, ratified), and `etcd_pub` now
+   writes off the graph thread via `consume_async` — its `flush` teardown
+   surfaces the final-cycle `force: false` conditional-write abort, so the old
+   per-write `Handle::block_on` is gone (register A1/A4/B1). The canonical
+   deviation list is the adapter's `# Deviations from classic` module-doc block
+   plus [`deviation-register.md`](./deviation-register.md).
    ✅ **redis** *(done)*: Pub/Sub (`redis_sub` source + `RedisSinkOps::redis_pub`
    sink) and Streams (`redis_stream_read` snapshot→tail source +
    `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature.
@@ -596,17 +584,18 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    teardown). Parity port of the classic adapter's tests as
    `tests/redis_integration.rs` (testcontainers, gated on `redis-integration-test`)
    plus no-service tests in `tests/redis_adapter.rs`; classic example ported to
-   `examples/redis_adapter.rs`. **Deviations** (capabilities all preserved), the
-   same three as etcd: (a) the tokio runtime is the caller's (`&Handle` + a
-   `RunParams` for the sources); (b) the sinks connect eagerly at wiring and
-   return `Result`, so a connection error surfaces before the run; (c) the sinks
-   are the `RedisSinkOps` / `RedisStreamSinkOps` traits only (classic's free
-   functions + operator traits folded into one trait each). Two burst-model
-   notes: `redis_stream_read`'s snapshot rides one atomic burst (one shared
-   timestamp, as etcd) rather than classic's per-entry `NanoTime::now()`; and both
-   sources **reject `RunMode::HistoricalFrom` at wiring time** (live, unbounded,
-   wall-clock streams — Pub/Sub has no backlog, the stream tail blocks forever —
-   with no historical timeline to replay).
+   `examples/redis_adapter.rs`. **Deviations:** all classic capabilities
+   preserved; after the defer-to-start migrations both Pub/Sub and Streams
+   sources ride `produce_async` and both sinks ride `consume_async`, all
+   establishing their I/O at run start rather than wiring — the graph owns the
+   tokio runtime (no `&Handle`; register A5), the sinks connect lazily on their
+   first write (register A1/A4), and both sources take a `RunMode`, **rejecting
+   `RunMode::HistoricalFrom` at wiring** (live, unbounded streams — Pub/Sub has
+   no backlog, the stream tail blocks forever — with no historical timeline to
+   replay; register B2, ratified). Burst-model note: `redis_stream_read`'s
+   snapshot rides one atomic burst (one shared timestamp, as etcd). The canonical
+   deviation list is the adapter's `# Deviations from classic` module-doc block
+   plus [`deviation-register.md`](./deviation-register.md).
    ✅ **postgres** *(done)*: a time-partitioned historical replay source
    (`postgres_read` — one query per midnight-aligned time slice, clamped by
    `WindowFilter`, fed to `replay_results`), a realtime `LISTEN`/`NOTIFY`
@@ -622,17 +611,21 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `tests/postgres_adapter.rs`; classic example ported to
    `examples/postgres_adapter/`. **Password redaction** (classic PR #433) is
    reproduced: `PostgresConnection::redacted()` masks the DSN `password=…` token
-   at every `connect()` error site. **Deviations** (capabilities all preserved),
-   the same three as etcd/redis plus one reader-shape change: (a) the tokio
-   runtime is the caller's (`&Handle` + a `RunParams` for the sources); (b) the
-   sink connects eagerly at wiring and returns `Result`; (c) the sink is the
-   `PostgresSinkOps` trait only (classic's free fn + operator trait folded in),
-   burst-only like classic, and takes a `consume_async` `buffer_size`; (d) the
-   reader queries every slice at **wiring** time (`Handle::block_on`) onto
-   `replay_results` rather than streaming through `produce_async` — identical for
-   a bounded historical run, but a connection/query error surfaces at wiring
-   while a decode/non-monotonic-time error still aborts the run. The live tail
-   **rejects `RunMode::HistoricalFrom` at wiring time** (use `postgres_read`).
+   at every `connect()` error site. **Deviations:** all classic capabilities
+   preserved; after the defer-to-start migrations the graph owns the tokio
+   runtime (no `&Handle`; register A5), the `postgres_write` sink connects lazily
+   on its first write inside `consume_async` (register A1/A4), and `postgres_read`
+   now defers its connect + slice queries to the run via `produce_async` (register
+   B5 resolved) — the window is still validated + sliced at **wiring** (a pure,
+   fail-fast check), but no I/O happens there, so a connection/query error aborts
+   the run rather than graph construction. The `LISTEN`/`NOTIFY` live tail
+   **rejects `RunMode::HistoricalFrom` at wiring** (classic parity — classic
+   `postgres_sub` already required realtime; register B2). **Unified source
+   landed (register B2):** `postgres_source(PostgresSourceConfig)` dispatches on
+   `params.run_mode` at wiring — historical → `postgres_read`, realtime →
+   `postgres_sub` — with the two primitives kept public underneath. The canonical
+   deviation list is the adapter's `# Deviations from classic` module-doc block
+   plus [`deviation-register.md`](./deviation-register.md).
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
    ✅ **zmq** *(done)*: real-time ØMQ pub/sub — a `zmq_sub` source (a background
    OS thread polling the `SUB` socket + monitor, feeding the `channel` layer,
@@ -675,25 +668,18 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `tests/kafka_integration.rs` (testcontainers/Redpanda, gated on
    `kafka-integration-test`; `kafka-next-integration.yml`) plus no-service tests
    in `tests/kafka_adapter.rs`, and the round-trip example (`kafka_adapter`).
-   **Deviations** (capabilities all preserved): (a) the tokio runtime is the
-   caller's — `kafka_sub`/`kafka_pub` take a `&tokio::runtime::Handle` (and
-   `kafka_sub` a `RunParams`), matching next's `produce_async` convention rather
-   than classic's hidden global runtime; (b) the sink is the `KafkaSinkOps` trait
-   only (classic's free `kafka_pub` fn folded into the trait, per next's
-   sink-as-trait convention), creating the `FutureProducer` at wiring and
-   returning `Result`; (c) records in a burst are produced **sequentially**
-   (single ordered `consume_async` consumer, each `send` awaited to delivery
-   confirmation) rather than concurrently via `FuturesUnordered` — order is
-   preserved at the cost of N roundtrips per burst, and the explicit
-   `producer.flush()` at upstream end is dropped as unnecessary (every send is
-   already awaited to its ack; `consume_async` drains queued writes at teardown).
-   - **Historical mode unsupported:** like `etcd_sub`, `kafka_sub` is a live,
-     unbounded, wall-clock-stamped consumer with no historical timeline to
-     replay, and the historical channel path would block-collect its never-ending
-     `recv()` loop up front and deadlock at `start`. `kafka_sub` returns `Result`
-     and **rejects `RunMode::HistoricalFrom` at wiring time** with a clear error;
-     run it under `RunMode::RealTime`. (Classic technically permitted a
-     historical run with wall-clock timestamps.)
+   **Deviations:** all classic capabilities preserved; after the defer-to-start
+   and concurrency migrations the graph owns the tokio runtime (no `&Handle`;
+   register A5), `kafka_pub` connects lazily (librdkafka opens no socket until the
+   first `send()`; register A1/A4), and — register B3 resolved — a burst's records
+   are now produced **concurrently** via `consume_async_bursts` + `FuturesUnordered`
+   (~one broker roundtrip/burst, order preserved across bursts, at throughput
+   parity with classic) rather than sequentially. `kafka_sub` takes a `RunMode`
+   and **rejects `RunMode::HistoricalFrom` at wiring** (a live, unbounded consumer
+   with no historical timeline to replay; register B2, ratified until a bounded
+   offset-range reader exists — classic technically permitted a wall-clock
+   historical run). The canonical deviation list is the adapter's `# Deviations
+   from classic` module-doc block plus [`deviation-register.md`](./deviation-register.md).
    - **`async` feature fix:** enabling `async` now also enables `tokio/sync`
      (which `consume_async`'s sink channels need). Previously the `async` feature
      compiled only because a companion adapter (`etcd-client`) pulled `tokio/sync`
@@ -743,22 +729,41 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `push` unit tests: historical no-connect + bad-endpoint-graceful); the
    end-to-end export test is `tests/otlp_integration.rs` behind
    `otlp-integration-test` (a testcontainers OTel collector;
-   `otlp-next-integration.yml`). **Deviations** (metrics capabilities all
-   preserved): (a) the tokio runtime is the caller's — `otlp_push` takes a
-   `&tokio::runtime::Handle` (the etcd/`consume_async` convention), so the graph
-   must be driven from a non-async thread; (b) the sink is the `OtlpSinkOps`
-   extension trait (`stream.otlp_push(&handle, name, config)`), not a classic
-   `OtlpPush` on `dyn Stream<T>`. **Trace/span export ✅ ported** (`OtlpSpanOps::otlp_spans`):
-   emits one parent span per tick plus one child span per stage hop from
+   `otlp-next-integration.yml`). **Deviations:** all classic capabilities
+   preserved; after the runtime-ownership migration the graph owns the tokio
+   runtime (register A5), so `otlp_push` takes **no** `&Handle` —
+   `stream.otlp_push(name, config)` — and the sink is the `OtlpSinkOps` extension
+   trait rather than a classic `OtlpPush` on `dyn Stream<T>` (the graph must be
+   driven from a non-async thread, the `consume_async` footgun). **Trace/span
+   export ✅ ported** (`OtlpSpanOps::otlp_spans`, register C1 resolved): emits one
+   parent span per tick plus one child span per stage hop from
    `Stream<P: HasLatency>` values (now that the Phase 5 latency infrastructure
    has landed), with caller-supplied attributes via `OtlpAttributeBuffer` and
    the silent skip of all-zero / backwards timestamps. Same off-thread
    `consume_async` model as `otlp_push` (the tracer provider is built lazily on
    the first exported value and dropped at teardown to flush; no-op under
-   historical replay); the same `&tokio::runtime::Handle` and extension-trait
-   deviations apply. Parity tests: `spans_historical_mode_drains_without_connecting`
-   in `tests/otlp_adapter.rs` and `otlp_spans_sends_successfully` in
-   `tests/otlp_integration.rs`.
+   historical replay); note the span sink's argument order differs from classic —
+   next `otlp_spans(span_name, config, attrs)` vs classic
+   `otlp_spans(config, span_name, attrs)`. The canonical deviation list is the
+   adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md). Parity tests:
+   `spans_historical_mode_drains_without_connecting` in `tests/otlp_adapter.rs`
+   and `otlp_spans_sends_successfully` in `tests/otlp_integration.rs`.
+   ✅ **augurs** *(done)*: on-graph time-series analysis (a pure-Rust compute
+   adapter, no service/lifecycle), behind the `augurs` feature. Ports **2 of
+   classic's 6 operators** — `AugursForecastOps::augurs_forecast` (windowed ETS /
+   MSTL point forecast + prediction intervals) and
+   `AugursOutlierOps::augurs_outlier` (windowed MAD / DBSCAN multi-series outlier
+   detection) — both as sliding-window transform ops fitting their model inside
+   `cycle()` on the graph thread (same shape as the `stats` rolling ops). The
+   **4 unported operators** (`augurs_changepoint`, `augurs_seasons`,
+   `augurs_dtw`, `augurs_cluster`) are a tracked capability gap (register C5), not
+   yet needed downstream. **Deviations:** the ops validate config inside `cycle`
+   (returning `Result` / `anyhow::bail!`) rather than classic's wiring-time
+   `panic!` on a bad detector sensitivity — a deliberate improvement; see the
+   adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md). Test file
+   `tests/augurs_adapter.rs`; example `examples/augurs_adapter.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 

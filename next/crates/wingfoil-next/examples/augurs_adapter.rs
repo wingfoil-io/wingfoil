@@ -7,9 +7,11 @@
 //! ```
 //!
 //! augurs is a pure-Rust time-series toolkit, so there is no service to start.
-//! wingfoil-next currently ports two of the classic adapter's operators —
-//! forecasting and outlier detection. (Seasonality and changepoint detection
-//! remain classic-only for now; see `next/docs/port-plan.md`.) This example
+//! wingfoil-next currently ports two of the classic adapter's six operators —
+//! forecasting and outlier detection. (The other four — seasonality,
+//! changepoint detection, DTW, and clustering — remain classic-only for now, a
+//! tracked capability gap; see `next/docs/port-plan.md` and the deviation
+//! register C5.) This example
 //! drives a synthetic stream through each op, on the graph clock:
 //!
 //! 1. a noisy upward ramp fed to `augurs_forecast`, printing the 5-step-ahead

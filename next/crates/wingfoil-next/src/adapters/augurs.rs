@@ -27,6 +27,22 @@
 //! single-threaded engine (no locks, no I/O), but refitting is not free —
 //! throttle the input with [`throttle`](crate::fluent::StreamOps::throttle)
 //! upstream if you do not need a fresh fit on every tick.
+//!
+//! # Deviations from classic
+//!
+//! - **Only 2 of classic's 6 operators are ported** — `augurs_forecast` and
+//!   `augurs_outlier`. The remaining four —
+//!   `augurs_changepoint`, `augurs_seasons`, `augurs_dtw`, and `augurs_cluster`
+//!   — are **not ported** (a tracked, deliberate capability gap; deviation
+//!   register C5 and `docs/port-plan.md` Phase-4 augurs). They have no next twin
+//!   yet because nothing downstream needs them.
+//! - **Config is validated inside `cycle` (fallibly), not at wiring (by panic).**
+//!   Classic's outlier detector construction panics at wiring on a bad
+//!   sensitivity (`MADDetector::with_sensitivity(...).unwrap_or_else(|e|
+//!   panic!(...))`); next builds the detector inside `cycle` and returns an
+//!   `anyhow` error (`.map_err(...)` / `anyhow::bail!`) so a bad config aborts
+//!   the run with a clear message rather than panicking during graph
+//!   construction — a deliberate improvement over the classic behaviour.
 
 use std::collections::VecDeque;
 
