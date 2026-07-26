@@ -393,6 +393,80 @@ where
     F: FnMut(T) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
+    // Payload = one value. The sink feeds the burst's values into the channel
+    // one at a time; the consumer awaits each `run(value)` before the next.
+    let (send_one, flush) = spawn_sink::<T, F, Fut>(g, buffer_size, run)?;
+    let sink = move |burst: &Burst<T>| -> anyhow::Result<()> {
+        for item in burst.iter() {
+            send_one(item.clone())?;
+        }
+        Ok(())
+    };
+    Ok((Box::new(sink), flush))
+}
+
+/// [`consume_async`], but the consumer processes a **whole burst at a time**
+/// instead of one value at a time — so a sink can act on the burst's values
+/// *concurrently* (e.g. hand them all to a producer and drain their delivery
+/// futures together) while the single consumer still preserves order *across*
+/// bursts.
+///
+/// The `run` closure receives one `Vec<T>` per burst (empty bursts are skipped,
+/// never handed to `run`). Everything else matches [`consume_async`]: the
+/// returned `(sink, flush)` pair wires the same way (`for_each(sink).finally(flush)`),
+/// back-pressure/ordering/error-surfacing are identical (here `buffer_size`
+/// bounds bursts, not values), and the final burst's error surfaces via `flush`.
+///
+/// This is the concurrent-within-burst shape kafka's producer wants (classic
+/// `kafka_pub` drained a burst's sends together via `FuturesUnordered`, one
+/// broker roundtrip per burst); the per-value [`consume_async`] would serialise
+/// them into N roundtrips.
+#[allow(clippy::type_complexity)]
+pub fn consume_async_bursts<T, F, Fut>(
+    g: &GraphBuilder,
+    buffer_size: Option<usize>,
+    run: F,
+) -> anyhow::Result<(
+    Box<dyn Fn(&Burst<T>) -> anyhow::Result<()>>,
+    Box<dyn Fn(&()) -> anyhow::Result<()>>,
+)>
+where
+    T: Clone + Default + Send + 'static,
+    F: FnMut(Vec<T>) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    // Payload = one burst (as an owned `Vec<T>`). The whole burst is handed to
+    // `run` at once so it can process the values concurrently.
+    let (send_one, flush) = spawn_sink::<Vec<T>, F, Fut>(g, buffer_size, run)?;
+    let sink = move |burst: &Burst<T>| -> anyhow::Result<()> {
+        if !burst.is_empty() {
+            send_one(burst.iter().cloned().collect::<Vec<T>>())?;
+        }
+        Ok(())
+    };
+    Ok((Box::new(sink), flush))
+}
+
+/// The shared machinery behind [`consume_async`] and [`consume_async_bursts`]:
+/// spawn the single consumer task over a `buffer_size`-bounded channel, and hand
+/// back a `send_one` closure (feed one payload `P` to the consumer, surfacing a
+/// prior async error) plus the `flush` teardown. The two public entry points
+/// differ only in the payload type — one value vs one burst — and in how their
+/// sink closure chunks a burst into `send_one` calls.
+#[allow(clippy::type_complexity)]
+fn spawn_sink<P, F, Fut>(
+    g: &GraphBuilder,
+    buffer_size: Option<usize>,
+    run: F,
+) -> anyhow::Result<(
+    Box<dyn Fn(P) -> anyhow::Result<()>>,
+    Box<dyn Fn(&()) -> anyhow::Result<()>>,
+)>
+where
+    P: Send + 'static,
+    F: FnMut(P) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
     // The graph owns the runtime (created lazily here on first async use, or a
     // caller override); the consumer task spawns onto it, and the sink closure /
     // flush teardown drive it with `block_on` on the graph thread.
@@ -405,11 +479,11 @@ where
     let (err_tx, err_rx) = mpsc::channel::<String>();
 
     // Bounded (back-pressure) or unbounded data channel, per `buffer_size`.
-    let (tx, mut rx) = sink_channel::<T>(buffer_size);
+    let (tx, mut rx) = sink_channel::<P>(buffer_size);
 
     let mut run = run;
     let task = handle.spawn(async move {
-        // Single consumer: await each write to completion before the next, so
+        // Single consumer: await each payload to completion before the next, so
         // writes land in the order the graph produced them.
         while let Some(item) = rx.recv().await {
             if let Err(e) = run(item).await {
@@ -434,7 +508,7 @@ where
 
     let send_handle = handle.clone();
     let send_shared = shared.clone();
-    let sink = move |burst: &Burst<T>| -> anyhow::Result<()> {
+    let send_one = move |item: P| -> anyhow::Result<()> {
         let s = send_shared.borrow();
         // Surface a prior async write error before doing more work.
         if let Ok(msg) = s.err_rx.try_recv() {
@@ -443,26 +517,24 @@ where
         let tx =
             s.tx.as_ref()
                 .expect("invariant: sink sender present during the run");
-        for item in burst.iter() {
-            if tx.send_blocking(&send_handle, item.clone()).is_err() {
-                // A closed data channel means the consumer task stopped, which
-                // only happens after a write error; surface it with context.
-                return match s.err_rx.try_recv() {
-                    Ok(msg) => Err(anyhow::anyhow!(
-                        "consume_async: background sink write failed: {msg}"
-                    )),
-                    Err(_) => Err(anyhow::anyhow!(
-                        "consume_async: background sink task ended unexpectedly"
-                    )),
-                };
-            }
+        if tx.send_blocking(&send_handle, item).is_err() {
+            // A closed data channel means the consumer task stopped, which
+            // only happens after a write error; surface it with context.
+            return match s.err_rx.try_recv() {
+                Ok(msg) => Err(anyhow::anyhow!(
+                    "consume_async: background sink write failed: {msg}"
+                )),
+                Err(_) => Err(anyhow::anyhow!(
+                    "consume_async: background sink task ended unexpectedly"
+                )),
+            };
         }
         Ok(())
     };
 
     let flush = move |_: &()| -> anyhow::Result<()> { shared.borrow_mut().flush() };
 
-    Ok((Box::new(sink), Box::new(flush)))
+    Ok((Box::new(send_one), Box::new(flush)))
 }
 
 /// Shared teardown state for a [`consume_async`] sink: the sender to close, the

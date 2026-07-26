@@ -48,16 +48,16 @@
 //!    wiring time and the factory returns [`Result`]; librdkafka connects
 //!    lazily, so a bad broker surfaces on the first produced record during the
 //!    run rather than at wiring.
-//! 4. **Records are produced sequentially, not concurrently per burst.** Classic
-//!    handed every record in a burst to the producer up front and drained their
-//!    delivery futures together (`FuturesUnordered`), so per-burst latency was
-//!    one broker roundtrip. Next's [`consume_async`] drains each burst's records
-//!    through a **single** consumer task that awaits each `send` to delivery
-//!    confirmation before the next, so writes land in the exact order the graph
-//!    produced them at the cost of N sequential roundtrips per burst. The
-//!    explicit `producer.flush()` at upstream end is therefore unnecessary and
-//!    dropped: every send is awaited to its delivery ack (nothing is left
-//!    queued), and `consume_async` drains all queued writes at teardown.
+//!
+//! Records are produced **concurrently per burst** — at parity with classic: the
+//! sink rides [`consume_async_bursts`](crate::async_source::consume_async_bursts)
+//! and hands a whole burst's records to the producer up front, draining their
+//! delivery futures together via `FuturesUnordered`, so per-burst latency is
+//! ~one broker roundtrip rather than N. Order is preserved *across* bursts (the
+//! single consumer awaits each burst to completion before the next). The explicit
+//! `producer.flush()` classic did at upstream end is unnecessary here: every send
+//! is awaited to its delivery ack (nothing is left queued), and the consumer
+//! drains all queued bursts at teardown.
 //!
 //! # Consumer group and offsets
 //!
@@ -73,9 +73,11 @@
 //! # Sink
 //!
 //! [`KafkaSinkOps::kafka_pub`] produces one Kafka message per [`KafkaRecord`] in
-//! each burst. Each record names its own target topic, so a single sink can
-//! write to many topics. A delivery failure aborts the run with context (on the
-//! next cycle, per [`consume_async`]'s off-thread error propagation).
+//! each burst, all records in a burst concurrently (one broker roundtrip per
+//! burst). Each record names its own target topic, so a single sink can write to
+//! many topics. A delivery failure aborts the run with context (on the next
+//! cycle, or via the `flush` teardown for the final burst, per
+//! [`consume_async_bursts`](crate::async_source::consume_async_bursts)).
 //!
 //! # Setup
 //!
@@ -89,6 +91,8 @@
 //! ```
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -99,7 +103,7 @@ use std::time::Duration;
 use wingfoil::{NanoTime, RunMode};
 
 use crate::Burst;
-use crate::async_source::{RunParams, consume_async, produce_async};
+use crate::async_source::{RunParams, consume_async_bursts, produce_async};
 use crate::burst;
 use crate::fluent::{GraphBuilder, Stream, StreamOps};
 
@@ -292,9 +296,11 @@ pub trait KafkaSinkOps {
     ///
     /// The graph owns the tokio runtime (see the module docs).
     ///
-    /// Records are drained off the graph thread and produced in order, each
-    /// awaited to its delivery confirmation. A delivery failure aborts the run
-    /// with context (surfaced on the next cycle, per [`consume_async`]).
+    /// Records are drained off the graph thread one burst at a time; within a
+    /// burst all records are produced concurrently (one broker roundtrip), and
+    /// bursts are produced in order. A delivery failure aborts the run with
+    /// context (surfaced on the next cycle, or via the `flush` teardown for the
+    /// final burst, per [`consume_async_bursts`](crate::async_source::consume_async_bursts)).
     ///
     /// # Errors
     ///
@@ -317,28 +323,42 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
             .create()
             .context("kafka_pub: creating producer")?;
 
-        // `consume_async` drains each burst's records through a single consumer
-        // task (order preserved) off the graph thread; a write error propagates
-        // back into the graph on the next cycle, and the final cycle's error is
-        // surfaced by the `flush` teardown wired below. The producer is cloned
-        // per send (it is an `Arc` internally, cheap to clone and `Send`). The
-        // graph owns the runtime the consumer task runs on.
-        let (sink, flush) = consume_async(&self.graph(), None, move |record: KafkaRecord| {
-            let producer = producer.clone();
-            async move {
-                let mut fut_record = FutureRecord::to(&record.topic).payload(&record.value);
-                if let Some(ref key) = record.key {
-                    fut_record = fut_record.key(key.as_slice());
+        // `consume_async_bursts` drains one whole burst at a time through a single
+        // consumer task off the graph thread (order preserved *across* bursts); a
+        // write error propagates back into the graph on the next cycle, and the
+        // final burst's error is surfaced by the `flush` teardown wired below. The
+        // producer is cloned per burst (it is an `Arc` internally, cheap to clone
+        // and `Send`). The graph owns the runtime the consumer task runs on.
+        let (sink, flush) =
+            consume_async_bursts(&self.graph(), None, move |records: Vec<KafkaRecord>| {
+                let producer = producer.clone();
+                async move {
+                    // Build every record's delivery future up front and drive them
+                    // together via `FuturesUnordered`, so the whole burst is in
+                    // flight at once (~one broker roundtrip, matching classic)
+                    // rather than N sequential roundtrips. Order within a burst is
+                    // not observable to downstream (the sink emits `()`), so
+                    // draining out of completion order is fine.
+                    let mut inflight = FuturesUnordered::new();
+                    for record in &records {
+                        let mut fut_record = FutureRecord::to(&record.topic).payload(&record.value);
+                        if let Some(ref key) = record.key {
+                            fut_record = fut_record.key(key.as_slice());
+                        }
+                        let topic = record.topic.clone();
+                        let delivery = producer.send(fut_record, SEND_TIMEOUT);
+                        inflight.push(async move {
+                            delivery.await.map_err(|(e, _)| {
+                                anyhow::anyhow!("kafka_pub: producing to {topic} failed: {e}")
+                            })
+                        });
+                    }
+                    while let Some(result) = inflight.next().await {
+                        result?;
+                    }
+                    Ok(())
                 }
-                producer
-                    .send(fut_record, SEND_TIMEOUT)
-                    .await
-                    .map_err(|(e, _)| {
-                        anyhow::anyhow!("kafka_pub: producing to {} failed: {e}", record.topic)
-                    })?;
-                Ok(())
-            }
-        })?;
+            })?;
         Ok(self.for_each(sink).finally(flush))
     }
 }
