@@ -7783,6 +7783,7 @@ dependencies = [
  "chrono",
  "criterion",
  "csv",
+ "env_logger 0.11.10",
  "etcd-client",
  "futures",
  "log",

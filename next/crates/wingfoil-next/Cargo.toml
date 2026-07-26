@@ -163,6 +163,9 @@ criterion = "0.8.1"
 # The `latency_stages!` macro derives serde on the generated record, so a crate
 # invoking it (here, the latency tests) needs serde in scope.
 serde = { version = "1.0", features = ["derive"] }
+# Subscriber for the `tracing` example's `log` mode — renders the `logged` op's
+# `log`-crate records (target "wingfoil"). Mirrors the classic tracing example.
+env_logger = { workspace = true }
 
 [features]
 default = []
@@ -238,6 +241,13 @@ required-features = ["async"]
 name = "async"
 path = "examples/async/main.rs"
 required-features = ["async"]
+
+# Observability: the `logged` debug tap rendered through `env_logger`. Ports the
+# `log` mode of the classic `tracing` example (the `tracing`-subscriber and
+# engine-span `instruments` modes await next's instrumentation-feature port).
+[[example]]
+name = "tracing"
+path = "examples/tracing/main.rs"
 
 [[bench]]
 name = "tiers"
