@@ -41,15 +41,17 @@
 //!    `HistoricalFrom` run (with wall-clock `NanoTime::now()` timestamps); next
 //!    [rejects it at wiring time](kafka_sub#errors) with a clear error rather
 //!    than deadlocking. Run `kafka_sub` under [`RunMode::RealTime`].
-//! 3. **The sink is a trait only, connecting at wiring time.** Classic exposed
-//!    both a free `kafka_pub` function and a `KafkaPubOperators` trait; next
-//!    folds the single public entry point into the [`KafkaSinkOps`] trait
-//!    (renamed for the sink-as-trait convention shared with
-//!    [`lines`](crate::adapters::lines) / [`csv`](crate::adapters::csv) /
-//!    [`etcd`](crate::adapters::etcd)). The [`FutureProducer`] is created at
-//!    wiring time and the factory returns [`Result`]; librdkafka connects
-//!    lazily, so a bad broker surfaces on the first produced record during the
-//!    run rather than at wiring.
+//! 3. **The sink is a trait only.** Classic exposed both a free `kafka_pub`
+//!    function and a `KafkaPubOperators` trait; next folds the single public
+//!    entry point into the [`KafkaSinkOps`] trait (renamed for the
+//!    sink-as-trait convention shared with [`lines`](crate::adapters::lines) /
+//!    [`csv`](crate::adapters::csv) / [`etcd`](crate::adapters::etcd)). The
+//!    [`FutureProducer`] is created at wiring time (a `ClientConfig::create()`
+//!    config check — no socket — and the factory returns [`Result`]), but
+//!    librdkafka connects **lazily on the first `send()`**, so wiring opens no
+//!    broker connection and a bad broker surfaces as a produce failure during
+//!    the run rather than at wiring — in line with the defer-to-start direction
+//!    (register A1), no migration needed.
 //!
 //! Records are produced **concurrently per burst** — at parity with classic: the
 //! sink rides [`consume_async_bursts`](crate::async_source::consume_async_bursts)
