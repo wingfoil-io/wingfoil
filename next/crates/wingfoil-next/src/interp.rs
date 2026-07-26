@@ -37,7 +37,6 @@ use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,8 +55,8 @@ use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
     Const, Delay, DelayState, DelayWithReset, DelayWithResetState, Filter, Finally, Fold, Join,
-    Join3, Merge2, Never, Poll, Print, Sample, Throttle, Ticker, TickerState, Timed, TimedState,
-    TryJoin, TryJoin3, Window, WindowState, WithTime,
+    Join3, Merge2, Never, Poll, Sample, Throttle, Ticker, TickerState, Timed, TimedState, TryJoin,
+    TryJoin3, Window, WindowState, WithTime,
 };
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
@@ -2113,57 +2112,6 @@ impl Builder {
         });
         self.set_reset(Box::new(move || {
             cs_reset.borrow_mut().1 = A::default();
-        }));
-        self.make_handle(idx)
-    }
-
-    /// The classic `print`: pass each value through unchanged while buffering
-    /// it, then print the whole buffer (`{value:?}` per line) at teardown.
-    /// Hand-written (not `#[op]`) because it carries a teardown hook.
-    pub fn print<T: Clone + Default + Debug + 'static>(&mut self, src: Handle<T>) -> Handle<T> {
-        let idx = self.nodes.len();
-        let src_slot = self.slot(src);
-        let out = self.new_slot(T::default());
-        let cs = Self::cell((), Vec::<T>::new());
-        let cs2 = cs.clone();
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
-            vec![src.idx],
-            Print::<T>::ACTIVATION,
-            "print",
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let a = src_slot.borrow();
-                match Print::<T>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        // Print buffers during the run and flushes at teardown (classic `Drop`).
-        let node = self
-            .nodes
-            .last_mut()
-            .expect("invariant: print node just pushed");
-        node.teardown = Box::new(move |k| {
-            let (cfg, state) = &mut *cs2.borrow_mut();
-            let mut ctx = Ctx::new(k, idx);
-            Print::<T>::teardown(cfg, state, &mut ctx)
-        });
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = Vec::new();
-            *out_reset.borrow_mut() = T::default();
         }));
         self.make_handle(idx)
     }

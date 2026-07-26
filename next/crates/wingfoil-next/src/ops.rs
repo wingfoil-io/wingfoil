@@ -314,36 +314,68 @@ where
     }
 }
 
-/// Passes each value through unchanged while buffering it, then prints the
-/// whole buffer (`{value:?}` per line) at teardown. The classic `print` node,
-/// whose buffered `Drop` becomes the op's [`teardown`](Op::teardown) hook —
-/// so the summary still prints even if a cycle aborted the run. `State` is the
-/// buffer.
+/// Passes each value through unchanged, printing it (`{value:?}` on its own
+/// line) to stdout as it ticks. The classic `print` node. Stateless.
+///
+/// **Deviation from classic (justified — tracked as D8 in
+/// `docs/deviation-register.md`).** Classic `print` *buffers* every value
+/// and prints the whole buffer at `Drop` (teardown); this twin prints each
+/// value immediately in `cycle`. The observable value stream is identical —
+/// `print` is a pass-through — only the diagnostic emission differs. Per-tick
+/// printing (a) drops the unbounded `Vec` buffer classic grows one entry per
+/// tick for the whole run, (b) streams output as the run progresses rather
+/// than in one dump at the end, and (c) still prints what was seen if a later
+/// cycle aborts the run. Shedding the teardown hook also lets `print` be an
+/// ordinary single-input `#[op]` (no hand-written `Builder` method), the same
+/// shape as `map` / `limit`.
 pub struct Print<T>(PhantomData<T>);
 
-#[op(build = print, no_builder)]
+#[op(build = print)]
 impl<T: Clone + Debug + 'static> Op for Print<T> {
     type Cfg = ();
-    type State = Vec<T>;
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        println!("{:?}", input.0);
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
+/// Logs each value as it ticks — `"{time} {label} {value:?}"` at `level`, via
+/// the `log` crate (target `"wingfoil"`) — and passes it through unchanged.
+/// The classic `logged` debug tap. `Cfg` = `(label, level)`; stateless.
+///
+/// Deviations from classic (both benign; the value stream is a pass-through,
+/// only the diagnostic differs). Classic `logged` (a) skips wiring the node
+/// entirely when `level` is disabled — a wiring-time `log_enabled!` short
+/// circuit that returns the source unchanged — and (b) reads the tick time via
+/// a `bimap` with `ticked_at_elapsed`. The next twin (a) always wires the
+/// node, leaning on `log!`'s own internal enabled-check so a disabled level
+/// still costs only that check, and (b) reads the time straight off
+/// [`Ctx::time`]. Always wiring keeps the interpreted and compiled engines
+/// identical — a wiring-time skip cannot be expressed in `compiled()`.
+pub struct Logged<T>(PhantomData<T>);
+
+#[op(build = logged)]
+impl<T: Clone + Debug + 'static> Op for Logged<T> {
+    type Cfg = (String, log::Level);
+    type State = ();
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        _cfg: &mut (),
-        state: &mut Vec<T>,
+        cfg: &mut (String, log::Level),
+        _state: &mut (),
         input: (&T,),
-        _ctx: &mut Ctx<'_>,
+        ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
-        state.push(input.0.clone());
+        let (label, level) = &*cfg;
+        log::log!(target: "wingfoil", *level, "{} {label} {:?}", ctx.time().pretty(), input.0);
         Ok(Tick::Value(input.0.clone()))
-    }
-
-    fn teardown(_cfg: &mut (), state: &mut Vec<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
-        for val in state.iter() {
-            println!("{val:?}");
-        }
-        Ok(())
     }
 }
 

@@ -122,3 +122,7 @@ pub use wingfoil;
 // `anyhow` directly.
 #[doc(hidden)]
 pub use anyhow;
+
+/// Re-exported so callers of [`StreamOps::logged`](crate::fluent::StreamOps::logged)
+/// can name [`log::Level`] without adding a direct `log` dependency.
+pub use log;

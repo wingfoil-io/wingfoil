@@ -344,6 +344,21 @@ impl PyStream {
         self.wrap(observed)
     }
 
+    /// Print each value (`{value:?}`) to stdout as it ticks, passing it through
+    /// unchanged (the classic `print` debug tap). Prints per tick rather than
+    /// buffering to teardown — see the `Print` op's deviation note.
+    pub fn print(&self) -> PyStream {
+        self.wrap(self.stream.print())
+    }
+
+    /// Log each value (`"{time} {label} {value:?}"` at `level`, via the `log`
+    /// crate) as it ticks, passing it through unchanged (the classic `logged`
+    /// debug tap). Wire up any `log` backend (e.g. Python `logging` bridged in,
+    /// or `env_logger`) to see the output.
+    pub fn logged(&self, label: &str, level: log::Level) -> PyStream {
+        self.wrap(self.stream.logged(label, level))
+    }
+
     /// Collect every emitted value into a growing Python `list`, re-emitted each
     /// tick (the classic `accumulate`).
     pub fn accumulate(&self) -> PyStream {

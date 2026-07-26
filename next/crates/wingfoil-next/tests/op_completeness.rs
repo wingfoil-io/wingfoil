@@ -46,6 +46,17 @@
 //!     the *exception* — the macro recognises them as repetition sugar, so they
 //!     ARE expressible; covered in `surface_sugar` below.)
 //!
+//! **2b. Ergonomic fluent signature ≠ the op's `Cfg` — fluent-only:**
+//!   * `logged` — the `Logged` op's `Cfg` is `(String, log::Level)`, but the
+//!     fluent method takes `&str` and converts (so dynamic `format!` labels
+//!     work, matching classic). `graph!`/compiled uses the *call-site arg
+//!     types* as the `Cfg` verbatim, so the same tokens cannot satisfy both a
+//!     `&str` fluent param and a `String` cfg. `#[op(build = logged)]` still
+//!     emits forwarders (harmless) and the interpreted `Builder::logged` the
+//!     fluent method wires through; it just isn't spelled in a `graph!` block.
+//!     A debug/logging tap has no place in a self-driving compiled kernel
+//!     anyway, so this costs nothing real.
+//!
 //! **3. Currently interpreted-only — candidate follow-up, not by design:**
 //!   * *(empty — all four former members are now dual-mode.)* `join_passive`,
 //!     `try_join_passive`, `delay_with_reset`, and `with_time` were once
@@ -176,9 +187,10 @@ wingfoil_next::graph! {
     }
 }
 
-// Lifecycle / passthrough-with-hook surface: `print`, `timed` (each passes
-// values through unchanged while carrying a start/stop/teardown hook the
-// compiled path now emits).
+// Lifecycle / passthrough surface: `print` (a plain per-tick pass-through
+// since deviation D8 dropped its teardown buffer) and `timed` (passes values
+// through unchanged while carrying the start/stop hooks the compiled path
+// emits).
 wingfoil_next::graph! {
     fn surface_lifecycle(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(P).count();

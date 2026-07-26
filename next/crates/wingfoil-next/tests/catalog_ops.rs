@@ -130,8 +130,10 @@ fn try_join3_passive_does_not_trigger() {
 
 // --- print -----------------------------------------------------------------
 
-/// `print` passes values through unchanged (the buffered print is a teardown
-/// side effect) — mirrors classic `print::print_passes_through_values`.
+/// `print` passes values through unchanged (the per-tick stdout print is a
+/// side effect) — mirrors classic `print::print_passes_through_values`. Next
+/// prints per tick rather than buffering to teardown (deviation D8), but the
+/// value stream — all that a downstream node observes — is identical.
 #[test]
 fn print_passes_through_values() {
     let g = GraphBuilder::new();
@@ -140,6 +142,33 @@ fn print_passes_through_values() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![1, 2, 3], r.value(&acc));
+}
+
+// --- logged ----------------------------------------------------------------
+
+/// `logged` passes values through unchanged (the log emission is a side
+/// effect), preserving tick times — the classic `logged` debug tap. Classic
+/// has no dedicated unit test (it is exercised across the node suites as a
+/// diagnostic wrapper); this asserts the pass-through and tick-time invariants
+/// its callers rely on.
+#[test]
+fn logged_passes_through_values_and_times() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count
+        .logged("count", wingfoil_next::log::Level::Info)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(100), 2),
+            (NanoTime::new(200), 3),
+        ],
+        r.value(&acc)
+    );
 }
 
 // --- timed -----------------------------------------------------------------
