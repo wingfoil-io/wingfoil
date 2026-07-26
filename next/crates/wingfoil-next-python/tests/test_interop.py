@@ -170,6 +170,25 @@ def test_pyadapter_burst_source():
     assert out.value() == [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]
 
 
+def test_pyadapter_burst_round_trip():
+    # A burst source's per-tick list feeds a burst sink, which rebuilds the
+    # multi-value burst: Burst -> Python list -> Burst.
+    out = []
+    g = wf.Graph()
+    wf.burst_list_sink(wf.pair_source(g), out)  # [1,10],[2,20],[3,30]
+    g.run(cycles=3)
+    assert out == [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]
+
+
+def test_pyadapter_burst_sink_scalar_input():
+    # A plain scalar stream arrives at a burst sink as single-element bursts.
+    out = []
+    g = wf.Graph()
+    wf.burst_list_sink(g.counter(period_nanos=100), out)  # 1,2,3 -> [1],[2],[3]
+    g.run(cycles=3)
+    assert out == [[1.0], [2.0], [3.0]]
+
+
 def test_pyadapter_source_feeds_combinators():
     g = wf.Graph()
     out = wf.ramp_source(g, 1.0, 1.0).sum()  # 1,2,3 -> cumulative 1,3,6
