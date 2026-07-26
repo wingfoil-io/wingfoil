@@ -12,8 +12,23 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps};
+use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
+use wingfoil_next::latency::{Latency, Stage, Traced, latency_stages};
 use wingfoil_next::prelude::*;
+
+latency_stages! {
+    pub TestLatency {
+        a,
+        b,
+        c,
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct TestPayload {
+    session: u64,
+}
 
 /// Parity of classic `historical_mode_drains_without_connecting`: with no
 /// collector running, a historical run must complete without any network calls
@@ -54,6 +69,35 @@ fn bad_endpoint_is_handled_gracefully() {
 
     // Errors from the background exporter are non-fatal; ignore the result.
     let _ = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
+}
+
+/// Parity of classic `traces::historical_mode_drains_without_connecting`: an
+/// `otlp_spans` sink in historical mode must complete without building a tracer
+/// provider or making any network calls — the sink no-ops under
+/// `RunMode::HistoricalFrom`.
+#[test]
+fn spans_historical_mode_drains_without_connecting() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let config = OtlpConfig::new("http://127.0.0.1:1", "test");
+
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let source = g
+        .ticker(Duration::from_millis(10))
+        .count()
+        .map(|i: &u64| Traced::<TestPayload, TestLatency>::new(TestPayload { session: *i }));
+    let _sink = source
+        .otlp_spans(
+            "test_span",
+            config,
+            |_p: &Traced<TestPayload, TestLatency>, attrs| {
+                attrs.add("k", "v");
+            },
+        )
+        .unwrap();
+
+    g.build()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
 }
 
 /// A `(endpoint, service_name)` tuple resolves to an `OtlpConfig` via

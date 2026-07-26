@@ -698,7 +698,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `anyhow::Result<u16>` with `.context`, not `Result<u16, io::Error>`. The one
    engine addition is `Ctx::run_mode()` (a realtime-only IO sink needs to see the
    run mode; reported as `RealTime` inside an island, like `is_last_cycle`).
-   ✅ **otlp** *(metrics done; traces deferred)*: a realtime, push-based
+   ✅ **otlp** *(metrics + traces done)*: a realtime, push-based
    OpenTelemetry metrics **sink** — the `OtlpSinkOps::otlp_push` extension trait
    on any `Stream<T: Display>` exports each tick as an OTLP `f64` gauge over
    HTTP/protobuf, behind the `otlp` feature. Built on `consume_async` so the OTel
@@ -715,13 +715,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `&tokio::runtime::Handle` (the etcd/`consume_async` convention), so the graph
    must be driven from a non-async thread; (b) the sink is the `OtlpSinkOps`
    extension trait (`stream.otlp_push(&handle, name, config)`), not a classic
-   `OtlpPush` on `dyn Stream<T>`. **Capability gap — trace/span export
-   (`OtlpSpans`) not ported:** classic's span exporter emits OTel spans from
-   `Stream<P: HasLatency>` values; that path depends on the `Traced` /
-   `HasLatency` / `latency_stages!` latency infrastructure, which ✅ **has now
-   landed** (Phase 5, `src/latency.rs`). `otlp_spans` can now port mechanically
-   onto the same `consume_async` shape; until it does, only the metrics push is
-   available, and `otlp_push` itself is at full parity.
+   `OtlpPush` on `dyn Stream<T>`. **Trace/span export ✅ ported** (`OtlpSpanOps::otlp_spans`):
+   emits one parent span per tick plus one child span per stage hop from
+   `Stream<P: HasLatency>` values (now that the Phase 5 latency infrastructure
+   has landed), with caller-supplied attributes via `OtlpAttributeBuffer` and
+   the silent skip of all-zero / backwards timestamps. Same off-thread
+   `consume_async` model as `otlp_push` (the tracer provider is built lazily on
+   the first exported value and dropped at teardown to flush; no-op under
+   historical replay); the same `&tokio::runtime::Handle` and extension-trait
+   deviations apply. Parity tests: `spans_historical_mode_drains_without_connecting`
+   in `tests/otlp_adapter.rs` and `otlp_spans_sends_successfully` in
+   `tests/otlp_integration.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 

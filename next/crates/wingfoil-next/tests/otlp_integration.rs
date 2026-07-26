@@ -14,8 +14,23 @@ use std::time::Duration;
 
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
 use wingfoil::{RunFor, RunMode};
-use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps};
+use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
+use wingfoil_next::latency::{Latency, Stage, Traced, latency_stages};
 use wingfoil_next::prelude::*;
+
+latency_stages! {
+    pub IntegrationLatency {
+        ingress,
+        process,
+        egress,
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct TestPayload {
+    session: u64,
+}
 
 const COLLECTOR_IMAGE: &str = "otel/opentelemetry-collector";
 const COLLECTOR_TAG: &str = "0.149.0";
@@ -43,6 +58,37 @@ fn otlp_push_sends_successfully() -> anyhow::Result<()> {
         .ticker(Duration::from_millis(100))
         .count()
         .otlp_push("wingfoil_next_integration_counter", config)?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;
+    Ok(())
+}
+
+/// A realtime run exports trace spans to the collector without error. Parity of
+/// classic `otlp_spans_sends_successfully`: each tick carries a fully-stamped
+/// latency record, so `otlp_spans` emits a parent span plus one child per hop.
+#[test]
+fn otlp_spans_sends_successfully() -> anyhow::Result<()> {
+    let (_container, endpoint) = start_collector()?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let config = OtlpConfig::new(endpoint, "wingfoil-next-test-spans");
+
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let source = g.ticker(Duration::from_millis(100)).count().map(|i: &u64| {
+        let mut traced =
+            Traced::<TestPayload, IntegrationLatency>::new(TestPayload { session: *i });
+        *traced.latency.stamp_mut(0) = 1000; // ingress
+        *traced.latency.stamp_mut(1) = 2000; // process
+        *traced.latency.stamp_mut(2) = 3000; // egress
+        traced
+    });
+    let _sink = source.otlp_spans(
+        "integration_span",
+        config,
+        |p: &Traced<TestPayload, IntegrationLatency>, attrs| {
+            attrs.add("session_id", p.payload.session.to_string());
+        },
+    )?;
 
     g.build()
         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(1)))?;
