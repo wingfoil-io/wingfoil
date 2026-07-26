@@ -50,6 +50,14 @@ impl Graph {
         Stream(self.0.counter(Duration::from_nanos(period_nanos)))
     }
 
+    /// A source that replays a finite list of values, one per tick,
+    /// `period_nanos` apart (first at t=0). The way to feed real data into a
+    /// graph from Python. A graph containing it is single-run.
+    fn values(&self, values: Vec<Py<PyAny>>, period_nanos: u64) -> Stream {
+        let elements: Vec<PyElement> = values.into_iter().map(PyElement::from).collect();
+        Stream(self.0.values(elements, Duration::from_nanos(period_nanos)))
+    }
+
     /// Run the graph to its bound.
     ///
     /// `realtime` selects wall-clock vs historical replay (from `start_nanos`).
