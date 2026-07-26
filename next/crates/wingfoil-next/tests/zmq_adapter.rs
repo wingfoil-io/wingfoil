@@ -38,7 +38,7 @@ fn sub_rejects_historical_mode() {
     );
 }
 
-/// The publisher checks the run mode lazily on its first cycle (like classic's
+/// The publisher checks the run mode at graph `start()` (like classic's
 /// `start`), so a `HistoricalFrom` run aborts with a "real-time" error — parity
 /// of classic `zmq_pub_historical_mode_fails`.
 #[test]

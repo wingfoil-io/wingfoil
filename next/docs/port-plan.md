@@ -627,8 +627,8 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    ✅ **zmq** *(done)*: real-time ØMQ pub/sub — a `zmq_sub` source (a background
    OS thread polling the `SUB` socket + monitor, feeding the `channel` layer,
    returning a `(data, status)` pair) and a `ZeroMqPub::zmq_pub` /
-   `zmq_pub_on` sink (a `register_op1` op that binds the `PUB` socket lazily on
-   the first cycle, buffers around the ZMQ slow-joiner, and sends `EndOfStream`
+   `zmq_pub_on` sink (a `register_op1` op that binds the `PUB` socket at graph
+   `start()`, buffers around the ZMQ slow-joiner, and sends `EndOfStream`
    + revokes the registry via a `Drop` on its state), behind the `zmq` feature.
    The pluggable **discovery backend** is preserved as the skill's
    trait-behind-a-feature: a `ZmqRegistry` trait with `ZmqPubRegistration` /
@@ -645,9 +645,11 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    channel is bimodal and would block-collect the never-closing subscriber and
    deadlock at `start`, so it errors rather than rejecting at run start the way
    classic's realtime-only `ReceiverStream` does; (b) `zmq_pub` returns a sink
-   `Stream<()>` (not `Rc<dyn Node>`), binding/registering/run-mode-checking
-   lazily on the first cycle so a historical run still errors with "real-time"
-   before touching the registry; (c) the `bincode` wire envelope is next-local,
+   `Stream<()>` (not `Rc<dyn Node>`), binding/registering/run-mode-checking at
+   graph `start()` (before the first payload, so a fresh subscriber's filter
+   propagates during the startup window rather than racing the first publish)
+   and a historical run still errors with "real-time" before touching the
+   registry; (c) the `bincode` wire envelope is next-local,
    so a next publisher interoperates with a next subscriber but is **not**
    wire-compatible with a classic/Python peer — cross-language interop lands with
    the Python bindings (Phase 6), which is also why the classic `zmq-cross-lang`
