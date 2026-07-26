@@ -123,6 +123,41 @@ impl RedisConnection {
     pub fn new(url: impl Into<String>) -> Self {
         Self { url: url.into() }
     }
+
+    /// Render the URL with any `user:pass@` / `:pass@` userinfo masked, for safe
+    /// inclusion in error messages and logs.
+    ///
+    /// Redis URLs carry credentials in the authority's userinfo
+    /// (`redis://user:pass@host:6379/0`, `rediss://:pass@host`), so the whole
+    /// userinfo component is replaced with `***:***` while the scheme, host,
+    /// port, and path are preserved. A URL without userinfo is returned
+    /// unchanged. Used at every `Client::open` / connect error site so the raw
+    /// URL's password never reaches a log or an aborted-run error (parity with
+    /// the postgres adapter's `PostgresConnection::redacted`, classic PR #433).
+    #[must_use]
+    pub fn redacted(&self) -> String {
+        redact_redis_url(&self.url)
+    }
+}
+
+/// Mask any `user:pass@` / `:pass@` userinfo in a Redis URL, preserving the
+/// scheme, host, port, and path. See [`RedisConnection::redacted`].
+fn redact_redis_url(url: &str) -> String {
+    // Split `scheme://` from the authority (+ optional `/path`).
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    // The authority ends at the first `/` (the db path) if present. The host
+    // never contains `@`, so the last `@` in the authority delimits userinfo
+    // (robust to an `@` inside the password).
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    match authority.rsplit_once('@') {
+        Some((_userinfo, host_port)) => format!("{scheme}://***:***@{host_port}{path}"),
+        None => url.to_string(),
+    }
 }
 
 impl From<&str> for RedisConnection {
@@ -153,7 +188,7 @@ impl From<&String> for RedisConnection {
 async fn get_or_connect(
     client: &redis::Client,
     cell: &tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>,
-    url: &str,
+    redacted_url: &str,
     who: &str,
 ) -> Result<redis::aio::MultiplexedConnection> {
     let mut guard = cell.lock().await;
@@ -163,7 +198,7 @@ async fn get_or_connect(
             let c = client
                 .get_multiplexed_async_connection()
                 .await
-                .with_context(|| format!("{who}: connecting to {url:?}"))?;
+                .with_context(|| format!("{who}: connecting to {redacted_url}"))?;
             *guard = Some(c.clone());
             Ok(c)
         }
@@ -308,11 +343,11 @@ pub fn redis_sub(
     let channel = channel.into();
     produce_async(g, move |_p: RunParams| async move {
         let client = redis::Client::open(conn.url.as_str())
-            .with_context(|| format!("redis_sub: opening client for {:?}", conn.url))?;
+            .with_context(|| format!("redis_sub: opening client for {}", conn.redacted()))?;
         let mut pubsub = client
             .get_async_pubsub()
             .await
-            .with_context(|| format!("redis_sub: connecting to {:?}", conn.url))?;
+            .with_context(|| format!("redis_sub: connecting to {}", conn.redacted()))?;
         pubsub
             .subscribe(channel.as_str())
             .await
@@ -373,12 +408,13 @@ pub fn redis_stream_read(
     let conn = conn.into();
     let key = key.into();
     produce_async(g, move |_p: RunParams| async move {
-        let client = redis::Client::open(conn.url.as_str())
-            .with_context(|| format!("redis_stream_read: opening client for {:?}", conn.url))?;
+        let client = redis::Client::open(conn.url.as_str()).with_context(|| {
+            format!("redis_stream_read: opening client for {}", conn.redacted())
+        })?;
         let mut connection = client
             .get_multiplexed_async_connection()
             .await
-            .with_context(|| format!("redis_stream_read: connecting to {:?}", conn.url))?;
+            .with_context(|| format!("redis_stream_read: connecting to {}", conn.redacted()))?;
 
         // 1. Snapshot all existing entries and capture the last ID.
         let snapshot: StreamRangeReply = connection
@@ -478,17 +514,18 @@ impl RedisSinkOps for Stream<Burst<RedisEntry>> {
         // stays at wiring. The socket opens lazily on the first write (below), so
         // wiring does no I/O and a connect failure aborts the run, not wiring.
         let client = redis::Client::open(conn.url.as_str())
-            .with_context(|| format!("redis_pub: opening client for {:?}", conn.url))?;
-        let url = conn.url.clone();
+            .with_context(|| format!("redis_pub: opening client for {}", conn.redacted()))?;
+        let redacted = conn.redacted();
         let conn_cell: Arc<tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>> =
             Arc::new(tokio::sync::Mutex::new(None));
 
         let (sink, flush) = consume_async(&g, buffer_size, move |entry: RedisEntry| {
             let client = client.clone();
             let conn_cell = Arc::clone(&conn_cell);
-            let url = url.clone();
+            let redacted = redacted.clone();
             async move {
-                let mut connection = get_or_connect(&client, &conn_cell, &url, "redis_pub").await?;
+                let mut connection =
+                    get_or_connect(&client, &conn_cell, &redacted, "redis_pub").await?;
                 redis::cmd("PUBLISH")
                     .arg(entry.channel.as_str())
                     .arg(entry.payload.as_slice())
@@ -555,19 +592,20 @@ impl RedisStreamSinkOps for Stream<Burst<RedisStreamRecord>> {
         // `Client::open` only parses the URL (no socket) — a config error, so it
         // stays at wiring. The socket opens lazily on the first write (below), so
         // wiring does no I/O and a connect failure aborts the run, not wiring.
-        let client = redis::Client::open(conn.url.as_str())
-            .with_context(|| format!("redis_stream_write: opening client for {:?}", conn.url))?;
-        let url = conn.url.clone();
+        let client = redis::Client::open(conn.url.as_str()).with_context(|| {
+            format!("redis_stream_write: opening client for {}", conn.redacted())
+        })?;
+        let redacted = conn.redacted();
         let conn_cell: Arc<tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>> =
             Arc::new(tokio::sync::Mutex::new(None));
 
         let (sink, flush) = consume_async(&g, buffer_size, move |record: RedisStreamRecord| {
             let client = client.clone();
             let conn_cell = Arc::clone(&conn_cell);
-            let url = url.clone();
+            let redacted = redacted.clone();
             async move {
                 let mut connection =
-                    get_or_connect(&client, &conn_cell, &url, "redis_stream_write").await?;
+                    get_or_connect(&client, &conn_cell, &redacted, "redis_stream_write").await?;
                 let mut cmd = redis::cmd("XADD");
                 cmd.arg(record.key.as_str()).arg("*");
                 for (field, value) in &record.fields {
@@ -641,5 +679,36 @@ mod tests {
             RedisConnection::from("redis://h:6379".to_string()).url,
             "redis://h:6379"
         );
+    }
+
+    #[test]
+    fn test_redacted_masks_user_and_password() {
+        let conn = RedisConnection::new("redis://user:sup3rs3cr3t@127.0.0.1:6379/0");
+        let out = conn.redacted();
+        assert!(!out.contains("sup3rs3cr3t"), "password leaked: {out}");
+        assert_eq!(out, "redis://***:***@127.0.0.1:6379/0");
+    }
+
+    #[test]
+    fn test_redacted_masks_password_only_userinfo() {
+        // `redis://:pass@host` — no username, just a password.
+        let conn = RedisConnection::new("redis://:hunter2@host:6379");
+        let out = conn.redacted();
+        assert!(!out.contains("hunter2"), "password leaked: {out}");
+        assert_eq!(out, "redis://***:***@host:6379");
+    }
+
+    #[test]
+    fn test_redacted_masks_rediss_scheme() {
+        let conn = RedisConnection::new("rediss://user:s3cr3t@host:6380/1");
+        let out = conn.redacted();
+        assert!(!out.contains("s3cr3t"), "password leaked: {out}");
+        assert_eq!(out, "rediss://***:***@host:6380/1");
+    }
+
+    #[test]
+    fn test_redacted_noop_without_userinfo() {
+        let conn = RedisConnection::new("redis://127.0.0.1:6379/0");
+        assert_eq!(conn.redacted(), "redis://127.0.0.1:6379/0");
     }
 }
