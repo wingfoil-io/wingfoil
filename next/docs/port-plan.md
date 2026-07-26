@@ -966,9 +966,15 @@ tests covered — not "legacy pytest passes unchanged."
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `graph!`),
   keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
   breadth_first, run_mode, statistics, threading, async, feedback, and the
-  runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`).
-  Remaining: `latency` / `telemetry` (adapter/cross-process), and `tracing`
-  (blocked — next has no `tracing`/`instrument` feature or `.logged()` yet).
+  runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`), and
+  `tracing` (the `log` mode — the `logged` debug tap through `env_logger`).
+  Remaining: `latency` / `telemetry` (adapter/cross-process); and the `tracing`
+  example's other two modes — `tracing` (route events through a
+  `tracing-subscriber`) and `instruments` (engine spans around `run`/cycle) —
+  which are ⏳ *blocked* on porting next's `tracing` / `instrument-*` engine
+  features (the op catalog logs through `log` only, and the engine has no span
+  instrumentation yet). Tracked as a Phase-6 follow-up, landing with the
+  instrumentation port, not as example work.
 - **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
   runs a `classic` (legacy interpreted) bar beside next's
   `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`
