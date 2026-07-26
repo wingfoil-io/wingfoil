@@ -24,11 +24,15 @@
 //! Classic `produce_async` derives its [`RunParams`] from the graph's own run
 //! (in the node's `setup`, from the live `run_mode`/`run_for`/`start_time`) and
 //! bounds the producer→graph channel with `buffer_size`. Here the producer task
-//! is spawned at *wiring* time, before [`Runner::run`](crate::interp::Runner::run)
-//! is called, so the caller has to hand in the [`RunParams`] up front. That
-//! makes it possible for the caller to pass params that disagree with the
-//! actual `run(run_mode, run_for)` — which classic makes impossible by
-//! construction. To close the gap:
+//! now spawns in `start()` (deferred via `source_at_start` — nothing runs at
+//! wiring), but the public API still takes the [`RunParams`] up front rather than
+//! deriving them from the run. That makes it possible for the caller to pass
+//! params that disagree with the actual `run(run_mode, run_for)` — which classic
+//! makes impossible by construction. (Now that the deferred `setup` is handed the
+//! run's real `run_mode`/`run_for`/`start_time` at start, dropping the caller
+//! params and deriving them from the run is a clean follow-on that would retire
+//! the guard below — see `docs/source-lifecycle-defer-to-start.md`.) To close the
+//! gap meanwhile:
 //!
 //! * **Validation.** In historical mode the run's `start_time` is knowable and
 //!   deterministic (it is the `HistoricalFrom(_)` instant). A validating
@@ -69,7 +73,8 @@ use tokio::runtime::{Handle, Runtime};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
-use crate::fluent::{GraphBuilder, SourceOps, Stream};
+use crate::fluent::{GraphBuilder, Stream};
+use crate::interp::StopHandle;
 use crate::op::{Activation, Tick};
 
 /// The async runtime a graph's async adapters spawn onto, owned by the graph.
@@ -204,17 +209,21 @@ where
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
 {
     // The graph owns the runtime (created lazily here on first async use, or a
-    // caller override); the producer task spawns onto it at wiring time.
+    // caller override). The producer task is spawned in `start()` — not at wiring
+    // — via `source_at_start`, so an adapter's I/O (connect / subscribe) is
+    // established at run start, matching classic and keeping wiring side-effect
+    // free (nothing runs until `run()`). Re-run is still a follow-on: the source
+    // inherits `channel`'s single-run restriction. See
+    // `docs/source-lifecycle-defer-to-start.md`.
     let handle = g.async_runtime_handle()?;
-    let (stream, sender) = g.channel::<T>();
 
     // Realtime backpressure: a bounded permit channel. The producer takes a
     // permit before each send; the validating passthrough returns one per
     // delivered value. Only wired in realtime — a historical run collects the
-    // whole stream at graph start, so throttling the producer there would
-    // deadlock that collection. Dropping the receiver (when the graph is torn
-    // down) closes the channel, which unblocks a parked producer.
-    let (mut permit_tx, mut permit_rx) = match (params.run_mode, buffer_size) {
+    // whole stream at start, so throttling the producer there would deadlock that
+    // collection. Dropping the receiver (when the graph is torn down) closes the
+    // channel, which unblocks a parked producer.
+    let (permit_tx, mut permit_rx) = match (params.run_mode, buffer_size) {
         (RunMode::RealTime, Some(n)) => {
             // futures' bounded channel grants each sender one extra slot on top
             // of `buffer`, so `n - 1` bounds in-flight values to ~`n`.
@@ -223,6 +232,60 @@ where
         }
         _ => (None, None),
     };
+
+    // The producer is established at `start()`: `run`/`permit_tx` are once-only
+    // (taken on the first — and, single-run, only — start), and the returned
+    // `StopHandle` aborts the task at teardown (a finished historical producer is
+    // already gone; a live realtime producer is stopped here).
+    let mut run = Some(run);
+    let mut permit_tx = permit_tx;
+    let stream_handle = g.with_builder(move |b| {
+        b.source_at_start_with_params::<T, _>(
+            None,
+            move |sender, _run_mode, _run_for, _start_time| {
+                let run = run
+                    .take()
+                    .expect("invariant: produce_async producer is single-run");
+                let mut permit_tx = permit_tx.take();
+                let task = handle.spawn(async move {
+                    match run(params).await {
+                        Err(e) => {
+                            let _ = sender.send_error(e);
+                        }
+                        Ok(source) => {
+                            futures::pin_mut!(source);
+                            while let Some(item) = source.next().await {
+                                match item {
+                                    Ok((t, v)) => {
+                                        // Take a permit first (realtime only). A
+                                        // closed permit channel means the graph is
+                                        // gone — a normal teardown race; stop.
+                                        if let Some(tx) = permit_tx.as_mut()
+                                            && tx.send(()).await.is_err()
+                                        {
+                                            return;
+                                        }
+                                        // `send_at` returns false once the receiver
+                                        // is gone — a teardown race; stop.
+                                        if !sender.send_at(v, t) {
+                                            return;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = sender.send_error(e);
+                                        return;
+                                    }
+                                }
+                            }
+                            let _ = sender.close();
+                        }
+                    }
+                });
+                Ok(StopHandle::new(AbortOnDrop(task)))
+            },
+        )
+    });
+    let stream = g.wrap(stream_handle);
 
     // Validating passthrough: forwards each burst unchanged, checks the
     // caller's declared params against the real run once, and releases permits.
@@ -265,42 +328,20 @@ where
             },
         )
     });
-
-    handle.spawn(async move {
-        match run(params).await {
-            Err(e) => {
-                let _ = sender.send_error(e);
-            }
-            Ok(source) => {
-                futures::pin_mut!(source);
-                while let Some(item) = source.next().await {
-                    match item {
-                        Ok((t, v)) => {
-                            // Take a permit first (realtime only). A closed
-                            // permit channel means the graph is gone — a normal
-                            // teardown race; stop producing.
-                            if let Some(tx) = permit_tx.as_mut()
-                                && tx.send(()).await.is_err()
-                            {
-                                return;
-                            }
-                            // `send_at` returns false once the receiver is gone —
-                            // a normal teardown race; stop producing.
-                            if !sender.send_at(v, t) {
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            let _ = sender.send_error(e);
-                            return;
-                        }
-                    }
-                }
-                let _ = sender.close();
-            }
-        }
-    });
     Ok(validated)
+}
+
+/// Aborts a deferred [`produce_async`] producer task when the run tears down (the
+/// [`StopHandle`] held by `source_at_start` drops). A finished historical producer
+/// is already gone; a live realtime producer (a subscriber socket) is stopped
+/// here — the deferred-source analogue of the wiring-spawn model's
+/// receiver-dropped stop.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 // ---------------------------------------------------------------------------
