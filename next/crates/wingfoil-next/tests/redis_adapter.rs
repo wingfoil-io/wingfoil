@@ -132,6 +132,35 @@ fn pub_connection_refused_surfaces_an_error() {
     );
 }
 
+/// A connection URL can embed a password (`redis://user:pass@host`). When the
+/// deferred connect fails at run time, the error context must **redact** that
+/// password — it must never reach a log or the aborted-run error (parity with
+/// the postgres adapter; a leak regression versus classic that this restores).
+#[test]
+fn pub_connection_refused_redacts_password() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let source = g.constant(burst![RedisEntry {
+        channel: "ch".to_string(),
+        payload: b"v".to_vec(),
+    }]);
+    let conn = RedisConnection::new("redis://user:sup3rs3cr3t@127.0.0.1:59999/0");
+
+    let _sink = source
+        .redis_pub(conn, None)
+        .expect("wiring must succeed (connect is deferred to the run)");
+    let err = g
+        .build()
+        .run(RunMode::RealTime, RunFor::Cycles(1))
+        .expect_err("an unreachable Redis endpoint must abort the run");
+    let msg = format!("{err:#}");
+    assert!(
+        !msg.contains("sup3rs3cr3t"),
+        "password leaked in error: {msg}"
+    );
+    assert!(msg.contains("***:***"), "userinfo not redacted: {msg}");
+}
+
 /// The stream sink connects lazily the same way.
 #[test]
 fn stream_write_connection_refused_surfaces_an_error() {
