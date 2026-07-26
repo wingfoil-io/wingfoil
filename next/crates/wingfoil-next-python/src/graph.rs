@@ -224,6 +224,14 @@ impl PyStream {
         self.wrap(self.stream.delay(delay))
     }
 
+    /// Merge with several other streams at once (the classic n-ary `merge`); on
+    /// any tick the earliest-supplied ticked input wins. Equivalent to a chain
+    /// of 2-ary [`merge`](Self::merge)s.
+    pub fn merge_all(&self, others: &[PyStream]) -> PyStream {
+        let refs: Vec<&Stream<PyElement>> = others.iter().map(|s| &s.stream).collect();
+        self.wrap(self.stream.merge_all(&refs))
+    }
+
     /// Suppress consecutive duplicate values (emit on change only).
     pub fn distinct(&self) -> PyStream {
         self.wrap(self.stream.distinct())
@@ -914,6 +922,23 @@ mod tests {
         let l: i64 = (&left.value()).try_into().unwrap();
         let r: i64 = (&right.value()).try_into().unwrap();
         assert_eq!((3, 30), (l, r));
+    }
+
+    #[test]
+    fn merge_all_earliest_supplied_wins_ties() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(300));
+        let b = g
+            .counter(Duration::from_nanos(300))
+            .map(lambda("lambda n: n + 100"));
+        let c = g
+            .counter(Duration::from_nanos(300))
+            .map(lambda("lambda n: n + 200"));
+        let merged = a.merge_all(&[b, c]);
+        run_cycles(&g, 3);
+        // All three tick together each instant; `a` (earliest) wins the tie.
+        let v: i64 = (&merged.value()).try_into().unwrap();
+        assert_eq!(3, v);
     }
 
     #[test]

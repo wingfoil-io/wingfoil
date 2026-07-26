@@ -332,6 +332,16 @@ def test_sum_of_non_numeric_aborts_run():
         g.run(cycles=1)
 
 
+def test_merge_all_combines_streams():
+    g = wf.Graph()
+    a = g.counter(period_nanos=300)  # ticks at 0,300,600
+    b = g.counter(period_nanos=300).map(lambda n: n + 100)
+    c = g.counter(period_nanos=300).map(lambda n: n + 200)
+    out = a.merge_all([b, c])
+    g.run(cycles=3)  # all tick together; earliest-supplied (a) wins the tie
+    assert out.value() == 3  # a's running count
+
+
 def test_dataframe_from_stream():
     pd = pytest.importorskip("pandas")
     g = wf.Graph()

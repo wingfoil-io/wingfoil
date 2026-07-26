@@ -124,6 +124,13 @@ impl Stream {
         Stream(self.0.merge(&other.0))
     }
 
+    /// Merge with several other streams at once; the earliest-supplied ticked
+    /// input wins.
+    fn merge_all(&self, others: Vec<PyRef<'_, Stream>>) -> Stream {
+        let streams: Vec<PyStream> = others.iter().map(|s| s.0.clone()).collect();
+        Stream(self.0.merge_all(&streams))
+    }
+
     /// Re-emit each value `delay_nanos` nanoseconds later.
     fn delay(&self, delay_nanos: u64) -> Stream {
         Stream(self.0.delay(Duration::from_nanos(delay_nanos)))
