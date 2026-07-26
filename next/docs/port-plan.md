@@ -414,10 +414,10 @@ Inventory (classic `nodes/` → target), grouped by effort:
 
 **Dynamic graphs** (`graph_node`, `dynamic_group`, the dynamic examples):
 islands already cover *static* subgraphs composed procedurally (including in
-loops). Runtime graph *mutation* is a separate feature: either
-`Runner::extend` on the interpreted engine (design here, implement if the
-demand is real) or an explicit out-of-scope ruling for v1. Do not let this
-block the catalog — decide, document, move on.
+loops). Runtime graph *mutation* has since landed as a separate feature
+(behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope
+(append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
+and `Builder::demux` on the interpreted engine.
 
 **Engine coverage note:** `never`, `combine`, and `delay_with_reset` land as
 interpreted-engine (fluent) ports — like `feedback` — since a zero-input
@@ -997,7 +997,7 @@ tests covered — not "legacy pytest passes unchanged."
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
-| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; the mutation feature (`Runner::extend`) is **not yet built** — open decision: cutover blocker vs documented v1 deviation. Islands cover static composition today |
+| Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; ✅ **the mutation feature has landed** (behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope (append / splice / remove / recycle), `Builder::dynamic_group`, and `Builder::demux`. Islands also cover static composition |
 | Python API change (next-python supersedes legacy `wingfoil-python`) | existing `import wingfoil` code must migrate — an accepted breaking change, not drift to avoid | new object-form binding at parity before cutover; next-python `test_interop.py` pytest as gate; migration guide + `wingfoil` module-name takeover at cutover |
 | Statistics adapter size | schedule risk, not design risk | it's first in Phase 4 precisely to surface state-porting friction early |
 
