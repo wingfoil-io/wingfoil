@@ -876,7 +876,10 @@ dynamism is an interpreted-engine capability, matching classic.
   latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
   *type* parameter, which does not map onto the `graph!` value-dispatch table,
   so compiled/nested support is out of scope for this op family.
-- **Graph export**: GML from `Builder` topology + debug labels.
+- **Graph export**: ❌ **not doing this** (GML from `Builder` topology + debug
+  labels). Deferred deliberately — we want a better introspection/visualization
+  story than a one-off GML dump, to be designed and scoped separately later
+  rather than ported as-is from classic.
 - **`#[node]` retirement**: replaced by `Op` impls.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
   interpreted `Builder` method (over `register_op1`) for single-input ops;
