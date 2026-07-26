@@ -124,6 +124,13 @@ impl Stream {
         Stream(self.0.merge(&other.0))
     }
 
+    /// Merge with several other streams at once; the earliest-supplied ticked
+    /// input wins.
+    fn merge_all(&self, others: Vec<PyRef<'_, Stream>>) -> Stream {
+        let streams: Vec<PyStream> = others.iter().map(|s| s.0.clone()).collect();
+        Stream(self.0.merge_all(&streams))
+    }
+
     /// Re-emit each value `delay_nanos` nanoseconds later.
     fn delay(&self, delay_nanos: u64) -> Stream {
         Stream(self.0.delay(Duration::from_nanos(delay_nanos)))
@@ -241,6 +248,25 @@ impl Stream {
     /// aborts the run.
     fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
         Stream(self.0.bimap(&other.0, func))
+    }
+
+    /// Reduce values with `func(acc, value)`, emitting the running result. The
+    /// first value seeds the accumulator; a raised exception aborts the run.
+    fn reduce(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.reduce(func))
+    }
+
+    /// Decompose a stream of 2-tuples into its two component streams.
+    fn split(&self) -> (Stream, Stream) {
+        let (a, b) = self.0.split();
+        (Stream(a), Stream(b))
+    }
+
+    /// Build a pandas `DataFrame` (columns `time`, `value`) from every value and
+    /// its engine time; the final value (after the run) is the frame. Requires
+    /// pandas at run time.
+    fn dataframe(&self) -> Stream {
+        Stream(self.0.dataframe())
     }
 
     /// The current value after the owning [`Graph`] has run.

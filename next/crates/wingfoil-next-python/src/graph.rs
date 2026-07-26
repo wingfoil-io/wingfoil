@@ -224,6 +224,14 @@ impl PyStream {
         self.wrap(self.stream.delay(delay))
     }
 
+    /// Merge with several other streams at once (the classic n-ary `merge`); on
+    /// any tick the earliest-supplied ticked input wins. Equivalent to a chain
+    /// of 2-ary [`merge`](Self::merge)s.
+    pub fn merge_all(&self, others: &[PyStream]) -> PyStream {
+        let refs: Vec<&Stream<PyElement>> = others.iter().map(|s| &s.stream).collect();
+        self.wrap(self.stream.merge_all(&refs))
+    }
+
     /// Suppress consecutive duplicate values (emit on change only).
     pub fn distinct(&self) -> PyStream {
         self.wrap(self.stream.distinct())
@@ -467,6 +475,111 @@ impl PyStream {
                 )
             });
         self.wrap(joined)
+    }
+
+    /// Build a pandas `DataFrame` (columns `time`, `value`) from every emitted
+    /// value paired with its engine time (the classic `dataframe`). The frame is
+    /// assembled **once, on the last cycle**, so the stream's final value is the
+    /// completed `DataFrame`; earlier cycles stay quiet. Rows are engine-owned
+    /// state re-seeded on a graph reset, so a re-run rebuilds cleanly.
+    ///
+    /// `pandas` is imported lazily here — only a graph that actually calls
+    /// `dataframe` needs it; if it is not importable the run aborts with context.
+    pub fn dataframe(&self) -> PyStream {
+        let framed = self.stream.with_time().wire(|b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "dataframe",
+                Activation::NONE,
+                (),
+                Vec::<(i64, Py<PyAny>)>::new, // state: accumulated (nanos, value) rows
+                move |_cfg: &mut (),
+                      rows: &mut Vec<(i64, Py<PyAny>)>,
+                      (time, value): &(NanoTime, PyElement),
+                      ctx| {
+                    Python::attach(|py| {
+                        rows.push((u64::from(*time) as i64, value.object().clone_ref(py)));
+                        if !ctx.is_last_cycle() {
+                            return Ok(Tick::Quiet);
+                        }
+                        let pandas = py
+                            .import("pandas")
+                            .map_err(|err| anyhow::anyhow!("dataframe() needs pandas: {err}"))?;
+                        let times: Vec<i64> = rows.iter().map(|(t, _)| *t).collect();
+                        let values: Vec<Py<PyAny>> =
+                            rows.iter().map(|(_, v)| v.clone_ref(py)).collect();
+                        let columns = pyo3::types::PyDict::new(py);
+                        columns
+                            .set_item("time", times)
+                            .and_then(|()| columns.set_item("value", values))
+                            .map_err(|err| anyhow::anyhow!("dataframe() column build: {err}"))?;
+                        let frame = pandas
+                            .call_method1("DataFrame", (columns,))
+                            .map_err(|err| anyhow::anyhow!("pandas.DataFrame raised: {err}"))?;
+                        Ok(Tick::Value(PyElement::new(frame.unbind())))
+                    })
+                },
+            )
+        });
+        self.wrap(framed)
+    }
+
+    /// Reduce values with a Python callable, emitting the running result (the
+    /// classic `reduce`). The **first** value seeds the accumulator and is
+    /// emitted as-is; each later value emits `func(acc, value)`
+    /// (functools.reduce-style, no explicit initial). The accumulator is
+    /// engine-owned state re-seeded on a graph reset, so a re-run restarts. A
+    /// raised exception aborts the run with context.
+    pub fn reduce(&self, func: Py<PyAny>) -> PyStream {
+        let reduced = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "reduce",
+                Activation::NONE,
+                func,                         // cfg: the Python reducer
+                || Option::<PyElement>::None, // state: accumulator, empty until the first value
+                move |func: &mut Py<PyAny>,
+                      acc: &mut Option<PyElement>,
+                      value: &PyElement,
+                      _ctx| {
+                    match acc.take() {
+                        None => {
+                            *acc = Some(value.clone());
+                            Ok(Tick::Value(value.clone()))
+                        }
+                        Some(current) => Python::attach(|py| {
+                            let next = func.call1(py, (current.value(), value.value())).map_err(
+                                |err| anyhow::anyhow!("Python reduce callable raised: {err}"),
+                            )?;
+                            let next = PyElement::new(next);
+                            *acc = Some(next.clone());
+                            Ok(Tick::Value(next))
+                        }),
+                    }
+                },
+            )
+        });
+        self.wrap(reduced)
+    }
+
+    /// Decompose a stream of 2-tuples into its two component streams (the
+    /// classic `split`); both branches tick whenever the source does. Reading a
+    /// non-indexable value aborts the run with context.
+    pub fn split(&self) -> (PyStream, PyStream) {
+        (self.item(0), self.item(1))
+    }
+
+    /// Project index `i` out of each (indexable) value — the per-branch half of
+    /// [`split`](Self::split).
+    fn item(&self, i: usize) -> PyStream {
+        self.wire_stateless("split", move |value| {
+            Python::attach(|py| {
+                let item = value.object().bind(py).get_item(i).map_err(|err| {
+                    anyhow::anyhow!("Python split: value is not indexable at {i}: {err}")
+                })?;
+                Ok(Tick::Value(PyElement::new(item.unbind())))
+            })
+        })
     }
 
     /// Wire a **stateless, fallible** single-input op that maps each value to a
@@ -749,6 +862,83 @@ mod tests {
         run_cycles(&g, 6);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn dataframe_builds_on_last_cycle() {
+        // Skip when pandas isn't installed (parity with pytest's importorskip),
+        // so this test doesn't fail in a bare CI environment.
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        let g = PyGraph::new();
+        let df = g.counter(Duration::from_nanos(100)).dataframe();
+        run_cycles(&g, 3);
+        // The final value is a pandas DataFrame with time/value columns.
+        let (times, values): (Vec<i64>, Vec<i64>) = Python::attach(|py| {
+            let frame = df.value().value();
+            let bound = frame.bind(py);
+            let t = bound
+                .call_method1("__getitem__", ("time",))
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let v = bound
+                .call_method1("__getitem__", ("value",))
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap();
+            (t, v)
+        });
+        assert_eq!(vec![0, 100, 200], times);
+        assert_eq!(vec![1, 2, 3], values);
+    }
+
+    #[test]
+    fn reduce_runs_from_first_value() {
+        let g = PyGraph::new();
+        // First value seeds; then max-so-far.
+        let running_max = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: (n * 7) % 5")) // 2,4,1,3,0,2
+            .reduce(lambda("lambda acc, v: max(acc, v)"));
+        run_cycles(&g, 6);
+        let v: i64 = (&running_max.value()).try_into().unwrap();
+        assert_eq!(4, v);
+    }
+
+    #[test]
+    fn split_decomposes_tuples() {
+        let g = PyGraph::new();
+        let pairs = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: (n, n * 10)"));
+        let (left, right) = pairs.split();
+        run_cycles(&g, 3);
+        let l: i64 = (&left.value()).try_into().unwrap();
+        let r: i64 = (&right.value()).try_into().unwrap();
+        assert_eq!((3, 30), (l, r));
+    }
+
+    #[test]
+    fn merge_all_earliest_supplied_wins_ties() {
+        let g = PyGraph::new();
+        let a = g.counter(Duration::from_nanos(300));
+        let b = g
+            .counter(Duration::from_nanos(300))
+            .map(lambda("lambda n: n + 100"));
+        let c = g
+            .counter(Duration::from_nanos(300))
+            .map(lambda("lambda n: n + 200"));
+        let merged = a.merge_all(&[b, c]);
+        run_cycles(&g, 3);
+        // All three tick together each instant; `a` (earliest) wins the tie.
+        let v: i64 = (&merged.value()).try_into().unwrap();
+        assert_eq!(3, v);
     }
 
     #[test]
