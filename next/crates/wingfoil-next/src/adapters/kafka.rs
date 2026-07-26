@@ -27,9 +27,10 @@
 //!    Next's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). `kafka_sub` still takes a [`RunParams`]
-//!    (the producer task now spawns in `start()`, deferred via `source_at_start`,
-//!    so the broker consumer starts at run start, not at wiring). Embed in an
+//!    `docs/runtime-ownership.md`). `kafka_sub` takes a [`RunMode`] (only to reject
+//!    a historical run at wiring); the producer task spawns in `start()`, deferred
+//!    via `source_at_start`, so the broker consumer starts at run start, not at
+//!    wiring, and the producer's `RunParams` come from the actual run. Embed in an
 //!    existing runtime by installing an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **`kafka_sub` is realtime-only, rejected at wiring time under historical
@@ -203,8 +204,10 @@ impl KafkaEvent {
 /// [`Burst`]. Use `.collapse_accumulate()` (or `.collapse()`) for single-event
 /// processing.
 ///
-/// `handle` is the caller's tokio runtime handle and `params` describes the run
-/// the graph will be driven with (see [`produce_async`] and the module docs).
+/// `run_mode` is the mode the graph will be driven with — used only to reject a
+/// historical run at wiring (see below); the producer's full [`RunParams`] are
+/// derived from the actual run at start (see [`produce_async`] and the module
+/// docs). The graph owns the tokio runtime.
 ///
 /// # Consumer group and delivery
 ///
@@ -214,19 +217,19 @@ impl KafkaEvent {
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if `params.run_mode` is
+/// Returns an error at **wiring time** if `run_mode` is
 /// [`RunMode::HistoricalFrom`]: the Kafka consumer is a live, unbounded,
 /// wall-clock-stamped stream with no historical timeline to replay, and the
 /// historical channel path would block-collect its never-ending `recv()` loop up
 /// front and deadlock at `start`. Run `kafka_sub` under [`RunMode::RealTime`].
 pub fn kafka_sub(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,
     conn: impl Into<KafkaConnection>,
     topic: impl Into<String>,
     group_id: impl Into<String>,
 ) -> Result<Stream<Burst<KafkaEvent>>> {
-    if let RunMode::HistoricalFrom(_) = params.run_mode {
+    if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
             "kafka_sub: RunMode::HistoricalFrom is unsupported — the Kafka consumer \
              is a live, unbounded, wall-clock-stamped stream with no historical \
@@ -236,7 +239,7 @@ pub fn kafka_sub(
     let conn = conn.into();
     let topic = topic.into();
     let group_id = group_id.into();
-    produce_async(g, params, move |_p: RunParams| async move {
+    produce_async(g, move |_p: RunParams| async move {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &conn.brokers)
             .set("group.id", &group_id)

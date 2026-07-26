@@ -30,7 +30,7 @@ fn sub_rejects_historical_mode() {
     };
     let err = match kafka_sub(
         &g,
-        params,
+        params.run_mode,
         KafkaConnection::new("127.0.0.1:9092"),
         "topic",
         "group",
@@ -61,7 +61,7 @@ fn sub_connection_refused_terminates() {
     };
     let _events = kafka_sub(
         &g,
-        params,
+        params.run_mode,
         KafkaConnection::new("127.0.0.1:59999"),
         "nonexistent",
         "test-group",

@@ -23,38 +23,26 @@
 //!
 //! Classic `produce_async` derives its [`RunParams`] from the graph's own run
 //! (in the node's `setup`, from the live `run_mode`/`run_for`/`start_time`) and
-//! bounds the producer→graph channel with `buffer_size`. Here the producer task
-//! now spawns in `start()` (deferred via `source_at_start` — nothing runs at
-//! wiring), but the public API still takes the [`RunParams`] up front rather than
-//! deriving them from the run. That makes it possible for the caller to pass
-//! params that disagree with the actual `run(run_mode, run_for)` — which classic
-//! makes impossible by construction. (Now that the deferred `setup` is handed the
-//! run's real `run_mode`/`run_for`/`start_time` at start, dropping the caller
-//! params and deriving them from the run is a clean follow-on that would retire
-//! the guard below — see `docs/source-lifecycle-defer-to-start.md`.) To close the
-//! gap meanwhile:
+//! bounds the producer→graph channel with `buffer_size`. next matches both:
 //!
-//! * **Validation.** In historical mode the run's `start_time` is knowable and
-//!   deterministic (it is the `HistoricalFrom(_)` instant). A validating
-//!   passthrough on the source checks, on the first burst it sees, that the
-//!   caller-supplied `params.start_time` equals the run's real `start_time`
-//!   and [aborts the run](anyhow::bail) with context on a mismatch, rather
-//!   than silently replaying against a bogus timeline. (`run_mode`/`run_for`
-//!   are not observable from an op's [`Ctx`](crate::op::Ctx) at this layer, so
-//!   the caller stays responsible for those matching the eventual `run(..)`;
-//!   note a `run_mode` mismatch that shifts `start_time` — e.g. declaring
-//!   historical while running realtime, or vice versa — is caught here too.)
+//! * **Params from the run.** The producer task spawns in `start()` (deferred via
+//!   `source_at_start` — nothing runs at wiring), and its [`RunParams`] are
+//!   derived from the *actual* run at that point (the deferred `setup` is handed
+//!   the live `run_mode`/`run_for`/`start_time`). So — like classic — there is no
+//!   caller-declared params to disagree with the run; the earlier declare-up-front
+//!   footgun (and its validating passthrough) is gone.
 //! * **Backpressure.** `buffer_size` bounds how far the realtime producer may
 //!   run ahead of the graph: the producer takes a permit before each send and
 //!   the passthrough returns one per delivered value, so at most ~`buffer_size`
 //!   values sit undelivered — the producer blocks instead of growing memory
-//!   without limit. See [`produce_async`] for the historical caveat.
+//!   without limit. Only realtime drains permits (decided from the run mode at
+//!   start); see [`produce_async`] for the historical caveat.
 //!
 //! ```ignore
 //! // The graph owns the runtime (lazily created); no `&Handle` to pass. To
 //! // embed in your own runtime instead: `GraphBuilder::new().with_async_runtime(rt.handle().clone())`.
 //! let g = GraphBuilder::new();
-//! let quotes = produce_async_bounded(&g, params, Some(64), |_p| async {
+//! let quotes = produce_async_bounded(&g, Some(64), |_p| async {
 //!     Ok(futures::stream::iter(vec![
 //!         Ok((NanoTime::new(100), 1.0)),
 //!         Ok((NanoTime::new(200), 2.0)),
@@ -139,10 +127,10 @@ impl GraphRuntime {
 /// The run parameters handed to a producer closure (mirrors classic
 /// `RunParams`), so a producer can choose a historical vs live data source.
 ///
-/// These describe the run the graph will actually be driven with. They must
-/// match the `run(run_mode, run_for)` the caller ultimately invokes; a
-/// disagreement in `start_time` is rejected at run time (see the module docs).
-/// For the run *bound*, prefer emitting a finite stream and letting the
+/// These describe the run the graph is actually being driven with — a
+/// [`produce_async`] producer receives them derived from the live run at graph
+/// start, so they always match `run(run_mode, run_for)` (no caller declaration to
+/// disagree). For the run *bound*, prefer emitting a finite stream and letting the
 /// receiver stop at end-of-stream.
 #[derive(Clone, Copy, Debug)]
 pub struct RunParams {
@@ -154,39 +142,28 @@ pub struct RunParams {
 /// Drive a graph source from an async producer of timestamped values. See the
 /// module docs. Returns the source [`Stream<Burst<T>>`].
 ///
-/// The producer closure receives [`RunParams`]; it must return a stream of
-/// `Result<(NanoTime, T)>`. Each `Ok((t, v))` is delivered at graph time `t`
-/// (historical replay) or live (realtime); an `Err` aborts the run.
-///
-/// `params` must describe the same run passed to
-/// [`run`](crate::interp::Runner::run): in historical mode the run's
-/// `start_time` is validated against `params.start_time` and a mismatch aborts
-/// the run with context (the caller-supplied params are never trusted blind).
+/// The producer closure receives the run's [`RunParams`] — derived from the
+/// actual [`run`](crate::interp::Runner::run) at graph start, not declared up
+/// front — and must return a stream of `Result<(NanoTime, T)>`. Each `Ok((t, v))`
+/// is delivered at graph time `t` (historical replay) or live (realtime); an
+/// `Err` aborts the run.
 ///
 /// This is the unbounded variant — a fast producer feeding a slower graph can
 /// accumulate an arbitrarily large backlog. Use [`produce_async_bounded`] to
 /// apply `buffer_size` back-pressure in realtime.
-pub fn produce_async<T, F, Fut, S>(
-    g: &GraphBuilder,
-    params: RunParams,
-    run: F,
-) -> anyhow::Result<Stream<Burst<T>>>
+pub fn produce_async<T, F, Fut, S>(g: &GraphBuilder, run: F) -> anyhow::Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
     F: FnOnce(RunParams) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<S>> + Send + 'static,
     S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
 {
-    produce_async_bounded(g, params, None, run)
+    produce_async_bounded(g, None, run)
 }
 
 /// [`produce_async`] with `buffer_size` back-pressure (mirrors classic
-/// `produce_async`'s `buffer_size`). See the module docs.
-///
-/// `params` must describe the same run passed to
-/// [`run`](crate::interp::Runner::run): in historical mode the run's
-/// `start_time` is validated against `params.start_time` and a mismatch aborts
-/// the run with context (the caller-supplied params are never trusted blind).
+/// `produce_async`'s `buffer_size`). See the module docs. The producer closure
+/// receives the run's [`RunParams`], derived from the actual run at start.
 ///
 /// `buffer_size` bounds the producer→graph backlog in **realtime**: `Some(n)`
 /// lets the producer run at most ~`n` values ahead of the graph before it
@@ -198,7 +175,6 @@ where
 /// up-front collection.
 pub fn produce_async_bounded<T, F, Fut, S>(
     g: &GraphBuilder,
-    params: RunParams,
     buffer_size: Option<usize>,
     run: F,
 ) -> anyhow::Result<Stream<Burst<T>>>
@@ -217,107 +193,100 @@ where
     // `docs/source-lifecycle-defer-to-start.md`.
     let handle = g.async_runtime_handle()?;
 
-    // Realtime backpressure: a bounded permit channel. The producer takes a
-    // permit before each send; the validating passthrough returns one per
-    // delivered value. Only wired in realtime — a historical run collects the
-    // whole stream at start, so throttling the producer there would deadlock that
-    // collection. Dropping the receiver (when the graph is torn down) closes the
-    // channel, which unblocks a parked producer.
-    let (permit_tx, mut permit_rx) = match (params.run_mode, buffer_size) {
-        (RunMode::RealTime, Some(n)) => {
+    // Realtime backpressure: a bounded permit channel, created when a bound is
+    // requested. Whether it is *used* is decided at run start from the real run
+    // mode — permits gate only a realtime producer; a historical run collects the
+    // whole stream at start, so throttling there would deadlock that collection,
+    // and the permit path is skipped (`buffer_size` ignored in historical,
+    // matching classic). The producer takes a permit before each send; the
+    // backpressure passthrough returns one per delivered value.
+    let (permit_tx, mut permit_rx) = match buffer_size {
+        Some(n) => {
             // futures' bounded channel grants each sender one extra slot on top
             // of `buffer`, so `n - 1` bounds in-flight values to ~`n`.
             let (tx, rx) = futures::channel::mpsc::channel::<()>(n.max(1) - 1);
             (Some(tx), Some(rx))
         }
-        _ => (None, None),
+        None => (None, None),
     };
 
     // The producer is established at `start()`: `run`/`permit_tx` are once-only
     // (taken on the first — and, single-run, only — start), and the returned
     // `StopHandle` aborts the task at teardown (a finished historical producer is
-    // already gone; a live realtime producer is stopped here).
+    // already gone; a live realtime producer is stopped here). The producer's
+    // `RunParams` are derived from the *actual* run here — there is no
+    // caller-declared params to disagree with, so no validation is needed.
     let mut run = Some(run);
     let mut permit_tx = permit_tx;
     let stream_handle = g.with_builder(move |b| {
-        b.source_at_start_with_params::<T, _>(
-            None,
-            move |sender, _run_mode, _run_for, _start_time| {
-                let run = run
-                    .take()
-                    .expect("invariant: produce_async producer is single-run");
-                let mut permit_tx = permit_tx.take();
-                let task = handle.spawn(async move {
-                    match run(params).await {
-                        Err(e) => {
-                            let _ = sender.send_error(e);
-                        }
-                        Ok(source) => {
-                            futures::pin_mut!(source);
-                            while let Some(item) = source.next().await {
-                                match item {
-                                    Ok((t, v)) => {
-                                        // Take a permit first (realtime only). A
-                                        // closed permit channel means the graph is
-                                        // gone — a normal teardown race; stop.
-                                        if let Some(tx) = permit_tx.as_mut()
-                                            && tx.send(()).await.is_err()
-                                        {
-                                            return;
-                                        }
-                                        // `send_at` returns false once the receiver
-                                        // is gone — a teardown race; stop.
-                                        if !sender.send_at(v, t) {
-                                            return;
-                                        }
+        b.source_at_start_with_params::<T, _>(None, move |sender, run_mode, run_for, start_time| {
+            let run = run
+                .take()
+                .expect("invariant: produce_async producer is single-run");
+            let params = RunParams {
+                run_mode,
+                run_for,
+                start_time,
+            };
+            // Permits bound a realtime producer only; historical replay never
+            // takes them (see above), so drop the sender in that mode.
+            let mut permit_tx = permit_tx
+                .take()
+                .filter(|_| matches!(run_mode, RunMode::RealTime));
+            let task = handle.spawn(async move {
+                match run(params).await {
+                    Err(e) => {
+                        let _ = sender.send_error(e);
+                    }
+                    Ok(source) => {
+                        futures::pin_mut!(source);
+                        while let Some(item) = source.next().await {
+                            match item {
+                                Ok((t, v)) => {
+                                    // Take a permit first (realtime only). A
+                                    // closed permit channel means the graph is
+                                    // gone — a normal teardown race; stop.
+                                    if let Some(tx) = permit_tx.as_mut()
+                                        && tx.send(()).await.is_err()
+                                    {
+                                        return;
                                     }
-                                    Err(e) => {
-                                        let _ = sender.send_error(e);
+                                    // `send_at` returns false once the receiver
+                                    // is gone — a teardown race; stop.
+                                    if !sender.send_at(v, t) {
                                         return;
                                     }
                                 }
+                                Err(e) => {
+                                    let _ = sender.send_error(e);
+                                    return;
+                                }
                             }
-                            let _ = sender.close();
                         }
+                        let _ = sender.close();
                     }
-                });
-                Ok(StopHandle::new(AbortOnDrop(task)))
-            },
-        )
+                }
+            });
+            Ok(StopHandle::new(AbortOnDrop(task)))
+        })
     });
     let stream = g.wrap(stream_handle);
 
-    // Validating passthrough: forwards each burst unchanged, checks the
-    // caller's declared params against the real run once, and releases permits.
-    let mut checked = false;
-    let declared = params;
+    // Backpressure passthrough: returns one permit per delivered value so the
+    // realtime producer may advance. Only drains in realtime (where the producer
+    // takes permits); a no-op in historical. Draining exactly `len` keeps the
+    // bound intact (never freeing capacity for values not yet delivered).
     let validated = stream.wire(move |b, h| {
         b.register_op1(
             h,
-            "produce_async::validate",
+            "produce_async::backpressure",
             Activation::NONE,
             (),
             || (),
             move |_cfg: &mut (), _state: &mut (), input: &Burst<T>, ctx| {
-                if !checked {
-                    checked = true;
-                    if let RunMode::HistoricalFrom(_) = declared.run_mode {
-                        let actual = ctx.start_time();
-                        if declared.start_time != actual {
-                            anyhow::bail!(
-                                "produce_async: caller-supplied RunParams.start_time ({:?}) \
-                                 does not match the graph run's start_time ({:?}); RunParams \
-                                 must describe the same run passed to run(run_mode, run_for)",
-                                declared.start_time,
-                                actual,
-                            );
-                        }
-                    }
-                }
-                // Return one permit per delivered value so the producer may
-                // advance. Draining exactly `len` keeps the bound intact
-                // (never freeing capacity for values not yet delivered).
-                if let Some(rx) = permit_rx.as_mut() {
+                if matches!(ctx.run_mode(), RunMode::RealTime)
+                    && let Some(rx) = permit_rx.as_mut()
+                {
                     for _ in 0..input.len() {
                         if rx.try_recv().is_err() {
                             break;

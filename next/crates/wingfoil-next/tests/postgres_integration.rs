@@ -413,7 +413,7 @@ fn test_sub_catch_up_then_live_inserts() -> anyhow::Result<()> {
     // Collect whole bursts: in real-time several rows can arrive in one cycle.
     let acc = postgres_sub::<TestTrade, _>(
         &g,
-        params,
+        params.run_mode,
         conn,
         "trades_feed",
         NanoTime::from_kdb_timestamp(0), // cursor in the past → catch-up

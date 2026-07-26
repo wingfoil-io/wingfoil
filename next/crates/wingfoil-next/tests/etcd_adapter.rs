@@ -24,7 +24,7 @@ fn sub_connection_refused_aborts_the_run() {
         start_time: NanoTime::ZERO,
     };
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
-    let _events = etcd_sub(&g, params, conn, "/x/")
+    let _events = etcd_sub(&g, params.run_mode, conn, "/x/")
         .expect("realtime etcd_sub wires without error")
         .collapse_accumulate();
 
@@ -50,7 +50,7 @@ fn sub_rejects_historical_mode() {
         start_time: NanoTime::ZERO,
     };
     let conn = EtcdConnection::new("http://127.0.0.1:2379");
-    let err = match etcd_sub(&g, params, conn, "/x/") {
+    let err = match etcd_sub(&g, params.run_mode, conn, "/x/") {
         Ok(_) => panic!("HistoricalFrom must be rejected at wiring time"),
         Err(e) => e,
     };

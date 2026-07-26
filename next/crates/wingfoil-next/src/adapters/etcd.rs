@@ -27,9 +27,11 @@
 //!    `GraphBuilder` instead owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter in the graph — so
 //!    the common call needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). `etcd_sub` still takes [`RunParams`] (the
-//!    producer task now spawns in `start()`, deferred via `source_at_start`, so
-//!    the etcd connect + watch happen at run start, not at wiring). To embed the
+//!    `docs/runtime-ownership.md`). `etcd_sub` takes a [`RunMode`] (only to reject
+//!    a historical run at wiring); the producer task spawns in `start()`, deferred
+//!    via `source_at_start`, so the etcd connect + watch happen at run start, not
+//!    at wiring, and the producer's `RunParams` come from the actual run. To embed
+//!    the
 //!    graph in an existing runtime, install it as an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
 //! 2. **The sink connects eagerly, at wiring time.** `etcd_pub` returns
@@ -218,24 +220,25 @@ pub struct EtcdEvent {
 /// `mod_revision <= snapshot_rev` is filtered out as a duplicate of the
 /// snapshot.
 ///
-/// `params` describes the run the graph will be driven with (see
-/// [`produce_async`] and the module docs); the graph owns the tokio runtime.
-/// Use `.collapse()` for single-event processing.
+/// `run_mode` is the mode the graph will be driven with — used only to reject a
+/// historical run at wiring (see below); the producer's full [`RunParams`] are
+/// derived from the actual run at start (see [`produce_async`]). The graph owns
+/// the tokio runtime. Use `.collapse()` for single-event processing.
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if `params.run_mode` is
+/// Returns an error at **wiring time** if `run_mode` is
 /// [`RunMode::HistoricalFrom`]: the etcd watch is a live, unbounded,
 /// wall-clock-stamped stream with no historical timeline to replay, and the
 /// historical channel path would block-collect it up front and deadlock at
 /// `start`. Run `etcd_sub` under [`RunMode::RealTime`].
 pub fn etcd_sub(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,
     conn: impl Into<EtcdConnection>,
     prefix: impl Into<String>,
 ) -> Result<Stream<Burst<EtcdEvent>>> {
-    if let RunMode::HistoricalFrom(_) = params.run_mode {
+    if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
             "etcd_sub: RunMode::HistoricalFrom is unsupported — the etcd watch is a \
              live, unbounded, wall-clock-stamped stream with no historical timeline \
@@ -244,7 +247,7 @@ pub fn etcd_sub(
     }
     let conn = conn.into();
     let prefix = prefix.into();
-    produce_async(g, params, move |_p: RunParams| async move {
+    produce_async(g, move |_p: RunParams| async move {
         let mut client = Client::connect(&conn.endpoints, None)
             .await
             .with_context(|| format!("etcd_sub: connecting to etcd at {:?}", conn.endpoints))?;

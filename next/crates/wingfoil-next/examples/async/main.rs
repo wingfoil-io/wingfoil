@@ -23,7 +23,7 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::async_source::{RunParams, produce_async};
+use wingfoil_next::async_source::produce_async;
 use wingfoil_next::prelude::*;
 
 fn main() {
@@ -32,19 +32,10 @@ fn main() {
 
     let period = Duration::from_millis(10);
 
-    // The params describe the run we are about to drive (they must match the
-    // `run(..)` below; a historical `start_time` mismatch is rejected at run
-    // time — see the `produce_async` docs).
-    let params = RunParams {
-        run_mode: RunMode::RealTime,
-        run_for: RunFor::Forever,
-        start_time: NanoTime::ZERO,
-    };
-
     // The async producer: it awaits between yields (as a socket read would),
     // emitting timestamped values. A finite feed of 8 values that ends —
     // closing the stream, which stops the graph.
-    let quotes = produce_async(&g, params, move |_p| async move {
+    let quotes = produce_async(&g, move |_p| async move {
         Ok(futures::stream::unfold(0u32, move |i| async move {
             if i >= 8 {
                 return None;

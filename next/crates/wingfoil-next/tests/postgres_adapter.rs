@@ -161,7 +161,7 @@ fn sub_rejects_historical_mode() {
     };
     let err = match postgres_sub::<TestTrade, _>(
         &g,
-        params,
+        params.run_mode,
         "host=127.0.0.1 dbname=db",
         "chan",
         NanoTime::ZERO,

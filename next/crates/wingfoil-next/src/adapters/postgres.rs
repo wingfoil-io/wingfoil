@@ -97,7 +97,10 @@
 //!    by every async adapter — replacing classic's hidden never-dropped global
 //!    (see `docs/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
-//!    The sources still take a [`RunParams`]. The reader and the sink drive the
+//!    [`postgres_read`] takes a [`RunParams`] (it needs the run's `[start, end)`
+//!    window to slice queries at wiring); the live [`postgres_sub`] takes only a
+//!    [`RunMode`] (to reject a historical run at wiring — its producer derives its
+//!    `RunParams` from the actual run at start). The reader and the sink drive the
 //!    client with [`Handle::block_on`](tokio::runtime::Handle::block_on), so the
 //!    graph must be built, run, and dropped from a **non-async thread** (`main`,
 //!    a `#[test]` fn).
@@ -526,7 +529,7 @@ pub fn postgres_notify_trigger_sql(table: &str, channel: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns an error at **wiring time** if `params.run_mode` is
+/// Returns an error at **wiring time** if `run_mode` is
 /// [`RunMode::HistoricalFrom`]: the live tail is a live, unbounded,
 /// wall-clock-stamped stream with no historical timeline to replay, and the
 /// historical channel path would block-collect it up front and deadlock at
@@ -535,7 +538,7 @@ pub fn postgres_notify_trigger_sql(table: &str, channel: &str) -> String {
 /// the run with context (the connection string is redacted).
 pub fn postgres_sub<T, F>(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,
     connection: impl Into<PostgresConnection>,
     channel: impl Into<String>,
     start_from: NanoTime,
@@ -545,7 +548,7 @@ where
     T: PostgresDeserialize + Clone + Default + Send + 'static,
     F: FnMut(NanoTime) -> String + Send + 'static,
 {
-    if let RunMode::HistoricalFrom(_) = params.run_mode {
+    if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
             "postgres_sub: RunMode::HistoricalFrom is unsupported — the LISTEN/NOTIFY \
              live tail is a live, unbounded, wall-clock-stamped stream with no \
@@ -555,7 +558,7 @@ where
     }
     let connection = connection.into();
     let channel = channel.into();
-    produce_async(g, params, move |_p: RunParams| async move {
+    produce_async(g, move |_p: RunParams| async move {
         let mut query_fn = query_fn;
         let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
             .await
@@ -767,7 +770,7 @@ where
             })?;
             postgres_sub::<T, _>(
                 g,
-                params,
+                params.run_mode,
                 connection,
                 live.channel,
                 live.start_from,

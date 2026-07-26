@@ -137,8 +137,8 @@ fn test_sub_live_message() -> anyhow::Result<()> {
     let (done, publisher) = spawn_publisher(&url, "live", b"hello");
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events =
-        redis_sub(&g, realtime(1), RedisConnection::new(&url), "live")?.collapse_accumulate();
+    let events = redis_sub(&g, realtime(1).run_mode, RedisConnection::new(&url), "live")?
+        .collapse_accumulate();
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
 
@@ -247,7 +247,7 @@ fn test_stream_write_and_read_snapshot() -> anyhow::Result<()> {
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     // `.accumulate()` keeps whole bursts (the snapshot rides one burst), then we
     // flatten — `.collapse_accumulate()` would drop all but the last entry.
-    let bursts = redis_stream_read(&g, realtime(1), conn, "events")?.accumulate();
+    let bursts = redis_stream_read(&g, realtime(1).run_mode, conn, "events")?.accumulate();
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
 
@@ -277,7 +277,7 @@ fn test_stream_read_live_tail() -> anyhow::Result<()> {
     });
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let events = redis_stream_read(&g, realtime(1), conn, "tail")?.collapse_accumulate();
+    let events = redis_stream_read(&g, realtime(1).run_mode, conn, "tail")?.collapse_accumulate();
     let mut runner = g.build();
     runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
     writer.join().unwrap();
