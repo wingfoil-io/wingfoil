@@ -47,7 +47,7 @@
 //! connection and **buffers** outgoing messages until the subscriber is ready
 //! (up to [`BUFFER_TIMEOUT`], plus a short subscription-propagation delay). The
 //! publisher is realtime-only: a [`RunMode::HistoricalFrom`] run **aborts** with a
-//! "real-time" error on the first cycle (publishing fast-forwarded historical
+//! "real-time" error at graph `start()` (publishing fast-forwarded historical
 //! data to a live socket is meaningless — matching classic, which errors rather
 //! than the skill's no-op default for exporters).
 //!
@@ -82,9 +82,11 @@
 //!    realtime-only `ReceiverStream` does.
 //! 2. **[`ZeroMqPub::zmq_pub`] returns `Stream<()>`** (a sink to add to the
 //!    graph) instead of classic's `Rc<dyn Node>`. Binding, registration and the
-//!    run-mode check happen lazily on the first cycle (like classic's `start`),
-//!    so a historical run still errors with "real-time" *before* touching the
-//!    registry.
+//!    run-mode check happen at graph `start()` (like classic's `start`), *before*
+//!    the first payload, so a fresh subscriber can connect and propagate its
+//!    subscription filter during the startup window instead of racing the first
+//!    publish. A historical run aborts at `start()` naming the run mode, *before*
+//!    touching the registry.
 //! 3. **The wire envelope is next-local.** Messages are `bincode`-framed with an
 //!    internal envelope, so a next publisher interoperates with a next
 //!    subscriber but is **not** wire-compatible with a classic/Python
@@ -96,6 +98,8 @@
 //! is purely an internal transport detail); and `ZmqStatus` derives `Eq` in
 //! addition to classic's `PartialEq` (harmless).
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -395,9 +399,9 @@ where
 // Sink
 // ---------------------------------------------------------------------------
 
-/// Graph-thread-local publisher state. Bound and registered lazily on the first
-/// cycle (like classic's `start`); its [`Drop`] sends `EndOfStream` and revokes
-/// the registry handle at graph teardown (like classic's `stop`).
+/// Graph-thread-local publisher state. Bound and registered at graph `start()`
+/// (like classic's `start`); its [`Drop`] sends `EndOfStream` and revokes the
+/// registry handle at graph teardown (like classic's `stop`).
 struct ZmqPubState {
     port: u16,
     bind_address: String,
@@ -409,7 +413,6 @@ struct ZmqPubState {
     accepted_at: Option<Instant>,
     buffer: Vec<Vec<u8>>,
     buffer_start: Option<Instant>,
-    started: bool,
 }
 
 impl ZmqPubState {
@@ -425,12 +428,14 @@ impl ZmqPubState {
             accepted_at: None,
             buffer: Vec::new(),
             buffer_start: None,
-            started: false,
         }
     }
 
     /// Bind the `PUB` socket, open its monitor, and register with a discovery
-    /// backend. Runs once, on the first cycle.
+    /// backend. Runs once, at graph `start()` — *before* the first payload — so a
+    /// fresh subscriber can connect and propagate its subscription filter during
+    /// the startup window rather than racing the first publish (the ZMQ
+    /// slow-joiner problem).
     fn start(&mut self) -> Result<()> {
         let context = zmq::Context::new();
         let socket = context
@@ -463,7 +468,6 @@ impl ZmqPubState {
         }
         self.socket = Some(socket);
         self.monitor = Some(monitor);
-        self.started = true;
         Ok(())
     }
 
@@ -511,7 +515,7 @@ impl ZmqPubState {
         let sock = self
             .socket
             .as_ref()
-            .expect("invariant: socket bound on the first cycle");
+            .expect("invariant: socket bound at graph start()");
 
         if self.subscriber_connected {
             for buffered in self.buffer.drain(..) {
@@ -568,7 +572,7 @@ pub trait ZeroMqPub<T> {
     /// address is reachable by remote subscribers.
     ///
     /// The publisher is realtime-only: a [`RunMode::HistoricalFrom`] run aborts
-    /// with a "real-time" error on the first cycle.
+    /// with a "real-time" error at graph `start()`.
     fn zmq_pub(&self, port: u16, registration: impl Into<ZmqPubRegistration>) -> Stream<()>;
 
     /// Bind on `address:port` (rather than `127.0.0.1`) and publish each value.
@@ -595,30 +599,47 @@ where
         port: u16,
         registration: impl Into<ZmqPubRegistration>,
     ) -> Stream<()> {
-        let state = ZmqPubState::new(port, address.to_string(), registration.into());
+        let state = Rc::new(RefCell::new(ZmqPubState::new(
+            port,
+            address.to_string(),
+            registration.into(),
+        )));
+        let start_state = state.clone();
         self.wire(move |b, h| {
-            b.register_op1(
+            let sink = b.register_op1(
                 h,
                 "zmq_pub",
                 Activation::NONE,
                 state,
                 || (),
-                move |state: &mut ZmqPubState, _s: &mut (), value: &T, ctx: &mut Ctx<'_>| {
-                    if !state.started {
-                        if let RunMode::HistoricalFrom(_) = ctx.run_mode() {
-                            // Reject historical before binding or touching the
-                            // registry, so the error names the run mode — not a
-                            // registry connection failure (classic ordering).
-                            anyhow::bail!("ZMQ nodes only support real-time mode");
-                        }
-                        state.start()?;
-                    }
+                move |state: &mut Rc<RefCell<ZmqPubState>>,
+                      _s: &mut (),
+                      value: &T,
+                      _ctx: &mut Ctx<'_>| {
                     let data = bincode::serialize(&WireMessage::Value(value.clone()))
                         .context("zmq_pub: serializing message")?;
-                    state.publish(data)?;
+                    state.borrow_mut().publish(data)?;
                     Ok(Tick::Value(()))
                 },
-            )
+            );
+            // Bind the `PUB` socket at graph **start()**, not on the first cycle:
+            // the subscriber then connects and propagates its subscription filter
+            // during the startup window, well before any payload, instead of
+            // racing the first publish (the ZMQ slow-joiner problem — the source
+            // of the earlier `first_message_not_dropped` flakiness). This also
+            // restores parity with classic, which binds in its `start`. The
+            // run-mode check moves here too, ahead of the bind and the registry,
+            // so a historical run still aborts naming the run mode (classic
+            // ordering). The returned handle wraps no guard: `ZmqPubState`'s own
+            // `Drop` sends `EndOfStream` and revokes the registry at teardown.
+            b.compose_spawn_at_start(sink.index(), move |run_mode, _run_for, _start_time| {
+                if let RunMode::HistoricalFrom(_) = run_mode {
+                    anyhow::bail!("ZMQ nodes only support real-time mode");
+                }
+                start_state.borrow_mut().start()?;
+                Ok(StopHandle::new(()))
+            });
+            sink
         })
     }
 }

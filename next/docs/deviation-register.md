@@ -32,11 +32,11 @@ has its own decision record in
 |---|---|:--:|---|
 | A1 | **Wiring-time I/O establishment.** Remaining eager: `external` + plain `channel` feeders (caller-owned producers — really re-run, see A2); sinks `etcd_pub`, `kafka_pub` connect eagerly at wiring; `postgres_read` runs its whole query at wiring (B5); `prometheus::serve` binds at wiring. | 🟡🔴 | Classic connects in `setup`/`start`. Causes: side-effecting/untestable wiring, a "wired but not running" window, realtime pre-run message accumulation. → defer-to-start plan. **Partially resolved:** the `source_at_start` primitive landed and `zmq_sub` migrated (#547); the **`produce_async` family (etcd/kafka/redis/postgres `_sub`)** now spawns its producer in `start()` too, deferred via `source_at_start_with_params` — connect/subscribe happen at run start, wiring is side-effect-free. `produce_async` no longer takes `RunParams` (derived from the actual run at start; the validating passthrough is gone), and the `_sub` sources take only a `RunMode` (for the wiring historical rejection). The **sinks** are being migrated to connect lazily inside their `consume_async` consumer on the first write — like classic — so wiring opens no socket and a connect failure aborts the run, not graph construction: **`postgres_write` (#577)** and **`redis_pub` / `redis_stream_write`** are done. The remaining `etcd_pub` / `kafka_pub` sinks + `postgres_read` + `prometheus::serve` are the remaining migrations. |
 | A2 | **I/O sources are single-run.** A second `run()` errors; classic re-runs. | 🔴 | A *consequence* of A1 (the channel/waker/thread is consumed). Real superset gap. Still open: `source_at_start` (#547) defers establishment but inherits the single-run channel, so even `zmq_sub` is not yet re-runnable — re-run is the tracked follow-on (port-plan §0.4 reopened). → plan. |
-| A3 | **`zmq_pub` binds its socket lazily on its first cycle**, not `start()`. | 🟡 | Another "when does I/O happen" quirk; interacts with the slow-joiner window. |
+| A3 | ~~**`zmq_pub` binds its socket lazily on its first cycle**, not `start()`.~~ | ✅ | **Resolved.** `zmq_pub` now binds its `PUB` socket (and runs the run-mode check) at graph `start()` via `compose_spawn_at_start`, matching classic's `start`. This is what closes A6: the subscriber connects and propagates its subscription filter during the startup window instead of racing the first publish. `adapters/zmq.rs`. |
 | A4 | **Error-surfacing timing shifted to wiring** — connection errors surface during graph construction, not at run start / first op. | 🟡 | Still applies to the eager-connect **sinks** in A1 (`etcd_pub`/`kafka_pub`). **Resolved for `zmq_sub`** (#547), the **`produce_async` `_sub` family**, and the **`postgres_write` / `redis_pub` / `redis_stream_write`** sinks: their I/O establishes during the run (the `_sub` producers in `start()`, the sinks lazily on first write), so a connect/subscribe failure surfaces during the run (via `send_error` / the `consume_async` error channel), not at wiring — classic-consistent. (The historical-mode *rejection* for the `_sub` sources still fires at wiring, a deliberate fail-fast.) Deferring the remaining sinks moves them the same way. |
 | A5 | ~~**Caller-owned tokio runtime**~~ — etcd/redis/kafka/postgres/otlp took `&Handle`. | ✅ | **Resolved (#548).** The `GraphBuilder` now owns one tokio runtime (lazy, shared, dropped at teardown) with a `with_async_runtime` override; the `&Handle` param is gone from every async factory. Decision record: [`runtime-ownership.md`](./runtime-ownership.md). *Residual (A5a below) is unchanged.* |
 | A5a | **"Drive from a non-async thread."** The `block_on` sinks/readers still panic if the graph is built/run/dropped inside an async context. | 🟡 | Inherent to `block_on`-on-the-graph-thread (an owned runtime doesn't change it — its workers are separate threads either way). Documented per-adapter; matches classic's constraint. Not removed by #548. |
-| A6 | **channel-sub establishes slower than classic's `ReceiverStream`** (the zmq first-message test needed a ~600 ms settle vs classic's 200 ms). | ❓ | Behavioural difference; **mechanism not pinned** (see the zmq fix PR #542 discussion). Worth a measured investigation. |
+| A6 | ~~**channel-sub establishes slower than classic's `ReceiverStream`** (the zmq first-message test needed a ~600 ms settle vs classic's 200 ms).~~ | ✅ | **Resolved — mechanism pinned.** The flakiness was **A3**, not channel-sub latency: because `zmq_pub` bound its socket lazily on the *first publish* (after the test's `SUB_SETTLE` delay), the subscriber could not connect during the settle window, so the whole slow-joiner handshake was compressed into the first publish and rested on the adapter's ~50 ms post-accept margin — which lost the first few messages under CI (coverage) load. Binding at `start()` (A3 fix) makes the settle window effective; `first_message_not_dropped` now passes 25/25 under CPU load. `tests/zmq_integration.rs`. |
 
 ## B. Behavioural / capability deviations — need a decision
 
@@ -145,7 +145,6 @@ motivated the reject only ever required two *mechanisms*, not two public
    §0.4 to make I/O sources **re-runnable** (A2) — the remaining structural win.
 2. **B4** — decide whether the csv whole-file memory deviation matters for the
    "strict superset" claim, or is an acceptable documented trade-off.
-3. **A6** — measure the channel-sub startup latency to either explain or close it.
 
 **Resolved / ratified since this register was written:** **A5** (graph-owned
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
@@ -155,7 +154,8 @@ the swallowed-final-error gap for kafka/postgres/redis/otlp); **B2** (split
 ruling, #557: reject ratified for live-only sources; adapters with a bounded
 historical twin move to a unified mode-dispatching `<adapter>_source` — see
 plan §B2, postgres first); **B3** (`consume_async_bursts` restores kafka's
-concurrent per-burst publish).
+concurrent per-burst publish); **A3 / A6** (`zmq_pub` binds at `start()`, which
+pins and fixes the `first_message_not_dropped` slow-joiner flakiness).
 
 ## Keeping this current
 

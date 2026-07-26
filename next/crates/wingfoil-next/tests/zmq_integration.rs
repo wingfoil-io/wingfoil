@@ -88,11 +88,12 @@ fn round_trip_consecutive_counters() {
 /// allows a wider, machine-safe window. Purely a test settle time — the adapter
 /// keeps classic's 50 ms post-accept flush window unchanged.
 ///
-/// Set generously (1500 ms): 600 ms was marginal and dropped the first ~3
-/// messages under CI load (the filter propagated ~150 ms late), so the window is
-/// widened well past the observed establishment time. This is the slow-joiner
-/// margin tracked as deviation **A6** (the mechanism is not yet pinned); a proper
-/// fix — a deterministic connect/filter handshake — is the A6 follow-on.
+/// This window is now genuinely effective: `zmq_pub` binds its `PUB` socket at
+/// graph `start()` (not lazily on the first publish), so the subscriber connects
+/// and its subscription filter propagates *during* this settle time, well before
+/// the first payload — the mechanism behind the earlier deviation **A6**
+/// flakiness. Kept generous (1500 ms) as CI-load headroom; the guarantee no
+/// longer rests on the ~50 ms post-accept margin.
 const SUB_SETTLE: Duration = Duration::from_millis(1500);
 
 #[test]
