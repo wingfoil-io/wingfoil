@@ -126,7 +126,7 @@ motivated the reject only ever required two *mechanisms*, not two public
 | D2 | Factories return `anyhow::Result` (+ `.context`) vs classic's typed `io::Error` (e.g. `prometheus::serve`). | 🟢 | Fallible-with-context convention. |
 | D3 | postgres/redis sinks take a `consume_async` `buffer_size`. | 🟢 | Added back-pressure knob. |
 | D4 | `DemuxMap` uses a `BTreeSet` slot pool (lowest free slot, deterministic) vs classic's `HashSet`. | 🟢 | An *improvement* — aids backtest determinism (#529). |
-| D5 | **otlp pins opentelemetry 0.32; classic still on 0.28.** | 🟡 | Deliberate divergence for security (GHSA-w9wp-h8wv-79jx, #543). **Drift** — bump classic to match to restore lockstep + fix the advisory there. |
+| D5 | **otlp pins opentelemetry 0.32; classic still on 0.28.** | 🟢 | **Won't-fix — moot at cutover.** Deliberate divergence for security (GHSA-w9wp-h8wv-79jx, #543). Classic is retired wholesale at cutover, so next's 0.32 is the surviving version and the classic-side advisory disappears with the legacy tree; bumping classic to restore lockstep is not worth the churn. |
 | D6 | csv malformed-row error surfaces at replay start vs classic mid-stream. | 🟢 | Same run-failure outcome + context string; documented. |
 | D7 | `FileCache` log messages drop the classic "KDB " prefix. | 🟢 | The cache isn't kdb-specific in next. |
 
@@ -138,10 +138,9 @@ motivated the reject only ever required two *mechanisms*, not two public
    and the `zmq_sub` migration landed (#547); finish it by migrating the
    `produce_async` family + the plain `external`/`channel` feeders, then reopen
    §0.4 to make I/O sources **re-runnable** (A2) — the remaining structural win.
-2. **D5** — bump classic's opentelemetry to restore lockstep with next.
-3. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
+2. **B3 / B4** — decide whether the throughput (kafka) / memory (csv) deviations
    matter for the "strict superset" claim, or are acceptable documented trade-offs.
-4. **A6** — measure the channel-sub startup latency to either explain or close it.
+3. **A6** — measure the channel-sub startup latency to either explain or close it.
 
 **Resolved / ratified since this register was written:** **A5** (graph-owned
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via
