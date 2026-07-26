@@ -301,6 +301,27 @@ impl<T> Clone for FeedbackSink<T> {
     }
 }
 
+/// The teardown handle a [`source_at_start`](Builder::source_at_start) `setup`
+/// returns. Whatever it wraps is held for the run and **dropped at teardown**,
+/// so its `Drop` is where a deferred producer stops — the zmq adapter's
+/// `ThreadStopGuard` pattern, generalised and made start-scoped. Wrap any
+/// `'static` value whose `Drop` signals your producer to stop (a stop-flag
+/// guard, a `JoinHandle` wrapper, an owned socket).
+pub struct StopHandle(
+    // Held only for its `Drop`; never read or downcast. Dropping the
+    // `Box<dyn Any>` runs the wrapped guard's own `Drop`, which is what stops
+    // the producer — `Any` (rather than, say, `Box<dyn FnOnce()>`) just so any
+    // `'static` guard type can be wrapped without naming it.
+    #[allow(dead_code)] Box<dyn Any>,
+);
+
+impl StopHandle {
+    /// Wrap a teardown guard; its `Drop` runs when the run tears down.
+    pub fn new(guard: impl Any) -> Self {
+        Self(Box::new(guard))
+    }
+}
+
 /// Wires a graph of [`Op`]s. Combinators mirror the classic fluent API but
 /// the engine — not the node — owns state, config and values.
 pub struct Builder {
@@ -590,6 +611,80 @@ impl Builder {
         );
         let sender = ChannelSender::new(tx, self.waker.clone(), idx);
         (self.make_handle(idx), sender)
+    }
+
+    /// A [`channel`](Self::channel)-fed source whose producer is established in
+    /// `start()` rather than at wiring — the **deferred-connection** primitive.
+    ///
+    /// The factory allocates the channel and stores `setup`, but performs **no**
+    /// I/O: no thread is spawned and no socket is connected while the graph is
+    /// merely being constructed. On each run, `start()` calls `setup`, handing
+    /// it the [`ChannelSender`]; `setup` connects/spawns the live producer and
+    /// returns a [`StopHandle`] that is dropped at teardown (running its `Drop`),
+    /// so the producer is torn down with the run (the `ThreadStopGuard` pattern,
+    /// generalised). A `setup` error aborts the run at start with node context —
+    /// classic-consistent: a connection failure surfaces when the run begins,
+    /// not at construction.
+    ///
+    /// This is what lets an adapter's wiring stay side-effect-free and
+    /// unit-testable: address parsing, registry lookup and historical-mode
+    /// rejection are pure `Result`-returning work done *before* calling this;
+    /// the socket/thread only exist during a run.
+    ///
+    /// Delivery reuses [`channel`](Self::channel), so the same realtime/historical
+    /// burst semantics apply. A *live* deferred source (a subscriber socket, say)
+    /// is realtime-only and its caller should reject historical at wiring, exactly
+    /// as [`channel`](Self::channel) callers do today. The receive channel and
+    /// waker are consumed by the first run, so — like `channel` — a graph built
+    /// with this source is single-run for now (re-run is a documented follow-on;
+    /// see `docs/source-lifecycle-defer-to-start.md`).
+    ///
+    /// **A historical producer must `close()` explicitly.** Unlike
+    /// [`channel`](Self::channel) — whose sender is handed to the caller — this
+    /// source *retains* a live [`ChannelSender`] for the whole run (it clones one
+    /// into `setup` at each start). A historical up-front collect therefore ends
+    /// only on an explicit `close()` / `EndOfStream`, never on the
+    /// all-senders-dropped path (the retained sender keeps the channel open), so
+    /// a producer that finishes by merely dropping its sender would deadlock the
+    /// collect. Realtime live sources — the primary use — are unaffected: they
+    /// terminate on `close()` or the run bound.
+    pub fn source_at_start<T, Setup>(&mut self, setup: Setup) -> Handle<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+        Setup: FnMut(ChannelSender<T>) -> Result<StopHandle> + 'static,
+    {
+        let (handle, sender) = self.channel::<T>();
+        let idx = handle.idx;
+        let node = &mut self.nodes[idx];
+        // The channel node already carries a `start` hook (the historical
+        // collect). Compose the deferred `setup` **ahead** of it: `setup` spawns
+        // the producer first, so a historical deferred source's up-front collect
+        // sees a live producer instead of deadlocking on an unstarted one. For a
+        // realtime live source the collect branch is a no-op, so the order is
+        // moot there.
+        let mut prev_start = std::mem::replace(&mut node.start, Box::new(|_| Ok(())));
+        // Compose (don't clobber) the channel node's teardown as well: it is a
+        // no-op today, but replacing it outright would silently drop any teardown
+        // hook `channel` grows later. Our guard-drop runs first, then the
+        // previous teardown — symmetric with the `start` composition above.
+        let mut prev_teardown = std::mem::replace(&mut node.teardown, Box::new(|_| Ok(())));
+        let mut setup = setup;
+        // Holds the `setup`-returned guard for the duration of the run; the
+        // teardown hook drops it to stop the producer.
+        let stop: Rc<RefCell<Option<StopHandle>>> = Rc::new(RefCell::new(None));
+        let stop_at_start = stop.clone();
+        node.start = Box::new(move |k| {
+            let guard = setup(sender.clone())?;
+            *stop_at_start.borrow_mut() = Some(guard);
+            prev_start(k)
+        });
+        node.teardown = Box::new(move |k| {
+            // Drop the StopHandle → its `Drop` signals the producer to stop,
+            // then run the channel node's own teardown.
+            stop.borrow_mut().take();
+            prev_teardown(k)
+        });
+        handle
     }
 
     pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {

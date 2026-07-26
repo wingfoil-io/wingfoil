@@ -108,6 +108,7 @@ use wingfoil::RunMode;
 use crate::Burst;
 use crate::channel::ChannelSender;
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
+use crate::interp::StopHandle;
 use crate::op::{Activation, Ctx, Tick};
 
 mod registry;
@@ -244,33 +245,24 @@ where
             .with_context(|| format!("zmq_sub: resolving {name:?} via registry"))?,
     };
 
-    let (events, sender) = g.channel::<ZmqEvent<T>>();
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_stop = stop.clone();
-    std::thread::Builder::new()
-        .name("zmq-sub".into())
-        .spawn(move || {
-            if let Err(e) = run_subscriber::<T>(&address, &sender, &thread_stop) {
-                sender.send_error(e);
-            }
-        })
-        .context("zmq_sub: spawning subscriber thread")?;
-
-    // Route the raw event burst through a passthrough op that owns the stop
-    // guard, so the background thread is signalled to stop when the graph is
-    // dropped at teardown.
-    let events = events.wire(move |b, h| {
-        b.register_op1(
-            h,
-            "zmq_sub",
-            Activation::NONE,
-            ThreadStopGuard(stop),
-            || (),
-            move |_g: &mut ThreadStopGuard,
-                  _s: &mut (),
-                  burst: &Burst<ZmqEvent<T>>,
-                  _ctx: &mut Ctx<'_>| { Ok(Tick::Value(burst.clone())) },
-        )
+    // Defer the socket connect and subscriber thread to graph **start**: the
+    // factory above did only pure wiring work (address parse / registry lookup /
+    // historical rejection), touching no socket. `setup` runs at `start()`,
+    // spawns the polling thread, and returns a [`StopHandle`] wrapping the
+    // [`ThreadStopGuard`] so the thread is signalled to stop at teardown.
+    let events = g.source_at_start::<ZmqEvent<T>, _>(move |sender| {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        let address = address.clone();
+        std::thread::Builder::new()
+            .name("zmq-sub".into())
+            .spawn(move || {
+                if let Err(e) = run_subscriber::<T>(&address, &sender, &thread_stop) {
+                    sender.send_error(e);
+                }
+            })
+            .context("zmq_sub: spawning subscriber thread")?;
+        Ok(StopHandle::new(ThreadStopGuard(stop)))
     });
 
     let data = events.map_filter(|burst: &Burst<ZmqEvent<T>>| {

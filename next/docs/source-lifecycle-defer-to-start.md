@@ -1,9 +1,45 @@
 # Deferring I/O source establishment to `start()`
 
-Status: **proposal / not started.** This is a design plan for a handover — it
-describes a change to the wingfoil-next *source lifecycle model*, not a bug fix.
-Read `port-plan.md` §0.4 (the single-run decision) and §1 (the `reset` hook)
-first; this proposal revisits both.
+Status: **spike landed (steps 1 & the zmq migration); re-run still a follow-on.**
+This was a design plan for a handover — it describes a change to the
+wingfoil-next *source lifecycle model*, not a bug fix. Read `port-plan.md` §0.4
+(the single-run decision) and §1 (the `reset` hook) first; this proposal
+revisits both.
+
+## Implemented so far (the spike)
+
+The **deferred-connection primitive and the zmq migration** have landed, i.e.
+the "defer + testability" half of this plan (steps 1–2's spike, which the
+closing note below flags as legitimately landable ahead of re-run):
+
+- **`Builder::source_at_start` / `SourceOps::source_at_start`** (`interp.rs`,
+  `fluent.rs`) — a [`channel`]-fed source whose producer (thread/socket) is
+  established in `start()` rather than at wiring. The factory allocates the
+  channel and stores the `setup` closure but performs **no** I/O. On each run,
+  `start()` calls `setup(sender)`, which connects/spawns the live producer and
+  returns a **`StopHandle`** (a generalised, start-scoped `ThreadStopGuard`)
+  that is dropped at teardown to stop it. A `setup` error aborts the run at
+  start with node context (classic-consistent). Built on the existing `channel`
+  node, so it inherits the burst semantics and the current **single-run**
+  restriction (the receive channel + waker are consumed by the first run).
+- **`zmq_sub` migrated** (`adapters/zmq.rs`) — the SUB socket connect and the
+  polling thread now spawn in `setup` at graph start; wiring does only pure work
+  (address parse, registry lookup, historical-mode rejection). The bespoke
+  stop-guard passthrough op is gone — `source_at_start` owns the stop lifecycle.
+- **Acceptance tests** (`tests/fluent_primitives.rs`) — assert the factory runs
+  no `setup` at wiring/`build()`, that `setup` runs once at start, that the
+  `StopHandle` guard is dropped at teardown, and that a `setup` error aborts the
+  run at start with node context. The existing zmq integration/parity suites
+  cover the real-socket path unchanged.
+
+**Not yet done** (the higher-cost payoff, deliberately left as follow-ons — see
+"The hard part" and the closing note): re-run for I/O sources (the
+reset/channel-recreation interlock, which needs the §0.4 single-run decision
+reopened); and migrating `external`, the plain `channel` feeders, and
+`produce_async`/`produce_async_bounded` (etcd/kafka/redis/postgres) plus the
+`RunParams` simplification.
+
+[`channel`]: ../crates/wingfoil-next/src/interp.rs
 
 ## One-paragraph summary
 
