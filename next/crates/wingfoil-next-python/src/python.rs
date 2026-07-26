@@ -172,6 +172,31 @@ impl Stream {
         Stream(self.0.inspect(func))
     }
 
+    /// Collect every emitted value into a growing `list`, re-emitted each tick.
+    fn accumulate(&self) -> Stream {
+        Stream(self.0.accumulate())
+    }
+
+    /// Flush a `list` once `capacity` values accumulate (and on the last cycle).
+    fn buffer(&self, capacity: usize) -> Stream {
+        Stream(self.0.buffer(capacity))
+    }
+
+    /// Flush a `list` on each `interval_nanos` boundary (and on the last cycle).
+    fn window(&self, interval_nanos: u64) -> Stream {
+        Stream(self.0.window(Duration::from_nanos(interval_nanos)))
+    }
+
+    /// Pair each value with the engine time as a `(nanos, value)` tuple.
+    fn with_time(&self) -> Stream {
+        Stream(self.0.with_time())
+    }
+
+    /// Collect every `(nanos, value)` pair into a growing `list` of tuples.
+    fn collect(&self) -> Stream {
+        Stream(self.0.collect())
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()

@@ -26,8 +26,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
+use pyo3::IntoPyObject;
 use pyo3::prelude::*;
-use wingfoil::{RunFor, RunMode};
+use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
@@ -37,6 +38,19 @@ use crate::PyElement;
 /// The runner produced by [`PyGraph::run`], shared by the graph and every
 /// [`PyStream`] wired from it so `value()` works on whichever you kept.
 type RunnerSlot = Rc<RefCell<Option<Runner>>>;
+
+/// Box a `(time, value)` pair into a Python `(nanos, value)` tuple element —
+/// the edge conversion shared by `with_time` and `collect` (nanoseconds as an
+/// int).
+fn time_value_tuple(time: NanoTime, value: &PyElement) -> PyElement {
+    Python::attach(|py| {
+        let nanos = u64::from(time) as i64;
+        let tuple = (nanos, value.value())
+            .into_pyobject(py)
+            .expect("invariant: (i64, PyObject) is always tuple-convertible");
+        PyElement::new(tuple.into_any().unbind())
+    })
+}
 
 /// A held graph with the classic `run` / read-value ergonomics, erased to
 /// [`PyElement`]. Clones share the same underlying builder and runner slot.
@@ -265,6 +279,64 @@ impl PyStream {
         self.wrap(observed)
     }
 
+    /// Collect every emitted value into a growing Python `list`, re-emitted each
+    /// tick (the classic `accumulate`).
+    pub fn accumulate(&self) -> PyStream {
+        let acc = self
+            .stream
+            .accumulate()
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(acc)
+    }
+
+    /// Buffer values and flush them as a Python `list` once `capacity`
+    /// accumulate (and once more on the last cycle).
+    pub fn buffer(&self, capacity: usize) -> PyStream {
+        let buffered = self
+            .stream
+            .buffer(capacity)
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(buffered)
+    }
+
+    /// Buffer values and flush them as a Python `list` on each `interval`
+    /// boundary (and once more on the last cycle).
+    pub fn window(&self, interval: Duration) -> PyStream {
+        let windowed = self
+            .stream
+            .window(interval)
+            .map(|items: &Vec<PyElement>| PyElement::list(items));
+        self.wrap(windowed)
+    }
+
+    /// Pair each value with the current engine time as a Python `(nanos, value)`
+    /// tuple (the classic `with_time`, nanoseconds as an int).
+    pub fn with_time(&self) -> PyStream {
+        let timed = self
+            .stream
+            .with_time()
+            .map(|(time, value): &(NanoTime, PyElement)| time_value_tuple(*time, value));
+        self.wrap(timed)
+    }
+
+    /// Collect every `(nanos, value)` pair into a growing Python `list` of
+    /// tuples, re-emitted each tick (the classic `collect` — value + time,
+    /// what `dataframe` builds on).
+    pub fn collect(&self) -> PyStream {
+        let collected =
+            self.stream
+                .with_time()
+                .accumulate()
+                .map(|rows: &Vec<(NanoTime, PyElement)>| {
+                    let tuples: Vec<PyElement> = rows
+                        .iter()
+                        .map(|(time, value)| time_value_tuple(*time, value))
+                        .collect();
+                    PyElement::list(&tuples)
+                });
+        self.wrap(collected)
+    }
+
     /// Wire a **single-input op** onto this stream at the erased boundary — the
     /// extensibility primitive third-party ops (and the `pyop!` macro) build
     /// on. The op computes on its own concrete types: the input is extracted
@@ -422,6 +494,45 @@ mod tests {
         // Passes the value through unchanged.
         let v: i64 = (&tapped.value()).try_into().unwrap();
         assert_eq!(3, v);
+    }
+
+    #[test]
+    fn accumulate_grows_a_list() {
+        let g = PyGraph::new();
+        let acc = g.counter(Duration::from_nanos(100)).accumulate();
+        run_cycles(&g, 3);
+        let v: Vec<i64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+        assert_eq!(vec![1, 2, 3], v);
+    }
+
+    #[test]
+    fn buffer_flushes_a_list_at_capacity() {
+        let g = PyGraph::new();
+        let buffered = g.counter(Duration::from_nanos(100)).buffer(2);
+        run_cycles(&g, 4);
+        // Last full flush is [3, 4].
+        let v: Vec<i64> = Python::attach(|py| buffered.value().value().extract(py).unwrap());
+        assert_eq!(vec![3, 4], v);
+    }
+
+    #[test]
+    fn with_time_pairs_nanos_and_value() {
+        let g = PyGraph::new();
+        let timed = g.counter(Duration::from_nanos(100)).with_time();
+        run_cycles(&g, 3);
+        // Ticks fire at t=0,100,200 — 3rd tick is value 3 at t=200.
+        let pair: (i64, i64) = Python::attach(|py| timed.value().value().extract(py).unwrap());
+        assert_eq!((200, 3), pair);
+    }
+
+    #[test]
+    fn collect_gathers_time_value_tuples() {
+        let g = PyGraph::new();
+        let collected = g.counter(Duration::from_nanos(100)).collect();
+        run_cycles(&g, 2);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| collected.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 1), (100, 2)], rows);
     }
 
     #[test]

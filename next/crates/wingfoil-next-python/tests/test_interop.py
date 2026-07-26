@@ -221,3 +221,38 @@ def test_inspect_exception_aborts_run():
     g.counter(period_nanos=100).inspect(boom)
     with pytest.raises(RuntimeError, match="Python inspect callable raised"):
         g.run(cycles=1)
+
+
+def test_accumulate_grows_a_list():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).accumulate()
+    g.run(cycles=3)
+    assert out.value() == [1, 2, 3]
+
+
+def test_buffer_flushes_at_capacity():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).buffer(2)
+    g.run(cycles=4)
+    assert out.value() == [3, 4]  # last full flush
+
+
+def test_window_flushes_on_interval():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).window(interval_nanos=200)
+    g.run(cycles=6)
+    assert out.value() == [5, 6]  # last window boundary flush
+
+
+def test_with_time_pairs_nanos_and_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).with_time()
+    g.run(cycles=3)
+    assert out.value() == (200, 3)  # ticks at t=0,100,200
+
+
+def test_collect_gathers_time_value_tuples():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).collect()
+    g.run(cycles=2)
+    assert out.value() == [(0, 1), (100, 2)]
