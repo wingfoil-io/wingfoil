@@ -964,10 +964,24 @@ tests covered — not "legacy pytest passes unchanged."
   `PyStream` above).
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `graph!`),
-  keeping classic versions until Phase 7.
-- **Benchmarks**: rerun the four-way tiers bench as a regression gate —
-  next-interpreted ≥ classic-interpreted; compiled/island wins hold
-  (dispatch ~2×, inline 3–4× on the measured workloads).
+  keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
+  breadth_first, run_mode, statistics, threading, async, feedback, and the
+  runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`).
+  Remaining: `latency` / `telemetry` (adapter/cross-process), and `tracing`
+  (blocked — next has no `tracing`/`instrument` feature or `.logged()` yet).
+- **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
+  runs a `classic` (legacy interpreted) bar beside next's
+  `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`
+  is directly readable via `cargo bench --bench tiers`. Current measured
+  relationship: next-interpreted **beats** classic on `dense_chain`
+  (dispatch-bound) and `accumulate` (loop-bound), but **trails** it on wide
+  `fanout` (~40% slower — every node fires every cycle, so the sparse
+  dirty-list path can't help). compiled/island win decisively across the board
+  (compiled fan-out ~25× either interpreter). ⚠️ *Standing perf item*: close the
+  dense-`fanout` interpreted gap (or document it as accepted, since the
+  compiled/nested tiers are the intended hot path for such graphs). Wiring the
+  bench as an automated CI gate is deferred — criterion wall-clock thresholds
+  are too noisy for the shared CI runners; it stays a run-on-demand scaffold.
 
 ## Phase 7 — cutover
 
