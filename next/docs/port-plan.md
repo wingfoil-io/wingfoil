@@ -411,11 +411,30 @@ Inventory (classic `nodes/` → target), grouped by effort:
 | Scheduling | ✅ throttle, delay_with_reset, node_flow (node-level delay/filter/limit/throttle, run over the unit-stream path, `tests/catalog_flow.rs`) | `SCHEDULES`/time-gated; pattern proven by delay + throttle |
 | Multi-input | ✅ bimap (active/passive) + join, trimap + join3, try_* variants (`tests/catalog_ops.rs`) | passive `bimap` unlocked passive feedback; `trimap` is the 3-ary combine |
 | Engine-touching | always (→`ALWAYS`, done), ✅ never (`tests/catalog_flow.rs`), finally (needs teardown, done), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
-| Structural / deferred | demux, dynamic_group, graph_node | multi-output + dynamic-graph decisions below |
+| Structural / deferred | demux ✅, dynamic_group ✅, ✅ graph_node (→`spawn`/`spawn_map`, `tests/spawn.rs`) | multi-output + dynamic-graph notes below |
 
-**Dynamic graphs** (`graph_node`, `dynamic_group`, the dynamic examples):
-islands already cover *static* subgraphs composed procedurally (including in
-loops). Runtime graph *mutation* has since landed as a separate feature
+**`graph_node` (thread-offload) ✅ ported as `spawn` / `spawn_map`.** classic
+`graph_node` is two combinators — `producer()` (a source sub-graph on a worker
+thread) and `.mapper()` (map an input stream through a worker sub-graph). Their
+next twins are `SourceOps::spawn` and `StreamOps::spawn_map` (`fluent.rs`), riding
+the channel layer: the worker builds and runs its own graph at run start (under
+the driving run's inherited mode + bound) and exchanges timestamped values over
+the channel. Both run in **both** modes. Historical mode is deterministic and
+lock-step by graph time — which required replacing the channel's historical
+*block-collect* with an **incremental, timestamp-gated read** (classic's
+"block-while-behind / non-block-once-caught-up" loop, `interp.rs::pump_historical`)
+so a worker that depends on the driving graph's output no longer deadlocks. That
+incremental read also gives every channel bounded (one-ahead) memory. Parity
+tests in `tests/spawn.rs`; the classic `graph_node_works` oracle. *Lock-step
+caveat (matches classic):* the sub-graph is expected to emit a result per input
+instant; bound historical `spawn_map` runs by duration, not a raw cycle count
+(the lock-step reader spends one no-op poll cycle between instants — a next
+monotonic-clock artifact with no effect on values/times).
+
+**Dynamic graphs** (`dynamic_group`, the dynamic examples): distinct from
+`graph_node` above — this is runtime graph *mutation* (add/remove nodes mid-run),
+not thread-offload. islands already cover *static* subgraphs composed procedurally
+(including in loops). Runtime mutation has since landed as a separate feature
 (behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope
 (append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
 and `Builder::demux` on the interpreted engine.
@@ -460,10 +479,11 @@ values and tick times.
   deterministically on its final write cannot migrate to it yet (see etcd).
 - ✅ Classic `threading`/`async` examples re-implemented on next. `threading`
   (`examples/threading/`) offloads a producer sub-graph to a worker thread that
-  feeds the main graph over the channel layer — next's take on classic
-  `producer()`/`mapper()`, which stay out of the fluent vocabulary (the channel
-  primitive replaces the sugar) — and runs in both modes (realtime bursts,
-  deterministic historical replay). `async` (`examples/async/`, gated on the
+  feeds the main graph over the channel layer — the primitive under classic
+  `producer()`/`mapper()` (the `graph_node` node), which now **also** have direct
+  fluent twins, `SourceOps::spawn` / `StreamOps::spawn_map` (see the Phase 2
+  `graph_node` entry) — and runs in both modes (realtime bursts, deterministic
+  historical replay). `async` (`examples/async/`, gated on the
   `async` feature) drives the graph from a `produce_async` producer with the
   graph as consumer. Bounded-buffer back-pressure (`produce_async_bounded`) and
   wiring-time `RunParams` (validated against the real run in historical mode)

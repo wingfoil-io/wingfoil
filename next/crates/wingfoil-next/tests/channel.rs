@@ -152,3 +152,35 @@ fn message_equality_matches_classic() {
     let e2 = Message::<u64>::Error(std::sync::Arc::new(anyhow::anyhow!("x")));
     assert_ne!(e1, e2);
 }
+
+/// `channel_bounded(Some(n))`: a concurrent producer sends more values than the
+/// bound, so its `send` blocks (back-pressure) until the graph drains — yet the
+/// historical replay is lossless and deterministic, identical to the unbounded
+/// channel. (The producer runs on its own thread, so it is drained *during* the
+/// run; a producer that queued everything before the run must stay unbounded.)
+#[test]
+fn channel_bounded_applies_backpressure_without_changing_the_result() {
+    let g = GraphBuilder::new();
+    let (values, sender) = g.channel_bounded::<u64>(Some(2));
+    let acc = values.with_time().accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        // 8 values, buffer of 2 → the producer blocks after the 2nd until the
+        // graph reads, and so on. All must still arrive at their timestamps.
+        for i in 1..=8u64 {
+            sender.send_at(i * 10, NanoTime::new(i * 100));
+        }
+        sender.close();
+    });
+
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    producer.join().expect("producer thread");
+
+    let got = r.value(&acc);
+    let values: Vec<u64> = got.iter().flat_map(|(_, v)| v.clone()).collect();
+    let times: Vec<u64> = got.iter().map(|(t, _)| u64::from(*t)).collect();
+    assert_eq!(values, (1..=8).map(|i| i * 10).collect::<Vec<u64>>());
+    assert_eq!(times, (1..=8).map(|i| i * 100).collect::<Vec<u64>>());
+}

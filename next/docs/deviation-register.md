@@ -47,6 +47,23 @@ has its own decision record in
 | B3 | **`kafka_pub` produces sequentially** (single ordered `consume_async` consumer, N roundtrips/burst) vs classic's concurrent `FuturesUnordered` (one roundtrip/burst). | 🟡 | Order-preserving but a throughput deviation. `adapters/kafka.rs` deviation #4. |
 | B4 | **csv reads the whole file up front** vs classic's lazy row streaming. | 🟡 | Unbounded-memory for a huge file under `RunFor::Forever`. `adapters/csv.rs` "consequences of using the channel source". |
 | B5 | **`postgres_read` queries all slices at wiring** onto `replay_results` vs classic's lazy `produce_async`. | 🟢🟡 | "Identical for a bounded historical run," but buffers the whole result set (memory). Same family as A1. `adapters/postgres.rs` deviation #2. |
+| B6 | **`spawn_map` historical is lock-step by graph time** (twin of classic `mapper()`). | 🟢🟡 | Values + tick times match classic. Two benign artifacts: (a) the sub-graph is expected to emit a result per input instant (a filtering/delaying sub-graph desynchronises the lock-step — classic's `graph_node` delay case likewise fails); (b) the lock-step reader spends one no-op poll cycle between instants (next's monotonic-clock re-arm), so bound runs by **duration**, not a raw cycle count. `fluent.rs::spawn_map`, `tests/spawn.rs`. |
+
+## Resolved
+
+- **Channel historical block-collect → incremental read.** The historical channel
+  source previously block-collected the entire feed into memory at `start()`
+  (documented deviation: unbounded memory + deadlocks a producer that depends on
+  the graph's output). Replaced with an incremental, timestamp-gated one-ahead
+  read (`interp.rs::pump_historical`, classic's block-while-behind loop), giving
+  bounded memory and unblocking concurrent producer↔consumer (this is what makes
+  `spawn_map` historical possible). B4/B5 (csv/postgres reading everything at
+  wiring) are now adapter-side pre-queueing, no longer amplified by the channel.
+  The transport itself is still unbounded by default, but opt-in back-pressure is
+  available — `SourceOps::channel_bounded` / `spawn_bounded` / `spawn_map_bounded`
+  take `Option<usize>` (`None` = unbounded, `Some(n)` = `sync_channel(n)`). Not for
+  producers that fill the buffer before the run starts (`replay_results`, csv,
+  `postgres_read`) — those stay on the unbounded path.
 
 ### B2 — agreed plan: unified `<adapter>_source`
 

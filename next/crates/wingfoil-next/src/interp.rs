@@ -51,7 +51,7 @@ use anyhow::{Result, bail};
 static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
-use crate::channel::{ChannelSender, Message};
+use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{
@@ -104,6 +104,137 @@ impl<T> Handle<T> {
     pub fn index(&self) -> usize {
         self.idx
     }
+}
+
+/// A historical channel receiver's persistent read state: the time-grouped
+/// look-ahead buffer, an end-of-stream flag, and the highest timestamp seen so
+/// far (a group is known-complete once a strictly-later timestamp arrives or the
+/// stream ends). Carried in the channel node's shared cell across cycles.
+struct HistRead<T: Default> {
+    groups: VecDeque<(NanoTime, Burst<T>)>,
+    eof: bool,
+    seen_max: Option<NanoTime>,
+}
+
+impl<T: Default> Default for HistRead<T> {
+    fn default() -> Self {
+        Self {
+            groups: VecDeque::new(),
+            eof: false,
+            seen_max: None,
+        }
+    }
+}
+
+/// Incrementally drain a historical channel receiver into time-grouped
+/// look-ahead bursts — the streaming counterpart of the old block-collect.
+///
+/// Reads messages until either every group with time `<= upto` is known
+/// complete (a strictly-later timestamp has been seen, or the stream ended)
+/// or — when `blocking` is `false` — the channel is momentarily empty. This is
+/// the port of classic `ChannelReceiverStream`'s "block while behind, stop once
+/// caught up" loop (`wingfoil/src/nodes/channel.rs`): it holds at most one group
+/// of look-ahead, so memory is bounded and a producer that depends on the
+/// receiving graph's own output can make progress (the block-collect predecessor
+/// deadlocked it, which is why `spawn_map`'s historical mode was impossible).
+///
+/// `state` is the receiver's persistent read state (see [`HistRead`]). Timestamps
+/// must be `>= start_time` and non-decreasing (classic errors on either); a
+/// `Message::Error` aborts the run.
+///
+/// `read_past` distinguishes the two classic drive modes. A **self-driven**
+/// receiver reads *past* `upto` (`seen_max > upto`) so a same-time burst
+/// delivered as separate messages is drained whole before delivery. A
+/// **triggered** receiver (the `spawn_map` worker feed) stops as soon as it has
+/// the value *at* `upto` (`seen_max >= upto`) and never reads ahead — reading
+/// past would block on a value the producer cannot send until it receives more
+/// input from this very graph, the deadlock the block-collect had.
+fn pump_historical<T: Clone + Default>(
+    rx: &std::sync::mpsc::Receiver<Message<T>>,
+    state: &mut HistRead<T>,
+    start_time: NanoTime,
+    upto: NanoTime,
+    read_past: bool,
+    blocking: bool,
+) -> Result<()> {
+    use std::sync::mpsc::TryRecvError;
+    loop {
+        if state.eof {
+            break;
+        }
+        // Stop once everything at or before `upto` is buffered. Self-driven
+        // reads one strictly-later timestamp to close a same-time burst;
+        // triggered stops at the first message stamped `>= upto`.
+        if let Some(mx) = state.seen_max
+            && (if read_past { mx > upto } else { mx >= upto })
+        {
+            break;
+        }
+        let msg = if blocking {
+            match rx.recv() {
+                Ok(m) => m,
+                // All senders dropped without an explicit close.
+                Err(_) => {
+                    state.eof = true;
+                    break;
+                }
+            }
+        } else {
+            match rx.try_recv() {
+                Ok(m) => m,
+                // Nothing more buffered right now — a triggered receiver stops
+                // here rather than blocking (that is what avoids the deadlock).
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    state.eof = true;
+                    break;
+                }
+            }
+        };
+        let (t, v) = match msg {
+            Message::ValueAt(v, t) => (t, v),
+            // An unstamped value replays at the run's start time.
+            Message::Value(v) => (start_time, v),
+            // A progress marker carries no value; the historical block-collect
+            // predecessor ignored it, so we do too (it neither ticks nor groups).
+            Message::Checkpoint(_) => continue,
+            Message::EndOfStream => {
+                state.eof = true;
+                break;
+            }
+            Message::Error(e) => {
+                return Err(
+                    anyhow::anyhow!("{e:#}").context("channel receiver: producer sent an error")
+                );
+            }
+        };
+        // Reject a pre-start timestamp: the kernel schedules callbacks verbatim,
+        // so a time before `start_time` would rewind the run clock. Classic
+        // errors on any time behind the graph clock; we mirror that.
+        if t < start_time {
+            return Err(anyhow::anyhow!(
+                "channel receiver: historical send_at time {t} is before the run start time \
+                 {start_time} — timestamps must be at or after the start of the replay"
+            ));
+        }
+        // Enforce non-decreasing send order (the graph clock only advances, so
+        // an earlier timestamp is the equivalent of classic's behind-the-clock
+        // message).
+        if let Some(mx) = state.seen_max
+            && t < mx
+        {
+            return Err(anyhow::anyhow!(
+                "channel receiver: historical send_at time {t} is out of order (after {mx}) — \
+                 timestamped sends must be non-decreasing (classic errors on out-of-order)"
+            ));
+        }
+        state.seen_max = Some(t);
+        match state.groups.back_mut() {
+            Some((bt, burst)) if *bt == t => burst.push(v),
+            _ => state.groups.push_back((t, Burst::from([v]))),
+        }
+    }
+    Ok(())
 }
 
 impl Builder {
@@ -483,40 +614,149 @@ impl Builder {
     pub fn channel<T: Clone + Default + 'static>(
         &mut self,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        self.channel_bounded(None)
+    }
+
+    /// [`channel`](Self::channel) with an optional transport bound. `None` is the
+    /// unbounded default; `Some(n)` makes the producer→graph transport a bounded
+    /// `sync_channel(n)`, so a producer sending faster than the graph drains
+    /// **blocks** on `send` (back-pressure) instead of accumulating an unbounded
+    /// backlog. **Do not** bound a producer that fills the buffer *before the run
+    /// starts* (e.g. `replay_results`, which queues its whole feed at wiring —
+    /// there is no running consumer to drain it, so a bounded send would block at
+    /// wiring); those keep the unbounded path.
+    pub fn channel_bounded<T: Clone + Default + 'static>(
+        &mut self,
+        buffer: Option<usize>,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        // Self-driven, read-ahead: an independent producer may batch several
+        // values at one instant, so read one timestamp past `now` to close the
+        // same-time burst before delivering it.
+        self.channel_inner(None, true, buffer)
+    }
+
+    /// A channel receiver driven by an upstream `trigger` node rather than
+    /// self-scheduling — the incremental, non-blocking counterpart used to feed
+    /// a `spawn_map` worker's output back into the graph. In historical mode it
+    /// reads only what is already due at the current time (blocking while behind
+    /// to stay deterministic, never reading ahead), so a producer that depends on
+    /// this graph's output — the worker — can make progress. The trigger must
+    /// tick at (at least) every instant the receiver should deliver at, and
+    /// should be sequenced *after* whatever sends the worker its input (wire the
+    /// send sink as the trigger, so its lower layer runs first each cycle).
+    pub(crate) fn channel_triggered<T: Clone + Default + 'static>(
+        &mut self,
+        trigger: usize,
+        buffer: Option<usize>,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        self.channel_inner(Some(trigger), false, buffer)
+    }
+
+    /// A self-driven channel receiver that delivers one instant at a time with
+    /// **no read-ahead** — for a producer feeding it in lock-step with this
+    /// graph's clock (a `spawn_map` worker's *input*, fed one value per instant by
+    /// the driving graph). Reading ahead would block on a value the producer
+    /// cannot send until this graph advances, which it cannot while the reader
+    /// blocks — the lock-step deadlock. Safe precisely because such a feed carries
+    /// a single value per instant (no same-time burst to close).
+    pub(crate) fn channel_lockstep<T: Clone + Default + 'static>(
+        &mut self,
+        buffer: Option<usize>,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        self.channel_inner(None, false, buffer)
+    }
+
+    fn channel_inner<T: Clone + Default + 'static>(
+        &mut self,
+        trigger: Option<usize>,
+        read_ahead: bool,
+        buffer: Option<usize>,
+    ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        let triggered = trigger.is_some();
         let idx = self.nodes.len();
         let out = self.new_slot(Burst::<T>::new());
-        let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+        // Unbounded by default; `Some(n)` bounds the transport to `sync_channel(n)`
+        // so a producer outrunning the graph blocks on `send` (back-pressure).
+        let (tx, rx) = match buffer {
+            None => {
+                let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+                (Tx::Unbounded(tx), rx)
+            }
+            Some(n) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Message<T>>(n);
+                (Tx::Bounded(tx), rx)
+            }
+        };
         self.has_channel = true;
         // The receiver is drained (historical) or waker-driven (realtime) by
         // the first run; a second run would see an empty channel.
         self.re_runnable = false;
-        // Shared between the cycle and start adapters: the receiver, plus the
-        // time-grouped bursts the historical `start` fills.
-        let cs = Self::cell(rx, VecDeque::<(NanoTime, Burst<T>)>::new());
+        // Shared between the cycle and start adapters: the receiver plus the
+        // incremental historical read state (see `HistRead`). One-ahead, not
+        // block-collect (see `pump_historical`).
+        let cs = Self::cell(rx, HistRead::<T>::default());
         let cs2 = cs.clone();
         let finished = self.finished.clone();
         self.push_node(
-            Vec::new(),
+            trigger.map(|t| vec![t]).unwrap_or_default(),
             Activation {
-                schedules: true,
+                // A self-driven receiver re-arms its own callbacks; a triggered
+                // one is fired by its upstream (and a realtime waker), so it does
+                // not schedule.
+                schedules: !triggered,
                 threaded: true,
                 always: false,
             },
-            "channel",
+            if triggered {
+                "channel(triggered)"
+            } else {
+                "channel"
+            },
             Box::new(move |k| {
                 match k.run_mode() {
-                    // Historical: emit the burst grouped at the current time.
+                    // Historical: read incrementally up to the current time
+                    // (block while behind so a same-time burst arrives whole),
+                    // deliver the group due now, and — when self-driven — re-arm
+                    // at the next group's timestamp. Never block-collect.
                     RunMode::HistoricalFrom(_) => {
                         let now = k.time();
-                        let (_, groups) = &mut *cs.borrow_mut();
-                        match groups.front() {
+                        let start_time = k.start_time();
+                        let (rx, state) = &mut *cs.borrow_mut();
+                        // `read_ahead` false: stop at the value due now, never
+                        // read ahead (reading ahead would block on data the
+                        // producer cannot send until this graph advances — the
+                        // lock-step deadlock).
+                        pump_historical(rx, state, start_time, now, read_ahead, true)?;
+                        let ticked = match state.groups.front() {
                             Some((t, _)) if *t <= now => {
-                                let (_, burst) = groups.pop_front().expect("front checked");
+                                let (_, burst) = state.groups.pop_front().expect("front checked");
                                 *out.borrow_mut() = burst;
-                                Ok(true)
+                                true
                             }
-                            _ => Ok(false),
+                            _ => false,
+                        };
+                        // Self-driven only: re-arm at the next buffered group's
+                        // (always future) time; if none is buffered but the stream
+                        // is still open, wake at `now` so the next cycle blocks for
+                        // the next message. A triggered receiver is re-fired by its
+                        // upstream instead.
+                        if !triggered {
+                            match state.groups.front() {
+                                Some((t, _)) => k.schedule(idx, *t),
+                                // Nothing buffered ahead. If the stream is still
+                                // open, re-arm at `now` (the kernel bumps it one
+                                // tick forward) so the next cycle blocks for the
+                                // next message — classic's caught-up
+                                // `add_callback(now)` (channel.rs:238). A closed
+                                // (eof) stream just winds down.
+                                None => {
+                                    if !state.eof {
+                                        k.schedule(idx, now);
+                                    }
+                                }
+                            }
                         }
+                        Ok(ticked)
                     }
                     // Realtime: drain everything pending into one burst.
                     RunMode::RealTime => {
@@ -555,77 +795,21 @@ impl Builder {
                 }
             }),
             Box::new(move |k| {
-                // Historical: block-collect the whole timestamped stream up
-                // front (producer sends values then closes), group same-time
-                // values into bursts, and schedule one delivery per timestamp.
+                // Historical, self-driven only: seed the incremental read. Read
+                // just far enough to learn the first group's timestamp, then
+                // schedule the first wakeup at it; per-cycle `pump_historical`
+                // streams the rest on demand. No block-collect — bounded memory,
+                // and a producer that depends on this graph's output still gets to
+                // run (the deadlock the old block-collect documented is gone).
                 //
-                // KNOWN DEVIATION from classic (`wingfoil/src/nodes/channel.rs`),
-                // which reads incrementally and non-blocking once caught up:
-                // this `start` hook *blocks* until the producer closes and holds
-                // the entire feed in memory. It therefore (a) uses unbounded
-                // memory for large feeds, and (b) would deadlock a producer that
-                // depends on this graph's output (it never gets to run). Fine
-                // for the finite offline-replay case; a streaming/back-pressured
-                // variant is future work.
-                if let RunMode::HistoricalFrom(_) = k.run_mode() {
+                // A triggered receiver seeds nothing at start: it must not read
+                // before its trigger has sent the worker any input, and it is
+                // driven forward by that trigger, not by self-scheduled callbacks.
+                if !triggered && let RunMode::HistoricalFrom(_) = k.run_mode() {
                     let start_time = k.start_time();
-                    let mut collected: Vec<(NanoTime, T)> = Vec::new();
-                    {
-                        let (rx, _) = &mut *cs2.borrow_mut();
-                        loop {
-                            match rx.recv() {
-                                Ok(Message::ValueAt(v, t)) => {
-                                    // Reject a pre-start timestamp: the kernel
-                                    // schedules callbacks verbatim, so a time
-                                    // before `start_time` would rewind the run
-                                    // clock (the first cycle firing before
-                                    // `HistoricalFrom(start)`). Classic errors on
-                                    // any time behind the graph clock; we mirror
-                                    // that.
-                                    if t < start_time {
-                                        return Err(anyhow::anyhow!(
-                                            "channel receiver: historical send_at time {t} is \
-                                             before the run start time {start_time} — timestamps \
-                                             must be at or after the start of the replay"
-                                        ));
-                                    }
-                                    // Enforce non-decreasing send order (classic
-                                    // errors on a message stamped behind the graph
-                                    // clock; here the graph clock only advances,
-                                    // so out-of-order sends are the equivalent).
-                                    if let Some((prev, _)) = collected.last()
-                                        && t < *prev
-                                    {
-                                        return Err(anyhow::anyhow!(
-                                            "channel receiver: historical send_at time {t} is \
-                                             out of order (after {prev}) — timestamped sends must \
-                                             be non-decreasing (classic errors on out-of-order)"
-                                        ));
-                                    }
-                                    collected.push((t, v));
-                                }
-                                Ok(Message::Value(v)) => collected.push((start_time, v)),
-                                Ok(Message::Checkpoint(_)) => {}
-                                Ok(Message::EndOfStream) => break,
-                                Ok(Message::Error(e)) => {
-                                    return Err(anyhow::anyhow!("{e:#}")
-                                        .context("channel receiver: producer sent an error"));
-                                }
-                                // All senders dropped without an explicit close.
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    // Order is already validated non-decreasing above; group
-                    // consecutive equal timestamps into one burst.
-                    let (_, groups) = &mut *cs2.borrow_mut();
-                    for (t, v) in collected {
-                        match groups.back_mut() {
-                            Some((bt, burst)) if *bt == t => burst.push(v),
-                            _ => groups.push_back((t, Burst::from([v]))),
-                        }
-                    }
-                    for (t, _) in groups.iter() {
+                    let (rx, state) = &mut *cs2.borrow_mut();
+                    pump_historical(rx, state, start_time, start_time, read_ahead, true)?;
+                    if let Some((t, _)) = state.groups.front() {
                         k.schedule(idx, *t);
                     }
                 }
@@ -671,12 +855,33 @@ impl Builder {
     /// a producer that finishes by merely dropping its sender would deadlock the
     /// collect. Realtime live sources — the primary use — are unaffected: they
     /// terminate on `close()` or the run bound.
-    pub fn source_at_start<T, Setup>(&mut self, setup: Setup) -> Handle<Burst<T>>
+    pub fn source_at_start<T, Setup>(&mut self, mut setup: Setup) -> Handle<Burst<T>>
     where
         T: Clone + Default + 'static,
         Setup: FnMut(ChannelSender<T>) -> Result<StopHandle> + 'static,
     {
-        let (handle, sender) = self.channel::<T>();
+        self.source_at_start_with_params(None, move |sender, _run_mode, _run_for, _start_time| {
+            setup(sender)
+        })
+    }
+
+    /// Like [`source_at_start`](Self::source_at_start), but the `setup` closure
+    /// is also handed the run's [`RunMode`]/[`RunFor`]/`start_time` at start — the
+    /// bounds a producer needs when it must itself run a *sub-graph* under the
+    /// same bound. This is what [`spawn`](crate::fluent::SourceOps::spawn) rides:
+    /// its worker thread builds and runs its own graph and can only learn the run
+    /// parameters here (they do not exist at wiring). The composed `start`/
+    /// `teardown` semantics are identical to `source_at_start`.
+    pub(crate) fn source_at_start_with_params<T, Setup>(
+        &mut self,
+        buffer: Option<usize>,
+        setup: Setup,
+    ) -> Handle<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+        Setup: FnMut(ChannelSender<T>, RunMode, RunFor, NanoTime) -> Result<StopHandle> + 'static,
+    {
+        let (handle, sender) = self.channel_bounded::<T>(buffer);
         let idx = handle.idx;
         let node = &mut self.nodes[idx];
         // The channel node already carries a `start` hook (the historical
@@ -697,7 +902,7 @@ impl Builder {
         let stop: Rc<RefCell<Option<StopHandle>>> = Rc::new(RefCell::new(None));
         let stop_at_start = stop.clone();
         node.start = Box::new(move |k| {
-            let guard = setup(sender.clone())?;
+            let guard = setup(sender.clone(), k.run_mode(), k.run_for(), k.start_time())?;
             *stop_at_start.borrow_mut() = Some(guard);
             prev_start(k)
         });
@@ -708,6 +913,34 @@ impl Builder {
             prev_teardown(k)
         });
         handle
+    }
+
+    /// Compose a worker-spawn onto an **existing** node's `start`/`teardown`
+    /// (unlike [`source_at_start_with_params`](Self::source_at_start_with_params),
+    /// which mints a fresh channel source). At run start `setup` is handed the run
+    /// params and returns a [`StopHandle`] held for the run and dropped at
+    /// teardown. Used by [`spawn_map`](crate::fluent::StreamOps::spawn_map) to
+    /// launch its worker off the *output receiver* node once the run bounds are
+    /// known. `idx` must be a valid node index in this builder.
+    pub(crate) fn compose_spawn_at_start<S>(&mut self, idx: usize, setup: S)
+    where
+        S: FnMut(RunMode, RunFor, NanoTime) -> Result<StopHandle> + 'static,
+    {
+        let node = &mut self.nodes[idx];
+        let mut prev_start = std::mem::replace(&mut node.start, Box::new(|_| Ok(())));
+        let mut prev_teardown = std::mem::replace(&mut node.teardown, Box::new(|_| Ok(())));
+        let mut setup = setup;
+        let stop: Rc<RefCell<Option<StopHandle>>> = Rc::new(RefCell::new(None));
+        let stop_at_start = stop.clone();
+        node.start = Box::new(move |k| {
+            let guard = setup(k.run_mode(), k.run_for(), k.start_time())?;
+            *stop_at_start.borrow_mut() = Some(guard);
+            prev_start(k)
+        });
+        node.teardown = Box::new(move |k| {
+            stop.borrow_mut().take();
+            prev_teardown(k)
+        });
     }
 
     /// Resolve the tokio runtime [`Handle`](tokio::runtime::Handle) the async

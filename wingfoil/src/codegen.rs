@@ -168,6 +168,22 @@ impl Kernel {
         self.run_mode
     }
 
+    /// The run bound this kernel was built with, reconstructed from the derived
+    /// end-time / end-cycle sentinels (the mirror of [`run_mode`](Self::run_mode)).
+    /// Lets a source run a *sub-graph* under the same bound — e.g. a worker-thread
+    /// producer (`spawn`) whose graph must stop when the driving graph does.
+    pub fn run_for(&self) -> RunFor {
+        if self.end_cycle != u32::MAX {
+            RunFor::Cycles(self.end_cycle)
+        } else if self.end_time != NanoTime::MAX {
+            RunFor::Duration(Duration::from_nanos(
+                u64::from(self.end_time).saturating_sub(u64::from(self.start_time)),
+            ))
+        } else {
+            RunFor::Forever
+        }
+    }
+
     /// Whether this is the final cycle of the run (the run bound is about to
     /// stop it). Ops that buffer and flush on a boundary (window, buffer) use
     /// this to flush their pending contents before the run ends.
