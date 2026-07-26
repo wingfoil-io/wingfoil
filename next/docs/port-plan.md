@@ -980,16 +980,18 @@ tests covered — not "legacy pytest passes unchanged."
 - **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
   runs a `classic` (legacy interpreted) bar beside next's
   `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`
-  is directly readable via `cargo bench --bench tiers`. Current measured
-  relationship: next-interpreted **beats** classic on `dense_chain`
-  (dispatch-bound) and `accumulate` (loop-bound), but **trails** it on wide
-  `fanout` (~40% slower — every node fires every cycle, so the sparse
-  dirty-list path can't help). compiled/island win decisively across the board
-  (compiled fan-out ~25× either interpreter). ⚠️ *Standing perf item*: close the
-  dense-`fanout` interpreted gap (or document it as accepted, since the
-  compiled/nested tiers are the intended hot path for such graphs). Wiring the
-  bench as an automated CI gate is deferred — criterion wall-clock thresholds
-  are too noisy for the shared CI runners; it stays a run-on-demand scaffold.
+  is directly readable via `cargo bench --bench tiers`. The baseline now **holds
+  on all three workloads**: next-interpreted meets or beats classic on
+  `dense_chain` (dispatch-bound), `accumulate` (loop-bound), and wide `fanout`
+  (every node fires every cycle); compiled/island win decisively across the
+  board (compiled fan-out ~25× either interpreter). ✅ *Resolved*: the earlier
+  dense-`fanout` gap (next-interpreted ~40% slower) was the sparse dispatch's
+  per-node `BinaryHeap` push/pop; replacing it with classic's layer-bucketed
+  drain (`dirty_nodes_by_layer`) closed it — fanout interpreted ~2× faster,
+  byte-identical results (guarded by the `Sparse`/`FullSweep`/compiled/nested
+  differential suite), no regression on the other workloads. Wiring the bench as
+  an automated CI gate is deferred — criterion wall-clock thresholds are too
+  noisy for the shared CI runners; it stays a run-on-demand scaffold.
 
 ## Phase 7 — cutover
 

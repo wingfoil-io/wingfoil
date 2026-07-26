@@ -35,8 +35,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2805,20 +2804,20 @@ impl Runner {
         let n = self.nodes.len();
         let mut dirty = vec![false; n];
         // Sparse dirty-list scratch, allocated once and reused every cycle:
-        //   * `queue` — the dirty work set, a min-heap on `(layer, index)` so it
-        //     drains in ascending layer order (ties broken by index — classic's
-        //     within-layer wiring order). Every active downstream has a strictly
-        //     greater layer than its upstream, so a node enqueued while
-        //     processing `i` is always popped after `i` — the heap never
-        //     revisits a processed node. Keying on `layer` (not raw index) is
-        //     what keeps this invariant after a dynamic splice bumps a caller's
-        //     layer above a newly added upstream.
+        //   * `buckets` — the dirty work set as per-layer vectors (classic's
+        //     `dirty_nodes_by_layer`), indexed by `layer[i]` and drained in
+        //     ascending layer order. Every active downstream has a strictly
+        //     greater layer than its upstream, so a bucket never grows once its
+        //     layer is reached and each node fires exactly once after everything
+        //     it reads. Bucketing by `layer` (not raw index) keeps that invariant
+        //     after a dynamic splice bumps a caller's layer above a newly added
+        //     upstream. `layer[i] < n`, so `n` buckets suffice.
         //   * `node_dirty[i]` — guards a recombine node against being enqueued
         //     twice, so it fires exactly once per cycle.
         //   * `fired` — every node cycled this tick; the per-cycle `ticked` and
         //     `node_dirty` resets touch only these, not all `N`, so per-cycle
         //     work stays proportional to the active node count.
-        let mut queue: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+        let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut node_dirty = vec![false; n];
         let mut fired: Vec<usize> = Vec::new();
         // Check `finished` *before* `begin_cycle` parks: a channel that received
@@ -2827,7 +2826,7 @@ impl Runner {
         // channel connected.
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
             if let Some(e) =
-                self.drain_cycle(kernel, &dirty, &mut queue, &mut node_dirty, &mut fired)
+                self.drain_cycle(kernel, &dirty, &mut buckets, &mut node_dirty, &mut fired)
             {
                 return Some(e);
             }
@@ -2840,67 +2839,99 @@ impl Runner {
     /// [`run_cycles_sparse`](Runner::run_cycles_sparse) and (behind
     /// `dynamic-graph`) [`run_dynamic`](Runner::run_dynamic). `dirty` was filled
     /// by `kernel.begin_cycle`; the scratch buffers are reused across cycles and
-    /// must be empty (`queue`, `fired`) / sized to the node count and all-false
-    /// (`node_dirty`) on entry, and are restored to that state on a clean
-    /// return. On a cycle error the buffers are left as-is (the run aborts, so
-    /// they are not reused). Returns the first cycle error, or `None`.
+    /// must be empty (`fired`, and every `buckets` entry) / sized to the node
+    /// count and all-false (`node_dirty`) on entry, and are restored to that
+    /// state on a clean return. On a cycle error the buffers are left as-is (the
+    /// run aborts, so they are not reused). Returns the first cycle error, or
+    /// `None`.
     fn drain_cycle(
         &mut self,
         kernel: &mut Kernel,
         dirty: &[bool],
-        queue: &mut BinaryHeap<Reverse<(usize, usize)>>,
+        buckets: &mut [Vec<usize>],
         node_dirty: &mut [bool],
         fired: &mut Vec<usize>,
     ) -> Option<anyhow::Error> {
-        // Seed the frontier: `always` ops fire unconditionally; callback-
-        // activated ops (tickers, `delay` pops, feedback source, channel replay)
-        // fire only when the kernel marked them dirty this cycle. Everything
-        // else reaches the queue by downstream propagation below.
+        // Seed the frontier into per-layer buckets: `always` ops fire
+        // unconditionally; callback-activated ops (tickers, `delay` pops,
+        // feedback source, channel replay) fire only when the kernel marked them
+        // dirty this cycle. Everything else reaches a bucket by downstream
+        // propagation below. `max_layer` tracks the deepest active layer so the
+        // drain scans only `0..=max_layer`, not all `N` buckets.
+        let mut max_layer = 0usize;
         for &i in &self.seed_nodes {
             if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
                 node_dirty[i] = true;
-                queue.push(Reverse((self.layer[i], i)));
+                let l = self.layer[i];
+                buckets[l].push(i);
+                max_layer = max_layer.max(l);
             }
         }
-        // Drain in ascending `(layer, index)` order. A node that ticks marks its
-        // active downstream neighbours (all at strictly higher layers, so still
-        // ahead in the drain) dirty — propagating the tick frontier, each node
-        // firing once after everything it reads.
-        while let Some(Reverse((_layer, i))) = queue.pop() {
-            let did = match (self.nodes[i].cycle)(kernel) {
-                Ok(did) => did,
-                Err(e) => {
-                    let label = self.nodes[i].label;
-                    return Some(e.context(format!("node {i} ({label}) cycle")));
+        // Drain layer by layer in ascending order (classic's
+        // `dirty_nodes_by_layer`). A node that ticks marks its active downstream
+        // neighbours — all at strictly higher layers, so their bucket has not
+        // been reached yet — propagating the tick frontier. A bucket therefore
+        // never grows once its own layer is processed, so draining it fully is
+        // safe and each node fires exactly once after everything it reads.
+        // Sorting each bucket by index reproduces classic's within-layer wiring
+        // order (byte-identical to the full-index sweep). O(active + depth) —
+        // no per-node heap push/pop.
+        let mut l = 0usize;
+        while l <= max_layer {
+            if buckets[l].is_empty() {
+                l += 1;
+                continue;
+            }
+            // Move the layer's work out so downstream pushes (all to higher
+            // layers) cannot alias it; the emptied allocation is returned below
+            // for reuse next cycle.
+            let mut current = std::mem::take(&mut buckets[l]);
+            current.sort_unstable();
+            for &i in &current {
+                let did = match (self.nodes[i].cycle)(kernel) {
+                    Ok(did) => did,
+                    Err(e) => {
+                        let label = self.nodes[i].label;
+                        return Some(e.context(format!("node {i} ({label}) cycle")));
+                    }
+                };
+                // `ticked[i]` must be visible to downstreams that read it
+                // (`merge` tie-break, `delay` first-value seeding) before they
+                // fire; layer order guarantees every node `i` reads has already
+                // set its flag.
+                self.ticked.borrow_mut()[i] = did;
+                fired.push(i);
+                if did {
+                    for &d in &self.active_downs[i] {
+                        if !node_dirty[d] {
+                            node_dirty[d] = true;
+                            let dl = self.layer[d];
+                            buckets[dl].push(d);
+                            max_layer = max_layer.max(dl);
+                        }
+                    }
                 }
-            };
-            // `ticked[i]` must be visible to downstreams that read it (`merge`
-            // tie-break, `delay` first-value seeding) before they fire; layer
-            // order guarantees every node `i` reads has already set its flag.
-            self.ticked.borrow_mut()[i] = did;
-            fired.push(i);
-            if did {
-                for &d in &self.active_downs[i] {
-                    if !node_dirty[d] {
-                        node_dirty[d] = true;
-                        queue.push(Reverse((self.layer[d], d)));
+                // Same-cycle routing: a `demux` parent marks a chosen,
+                // already-wired child (strictly higher layer, so its bucket is
+                // still ahead in the drain) to fire this cycle — even though the
+                // parent itself did not tick.
+                if self.has_marks {
+                    let mut marks = self.marks.borrow_mut();
+                    for target in marks.drain(..) {
+                        if !node_dirty[target] {
+                            node_dirty[target] = true;
+                            let tl = self.layer[target];
+                            buckets[tl].push(target);
+                            max_layer = max_layer.max(tl);
+                        }
                     }
                 }
             }
-            // Same-cycle routing: a `demux` parent marks a chosen, already-wired
-            // child (higher `(layer, index)`, so still ahead in the drain) to
-            // fire this cycle — even though the parent itself did not tick.
-            if self.has_marks {
-                let mut marks = self.marks.borrow_mut();
-                for target in marks.drain(..) {
-                    if !node_dirty[target] {
-                        node_dirty[target] = true;
-                        queue.push(Reverse((self.layer[target], target)));
-                    }
-                }
-            }
+            current.clear();
+            buckets[l] = current;
+            l += 1;
         }
-        // Reset only the nodes we touched (the queue is already drained empty),
+        // Reset only the nodes we touched (all buckets are empty again),
         // keeping the per-cycle reset sparse.
         {
             let mut t = self.ticked.borrow_mut();
@@ -3050,7 +3081,7 @@ impl Runner {
             // Scratch is reused across cycles and regrown as nodes are appended.
             // `dirty` is sized to the current node count each cycle (the kernel
             // marks due callbacks into it by index).
-            let mut queue: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+            let mut buckets: Vec<Vec<usize>> = Vec::new();
             let mut node_dirty: Vec<bool> = Vec::new();
             let mut fired: Vec<usize> = Vec::new();
             let mut cycles: u32 = 0;
@@ -3059,13 +3090,22 @@ impl Runner {
                 if node_dirty.len() < n {
                     node_dirty.resize(n, false);
                 }
+                // `layer[i] < n`, so `n` buckets always suffice; regrow as nodes
+                // are appended (splices only add layers at the top).
+                if buckets.len() < n {
+                    buckets.resize_with(n, Vec::new);
+                }
                 let mut dirty = vec![false; n];
                 if self.finished.get() || !kernel.begin_cycle(&mut dirty) {
                     break;
                 }
-                if let Some(e) =
-                    self.drain_cycle(&mut kernel, &dirty, &mut queue, &mut node_dirty, &mut fired)
-                {
+                if let Some(e) = self.drain_cycle(
+                    &mut kernel,
+                    &dirty,
+                    &mut buckets,
+                    &mut node_dirty,
+                    &mut fired,
+                ) {
                     first_err = Some(e);
                     break;
                 }
