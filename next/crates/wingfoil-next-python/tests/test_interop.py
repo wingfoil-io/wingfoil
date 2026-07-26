@@ -332,6 +332,22 @@ def test_sum_of_non_numeric_aborts_run():
         g.run(cycles=1)
 
 
+def test_reduce_runs_from_first_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).reduce(lambda acc, v: acc + v)
+    g.run(cycles=3)
+    assert out.value() == 6  # 1, then 1+2=3, then 3+3=6
+
+
+def test_split_decomposes_tuples():
+    g = wf.Graph()
+    pairs = g.counter(period_nanos=100).map(lambda n: (n, n * 10))
+    left, right = pairs.split()
+    g.run(cycles=3)
+    assert left.value() == 3
+    assert right.value() == 30
+
+
 def test_bimap_combines_two_inputs():
     g = wf.Graph()
     a = g.counter(period_nanos=100)  # 1,2,3

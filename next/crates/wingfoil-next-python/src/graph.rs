@@ -469,6 +469,64 @@ impl PyStream {
         self.wrap(joined)
     }
 
+    /// Reduce values with a Python callable, emitting the running result (the
+    /// classic `reduce`). The **first** value seeds the accumulator and is
+    /// emitted as-is; each later value emits `func(acc, value)`
+    /// (functools.reduce-style, no explicit initial). The accumulator is
+    /// engine-owned state re-seeded on a graph reset, so a re-run restarts. A
+    /// raised exception aborts the run with context.
+    pub fn reduce(&self, func: Py<PyAny>) -> PyStream {
+        let reduced = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "reduce",
+                Activation::NONE,
+                func,                         // cfg: the Python reducer
+                || Option::<PyElement>::None, // state: accumulator, empty until the first value
+                move |func: &mut Py<PyAny>,
+                      acc: &mut Option<PyElement>,
+                      value: &PyElement,
+                      _ctx| {
+                    match acc.take() {
+                        None => {
+                            *acc = Some(value.clone());
+                            Ok(Tick::Value(value.clone()))
+                        }
+                        Some(current) => Python::attach(|py| {
+                            let next = func.call1(py, (current.value(), value.value())).map_err(
+                                |err| anyhow::anyhow!("Python reduce callable raised: {err}"),
+                            )?;
+                            let next = PyElement::new(next);
+                            *acc = Some(next.clone());
+                            Ok(Tick::Value(next))
+                        }),
+                    }
+                },
+            )
+        });
+        self.wrap(reduced)
+    }
+
+    /// Decompose a stream of 2-tuples into its two component streams (the
+    /// classic `split`); both branches tick whenever the source does. Reading a
+    /// non-indexable value aborts the run with context.
+    pub fn split(&self) -> (PyStream, PyStream) {
+        (self.item(0), self.item(1))
+    }
+
+    /// Project index `i` out of each (indexable) value — the per-branch half of
+    /// [`split`](Self::split).
+    fn item(&self, i: usize) -> PyStream {
+        self.wire_stateless("split", move |value| {
+            Python::attach(|py| {
+                let item = value.object().bind(py).get_item(i).map_err(|err| {
+                    anyhow::anyhow!("Python split: value is not indexable at {i}: {err}")
+                })?;
+                Ok(Tick::Value(PyElement::new(item.unbind())))
+            })
+        })
+    }
+
     /// Wire a **stateless, fallible** single-input op that maps each value to a
     /// [`Tick`] — the shared plumbing for `filter_map`/`filter_value`/
     /// `filter_none`. Runs over the engine's `register_op1` so a returned `Err`
@@ -749,6 +807,32 @@ mod tests {
         run_cycles(&g, 6);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(6, v); // 2,4,6 pass; last is 6
+    }
+
+    #[test]
+    fn reduce_runs_from_first_value() {
+        let g = PyGraph::new();
+        // First value seeds; then max-so-far.
+        let running_max = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: (n * 7) % 5")) // 2,4,1,3,0,2
+            .reduce(lambda("lambda acc, v: max(acc, v)"));
+        run_cycles(&g, 6);
+        let v: i64 = (&running_max.value()).try_into().unwrap();
+        assert_eq!(4, v);
+    }
+
+    #[test]
+    fn split_decomposes_tuples() {
+        let g = PyGraph::new();
+        let pairs = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: (n, n * 10)"));
+        let (left, right) = pairs.split();
+        run_cycles(&g, 3);
+        let l: i64 = (&left.value()).try_into().unwrap();
+        let r: i64 = (&right.value()).try_into().unwrap();
+        assert_eq!((3, 30), (l, r));
     }
 
     #[test]

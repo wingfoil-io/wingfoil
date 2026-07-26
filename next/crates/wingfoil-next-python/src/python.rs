@@ -243,6 +243,18 @@ impl Stream {
         Stream(self.0.bimap(&other.0, func))
     }
 
+    /// Reduce values with `func(acc, value)`, emitting the running result. The
+    /// first value seeds the accumulator; a raised exception aborts the run.
+    fn reduce(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.reduce(func))
+    }
+
+    /// Decompose a stream of 2-tuples into its two component streams.
+    fn split(&self) -> (Stream, Stream) {
+        let (a, b) = self.0.split();
+        (Stream(a), Stream(b))
+    }
+
     /// The current value after the owning [`Graph`] has run.
     fn value(&self) -> Py<PyAny> {
         self.0.value().value()
