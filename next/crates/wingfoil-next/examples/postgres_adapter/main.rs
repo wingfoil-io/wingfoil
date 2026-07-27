@@ -133,6 +133,7 @@ fn main() -> Result<()> {
                 postgres_timestamp(t1),
             )
         },
+        None,
     )?
     .collapse()
     .accumulate();

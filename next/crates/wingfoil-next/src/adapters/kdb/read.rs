@@ -337,98 +337,78 @@ pub trait KdbDeserialize: Sized {
 /// [`TimeWindow`] its rows are expected to fall in.
 type Slice = (String, TimeWindow);
 
-/// Connect, run every slice query, decode + window-clamp the rows, and return the
-/// finite `Result<(record, time)>` sequence handed to `produce_async`.
+/// Lazily query each slice and yield its in-window rows as a `(NanoTime, T)`
+/// stream — the streaming counterpart of classic `chunk_stream`.
 ///
-/// Connection failures return `Err` (surfaced during the run, via
-/// `produce_async`'s `send_error`); a query, decode, or non-monotonic-time
-/// failure is pushed as a trailing `Err` in the returned Vec so it aborts the run
-/// through the producer stream (matching classic's per-row abort).
+/// This is an `async_stream` generator: it calls `next_slice()` (→ runs the next
+/// KDB query) only when polled past the previous slice's rows, so — driven by
+/// [`produce_async_bounded`](crate::async_source::produce_async_bounded)'s
+/// back-pressure — a slice is fetched only once the graph has room for it. Memory
+/// is bounded to a slice plus the producer's look-ahead, and I/O pipelines with
+/// graph compute (legacy's model).
 ///
-/// `prev_time` is reset each slice so time-of-day columns work correctly when
-/// advancing across date partitions (timestamps restart at midnight on each new
-/// date).
-async fn read_slices<T>(
-    connection: &KdbConnection,
-    mut next_slice: impl FnMut() -> Option<Slice>,
-) -> Result<Vec<Result<(T, NanoTime)>>>
+/// A query, decode, or non-monotonic-time failure yields a trailing `Err` and
+/// stops (aborting the run through the producer stream — classic's per-row
+/// abort). Rows outside the slice's [`TimeWindow`] are dropped via
+/// [`WindowFilter`]. `prev_time` is reset each slice so time-of-day columns work
+/// across date partitions (timestamps restart at midnight on each new date).
+fn chunk_stream<T>(
+    mut socket: QStream,
+    mut next_slice: impl FnMut() -> Option<Slice> + Send + 'static,
+) -> impl futures::Stream<Item = Result<(NanoTime, T)>> + Send + 'static
 where
-    T: KdbDeserialize,
+    T: KdbDeserialize + Send + 'static,
 {
-    let creds = connection.credentials_string();
-    let mut socket = QStream::connect(
-        ConnectionMethod::TCP,
-        &connection.host,
-        connection.port,
-        &creds,
-    )
-    .await
-    .with_context(|| format!("kdb_read: failed to connect to {}", connection.redacted()))?;
+    async_stream::stream! {
+        let mut interner = SymbolInterner::default();
 
-    let mut interner = SymbolInterner::default();
-    let mut out: Vec<Result<(T, NanoTime)>> = Vec::new();
-
-    'outer: while let Some((query, window)) = next_slice() {
-        info!("KDB query: {query}");
-        let fetch_start = std::time::Instant::now();
-        let result: K = match socket.send_sync_message(&query.as_str()).await {
-            Ok(r) => r,
-            Err(e) => {
-                out.push(Err(e.into()));
-                break;
-            }
-        };
-
-        let (columns, rows) = match (result.column_names(), result.rows()) {
-            (Ok(cols), Ok(rows)) => (cols, rows),
-            (Err(e), _) | (_, Err(e)) => {
-                out.push(Err(e));
-                break;
-            }
-        };
-
-        let row_count = rows.len();
-        info!(
-            "KDB query: {} rows in {:?}",
-            row_count,
-            fetch_start.elapsed()
-        );
-
-        let mut prev_time: Option<NanoTime> = None;
-        let mut filter = WindowFilter::new("kdb_read", window);
-        for row in &rows {
-            let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
+        'outer: while let Some((query, window)) = next_slice() {
+            info!("KDB query: {query}");
+            let fetch_start = std::time::Instant::now();
+            let result: K = match socket.send_sync_message(&query.as_str()).await {
                 Ok(r) => r,
-                Err(e) => {
-                    out.push(Err(e.into()));
-                    break 'outer;
-                }
+                Err(e) => { yield Err(e.into()); break; }
             };
 
-            // Drop rows the query returned outside the run window (before
-            // start_time, at/after end_time, or beyond the slice bounds).
-            // Emitting them would drive the monotonic graph clock backwards.
-            if !filter.keep(time) {
-                continue;
-            }
+            let (columns, rows) = match (result.column_names(), result.rows()) {
+                (Ok(cols), Ok(rows)) => (cols, rows),
+                (Err(e), _) | (_, Err(e)) => { yield Err(e); break; }
+            };
 
-            if let Some(prev) = prev_time
-                && time < prev
-            {
-                out.push(Err(anyhow::anyhow!(
-                    "KDB data is not sorted by time: got {time:?} after {prev:?}. \
-                     Add `xasc` to your query to sort the data."
-                )));
-                break 'outer;
-            }
-            prev_time = Some(time);
+            let row_count = rows.len();
+            info!("KDB query: {} rows in {:?}", row_count, fetch_start.elapsed());
 
-            out.push(Ok((record, time)));
+            let mut prev_time: Option<NanoTime> = None;
+            let mut filter = WindowFilter::new("kdb_read", window);
+            for row in &rows {
+                let (time, record) = match T::from_kdb_row(row, &columns, &mut interner) {
+                    Ok(r) => r,
+                    Err(e) => { yield Err(e.into()); break 'outer; }
+                };
+
+                // Drop rows the query returned outside the run window (before
+                // start_time, at/after end_time, or beyond the slice bounds).
+                // Emitting them would drive the monotonic graph clock backwards.
+                if !filter.keep(time) {
+                    continue;
+                }
+
+                if let Some(prev) = prev_time
+                    && time < prev
+                {
+                    yield Err(anyhow::anyhow!(
+                        "KDB data is not sorted by time: got {time:?} after {prev:?}. \
+                         Add `xasc` to your query to sort the data."
+                    ));
+                    break 'outer;
+                }
+                prev_time = Some(time);
+
+                yield Ok((time, record));
+            }
+            filter.finish();
         }
-        filter.finish();
     }
-
-    Ok(out)
 }
 
 /// Read a time-partitioned KDB+ table, one query per time slice, as a
@@ -448,10 +428,10 @@ where
 /// semantics and the burst grouping. Run the graph with the same
 /// `RunMode::HistoricalFrom` / `RunFor` described by `params`.
 ///
-/// `buffer_size` bounds the producer→graph backlog; it is a **no-op in
-/// historical mode** (matching next's `produce_async_bounded` — the historical
-/// producer collects the whole stream up front, so bounding it would deadlock
-/// that collection), but is preserved for classic API parity.
+/// `buffer_size` bounds the producer→graph backlog as back-pressure (like
+/// classic): `Some(n)` caps the replay to ~`n` timestamp-groups of look-ahead, so
+/// a slice is fetched only as the graph drains — bounded memory, pipelined I/O.
+/// `None` is unbounded (a fast KDB feeding a slower graph accumulates a backlog).
 ///
 /// # Errors
 ///
@@ -495,8 +475,19 @@ where
     // Defer the connect + slice queries to the run via `produce_async`: nothing
     // touches the network at wiring, so a connection or query failure aborts the
     // *run* (not graph construction) — matching classic's lazy `produce_async`
-    // reader.
+    // reader. The connect happens here (in the closure, before the stream); the
+    // per-slice queries run lazily inside `chunk_stream` as the graph drains.
     produce_async_bounded(g, buffer_size, move |_p: RunParams| async move {
+        let creds = connection.credentials_string();
+        let socket = QStream::connect(
+            ConnectionMethod::TCP,
+            &connection.host,
+            connection.port,
+            &creds,
+        )
+        .await
+        .with_context(|| format!("kdb_read: failed to connect to {}", connection.redacted()))?;
+
         let mut slices_iter = slices.into_iter();
         let mut query_fn = query_fn;
         // The query uses the period-aligned (t0, t1) for clean round-number
@@ -510,11 +501,7 @@ where
             let query = query_fn((t0, t1), date, iteration);
             Some((query, window))
         };
-        let rows = read_slices::<T>(&connection, slice_fn).await?;
-        Ok(futures::stream::iter(
-            rows.into_iter()
-                .map(|r| r.map(|(record, time)| (time, record))),
-        ))
+        Ok(chunk_stream::<T>(socket, slice_fn))
     })
 }
 

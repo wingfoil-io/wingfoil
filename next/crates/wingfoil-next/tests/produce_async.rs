@@ -87,24 +87,70 @@ fn produce_async_error_aborts_the_run() {
     );
 }
 
-/// Matching params replay fine even when a `buffer_size` is supplied for a
-/// historical run — the up-front collection is never throttled (no deadlock),
-/// so the bound is simply not applied in historical replay.
+/// A bounded historical replay produces byte-identical values *and* tick times
+/// to the unbounded one — back-pressure paces the producer (it fetches the next
+/// group only as the graph drains) without changing what the graph sees. Covers
+/// the floor: `Some(1)` behaves as `Some(2)` and must not deadlock.
 #[test]
-fn produce_async_buffer_size_ignored_in_historical() {
+fn produce_async_bounded_historical_is_deterministic() {
+    fn run_with(buffer: Option<usize>) -> Vec<(NanoTime, Vec<u64>)> {
+        let g = GraphBuilder::new();
+        let values = produce_async_bounded(&g, buffer, |_p| async {
+            Ok(futures::stream::iter(
+                (1u64..=20).map(|i| Ok((NanoTime::new(i * 100), i))),
+            ))
+        })
+        .unwrap();
+        let acc = values.with_time().accumulate();
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Forever).unwrap();
+        r.value(&acc)
+            .into_iter()
+            .map(|(t, b)| (t, b.iter().copied().collect()))
+            .collect()
+    }
+    let unbounded = run_with(None);
+    assert_eq!(20, unbounded.len());
+    assert_eq!(unbounded, run_with(Some(5)));
+    assert_eq!(unbounded, run_with(Some(2)));
+    assert_eq!(
+        unbounded,
+        run_with(Some(1)),
+        "Some(1) floors to 2, no deadlock"
+    );
+}
+
+/// A same-time burst **larger than the bound** must not deadlock. Historical
+/// back-pressure counts timestamp-*groups*, so an arbitrarily large same-time
+/// burst rides one permit and is sent whole before the producer waits — the fix
+/// over a naive per-value permit, which would stall mid-burst on a permit only
+/// the group's own (blocked) delivery could release.
+#[test]
+fn produce_async_bounded_large_same_time_burst_no_deadlock() {
     let g = GraphBuilder::new();
-    let values = produce_async_bounded(&g, Some(1), |_p| async {
-        Ok(futures::stream::iter(vec![
-            Ok((NanoTime::new(100), 1u64)),
-            Ok((NanoTime::new(200), 2u64)),
-            Ok((NanoTime::new(300), 3u64)),
-        ]))
+    let values = produce_async_bounded(&g, Some(2), |_p| async {
+        // 10 values all at t=100 (one group, far larger than the bound of 2),
+        // then a later group so the first can be closed and delivered.
+        let mut items: Vec<_> = (0..10u64).map(|i| Ok((NanoTime::new(100), i))).collect();
+        items.push(Ok((NanoTime::new(200), 99)));
+        Ok(futures::stream::iter(items))
     })
     .unwrap();
-    let acc = values.collapse_accumulate();
+    let acc = values.with_time().accumulate();
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Forever).unwrap();
-    assert_eq!(vec![1, 2, 3], r.value(&acc));
+    let got: Vec<(NanoTime, Vec<u64>)> = r
+        .value(&acc)
+        .into_iter()
+        .map(|(t, b)| (t, b.iter().copied().collect()))
+        .collect();
+    assert_eq!(
+        vec![
+            (NanoTime::new(100), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            (NanoTime::new(200), vec![99]),
+        ],
+        got
+    );
 }
 
 /// A realtime producer with a small `buffer_size` still delivers every value in

@@ -80,9 +80,16 @@ fn read_rejects_realtime_mode() {
         run_for: RunFor::Duration(HOUR),
         start_time: NanoTime::ZERO,
     };
-    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
-        .err()
-        .expect("RealTime must be rejected");
+    let err = postgres_read::<TestTrade>(
+        &g,
+        params,
+        "host=127.0.0.1 dbname=db",
+        HOUR,
+        read_query,
+        None,
+    )
+    .err()
+    .expect("RealTime must be rejected");
     let msg = format!("{err:#}");
     assert!(msg.contains("postgres_read"), "names the adapter: {msg}");
     assert!(
@@ -101,9 +108,16 @@ fn read_rejects_forever() {
         run_for: RunFor::Forever,
         start_time: NanoTime::from_kdb_timestamp(0),
     };
-    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
-        .err()
-        .expect("Forever must be rejected");
+    let err = postgres_read::<TestTrade>(
+        &g,
+        params,
+        "host=127.0.0.1 dbname=db",
+        HOUR,
+        read_query,
+        None,
+    )
+    .err()
+    .expect("Forever must be rejected");
     assert!(format!("{err:#}").contains("RunFor::Forever"));
 }
 
@@ -117,9 +131,16 @@ fn read_rejects_cycles() {
         run_for: RunFor::Cycles(1),
         start_time: NanoTime::from_kdb_timestamp(0),
     };
-    let err = postgres_read::<TestTrade>(&g, params, "host=127.0.0.1 dbname=db", HOUR, read_query)
-        .err()
-        .expect("Cycles must be rejected");
+    let err = postgres_read::<TestTrade>(
+        &g,
+        params,
+        "host=127.0.0.1 dbname=db",
+        HOUR,
+        read_query,
+        None,
+    )
+    .err()
+    .expect("Cycles must be rejected");
     assert!(format!("{err:#}").contains("RunFor::Cycles"));
 }
 
@@ -140,6 +161,7 @@ fn read_connection_refused_redacts_password() {
         conn,
         HOUR,
         read_query,
+        None,
     )
     .expect("wiring must succeed (connect is deferred to the run)");
     // The connect runs at start; the unreachable endpoint aborts the run.
