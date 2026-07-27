@@ -17,6 +17,7 @@ mod delay_with_reset;
 mod demux;
 mod difference;
 mod distinct;
+mod drop_small_change;
 #[cfg(feature = "dynamic-graph")]
 pub mod dynamic_group;
 mod feedback;
@@ -75,6 +76,7 @@ use delay::*;
 use delay_with_reset::*;
 use difference::*;
 use distinct::*;
+use drop_small_change::*;
 use filter::*;
 use finally::*;
 use fold::*;
@@ -475,6 +477,29 @@ pub trait StreamOperators<T: Element> {
     fn distinct(self: &Rc<Self>) -> Rc<dyn Stream<T>>
     where
         T: PartialEq;
+    /// Only propagates source ticks when the change from the last emitted
+    /// value is considered significant.
+    ///
+    /// `is_small(current, previous)` should return `true` to suppress the
+    /// current tick. The first upstream tick always propagates.
+    ///
+    /// # Example
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::{NodeOperators, StreamOperators, ticker};
+    ///
+    /// let prices = ticker(Duration::from_millis(1))
+    ///     .count()
+    ///     .map(|value| value as f64);
+    /// let significant = prices.drop_small_change(|current, previous| {
+    ///     (current - previous).abs() < 0.01
+    /// });
+    /// ```
+    #[must_use]
+    fn drop_small_change(
+        self: &Rc<Self>,
+        is_small: impl Fn(&T, &T) -> bool + 'static,
+    ) -> Rc<dyn Stream<T>>;
     /// drops source contingent on supplied stream
     #[must_use]
     fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Stream<T>>;
@@ -704,6 +729,13 @@ where
         T: PartialEq,
     {
         DistinctStream::new(self.clone()).into_stream()
+    }
+
+    fn drop_small_change(
+        self: &Rc<Self>,
+        is_small: impl Fn(&T, &T) -> bool + 'static,
+    ) -> Rc<dyn Stream<T>> {
+        DropSmallChangeStream::new(self.clone(), Box::new(is_small)).into_stream()
     }
 
     fn filter(self: &Rc<Self>, condition: Rc<dyn Stream<bool>>) -> Rc<dyn Stream<T>> {

@@ -36,6 +36,29 @@ class TestBasicOperators(unittest.TestCase):
         stream.run(realtime=False, cycles=5)
         self.assertEqual(stream.peek_value(), [0, 1, 2])
 
+    def test_drop_small_change(self):
+        predicate_calls = []
+        prices = [100.000, 100.005, 100.020, 100.025]
+
+        def is_small(current, previous):
+            predicate_calls.append((current, previous))
+            return abs(current - previous) < 0.01
+
+        stream = (
+            ticker(0.1)
+                .count()
+                .map(lambda count: prices[count - 1])
+                .drop_small_change(is_small)
+                .collect()
+        )
+        stream.run(realtime=False, cycles=4)
+
+        self.assertEqual(stream.peek_value(), [100.000, 100.020])
+        self.assertEqual(
+            predicate_calls,
+            [(100.005, 100.000), (100.020, 100.000), (100.025, 100.020)],
+        )
+
     def test_inspect(self):
         inspected_values = []
         stream = (
@@ -316,6 +339,24 @@ class TestCallbackExceptionPropagation(unittest.TestCase):
         stream = ticker(0.1).count().filter(lambda x: "not a bool").collect()
         with self.assertRaises(Exception):
             stream.run(realtime=False, cycles=1)
+
+    def test_drop_small_change_callback_exception_propagates(self):
+        def explode(_current, _previous):
+            raise ValueError("drop_small_change predicate blew up")
+
+        stream = ticker(0.1).count().drop_small_change(explode).collect()
+        with self.assertRaises(ValueError):
+            stream.run(realtime=False, cycles=2)
+
+    def test_drop_small_change_non_bool_return_raises(self):
+        stream = (
+            ticker(0.1)
+                .count()
+                .drop_small_change(lambda _current, _previous: "not a bool")
+                .collect()
+        )
+        with self.assertRaises(Exception):
+            stream.run(realtime=False, cycles=2)
 
     def test_for_each_callback_exception_propagates(self):
         def explode(_value, _t):

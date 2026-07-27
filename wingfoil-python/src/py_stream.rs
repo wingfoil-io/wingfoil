@@ -8,6 +8,7 @@ use ::wingfoil::{Element, IntoStream, NodeOperators, Stream, StreamOperators};
 use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::proxy_stream::*;
@@ -273,6 +274,39 @@ impl PyStream {
     /// only propagates its source if it changed (uses PartialEq on PyElement)
     fn distinct(&self) -> PyStream {
         PyStream(self.0.distinct())
+    }
+
+    /// Only propagates ticks where is_small(current, previous) returns False.
+    /// The first tick always propagates.
+    fn drop_small_change(&self, is_small: Py<PyAny>) -> PyStream {
+        let last_emitted = Rc::new(RefCell::new(None::<PyElement>));
+        let evaluated = self.0.try_map({
+            let last_emitted = Rc::clone(&last_emitted);
+            move |current: PyElement| {
+                let previous = last_emitted.borrow().clone();
+                let should_suppress = match previous {
+                    None => false,
+                    Some(previous) => Python::attach(|py| {
+                        let result = is_small
+                            .call1(py, (current.value(), previous.value()))
+                            .map_err(py_callback_error)?;
+                        result.extract::<bool>(py).map_err(|e| {
+                            py_callback_error(e)
+                                .context("drop_small_change predicate must return a bool")
+                        })
+                    })?,
+                };
+
+                if should_suppress {
+                    Ok(None)
+                } else {
+                    *last_emitted.borrow_mut() = Some(current.clone());
+                    Ok(Some(current))
+                }
+            }
+        });
+
+        PyStream(evaluated.filter_map(|value| value))
     }
 
     /// drops source contingent on supplied predicate (Python callable)
