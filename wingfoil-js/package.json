@@ -76,7 +76,9 @@
       "svelte": ">=5.55.7",
       "devalue": ">=5.8.1",
       "esbuild": ">=0.25.0",
-      "@babel/core": ">=7.29.6"
+      "@babel/core": ">=7.29.6",
+      "seroval": ">=1.5.3",
+      "postcss": ">=8.5.18"
     }
   }
 }
