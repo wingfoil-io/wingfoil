@@ -7786,6 +7786,7 @@ dependencies = [
  "env_logger 0.11.10",
  "etcd-client",
  "futures",
+ "kdb-plus-fixed",
  "log",
  "opentelemetry 0.32.0",
  "opentelemetry-otlp 0.32.0",

@@ -107,6 +107,16 @@ tokio-postgres = { version = "0.7", features = [
 ], optional = true }
 chrono = { version = "0.4", optional = true }
 
+# `kdb` feature: KDB+/q connectivity — time-partitioned historical reads
+# (`kdb_read`, `kdb_read_cached`), a real-time tickerplant subscription
+# (`kdb_sub`), and a streaming insert sink (`kdb_write`), on the async `kdbplus`
+# IPC client (`QStream`). Built on `async` (the `produce_async` reader/sub +
+# `consume_async` sink), `async-stream` (the reader/sub `stream!` macros),
+# `chrono` (the write timestamp column), and the `cache` feature (the file cache
+# behind `kdb_read_cached`). Version mirrors the classic `wingfoil` crate's kdb
+# adapter so the two trees don't drift; `ipc` is the KDB IPC protocol feature.
+kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
+
 # `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
 # `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
 # lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
@@ -195,6 +205,19 @@ postgres-integration-test = ["postgres", "dep:testcontainers"]
 # consumer's `recv()` loop. Mirrors classic wingfoil's `kafka` deps.
 kafka = ["dep:rdkafka", "dep:async-stream", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
+# KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
+# `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
+# streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
+# `consume_async` ergonomics, via `cache`), `async-stream` (the reader/sub
+# `stream!` macros), `chrono` (the write timestamp column), and the `cache`
+# feature (the file cache behind `kdb_read_cached`, which also supplies
+# `sha2`/`bincode`/`serde`/`tokio/fs`). Mirrors classic wingfoil's `kdb` deps.
+kdb = ["dep:kdb-plus-fixed", "dep:chrono", "dep:async-stream", "cache"]
+# KDB+ cannot be run under `testcontainers` (no public, freely-licensed image),
+# so the integration tests probe an externally-provided instance (KDB_TEST_HOST
+# / KDB_TEST_PORT, default localhost:5000) and skip when unreachable — no
+# container dependency, matching the classic adapter's `q -p 5000` setup.
+kdb-integration-test = ["kdb"]
 # Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
 prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
@@ -285,6 +308,23 @@ required-features = ["postgres"]
 [[example]]
 name = "kafka_adapter"
 required-features = ["kafka"]
+
+# KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
+# with a README). All require a running KDB+/tickerplant instance to actually run.
+[[example]]
+name = "kdb_read"
+path = "examples/kdb/read/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read_cached"
+path = "examples/kdb/read_cached/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_round_trip"
+path = "examples/kdb/round_trip/main.rs"
+required-features = ["kdb"]
 
 [[example]]
 name = "prometheus_adapter"

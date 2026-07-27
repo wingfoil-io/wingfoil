@@ -15,6 +15,11 @@ jobs:
     uses: ./.github/workflows/kdb-integration.yml
     secrets: inherit
 
+  kdb-next-integration:
+    name: KDB (next) Integration Tests
+    uses: ./.github/workflows/kdb-next-integration.yml
+    secrets: inherit
+
   etcd-integration:
     name: etcd Integration Tests
     uses: ./.github/workflows/etcd-integration.yml

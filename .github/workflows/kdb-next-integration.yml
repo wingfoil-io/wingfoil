@@ -1,0 +1,74 @@
+name: test.integration.kdb-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - "next/crates/wingfoil-next/src/adapters/kdb**"
+      - "next/crates/wingfoil-next/src/adapters/cache.rs"
+      - "next/crates/wingfoil-next/src/adapters/common.rs"
+      - "next/crates/wingfoil-next/tests/kdb_integration.rs"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  kdb-next-integration:
+    name: KDB (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      # Reuses the classic adapter's KDB Docker image + license secret; KDB+ has
+      # no public, freely-licensed image, so the tests probe this instance (and
+      # skip if unreachable — but in CI it must be present).
+      - name: Build KDB image
+        run: docker build -t wingfoil-kdb wingfoil/src/adapters/kdb/docker/
+
+      - name: Start KDB container
+        run: |
+          echo "${{ secrets.KDB_LICENSE_B64 }}" | base64 -d > /tmp/kc.lic
+          docker run -d \
+            --name kdb \
+            -p 5000:5000 \
+            -e QLIC=/q \
+            -v /tmp/kc.lic:/q/kc.lic \
+            wingfoil-kdb
+
+      - name: Wait for KDB to be ready
+        run: |
+          for i in $(seq 1 30); do
+            nc -z localhost 5000 && echo "KDB ready" && break
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 5000 || (echo "KDB never became ready" && exit 1)
+
+      - name: Run KDB (next) integration tests
+        env:
+          KDB_TEST_HOST: localhost
+          KDB_TEST_PORT: 5000
+          RUST_LOG: INFO
+        run: |
+          cargo test --features kdb-integration-test -p wingfoil-next \
+            -- --test-threads=1 --nocapture
+
+      - name: Dump KDB logs on failure
+        if: failure()
+        run: docker logs kdb
+
+      - name: Stop KDB container
+        if: always()
+        run: docker stop kdb && docker rm kdb
