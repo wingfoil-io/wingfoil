@@ -24,6 +24,12 @@
 //!   topic-produce sink (`KafkaSinkOps::kafka_pub`) for Apache Kafka, behind the
 //!   `kafka` feature (built on the async `produce_async` / `consume_async`
 //!   ergonomics).
+//! - [`web`] — bidirectional WebSocket streaming to browsers: an axum HTTP/WS
+//!   server plus a publish sink (`WebSinkOps::web_pub` /
+//!   `WebBurstSinkOps::web_pub_bursts`) and a browser-input source (`web_sub`),
+//!   behind the `web` feature (`web-tls` adds HTTPS/WSS). The wire protocol is
+//!   the shared, engine-agnostic `wingfoil-wire-types` format, so the existing
+//!   browser client works unchanged.
 //! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
 //!   time-sliced historical readers, behind the `cache` feature. A pure utility
 //!   (async `get`/`put`), not a source/sink op.
@@ -93,5 +99,7 @@ pub mod postgres;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "web")]
+pub mod web;
 #[cfg(feature = "zmq")]
 pub mod zmq;

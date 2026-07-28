@@ -95,6 +95,32 @@ redis = { version = "0.27", features = [
 # optional [dependencies] entry above, shared with the etcd adapter.
 rdkafka = { version = "0.37", optional = true }
 
+# `web` feature: bidirectional WebSocket streaming between the graph and one or
+# more browsers — an axum HTTP/WS server on its own runtime, plus the graph-side
+# publish sink and subscribe source. The wire types live in the shared
+# `wingfoil-wire-types` crate so the server, `wingfoil-wasm` and `@wingfoil/client`
+# cannot drift; the protocol is engine-agnostic and reused as-is by this port.
+# Versions mirror the classic `wingfoil` crate's web adapter so the two trees
+# don't drift.
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+wingfoil-wire-types = { path = "../../../wingfoil-wire-types", version = "8.0.0", optional = true }
+# web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
+# `rustls` itself is already an optional dependency above (shared with `fix`).
+axum-server = { version = "0.7", default-features = false, features = [
+    "tls-rustls-no-provider",
+], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+
+# Used only by the web-tls integration test: `rcgen` generates a fresh
+# self-signed cert at test time (cheaper and more deterministic than shipping a
+# static fixture that would need rotating), `scopeguard` removes the PEM files
+# afterwards. Optional [dependencies] entries because feature flags cannot gate
+# dev-dependencies. Versions mirror the classic `wingfoil` crate.
+rcgen = { version = "0.13", optional = true }
+scopeguard = { version = "1.2.0", optional = true }
+
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
 # client. Built on `async` (the `Handle::block_on` reader/sink and the
@@ -216,6 +242,31 @@ postgres-integration-test = ["postgres", "dep:testcontainers"]
 # consumer's `recv()` loop. Mirrors classic wingfoil's `kafka` deps.
 kafka = ["dep:rdkafka", "dep:async-stream", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
+# Bidirectional WebSocket streaming to browsers: an axum HTTP/WS server plus
+# the `web_pub` sink and `web_sub` source. Built on `async` (the `produce_async`
+# source and `consume_async` sink ergonomics) and `async-stream` (the sub's
+# `stream!` macro). Mirrors classic wingfoil's `web` deps.
+web = [
+    "async",
+    "dep:serde",
+    "dep:axum",
+    "dep:tower-http",
+    "dep:tokio-tungstenite",
+    "dep:wingfoil-wire-types",
+    "dep:bincode",
+    "dep:async-stream",
+    "tokio/net",
+    "tokio/sync",
+]
+web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
+# Pulls in `tokio-tungstenite/rustls-tls-webpki-roots` so the test client can
+# speak `wss://`, plus `rcgen`/`scopeguard` for the self-signed cert fixture.
+web-tls-integration-test = [
+    "web-tls",
+    "tokio-tungstenite/rustls-tls-webpki-roots",
+    "dep:rcgen",
+    "dep:scopeguard",
+]
 # KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
 # `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
 # streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
@@ -339,6 +390,13 @@ required-features = ["postgres"]
 [[example]]
 name = "kafka_adapter"
 required-features = ["kafka"]
+
+# Port of the classic `wingfoil/examples/web` example (a directory with a
+# README). Streams a synthetic mid price to the browser and logs UI events back.
+[[example]]
+name = "web_adapter"
+path = "examples/web/main.rs"
+required-features = ["web"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.
