@@ -277,7 +277,7 @@ fn source_missing_historical_half_errors_under_historical_mode() {
 fn source_missing_live_half_errors_under_realtime() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query, None);
     let err = postgres_source::<TestTrade>(&g, realtime(), "host=127.0.0.1 dbname=db", cfg)
         .err()
         .expect("RealTime without a live config must be rejected");
@@ -294,7 +294,7 @@ fn source_missing_live_half_errors_under_realtime() {
 fn source_dispatches_to_read_under_historical_mode() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query, None);
     let params = RunParams {
         run_mode: RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
         run_for: RunFor::Forever,

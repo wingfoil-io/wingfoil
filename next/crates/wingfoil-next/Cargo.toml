@@ -183,7 +183,10 @@ default = []
 # part of the async module, so the feature enables it directly rather than
 # relying on a companion adapter (etcd-client) to pull it in transitively.
 async = ["dep:tokio", "dep:futures", "tokio/sync"]
-csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
+# `async` + `async-stream` back the lazy, back-pressured `csv_read` replay
+# source (a `produce_async_bounded` producer streaming rows on demand, so a huge
+# file is not read into memory up front). The sink stays synchronous.
+csv = ["dep:csv", "dep:serde", "dep:serde-aux", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).

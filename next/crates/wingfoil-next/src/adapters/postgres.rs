@@ -117,7 +117,8 @@
 //!    `buffer_size` bound the replay stays bounded in memory and pipelines query
 //!    I/O with graph compute — legacy's model, not an up-front collection.
 //!    [`postgres_read`] takes a `buffer_size` for that back-pressure (`None` =
-//!    unbounded); the mode-agnostic [`postgres_source`] uses the unbounded path.
+//!    unbounded); [`postgres_source`] threads one through its
+//!    [`historical`](PostgresSourceConfig::historical) half.
 //! 3. **The sink is a trait only and pipelines per burst via `consume_async`.**
 //!    Classic exposed a free `postgres_write` fn *and* a `PostgresWriteOperators`
 //!    trait; next folds the entry point into [`PostgresSinkOps`]. Like classic,
@@ -688,6 +689,7 @@ pub struct PostgresSourceConfig {
 struct HistoricalSpec {
     period: Duration,
     query_fn: Box<dyn FnMut((NanoTime, NanoTime), i32, usize) -> String + Send>,
+    buffer_size: Option<usize>,
 }
 
 /// The live half — see [`PostgresSourceConfig::live`].
@@ -707,15 +709,19 @@ impl PostgresSourceConfig {
     /// Configure the **historical** (bounded, time-sliced replay) half — the
     /// [`postgres_read`] mechanism. `period` is the slice length; `query_fn` is
     /// called once per slice with `((t0, t1), date, iteration)` and returns SQL
-    /// filtering `time >= t0 AND time < t1`, ordered by time.
+    /// filtering `time >= t0 AND time < t1`, ordered by time. `buffer_size` bounds
+    /// the replay's look-ahead as back-pressure (`None` = unbounded), exactly as
+    /// [`postgres_read`]'s `buffer_size`.
     pub fn historical(
         mut self,
         period: Duration,
         query_fn: impl FnMut((NanoTime, NanoTime), i32, usize) -> String + Send + 'static,
+        buffer_size: Option<usize>,
     ) -> Self {
         self.historical = Some(HistoricalSpec {
             period,
             query_fn: Box::new(query_fn),
+            buffer_size,
         });
         self
     }
@@ -776,14 +782,18 @@ where
             let hist = cfg.historical.ok_or_else(|| {
                 anyhow::anyhow!(
                     "postgres_source: run mode is RunMode::HistoricalFrom but no historical \
-                     config was supplied — add .historical(period, query_fn), or run under \
+                     config was supplied — add .historical(period, query_fn, buffer_size), or run under \
                      RunMode::RealTime with a .live(..) config"
                 )
             })?;
-            // `postgres_source` is the mode-agnostic convenience; it uses the
-            // unbounded historical path. Callers wanting `buffer_size`
-            // back-pressure call `postgres_read` directly.
-            postgres_read::<T>(g, params, connection, hist.period, hist.query_fn, None)
+            postgres_read::<T>(
+                g,
+                params,
+                connection,
+                hist.period,
+                hist.query_fn,
+                hist.buffer_size,
+            )
         }
         RunMode::RealTime => {
             let live = cfg.live.ok_or_else(|| {

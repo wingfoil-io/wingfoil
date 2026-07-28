@@ -56,7 +56,7 @@ fn csv_read_emits_all_rows_each_a_single_burst() {
     );
 
     let g = GraphBuilder::new();
-    let rows = csv_read(&g, &path, get_time, false).unwrap();
+    let rows = csv_read(&g, &path, get_time, false, None).unwrap();
     let acc = rows.with_time().accumulate();
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -84,7 +84,7 @@ fn csv_read_groups_same_timestamp_into_one_burst() {
     let path = write_tmp("multi.csv", "1001,1\n1002,2\n1003,3\n1003,3\n1004,4\n");
 
     let g = GraphBuilder::new();
-    let rows = csv_read(&g, &path, get_time, false).unwrap();
+    let rows = csv_read(&g, &path, get_time, false, None).unwrap();
     let acc = rows.with_time().accumulate();
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -109,6 +109,7 @@ fn csv_read_missing_file_returns_error_with_context() {
         std::env::temp_dir().join("wf_next_csv_does_not_exist.csv"),
         get_time,
         false,
+        None,
     );
     // `Stream` isn't `Debug`, so match rather than `expect_err`.
     let err = match result {
@@ -130,7 +131,7 @@ fn csv_read_malformed_row_surfaces_error_not_panic() {
     let path = write_tmp("malformed.csv", "1001,1\n1002,notanumber\n1003,3\n");
 
     let g = GraphBuilder::new();
-    let rows = csv_read::<Record, _>(&g, &path, get_time, false)
+    let rows = csv_read::<Record, _>(&g, &path, get_time, false, None)
         .expect("file opens fine; the error is in a row");
     let _acc = rows.with_time().accumulate();
     let mut r = g.build();
@@ -152,7 +153,7 @@ fn csv_round_trip_read_transform_write() {
     let out = write_tmp("round_out.csv", "");
 
     let g = GraphBuilder::new();
-    let rows = csv_read(&g, &path, get_time, false).unwrap();
+    let rows = csv_read(&g, &path, get_time, false, None).unwrap();
     // Transform: double each value, preserving the burst grouping.
     let doubled = rows.map(|b: &Burst<Record>| {
         b.iter()
@@ -202,7 +203,9 @@ fn single_value_stream_uses_the_convenience_sink() {
 
     let g = GraphBuilder::new();
     // `collapse` turns Stream<Burst<Record>> into a plain Stream<Record>.
-    let each: Stream<Record> = csv_read(&g, &path, get_time, false).unwrap().collapse();
+    let each: Stream<Record> = csv_read(&g, &path, get_time, false, None)
+        .unwrap()
+        .collapse();
     let _sink = each.csv_write(&out).unwrap();
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -225,7 +228,14 @@ fn csv_sink_writes_header_for_named_struct() {
     let out = write_tmp("struct_out.csv", "");
 
     let g = GraphBuilder::new();
-    let rows = csv_read(&g, &path, |q: &Quote| NanoTime::new(q.timestamp), false).unwrap();
+    let rows = csv_read(
+        &g,
+        &path,
+        |q: &Quote| NanoTime::new(q.timestamp),
+        false,
+        None,
+    )
+    .unwrap();
     let _sink = rows.csv_write(&out).unwrap();
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
@@ -235,4 +245,42 @@ fn csv_sink_writes_header_for_named_struct() {
         output_lines(&out),
         vec!["time,timestamp,price", "100,100,10", "200,200,20"],
     );
+}
+
+/// A bounded `buffer_size` replays byte-identically to the unbounded one — the
+/// back-pressure paces the file read without changing what the graph sees — and
+/// a same-time burst **larger than the bound** must not deadlock (historical
+/// back-pressure counts timestamp-groups, so the whole burst rides one slot).
+#[test]
+fn csv_read_bounded_is_deterministic_and_survives_large_bursts() {
+    // 20 rows all sharing t=1000 (one group, far larger than a bound of 2), then
+    // three later distinct-timestamp rows.
+    let mut contents = String::new();
+    for v in 0..20u32 {
+        contents.push_str(&format!("1000,{v}\n"));
+    }
+    contents.push_str("1001,100\n1002,101\n1003,102\n");
+    let path = write_tmp("bounded.csv", &contents);
+
+    let read_with = |buffer: Option<usize>| -> Vec<(NanoTime, Vec<u32>)> {
+        let g = GraphBuilder::new();
+        let rows = csv_read(&g, &path, get_time, false, buffer).unwrap();
+        let acc = rows.with_time().accumulate();
+        let mut r = g.build();
+        r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        r.value(&acc)
+            .into_iter()
+            .map(|(t, b)| (t, b.iter().map(|r| r.1).collect()))
+            .collect()
+    };
+
+    let unbounded = read_with(None);
+    // 4 distinct timestamps; the t=1000 burst holds all 20 rows.
+    assert_eq!(unbounded.len(), 4);
+    assert_eq!(unbounded[0].0, NanoTime::new(1000));
+    assert_eq!(unbounded[0].1, (0..20u32).collect::<Vec<_>>());
+    // Bounded (Some(2), below the 20-row burst) must not deadlock and must match.
+    assert_eq!(unbounded, read_with(Some(2)));
+    assert_eq!(unbounded, read_with(Some(5)));
 }

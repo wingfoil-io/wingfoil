@@ -33,7 +33,13 @@ fn main() -> anyhow::Result<()> {
 
     // Read → transform (bump every price by 1.0) → write, on the graph clock.
     let g = GraphBuilder::new();
-    let rows = csv_read(&g, &input, |q: &Quote| NanoTime::new(q.timestamp), false)?;
+    let rows = csv_read(
+        &g,
+        &input,
+        |q: &Quote| NanoTime::new(q.timestamp),
+        false,
+        None,
+    )?;
     let bumped = rows.map(|b| {
         b.iter()
             .map(|q| Quote {
@@ -53,8 +59,14 @@ fn main() -> anyhow::Result<()> {
     // Single-value convenience: a plain `Stream<T>` sinks by wrapping each value
     // into a one-element burst first.
     let g = GraphBuilder::new();
-    let totals = csv_read(&g, &input, |q: &Quote| NanoTime::new(q.timestamp), false)?
-        .map(|b| Burst::from([b.iter().map(|q| q.price).sum::<f64>()]));
+    let totals = csv_read(
+        &g,
+        &input,
+        |q: &Quote| NanoTime::new(q.timestamp),
+        false,
+        None,
+    )?
+    .map(|b| Burst::from([b.iter().map(|q| q.price).sum::<f64>()]));
     let _totals_sink = totals.csv_write(dir.join("wingfoil_next_csv_adapter_totals.csv"))?;
     let mut runner = g.build();
     runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;

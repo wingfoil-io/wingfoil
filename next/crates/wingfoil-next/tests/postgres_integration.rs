@@ -196,7 +196,7 @@ fn test_source_historical_dispatches_to_read() -> anyhow::Result<()> {
         start_time: start,
     };
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query, None);
     let acc = postgres_source::<TestTrade>(&g, params, conn, cfg)?
         .collapse()
         .with_time()
