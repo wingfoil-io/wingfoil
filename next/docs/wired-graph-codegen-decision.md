@@ -270,6 +270,11 @@ the generator.**
 4. **Explicitly deferred:** mixed-mode islands (§4.2), capture-as-runtime-
    parameters (§3), multi-module wiring scope.
 
+A further backend behind the same front-end — emitting RustHDL/RHDL and
+thence Verilog for FPGA targets — is designed separately in
+[`fpga-hdl-backend-decision.md`](fpga-hdl-backend-decision.md); it sits
+strictly behind the gates above.
+
 ## 9. Known limitations (accepted, documented)
 
 - Implicit environment capture is unavailable to quoted closures — closed
