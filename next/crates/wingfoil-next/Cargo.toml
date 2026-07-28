@@ -166,6 +166,14 @@ opentelemetry-otlp = { version = "0.32", features = [
     "trace",
 ], optional = true }
 
+# `fix` feature: TLS for the FIX initiator (`rustls` with the `ring` provider +
+# the Mozilla root bundle via `webpki-roots`) and a lock-free bounded MPSC
+# (`kanal`) for the outbound inject channel. Versions mirror the classic
+# `wingfoil` crate's `fix` adapter so the two trees don't drift.
+rustls = { version = "0.23", features = ["ring"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
+kanal = { version = "0.1.1", optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `graph!` macro's key error paths.
 trybuild = "1"
@@ -246,6 +254,20 @@ otlp = [
 # Adds the self-contained OTLP integration test (a testcontainers OTel collector
 # the sink exports to). Mirrors classic wingfoil.
 otlp-integration-test = ["otlp", "dep:testcontainers"]
+# FIX (Financial Information eXchange) protocol adapter: a synchronous, poll-based
+# session engine (initiator + acceptor, plain TCP or TLS) exposing inbound
+# messages + session status as streams, a market-data subscription helper, and an
+# outbound sender. Like classic wingfoil's `fix`, it is synchronous/poll-based and
+# deliberately does NOT pull in `async`; `rustls`/`webpki-roots` back the TLS
+# initiator and `kanal` backs the lock-free outbound inject channel. Versions
+# mirror the classic `wingfoil` crate's `fix` adapter so the two trees don't drift.
+fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal", "dep:chrono"]
+# The FIX adapter's cross-process parity tests spin up an in-process acceptor +
+# initiator over real loopback sockets (no external service / container), so this
+# gates the same-process integration tests. Mirrors classic wingfoil's
+# `fix-integration-test` (which additionally reaches the LMAX demo when
+# credentialed; those credentialed tests are not ported — see the module docs).
+fix-integration-test = ["fix"]
 # Runtime graph dynamism: append nodes and splice edges into a live graph
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors classic wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
@@ -346,6 +368,10 @@ required-features = ["zmq"]
 [[example]]
 name = "otlp_adapter"
 required-features = ["otlp", "prometheus"]
+
+[[example]]
+name = "fix_adapter"
+required-features = ["fix"]
 
 # Ports of the classic `wingfoil/examples/` onto the next engine's fluent API.
 # Each lives in its own directory with a README, mirroring the classic layout.

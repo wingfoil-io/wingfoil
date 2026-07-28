@@ -1,0 +1,39 @@
+name: test.integration.fix-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/fix**'
+      - 'next/crates/wingfoil-next/tests/fix_integration.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fix-next-integration:
+    name: FIX (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Run FIX (next) same-process integration tests
+        # Loopback TCP only — no external service or container. Serialized
+        # (`--test-threads=1`) because the tests run against a live wall clock.
+        run: |
+          cargo test --features fix-integration-test -p wingfoil-next \
+            --test fix_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
