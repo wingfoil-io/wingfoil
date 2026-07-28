@@ -91,6 +91,12 @@ full compiled/interpreted gap (~10×) for user ops.
 
 ## 2. "Could the macro run the interpreted graph and interrogate it instead?"
 
+> **Revisited:** [`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md)
+> works out the two-phase route in full — with a `func!` quotation
+> primitive it becomes sound for a defined subset (and buys dynamic
+> topology), positioned as a second front-end that emits `graph!` input.
+> The "No" below stands for the *unassisted* form described here.
+
 No — not in a single compilation. A proc macro expands *before* name
 resolution and type checking; rustc offers no API to ask "what type is this
 expression". The two approximations both exist in this repo's history:
