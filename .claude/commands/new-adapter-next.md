@@ -212,9 +212,10 @@ load-bearing decision:
 
 | Library / data shape | Source | Sink | Reference |
 |---|---|---|---|
-| File / batch replay (historical) | read fully at wiring → `send_at` per record → `close` | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs` |
+| Small finite in-memory fixture (historical) | `replay_results`: queue every `(value, time)` at wiring → `close` | `for_each` + `RefCell` writer | test/example fixtures |
+| File / batch replay (historical, unbounded resource) | lazy `produce_async` + `buffer_size` (`async` feature) — rows pulled on demand as the graph drains, never read fully up front | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs` |
 | Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq.rs`, pattern below |
-| Async client library (tokio-based) | `produce_async` / `produce_async_bounded` (`async` feature) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
+| Async client library (tokio-based) | `produce_async` (`async` feature; optional `buffer_size` for back-pressure in both modes) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
 | Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (classic), step 8 |
 | Pull-based exporter (scraped, no source) | n/a | `for_each` → `ArcSwap` slot read by a background HTTP thread | prometheus, step 8 |
@@ -474,30 +475,36 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 ```rust
 pub fn $ARGUMENTS_sub(
     g: &GraphBuilder,
-    params: RunParams,
+    run_mode: RunMode,        // live-only sources reject HistoricalFrom here (register B2)
     conn: <Name>Config,
 ) -> anyhow::Result<Stream<Burst<<Name>Event>>> {
-    produce_async(g, params, move |_p| async move {
+    // Single legacy-shaped signature: (g, run, buffer_size). The closure
+    // receives RunParams; buffer_size is the last arg (None = unbounded,
+    // Some(n) = bounded back-pressure in BOTH run modes).
+    produce_async(g, move |_p: RunParams| async move {
         // connect; optionally snapshot-then-watch (see below)
         Ok(async_stream::stream! {
             // yield Ok((NanoTime, event)); yield Err(e) to abort the run
         })
-    }) // returns Result — propagate with `?` (runtime creation is fallible)
+    }, None) // returns Result — propagate with `?` (runtime creation is fallible)
 }
 ```
 
-Know the caveats (documented in `async_source.rs`): the producer task spawns
-at **wiring** time, so `params` must describe the run the caller will actually
-invoke — historical `start_time` mismatches are validated and abort the run;
-use `produce_async_bounded` when a fast realtime producer needs `buffer_size`
-back-pressure (not applied in historical mode, by design).
+Know the caveats (documented in `async_source.rs`): the closure receives the
+run's `RunParams`, so a historical `start_time` mismatch is validated and
+aborts the run. Pass `Some(n)` as `buffer_size` when a producer needs
+back-pressure — since register B5 this **is** applied in historical mode too
+(the producer paces itself against the graph's incremental drain via a
+per-group semaphore), giving legacy's bounded-memory pipelined replay; `None`
+is the unbounded default. There is a single `produce_async` — the earlier
+`produce_async_bounded` split was unified back to legacy's one signature.
 
 **Runtime ownership — the graph owns the runtime; pass no `&Handle`.** The
 `GraphBuilder` owns one tokio runtime, created lazily on first async use and
 dropped at teardown, shared by every async adapter in the graph
 (`next/docs/runtime-ownership.md`, landed). So your factory takes **no**
-`&tokio::runtime::Handle`: `produce_async` / `produce_async_bounded` /
-`consume_async` pull the handle from `g` themselves and return `Result` (the
+`&tokio::runtime::Handle`: `produce_async` / `consume_async` pull the handle
+from `g` themselves and return `Result` (the
 first, owned-runtime creation is the only fallible part — propagate with `?`).
 For a **sink trait** (method on `Stream<…>`, no `&g` in hand), get a builder
 view with `self.graph()` and, if you need the handle directly for a wiring-time
@@ -713,6 +720,18 @@ Conventions (see `tests/lines_adapter.rs` / `tests/csv_adapter.rs`):
 - **Historical determinism**: run with
   `RunMode::HistoricalFrom(NanoTime::ZERO)`; assert exact values **and tick
   times** via `.with_time().accumulate()` and `runner.value(&stream)`.
+- **The run window must cover the data timestamps.** `HistoricalFrom(ZERO)` is
+  the default *only* when the fixture is stamped near zero. A source (or a
+  `replay_results` write fixture) whose rows carry real-epoch timestamps — e.g.
+  `NanoTime::from_kdb_timestamp(i * 1e9)` lands in the **year 2000** — will have
+  every event fall **outside** a `HistoricalFrom(NanoTime::ZERO)` +
+  `RunFor::Duration(short)` window, so only a partial burst is delivered and the
+  round-trip count silently comes up short (this cost us a real bug — the kdb
+  write test delivered 2 of 5 rows). Either start the window at the data
+  (`HistoricalFrom(NanoTime::from_kdb_timestamp(0))`) or, for a finite feed that
+  closes itself, run `RunFor::Forever` so the `[0, MAX]` window covers any epoch
+  — this is what the classic kdb write test does. Match the classic test's
+  window when porting.
 - **Unique temp paths** per test (pid + atomic counter) so parallel tests
   never collide.
 - **Parity first**: port every classic adapter unit test, then add

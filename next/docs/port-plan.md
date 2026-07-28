@@ -495,7 +495,8 @@ values and tick times.
   `graph_node` entry) — and runs in both modes (realtime bursts, deterministic
   historical replay). `async` (`examples/async/`, gated on the
   `async` feature) drives the graph from a `produce_async` producer with the
-  graph as consumer. Bounded-buffer back-pressure (`produce_async_bounded`) and
+  graph as consumer. Bounded-buffer back-pressure (`produce_async`'s optional
+  `buffer_size`, applied in **both** run modes — register B5) and
   wiring-time `RunParams` (validated against the real run in historical mode)
   landed with the `produce_async` ergonomic above.
 
@@ -687,8 +688,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    no bounded historical twin — register B2, ratified; classic checked the same
    guard at run start). The sink is the `KdbSinkOps` extension trait (not the
    classic free-fn + `KdbWriteOperators` pair) and takes a `buffer_size` for the
-   `consume_async` bound; `kdb_read` keeps classic's `buffer_size` (a no-op in
-   historical mode). Credentials never reach an error message
+   `consume_async` bound; `kdb_read` takes classic's `buffer_size`, now an
+   effective bound (B5 lazified the slice replay, so `Some(n)` gives
+   bounded-memory pipelined historical replay; `None` = unbounded, classic's
+   default). Credentials never reach an error message
    (`KdbConnection::redacted()` = `host:port`). The canonical deviation list is the
    adapter's `# Deviations from classic` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
