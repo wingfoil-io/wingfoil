@@ -495,7 +495,8 @@ values and tick times.
   `graph_node` entry) — and runs in both modes (realtime bursts, deterministic
   historical replay). `async` (`examples/async/`, gated on the
   `async` feature) drives the graph from a `produce_async` producer with the
-  graph as consumer. Bounded-buffer back-pressure (`produce_async_bounded`) and
+  graph as consumer. Bounded-buffer back-pressure (`produce_async`'s optional
+  `buffer_size`, applied in **both** run modes — register B5) and
   wiring-time `RunParams` (validated against the real run in historical mode)
   landed with the `produce_async` ergonomic above.
 
@@ -535,8 +536,8 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    verbatim). **Deviations** (none behavioural): (a) the classic time-slicing
    helpers (`compute_time_slices`/`compute_validated_time_slices`) land in
    `common` alongside the time-sliced readers — **ported with `postgres`**
-   (Phase 4 item 4) and feature-gated on `postgres` today (the kdb port adds
-   `feature = "kdb"` to the gate at Phase 4 item 5); the always-compiled
+   (Phase 4 item 4) and feature-gated on `any(postgres, kdb)` — the kdb port
+   (Phase 4 item 5) widened the gate to reuse the same slicer; the always-compiled
    `WindowFilter`/`TimeWindow` surface is here from the start; (b) `FileCache`'s
    log messages drop the classic "KDB " prefix (the cache is not kdb-specific in
    next).
@@ -658,9 +659,42 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    the Python bindings (Phase 6), which is also why the classic `zmq-cross-lang`
    tests are not ported. Realtime-only, so the parity tests assert received
    values (consecutive counters, connection status) rather than exact tick times.
-   - **kdb** reuses the `postgres`-ported time slicer in `adapters::common` —
-     add `feature = "kdb"` to the `#[cfg]` gate on `compute_time_slices` /
-     `compute_validated_time_slices` and their tests.
+   ✅ **kdb** *(done)*: KDB+/q — two time-partitioned historical replay sources
+   (`kdb_read`, one query per time slice via the shared time slicer; and its
+   file-cached twin `kdb_read_cached` over the `cache` adapter's `FileCache`), a
+   real-time tickerplant subscription (`kdb_sub`), and a streaming insert sink
+   (`KdbSinkOps::kdb_write`), behind the `kdb` feature on the async `kdbplus` IPC
+   client (`kdb-plus-fixed` 0.5, mirroring classic). All ride the async
+   ergonomics: `kdb_read`/`kdb_read_cached`/`kdb_sub` over `produce_async`,
+   `kdb_write` over `consume_async`. As the *reusing* time-sliced adapter, it
+   **widened the slicer cfg-gate** in `adapters::common` from
+   `#[cfg(feature = "postgres")]` to `#[cfg(any(feature = "postgres", feature =
+   "kdb"))]` (the `WindowFilter` row-clamp is always compiled; only the slicer is
+   gated). Parity port of the classic adapter's + cache tests as
+   `tests/kdb_integration.rs` (KDB+ has no public licensed container image, so the
+   tests probe an external `q -p 5000` and **skip** when unreachable — no
+   testcontainers; `kdb-next-integration.yml` reuses the classic adapter's KDB
+   Docker image + license secret) plus no-service tests in `tests/kdb_adapter.rs`;
+   the three classic examples ported to `examples/kdb/{read,read_cached,round_trip}`.
+   **Deviations:** all classic capabilities preserved — the read/read_cached/sub
+   sources, the write sink, the `KdbDeserialize`/`KdbSerialize`/`KdbExt` traits,
+   `Sym`/`SymbolInterner`, and the `Row`/`Rows` access. After the defer-to-start
+   and runtime-ownership migrations the graph owns the tokio runtime (no `&Handle`;
+   register A5), the sink connects lazily on its first write (register A1/A4), and
+   `kdb_read`/`kdb_read_cached` defer their connect + slice queries to the run via
+   `produce_async` (the window is still validated + sliced at **wiring**, a pure
+   check — register B5-style). `kdb_sub` takes a `RunMode` and **rejects
+   `RunMode::HistoricalFrom` at wiring** (a live, unbounded tickerplant tail with
+   no bounded historical twin — register B2, ratified; classic checked the same
+   guard at run start). The sink is the `KdbSinkOps` extension trait (not the
+   classic free-fn + `KdbWriteOperators` pair) and takes a `buffer_size` for the
+   `consume_async` bound; `kdb_read` takes classic's `buffer_size`, now an
+   effective bound (B5 lazified the slice replay, so `Some(n)` gives
+   bounded-memory pipelined historical replay; `None` = unbounded, classic's
+   default). Credentials never reach an error message
+   (`KdbConnection::redacted()` = `host:port`). The canonical deviation list is the
+   adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md).
    ✅ **kafka** *(done)*: a streaming topic-consume source (`kafka_sub`) on
    `produce_async` and a topic-produce sink (`KafkaSinkOps::kafka_pub`) on
    `consume_async`, behind the `kafka` feature (`rdkafka` 0.37, mirroring

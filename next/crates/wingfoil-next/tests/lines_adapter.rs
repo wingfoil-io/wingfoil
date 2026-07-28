@@ -1,6 +1,12 @@
-//! The dependency-free line-oriented file adapter: deterministic historical
-//! replay of a file through a graph, a transform, and a file sink — asserting
-//! both the written output and the replay ordering / timestamps.
+//! The line-oriented file adapter: deterministic historical replay of a file
+//! through a graph, a transform, and a file sink — asserting both the written
+//! output and the replay ordering / timestamps.
+//!
+//! The replay sources ([`replay_lines`] / [`replay_lines_scheduled`]) sit behind
+//! the `async` feature (lazy, back-pressured `produce_async` replay, like
+//! `csv_read`), so this whole file is gated on it; the dependency-free `tail_lines`
+//! reassembly is covered by the inline `poll_line` unit tests in `lines.rs`.
+#![cfg(feature = "async")]
 
 use std::fs;
 use std::path::PathBuf;
@@ -32,7 +38,7 @@ fn replay_transform_and_sink_roundtrips_through_files() {
     fs::write(&input, "alpha\nbravo\ncharlie\ndelta\n").unwrap();
 
     let g = GraphBuilder::new();
-    let lines = replay_lines(&g, &input).unwrap();
+    let lines = replay_lines(&g, &input, None).unwrap();
     let shouted = lines.map(|burst: &Burst<String>| {
         burst
             .iter()
@@ -64,7 +70,7 @@ fn replay_is_scheduled_deterministically_on_the_graph_clock() {
     let step = std::time::Duration::from_nanos(10);
 
     let g = GraphBuilder::new();
-    let lines = replay_lines_scheduled(&g, &input, base, step).unwrap();
+    let lines = replay_lines_scheduled(&g, &input, base, step, None).unwrap();
     // Pair each burst with the engine time it was delivered at.
     let stamped = lines.with_time().accumulate();
 
@@ -104,6 +110,7 @@ fn zero_step_groups_records_into_one_burst() {
         &input,
         NanoTime::ZERO,
         std::time::Duration::from_nanos(0),
+        None,
     )
     .unwrap();
     let stamped = lines.with_time().accumulate();
@@ -140,7 +147,7 @@ fn append_sink_preserves_existing_content() {
     fs::write(&output, "header\n").unwrap();
 
     let g = GraphBuilder::new();
-    let lines = replay_lines(&g, &input).unwrap();
+    let lines = replay_lines(&g, &input, None).unwrap();
     lines.append_lines(&output).unwrap();
 
     let mut runner = g.build();
@@ -162,7 +169,7 @@ fn missing_source_file_is_an_error() {
     let missing = temp_path("does_not_exist");
     // `.err()` drops the `Ok(Stream)` (which is not `Debug`), so this avoids the
     // `Debug` bound `unwrap_err` would require.
-    let err = replay_lines(&g, &missing)
+    let err = replay_lines(&g, &missing, None)
         .err()
         .expect("opening a missing file must error");
     let msg = format!("{err:#}");
@@ -170,4 +177,48 @@ fn missing_source_file_is_an_error() {
         msg.contains("lines adapter: opening source file"),
         "unexpected error: {msg}"
     );
+}
+
+/// A bounded `buffer_size` replays byte-identically to the unbounded one, and a
+/// same-time burst **larger than the bound** must not deadlock (the group-aware
+/// back-pressure from `produce_async`, same as csv) — mirroring
+/// `csv_read_bounded_is_deterministic_and_survives_large_bursts`.
+#[test]
+fn replay_bounded_is_deterministic_and_survives_large_bursts() {
+    // 30 records all at t=0 (one group, far larger than a bound of 2) via step 0.
+    let input = temp_path("bounded");
+    let contents: String = (0..30u32).map(|i| format!("line{i}\n")).collect();
+    fs::write(&input, &contents).unwrap();
+
+    let read_with = |buffer: Option<usize>| -> Vec<(NanoTime, Vec<String>)> {
+        let g = GraphBuilder::new();
+        let lines = replay_lines_scheduled(
+            &g,
+            &input,
+            NanoTime::ZERO,
+            std::time::Duration::ZERO,
+            buffer,
+        )
+        .unwrap();
+        let stamped = lines.with_time().accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        runner
+            .value(&stamped)
+            .into_iter()
+            .map(|(t, b)| (t, b.iter().cloned().collect()))
+            .collect()
+    };
+
+    let unbounded = read_with(None);
+    // One burst at t=0 holding all 30 lines.
+    assert_eq!(unbounded.len(), 1);
+    assert_eq!(unbounded[0].0, NanoTime::ZERO);
+    assert_eq!(unbounded[0].1.len(), 30);
+    // Bounded below the burst size must not deadlock and must match.
+    assert_eq!(unbounded, read_with(Some(2)));
+
+    fs::remove_file(&input).ok();
 }

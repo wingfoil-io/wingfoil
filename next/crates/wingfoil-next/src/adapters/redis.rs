@@ -341,33 +341,37 @@ pub fn redis_sub(
     }
     let conn = conn.into();
     let channel = channel.into();
-    produce_async(g, move |_p: RunParams| async move {
-        let client = redis::Client::open(conn.url.as_str())
-            .with_context(|| format!("redis_sub: opening client for {}", conn.redacted()))?;
-        let mut pubsub = client
-            .get_async_pubsub()
-            .await
-            .with_context(|| format!("redis_sub: connecting to {}", conn.redacted()))?;
-        pubsub
-            .subscribe(channel.as_str())
-            .await
-            .with_context(|| format!("redis_sub: subscribing to {channel:?}"))?;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            let client = redis::Client::open(conn.url.as_str())
+                .with_context(|| format!("redis_sub: opening client for {}", conn.redacted()))?;
+            let mut pubsub = client
+                .get_async_pubsub()
+                .await
+                .with_context(|| format!("redis_sub: connecting to {}", conn.redacted()))?;
+            pubsub
+                .subscribe(channel.as_str())
+                .await
+                .with_context(|| format!("redis_sub: subscribing to {channel:?}"))?;
 
-        Ok(async_stream::stream! {
-            let mut messages = pubsub.on_message();
-            while let Some(msg) = messages.next().await {
-                let event = RedisEvent {
-                    channel: msg.get_channel_name().to_string(),
-                    payload: msg.get_payload_bytes().to_vec(),
-                };
-                yield Ok((NanoTime::now(), event));
-            }
-            // `on_message` ends only when the connection drops.
-            yield Err(anyhow::anyhow!(
-                "redis_sub: subscription stream closed unexpectedly"
-            ));
-        })
-    })
+            Ok(async_stream::stream! {
+                let mut messages = pubsub.on_message();
+                while let Some(msg) = messages.next().await {
+                    let event = RedisEvent {
+                        channel: msg.get_channel_name().to_string(),
+                        payload: msg.get_payload_bytes().to_vec(),
+                    };
+                    yield Ok((NanoTime::now(), event));
+                }
+                // `on_message` ends only when the connection drops.
+                yield Err(anyhow::anyhow!(
+                    "redis_sub: subscription stream closed unexpectedly"
+                ));
+            })
+        },
+        None,
+    )
 }
 
 /// Read a Redis stream `key`: emit a snapshot of all existing entries, then tail
@@ -407,62 +411,66 @@ pub fn redis_stream_read(
     }
     let conn = conn.into();
     let key = key.into();
-    produce_async(g, move |_p: RunParams| async move {
-        let client = redis::Client::open(conn.url.as_str()).with_context(|| {
-            format!("redis_stream_read: opening client for {}", conn.redacted())
-        })?;
-        let mut connection = client
-            .get_multiplexed_async_connection()
-            .await
-            .with_context(|| format!("redis_stream_read: connecting to {}", conn.redacted()))?;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            let client = redis::Client::open(conn.url.as_str()).with_context(|| {
+                format!("redis_stream_read: opening client for {}", conn.redacted())
+            })?;
+            let mut connection = client
+                .get_multiplexed_async_connection()
+                .await
+                .with_context(|| format!("redis_stream_read: connecting to {}", conn.redacted()))?;
 
-        // 1. Snapshot all existing entries and capture the last ID.
-        let snapshot: StreamRangeReply = connection
-            .xrange(&key, "-", "+")
-            .await
-            .with_context(|| format!("redis_stream_read: XRANGE on {key:?} failed"))?;
-        // "0" means "from the beginning" — used when the stream is empty so the
-        // tail picks up the very first appended entry.
-        let mut last_id = snapshot
-            .ids
-            .last()
-            .map(|id| id.id.clone())
-            .unwrap_or_else(|| "0".to_string());
-        let snapshot_events: Vec<RedisStreamEvent> =
-            snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
+            // 1. Snapshot all existing entries and capture the last ID.
+            let snapshot: StreamRangeReply = connection
+                .xrange(&key, "-", "+")
+                .await
+                .with_context(|| format!("redis_stream_read: XRANGE on {key:?} failed"))?;
+            // "0" means "from the beginning" — used when the stream is empty so the
+            // tail picks up the very first appended entry.
+            let mut last_id = snapshot
+                .ids
+                .last()
+                .map(|id| id.id.clone())
+                .unwrap_or_else(|| "0".to_string());
+            let snapshot_events: Vec<RedisStreamEvent> =
+                snapshot.ids.iter().map(|id| to_event(&key, id)).collect();
 
-        Ok(async_stream::stream! {
-            // Phase 1: emit the snapshot as one atomic burst — every entry
-            // shares ONE timestamp so a bounded run cannot observe only the
-            // first (the etcd snapshot-burst reasoning).
-            let snapshot_time = NanoTime::now();
-            for event in snapshot_events {
-                yield Ok((snapshot_time, event));
-            }
+            Ok(async_stream::stream! {
+                // Phase 1: emit the snapshot as one atomic burst — every entry
+                // shares ONE timestamp so a bounded run cannot observe only the
+                // first (the etcd snapshot-burst reasoning).
+                let snapshot_time = NanoTime::now();
+                for event in snapshot_events {
+                    yield Ok((snapshot_time, event));
+                }
 
-            // Phase 2: tail live appends from the snapshot boundary.
-            let opts = StreamReadOptions::default().block(0);
-            loop {
-                let reply: redis::RedisResult<StreamReadReply> =
-                    connection.xread_options(&[&key], &[&last_id], &opts).await;
-                match reply {
-                    Ok(reply) => {
-                        for stream_key in &reply.keys {
-                            for id in &stream_key.ids {
-                                last_id = id.id.clone();
-                                yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
+                // Phase 2: tail live appends from the snapshot boundary.
+                let opts = StreamReadOptions::default().block(0);
+                loop {
+                    let reply: redis::RedisResult<StreamReadReply> =
+                        connection.xread_options(&[&key], &[&last_id], &opts).await;
+                    match reply {
+                        Ok(reply) => {
+                            for stream_key in &reply.keys {
+                                for id in &stream_key.ids {
+                                    last_id = id.id.clone();
+                                    yield Ok((NanoTime::now(), to_event(&stream_key.key, id)));
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e)
-                            .context(format!("redis_stream_read: XREAD on {key:?} failed")));
-                        break;
+                        Err(e) => {
+                            yield Err(anyhow::Error::new(e)
+                                .context(format!("redis_stream_read: XREAD on {key:?} failed")));
+                            break;
+                        }
                     }
                 }
-            }
-        })
-    })
+            })
+        },
+        None,
+    )
 }
 
 // ---------------------------------------------------------------------------

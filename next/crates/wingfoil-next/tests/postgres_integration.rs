@@ -144,7 +144,7 @@ fn collect_hourly_read(
         start_time: start,
     };
     let g = GraphBuilder::new().with_async_runtime(handle.clone());
-    let acc = postgres_read::<TestTrade>(&g, params, conn, HOUR, read_query)?
+    let acc = postgres_read::<TestTrade>(&g, params, conn, HOUR, read_query, None)?
         .collapse()
         .with_time()
         .accumulate();
@@ -196,7 +196,7 @@ fn test_source_historical_dispatches_to_read() -> anyhow::Result<()> {
         start_time: start,
     };
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query);
+    let cfg = PostgresSourceConfig::new().historical(HOUR, read_query, None);
     let acc = postgres_source::<TestTrade>(&g, params, conn, cfg)?
         .collapse()
         .with_time()

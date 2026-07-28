@@ -17,21 +17,25 @@ fn main() {
 
     // A producer that awaits (like a socket read) and yields timestamped
     // quotes — a finite feed that closes when exhausted.
-    let quotes = produce_async(&g, |_p| async {
-        Ok(futures::stream::unfold(
-            (0u32, 100.0_f64),
-            |(i, price)| async move {
-                if i >= 8 {
-                    return None;
-                }
-                // Await, as a real feed handler would on a socket.
-                tokio::time::sleep(Duration::from_millis(1)).await;
-                let price = price + (i as f64 % 3.0) - 1.0;
-                let t = NanoTime::new(100 * (i as u64 + 1));
-                Some((Ok((t, price)), (i + 1, price)))
-            },
-        ))
-    })
+    let quotes = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::unfold(
+                (0u32, 100.0_f64),
+                |(i, price)| async move {
+                    if i >= 8 {
+                        return None;
+                    }
+                    // Await, as a real feed handler would on a socket.
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    let price = price + (i as f64 % 3.0) - 1.0;
+                    let t = NanoTime::new(100 * (i as u64 + 1));
+                    Some((Ok((t, price)), (i + 1, price)))
+                },
+            ))
+        },
+        None,
+    )
     .expect("produce_async");
 
     let mean = quotes

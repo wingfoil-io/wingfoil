@@ -243,107 +243,111 @@ pub fn etcd_sub(
     }
     let conn = conn.into();
     let prefix = prefix.into();
-    produce_async(g, move |_p: RunParams| async move {
-        let mut client = Client::connect(&conn.endpoints, None)
-            .await
-            .with_context(|| format!("etcd_sub: connecting to etcd at {:?}", conn.endpoints))?;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            let mut client = Client::connect(&conn.endpoints, None)
+                .await
+                .with_context(|| format!("etcd_sub: connecting to etcd at {:?}", conn.endpoints))?;
 
-        // 1. Open the watch BEFORE the GET to prevent the snapshot/watch race.
-        let watch_opts = WatchOptions::new().with_prefix();
-        let mut watch_stream = client
-            .watch(prefix.as_bytes(), Some(watch_opts))
-            .await
-            .map_err(|e| anyhow::anyhow!("etcd watch failed: {e}"))?;
+            // 1. Open the watch BEFORE the GET to prevent the snapshot/watch race.
+            let watch_opts = WatchOptions::new().with_prefix();
+            let mut watch_stream = client
+                .watch(prefix.as_bytes(), Some(watch_opts))
+                .await
+                .map_err(|e| anyhow::anyhow!("etcd watch failed: {e}"))?;
 
-        // 2. Read the snapshot and capture its revision.
-        let get_opts = GetOptions::new().with_prefix();
-        let get_resp = client
-            .get(prefix.as_bytes(), Some(get_opts))
-            .await
-            .map_err(|e| anyhow::anyhow!("etcd get failed: {e}"))?;
-        let snapshot_rev = get_resp.header().map(|h| h.revision()).unwrap_or(0);
+            // 2. Read the snapshot and capture its revision.
+            let get_opts = GetOptions::new().with_prefix();
+            let get_resp = client
+                .get(prefix.as_bytes(), Some(get_opts))
+                .await
+                .map_err(|e| anyhow::anyhow!("etcd get failed: {e}"))?;
+            let snapshot_rev = get_resp.header().map(|h| h.revision()).unwrap_or(0);
 
-        // 3. Collect snapshot KVs into owned data to move into the stream.
-        let snapshot: Vec<EtcdEvent> = get_resp
-            .kvs()
-            .iter()
-            .map(|kv| EtcdEvent {
-                kind: EtcdEventKind::Put,
-                entry: EtcdEntry {
-                    key: String::from_utf8_lossy(kv.key()).into_owned(),
-                    value: kv.value().to_vec(),
-                },
-                revision: snapshot_rev,
-            })
-            .collect();
+            // 3. Collect snapshot KVs into owned data to move into the stream.
+            let snapshot: Vec<EtcdEvent> = get_resp
+                .kvs()
+                .iter()
+                .map(|kv| EtcdEvent {
+                    kind: EtcdEventKind::Put,
+                    entry: EtcdEntry {
+                        key: String::from_utf8_lossy(kv.key()).into_owned(),
+                        value: kv.value().to_vec(),
+                    },
+                    revision: snapshot_rev,
+                })
+                .collect();
 
-        // 4. Return the combined snapshot + live stream. `watch_stream` is moved
-        //    in and kept alive for the stream's lifetime so the watch stays open.
-        Ok(async_stream::stream! {
-            // Phase 1: emit the snapshot as a single atomic burst. Every
-            // snapshot KV shares ONE timestamp so they are grouped into one
-            // burst (never latest-wins, never split across cycles) — matching
-            // classic's single `HistoricalValue` snapshot burst. Stamping each
-            // event with its own `NanoTime::now()` would scatter them across
-            // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
-            // could observe only the first key — an intermittent "missing key"
-            // under load.
-            let snapshot_time = NanoTime::now();
-            for event in snapshot {
-                yield Ok((snapshot_time, event));
-            }
+            // 4. Return the combined snapshot + live stream. `watch_stream` is moved
+            //    in and kept alive for the stream's lifetime so the watch stays open.
+            Ok(async_stream::stream! {
+                // Phase 1: emit the snapshot as a single atomic burst. Every
+                // snapshot KV shares ONE timestamp so they are grouped into one
+                // burst (never latest-wins, never split across cycles) — matching
+                // classic's single `HistoricalValue` snapshot burst. Stamping each
+                // event with its own `NanoTime::now()` would scatter them across
+                // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
+                // could observe only the first key — an intermittent "missing key"
+                // under load.
+                let snapshot_time = NanoTime::now();
+                for event in snapshot {
+                    yield Ok((snapshot_time, event));
+                }
 
-            // Phase 2: drain the watch stream, deduplicating against the snapshot.
-            loop {
-                match watch_stream.next().await {
-                    Some(Ok(resp)) => {
-                        // Skip the initial "watch created" confirmation (no events).
-                        if resp.created() {
-                            continue;
-                        }
-                        if resp.canceled() {
-                            yield Err(anyhow::anyhow!(
-                                "etcd watch cancelled: {}",
-                                resp.cancel_reason()
-                            ));
-                            break;
-                        }
-                        for event in resp.events() {
-                            let kv = match event.kv() {
-                                Some(kv) => kv,
-                                None => continue,
-                            };
-                            let mod_rev = kv.mod_revision();
-                            // Skip events already covered by the snapshot.
-                            if mod_rev <= snapshot_rev {
+                // Phase 2: drain the watch stream, deduplicating against the snapshot.
+                loop {
+                    match watch_stream.next().await {
+                        Some(Ok(resp)) => {
+                            // Skip the initial "watch created" confirmation (no events).
+                            if resp.created() {
                                 continue;
                             }
-                            let kind = match event.event_type() {
-                                etcd_client::EventType::Put => EtcdEventKind::Put,
-                                etcd_client::EventType::Delete => EtcdEventKind::Delete,
-                            };
-                            yield Ok((NanoTime::now(), EtcdEvent {
-                                kind,
-                                entry: EtcdEntry {
-                                    key: String::from_utf8_lossy(kv.key()).into_owned(),
-                                    value: kv.value().to_vec(),
-                                },
-                                revision: mod_rev,
-                            }));
+                            if resp.canceled() {
+                                yield Err(anyhow::anyhow!(
+                                    "etcd watch cancelled: {}",
+                                    resp.cancel_reason()
+                                ));
+                                break;
+                            }
+                            for event in resp.events() {
+                                let kv = match event.kv() {
+                                    Some(kv) => kv,
+                                    None => continue,
+                                };
+                                let mod_rev = kv.mod_revision();
+                                // Skip events already covered by the snapshot.
+                                if mod_rev <= snapshot_rev {
+                                    continue;
+                                }
+                                let kind = match event.event_type() {
+                                    etcd_client::EventType::Put => EtcdEventKind::Put,
+                                    etcd_client::EventType::Delete => EtcdEventKind::Delete,
+                                };
+                                yield Ok((NanoTime::now(), EtcdEvent {
+                                    kind,
+                                    entry: EtcdEntry {
+                                        key: String::from_utf8_lossy(kv.key()).into_owned(),
+                                        value: kv.value().to_vec(),
+                                    },
+                                    revision: mod_rev,
+                                }));
+                            }
+                        }
+                        Some(Err(e)) => {
+                            yield Err(anyhow::anyhow!("etcd watch error: {e}"));
+                            break;
+                        }
+                        None => {
+                            yield Err(anyhow::anyhow!("etcd watch stream closed unexpectedly"));
+                            break;
                         }
                     }
-                    Some(Err(e)) => {
-                        yield Err(anyhow::anyhow!("etcd watch error: {e}"));
-                        break;
-                    }
-                    None => {
-                        yield Err(anyhow::anyhow!("etcd watch stream closed unexpectedly"));
-                        break;
-                    }
                 }
-            }
-        })
-    })
+            })
+        },
+        None,
+    )
 }
 
 /// Holds a granted lease alive and revokes it on drop.

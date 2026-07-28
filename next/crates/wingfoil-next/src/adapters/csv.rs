@@ -24,30 +24,32 @@
 //!
 //! # Historical replay (the burst model)
 //!
-//! [`csv_read`] reads and deserializes the whole file up front, then stamps
-//! each record with `get_time(&record)` and queues it onto a
-//! [`channel`](crate::fluent::SourceOps::channel) source through
-//! [`ChannelSender::send_at`](crate::channel::ChannelSender::send_at); the
-//! sender is [`close`](crate::channel::ChannelSender::close)d immediately. The
-//! channel receiver groups records sharing a timestamp into one atomic
-//! [`Burst`](crate::Burst) and replays them deterministically at their
-//! timestamps — lossless, in order, independent of wall-clock. This mirrors the
-//! classic `csv_read`, whose `TryIteratorStream` groups same-timestamp rows
-//! into one burst (use `.collapse_accumulate()` when the source is strictly
-//! ascending and you want a flat `Vec<T>`).
+//! [`csv_read`] opens the file at wiring (fail-fast) and streams its rows
+//! **lazily** over a [`produce_async`](crate::async_source::produce_async)
+//! producer: each record is deserialized on demand, stamped with
+//! `get_time(&record)`, and delivered on the graph clock. The channel receiver
+//! groups records sharing a timestamp into one atomic [`Burst`](crate::Burst)
+//! and replays them deterministically at their timestamps — lossless, in order,
+//! independent of wall-clock. This mirrors the classic `csv_read`, whose
+//! `TryIteratorStream` groups same-timestamp rows into one burst (use
+//! `.collapse_accumulate()` when the source is strictly ascending and you want a
+//! flat `Vec<T>`).
+//!
+//! `buffer_size` bounds the replay's look-ahead as back-pressure: `Some(n)` keeps
+//! at most ~`n` timestamp-groups queued ahead of the graph, so a huge file is
+//! **not** read into memory up front — rows are pulled only as the graph drains
+//! (a same-time group of any size rides one slot, never split). `None` is
+//! unbounded. (Reads happen on the async producer task, so wiring stays
+//! side-effect-free apart from the open; the file I/O itself is synchronous and
+//! occupies one runtime worker during replay.)
 //!
 //! # Deviations from classic
 //!
-//! - **Whole-file read / non-decreasing timestamps.** The channel source reads
-//!   and deserializes the whole file up front and queues each record via
-//!   `send_at`, so record timestamps must be **non-decreasing** (the historical
-//!   receiver rejects out-of-order sends). Classic's `TryIteratorStream` pulls
-//!   rows lazily per tick and imposes no such ordering constraint at the source.
-//! - **Malformed-row timing.** A row that fails to deserialize is propagated as
-//!   a [`Message::Error`](crate::channel::Message) so it still aborts the run —
-//!   the same observable outcome as classic (the run fails with a "failed to
-//!   deserialize row" context), just surfaced at the start of the replay rather
-//!   than mid-stream.
+//! - **Non-decreasing timestamps.** Records are delivered on the monotonic graph
+//!   clock, so their timestamps must be **non-decreasing** (an out-of-order
+//!   record aborts the run). Classic's `TryIteratorStream` imposes no explicit
+//!   ordering constraint at the source, though a backwards timestamp would fail
+//!   the monotonic engine there too.
 //! - **Eager header write.** [`csv_write`](CsvSinkOps::csv_write) opens the file
 //!   and writes the CSV header at wiring time (before `for_each_mut`), whereas
 //!   classic defers the header to the first tick via a `headers_written` flag in
@@ -80,6 +82,7 @@ use serde::de::DeserializeOwned;
 use serde_aux::serde_introspection::serde_introspect;
 use wingfoil::NanoTime;
 
+use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, Stream, StreamOps};
 use crate::{Burst, burst};
 
@@ -87,60 +90,76 @@ use crate::{Burst, burst};
 /// [`Burst<T>`] on the graph clock at `get_time(&record)`, with records sharing
 /// a timestamp grouped into one atomic burst.
 ///
-/// The file is read and deserialized in full up front and queued onto a
-/// [`channel`](crate::fluent::SourceOps::channel) source, so replay is
-/// reproducible and needs no producer thread. Run the graph with
-/// `RunMode::HistoricalFrom(t)` where `t` is at or before the first record's
-/// timestamp (e.g. `NanoTime::ZERO`). Use
+/// The file is opened at wiring (fail-fast) and its rows are streamed **lazily**
+/// over a [`produce_async`](crate::async_source::produce_async)
+/// producer — deserialized on demand, not read into memory up front. Run the
+/// graph with `RunMode::HistoricalFrom(t)` where `t` is at or before the first
+/// record's timestamp (e.g. `NanoTime::ZERO`). Use
 /// [`collapse_accumulate`](crate::fluent::Stream::collapse_accumulate) when the
 /// source is strictly ascending and you want a flat `Vec<T>`.
 ///
 /// `has_headers` toggles whether the first line is a header (skipped) or data,
 /// exactly as `csv::ReaderBuilder::has_headers`.
 ///
+/// `buffer_size` bounds the replay's look-ahead as back-pressure: `Some(n)` caps
+/// the queued backlog to ~`n` timestamp-groups (a huge file stays bounded in
+/// memory — rows are pulled only as the graph drains); `None` is unbounded.
+///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened. A row that fails to
-/// deserialize does not panic — it is propagated into the graph as a channel
-/// error and surfaces as a run failure with a "failed to deserialize row"
-/// context (the same outcome as the classic adapter). Record timestamps must be
+/// Returns an error at **wiring time** if the file cannot be opened. A row that
+/// fails to deserialize does not panic — it is propagated into the graph and
+/// surfaces as a run failure with a "failed to deserialize row" context (the same
+/// outcome as the classic adapter), now surfaced **mid-stream** as the reader
+/// reaches it (like classic), not up front. Record timestamps must be
 /// non-decreasing; an out-of-order record fails the run.
 pub fn csv_read<T, F>(
     g: &GraphBuilder,
     path: impl AsRef<Path>,
     get_time: F,
     has_headers: bool,
+    buffer_size: Option<usize>,
 ) -> Result<Stream<Burst<T>>>
 where
-    T: Clone + Default + DeserializeOwned + 'static,
-    F: Fn(&T) -> NanoTime,
+    T: Clone + Default + DeserializeOwned + Send + 'static,
+    F: Fn(&T) -> NanoTime + Send + 'static,
 {
     let path = path.as_ref();
     let file =
         File::open(path).with_context(|| format!("csv_read: failed to open {}", path.display()))?;
     let display = path.display().to_string();
-    let reader = csv::ReaderBuilder::new()
+    // `into_deserialize` owns the reader, so the iterator is `Send + 'static`; it
+    // is lazy (reads nothing until polled), so building it at wiring does no I/O
+    // beyond the open above. The rows are pulled on the async producer task as the
+    // graph drains, deserialized on demand and delivered at their timestamps — so
+    // a malformed row aborts the run mid-stream (classic's abort-not-panic), and a
+    // huge file never lands in memory at once.
+    let mut iter = csv::ReaderBuilder::new()
         .has_headers(has_headers)
-        .from_reader(file);
-    // Deserialize lazily into `Result<(record, time)>` rows and hand them to the
-    // shared `replay_results` engine: it queues each row via `send_at`, and — on
-    // a malformed row — forwards the error via `send_error` and stops, so the run
-    // aborts with the same context string the classic adapter uses (mirroring
-    // classic's abort-not-panic on a bad row). `into_deserialize` owns the reader
-    // so the iterator is `'static`.
-    let rows = reader.into_deserialize::<T>().map(move |record| {
-        record
-            .map(|rec| {
-                let time = get_time(&rec);
-                (rec, time)
+        .from_reader(file)
+        .into_deserialize::<T>();
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            Ok(async_stream::stream! {
+                for record in iter.by_ref() {
+                    match record {
+                        Ok(rec) => {
+                            let time = get_time(&rec);
+                            yield Ok((time, rec));
+                        }
+                        Err(e) => {
+                            yield Err(anyhow::Error::new(e).context(format!(
+                                "csv_read: failed to deserialize row from {display}"
+                            )));
+                            break;
+                        }
+                    }
+                }
             })
-            .map_err(|e| {
-                anyhow::Error::new(e).context(format!(
-                    "csv_read: failed to deserialize row from {display}"
-                ))
-            })
-    });
-    Ok(g.replay_results(rows))
+        },
+        buffer_size,
+    )
 }
 
 /// A CSV file sink — the outbound counterpart of [`csv_read`].

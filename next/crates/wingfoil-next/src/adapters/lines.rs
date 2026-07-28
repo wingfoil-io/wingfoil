@@ -1,11 +1,13 @@
-//! A dependency-free, line-oriented file adapter — the smallest complete
-//! demonstration of an Op-pattern I/O edge, in both directions.
+//! A line-oriented file adapter — the smallest complete demonstration of an
+//! Op-pattern I/O edge, in both directions.
 //!
 //! It reads and writes newline-delimited **records** (plain `String` lines, no
-//! serde) using nothing but `std::fs` / `std::io`. It is the dependency-free
-//! cousin of the planned CSV adapter (see `next/docs/port-plan.md`, Phase 4:
-//! "csv — replay source + sink; exercises historical bursts"): the same shape,
-//! without the parsing.
+//! serde) using nothing but `std::fs` / `std::io`. It is the dependency-light
+//! cousin of the [`csv`](crate::adapters::csv) adapter: the same shape, without
+//! the parsing. The realtime [`tail_lines`] source and the file sink are
+//! **dependency-free** (default build); the historical replay sources
+//! ([`replay_lines`] / [`replay_lines_scheduled`]) sit behind the `async`
+//! feature — see "Historical replay" below.
 //!
 //! # Layering
 //!
@@ -14,8 +16,8 @@
 //!
 //! - **Sources** — free builder functions on a [`GraphBuilder`]:
 //!   [`replay_lines`] / [`replay_lines_scheduled`] (deterministic historical
-//!   replay) and [`tail_lines`] (a realtime `poll`-driven tail). Each returns a
-//!   `Stream<Burst<String>>`.
+//!   replay, `async` feature) and [`tail_lines`] (a realtime `poll`-driven tail,
+//!   dependency-free). Each returns a `Stream<Burst<String>>`.
 //! - **Sink** — the [`LinesSinkOps`] extension trait on `Stream<Burst<T>>`,
 //!   enabled with `use wingfoil_next::adapters::lines::LinesSinkOps;`. (A
 //!   single-value `Stream<T>` maps first — see the trait docs for why there is
@@ -23,19 +25,23 @@
 //!
 //! # Historical replay (the burst model)
 //!
-//! [`replay_lines`] reads the whole file up front and schedules each record
-//! onto the graph clock through a [`channel`](crate::fluent::SourceOps::channel)
-//! source: record `i` is stamped at `base + i * step` with
-//! [`ChannelSender::send_at`](crate::channel::ChannelSender::send_at), and the
-//! sender is [`close`](crate::channel::ChannelSender::close)d immediately. The
-//! channel receiver groups same-timestamp records into one atomic
-//! [`Burst`](crate::Burst) and replays them deterministically at their
+//! [`replay_lines`] opens the file at wiring (fail-fast) and streams its lines
+//! **lazily** over a
+//! [`produce_async`](crate::async_source::produce_async)
+//! producer — exactly like [`csv_read`](crate::adapters::csv::csv_read): record
+//! `i` is read on demand, stamped at `base + i * step`, and delivered on the
+//! graph clock. The channel receiver groups same-timestamp records into one
+//! atomic [`Burst`](crate::Burst) and replays them deterministically at their
 //! timestamps — lossless, in order, independent of wall-clock. With the default
 //! `step` of one nanosecond every record lands at a distinct instant, so each
 //! burst carries exactly one line; a zero `step` (or a `base`/`step` that makes
-//! records collide) groups colliding records into a single burst. The whole
-//! feed is queued *before* the run, so replay needs no producer thread and is
-//! fully reproducible under `RunMode::HistoricalFrom`.
+//! records collide) groups colliding records into a single burst.
+//!
+//! `buffer_size` bounds the replay's look-ahead as back-pressure, so a huge file
+//! is **not** read into memory up front — lines are pulled only as the graph
+//! drains (a same-time group of any size rides one slot). This is why the replay
+//! sources need the `async` feature (the lazy, bounded producer); the file I/O
+//! itself is synchronous, on the producer task.
 //!
 //! # Sink
 //!
@@ -51,11 +57,18 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::rc::Rc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+
+// Only the (async-gated) historical replay sources use the graph clock types and
+// the `produce_async` ergonomic; the dependency-free tail + sink do not.
+#[cfg(feature = "async")]
+use std::time::Duration;
+#[cfg(feature = "async")]
 use wingfoil::NanoTime;
 
+#[cfg(feature = "async")]
+use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::{Burst, burst};
 
@@ -67,11 +80,27 @@ use crate::{Burst, burst};
 /// exactly one line. Run the graph with `RunMode::HistoricalFrom(t)` where
 /// `t <= base` (e.g. `NanoTime::ZERO`).
 ///
+/// Behind the `async` feature — see [`replay_lines_scheduled`] for why (lazy,
+/// back-pressured replay via `produce_async`). `buffer_size` bounds the
+/// replay's look-ahead as back-pressure (`None` = unbounded), exactly as
+/// [`csv_read`](crate::adapters::csv::csv_read)'s `buffer_size`.
+///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened or a line cannot be read.
-pub fn replay_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<Burst<String>>> {
-    replay_lines_scheduled(g, path, NanoTime::ZERO, Duration::from_nanos(1))
+/// Returns an error at wiring time if the file cannot be opened.
+#[cfg(feature = "async")]
+pub fn replay_lines(
+    g: &GraphBuilder,
+    path: impl AsRef<Path>,
+    buffer_size: Option<usize>,
+) -> Result<Stream<Burst<String>>> {
+    replay_lines_scheduled(
+        g,
+        path,
+        NanoTime::ZERO,
+        Duration::from_nanos(1),
+        buffer_size,
+    )
 }
 
 /// Deterministic historical replay with an explicit schedule: record `i` is
@@ -79,45 +108,63 @@ pub fn replay_lines(g: &GraphBuilder, path: impl AsRef<Path>) -> Result<Stream<B
 /// [`Burst`]. Records sharing a timestamp (e.g. `step == 0`) ride one atomic
 /// burst; otherwise each burst holds a single line.
 ///
-/// The file is read in full and queued onto a
-/// [`channel`](crate::fluent::SourceOps::channel) source up front, so replay is
-/// reproducible and needs no producer thread. `base` must be at or after the
-/// run's start time (the channel receiver rejects a pre-start timestamp).
+/// The file is opened at wiring (fail-fast) but its lines are read **lazily** —
+/// like [`csv_read`](crate::adapters::csv::csv_read), the replay rides a
+/// [`produce_async`](crate::async_source::produce_async)
+/// producer over a synchronous line iterator, so a huge file is never read into
+/// memory up front. `base` must be at or after the run's start time (a pre-start
+/// timestamp aborts the run). `buffer_size` bounds the look-ahead as
+/// back-pressure (`None` = unbounded); a same-time group of any size rides one
+/// slot, so it never deadlocks.
+///
+/// Behind the `async` feature (it uses the `produce_async` ergonomic); the
+/// dependency-free [`tail_lines`] source and the file sink stay available in the
+/// default build. The file I/O is synchronous on the producer task.
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened or a line cannot be read.
+/// Returns an error at wiring time if the file cannot be opened. A line that
+/// cannot be read, or a line index beyond `u32::MAX`, aborts the run mid-stream
+/// with context (surfaced as the reader reaches it).
+#[cfg(feature = "async")]
 pub fn replay_lines_scheduled(
     g: &GraphBuilder,
     path: impl AsRef<Path>,
     base: NanoTime,
     step: Duration,
+    buffer_size: Option<usize>,
 ) -> Result<Stream<Burst<String>>> {
     let path = path.as_ref();
     let file = File::open(path)
         .with_context(|| format!("lines adapter: opening source file {}", path.display()))?;
-    let mut rows = Vec::new();
-    for (i, line) in BufReader::new(file).lines().enumerate() {
-        let line =
-            line.with_context(|| format!("lines adapter: reading line {i} of {}", path.display()))?;
-        // A distinct `step` per record yields one line per burst, a zero step
-        // groups them; either way timestamps stay non-decreasing (the channel
-        // receiver requires it). `try_from` turns the u32 tick-index ceiling
-        // into a clear error rather than a silent wrap that would rewind the
-        // clock and fail the run far from its cause.
-        let tick = u32::try_from(i).with_context(|| {
-            format!(
-                "lines adapter: {} has more lines than the {} the replay clock can schedule",
-                path.display(),
-                u32::MAX
-            )
-        })?;
-        rows.push((line, base + step * tick));
-    }
-    // Read/overflow errors surface above at wiring time (via `?`);
-    // `replay_results` queues the collected rows onto a channel source and
-    // closes it. Every row is `Ok`, so nothing is forwarded via `send_error`.
-    Ok(g.replay_results(rows.into_iter().map(Ok)))
+    let display = path.display().to_string();
+    // A lazy synchronous iterator: read a line, stamp it at `base + i * step`.
+    // `BufReader::lines()` owns the file, so the iterator is `Send + 'static`; it
+    // is pulled on demand by the producer (bounded by `buffer_size`), so the file
+    // is never read into memory up front. A distinct `step` per record yields one
+    // line per burst, a zero step groups them; either way timestamps stay
+    // non-decreasing (the receiver requires it). `try_from` turns the u32
+    // tick-index ceiling into a clear error rather than a silent wrap that would
+    // rewind the clock.
+    let rows = BufReader::new(file)
+        .lines()
+        .enumerate()
+        .map(move |(i, line)| -> Result<(NanoTime, String)> {
+            let line = line
+                .with_context(|| format!("lines adapter: reading line {i} of {display}"))?;
+            let tick = u32::try_from(i).with_context(|| {
+                format!(
+                    "lines adapter: {display} has more lines than the {} the replay clock can schedule",
+                    u32::MAX
+                )
+            })?;
+            Ok((base + step * tick, line))
+        });
+    produce_async(
+        g,
+        move |_p: RunParams| async move { Ok(futures::stream::iter(rows)) },
+        buffer_size,
+    )
 }
 
 /// A best-effort **realtime** tail of a newline-delimited file: a busy-poll

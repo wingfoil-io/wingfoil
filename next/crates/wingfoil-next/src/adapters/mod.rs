@@ -8,9 +8,9 @@
 //! `use wingfoil_next::adapters::lines::LinesSinkOps;`. This mirrors the
 //! [`stats`](crate::stats) module's extension-trait layering.
 //!
-//! - [`lines`] — a dependency-free, line-oriented file adapter (historical
-//!   replay source + realtime tail + file sink), the smallest complete
-//!   demonstration of an I/O edge in both directions.
+//! - [`lines`] — a line-oriented file adapter (a lazy historical replay source
+//!   behind the `async` feature + a dependency-free realtime tail + file sink),
+//!   the smallest complete demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
 //! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
@@ -39,6 +39,12 @@
 //!   `RedisStreamSinkOps::redis_stream_write` sink), behind the `redis` feature
 //!   (built on the async `produce_async` / `consume_async` ergonomics). The
 //!   sources are realtime-only.
+//! - [`kdb`] — KDB+/q: time-partitioned historical replay sources (`kdb_read`,
+//!   one query per time slice via the shared time slicer; `kdb_read_cached`, its
+//!   file-cached twin), a real-time tickerplant subscription (`kdb_sub`), and a
+//!   streaming insert sink (`KdbSinkOps::kdb_write`), behind the `kdb` feature
+//!   (built on the async `kdbplus` IPC client). The tickerplant subscription is
+//!   realtime-only.
 //! - [`postgres`] — PostgreSQL: a time-partitioned historical replay source
 //!   (`postgres_read`, one query per time slice via the shared time slicer +
 //!   `replay_results`), a realtime `LISTEN`/`NOTIFY` live-tail source
@@ -65,6 +71,8 @@ pub mod csv;
 pub mod etcd;
 #[cfg(feature = "kafka")]
 pub mod kafka;
+#[cfg(feature = "kdb")]
+pub mod kdb;
 pub mod lines;
 #[cfg(feature = "otlp")]
 pub mod otlp;

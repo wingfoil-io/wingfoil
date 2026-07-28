@@ -31,23 +31,26 @@
 //!   the live `run_mode`/`run_for`/`start_time`). So — like classic — there is no
 //!   caller-declared params to disagree with the run; the earlier declare-up-front
 //!   footgun (and its validating passthrough) is gone.
-//! * **Backpressure.** `buffer_size` bounds how far the realtime producer may
-//!   run ahead of the graph: the producer takes a permit before each send and
-//!   the passthrough returns one per delivered value, so at most ~`buffer_size`
-//!   values sit undelivered — the producer blocks instead of growing memory
-//!   without limit. Only realtime drains permits (decided from the run mode at
-//!   start); see [`produce_async`] for the historical caveat.
+//! * **Backpressure.** `buffer_size` bounds how far the producer may run ahead
+//!   of the graph, in **both** run modes (matching classic's bounded
+//!   `channel_pair`): the producer takes a permit before each send and the
+//!   passthrough returns one per delivered value, so at most ~`buffer_size`
+//!   values sit undelivered — the producer waits instead of growing memory
+//!   without limit. In historical this bounds a time-sliced replay to a lazy,
+//!   pipelined per-slice fetch (the receiver drains incrementally via
+//!   `pump_historical`, freeing permits as the graph clock advances); in realtime
+//!   it caps a fast subscriber's backlog. `None` is unbounded in both.
 //!
 //! ```ignore
 //! // The graph owns the runtime (lazily created); no `&Handle` to pass. To
 //! // embed in your own runtime instead: `GraphBuilder::new().with_async_runtime(rt.handle().clone())`.
 //! let g = GraphBuilder::new();
-//! let quotes = produce_async_bounded(&g, Some(64), |_p| async {
+//! let quotes = produce_async(&g, |_p| async {
 //!     Ok(futures::stream::iter(vec![
 //!         Ok((NanoTime::new(100), 1.0)),
 //!         Ok((NanoTime::new(200), 2.0)),
 //!     ]))
-//! })?;
+//! }, Some(64))?;
 //! ```
 
 use std::cell::RefCell;
@@ -56,7 +59,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 
 use anyhow::Context;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use tokio::runtime::{Handle, Runtime};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -139,8 +142,9 @@ pub struct RunParams {
     pub start_time: NanoTime,
 }
 
-/// Drive a graph source from an async producer of timestamped values. See the
-/// module docs. Returns the source [`Stream<Burst<T>>`].
+/// Drive a graph source from an async producer of timestamped values, matching
+/// classic `produce_async`'s `(closure, buffer_size)` signature. See the module
+/// docs. Returns the source [`Stream<Burst<T>>`].
 ///
 /// The producer closure receives the run's [`RunParams`] — derived from the
 /// actual [`run`](crate::interp::Runner::run) at graph start, not declared up
@@ -148,35 +152,35 @@ pub struct RunParams {
 /// is delivered at graph time `t` (historical replay) or live (realtime); an
 /// `Err` aborts the run.
 ///
-/// This is the unbounded variant — a fast producer feeding a slower graph can
-/// accumulate an arbitrarily large backlog. Use [`produce_async_bounded`] to
-/// apply `buffer_size` back-pressure in realtime.
-pub fn produce_async<T, F, Fut, S>(g: &GraphBuilder, run: F) -> anyhow::Result<Stream<Burst<T>>>
-where
-    T: Clone + Default + Send + 'static,
-    F: FnOnce(RunParams) -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<S>> + Send + 'static,
-    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
-{
-    produce_async_bounded(g, None, run)
-}
-
-/// [`produce_async`] with `buffer_size` back-pressure (mirrors classic
-/// `produce_async`'s `buffer_size`). See the module docs. The producer closure
-/// receives the run's [`RunParams`], derived from the actual run at start.
+/// `buffer_size` bounds the producer→graph backlog in **both** run modes
+/// (matching classic's bounded `channel_pair`); `None` is unbounded (a fast
+/// producer feeding a slower graph can accumulate an arbitrarily large backlog).
+/// What `Some(n)` counts differs by mode, mirroring how each groups values:
 ///
-/// `buffer_size` bounds the producer→graph backlog in **realtime**: `Some(n)`
-/// lets the producer run at most ~`n` values ahead of the graph before it
-/// blocks (back-pressure); `None` is unbounded (a fast producer feeding a
-/// slower graph can accumulate an arbitrarily large backlog). `Some(0)` is
-/// treated as `Some(1)`. Historical replay collects the whole timestamped
-/// stream up front (the producer sends everything, then closes), so
-/// `buffer_size` is not applied there — bounding it would deadlock that
-/// up-front collection.
-pub fn produce_async_bounded<T, F, Fut, S>(
+/// * **Realtime** — ~`n` *values* ahead of the graph's delivery point (values
+///   coalesce into a burst by arrival, so the bound is per value).
+/// * **Historical** — ~`n` *timestamp-groups* ahead (same-time values ride one
+///   atomic burst, exactly as classic, so an arbitrarily large same-time burst
+///   is never split and never counts as more than one slot). This is what makes
+///   a lazy time-sliced source stay bounded and pipelined: the receiver drains
+///   incrementally (`pump_historical`) as the graph clock advances, freeing a
+///   permit per delivered group, so the producer only fetches the next slice's
+///   rows once there is room — never materialising the whole replay. (Safe now
+///   that the receiver drains incrementally; the old block-collect receiver
+///   *would* have deadlocked under a bound, which is why historical throttling
+///   used to be skipped.)
+///
+/// **Look-ahead floor.** The self-driven historical receiver reads one group
+/// *past* the current instant to close a same-time group before delivering it,
+/// so it must hold ~2 groups before the first delivery frees a permit. A bound
+/// of `Some(1)` would wait on a permit that only the delivery it is blocking can
+/// release — a deadlock — so the effective bound is floored to 2 (`Some(0)`/
+/// `Some(1)` behave as `Some(2)`). Values and tick times are unchanged by the
+/// bound; only the producer's pace is.
+pub fn produce_async<T, F, Fut, S>(
     g: &GraphBuilder,
-    buffer_size: Option<usize>,
     run: F,
+    buffer_size: Option<usize>,
 ) -> anyhow::Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
@@ -193,22 +197,25 @@ where
     // `docs/source-lifecycle-defer-to-start.md`.
     let handle = g.async_runtime_handle()?;
 
-    // Realtime backpressure: a bounded permit channel, created when a bound is
-    // requested. Whether it is *used* is decided at run start from the real run
-    // mode — permits gate only a realtime producer; a historical run collects the
-    // whole stream at start, so throttling there would deadlock that collection,
-    // and the permit path is skipped (`buffer_size` ignored in historical,
-    // matching classic). The producer takes a permit before each send; the
-    // backpressure passthrough returns one per delivered value.
-    let (permit_tx, mut permit_rx) = match buffer_size {
-        Some(n) => {
-            // futures' bounded channel grants each sender one extra slot on top
-            // of `buffer`, so `n - 1` bounds in-flight values to ~`n`.
-            let (tx, rx) = futures::channel::mpsc::channel::<()>(n.max(1) - 1);
-            (Some(tx), Some(rx))
-        }
-        None => (None, None),
-    };
+    // Backpressure: a permit semaphore, created when a bound is requested. Active
+    // in **both** run modes (matching classic's bounded `channel_pair`): the
+    // producer acquires (and forgets) one permit before each unit and the
+    // passthrough adds one back per delivered unit, so the producer runs at most
+    // ~`buffer_size` units ahead of the graph's delivery point. In historical this
+    // keeps a lazy time-sliced source bounded and pipelined — safe now that the
+    // receiver drains incrementally (`pump_historical`); the old block-collect
+    // receiver *would* have deadlocked under a bound, which is why this used to be
+    // realtime-only.
+    //
+    // The budget is floored to **2**: the self-driven historical receiver reads
+    // one group *past* `now` to close a same-time group before delivering it, so
+    // the producer must send the current group *and* the next before the first
+    // delivery adds a permit back. A budget of 1 deadlocks — the receiver blocks
+    // in `recv()` for that next group while the producer waits on the permit only
+    // that blocked delivery would add. A semaphore makes the budget exact (a
+    // bounded channel's buffer-vs-usable-in-flight count is ambiguous).
+    let permit_sem =
+        buffer_size.map(|n| std::sync::Arc::new(tokio::sync::Semaphore::new(n.max(2))));
 
     // The producer is established at `start()`: `run`/`permit_tx` are once-only
     // (taken on the first — and, single-run, only — start), and the returned
@@ -217,7 +224,7 @@ where
     // `RunParams` are derived from the *actual* run here — there is no
     // caller-declared params to disagree with, so no validation is needed.
     let mut run = Some(run);
-    let mut permit_tx = permit_tx;
+    let producer_sem = permit_sem.clone();
     let stream_handle = g.with_builder(move |b| {
         b.source_at_start_with_params::<T, _>(None, move |sender, run_mode, run_for, start_time| {
             let run = run
@@ -228,11 +235,18 @@ where
                 run_for,
                 start_time,
             };
-            // Permits bound a realtime producer only; historical replay never
-            // takes them (see above), so drop the sender in that mode.
-            let mut permit_tx = permit_tx
-                .take()
-                .filter(|_| matches!(run_mode, RunMode::RealTime));
+            // Permits bound the producer in both run modes (see above).
+            let sem = producer_sem.clone();
+            // Historical bounds by **group** (distinct timestamp), realtime by
+            // value. In historical the receiver reads one value *past* a group to
+            // close it before delivering, so a same-time burst must be sent whole
+            // before the producer waits — otherwise a burst larger than the bound
+            // would deadlock on that read. Taking one permit per group (not per
+            // value) sends the whole burst under one permit; the passthrough
+            // returns one permit per delivered group. Realtime coalesces by
+            // arrival, not timestamp, so it stays per-value (take one per value,
+            // return `len` per burst) — its receiver never blocks to close a group.
+            let is_realtime = matches!(run_mode, RunMode::RealTime);
             let task = handle.spawn(async move {
                 match run(params).await {
                     Err(e) => {
@@ -240,16 +254,25 @@ where
                     }
                     Ok(source) => {
                         futures::pin_mut!(source);
+                        let mut last_time: Option<NanoTime> = None;
                         while let Some(item) = source.next().await {
                             match item {
                                 Ok((t, v)) => {
-                                    // Take a permit first (realtime only). A
-                                    // closed permit channel means the graph is
-                                    // gone — a normal teardown race; stop.
-                                    if let Some(tx) = permit_tx.as_mut()
-                                        && tx.send(()).await.is_err()
+                                    // Acquire + forget one permit per value
+                                    // (realtime) or per new group (historical); the
+                                    // passthrough adds it back on delivery. This
+                                    // await paces the producer to the graph.
+                                    let new_group = last_time != Some(t);
+                                    last_time = Some(t);
+                                    if (is_realtime || new_group)
+                                        && let Some(s) = sem.as_ref()
                                     {
-                                        return;
+                                        match s.acquire().await {
+                                            Ok(p) => p.forget(),
+                                            // Semaphore closed — graph gone
+                                            // (teardown race); stop.
+                                            Err(_) => return,
+                                        }
                                     }
                                     // `send_at` returns false once the receiver
                                     // is gone — a teardown race; stop.
@@ -272,11 +295,12 @@ where
     });
     let stream = g.wrap(stream_handle);
 
-    // Backpressure passthrough: returns one permit per delivered value so the
-    // realtime producer may advance. Only drains in realtime (where the producer
-    // takes permits); a no-op in historical. Draining exactly `len` keeps the
-    // bound intact (never freeing capacity for values not yet delivered).
+    // Backpressure passthrough: adds permits back as values are delivered so the
+    // producer may advance. The count mirrors how the producer *took* them (see
+    // the producer loop): realtime took one per value → add `len`; historical took
+    // one per group and delivers exactly one group per burst → add 1.
     let validated = stream.wire(move |b, h| {
+        let permit_sem = permit_sem.clone();
         b.register_op1(
             h,
             "produce_async::backpressure",
@@ -284,14 +308,13 @@ where
             (),
             || (),
             move |_cfg: &mut (), _state: &mut (), input: &Burst<T>, ctx| {
-                if matches!(ctx.run_mode(), RunMode::RealTime)
-                    && let Some(rx) = permit_rx.as_mut()
-                {
-                    for _ in 0..input.len() {
-                        if rx.try_recv().is_err() {
-                            break;
-                        }
-                    }
+                if let Some(sem) = permit_sem.as_ref() {
+                    let n = if matches!(ctx.run_mode(), RunMode::RealTime) {
+                        input.len()
+                    } else {
+                        1
+                    };
+                    sem.add_permits(n);
                 }
                 Ok(Tick::Value(input.clone()))
             },
@@ -348,7 +371,7 @@ impl Drop for AbortOnDrop {
 /// * **Back-pressure.** `buffer_size` bounds how far the graph may run ahead of a
 ///   slower sink: `Some(n)` uses a bounded channel of ~`n` and the sink closure
 ///   *blocks the graph thread* on a full channel (on `handle`, exactly as
-///   [`produce_async_bounded`]'s producer blocks on a full permit channel) until
+///   [`produce_async`]'s producer blocks on a full permit channel) until
 ///   the consumer drains one — so at most ~`n` values sit unwritten, memory does
 ///   not grow without bound, and nothing is dropped. `None` is unbounded (a fast
 ///   graph feeding a slow sink accumulates an arbitrarily large backlog). Unlike

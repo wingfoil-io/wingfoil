@@ -117,10 +117,10 @@ impl WindowFilter {
 // `kdb_read` once it ports): split the run's `[start, end)` window into
 // contiguous, half-open slices, one query per slice. Adapter-agnostic, but
 // feature-gated to the adapters that use it (this module itself is always
-// compiled for `TimeWindow`/`WindowFilter`). Gated on `postgres` now; the kdb
-// port adds `feature = "kdb"` to the gate later.
+// compiled for `TimeWindow`/`WindowFilter`). Gated on `postgres` or `kdb` — the
+// two time-partitioned readers that share it.
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "kdb"))]
 /// Validate the run window and period, then compute the time slices.
 ///
 /// Shared front door for time-sliced readers (`postgres_read`, and `kdb_read`
@@ -161,7 +161,7 @@ pub(crate) fn compute_validated_time_slices(
     Ok(compute_time_slices(start_time, end_time, period))
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "kdb"))]
 /// Split `[start_time, end_time)` into contiguous half-open slices of length `period`.
 ///
 /// Slices never straddle a midnight boundary: the final slice of each day clamps
@@ -242,7 +242,7 @@ pub(crate) fn compute_time_slices(
     result
 }
 
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(test, any(feature = "postgres", feature = "kdb")))]
 mod tests {
     use super::*;
 

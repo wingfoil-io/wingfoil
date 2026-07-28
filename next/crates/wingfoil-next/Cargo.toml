@@ -107,6 +107,16 @@ tokio-postgres = { version = "0.7", features = [
 ], optional = true }
 chrono = { version = "0.4", optional = true }
 
+# `kdb` feature: KDB+/q connectivity — time-partitioned historical reads
+# (`kdb_read`, `kdb_read_cached`), a real-time tickerplant subscription
+# (`kdb_sub`), and a streaming insert sink (`kdb_write`), on the async `kdbplus`
+# IPC client (`QStream`). Built on `async` (the `produce_async` reader/sub +
+# `consume_async` sink), `async-stream` (the reader/sub `stream!` macros),
+# `chrono` (the write timestamp column), and the `cache` feature (the file cache
+# behind `kdb_read_cached`). Version mirrors the classic `wingfoil` crate's kdb
+# adapter so the two trees don't drift; `ipc` is the KDB IPC protocol feature.
+kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
+
 # `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
 # `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
 # lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
@@ -173,7 +183,10 @@ default = []
 # part of the async module, so the feature enables it directly rather than
 # relying on a companion adapter (etcd-client) to pull it in transitively.
 async = ["dep:tokio", "dep:futures", "tokio/sync"]
-csv = ["dep:csv", "dep:serde", "dep:serde-aux"]
+# `async` + `async-stream` back the lazy, back-pressured `csv_read` replay
+# source (a lazy `produce_async` + `buffer_size` producer streaming rows on
+# demand, so a huge file is not read into memory up front). The sink stays synchronous.
+csv = ["dep:csv", "dep:serde", "dep:serde-aux", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
@@ -195,6 +208,19 @@ postgres-integration-test = ["postgres", "dep:testcontainers"]
 # consumer's `recv()` loop. Mirrors classic wingfoil's `kafka` deps.
 kafka = ["dep:rdkafka", "dep:async-stream", "async"]
 kafka-integration-test = ["kafka", "dep:testcontainers"]
+# KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
+# `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
+# streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
+# `consume_async` ergonomics, via `cache`), `async-stream` (the reader/sub
+# `stream!` macros), `chrono` (the write timestamp column), and the `cache`
+# feature (the file cache behind `kdb_read_cached`, which also supplies
+# `sha2`/`bincode`/`serde`/`tokio/fs`). Mirrors classic wingfoil's `kdb` deps.
+kdb = ["dep:kdb-plus-fixed", "dep:chrono", "dep:async-stream", "cache"]
+# KDB+ cannot be run under `testcontainers` (no public, freely-licensed image),
+# so the integration tests probe an externally-provided instance (KDB_TEST_HOST
+# / KDB_TEST_PORT, default localhost:5000) and skip when unreachable — no
+# container dependency, matching the classic adapter's `q -p 5000` setup.
+kdb-integration-test = ["kdb"]
 # Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
 prometheus = ["dep:arc-swap"]
 # Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
@@ -261,6 +287,12 @@ harness = false
 name = "store_baseline"
 harness = false
 
+# The lines replay source is behind `async` (lazy `produce_async` +
+# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
+[[example]]
+name = "lines_adapter"
+required-features = ["async"]
+
 [[example]]
 name = "csv_adapter"
 required-features = ["csv"]
@@ -285,6 +317,23 @@ required-features = ["postgres"]
 [[example]]
 name = "kafka_adapter"
 required-features = ["kafka"]
+
+# KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
+# with a README). All require a running KDB+/tickerplant instance to actually run.
+[[example]]
+name = "kdb_read"
+path = "examples/kdb/read/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read_cached"
+path = "examples/kdb/read_cached/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_round_trip"
+path = "examples/kdb/round_trip/main.rs"
+required-features = ["kdb"]
 
 [[example]]
 name = "prometheus_adapter"

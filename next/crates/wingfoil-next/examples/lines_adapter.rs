@@ -1,9 +1,12 @@
-//! The dependency-free line-oriented file adapter end to end: replay a text
-//! file through a graph, transform it, and write the result to another file —
-//! the smallest complete Op-pattern I/O edge in both directions.
+//! The line-oriented file adapter end to end: replay a text file through a
+//! graph, transform it, and write the result to another file — the smallest
+//! complete Op-pattern I/O edge in both directions.
+//!
+//! The lazy historical replay source is behind the `async` feature (like
+//! `csv_read`), so this example requires it:
 //!
 //! ```sh
-//! cargo run -p wingfoil-next --example lines_adapter
+//! cargo run -p wingfoil-next --example lines_adapter --features async
 //! ```
 
 use std::fs;
@@ -24,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     // record per successive graph instant), upper-case each record, and write
     // the results out as lines.
     let g = GraphBuilder::new();
-    let lines = replay_lines(&g, &input)?;
+    let lines = replay_lines(&g, &input, None)?;
     let shouted = lines.map(|burst: &Burst<String>| {
         burst
             .iter()
