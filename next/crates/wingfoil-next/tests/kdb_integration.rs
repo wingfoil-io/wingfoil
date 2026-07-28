@@ -463,10 +463,11 @@ fn write_trades(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<()> {
         .replay_results(rows)
         .kdb_write(conn, WRITE_TABLE_NAME, None)?;
     let mut runner = g.build();
-    runner.run(
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Duration(Duration::from_secs(3600)),
-    )?;
+    // Match the classic write test: run Forever so the whole [0, MAX] window
+    // covers the year-2000 `from_kdb_timestamp` data (a bounded Duration from
+    // NanoTime::ZERO would exclude it); the finite replay closes the channel and
+    // stops the graph.
+    runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
     Ok(())
 }
 
@@ -544,10 +545,9 @@ fn test_kdb_write_append() -> Result<()> {
             .replay_results(rows)
             .kdb_write(conn.clone(), WRITE_TABLE_NAME, None)?;
         let mut runner = g.build();
-        runner.run(
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(Duration::from_secs(3600)),
-        )?;
+        // Forever so the [0, MAX] window covers the year-2000 append timestamps
+        // (see write_trades); the finite replay closes the channel and stops.
+        runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
         assert_eq!(
             table_count(&rt, &conn, WRITE_TABLE_NAME)?,
             5,
