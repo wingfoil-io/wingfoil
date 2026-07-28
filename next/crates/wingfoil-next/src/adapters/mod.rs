@@ -8,9 +8,9 @@
 //! `use wingfoil_next::adapters::lines::LinesSinkOps;`. This mirrors the
 //! [`stats`](crate::stats) module's extension-trait layering.
 //!
-//! - [`lines`] — a dependency-free, line-oriented file adapter (historical
-//!   replay source + realtime tail + file sink), the smallest complete
-//!   demonstration of an I/O edge in both directions.
+//! - [`lines`] — a line-oriented file adapter (a lazy historical replay source
+//!   behind the `async` feature + a dependency-free realtime tail + file sink),
+//!   the smallest complete demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
 //! - [`augurs`] — on-graph time-series analysis (forecasting + outlier

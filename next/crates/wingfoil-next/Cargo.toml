@@ -287,6 +287,12 @@ harness = false
 name = "store_baseline"
 harness = false
 
+# The lines replay source is behind `async` (lazy `produce_async_bounded`
+# replay, like csv); the example uses it, so it requires the feature.
+[[example]]
+name = "lines_adapter"
+required-features = ["async"]
+
 [[example]]
 name = "csv_adapter"
 required-features = ["csv"]
