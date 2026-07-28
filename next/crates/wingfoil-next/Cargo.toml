@@ -142,6 +142,14 @@ aeron-rs = { version = "0.1", optional = true }
 # Used only by the aeron integration tests, to run the media-driver container as
 # the current uid/gid so the CNC file stays writable by the test process.
 libc = { version = "0.2", optional = true }
+# `iceoryx2` feature: zero-copy inter-process (and intra-process) publish/
+# subscribe over shared memory. Pure Rust — no native toolchain — and, like the
+# classic `wingfoil` iceoryx2 adapter, synchronous/poll-based, so it does NOT
+# pull in `async`. Version mirrors the classic `wingfoil` crate's iceoryx2
+# adapter so the two trees don't drift. `thiserror` backs the adapter's typed
+# error enum (ported from classic).
+iceoryx2 = { version = "0.8", optional = true }
+thiserror = { version = "2.0", optional = true }
 
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
@@ -308,6 +316,17 @@ aeron-driver = ["aeron", "dep:rusteron-media-driver"]
 # Live-media-driver tests (a testcontainers `aeronmd` bind-mounting /dev/shm).
 # Enables both backends so their handle-construction paths are covered.
 aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
+# Zero-copy IPC publish/subscribe over shared memory. Synchronous and
+# poll-based (a busy-spin `custom_node`, a background thread over the `channel`
+# layer, or an event-driven WaitSet), so — like classic — it does NOT pull in
+# `async`. Mirrors classic wingfoil's `iceoryx2` deps.
+# `wingfoil/iceoryx2` brings in the classic crate's `ZeroCopySend` impl for
+# `Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop (the classic
+# adapter's latency round-trip test relies on the same impl).
+iceoryx2 = ["dep:iceoryx2", "dep:thiserror", "wingfoil/iceoryx2"]
+# Cross-process `Ipc`-variant tests (real shared memory under /dev/shm, no
+# container). The in-process `Local`-variant tests need only `iceoryx2`.
+iceoryx2-integration-test = ["iceoryx2"]
 # KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
 # `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
 # streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
@@ -456,6 +475,17 @@ required-features = ["aeron"]
 name = "aeron_status_circuit_breaker"
 path = "examples/aeron/status_circuit_breaker.rs"
 required-features = ["aeron"]
+# Ports of the classic `wingfoil/examples/iceoryx2/{pub,sub}.rs` — two
+# processes talking over shared memory. Run the subscriber first.
+[[example]]
+name = "iceoryx2_pub"
+path = "examples/iceoryx2/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "iceoryx2_sub"
+path = "examples/iceoryx2/sub.rs"
+required-features = ["iceoryx2"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.

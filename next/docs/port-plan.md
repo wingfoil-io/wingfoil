@@ -939,6 +939,43 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    separate work item, as for every adapter so far. The canonical deviation list
    is the adapter's `# Deviations from classic` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
+   ✅ **iceoryx2** *(done)*: zero-copy inter-process (and intra-process)
+   publish/subscribe over shared memory, behind the `iceoryx2` feature
+   (`iceoryx2` 0.8, mirroring classic). Pure Rust — unlike aeron it needs no
+   native toolchain. **All three classic polling modes ported:**
+   `Iceoryx2Mode::Spin` rides a busy-spin `custom_node` (port creation deferred to
+   graph `start()` via `compose_spawn_at_start`, draining the subscriber port into
+   one burst per cycle), and `Threaded`/`Signaled` ride `source_at_start` (a
+   background thread over the `channel` layer — a 10 µs-yield poll loop, or a
+   blocking `WaitSet` attached to the service's `<name>.signal` Event service).
+   Both the typed (`ZeroCopySend`) and `[u8]` slice APIs are ported, in both the
+   `Ipc` and `Local` service variants, with the full classic constructor family
+   (`_sub`/`_sub_with`/`_sub_opts`, `_sub_slice`/`_sub_slice_opts`), the service
+   contracts, `FixedBytes<N>`, and the typed `Iceoryx2Error`. Like classic (and
+   unlike the networked adapters) it uses **no** `async`/tokio. Parity port of the
+   classic `local_tests.rs` as `tests/iceoryx2_adapter.rs` (`iceoryx2` — the
+   in-process `Local` round trips in all three modes, typed and slice, the
+   contract-mismatch case, and the `Traced` latency round trip across an iceoryx2
+   hop) plus the classic `integration_tests.rs` as `tests/iceoryx2_integration.rs`
+   (`iceoryx2-integration-test` — cross-process `Ipc` over real `/dev/shm`, no
+   container; `iceoryx2-next-integration.yml`); the two classic examples ported to
+   `examples/iceoryx2/{pub,sub}.rs`. **Deviations:** all classic capabilities
+   preserved; the sources take a `&GraphBuilder` + `RunMode`, return `Result`, and
+   **reject `RunMode::HistoricalFrom` at wiring** (a live shared-memory
+   subscription has no historical timeline, and the `Threaded`/`Signaled` channel
+   path would block-collect the never-closing producer and deadlock at `start` —
+   register B2, ratified; classic silently ran its poll loop against the
+   fast-forwarded historical clock); the sinks are the `Iceoryx2SinkOps` /
+   `Iceoryx2SliceSinkOps` extension traits returning `Stream<()>` (not the classic
+   free-fn family returning `Rc<dyn Node>`); and — deliberate classic parity — the
+   **sink does not reject or no-op under historical replay**, unlike `zmq_pub`
+   (which errors) and the telemetry exporters (which no-op). Ports are created at
+   graph `start()` as in classic, so wiring is pure and a bad service name or
+   contract mismatch aborts the run with node context (register A1/A4). The
+   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are **not** ported —
+   next's bench suite is a separate work item, as for every adapter so far. The
+   canonical deviation list is the adapter's `# Deviations from classic`
+   module-doc block plus [`deviation-register.md`](./deviation-register.md).
 
 Each adapter: keep its directory CLAUDE.md, port its tests, one PR each.
 

@@ -100,6 +100,11 @@ jobs:
     uses: ./.github/workflows/iceoryx2-integration.yml
     secrets: inherit
 
+  iceoryx2-next-integration:
+    name: iceoryx2 (next) Integration Tests
+    uses: ./.github/workflows/iceoryx2-next-integration.yml
+    secrets: inherit
+
   aeron-integration:
     name: Aeron Integration Tests
     uses: ./.github/workflows/aeron-integration.yml

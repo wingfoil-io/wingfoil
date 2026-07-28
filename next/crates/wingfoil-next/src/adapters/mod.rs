@@ -40,6 +40,12 @@
 //!   (`AeronSinkOps`), behind the `aeron` (rusteron) or `aeron-rs` (pure Rust)
 //!   backend features. Synchronous/poll-based, so — like classic — it does NOT
 //!   use `async`; the sources are realtime-only.
+//! - [`iceoryx2`] — zero-copy inter-process (and intra-process) publish/subscribe
+//!   over shared memory: subscriber sources in three polling modes
+//!   (`iceoryx2_sub*` — busy-spin, background thread, or event-driven WaitSet)
+//!   plus publisher sinks (`Iceoryx2SinkOps` / `Iceoryx2SliceSinkOps`), behind
+//!   the `iceoryx2` feature. Synchronous/poll-based, so — like classic — it does
+//!   NOT use `async`; the sources are realtime-only.
 //! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
 //!   time-sliced historical readers, behind the `cache` feature. A pure utility
 //!   (async `get`/`put`), not a source/sink op.
@@ -100,6 +106,8 @@ pub mod etcd;
 pub mod fix;
 #[cfg(feature = "fluvio")]
 pub mod fluvio;
+#[cfg(feature = "iceoryx2")]
+pub mod iceoryx2;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "kdb")]
