@@ -13,6 +13,15 @@
 //! The acceptor is wired **first** so its listener binds (at graph `start()`)
 //! before the spin initiator's synchronous connect runs.
 //!
+//! Of classic's five `wingfoil/examples/fix/` programs, only `fix_loopback` is
+//! self-contained, so it is the one ported here. The other four are
+//! peer/credential-dependent and are **not** ported: `fix_client` /
+//! `fix_echo_server` each demonstrate one half of a connection and need a
+//! separate counterparty process, and `lmax_demo` / `lmax_instruments` require a
+//! (free) LMAX London Demo account and credentials. All the API they exercise
+//! (`fix_connect`, `fix_accept`, `fix_connect_tls`, `fix_sub`, `fix_send`) is
+//! ported and covered by the adapter tests.
+//!
 //! # Run
 //!
 //! ```sh
