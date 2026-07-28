@@ -720,6 +720,44 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
      in transitively; `kafka` is the first async adapter that does not, so the
      feature is now self-contained.
 6. **fix** — codec-heavy; fallibility with context.
+   ✅ **fix** *(done)*: the FIX (Financial Information eXchange) protocol — a
+   synchronous, poll-based session engine (initiator [`fix_connect`] / acceptor
+   [`fix_accept`], plain TCP or TLS) exposing inbound messages + session status
+   as streams, a market-data subscription helper ([`FixConnection::fix_sub`]),
+   and an outbound sender ([`FixOperators::fix_send`] + the [`FixSender`] inject
+   channel), behind the `fix` feature. Like classic (and unlike the async
+   adapters) it uses **no** `async`/tokio: the hand-written FIX 4.4 tag-value
+   codec, the `FixSession` state machine, and both poll modes are a verbatim
+   port. **Both poll modes ported:** `FixPollMode::Threaded` rides
+   `source_at_start` (a background session thread over the `channel` layer, with
+   initiator reconnect-after-drop, acceptor re-accept, and the lock-free `kanal`
+   inject channel drained per loop), and `FixPollMode::AlwaysSpin` rides a
+   busy-spin `custom_node` (non-blocking socket reads on the graph thread) with
+   the socket connect/bind deferred to graph `start()` (via
+   `compose_spawn_at_start`) and a best-effort Logout at teardown. The pluggable
+   `FixLogon` auth seam (None / Password / `custom` Ed25519-signer over the
+   `LogonContext`) is preserved. **Engine fix (custom_node honours ALWAYS):** a
+   busy-spin `custom_node` must set the engine's `has_always` flag so the realtime
+   kernel doesn't park between cycles — `custom_node` accepted an `Activation` but
+   ignored the `always` bit's kernel implication (only `poll` set it); now
+   `custom_node` sets `has_always` when `activation.always`, so the spin source is
+   actually driven every cycle (register A7). **Deviations** (all capabilities
+   preserved): the source factories take a `&GraphBuilder` + `RunMode` and
+   **reject `RunMode::HistoricalFrom` at wiring** (a live session has no historical
+   timeline to replay; classic checked real-time-ness at run `start()` — register
+   B2); the sources return `Stream`s (not `Rc<dyn Stream>`), `fix_send` returns
+   `Result<Stream<()>>` and `fix_sub` a `Stream<()>` (checking real-time at
+   `start()` like classic, aborting a historical run there); and the `Threaded`
+   teardown drops classic's `Arc<Mutex<Option<TcpStream>>>` socket-shutdown handle
+   for a stop-flag-against-the-read-timeout exit (the zmq pattern — no lock on the
+   graph path; teardown costs up to one 200 ms read-timeout longer). No-service
+   wiring tests in `tests/fix_adapter.rs` (`fix`); same-process socket round-trip +
+   reconnect + connection-refused parity tests in `tests/fix_integration.rs`
+   (`fix-integration-test`, real loopback, no container); classic `fix_loopback`
+   example ported to `examples/fix_adapter.rs`. The credentialed LMAX-demo
+   integration tests are **not** ported (external credentials). The canonical
+   deviation list is the adapter's `# Deviations from classic` module-doc block
+   plus [`deviation-register.md`](./deviation-register.md).
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.
    *"wingfoil-js untouched" holds only if the ported web adapter reproduces

@@ -539,6 +539,39 @@ rather than the only option, unless the adapter's whole point is latency.
 Factor record-reassembly logic into a free function so it is unit-testable
 without a realtime run (`poll_line` precedent).
 
+**When `poll` is too narrow — a busy-spin `custom_node`.** `g.poll`'s closure is
+`Fn() -> Option<T>`: no start hook, no `Ctx`, and no way to propagate a
+`Result` from the cycle. If your spin source needs a **deferred connect at
+`start()`**, a **fallible cycle** (`?` a read error into a run abort — classic's
+spin `cycle` shape), or a **teardown hook** (a logout/close), reach for
+`g.custom_node(&[], &[], Activation::ALWAYS, cycle)` instead — the general
+`MutableNode` twin, whose `cycle` returns `Result<Tick<T>>` and which busy-spins
+exactly like `poll`. Defer the socket connect/bind to `start()` and attach the
+teardown guard with `compose_spawn_at_start` on the node's index:
+
+```rust
+let events = g.custom_node::<Burst<Ev>, _>(&[], &[], Activation::ALWAYS, move |_ctx| {
+    let evs = state.borrow_mut().poll_cycle()?;      // non-blocking read; `?` aborts on a real error
+    Ok(if evs.is_empty() { Tick::Quiet } else { Tick::Value(evs) })
+});
+let idx = events.handle().index();
+g.with_builder(move |b| {
+    b.compose_spawn_at_start(idx, move |run_mode, _run_for, _start_time| {
+        start_state.borrow_mut().connect()?;         // connect/bind here → error aborts at run start
+        Ok(StopHandle::new(TeardownGuard(start_state.clone())))  // Drop = logout/close
+    });
+});
+```
+
+`custom_node` honours the `always` bit (it sets the engine's `has_always`
+busy-spin flag, like `poll` — the FIX port fixed this; register A7). A
+`custom_node` graph is **single-run** (caller-owned state, no reset hook), which
+is fine for a realtime live source. **Same-process gotcha:** start hooks fire in
+**wiring order**, so if you stand up a spin acceptor *and* a spin initiator in
+one graph (a loopback test), wire the acceptor **first** — its listener must be
+bound before the initiator's synchronous connect runs in its own start hook.
+The FIX `AlwaysSpin` source is the reference for all of this.
+
 ## 8. Sinks
 
 ### Synchronous writer (files, blocking clients with cheap writes)

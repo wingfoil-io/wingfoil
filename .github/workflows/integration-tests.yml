@@ -85,6 +85,11 @@ jobs:
     uses: ./.github/workflows/zmq-next-integration.yml
     secrets: inherit
 
+  fix-next-integration:
+    name: FIX (next) Integration Tests
+    uses: ./.github/workflows/fix-next-integration.yml
+    secrets: inherit
+
   iceoryx2-integration:
     name: iceoryx2 Integration Tests
     uses: ./.github/workflows/iceoryx2-integration.yml

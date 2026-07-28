@@ -2440,6 +2440,15 @@ impl Builder {
         // node is single-run — the same contract as a mounted island (see the
         // re-run note in the port plan).
         self.re_runnable = false;
+        // Honour the `always` activation the same way [`poll`](Self::poll) does:
+        // a busy-poll custom node must keep the realtime kernel from parking
+        // between cycles, else its `cycle` only fires on unrelated wakeups (a
+        // socket-polling `ALWAYS` node would never advance). `seed_nodes` already
+        // includes it via `push_node`; this flips the engine into the busy-spin
+        // loop so it is actually driven every cycle.
+        if activation.always {
+            self.has_always = true;
+        }
         self.push_node(
             active_ups,
             activation,

@@ -59,6 +59,15 @@
 //!   stream values as OTLP gauge metrics (`OtlpSinkOps::otlp_push`) to any
 //!   OTLP-compatible backend, behind the `otlp` feature. A sink only; a no-op
 //!   under historical replay.
+//! - [`fix`] — the FIX (Financial Information eXchange) protocol: a synchronous,
+//!   poll-based session engine (initiator [`fix_connect`](fix::fix_connect) /
+//!   acceptor [`fix_accept`](fix::fix_accept), plain TCP or TLS) exposing inbound
+//!   messages + session status as streams, a market-data subscription helper
+//!   ([`FixConnection::fix_sub`](fix::FixConnection::fix_sub)), and an outbound
+//!   sender ([`FixOperators::fix_send`](fix::FixOperators::fix_send)), behind the
+//!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
+//!   layer, or a busy-spin `custom_node`), so — like classic — it does NOT use
+//!   `async`; all sources are realtime-only.
 
 #[cfg(feature = "augurs")]
 pub mod augurs;
@@ -69,6 +78,8 @@ pub mod common;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "fix")]
+pub mod fix;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "kdb")]
