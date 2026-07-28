@@ -7787,6 +7787,8 @@ dependencies = [
  "csv",
  "env_logger 0.11.10",
  "etcd-client",
+ "fluvio",
+ "fluvio-controlplane-metadata",
  "futures",
  "kanal",
  "kdb-plus-fixed",

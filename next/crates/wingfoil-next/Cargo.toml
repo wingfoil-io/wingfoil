@@ -120,6 +120,15 @@ rustls-pemfile = { version = "2", optional = true }
 # dev-dependencies. Versions mirror the classic `wingfoil` crate.
 rcgen = { version = "0.13", optional = true }
 scopeguard = { version = "1.2.0", optional = true }
+# `fluvio` feature: a streaming topic-partition consume source and a
+# topic-produce sink for Fluvio clusters, built on the async `produce_async` /
+# `consume_async_bursts` ergonomics (`fluvio` is a tokio client). Versions mirror
+# the classic `wingfoil` crate's fluvio adapter so the two trees don't drift.
+# `fluvio-controlplane-metadata` is only used by the integration tests (to
+# register the SPU with the SC before starting it); `testcontainers` is already
+# an optional [dependencies] entry above, shared with the etcd adapter.
+fluvio = { version = "0.50.1", optional = true }
+fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
@@ -267,6 +276,15 @@ web-tls-integration-test = [
     "dep:rcgen",
     "dep:scopeguard",
 ]
+# Streaming Fluvio consume source + produce sink. Built on the async
+# `produce_async` / `consume_async_bursts` ergonomics; needs `async-stream` for
+# the consumer's record loop. Mirrors classic wingfoil's `fluvio` deps.
+fluvio = ["dep:fluvio", "dep:async-stream", "async"]
+fluvio-integration-test = [
+    "fluvio",
+    "dep:testcontainers",
+    "dep:fluvio-controlplane-metadata",
+]
 # KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
 # `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
 # streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
@@ -397,6 +415,12 @@ required-features = ["kafka"]
 name = "web_adapter"
 path = "examples/web/main.rs"
 required-features = ["web"]
+# Port of the classic `wingfoil/examples/fluvio` example (a directory with a
+# README). Requires a running Fluvio cluster with the two topics created.
+[[example]]
+name = "fluvio_adapter"
+path = "examples/fluvio/main.rs"
+required-features = ["fluvio"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.
