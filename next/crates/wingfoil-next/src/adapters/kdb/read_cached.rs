@@ -88,23 +88,28 @@ where
     let end_time =
         end_time_bound.expect("compute_validated_time_slices accepted a bounded end_time");
 
-    produce_async(g, move |_p: RunParams| async move {
-        // Create the cache dir up front (before the stream) so an error surfaces
-        // at the start of the run; the per-slice cache checks + queries then run
-        // lazily inside the stream as the graph drains.
-        tokio::fs::create_dir_all(&cache_config.folder)
-            .await
-            .with_context(|| {
-                format!(
-                    "kdb_read_cached: creating cache dir {}",
-                    cache_config.folder.display()
-                )
-            })?;
-        let cache = FileCache::<T>::new(cache_config);
-        Ok(cached_chunk_stream::<T>(
-            connection, slices, start_time, end_time, cache, query_fn,
-        ))
-    })
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            // Create the cache dir up front (before the stream) so an error surfaces
+            // at the start of the run; the per-slice cache checks + queries then run
+            // lazily inside the stream as the graph drains. Unbounded (`None`) like
+            // classic; the source is still lazy per slice.
+            tokio::fs::create_dir_all(&cache_config.folder)
+                .await
+                .with_context(|| {
+                    format!(
+                        "kdb_read_cached: creating cache dir {}",
+                        cache_config.folder.display()
+                    )
+                })?;
+            let cache = FileCache::<T>::new(cache_config);
+            Ok(cached_chunk_stream::<T>(
+                connection, slices, start_time, end_time, cache, query_fn,
+            ))
+        },
+        None,
+    )
 }
 
 /// Lazily query each slice **through the file cache** and yield its in-window

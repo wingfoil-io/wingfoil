@@ -3,7 +3,7 @@
 //! output and the replay ordering / timestamps.
 //!
 //! The replay sources ([`replay_lines`] / [`replay_lines_scheduled`]) sit behind
-//! the `async` feature (lazy, back-pressured `produce_async_bounded` replay, like
+//! the `async` feature (lazy, back-pressured `produce_async` replay, like
 //! `csv_read`), so this whole file is gated on it; the dependency-free `tail_lines`
 //! reassembly is covered by the inline `poll_line` unit tests in `lines.rs`.
 #![cfg(feature = "async")]
@@ -181,7 +181,7 @@ fn missing_source_file_is_an_error() {
 
 /// A bounded `buffer_size` replays byte-identically to the unbounded one, and a
 /// same-time burst **larger than the bound** must not deadlock (the group-aware
-/// back-pressure from `produce_async_bounded`, same as csv) — mirroring
+/// back-pressure from `produce_async`, same as csv) — mirroring
 /// `csv_read_bounded_is_deterministic_and_survives_large_bursts`.
 #[test]
 fn replay_bounded_is_deterministic_and_survives_large_bursts() {

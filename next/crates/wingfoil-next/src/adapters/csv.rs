@@ -25,7 +25,7 @@
 //! # Historical replay (the burst model)
 //!
 //! [`csv_read`] opens the file at wiring (fail-fast) and streams its rows
-//! **lazily** over a [`produce_async_bounded`](crate::async_source::produce_async_bounded)
+//! **lazily** over a [`produce_async`](crate::async_source::produce_async)
 //! producer: each record is deserialized on demand, stamped with
 //! `get_time(&record)`, and delivered on the graph clock. The channel receiver
 //! groups records sharing a timestamp into one atomic [`Burst`](crate::Burst)
@@ -82,7 +82,7 @@ use serde::de::DeserializeOwned;
 use serde_aux::serde_introspection::serde_introspect;
 use wingfoil::NanoTime;
 
-use crate::async_source::{RunParams, produce_async_bounded};
+use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, Stream, StreamOps};
 use crate::{Burst, burst};
 
@@ -91,7 +91,7 @@ use crate::{Burst, burst};
 /// a timestamp grouped into one atomic burst.
 ///
 /// The file is opened at wiring (fail-fast) and its rows are streamed **lazily**
-/// over a [`produce_async_bounded`](crate::async_source::produce_async_bounded)
+/// over a [`produce_async`](crate::async_source::produce_async)
 /// producer — deserialized on demand, not read into memory up front. Run the
 /// graph with `RunMode::HistoricalFrom(t)` where `t` is at or before the first
 /// record's timestamp (e.g. `NanoTime::ZERO`). Use
@@ -138,24 +138,28 @@ where
         .has_headers(has_headers)
         .from_reader(file)
         .into_deserialize::<T>();
-    produce_async_bounded(g, buffer_size, move |_p: RunParams| async move {
-        Ok(async_stream::stream! {
-            for record in iter.by_ref() {
-                match record {
-                    Ok(rec) => {
-                        let time = get_time(&rec);
-                        yield Ok((time, rec));
-                    }
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context(format!(
-                            "csv_read: failed to deserialize row from {display}"
-                        )));
-                        break;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            Ok(async_stream::stream! {
+                for record in iter.by_ref() {
+                    match record {
+                        Ok(rec) => {
+                            let time = get_time(&rec);
+                            yield Ok((time, rec));
+                        }
+                        Err(e) => {
+                            yield Err(anyhow::Error::new(e).context(format!(
+                                "csv_read: failed to deserialize row from {display}"
+                            )));
+                            break;
+                        }
                     }
                 }
-            }
-        })
-    })
+            })
+        },
+        buffer_size,
+    )
 }
 
 /// A CSV file sink — the outbound counterpart of [`csv_read`].

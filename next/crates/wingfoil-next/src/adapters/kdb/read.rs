@@ -6,7 +6,7 @@
 use super::{KdbConnection, Sym, SymbolInterner};
 use crate::Burst;
 use crate::adapters::common::{TimeWindow, WindowFilter, compute_validated_time_slices};
-use crate::async_source::{RunParams, produce_async_bounded};
+use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, Stream};
 use anyhow::{Context, Result, bail};
 use kdb_plus_fixed::ipc::error::Error as KdbError;
@@ -342,7 +342,7 @@ type Slice = (String, TimeWindow);
 ///
 /// This is an `async_stream` generator: it calls `next_slice()` (→ runs the next
 /// KDB query) only when polled past the previous slice's rows, so — driven by
-/// [`produce_async_bounded`](crate::async_source::produce_async_bounded)'s
+/// [`produce_async`](crate::async_source::produce_async)'s
 /// back-pressure — a slice is fetched only once the graph has room for it. Memory
 /// is bounded to a slice plus the producer's look-ahead, and I/O pipelines with
 /// graph compute (legacy's model).
@@ -421,7 +421,7 @@ where
 /// on `time >= (`timestamp$){t0}j, time < (`timestamp$){t1}j`, sorted by time
 /// (`xasc`). The window is validated + sliced at **wiring** (a pure check); the
 /// connect and slice queries run at the start of the run via
-/// [`produce_async_bounded`](crate::async_source::produce_async_bounded), which
+/// [`produce_async`](crate::async_source::produce_async), which
 /// replays the decoded, in-window rows at their timestamps.
 ///
 /// See the [module docs](super) for the window-clamp / `date` / `iteration`
@@ -477,32 +477,36 @@ where
     // *run* (not graph construction) — matching classic's lazy `produce_async`
     // reader. The connect happens here (in the closure, before the stream); the
     // per-slice queries run lazily inside `chunk_stream` as the graph drains.
-    produce_async_bounded(g, buffer_size, move |_p: RunParams| async move {
-        let creds = connection.credentials_string();
-        let socket = QStream::connect(
-            ConnectionMethod::TCP,
-            &connection.host,
-            connection.port,
-            &creds,
-        )
-        .await
-        .with_context(|| format!("kdb_read: failed to connect to {}", connection.redacted()))?;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            let creds = connection.credentials_string();
+            let socket = QStream::connect(
+                ConnectionMethod::TCP,
+                &connection.host,
+                connection.port,
+                &creds,
+            )
+            .await
+            .with_context(|| format!("kdb_read: failed to connect to {}", connection.redacted()))?;
 
-        let mut slices_iter = slices.into_iter();
-        let mut query_fn = query_fn;
-        // The query uses the period-aligned (t0, t1) for clean round-number
-        // boundaries, but rows are clamped to the run's [start_time, end_time) so
-        // out-of-window rows are dropped rather than aborting the run. `t0` may
-        // precede `start_time` on the first slice; `t1` may exceed `end_time` on
-        // the last.
-        let slice_fn = move || -> Option<Slice> {
-            let ((t0, t1), date, iteration) = slices_iter.next()?;
-            let window = TimeWindow::clamp(t0, t1, start_time, end_time);
-            let query = query_fn((t0, t1), date, iteration);
-            Some((query, window))
-        };
-        Ok(chunk_stream::<T>(socket, slice_fn))
-    })
+            let mut slices_iter = slices.into_iter();
+            let mut query_fn = query_fn;
+            // The query uses the period-aligned (t0, t1) for clean round-number
+            // boundaries, but rows are clamped to the run's [start_time, end_time) so
+            // out-of-window rows are dropped rather than aborting the run. `t0` may
+            // precede `start_time` on the first slice; `t1` may exceed `end_time` on
+            // the last.
+            let slice_fn = move || -> Option<Slice> {
+                let ((t0, t1), date, iteration) = slices_iter.next()?;
+                let window = TimeWindow::clamp(t0, t1, start_time, end_time);
+                let query = query_fn((t0, t1), date, iteration);
+                Some((query, window))
+            };
+            Ok(chunk_stream::<T>(socket, slice_fn))
+        },
+        buffer_size,
+    )
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@
 //!
 //! [`replay_lines`] opens the file at wiring (fail-fast) and streams its lines
 //! **lazily** over a
-//! [`produce_async_bounded`](crate::async_source::produce_async_bounded)
+//! [`produce_async`](crate::async_source::produce_async)
 //! producer — exactly like [`csv_read`](crate::adapters::csv::csv_read): record
 //! `i` is read on demand, stamped at `base + i * step`, and delivered on the
 //! graph clock. The channel receiver groups same-timestamp records into one
@@ -68,7 +68,7 @@ use std::time::Duration;
 use wingfoil::NanoTime;
 
 #[cfg(feature = "async")]
-use crate::async_source::{RunParams, produce_async_bounded};
+use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::{Burst, burst};
 
@@ -81,7 +81,7 @@ use crate::{Burst, burst};
 /// `t <= base` (e.g. `NanoTime::ZERO`).
 ///
 /// Behind the `async` feature — see [`replay_lines_scheduled`] for why (lazy,
-/// back-pressured replay via `produce_async_bounded`). `buffer_size` bounds the
+/// back-pressured replay via `produce_async`). `buffer_size` bounds the
 /// replay's look-ahead as back-pressure (`None` = unbounded), exactly as
 /// [`csv_read`](crate::adapters::csv::csv_read)'s `buffer_size`.
 ///
@@ -110,7 +110,7 @@ pub fn replay_lines(
 ///
 /// The file is opened at wiring (fail-fast) but its lines are read **lazily** —
 /// like [`csv_read`](crate::adapters::csv::csv_read), the replay rides a
-/// [`produce_async_bounded`](crate::async_source::produce_async_bounded)
+/// [`produce_async`](crate::async_source::produce_async)
 /// producer over a synchronous line iterator, so a huge file is never read into
 /// memory up front. `base` must be at or after the run's start time (a pre-start
 /// timestamp aborts the run). `buffer_size` bounds the look-ahead as
@@ -160,9 +160,11 @@ pub fn replay_lines_scheduled(
             })?;
             Ok((base + step * tick, line))
         });
-    produce_async_bounded(g, buffer_size, move |_p: RunParams| async move {
-        Ok(futures::stream::iter(rows))
-    })
+    produce_async(
+        g,
+        move |_p: RunParams| async move { Ok(futures::stream::iter(rows)) },
+        buffer_size,
+    )
 }
 
 /// A best-effort **realtime** tail of a newline-delimited file: a busy-poll

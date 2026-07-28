@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::async_source::{produce_async, produce_async_bounded};
+use wingfoil_next::async_source::produce_async;
 use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -20,13 +20,17 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 #[test]
 fn produce_async_replays_deterministically() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, |_p| async {
-        Ok(futures::stream::iter(vec![
-            Ok((NanoTime::new(100), 1u64)),
-            Ok((NanoTime::new(200), 2u64)),
-            Ok((NanoTime::new(300), 3u64)),
-        ]))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::iter(vec![
+                Ok((NanoTime::new(100), 1u64)),
+                Ok((NanoTime::new(200), 2u64)),
+                Ok((NanoTime::new(300), 3u64)),
+            ]))
+        },
+        None,
+    )
     .unwrap();
     let acc = values.with_time().accumulate();
     let mut r = g.build();
@@ -51,13 +55,17 @@ fn produce_async_replays_deterministically() {
 #[test]
 fn produce_async_groups_same_time_into_a_burst() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, |_p| async {
-        Ok(futures::stream::iter(vec![
-            Ok((NanoTime::new(100), 1u64)),
-            Ok((NanoTime::new(100), 2u64)),
-            Ok((NanoTime::new(100), 3u64)),
-        ]))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::iter(vec![
+                Ok((NanoTime::new(100), 1u64)),
+                Ok((NanoTime::new(100), 2u64)),
+                Ok((NanoTime::new(100), 3u64)),
+            ]))
+        },
+        None,
+    )
     .unwrap();
     let acc = values.collapse_accumulate();
     let mut r = g.build();
@@ -69,12 +77,16 @@ fn produce_async_groups_same_time_into_a_burst() {
 #[test]
 fn produce_async_error_aborts_the_run() {
     let g = GraphBuilder::new();
-    let values = produce_async(&g, |_p| async {
-        Ok(futures::stream::iter(vec![
-            Ok((NanoTime::new(100), 1u64)),
-            Err(anyhow::anyhow!("feed dropped")),
-        ]))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::iter(vec![
+                Ok((NanoTime::new(100), 1u64)),
+                Err(anyhow::anyhow!("feed dropped")),
+            ]))
+        },
+        None,
+    )
     .unwrap();
     let _acc = values.collapse_accumulate();
     let mut r = g.build();
@@ -95,11 +107,15 @@ fn produce_async_error_aborts_the_run() {
 fn produce_async_bounded_historical_is_deterministic() {
     fn run_with(buffer: Option<usize>) -> Vec<(NanoTime, Vec<u64>)> {
         let g = GraphBuilder::new();
-        let values = produce_async_bounded(&g, buffer, |_p| async {
-            Ok(futures::stream::iter(
-                (1u64..=20).map(|i| Ok((NanoTime::new(i * 100), i))),
-            ))
-        })
+        let values = produce_async(
+            &g,
+            |_p| async {
+                Ok(futures::stream::iter(
+                    (1u64..=20).map(|i| Ok((NanoTime::new(i * 100), i))),
+                ))
+            },
+            buffer,
+        )
         .unwrap();
         let acc = values.with_time().accumulate();
         let mut r = g.build();
@@ -128,13 +144,17 @@ fn produce_async_bounded_historical_is_deterministic() {
 #[test]
 fn produce_async_bounded_large_same_time_burst_no_deadlock() {
     let g = GraphBuilder::new();
-    let values = produce_async_bounded(&g, Some(2), |_p| async {
-        // 10 values all at t=100 (one group, far larger than the bound of 2),
-        // then a later group so the first can be closed and delivered.
-        let mut items: Vec<_> = (0..10u64).map(|i| Ok((NanoTime::new(100), i))).collect();
-        items.push(Ok((NanoTime::new(200), 99)));
-        Ok(futures::stream::iter(items))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            // 10 values all at t=100 (one group, far larger than the bound of 2),
+            // then a later group so the first can be closed and delivered.
+            let mut items: Vec<_> = (0..10u64).map(|i| Ok((NanoTime::new(100), i))).collect();
+            items.push(Ok((NanoTime::new(200), 99)));
+            Ok(futures::stream::iter(items))
+        },
+        Some(2),
+    )
     .unwrap();
     let acc = values.with_time().accumulate();
     let mut r = g.build();
@@ -160,17 +180,21 @@ fn produce_async_bounded_large_same_time_burst_no_deadlock() {
 fn produce_async_realtime_bounded_buffer_delivers_all_in_order() {
     let g = GraphBuilder::new();
     // buffer_size = 2, but ten values must all arrive across the run.
-    let values = produce_async_bounded(&g, Some(2), |_p| async {
-        Ok(futures::stream::unfold(1u64, |i| async move {
-            if i > 10 {
-                return None;
-            }
-            // A small pace so the graph gets cycles to consume and release
-            // permits, mirroring the cross-thread channel tests.
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            Some((Ok((NanoTime::new(i), i)), i + 1))
-        }))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::unfold(1u64, |i| async move {
+                if i > 10 {
+                    return None;
+                }
+                // A small pace so the graph gets cycles to consume and release
+                // permits, mirroring the cross-thread channel tests.
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                Some((Ok((NanoTime::new(i), i)), i + 1))
+            }))
+        },
+        Some(2),
+    )
     .unwrap();
     let acc = values.collapse_accumulate();
     let mut r = g.build();
@@ -199,10 +223,14 @@ fn produce_async_defers_producer_to_run() {
     let started = Arc::new(AtomicBool::new(false));
     let started_producer = started.clone();
     let g = GraphBuilder::new();
-    let values = produce_async(&g, move |_p| async move {
-        started_producer.store(true, Ordering::SeqCst);
-        Ok(futures::stream::iter(vec![Ok((NanoTime::new(100), 1u64))]))
-    })
+    let values = produce_async(
+        &g,
+        move |_p| async move {
+            started_producer.store(true, Ordering::SeqCst);
+            Ok(futures::stream::iter(vec![Ok((NanoTime::new(100), 1u64))]))
+        },
+        None,
+    )
     .unwrap();
     let acc = values.collapse_accumulate();
     let mut r = g.build();
@@ -231,12 +259,16 @@ fn produce_async_defers_producer_to_run() {
 fn produce_async_honours_caller_runtime_override() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let values = produce_async(&g, |_p| async {
-        Ok(futures::stream::iter(vec![
-            Ok((NanoTime::new(100), 1u64)),
-            Ok((NanoTime::new(200), 2u64)),
-        ]))
-    })
+    let values = produce_async(
+        &g,
+        |_p| async {
+            Ok(futures::stream::iter(vec![
+                Ok((NanoTime::new(100), 1u64)),
+                Ok((NanoTime::new(200), 2u64)),
+            ]))
+        },
+        None,
+    )
     .unwrap();
     let acc = values.collapse_accumulate();
     let mut r = g.build();

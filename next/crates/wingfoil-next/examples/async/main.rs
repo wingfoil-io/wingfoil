@@ -35,18 +35,22 @@ fn main() {
     // The async producer: it awaits between yields (as a socket read would),
     // emitting timestamped values. A finite feed of 8 values that ends —
     // closing the stream, which stops the graph.
-    let quotes = produce_async(&g, move |_p| async move {
-        Ok(futures::stream::unfold(0u32, move |i| async move {
-            if i >= 8 {
-                return None;
-            }
-            tokio::time::sleep(period).await; // simulate waiting IO
-            let value = i * 10;
-            // In realtime the timestamp is informational (the value ticks on
-            // arrival); a historical producer would drive replay off it.
-            Some((Ok((NanoTime::now(), value)), i + 1))
-        }))
-    })
+    let quotes = produce_async(
+        &g,
+        move |_p| async move {
+            Ok(futures::stream::unfold(0u32, move |i| async move {
+                if i >= 8 {
+                    return None;
+                }
+                tokio::time::sleep(period).await; // simulate waiting IO
+                let value = i * 10;
+                // In realtime the timestamp is informational (the value ticks on
+                // arrival); a historical producer would drive replay off it.
+                Some((Ok((NanoTime::now(), value)), i + 1))
+            }))
+        },
+        None,
+    )
     .expect("produce_async");
 
     // The consumer, on the graph: print every value in each arriving burst.

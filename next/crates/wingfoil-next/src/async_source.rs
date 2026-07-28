@@ -45,12 +45,12 @@
 //! // The graph owns the runtime (lazily created); no `&Handle` to pass. To
 //! // embed in your own runtime instead: `GraphBuilder::new().with_async_runtime(rt.handle().clone())`.
 //! let g = GraphBuilder::new();
-//! let quotes = produce_async_bounded(&g, Some(64), |_p| async {
+//! let quotes = produce_async(&g, |_p| async {
 //!     Ok(futures::stream::iter(vec![
 //!         Ok((NanoTime::new(100), 1.0)),
 //!         Ok((NanoTime::new(200), 2.0)),
 //!     ]))
-//! })?;
+//! }, Some(64))?;
 //! ```
 
 use std::cell::RefCell;
@@ -142,31 +142,15 @@ pub struct RunParams {
     pub start_time: NanoTime,
 }
 
-/// Drive a graph source from an async producer of timestamped values. See the
-/// module docs. Returns the source [`Stream<Burst<T>>`].
+/// Drive a graph source from an async producer of timestamped values, matching
+/// classic `produce_async`'s `(closure, buffer_size)` signature. See the module
+/// docs. Returns the source [`Stream<Burst<T>>`].
 ///
 /// The producer closure receives the run's [`RunParams`] — derived from the
 /// actual [`run`](crate::interp::Runner::run) at graph start, not declared up
 /// front — and must return a stream of `Result<(NanoTime, T)>`. Each `Ok((t, v))`
 /// is delivered at graph time `t` (historical replay) or live (realtime); an
 /// `Err` aborts the run.
-///
-/// This is the unbounded variant — a fast producer feeding a slower graph can
-/// accumulate an arbitrarily large backlog. Use [`produce_async_bounded`] to
-/// apply `buffer_size` back-pressure (in **both** run modes).
-pub fn produce_async<T, F, Fut, S>(g: &GraphBuilder, run: F) -> anyhow::Result<Stream<Burst<T>>>
-where
-    T: Clone + Default + Send + 'static,
-    F: FnOnce(RunParams) -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<S>> + Send + 'static,
-    S: futures::Stream<Item = anyhow::Result<(NanoTime, T)>> + Send + 'static,
-{
-    produce_async_bounded(g, None, run)
-}
-
-/// [`produce_async`] with `buffer_size` back-pressure (mirrors classic
-/// `produce_async`'s `buffer_size`). See the module docs. The producer closure
-/// receives the run's [`RunParams`], derived from the actual run at start.
 ///
 /// `buffer_size` bounds the producer→graph backlog in **both** run modes
 /// (matching classic's bounded `channel_pair`); `None` is unbounded (a fast
@@ -193,10 +177,10 @@ where
 /// release — a deadlock — so the effective bound is floored to 2 (`Some(0)`/
 /// `Some(1)` behave as `Some(2)`). Values and tick times are unchanged by the
 /// bound; only the producer's pace is.
-pub fn produce_async_bounded<T, F, Fut, S>(
+pub fn produce_async<T, F, Fut, S>(
     g: &GraphBuilder,
-    buffer_size: Option<usize>,
     run: F,
+    buffer_size: Option<usize>,
 ) -> anyhow::Result<Stream<Burst<T>>>
 where
     T: Clone + Default + Send + 'static,
@@ -387,7 +371,7 @@ impl Drop for AbortOnDrop {
 /// * **Back-pressure.** `buffer_size` bounds how far the graph may run ahead of a
 ///   slower sink: `Some(n)` uses a bounded channel of ~`n` and the sink closure
 ///   *blocks the graph thread* on a full channel (on `handle`, exactly as
-///   [`produce_async_bounded`]'s producer blocks on a full permit channel) until
+///   [`produce_async`]'s producer blocks on a full permit channel) until
 ///   the consumer drains one — so at most ~`n` values sit unwritten, memory does
 ///   not grow without bound, and nothing is dropped. `None` is unbounded (a fast
 ///   graph feeding a slow sink accumulates an arbitrarily large backlog). Unlike

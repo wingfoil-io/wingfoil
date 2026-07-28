@@ -148,7 +148,7 @@ use tokio_postgres::{AsyncMessage, NoTls, Statement};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::adapters::common::{TimeWindow, WindowFilter, compute_validated_time_slices};
-use crate::async_source::{RunParams, consume_async, produce_async, produce_async_bounded};
+use crate::async_source::{RunParams, consume_async, produce_async};
 use crate::fluent::{GraphBuilder, Stream, StreamOps};
 use crate::{Burst, burst};
 
@@ -332,7 +332,7 @@ impl PostgresRowExt for Row {
 /// on `time >= t0 AND time < t1`, ordered by time. The window is validated +
 /// sliced at wiring (a pure check); the connect and the per-slice queries then
 /// run at the **start of the run** via
-/// [`produce_async_bounded`](crate::async_source::produce_async_bounded), which
+/// [`produce_async`](crate::async_source::produce_async), which
 /// replays the decoded, in-window rows at their timestamps.
 ///
 /// `buffer_size` bounds the producer→graph backlog as back-pressure (like
@@ -399,26 +399,30 @@ where
     // query I/O with graph compute (legacy's model). The run's window is fixed at
     // wiring (run with the `params` you passed), so the producer's own `RunParams`
     // are unused.
-    produce_async_bounded(g, buffer_size, move |_params: RunParams| async move {
-        let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
-            .await
-            .with_context(|| {
-                format!(
-                    "postgres_read: failed to connect: {}",
-                    connection.redacted()
-                )
-            })?;
-        // Drive the connection's protocol handling in the background; it ends when
-        // `client` is dropped after the slices are drained (inside the stream).
-        let conn_task = tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                log::error!("postgres connection error: {e}");
-            }
-        });
-        Ok(read_chunk_stream::<T>(
-            client, conn_task, slices, start_time, end_time, query_fn,
-        ))
-    })
+    produce_async(
+        g,
+        move |_params: RunParams| async move {
+            let (client, conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
+                .await
+                .with_context(|| {
+                    format!(
+                        "postgres_read: failed to connect: {}",
+                        connection.redacted()
+                    )
+                })?;
+            // Drive the connection's protocol handling in the background; it ends when
+            // `client` is dropped after the slices are drained (inside the stream).
+            let conn_task = tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    log::error!("postgres connection error: {e}");
+                }
+            });
+            Ok(read_chunk_stream::<T>(
+                client, conn_task, slices, start_time, end_time, query_fn,
+            ))
+        },
+        buffer_size,
+    )
 }
 
 /// Lazily query each slice and yield its in-window rows as a `(NanoTime, T)`
@@ -426,7 +430,7 @@ where
 ///
 /// An `async_stream` generator owning the `client` (+ its background connection
 /// task): it runs the next query only when polled past the previous slice, so —
-/// driven by `produce_async_bounded`'s back-pressure — a slice is fetched only
+/// driven by `produce_async`'s back-pressure — a slice is fetched only
 /// once the graph has room. A query, decode, or non-monotonic-time failure yields
 /// a trailing `Err` and stops (classic's per-row abort). Rows outside the slice's
 /// window are dropped via [`WindowFilter`]. Timestamps are full (not time-of-day),
@@ -581,89 +585,93 @@ where
     }
     let connection = connection.into();
     let channel = channel.into();
-    produce_async(g, move |_p: RunParams| async move {
-        let mut query_fn = query_fn;
-        let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
-            .await
-            .with_context(|| {
-                format!("postgres_sub: failed to connect: {}", connection.redacted())
-            })?;
+    produce_async(
+        g,
+        move |_p: RunParams| async move {
+            let mut query_fn = query_fn;
+            let (client, mut conn) = tokio_postgres::connect(&connection.conn_str, NoTls)
+                .await
+                .with_context(|| {
+                    format!("postgres_sub: failed to connect: {}", connection.redacted())
+                })?;
 
-        // Drive the connection and forward notification wake-ups. Polling
-        // `poll_message` (rather than awaiting the plain connection future) is
-        // what surfaces `AsyncMessage::Notification`s.
-        let (tx, mut rx) = mpsc::unbounded::<()>();
-        tokio::spawn(async move {
-            let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
-            while let Some(message) = messages.next().await {
-                match message {
-                    Ok(AsyncMessage::Notification(_)) => {
-                        if tx.unbounded_send(()).is_err() {
-                            break; // subscriber gone
+            // Drive the connection and forward notification wake-ups. Polling
+            // `poll_message` (rather than awaiting the plain connection future) is
+            // what surfaces `AsyncMessage::Notification`s.
+            let (tx, mut rx) = mpsc::unbounded::<()>();
+            tokio::spawn(async move {
+                let mut messages = futures::stream::poll_fn(move |cx| conn.poll_message(cx));
+                while let Some(message) = messages.next().await {
+                    match message {
+                        Ok(AsyncMessage::Notification(_)) => {
+                            if tx.unbounded_send(()).is_err() {
+                                break; // subscriber gone
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("postgres_sub connection error: {e}");
+                            break;
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::error!("postgres_sub connection error: {e}");
-                        break;
-                    }
                 }
-            }
-        });
+            });
 
-        // LISTEN before the catch-up query so an insert committed in the
-        // handoff window still produces a wake-up (watch-before-get).
-        client
-            .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
-            .await
-            .with_context(|| format!("postgres_sub: LISTEN on channel `{channel}` failed"))?;
+            // LISTEN before the catch-up query so an insert committed in the
+            // handoff window still produces a wake-up (watch-before-get).
+            client
+                .batch_execute(&format!("LISTEN {}", quote_ident(&channel)))
+                .await
+                .with_context(|| format!("postgres_sub: LISTEN on channel `{channel}` failed"))?;
 
-        Ok(async_stream::stream! {
-            let mut cursor = start_from;
-            loop {
-                // Drain everything past the cursor. The first pass is the
-                // catch-up from `start_from`; later passes fetch what the
-                // wake-up announced.
-                let query = query_fn(cursor);
-                info!("postgres_sub query: {query}");
-                let rows = match client.query(&query, &[]).await {
-                    Ok(rows) => rows,
-                    Err(e) => {
-                        yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
-                        break;
-                    }
-                };
-                if !rows.is_empty() {
-                    info!("postgres_sub: {} new rows", rows.len());
-                }
-                for row in &rows {
-                    let (time, record) = match T::from_row(row) {
-                        Ok(r) => r,
-                        Err(e) => { yield Err(e); return; }
+            Ok(async_stream::stream! {
+                let mut cursor = start_from;
+                loop {
+                    // Drain everything past the cursor. The first pass is the
+                    // catch-up from `start_from`; later passes fetch what the
+                    // wake-up announced.
+                    let query = query_fn(cursor);
+                    info!("postgres_sub query: {query}");
+                    let rows = match client.query(&query, &[]).await {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            yield Err(anyhow::Error::new(e).context("postgres_sub query failed"));
+                            break;
+                        }
                     };
-                    if time > cursor {
-                        cursor = time;
+                    if !rows.is_empty() {
+                        info!("postgres_sub: {} new rows", rows.len());
                     }
-                    yield Ok((time, record));
-                }
+                    for row in &rows {
+                        let (time, record) = match T::from_row(row) {
+                            Ok(r) => r,
+                            Err(e) => { yield Err(e); return; }
+                        };
+                        if time > cursor {
+                            cursor = time;
+                        }
+                        yield Ok((time, record));
+                    }
 
-                // Wait for the next wake-up; coalesce any that queued while we
-                // were querying (they all mean the same thing: re-query).
-                match rx.next().await {
-                    Some(()) => {
-                        // Coalesce queued wake-ups; each means "re-query".
-                        while rx.try_recv().is_ok() {}
-                    }
-                    None => {
-                        yield Err(anyhow::anyhow!(
-                            "postgres_sub: connection to postgres closed"
-                        ));
-                        break;
+                    // Wait for the next wake-up; coalesce any that queued while we
+                    // were querying (they all mean the same thing: re-query).
+                    match rx.next().await {
+                        Some(()) => {
+                            // Coalesce queued wake-ups; each means "re-query".
+                            while rx.try_recv().is_ok() {}
+                        }
+                        None => {
+                            yield Err(anyhow::anyhow!(
+                                "postgres_sub: connection to postgres closed"
+                            ));
+                            break;
+                        }
                     }
                 }
-            }
-        })
-    })
+            })
+        },
+        None,
+    )
 }
 
 // ---------------------------------------------------------------------------

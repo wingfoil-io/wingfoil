@@ -20,7 +20,7 @@ explicitly-timed, breadth-first world. The producer runs on the graph's own toki
 runtime (created lazily) and each yielded value wakes the kernel.
 
 `produce_async` also carries the two guarantees classic gives for free:
-**back-pressure** (`produce_async_bounded` bounds how far a realtime producer
+**back-pressure** (`produce_async` bounds how far a realtime producer
 may run ahead of the graph) and **`RunParams` validation** (a historical
 `start_time` that disagrees with the actual run is rejected rather than
 silently replaying against a bogus timeline). See the `async_source` module
