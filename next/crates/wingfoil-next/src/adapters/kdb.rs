@@ -84,7 +84,8 @@
 //! [`consume_async`](crate::async_source::consume_async). Non-finite floats map
 //! to q's native null/infinity literals (`0n`/`0w`/`0Ne`/…); symbols are built
 //! via the `` `$"…" `` string cast so special characters (`-`, spaces, …) are
-//! representable.
+//! representable. Serialized columns must be **scalar atoms** — vector/nested
+//! columns are read-only (see [`KdbSerialize`]).
 //!
 //! # Deviations from classic
 //!

@@ -20,12 +20,23 @@ use wingfoil::NanoTime;
 /// **IMPORTANT**: Do NOT include the time field. Time is automatically extracted
 /// from the graph tuple `(NanoTime, T)` and prepended to the row by the write
 /// adapter. Your struct should only contain business data.
+///
+/// # Atom columns only
+///
+/// Each element of the returned compound list must be a **scalar atom** —
+/// symbol, float, real, long, int, or bool. Vector- or nested-list-valued
+/// columns are **not** writable: [`kdb_write`](KdbSinkOps::kdb_write) aborts the
+/// run with an "unsupported KDB column type" error if a row carries one. This is
+/// deliberately asymmetric with the read path, which *does* decode vector columns
+/// (`Row::get(..).as_vec()`); the sink mirrors classic wingfoil, whose insert
+/// builder is likewise atom-only.
 pub trait KdbSerialize: Sized {
     /// Serialize self into a K object representing a row.
     ///
-    /// The returned K object should be a compound list containing the column
-    /// values (excluding time) in the same order as they appear in the target
-    /// table schema after the time column.
+    /// The returned K object must be a compound list of **scalar atoms** — one
+    /// per business column (excluding time), in the same order as they appear in
+    /// the target table schema after the time column. Vector/nested columns are
+    /// not supported on write (see the [trait docs](KdbSerialize)).
     ///
     /// # Note
     /// Do not include time in the returned K object — it is prepended
@@ -55,6 +66,9 @@ pub trait KdbSinkOps<T> {
     /// as the first column. The target table's columns must line up positionally:
     /// `(time, <business columns in to_kdb_row() order>)`. Returns the sink
     /// `Stream<()>`.
+    ///
+    /// Only **scalar atom** columns are writable — a [`KdbSerialize`] impl that
+    /// emits a vector/nested column aborts the run (see [`KdbSerialize`]).
     ///
     /// - `buffer_size`: back-pressure bound handed to
     ///   [`consume_async`](crate::async_source::consume_async) — `Some(n)` blocks
@@ -286,7 +300,20 @@ fn q_string_literal(s: &str) -> String {
 ///
 /// Produces literals like `` enlist `$"AAPL" ``, `enlist 42.5f`, `enlist 100j`,
 /// etc. For multi-row columns produces space-joined values with a single trailing
-/// suffix.
+/// suffix (`100 200j`, `1.5 2.5f`): q applies the trailing type suffix
+/// (`j`/`i`/`f`/`e`/`b`) to the whole space-separated literal, casting it to one
+/// typed vector — so whole-number floats (which Rust's `{}` prints without a
+/// decimal, e.g. `100`) still parse as floats rather than longs.
+///
+/// # Why `format!("{v}")` round-trips through q for floats
+///
+/// Rust's default `{}` formatting of `f64`/`f32` emits the shortest decimal that
+/// round-trips to the same IEEE-754 bits and never uses exponent notation, and
+/// q parses a decimal float literal to the nearest IEEE-754 double/real — so a
+/// finite value serialised here is recovered by q with identical bits. Non-finite
+/// values (`NaN`/`±inf`) are not valid q decimals and are handled separately by
+/// [`q_float64_token`]/[`q_float32_token`] (q's native null/infinity tokens),
+/// never reaching the `format!("{v}")` path.
 fn format_kdb_column_q(atoms: &[K]) -> Result<String> {
     if atoms.is_empty() {
         return Ok("()".to_string());
@@ -388,13 +415,18 @@ fn format_kdb_column_q(atoms: &[K]) -> Result<String> {
                 }
             }
         }
-        other => anyhow::bail!("unsupported KDB column type {other} in kdb_write"),
+        other => anyhow::bail!(
+            "kdb_write: unsupported KDB column type {other} — to_kdb_row must return \
+             scalar atom columns only (symbol/float/real/long/int/bool); vector or \
+             nested-list columns cannot be written"
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kdb_plus_fixed::qattribute;
 
     #[test]
     fn symbols_with_special_chars_format_as_string_cast() {
@@ -435,6 +467,43 @@ mod tests {
         assert_eq!(
             format_kdb_column_q(&[K::new_float(2.5)]).unwrap(),
             "enlist 2.5f"
+        );
+    }
+
+    #[test]
+    fn multi_value_finite_columns_use_typed_vector_literals() {
+        // A whole-number float prints without a decimal (`100`), but the trailing
+        // `f` casts the whole space-separated literal to a float vector in q — so
+        // the column stays a float, not a long. Pins the reliance that
+        // `format!("{v}")` + a type suffix yields a valid typed q vector.
+        assert_eq!(
+            format_kdb_column_q(&[K::new_float(100.0), K::new_float(200.5)]).unwrap(),
+            "100 200.5f"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_real(1.5), K::new_real(2.5)]).unwrap(),
+            "1.5 2.5e"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_long(1), K::new_long(2), K::new_long(3)]).unwrap(),
+            "1 2 3j"
+        );
+        assert_eq!(
+            format_kdb_column_q(&[K::new_int(10), K::new_int(20)]).unwrap(),
+            "10 20i"
+        );
+    }
+
+    #[test]
+    fn unsupported_column_type_names_the_atom_only_limitation() {
+        // A vector-valued column (here an int list) is not writable; the error
+        // must point at the atom-only limitation rather than a bare type code.
+        let err = format_kdb_column_q(&[K::new_int_list(vec![1, 2], qattribute::NONE)])
+            .expect_err("a vector column must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("scalar atom columns only"),
+            "unexpected: {msg}"
         );
     }
 
