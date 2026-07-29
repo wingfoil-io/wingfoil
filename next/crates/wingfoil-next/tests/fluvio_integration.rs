@@ -21,6 +21,8 @@
 //! which the SC hands to clients, is reachable from the test process on the host.
 #![cfg(feature = "fluvio-integration-test")]
 
+use std::sync::{Arc, Mutex, Weak};
+
 use fluvio::consumer::ConsumerConfigExt;
 use fluvio::metadata::customspu::CustomSpuSpec;
 use fluvio::metadata::topic::TopicSpec;
@@ -43,12 +45,62 @@ const FLUVIO_SPU_PRIVATE_PORT: u16 = 9011;
 const FLUVIO_IMAGE: &str = "infinyon/fluvio";
 const FLUVIO_TAG: &str = "0.18.1";
 
-/// Start a full Fluvio local cluster (SC + SPU) using host networking.
+/// A running Fluvio cluster, shared by every test in this binary.
+///
+/// The cluster uses **host networking on fixed ports** (the SPU public endpoint
+/// the SC hands to clients must be reachable from the host as `127.0.0.1:9010`),
+/// so at most one can exist per machine. `container` is `None` when we attached
+/// to a cluster that was already up rather than starting our own.
+struct FluvioCluster {
+    #[allow(dead_code)]
+    container: Option<testcontainers::Container<GenericImage>>,
+    endpoint: String,
+}
+
+/// Hand out the shared cluster, starting it on first use.
+///
+/// Every test holds an `Arc` for its duration, so the container is stopped by
+/// `Drop` once the last test finishes — no leaked container, and no per-test
+/// startup cost.
+///
+/// **Why shared rather than one cluster per test:** host networking pins the SC
+/// to 9003 and the SPU to 9010, and the SPU is registered under a fixed id
+/// (`spu-5001`). A second cluster cannot bind those ports, so a per-test
+/// container would silently attach to the first cluster's SC and then fail
+/// registering an SPU that is `already defined`. That is exactly what happened
+/// when the main `cargo test -p wingfoil-next --all-features` job ran this suite
+/// without `--test-threads=1`. Sharing makes the real constraint explicit and
+/// makes the suite safe at any thread count.
+fn fluvio_cluster() -> anyhow::Result<Arc<FluvioCluster>> {
+    static CLUSTER: Mutex<Weak<FluvioCluster>> = Mutex::new(Weak::new());
+    let mut slot = CLUSTER.lock().expect("fluvio cluster mutex poisoned");
+    if let Some(existing) = slot.upgrade() {
+        return Ok(existing);
+    }
+    let cluster = Arc::new(start_fluvio()?);
+    *slot = Arc::downgrade(&cluster);
+    Ok(cluster)
+}
+
+/// Start a full Fluvio local cluster (SC + SPU) using host networking, or attach
+/// to one that is already listening.
 ///
 /// The SC container is started first. Once the SC is ready the SPU spec is
 /// registered via the admin API so the SC recognises the SPU when it connects.
 /// The SPU process is then started via `docker exec` into the running container.
-fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
+fn start_fluvio() -> anyhow::Result<FluvioCluster> {
+    let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
+
+    // A cluster left running by a previous binary (or a concurrently-shutting-down
+    // one) already owns the fixed host ports, so reuse it instead of racing it.
+    if wait_for_port(&endpoint, std::time::Duration::from_millis(200)).is_ok() {
+        register_spu(&endpoint)?;
+        return Ok(FluvioCluster {
+            container: None,
+            endpoint,
+        });
+    }
+
     // Start the SC and wait for it to be ready.
     let container = GenericImage::new(FLUVIO_IMAGE, FLUVIO_TAG)
         .with_wait_for(WaitFor::message_on_stdout(
@@ -63,8 +115,6 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
             hc.network_mode = Some("host".to_string());
         })
         .start()?;
-
-    let endpoint = format!("127.0.0.1:{FLUVIO_SC_PORT}");
 
     // The SC logs "started successfully" before its 9003 listener is bound.
     // With host networking and back-to-back test containers this race shows up
@@ -88,7 +138,10 @@ fn start_fluvio() -> anyhow::Result<(impl Drop, String)> {
     // Give the SPU time to complete registration with the SC.
     std::thread::sleep(std::time::Duration::from_secs(3));
 
-    Ok((container, endpoint))
+    Ok(FluvioCluster {
+        container: Some(container),
+        endpoint,
+    })
 }
 
 /// Block until `endpoint` accepts a TCP connection, or `timeout` elapses.
@@ -137,12 +190,26 @@ fn register_spu(endpoint: &str) -> anyhow::Result<()> {
             public_endpoint_local: None,
         };
 
-        admin
+        // Registering an SPU that is already known is success, not failure: the
+        // cluster is shared (see `fluvio_cluster`), so whoever attaches second
+        // finds `spu-5001` already defined and can proceed.
+        match admin
             .create::<CustomSpuSpec>("spu-5001".to_string(), false, spec)
             .await
-            .map_err(|e| anyhow::anyhow!("SPU register failed: {e:?}"))?;
-        Ok(())
+        {
+            Ok(()) => Ok(()),
+            Err(e) if is_already_exists(&e) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("SPU register failed: {e:?}")),
+        }
     })
+}
+
+/// Fluvio reports "already defined" / "already exists" as an ordinary admin
+/// error rather than a typed variant, so the check is on the rendered message.
+/// Used to make cluster setup idempotent against the shared cluster.
+fn is_already_exists<E: std::fmt::Debug>(err: &E) -> bool {
+    let rendered = format!("{err:?}").to_lowercase();
+    rendered.contains("already defined") || rendered.contains("already exists")
 }
 
 /// Create a topic using FluvioAdmin with a throwaway async runtime.
@@ -153,15 +220,20 @@ fn create_topic(endpoint: &str, topic: &str) -> anyhow::Result<()> {
         let admin = FluvioAdmin::connect_with_config(&config)
             .await
             .map_err(|e| anyhow::anyhow!("fluvio admin connect failed: {e}"))?;
-        admin
+        // Same reasoning as `register_spu`: the cluster outlives a single test
+        // binary, so a re-run finds the topic already there.
+        match admin
             .create::<TopicSpec>(
                 topic.to_string(),
                 false,
                 TopicSpec::new_computed(1, 1, None),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("topic create failed: {e}"))?;
-        Ok(())
+        {
+            Ok(()) => Ok(()),
+            Err(e) if is_already_exists(&e) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("topic create failed: {e}")),
+        }
     })
 }
 
@@ -257,7 +329,8 @@ fn connection_refused() {
 /// Records pre-seeded before the consumer starts are received from offset 0.
 #[test]
 fn sub_from_beginning() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "sub-from-beginning";
     create_topic(&endpoint, topic)?;
     seed_records(&endpoint, topic, &[("k1", b"hello"), ("k2", b"world")])?;
@@ -288,7 +361,8 @@ fn sub_from_beginning() -> anyhow::Result<()> {
 /// `fluvio_pub` writes records; verify via a direct consumer read.
 #[test]
 fn pub_round_trip() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "pub-round-trip";
     create_topic(&endpoint, topic)?;
 
@@ -312,7 +386,8 @@ fn pub_round_trip() -> anyhow::Result<()> {
 /// Records produced after the consumer starts are received.
 #[test]
 fn sub_live_stream() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "sub-live-stream";
     create_topic(&endpoint, topic)?;
 
@@ -347,7 +422,8 @@ fn sub_live_stream() -> anyhow::Result<()> {
 /// Keyless records ([`RecordKey::NULL`]) are written and read back correctly.
 #[test]
 fn pub_keyless_record() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "keyless-records";
     create_topic(&endpoint, topic)?;
 
@@ -368,7 +444,8 @@ fn pub_keyless_record() -> anyhow::Result<()> {
 /// String keys are stored and readable from the consumer.
 #[test]
 fn pub_keyed_record() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "keyed-records";
     create_topic(&endpoint, topic)?;
 
@@ -390,7 +467,8 @@ fn pub_keyed_record() -> anyhow::Result<()> {
 /// A consumer with a non-zero `start_offset` skips earlier records.
 #[test]
 fn sub_from_absolute_offset() -> anyhow::Result<()> {
-    let (_container, endpoint) = start_fluvio()?;
+    let cluster = fluvio_cluster()?;
+    let endpoint = cluster.endpoint.clone();
     let topic = "sub-abs-offset";
     create_topic(&endpoint, topic)?;
     seed_records(
