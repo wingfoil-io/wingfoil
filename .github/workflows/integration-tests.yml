@@ -100,6 +100,11 @@ jobs:
     uses: ./.github/workflows/aeron-integration.yml
     secrets: inherit
 
+  aeron-next-integration:
+    name: Aeron (next) Integration Tests
+    uses: ./.github/workflows/aeron-next-integration.yml
+    secrets: inherit
+
   augurs-integration:
     name: augurs Integration Tests
     uses: ./.github/workflows/augurs-integration.yml

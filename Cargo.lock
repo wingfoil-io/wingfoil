@@ -7775,6 +7775,7 @@ dependencies = [
 name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
+ "aeron-rs",
  "anyhow",
  "arc-swap",
  "async-stream",
@@ -7790,6 +7791,7 @@ dependencies = [
  "futures",
  "kanal",
  "kdb-plus-fixed",
+ "libc",
  "log",
  "opentelemetry 0.32.0",
  "opentelemetry-otlp 0.32.0",
@@ -7798,6 +7800,8 @@ dependencies = [
  "rdkafka",
  "redis",
  "reqwest 0.12.28",
+ "rusteron-client",
+ "rusteron-media-driver",
  "rustls",
  "rustls-pemfile",
  "scopeguard",
