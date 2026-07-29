@@ -771,6 +771,40 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    both hinge on `Complete`, so the port must plumb a "publish source finished"
    signal (adjacent to `Ctx::is_last_cycle` / lifecycle) through to the adapter,
    not just carry the wire types over.
+   ✅ **web** *(done)*: bidirectional WebSocket streaming to browsers — the
+   axum HTTP/WS `WebServer` (own thread + own current-thread tokio runtime,
+   synchronous bind, optional static-file serving, optional `web-tls` HTTPS/WSS
+   via rustls/`ring`), the publish sink (`WebSinkOps::web_pub` on any
+   `Stream<T: Serialize>`, plus `WebBurstSinkOps::web_pub_bursts` on
+   `Stream<Burst<T>>`) over `consume_async`, and the browser-input source
+   (`web_sub`) over `produce_async`, behind the `web` feature. **The
+   "wingfoil-js untouched" condition holds:** the wire format is the shared,
+   engine-agnostic `wingfoil-wire-types` crate reused verbatim — v2 control plane
+   (`Hello`/`Subscribe`/`Unsubscribe`), both codecs (`Bincode` + `Json`), burst
+   payloads published as arrays, and **`ControlMessage::Complete { topic }`**
+   emitted when a `web_pub` source finishes (historical replay / finite
+   `RunFor`), which `@wingfoil/client`'s `onComplete` and its
+   stop-reconnecting logic depend on. next plumbs that end-of-stream signal
+   through the sink's **teardown**: `consume_async`'s `flush` is chained into a
+   `finally` that drains every queued frame, joins the consumer, then broadcasts
+   `Complete` — so the marker still lands strictly after the last data frame. Both
+   historical shapes are ported: streaming a replay through a live `start()`
+   server (with `web_sub` yielding an empty source so the run never blocks) and
+   the `start_historical()` no-op server. Parity port of the classic adapter's
+   in-process tests as `tests/web_adapter.rs` (`web`; the wss:// round trip and
+   the rcgen cert fixture behind `web-tls-integration-test`;
+   `web-next-integration.yml`) — 13 tests, no container; classic example ported to
+   `examples/web/`. **Deviations:** all classic capabilities preserved; `web_sub`
+   takes a `&GraphBuilder` and returns `Result`, and — unlike the live `_sub`
+   sources of register B2 — **does not reject `RunMode::HistoricalFrom`**, because
+   it is finite in that mode (an immediately-ending empty stream, exactly as
+   classic); the sink is the `WebSinkOps` trait (not the classic free-fn +
+   `WebPubOperators` pair) returning `Stream<()>`; and `WebBurstSinkOps::web_pub_bursts`
+   is added so a `Stream<Burst<T>>` publishes an atomic same-instant array without
+   the caller hand-mapping to `Vec<T>` (`Burst`/`TinyVec` is not `Serialize`, so it
+   cannot be a second impl of the same trait). The canonical deviation list is the
+   adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md).
    ✅ **prometheus** *(done)*: a realtime, pull-based metrics **sink** —
    `PrometheusExporter` (owns the registry, spawns the hand-rolled `GET /metrics`
    HTTP server, synchronous bind) plus the `PrometheusSinkOps::prometheus_gauge`

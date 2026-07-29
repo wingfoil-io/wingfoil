@@ -110,6 +110,11 @@ jobs:
     uses: ./.github/workflows/web-integration.yml
     secrets: inherit
 
+  web-next-integration:
+    name: Web (next) Integration Tests
+    uses: ./.github/workflows/web-next-integration.yml
+    secrets: inherit
+
   kafka-python-integration:
     name: Kafka Python Integration Tests
     uses: ./.github/workflows/kafka-python-integration.yml

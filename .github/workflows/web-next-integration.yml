@@ -1,0 +1,43 @@
+name: test.integration.web-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/web/**'
+      - 'next/crates/wingfoil-next/tests/web_adapter.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  web-next-integration:
+    name: Web (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # The server is in-process, so there is no container or external service.
+      # `web-tls-integration-test` also covers the plain-HTTP suite and adds the
+      # wss:// round trip against an rcgen-generated self-signed cert.
+      - name: Run web (next) integration tests (plain + TLS)
+        run: |
+          cargo test --features web-tls-integration-test -p wingfoil-next \
+            --test web_adapter -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
