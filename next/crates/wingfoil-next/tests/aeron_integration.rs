@@ -680,13 +680,19 @@ fn channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
     let pub_channel = ChannelUri::mdc_publication(control)?;
     let sub_channel = ChannelUri::mdc_subscription("127.0.0.1:40457", control)?;
 
-    let values = round_trip(
-        handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?,
-        handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?,
-        AeronSubOptions::default(),
-        1,
-        3,
-    )?;
+    // MDC joins over UDP loopback via a dynamic control handshake, which is much
+    // slower to establish than IPC or plain unicast. The subscription must exist
+    // before the publication can connect (it is the subscriber's status message
+    // to the control address that adds the destination), so create it first and
+    // only then wait for the image. Without this wait the graph starts offering
+    // into an unconnected publication and the run ends before the join
+    // completes, so nothing arrives. Classic's twin
+    // (`test_channel_uri_mdc_roundtrip`) waits here for the same reason.
+    let subscription = handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?;
+    let publication = handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?;
+    wait_for_pub_connected(&publication, CONNECT_TIMEOUT)?;
+
+    let values = round_trip(subscription, publication, AeronSubOptions::default(), 1, 3)?;
     assert!(!values.is_empty(), "expected values over the MDC channel");
     Ok(())
 }
