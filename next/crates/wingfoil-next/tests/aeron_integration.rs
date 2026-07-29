@@ -12,6 +12,7 @@
 //! `/dev/shm` so the host process connects to the same driver via `aeron:ipc`.
 #![cfg(feature = "aeron-integration-test")]
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use testcontainers::{
@@ -39,6 +40,26 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// client. Setting the same `AERON_DIR` on both sides ensures the CNC file path
 /// matches regardless of which user aeronmd runs as inside the container.
 const AERON_DIR: &str = "/dev/shm/aeron-next-integration-test";
+
+/// Serialise the whole suite.
+///
+/// These tests are inherently non-parallel: the media driver writes its CNC file
+/// to a fixed `AERON_DIR` under a bind-mounted `/dev/shm`, and the Aeron *client*
+/// is pointed at it through a process-global environment variable that
+/// `start_media_driver` (and `no_driver_connection_fails`) rewrite. Two tests in
+/// flight at once would clobber each other's driver directory and env var.
+///
+/// The dedicated workflow passes `--test-threads=1`, but the main
+/// `cargo test -p wingfoil-next --all-features` job does not — so the constraint
+/// is enforced here rather than left to the caller. Every test takes this guard
+/// first. The mutex is deliberately poison-tolerant: one failing test must not
+/// cascade into "poisoned" failures for all the others.
+fn serial_guard() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Start an Aeron media driver container and return a guard that stops it on
 /// drop. Binds `/dev/shm` into the container so the host process shares the CNC
@@ -121,6 +142,7 @@ fn wait_for_pub_connected<P: AeronPublisherBackend>(
 /// an earlier test does not cause a spurious success.
 #[test]
 fn no_driver_connection_fails() {
+    let _serial = serial_guard();
     const NO_DRIVER_DIR: &str = "/tmp/aeron-next-no-driver-test";
     let _ = std::fs::remove_dir_all(NO_DRIVER_DIR);
     // SAFETY: tests run with --test-threads=1, so no concurrent env access.
@@ -135,6 +157,7 @@ fn no_driver_connection_fails() {
 /// commit, and assert the subscriber receives exactly those bytes.
 #[test]
 fn try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2005i32;
@@ -170,6 +193,7 @@ fn try_claim_zero_copy_roundtrip() -> anyhow::Result<()> {
 /// so the buffer fills within a bounded iteration count.
 #[test]
 fn try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2006i32;
@@ -204,6 +228,7 @@ fn try_claim_back_pressure_returns_typed_error() -> anyhow::Result<()> {
 /// waiting 15 s for the publication-unblock timeout.
 #[test]
 fn try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2007i32;
@@ -228,6 +253,7 @@ fn try_claim_drop_without_commit_aborts() -> anyhow::Result<()> {
 /// in total. A buggy `fragment_limit` wiring would deliver all 1000 in one poll.
 #[test]
 fn fragment_limit_caps_burst_size() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2008i32;
@@ -317,6 +343,7 @@ where
 /// Spin-mode typed-parser round-trip over the media driver.
 #[test]
 fn spin_sub_single_message_roundtrip() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2009i32;
@@ -335,6 +362,7 @@ fn spin_sub_single_message_roundtrip() -> anyhow::Result<()> {
 /// 10 arrive in total.
 #[test]
 fn spin_sub_burst_accumulation() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2010i32;
@@ -359,6 +387,7 @@ fn spin_sub_burst_accumulation() -> anyhow::Result<()> {
 /// Threaded-mode delivery across the background channel.
 #[test]
 fn threaded_sub_accumulates_across_channel_drain() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2011i32;
@@ -382,6 +411,7 @@ fn threaded_sub_accumulates_across_channel_drain() -> anyhow::Result<()> {
 /// `collapse` yields the latest value of each burst.
 #[test]
 fn collapse_yields_latest_value() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2012i32;
@@ -418,6 +448,7 @@ fn collapse_yields_latest_value() -> anyhow::Result<()> {
 /// backend, which overrides `poll_fragments`.
 #[test]
 fn parser_sees_fragment_header_with_real_position() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2013i32;
@@ -461,6 +492,7 @@ fn parser_sees_fragment_header_with_real_position() -> anyhow::Result<()> {
 /// only once (transition-only).
 #[test]
 fn status_stream_emits_on_connect() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2014i32;
@@ -505,6 +537,7 @@ fn status_stream_emits_on_connect() -> anyhow::Result<()> {
 /// thread's cadence and carried in-band with the data.
 #[test]
 fn threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2015i32;
@@ -544,6 +577,7 @@ fn threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
 /// saturates behind an unpolled subscriber.
 #[test]
 fn publisher_status_emits_back_pressure() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2016i32;
@@ -575,6 +609,7 @@ fn publisher_status_emits_back_pressure() -> anyhow::Result<()> {
 /// Every item of every burst is published — no dedup.
 #[test]
 fn publisher_publishes_every_burst_item() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2017i32;
@@ -617,6 +652,7 @@ fn publisher_publishes_every_burst_item() -> anyhow::Result<()> {
 /// A round trip over the `ChannelUri::ipc()` builder's output.
 #[test]
 fn channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2018i32;
@@ -636,6 +672,7 @@ fn channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
 /// A round trip over the MDC (multi-destination-cast) URI builders.
 #[test]
 fn channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronHandle::connect()?;
     let stream_id = 2019i32;
@@ -664,6 +701,7 @@ fn channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
 /// end-to-end.
 #[test]
 fn aeron_rs_roundtrip() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
     let handle = AeronRsHandle::connect()?;
     let stream_id = 3001i32;
@@ -685,6 +723,7 @@ fn aeron_rs_roundtrip() -> anyhow::Result<()> {
 /// `fragment_limit` round-trips through both backends' builders.
 #[test]
 fn fragment_limit_field_round_trips() -> anyhow::Result<()> {
+    let _serial = serial_guard();
     let _container = start_media_driver()?;
 
     let handle = AeronHandle::connect()?;
