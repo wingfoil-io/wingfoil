@@ -128,12 +128,17 @@ Three things make the tree large, and they compound:
   carrying the entire dependency graph.
 
 That last one is why `[profile.dev.package."*"] debug = false` is set in the
-root `Cargo.toml`: debuginfo was over half the bulk and got copied into all ~69
-binaries. It took a single example binary from 260MB to 64MB and a
-`--all-targets` build from roughly 23GB to under 10GB. The override applies to
-dependencies only — cargo excludes workspace members from `package."*"` — so
-backtraces and debugger stepping through wingfoil code are unaffected; only
-frames inside third-party crates lose line numbers.
+root `Cargo.toml`: debuginfo was over half the bulk and got copied into every
+one of those binaries. It takes a single example binary from 260MB to 64MB, and
+a full `--all-targets` build (79 binaries) measures **9.2GB** with it — against
+roughly 17GB without, derived from the same per-artifact ratios. The override
+applies to dependencies only — cargo excludes workspace members from
+`package."*"` — so backtraces and debugger stepping through wingfoil code are
+unaffected; only frames inside third-party crates lose line numbers.
+
+`target/debug/incremental` is another 2.6GB of that 9.2GB. It pays for itself
+across edit-rebuild cycles, but `CARGO_INCREMENTAL=0` (what CI sets) reclaims it
+outright if you are only doing one-shot builds.
 
 Also note the git hooks installed by `.cargo-husky`: `pre-commit` runs
 `cargo fmt --all` and a full `cargo clippy --workspace --all-targets`, and
