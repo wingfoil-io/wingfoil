@@ -134,7 +134,7 @@ fn consume_messages(
             .map_err(|e| anyhow::anyhow!("subscribe failed: {e}"))?;
 
         let mut results = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
             if results.len() >= max || tokio::time::Instant::now() >= deadline {
                 break;
@@ -147,7 +147,16 @@ fn consume_messages(
                     ));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("consume error: {e}")),
-                Err(_) => break, // timeout
+                // A `recv()` timeout is NOT end-of-topic — it is the normal
+                // shape of a fresh consumer group's first poll, which has to
+                // find the group coordinator, join, and take its partition
+                // assignment before any fetch can return. On a loaded CI runner
+                // that routinely exceeds one 2 s slice. Keep polling until the
+                // overall deadline instead of giving up on the first slow slice;
+                // returning early here reports an empty topic when the records
+                // are in fact present, which is what made
+                // `test_pub_multiple_records_in_burst` flaky.
+                Err(_) => continue,
             }
         }
         Ok(results)
@@ -309,8 +318,17 @@ fn test_pub_multiple_records_in_burst() -> anyhow::Result<()> {
     }
 
     let messages = consume_messages(&brokers, topic, "multi-verify-group", 2)?;
-    assert_eq!(messages.len(), 2);
     let values: Vec<Vec<u8>> = messages.iter().map(|(_, v)| v.clone()).collect();
+    // Report what actually arrived: 0 of 2 points at the consumer side (no
+    // assignment within the deadline), whereas 1 of 2 would point at the
+    // producer dropping part of the burst — very different bugs.
+    assert_eq!(
+        messages.len(),
+        2,
+        "expected both burst records, got {}: {:?}",
+        messages.len(),
+        values
+    );
     assert!(values.contains(&b"v1".to_vec()));
     assert!(values.contains(&b"v2".to_vec()));
     Ok(())

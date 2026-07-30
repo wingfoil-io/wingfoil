@@ -131,7 +131,7 @@ fn consume_messages(
             .map_err(|e| anyhow::anyhow!("subscribe failed: {e}"))?;
 
         let mut results = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
             if results.len() >= max || tokio::time::Instant::now() >= deadline {
                 break;
@@ -144,7 +144,15 @@ fn consume_messages(
                     ));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("consume error: {e}")),
-                Err(_) => break, // timeout
+                // A `recv()` timeout is NOT end-of-topic — it is the normal
+                // shape of a fresh consumer group's first poll, which has to
+                // find the group coordinator, join, and take its partition
+                // assignment before any fetch can return. On a loaded CI runner
+                // that routinely exceeds one 2 s slice. Keep polling until the
+                // overall deadline instead of giving up on the first slow slice;
+                // returning early here reports an empty topic when the records
+                // are in fact present. Kept in step with the wingfoil-next twin.
+                Err(_) => continue,
             }
         }
         Ok(results)
