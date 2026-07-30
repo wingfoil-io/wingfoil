@@ -120,6 +120,19 @@ rustls-pemfile = { version = "2", optional = true }
 # dev-dependencies. Versions mirror the classic `wingfoil` crate.
 rcgen = { version = "0.13", optional = true }
 scopeguard = { version = "1.2.0", optional = true }
+# `aeron` feature: the Aeron IPC/UDP low-latency message transport. Like classic
+# (and unlike the networked async adapters) it is synchronous/poll-based, so it
+# does NOT pull in `async`. Two pluggable backends behind their own features:
+# `rusteron-client` (C++ FFI, production — needs cmake >= 3.30, clang, uuid-dev,
+# libbsd-dev) and `aeron-rs` (pure Rust, experimental — see the module docs'
+# lock warning). Versions mirror the classic `wingfoil` crate's aeron adapter so
+# the two trees don't drift.
+rusteron-client = { version = "0.1", optional = true }
+rusteron-media-driver = { version = "0.1", optional = true }
+aeron-rs = { version = "0.1", optional = true }
+# Used only by the aeron integration tests, to run the media-driver container as
+# the current uid/gid so the CNC file stays writable by the test process.
+libc = { version = "0.2", optional = true }
 
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
@@ -267,6 +280,16 @@ web-tls-integration-test = [
     "dep:rcgen",
     "dep:scopeguard",
 ]
+# Aeron IPC/UDP transport. Enable exactly one backend: `aeron` (rusteron-client,
+# production) or `aeron-rs` (pure Rust, experimental). `aeron-driver` embeds a
+# media driver in-process and implies `aeron`. Synchronous/poll-based — no
+# `async`. Mirrors classic wingfoil's `aeron` features.
+aeron = ["dep:rusteron-client"]
+aeron-rs = ["dep:aeron-rs"]
+aeron-driver = ["aeron", "dep:rusteron-media-driver"]
+# Live-media-driver tests (a testcontainers `aeronmd` bind-mounting /dev/shm).
+# Enables both backends so their handle-construction paths are covered.
+aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
 # KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
 # `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
 # streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
@@ -397,6 +420,17 @@ required-features = ["kafka"]
 name = "web_adapter"
 path = "examples/web/main.rs"
 required-features = ["web"]
+# Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
+# driver (see the adapter's module docs).
+[[example]]
+name = "aeron_adapter"
+path = "examples/aeron/main.rs"
+required-features = ["aeron"]
+
+[[example]]
+name = "aeron_status_circuit_breaker"
+path = "examples/aeron/status_circuit_breaker.rs"
+required-features = ["aeron"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.

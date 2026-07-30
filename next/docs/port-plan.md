@@ -873,6 +873,48 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
 
+   ✅ **aeron** *(done)*: the Aeron IPC/UDP low-latency message transport, behind
+   the `aeron` (rusteron-client, C++ FFI — production) or `aeron-rs` (pure Rust —
+   experimental) backend features, with `aeron-driver` embedding a media driver.
+   Versions mirror classic. **Both polling modes ported:** `AeronMode::Spin`
+   rides a busy-spin `custom_node` polling on the graph thread, and
+   `AeronMode::Threaded` rides `source_at_start` (a background poll thread over
+   the `channel` layer with classic's exponential idle back-off). The typed
+   parser with `FragmentHeader` access, the `fragment_limit` per-poll cap, the
+   `Spin`→`Threaded` downgrade for backends that lock on poll, both status
+   side-channels, the `ChannelUri` builders, `ClaimBuffer`'s zero-copy
+   commit/abort contract, and the `TransportError`/`AeronStatus` types are all
+   ported. Like classic it uses **no** `async`/tokio. Parity port of the classic
+   node-level unit tests as `tests/aeron_adapter.rs` (`aeron` — 20 mock-backed
+   tests, no media driver) plus the classic integration suite as
+   `tests/aeron_integration.rs` (`aeron-integration-test` — a testcontainers
+   `neomantra/aeron-cpp-debian` media driver bind-mounting `/dev/shm`;
+   `aeron-next-integration.yml`, which also installs the cmake ≥3.30 / clang /
+   uuid / libbsd toolchain rusteron needs); both classic examples ported to
+   `examples/aeron/`. **Deviations:** all classic capabilities preserved; the
+   sources take a `&GraphBuilder` + `RunMode`, return `Result`, and **reject
+   `RunMode::HistoricalFrom` at wiring** (a live Aeron subscription has no
+   historical timeline, and the threaded mode's channel receiver would
+   block-collect the never-closing poll thread and deadlock at `start` — register
+   B2, ratified; classic's spin subscriber silently ran against the
+   fast-forwarded historical clock, while the *publisher* keeps classic's
+   real-time check at graph `start()`). The **status side-channel is a plain
+   stream, not a node type**: classic's `AeronStatusStream` (a `MutableNode` the
+   producer drove via `clear()`/`record()` and wired as an active downstream) has
+   no next twin — next multiplexes status with data over one internal envelope
+   and splits it with `map_filter`, the `zmq_sub` shape, so the *spin* mode now
+   carries status in-band too. Observable behaviour (transition-only emission,
+   derivation order, in-band ordering) is identical. The sink is the
+   `AeronSinkOps` extension trait returning `Stream<()>` (not classic's
+   `AeronPub` returning `Rc<dyn Node>`), and the `MockSubscriber`/`MockPublisher`
+   backends are public test support (next's tests live outside the lib). The
+   classic Criterion benches (`aeron_publication_latency`,
+   `aeron_subscription_throughput`, `aeron_transceiver`,
+   `aeron_allocation_tracking`) are **not** ported — next's bench suite is a
+   separate work item, as for every adapter so far. The canonical deviation list
+   is the adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md).
+
 Each adapter: keep its directory CLAUDE.md, port its tests, one PR each.
 
 **Gate 4:** adapter test suites green on next; classic adapter code paths

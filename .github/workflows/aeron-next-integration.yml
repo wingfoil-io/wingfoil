@@ -1,0 +1,60 @@
+name: test.integration.aeron-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/aeron/**'
+      - 'next/crates/wingfoil-next/tests/aeron_adapter.rs'
+      - 'next/crates/wingfoil-next/tests/aeron_integration.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  aeron-next-integration:
+    name: Aeron (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # rusteron-client builds the Aeron C library from source: it needs clang,
+      # libuuid, libbsd and cmake >= 3.30 (Ubuntu 24.04 ships 3.28).
+      - name: Install Aeron build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
+          cmake --version
+
+      - name: Pre-pull Aeron media driver image
+        run: |
+          for i in 1 2 3; do
+            docker pull neomantra/aeron-cpp-debian:latest && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull the Aeron media driver image after 3 attempts" && exit 1
+
+      - name: Run aeron (next) integration tests
+        run: |
+          cargo test --features aeron-integration-test -p wingfoil-next \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO

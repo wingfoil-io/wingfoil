@@ -30,6 +30,12 @@
 //!   behind the `web` feature (`web-tls` adds HTTPS/WSS). The wire protocol is
 //!   the shared, engine-agnostic `wingfoil-wire-types` format, so the existing
 //!   browser client works unchanged.
+//! - [`aeron`] — the Aeron IPC/UDP low-latency message transport: a
+//!   typed-parser subscription source (`aeron_sub_fragment`, spin or threaded,
+//!   with an optional lifecycle-status side-channel) and a publication sink
+//!   (`AeronSinkOps`), behind the `aeron` (rusteron) or `aeron-rs` (pure Rust)
+//!   backend features. Synchronous/poll-based, so — like classic — it does NOT
+//!   use `async`; the sources are realtime-only.
 //! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
 //!   time-sliced historical readers, behind the `cache` feature. A pure utility
 //!   (async `get`/`put`), not a source/sink op.
@@ -75,6 +81,8 @@
 //!   layer, or a busy-spin `custom_node`), so — like classic — it does NOT use
 //!   `async`; all sources are realtime-only.
 
+#[cfg(any(feature = "aeron", feature = "aeron-rs"))]
+pub mod aeron;
 #[cfg(feature = "augurs")]
 pub mod augurs;
 #[cfg(feature = "cache")]
