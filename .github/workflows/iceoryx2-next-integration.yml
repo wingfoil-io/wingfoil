@@ -1,0 +1,44 @@
+name: test.integration.iceoryx2-next
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'next/crates/wingfoil-next/src/adapters/iceoryx2/**'
+      - 'next/crates/wingfoil-next/tests/iceoryx2_adapter.rs'
+      - 'next/crates/wingfoil-next/tests/iceoryx2_integration.rs'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  iceoryx2-next-integration:
+    name: iceoryx2 (next) Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # iceoryx2 is daemonless: `Ipc` needs only a writable /dev/shm, which the
+      # runner provides, so there is no service or container to start. This runs
+      # both the Local-variant suite and the cross-process Ipc suite.
+      - name: Run iceoryx2 (next) integration tests (Local + IPC)
+        run: |
+          cargo test --features iceoryx2-integration-test -p wingfoil-next \
+            -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
