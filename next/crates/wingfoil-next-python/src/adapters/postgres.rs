@@ -51,16 +51,16 @@ use anyhow::{Result, anyhow, bail};
 use chrono::NaiveDateTime;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil::NanoTime;
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
     PostgresSourceConfig, Row, ToSql, Type, postgres_notify_trigger_sql as pg_notify_trigger_sql,
     postgres_read as pg_read, postgres_source as pg_source, postgres_sub as pg_sub,
     postgres_timestamp, quote_ident,
 };
-use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::{Burst, GraphBuilder, Stream, StreamOps};
 
+use crate::adapters::common::{historical_params, realtime_params, run_mode, secs_to_nanotime};
 use crate::{PyElement, pyadapter};
 
 // ---------------------------------------------------------------------------
@@ -248,36 +248,9 @@ fn cursor_query(query: &str, time_col: &str) -> impl FnMut(NanoTime) -> String +
     }
 }
 
-/// The `RunParams` a historical read is wired for. `RunFor::Duration` is the
-/// only bound [`pg_read`] can slice (it needs a concrete end time), so the
-/// binding always builds one.
-fn historical_params(start_nanos: u64, duration_nanos: u64) -> RunParams {
-    let start = NanoTime::from(start_nanos);
-    RunParams {
-        run_mode: RunMode::HistoricalFrom(start),
-        run_for: RunFor::Duration(Duration::from_nanos(duration_nanos)),
-        start_time: start,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Sources.
 // ---------------------------------------------------------------------------
-
-/// The `postgres_read` source, as a `GraphBuilder` extension.
-trait PostgresReadOps {
-    #[allow(clippy::too_many_arguments)]
-    fn postgres_read(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        start_nanos: u64,
-        duration_nanos: u64,
-        chunk_secs: u64,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<Burst<PyPgRow>>>;
-}
 
 /// Read a time-partitioned PostgreSQL table as a bounded historical replay.
 ///
@@ -294,43 +267,28 @@ trait PostgresReadOps {
 /// unsupported column type fails the run on the first row rather than reading as
 /// `None`. `buffer_size` bounds the replay's look-ahead (`None` = unbounded).
 #[pyadapter(name = postgres_read, source)]
-impl PostgresReadOps for GraphBuilder {
-    #[pyo3(signature = (
-        conn_str, query, time_col, start_nanos, duration_nanos,
-        chunk_secs = 3600, buffer_size = None,
-    ))]
-    fn postgres_read(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        start_nanos: u64,
-        duration_nanos: u64,
-        chunk_secs: u64,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<Burst<PyPgRow>>> {
-        pg_read::<PyPgRow>(
-            self,
-            historical_params(start_nanos, duration_nanos),
-            PostgresConnection::new(conn_str),
-            Duration::from_secs(chunk_secs),
-            window_query(&query, &time_col),
-            buffer_size,
-        )
-    }
-}
-
-/// The `postgres_sub` live tail, as a `GraphBuilder` extension.
-trait PostgresSubOps {
-    fn postgres_sub(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        channel: String,
-        start_secs: f64,
-        realtime: bool,
-    ) -> Result<Stream<Burst<PyPgRow>>>;
+#[pyo3(signature = (
+    conn_str, query, time_col, start_nanos, duration_nanos,
+    chunk_secs = 3600, buffer_size = None,
+))]
+fn read(
+    g: &GraphBuilder,
+    conn_str: String,
+    query: String,
+    time_col: String,
+    start_nanos: u64,
+    duration_nanos: u64,
+    chunk_secs: u64,
+    buffer_size: Option<usize>,
+) -> Result<Stream<Burst<PyPgRow>>> {
+    pg_read::<PyPgRow>(
+        g,
+        historical_params(start_nanos, duration_nanos),
+        PostgresConnection::new(conn_str),
+        Duration::from_secs(chunk_secs),
+        window_query(&query, &time_col),
+        buffer_size,
+    )
 }
 
 /// Live-tail a PostgreSQL table in real time using `LISTEN`/`NOTIFY`.
@@ -351,44 +309,24 @@ trait PostgresSubOps {
 /// eventual `graph.run(realtime=…)`. The live tail has no historical timeline to
 /// replay, so `realtime=False` raises here — use `postgres_read` instead.
 #[pyadapter(name = postgres_sub, source)]
-impl PostgresSubOps for GraphBuilder {
-    #[pyo3(signature = (conn_str, query, time_col, channel, start_secs = 0.0, realtime = true))]
-    fn postgres_sub(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        channel: String,
-        start_secs: f64,
-        realtime: bool,
-    ) -> Result<Stream<Burst<PyPgRow>>> {
-        pg_sub::<PyPgRow, _>(
-            self,
-            run_mode(realtime),
-            PostgresConnection::new(conn_str),
-            channel,
-            secs_to_nanotime(start_secs)?,
-            cursor_query(&query, &time_col),
-        )
-    }
-}
-
-/// The mode-agnostic `postgres_source`, as a `GraphBuilder` extension.
-trait PostgresSourceOps {
-    #[allow(clippy::too_many_arguments)]
-    fn postgres_source(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        channel: String,
-        realtime: bool,
-        start_nanos: u64,
-        duration_nanos: u64,
-        start_secs: f64,
-        chunk_secs: u64,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<Burst<PyPgRow>>>;
+#[pyo3(signature = (conn_str, query, time_col, channel, start_secs = 0.0, realtime = true))]
+fn sub(
+    g: &GraphBuilder,
+    conn_str: String,
+    query: String,
+    time_col: String,
+    channel: String,
+    start_secs: f64,
+    realtime: bool,
+) -> Result<Stream<Burst<PyPgRow>>> {
+    pg_sub::<PyPgRow, _>(
+        g,
+        run_mode(realtime),
+        PostgresConnection::new(conn_str),
+        channel,
+        secs_to_nanotime(start_secs)?,
+        cursor_query(&query, &time_col),
+    )
 }
 
 /// One PostgreSQL source for **either** run mode: wire once, choose real-time vs
@@ -404,67 +342,41 @@ trait PostgresSourceOps {
 /// This has no legacy `wingfoil-python` equivalent; it is the Python exposure of
 /// next's unified `<adapter>_source`.
 #[pyadapter(name = postgres_source, source)]
-impl PostgresSourceOps for GraphBuilder {
-    #[pyo3(signature = (
-        conn_str, query, time_col, channel, realtime,
-        start_nanos = 0, duration_nanos = 0, start_secs = 0.0,
-        chunk_secs = 3600, buffer_size = None,
-    ))]
-    fn postgres_source(
-        &self,
-        conn_str: String,
-        query: String,
-        time_col: String,
-        channel: String,
-        realtime: bool,
-        start_nanos: u64,
-        duration_nanos: u64,
-        start_secs: f64,
-        chunk_secs: u64,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<Burst<PyPgRow>>> {
-        let params = if realtime {
-            RunParams {
-                run_mode: RunMode::RealTime,
-                run_for: RunFor::Forever,
-                start_time: NanoTime::ZERO,
-            }
-        } else {
-            historical_params(start_nanos, duration_nanos)
-        };
-        let cfg = PostgresSourceConfig::new()
-            .historical(
-                Duration::from_secs(chunk_secs),
-                window_query(&query, &time_col),
-                buffer_size,
-            )
-            .live(
-                channel,
-                secs_to_nanotime(start_secs)?,
-                cursor_query(&query, &time_col),
-            );
-        pg_source::<PyPgRow>(self, params, PostgresConnection::new(conn_str), cfg)
-    }
-}
-
-/// The run mode a source is being wired for, from the Python `realtime` flag.
-/// The historical arm carries `ZERO`: the live-tail sources only ever test
-/// *which* variant it is (to reject a historical run), never the instant.
-fn run_mode(realtime: bool) -> RunMode {
-    if realtime {
-        RunMode::RealTime
+#[pyo3(signature = (
+    conn_str, query, time_col, channel, realtime,
+    start_nanos = 0, duration_nanos = 0, start_secs = 0.0,
+    chunk_secs = 3600, buffer_size = None,
+))]
+fn source(
+    g: &GraphBuilder,
+    conn_str: String,
+    query: String,
+    time_col: String,
+    channel: String,
+    realtime: bool,
+    start_nanos: u64,
+    duration_nanos: u64,
+    start_secs: f64,
+    chunk_secs: u64,
+    buffer_size: Option<usize>,
+) -> Result<Stream<Burst<PyPgRow>>> {
+    let params = if realtime {
+        realtime_params()
     } else {
-        RunMode::HistoricalFrom(NanoTime::ZERO)
-    }
-}
-
-/// Unix seconds -> [`NanoTime`]. Rejects a negative or non-finite input rather
-/// than wrapping it into a nonsense cursor.
-fn secs_to_nanotime(secs: f64) -> Result<NanoTime> {
-    if !secs.is_finite() || secs < 0.0 {
-        bail!("expected a finite, non-negative Unix-seconds value, got {secs}");
-    }
-    Ok(NanoTime::new((secs * 1e9) as u64))
+        historical_params(start_nanos, duration_nanos)
+    };
+    let cfg = PostgresSourceConfig::new()
+        .historical(
+            Duration::from_secs(chunk_secs),
+            window_query(&query, &time_col),
+            buffer_size,
+        )
+        .live(
+            channel,
+            secs_to_nanotime(start_secs)?,
+            cursor_query(&query, &time_col),
+        );
+    pg_source::<PyPgRow>(g, params, PostgresConnection::new(conn_str), cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -583,23 +495,6 @@ fn element_to_write_row(elem: &PyElement, columns: &[(String, String)]) -> Resul
     })
 }
 
-/// The `postgres_write` sink, as an extension on the **erased** burst stream.
-///
-/// The input stays `PyElement` rather than a concrete record type because the
-/// row shape is only known from the caller's `columns` argument — which is in
-/// scope here, inside the adapter, and not at the `typed_burst_input` seam. The
-/// marshaling happens in this method's `try_map`; everything downstream of it is
-/// natively typed.
-trait PostgresWriteOps {
-    fn postgres_write(
-        &self,
-        conn_str: String,
-        table: String,
-        columns: Vec<(String, String)>,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<()>>;
-}
-
 /// Write this stream to a PostgreSQL table.
 ///
 /// Each tick's value is either a single `dict` of the declared columns, or a
@@ -616,29 +511,33 @@ trait PostgresWriteOps {
 /// failure also aborts the run rather than raising at wiring. `buffer_size`
 /// bounds the unwritten backlog (`None` = unbounded). Returns a terminal stream
 /// whose value is `None`.
+///
+/// The input stays **erased** (`Burst<PyElement>`) rather than a concrete record
+/// type because the row shape is only known from `columns` — which is in scope
+/// here, inside the adapter, and not at the `typed_burst_input` seam. The
+/// marshaling happens in the `try_map` below; everything downstream of it is
+/// natively typed.
 #[pyadapter(name = postgres_write)]
-impl PostgresWriteOps for Stream<Burst<PyElement>> {
-    #[pyo3(signature = (conn_str, table, columns, buffer_size = None))]
-    fn postgres_write(
-        &self,
-        conn_str: String,
-        table: String,
-        columns: Vec<(String, String)>,
-        buffer_size: Option<usize>,
-    ) -> Result<Stream<()>> {
-        let rows: Stream<Burst<PyPgWriteRow>> = self.try_map(move |burst: &Burst<PyElement>| {
-            burst
-                .iter()
-                .map(|elem| element_to_write_row(elem, &columns))
-                .collect::<Result<Burst<PyPgWriteRow>>>()
-        });
-        PostgresSinkOps::postgres_write(
-            &rows,
-            PostgresConnection::new(conn_str),
-            &table,
-            buffer_size,
-        )
-    }
+#[pyo3(signature = (conn_str, table, columns, buffer_size = None))]
+fn write(
+    stream: &Stream<Burst<PyElement>>,
+    conn_str: String,
+    table: String,
+    columns: Vec<(String, String)>,
+    buffer_size: Option<usize>,
+) -> Result<Stream<()>> {
+    let rows: Stream<Burst<PyPgWriteRow>> = stream.try_map(move |burst: &Burst<PyElement>| {
+        burst
+            .iter()
+            .map(|elem| element_to_write_row(elem, &columns))
+            .collect::<Result<Burst<PyPgWriteRow>>>()
+    });
+    PostgresSinkOps::postgres_write(
+        &rows,
+        PostgresConnection::new(conn_str),
+        &table,
+        buffer_size,
+    )
 }
 
 /// SQL installing an `AFTER INSERT` trigger that fires `pg_notify(channel, '')`.
@@ -870,12 +769,5 @@ mod tests {
         let sql = q(NanoTime::new(1_000_000_000));
         assert!(sql.contains(r#"WHERE sub."time" >"#), "{sql}");
         assert!(!sql.contains(">="), "cursor must be strict: {sql}");
-    }
-
-    #[test]
-    fn start_secs_rejects_nonsense() {
-        assert!(secs_to_nanotime(-1.0).is_err());
-        assert!(secs_to_nanotime(f64::NAN).is_err());
-        assert_eq!(NanoTime::new(1_500_000_000), secs_to_nanotime(1.5).unwrap());
     }
 }

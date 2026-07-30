@@ -1199,7 +1199,12 @@ tests covered — not "legacy pytest passes unchanged."
   `#[pyo3(signature = …)]`** so optional args get Python defaults, and
   `PyGraph::run` now **releases the GIL** for the run — without which no
   real-time adapter source can deliver, since its worker (and every other Python
-  thread) stays blocked until `run` returns. Remaining: the other adapters.
+  thread) stays blocked until `run` returns. It also grew a **free-fn form**
+  (receiver as the first param) so a binding needs no throwaway trait and no
+  duplicated signature, and the shared run-shape helpers live in
+  `crate::adapters::common` (`historical_params` / `realtime_params` /
+  `run_mode` / `secs_to_nanotime`) for the mode-aware sources that follow.
+  Remaining: the other adapters.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

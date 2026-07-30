@@ -173,7 +173,21 @@ impl MySocketSourceOps for GraphBuilder {
 // => PyGraphBuilder.my_socket_source(addr) -> PyStream   (Trade edge-erased to PyElement)
 ```
 
-A **real** adapter needs two things beyond that shape, both supported:
+That trait form still works, but a **binding** should use the free-fn form: the
+trait exists only to give the macro a receiver, and costs a throwaway trait plus
+a second copy of every signature. Put the receiver first instead —
+`&GraphBuilder` for a source, `&Stream<T>` for a sink — and give the Python name
+separately (it must differ from the fn's own name, which the macro emits beside
+it):
+
+```rust
+#[pyadapter(name = kafka_read, source)]
+fn read(g: &GraphBuilder, brokers: String, topic: String)
+    -> anyhow::Result<Stream<Burst<KafkaRecord>>> { /* ... */ }
+// => wingfoil_next.kafka_read(graph, brokers, topic)
+```
+
+A **real** adapter needs two more things, both supported:
 
 - **Fallible wiring.** Returning `Result<Stream<T>>` (any `…::Result`) makes the
   generated function return `PyResult`, so a wiring-time rejection — a bad run
@@ -278,7 +292,7 @@ form.
 | `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
 | `#[pyop]` extensions | **stateful + two-input ops done** — `State` is any `Default`-seedable type (re-seeded per run); `In<'a> = (&A, &B)` emits a `module.name(stream, other)` fn over `wire_op2`. Remaining: 3+ inputs and `Cfg`-tuple arg names | 🟡 stateful + 2-input done |
 | `#[pygraph]` macro (wiring reuse) | expose a Rust `fn(&Stream<T>) -> Stream<U>` sub-graph as `module.name(stream)`, spliced into the caller's graph; interior runs at native `T`, only the edge erases. Single-input/output v1, over the `PyStream::typed_input`/`erased_output` seam | ✅ done |
-| `#[pyadapter]` macro (source + sink + burst) | **source, sink/transform, and burst adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. `Stream<Burst<T>>` erases to a Python `list` per tick, and on the way in a Python `list`/`tuple` rebuilds a multi-value burst (else a single-element burst) — so a burst source round-trips into a burst sink. Over the `builder`/`erase_source`/`erase_burst_source` and `typed_input`/`typed_burst_input`/`erased_output`/`erased_burst_output` seams; a sink's `Stream<()>` erases to `None`. Adapter method params must be `FromPyObject`. **Fallible wiring** (`Result<Stream<T>>` → a `PyResult` fn, wiring errors raised as Python exceptions) and **forwarded `#[pyo3(signature = …)]`** (Python defaults for optional args, with the generated receiver injected) landed with the first real adapter binding | ✅ done |
+| `#[pyadapter]` macro (source + sink + burst) | **source, sink/transform, and burst adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. `Stream<Burst<T>>` erases to a Python `list` per tick, and on the way in a Python `list`/`tuple` rebuilds a multi-value burst (else a single-element burst) — so a burst source round-trips into a burst sink. Over the `builder`/`erase_source`/`erase_burst_source` and `typed_input`/`typed_burst_input`/`erased_output`/`erased_burst_output` seams; a sink's `Stream<()>` erases to `None`. Adapter method params must be `FromPyObject`. **Fallible wiring** (`Result<Stream<T>>` → a `PyResult` fn, wiring errors raised as Python exceptions) and **forwarded `#[pyo3(signature = …)]`** (Python defaults for optional args, with the generated receiver injected), and the **free-fn form** (receiver as the first param — no throwaway trait, no duplicated signature; the impl form remains for adapters wanting a fluent Rust trait) landed with the first real adapter binding | ✅ done |
 | Per-adapter Python bindings (`crate::adapters::*`) | The `#[pyadapter]` exposure of the real `wingfoil_next::adapters::*` I/O adapters, each behind a cargo feature of the same name and registered in the `#[pymodule]` under the same `#[cfg]`. **postgres done**: `postgres_read` / `postgres_sub` / `postgres_source` / `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict` edge (`PyPgRow`) and declared-column write marshaling; unit-level marshaling tests plus a service-backed pytest leg in `postgres-next-integration.yml`. Remaining: the other adapters as they are bound | 🟡 postgres done |
 | POC: call a fixed `compiled()` graph from Python | Wire `wingfoil-next` as a path dep; expose one fixed `graph!` wiring (`ticker → count → map(i*i) → accumulate`) as `compiled_squares`/`interpreted_squares` (both from a single wiring so they can't drift). Proved **compiled == interpreted output from Python** across cycle- and duration-bound runs; GIL released for the run; no `.unwrap()` in binding code. Honest limit: **one fixed, compile-time graph** — not general Python-defined-graph codegen (timing ~neutral at that ticker-bound size; a dispatch-heavy graph shows `compiled()`'s win). Consistent with the non-goal below (`compiled()`/`nested()` expose as single island nodes). Revisit against the post-refactor `compiled()` API. | ⬜ (was #506) |
 | Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |

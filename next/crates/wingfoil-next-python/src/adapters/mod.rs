@@ -12,5 +12,9 @@
 //! `list`), while the adapter's interior stays the concrete Rust record type,
 //! exactly as [`crate::graph`] describes.
 
+// Compiled whenever any adapter binding is, since that is its only consumer.
+#[cfg(feature = "postgres")]
+pub mod common;
+
 #[cfg(feature = "postgres")]
 pub mod postgres;

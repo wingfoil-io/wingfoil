@@ -859,12 +859,19 @@ the legacy `wingfoil-python`; see `next/docs/python-interop.md`). A next adapter
 reaches Python through the `#[pyadapter]` proc macro — values erase to
 `PyElement` at the boundary, the adapter's interior stays natively typed:
 
+Write the binding as **free functions**, receiver first — not as a trait. The
+`impl Trait for GraphBuilder` form also works, but its trait exists only to give
+the macro a receiver and costs a throwaway trait plus a second copy of every
+signature; a binding never calls itself fluently from Rust. `name` must differ
+from the fn's own name (the macro emits a `#[pyfunction]` of that name beside
+it), which is why the fns below are short — the module is already `$ARGUMENTS`.
+
 - **Source** — `#[pyadapter(name = $ARGUMENTS_read, source)]` on
-  `impl <Name>SourceOps for GraphBuilder { fn $ARGUMENTS_read(&self, args…) ->
-  Stream<T> }` emits `wingfoil_next.$ARGUMENTS_read(graph, args…) -> Stream`.
+  `fn read(g: &GraphBuilder, args…) -> Result<Stream<T>>` emits
+  `wingfoil_next.$ARGUMENTS_read(graph, args…) -> Stream`.
 - **Sink** — `#[pyadapter(name = $ARGUMENTS_write)]` (no `source` marker) on
-  `impl <Name>SinkOps for Stream<T> { fn $ARGUMENTS_write(&self, args…) ->
-  Stream<()> }` emits `wingfoil_next.$ARGUMENTS_write(stream, args…)`.
+  `fn write(stream: &Stream<T>, args…) -> Result<Stream<()>>` emits
+  `wingfoil_next.$ARGUMENTS_write(stream, args…)`.
 
 The `ramp_source` (source) and `list_sink` (sink) demos in `src/python.rs` are
 the minimal templates, and `tests/plugin_seam.rs` shows the same from an
@@ -885,12 +892,18 @@ system library at build time must stay opt-in or it breaks the wheel for
 everyone.
 
 **Fallible wiring.** Real adapters validate at wiring (run window, run mode,
-config), so the method returns `Result<Stream<T>>`; `#[pyadapter]` then generates
-a `PyResult`-returning function and the error surfaces as a Python exception.
+config), so the fn returns `Result<Stream<T>>`; `#[pyadapter]` then generates a
+`PyResult`-returning function and the error surfaces as a Python exception.
 
-**Optional arguments.** Put `#[pyo3(signature = (…))]` on the adapter method
-over *your own* params — the macro forwards it and injects the generated
+**Optional arguments.** Put `#[pyo3(signature = (…))]` on the adapter fn over
+*your own* params — the macro forwards it and injects the generated
 `graph`/`stream` receiver.
+
+**Shared run-shape helpers.** `crate::adapters::common` already carries what
+every mode-aware source binding needs: `historical_params(start_nanos,
+duration_nanos)`, `realtime_params()`, `run_mode(realtime)` and
+`secs_to_nanotime(secs)`. Use them rather than rebuilding `RunParams` inline; add
+to that module when you find the next repeated conversion.
 
 **Dynamic payloads.** Where a Rust caller writes a record struct, Python has
 none — supply a dynamic stand-in. Reads decode into a plain-Rust intermediate
