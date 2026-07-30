@@ -38,13 +38,13 @@
 //! (or the object form) directly.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Delimiter, Group, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    Error, FnArg, GenericArgument, Ident, ImplItem, ItemFn, ItemImpl, Pat, PathArguments,
-    ReturnType, Token, Type, parse_macro_input,
+    Attribute, Error, FnArg, GenericArgument, Ident, ImplItem, ItemFn, ItemImpl, Meta, Pat,
+    PathArguments, ReturnType, Token, Type, parse_macro_input, parse_quote,
 };
 
 /// Parsed `#[pyop(name = <fn>, [arg = <cfg param>])]`.
@@ -261,11 +261,26 @@ impl Parse for PyAdapterArgs {
 /// `Stream<Burst<T>>` may appear as a source's return, a sink's `Self`, or a
 /// transform's output. Adapter method params become `#[pyfunction]` params, so
 /// they must be `FromPyObject`.
+///
+/// **Fallible wiring** is supported: a method returning `Result<Stream<T>>`
+/// (any path ending in `Result`, so `anyhow::Result<..>` too) generates a
+/// `PyResult`-returning `#[pyfunction]`, mapping the wiring error to a Python
+/// exception. That is the usual shape for a real adapter, which validates its
+/// run window / run mode / config at wiring time.
 #[proc_macro_attribute]
 pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PyAdapterArgs);
-    let imp = parse_macro_input!(item as ItemImpl);
-    match expand_pyadapter(&args, &imp) {
+    let mut imp = parse_macro_input!(item as ItemImpl);
+    let expanded = expand_pyadapter(&args, &imp);
+    // `#[pyo3(..)]` attributes on the adapter method are *for the generated
+    // `#[pyfunction]`* (they were moved onto it above) — strip them from the
+    // re-emitted impl, where they would be an unknown attribute.
+    for item in &mut imp.items {
+        if let ImplItem::Fn(f) = item {
+            f.attrs.retain(|a| !a.path().is_ident("pyo3"));
+        }
+    }
+    match expanded {
         Ok(extra) => quote! { #imp #extra }.into(),
         Err(e) => {
             let e = e.to_compile_error();
@@ -293,6 +308,16 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
         ));
     }
     let method_name = &method.sig.ident;
+    // `#[pyo3(..)]` attributes written on the adapter method are forwarded to
+    // the generated `#[pyfunction]` — that is how an adapter declares Python
+    // defaults for its optional args, e.g.
+    // `#[pyo3(signature = (conn, query, chunk_secs = 3600, buffer_size = None))]`.
+    // They are stripped from the re-emitted impl by the caller.
+    let raw_py_attrs: Vec<&Attribute> = method
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("pyo3"))
+        .collect();
 
     // Non-receiver params: (name, type), forwarded to the method verbatim.
     let mut param_decls = Vec::new();
@@ -322,12 +347,42 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
         ReturnType::Default => {
             return Err(Error::new(
                 method.sig.span(),
-                "#[pyadapter] adapter method must return `Stream<T>`",
+                "#[pyadapter] adapter method must return `Stream<T>` or `Result<Stream<T>>`",
             ));
         }
     };
-    let out_inner = stream_inner(out_ty)?;
+    // A real adapter's wiring is usually **fallible** (`postgres_read` validates
+    // the run window, `postgres_sub` rejects a historical run, a sink quotes and
+    // checks its table name), so the method may return `Result<Stream<T>>`. When
+    // it does, the generated `#[pyfunction]` returns `PyResult<Stream>` and the
+    // wiring error surfaces as a Python exception instead of aborting the run;
+    // an infallible `Stream<T>` keeps the plain return.
+    let (out_ty, fallible) = match result_inner(out_ty) {
+        Some(inner) => (inner, true),
+        None => (out_ty.clone(), false),
+    };
+    let out_inner = stream_inner(&out_ty)?;
     let py_name = &args.name;
+
+    // The generated function's return type and how the adapter call is spelled:
+    // a fallible method's error maps to a Python exception at the seam.
+    let (ret_ty, unwrap) = if fallible {
+        (
+            quote! { pyo3::PyResult<::wingfoil_next_python::Stream> },
+            quote! { .map_err(::wingfoil_next_python::to_pyerr)? },
+        )
+    } else {
+        (quote! { ::wingfoil_next_python::Stream }, quote! {})
+    };
+    // `Stream::from(..)`, wrapped in `Ok(..)` when the signature is fallible.
+    let wrap_ret = |expr: TokenStream2| {
+        let built = quote! { ::wingfoil_next_python::Stream::from(#expr) };
+        if fallible {
+            quote! { Ok(#built) }
+        } else {
+            built
+        }
+    };
 
     if args.is_source {
         // Source: `impl Trait for GraphBuilder { fn m(&self, args…) -> Stream<T>
@@ -337,15 +392,24 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
             Some(t) => quote! { __obj.erase_burst_source::<#t>(__typed) },
             None => quote! { __obj.erase_source::<#out_inner>(__typed) },
         };
+        // The generated fn takes the graph as its first param, so a forwarded
+        // `signature` — written by the author over the *adapter method's* params
+        // — gains it too.
+        let py_attrs = forward_pyo3_attrs(&raw_py_attrs, &Ident::new("graph", py_name.span()));
+        let body = wrap_ret(erase);
         Ok(quote! {
             #[pyo3::pyfunction]
-            fn #py_name(
+            // An adapter's knobs plus the generated receiver routinely exceed
+            // clippy's threshold, and the author cannot annotate generated code.
+            #[allow(clippy::too_many_arguments)]
+            #(#py_attrs)*
+            pub fn #py_name(
                 graph: pyo3::PyRef<'_, ::wingfoil_next_python::Graph>,
                 #(#param_decls),*
-            ) -> ::wingfoil_next_python::Stream {
+            ) -> #ret_ty {
                 let __obj = graph.object();
-                let __typed = __obj.builder().#method_name(#(#param_names),*);
-                ::wingfoil_next_python::Stream::from(#erase)
+                let __typed = __obj.builder().#method_name(#(#param_names),*) #unwrap;
+                #body
             }
         })
     } else {
@@ -364,19 +428,93 @@ fn expand_pyadapter(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<TokenSt
             Some(u) => quote! { __obj.erased_burst_output::<#u>(__out) },
             None => quote! { __obj.erased_output::<#out_inner>(__out) },
         };
+        // As above, but the sink/transform form's leading param is the stream.
+        let py_attrs = forward_pyo3_attrs(&raw_py_attrs, &Ident::new("stream", py_name.span()));
+        let body = wrap_ret(erase);
         Ok(quote! {
             #[pyo3::pyfunction]
-            fn #py_name(
+            // An adapter's knobs plus the generated receiver routinely exceed
+            // clippy's threshold, and the author cannot annotate generated code.
+            #[allow(clippy::too_many_arguments)]
+            #(#py_attrs)*
+            pub fn #py_name(
                 stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
                 #(#param_decls),*
-            ) -> ::wingfoil_next_python::Stream {
+            ) -> #ret_ty {
                 let __obj = stream.object();
                 let __typed = #typed_in;
-                let __out = __typed.#method_name(#(#param_names),*);
-                ::wingfoil_next_python::Stream::from(#erase)
+                let __out = __typed.#method_name(#(#param_names),*) #unwrap;
+                #body
             }
         })
     }
+}
+
+/// Forward the adapter method's `#[pyo3(..)]` attributes to the generated
+/// `#[pyfunction]`, prepending `receiver` to any `signature = (..)` list.
+///
+/// The author writes the signature over the *adapter method's* own params
+/// (`#[pyo3(signature = (conn_str, chunk_secs = 3600))]`); the generated function
+/// additionally takes the graph/stream as its first param, and pyo3 requires a
+/// signature to name every param. Injecting it here keeps the generated receiver
+/// out of the author's hands.
+fn forward_pyo3_attrs(attrs: &[&Attribute], receiver: &Ident) -> Vec<Attribute> {
+    attrs
+        .iter()
+        .map(|attr| {
+            let Meta::List(list) = &attr.meta else {
+                return (*attr).clone();
+            };
+            let mut out = TokenStream2::new();
+            // Track `signature` `=` `( .. )` so only that group is rewritten.
+            let (mut saw_signature, mut saw_eq) = (false, false);
+            for tt in list.tokens.clone() {
+                match &tt {
+                    TokenTree::Ident(ident) if ident == "signature" => {
+                        saw_signature = true;
+                        saw_eq = false;
+                        out.extend([tt]);
+                    }
+                    TokenTree::Punct(p) if saw_signature && p.as_char() == '=' => {
+                        saw_eq = true;
+                        out.extend([tt]);
+                    }
+                    TokenTree::Group(g)
+                        if saw_signature && saw_eq && g.delimiter() == Delimiter::Parenthesis =>
+                    {
+                        let inner = g.stream();
+                        let merged = if inner.is_empty() {
+                            quote! { #receiver }
+                        } else {
+                            quote! { #receiver, #inner }
+                        };
+                        out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, merged))]);
+                        saw_signature = false;
+                        saw_eq = false;
+                    }
+                    _ => out.extend([tt]),
+                }
+            }
+            let path = &list.path;
+            parse_quote!(#[#path(#out)])
+        })
+        .collect()
+}
+
+/// If `ty` is `Result<X>` / `anyhow::Result<X>` / `Result<X, E>` (last path
+/// segment literally `Result`), the `X`; else `None`. Distinguishes a fallible
+/// adapter wiring fn — the common shape for real adapters, which validate their
+/// config and run mode at wiring — from an infallible one.
+fn result_inner(ty: &Type) -> Option<Type> {
+    if let Type::Path(p) = ty
+        && let Some(seg) = p.path.segments.last()
+        && seg.ident == "Result"
+        && let PathArguments::AngleBracketed(a) = &seg.arguments
+        && let Some(GenericArgument::Type(t)) = a.args.first()
+    {
+        return Some(t.clone());
+    }
+    None
 }
 
 /// If `ty` is `Burst<X>` (last path segment literally `Burst`), the `X`; else

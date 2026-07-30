@@ -244,6 +244,23 @@ macro_rules! try_into_scalar {
 }
 try_into_scalar!(f64, i64, bool, String);
 
+/// The **identity** edge conversion: extracting a `PyElement` from a
+/// `PyElement` is a clone.
+///
+/// This is what lets an adapter whose payload is inherently *dynamic* — a
+/// PostgreSQL row written from an arbitrary Python `dict`, say — stay on the
+/// erased type at the seam and do its own marshaling inside the adapter (where
+/// the column spec is in scope), while still going through the standard
+/// `#[pyadapter]` `typed_input` / `typed_burst_input` path. Without it such an
+/// adapter would need a hand-written `#[pyfunction]`.
+impl TryFrom<&PyElement> for PyElement {
+    type Error = anyhow::Error;
+
+    fn try_from(el: &PyElement) -> Result<Self> {
+        Ok(el.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

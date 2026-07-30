@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use pyo3::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::prelude::Stream;
 use wingfoil_next_python::{
     Activation, Ctx, Op, PyElement, PyGraph, Tick, pyadapter, pygraph, pyop,
 };
@@ -344,4 +345,88 @@ fn custom_op_error_aborts_run() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("odd value"));
     let _ = checked;
+}
+
+// A **fallible** source `#[pyadapter]` with **Python defaults** — the shape
+// every real IO adapter has: its wiring validates config and can fail, and most
+// of its knobs are optional. `Result<Stream<T>>` makes the generated
+// `#[pyfunction]` return `PyResult`, and the `#[pyo3(signature = ..)]` written
+// over the *adapter method's* params is forwarded to it with the generated
+// `graph` receiver injected.
+trait CheckedRampOps {
+    fn checked_ramp(&self, start: f64, step: f64) -> anyhow::Result<Stream<f64>>;
+}
+
+#[pyadapter(name = checked_ramp, source)]
+impl CheckedRampOps for wingfoil_next::prelude::GraphBuilder {
+    #[pyo3(signature = (start, step = 1.0))]
+    fn checked_ramp(&self, start: f64, step: f64) -> anyhow::Result<Stream<f64>> {
+        use wingfoil_next::prelude::{SourceOps, StreamOps};
+        if step <= 0.0 {
+            anyhow::bail!("checked_ramp: step must be positive, got {step}");
+        }
+        Ok(self
+            .ticker(Duration::from_nanos(100))
+            .count()
+            .map(move |n: &u64| start + step * ((*n - 1) as f64)))
+    }
+}
+
+// The fallible **sink** shape, likewise: a wiring-time check plus an optional arg.
+trait CheckedSinkOps {
+    fn checked_sink(&self, target: Py<PyAny>, limit: Option<usize>) -> anyhow::Result<Stream<()>>;
+}
+
+#[pyadapter(name = checked_sink)]
+impl CheckedSinkOps for Stream<f64> {
+    #[pyo3(signature = (target, limit = None))]
+    fn checked_sink(&self, target: Py<PyAny>, limit: Option<usize>) -> anyhow::Result<Stream<()>> {
+        use wingfoil_next::prelude::StreamOps;
+        if limit == Some(0) {
+            anyhow::bail!("checked_sink: limit must be non-zero");
+        }
+        Ok(self.for_each(move |v: &f64| {
+            Python::attach(|py| {
+                target
+                    .bind(py)
+                    .call_method1("append", (*v,))
+                    .map_err(|err| anyhow::anyhow!("checked_sink append raised: {err}"))?;
+                Ok(())
+            })
+        }))
+    }
+}
+
+#[test]
+fn fallible_pyadapter_generates_pyresult_functions() {
+    // Compile proof: both generated functions exist for `Result`-returning
+    // adapter methods carrying a forwarded `#[pyo3(signature = ..)]`.
+    let _source = checked_ramp;
+    let _sink = checked_sink;
+}
+
+#[test]
+fn fallible_pyadapter_wiring_succeeds_and_fails_as_written() {
+    let g = PyGraph::new();
+    // The happy path wires and runs like any other source.
+    let ok = g
+        .builder()
+        .checked_ramp(10.0, 5.0)
+        .expect("positive step wires");
+    let erased = g.erase_source::<f64>(ok);
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let v: f64 = (&erased.value()).try_into().unwrap();
+    assert_eq!(20.0, v);
+
+    // The rejected config is a *wiring* error — what the generated
+    // `#[pyfunction]` turns into a Python exception.
+    let err = match g.builder().checked_ramp(10.0, 0.0) {
+        Ok(_) => panic!("a non-positive step must be rejected at wiring"),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:#}").contains("step must be positive"),
+        "{err:#}"
+    );
 }

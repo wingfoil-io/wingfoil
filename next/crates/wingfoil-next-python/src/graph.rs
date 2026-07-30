@@ -40,6 +40,25 @@ use crate::PyElement;
 /// [`PyStream`] wired from it so `value()` works on whichever you kept.
 type RunnerSlot = Rc<RefCell<Option<Runner>>>;
 
+/// A raw pointer marked `Send` purely to satisfy the bound on
+/// [`Python::detach`], which requires a `Send` closure even though it runs that
+/// closure in place on the calling thread. See the safety note in
+/// [`PyGraph::run`], the only user.
+struct SendPtr<T>(*const T);
+
+impl<T> SendPtr<T> {
+    /// The wrapped pointer. An accessor rather than a field read because
+    /// edition-2024 closures capture disjoint *fields*: reading `.0` directly
+    /// would capture the bare (non-`Send`) pointer instead of this wrapper.
+    fn get(&self) -> *const T {
+        self.0
+    }
+}
+
+// SAFETY: the pointer is never dereferenced on, or sent to, another thread —
+// `detach` releases the GIL around an in-place call. See `PyGraph::run`.
+unsafe impl<T> Send for SendPtr<T> {}
+
 /// Box a `(time, value)` pair into a Python `(nanos, value)` tuple element —
 /// the edge conversion shared by `with_time` and `collect` (nanoseconds as an
 /// int).
@@ -153,14 +172,38 @@ impl PyGraph {
     /// to its wiring-time state so runs are independent (engine reset hook). A
     /// graph with single-run sources (`external`/`poll`/`channel`) errors on the
     /// second run, surfaced from the engine.
+    ///
+    /// **The GIL is released for the duration of the run** (re-acquired per
+    /// Python callback via `Python::attach`). Without that, a real-time adapter
+    /// source could not deliver — its worker thread, and every other Python
+    /// thread, would be blocked until `run` returned, so a live tail would only
+    /// ever see rows that already existed when it started. This mirrors legacy
+    /// `wingfoil-python`, whose `run` releases the GIL for the same reason.
     pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
-        let mut slot = self.runner.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(self.builder.build());
+        // Build outside the detached section: construction touches no Python.
+        {
+            let mut slot = self.runner.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(self.builder.build());
+            }
         }
-        slot.as_mut()
-            .expect("runner set above")
-            .run(run_mode, run_for)
+        let runner = SendPtr(Rc::as_ptr(&self.runner));
+        Python::attach(|py| {
+            py.detach(move || {
+                // SAFETY: `detach` runs its closure **in place on this thread** —
+                // it only releases the GIL for the closure's duration, it does
+                // not move the work elsewhere. Its `Send` bound is therefore
+                // conservative, and the pointee is kept alive for the whole call
+                // by `self`, which outlives it. Nothing else can reach the slot:
+                // `PyGraph` is `Rc`-based and its pyclass is `unsendable`, so it
+                // is pinned to this thread.
+                let slot = unsafe { &*runner.get() };
+                slot.borrow_mut()
+                    .as_mut()
+                    .expect("invariant: runner built above")
+                    .run(run_mode, run_for)
+            })
+        })
     }
 
     /// Wire a **Python-defined custom node** — a Python object acting as a graph
