@@ -872,6 +872,31 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `tests/augurs_adapter.rs`; example `examples/augurs_adapter.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
+   ✅ **fluvio** *(done)*: a streaming topic-partition consume source
+   (`fluvio_sub`) on `produce_async` and a topic-produce sink
+   (`FluvioSinkOps::fluvio_pub`) on `consume_async_bursts`, behind the `fluvio`
+   feature (`fluvio` 0.50.1, mirroring classic). Unlike aeron/iceoryx2 it is an
+   ordinary async network client, so it needs no native toolchain and lands
+   first of the three. Parity port of the classic adapter's tests as
+   `tests/fluvio_integration.rs` (testcontainers, `infinyon/fluvio:0.18.1` with
+   host networking + the SC/SPU registration dance, gated on
+   `fluvio-integration-test`; `fluvio-next-integration.yml`) plus no-service
+   tests in `tests/fluvio_adapter.rs`, and the classic round-trip example ported
+   to `examples/fluvio/`. **Deviations:** all classic capabilities preserved
+   (offset-selected partition consumption, keyed/keyless records, per-burst flush
+   batching, the single-record convenience sink); the graph owns the tokio
+   runtime (no `&Handle`; register A5), `fluvio_pub` connects + creates its
+   producer lazily on the first burst inside `consume_async_bursts` (register
+   A1/A4), and `fluvio_sub` takes a `RunMode` and **rejects
+   `RunMode::HistoricalFrom` at wiring** (a live, unbounded consumer that tails
+   forever after the retained records, with no historical timeline to replay;
+   register B2, ratified — classic technically permitted a wall-clock historical
+   run). The sink is the `FluvioSinkOps` extension trait (not the classic free-fn
+   + `FluvioPubOperators` pair) and takes a `buffer_size` for the
+   `consume_async_bursts` bound; a negative `start_offset` is rejected at wiring
+   rather than deferred into the producer future. The canonical deviation list is
+   the adapter's `# Deviations from classic` module-doc block plus
+   [`deviation-register.md`](./deviation-register.md).
 
    ✅ **aeron** *(done)*: the Aeron IPC/UDP low-latency message transport, behind
    the `aeron` (rusteron-client, C++ FFI — production) or `aeron-rs` (pure Rust —

@@ -24,6 +24,10 @@
 //!   topic-produce sink (`KafkaSinkOps::kafka_pub`) for Apache Kafka, behind the
 //!   `kafka` feature (built on the async `produce_async` / `consume_async`
 //!   ergonomics).
+//! - [`fluvio`] — a streaming topic-partition consume source (`fluvio_sub`) and
+//!   a topic-produce sink (`FluvioSinkOps::fluvio_pub`) for Fluvio clusters,
+//!   behind the `fluvio` feature (built on the async `produce_async` /
+//!   `consume_async_bursts` ergonomics). The source is realtime-only.
 //! - [`web`] — bidirectional WebSocket streaming to browsers: an axum HTTP/WS
 //!   server plus a publish sink (`WebSinkOps::web_pub` /
 //!   `WebBurstSinkOps::web_pub_bursts`) and a browser-input source (`web_sub`),
@@ -94,6 +98,8 @@ pub mod csv;
 pub mod etcd;
 #[cfg(feature = "fix")]
 pub mod fix;
+#[cfg(feature = "fluvio")]
+pub mod fluvio;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "kdb")]

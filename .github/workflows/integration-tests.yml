@@ -90,6 +90,11 @@ jobs:
     uses: ./.github/workflows/fix-next-integration.yml
     secrets: inherit
 
+  fluvio-next-integration:
+    name: Fluvio (next) Integration Tests
+    uses: ./.github/workflows/fluvio-next-integration.yml
+    secrets: inherit
+
   iceoryx2-integration:
     name: iceoryx2 Integration Tests
     uses: ./.github/workflows/iceoryx2-integration.yml
