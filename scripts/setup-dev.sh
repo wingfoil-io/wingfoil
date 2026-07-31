@@ -16,7 +16,11 @@ echo "protoc not found, installing..."
 case "$(uname -s)" in
     Linux*)
         if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update
+            # A third-party PPA that has gone unsigned/403 makes `update` exit
+            # non-zero even though the archives we need refreshed fine, and
+            # `set -e` would abort before we ever try the install. Let the
+            # install itself be the thing that decides whether we have protoc.
+            sudo apt-get update || echo "apt-get update reported errors, continuing"
             sudo apt-get install -y protobuf-compiler
         elif command -v dnf >/dev/null 2>&1; then
             sudo dnf install -y protobuf-compiler

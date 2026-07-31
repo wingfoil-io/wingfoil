@@ -46,6 +46,19 @@ serde_json = "1.0"
 thiserror = "2.0.11"
 tracing = "0.1"
 
+# Debuginfo is over half the bulk of target/ (stripping the 40 largest rlibs of
+# a dev build takes them from 810MB to 378MB), and it is not paid for once — it
+# is copied into every statically-linked binary. This workspace has ~69 example
+# and bench targets, so a `--all-targets` build carries ~69 copies of the whole
+# dependency graph's debuginfo and lands around 23GB.
+#
+# We never single-step into a dependency, so drop their debuginfo and keep our
+# own at full fidelity: workspace members are unaffected by a `package."*"`
+# override, so backtraces and debugger stepping through wingfoil code are
+# exactly as before. Only frames inside third-party crates lose line numbers.
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 debug = true            # Include debug info for profiling (perf, hotspot)
 #opt-level = 3       # Options: 0, 1, 2, 3, "s" (size), "z" (min size), 3 is max speed

@@ -96,9 +96,54 @@ cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2
 cargo fmt --all -- --check
 ```
 
-`cargo lint-all` requires `protoc` on the build machine (one of its
-transitive dependencies builds proto files). On Debian/Ubuntu:
-`sudo apt-get install -y protobuf-compiler`.
+`protoc` is required on the build machine (a transitive dependency builds proto
+files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
+`scripts/setup-dev.sh`. Note this is needed for a *plain* `cargo build
+--workspace`, not just `lint-all` — see the feature-unification note below.
+
+### Disk space
+
+Builds here are big enough to exhaust a dev sandbox, so it is worth knowing
+where the space goes. `scripts/disk.sh` reports it and reclaims it:
+
+```bash
+scripts/disk.sh          # what is using space
+scripts/disk.sh light    # drop examples/benches/incremental, keep deps/
+scripts/disk.sh deep     # also remove every target/ dir in the tree
+```
+
+Reach for `light` mid-session: it keeps `target/*/deps`, so the next build
+relinks instead of recompiling 700+ crates.
+
+Three things make the tree large, and they compound:
+
+- **There is no cheap build.** `wingfoil-python` enables 13 features on
+  `wingfoil`, and cargo unifies features across a `--workspace` build, so plain
+  `cargo build --workspace` already compiles nearly the whole `full` tree.
+  `cargo lint` and `cargo lint-all` differ only by aeron and iceoryx2.
+- **`lint-all` cannot reuse `lint`'s work.** A different feature set means a
+  different metadata hash, so the two pre-commit lints build two full artifact
+  sets back to back. If space is tight, `scripts/disk.sh light` between them.
+- **`--all-targets` links ~69 example and bench binaries**, each statically
+  carrying the entire dependency graph.
+
+That last one is why `[profile.dev.package."*"] debug = false` is set in the
+root `Cargo.toml`: debuginfo was over half the bulk and got copied into every
+one of those binaries. It takes a single example binary from 260MB to 64MB, and
+a full `--all-targets` build (79 binaries) measures **9.2GB** with it — against
+roughly 17GB without, derived from the same per-artifact ratios. The override
+applies to dependencies only — cargo excludes workspace members from
+`package."*"` — so backtraces and debugger stepping through wingfoil code are
+unaffected; only frames inside third-party crates lose line numbers.
+
+`target/debug/incremental` is another 2.6GB of that 9.2GB. It pays for itself
+across edit-rebuild cycles, but `CARGO_INCREMENTAL=0` (what CI sets) reclaims it
+outright if you are only doing one-shot builds.
+
+Also note the git hooks installed by `.cargo-husky`: `pre-commit` runs
+`cargo fmt --all` and a full `cargo clippy --workspace --all-targets`, and
+`pre-push` runs `cargo build` plus `cargo test` across the workspace. Every
+commit and push rebuilds, so expect commits to take minutes, not seconds.
 
 **Toolchain gap (clippy):** CI runs clippy on the current **stable** rustc,
 which can be *newer* than the toolchain in a dev sandbox. Newer clippy adds
