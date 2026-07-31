@@ -236,3 +236,88 @@ fn source_at_start_historical_replays_timestamped_sends() {
         "deferred historical sends replay grouped, on the graph clock",
     );
 }
+
+/// `register_op3` — the three-active-input registration primitive, the general
+/// form of the `Join3`-specialised `trimap`. All three upstreams trigger, all
+/// three are read by reference, and `cfg`/`state` are engine-owned.
+#[test]
+fn register_op3_reads_three_actives_and_owns_its_state() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let a = counter.map(|n: &u64| *n as f64);
+    let b = counter.map(|n: &u64| *n as f64 * 2.0);
+    let c = counter.map(|n: &u64| *n as f64 * 3.0);
+
+    let (b_handle, c_handle) = (b.handle(), c.handle());
+    // cfg is the weight; state accumulates across cycles, proving both are
+    // engine-owned rather than captured.
+    let blended: Stream<f64> = a.wire(move |bld, h| {
+        bld.register_op3(
+            h,
+            b_handle,
+            c_handle,
+            "blend3",
+            Activation::NONE,
+            10.0_f64,
+            || 0.0_f64,
+            |weight: &mut f64, total: &mut f64, x: &f64, y: &f64, z: &f64, _ctx| {
+                *total += x + y + z;
+                Ok(Tick::Value(*total * *weight))
+            },
+        )
+    });
+
+    let out = blended.with_time().accumulate();
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    // n=1: 1+2+3=6; n=2: +12 -> 18; n=3: +18 -> 36. Weighted by 10.
+    assert_eq!(
+        vec![
+            (NanoTime::ZERO, 60.0),
+            (NanoTime::new(100), 180.0),
+            (NanoTime::new(200), 360.0),
+        ],
+        runner.value(&out)
+    );
+}
+
+/// The `state_init` handed to `register_op3` re-seeds on a re-run, so a second
+/// `run()` replays from a clean accumulator rather than continuing the first.
+#[test]
+fn register_op3_state_re_seeds_between_runs() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let a = counter.map(|n: &u64| *n as f64);
+    let (b, c) = (a.clone(), a.clone());
+
+    let (b_handle, c_handle) = (b.handle(), c.handle());
+    let summed: Stream<f64> = a.wire(move |bld, h| {
+        bld.register_op3(
+            h,
+            b_handle,
+            c_handle,
+            "sum3",
+            Activation::NONE,
+            (),
+            || 0.0_f64,
+            |_cfg, total: &mut f64, x: &f64, y: &f64, z: &f64, _ctx| {
+                *total += x + y + z;
+                Ok(Tick::Value(*total))
+            },
+        )
+    });
+
+    let mut runner = g.build();
+    let bounds = (RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2));
+    runner.run(bounds.0, bounds.1).unwrap();
+    let first = runner.value(&summed);
+    runner.run(bounds.0, bounds.1).unwrap();
+    assert_eq!(
+        first,
+        runner.value(&summed),
+        "re-run must not continue state"
+    );
+}

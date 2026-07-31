@@ -1169,6 +1169,76 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// Register a **three-active-input** op — the `join3` shape: all three
+    /// upstreams read by reference, all triggering, one output slot,
+    /// engine-owned `cfg`+`state`, no lifecycle hooks. The three-input
+    /// counterpart to [`register_op2`](Self::register_op2), and the general
+    /// form of [`trimap`](Self::trimap) (which is specialised to `Join3`'s
+    /// `Cfg = F, State = ()`).
+    // As `register_op2`: over clippy's limit because it is a registration
+    // primitive whose arguments mirror the smaller arities plus one handle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_op3<A, B, C, Cfg, S, Out, Step, SInit>(
+        &mut self,
+        a: Handle<A>,
+        b: Handle<B>,
+        c: Handle<C>,
+        label: &'static str,
+        activation: Activation,
+        cfg: Cfg,
+        state_init: SInit,
+        mut step: Step,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        Cfg: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let c_slot = self.slot(c);
+        let out = self.new_slot(Out::default());
+        let cs = Rc::new(RefCell::new((cfg, state_init())));
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
+        self.push_node(
+            vec![a.idx, b.idx, c.idx],
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                let vc = c_slot.borrow();
+                match step(cfg, state, &va, &vb, &vc, &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop((va, vb, vc));
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out_reset.borrow_mut() = Out::default();
+        }));
+        self.make_handle(idx)
+    }
+
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
         let idx = self.nodes.len();
         let out = self.new_slot(());

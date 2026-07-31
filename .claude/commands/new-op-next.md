@@ -259,7 +259,7 @@ Pick the lightest tool that fits:
       fn $ARGUMENTS(cfg: f64): f64 => f64 = |cfg, _state, a, _ctx| Ok(Tick::Value(/* … */))
   }
   ```
-- **Stateless / stateful / two-input concrete op** → the `#[pyop]` **proc**
+- **Any concrete one-, two- or three-input op** → the `#[pyop]` **proc**
   macro (`wingfoil-next-python-macros`), placed alongside `#[op]` on the `Op`
   impl; it reads the associated types + `cycle` and emits the `#[pyfunction]`:
   ```rust
@@ -267,11 +267,22 @@ Pick the lightest tool that fits:
   #[pyop(name = $ARGUMENTS)]
   impl Op for MyOp { /* … */ }
   ```
-  v1 covers stateless single-input, plus stateful and two-input shapes (`State`
-  is any `Default`-seedable type, re-seeded per run; `In<'a> = (&A, &B)` emits a
-  two-stream `module.name(stream, other)`). Remaining gaps (3+ inputs,
-  `Cfg`-tuple arg names) drop to `PyStream::wire_op1` directly — the public
-  seam both macros build on.
+  Covers stateless and stateful ops (`State` is any `Default`-seedable type,
+  re-seeded per run) at one, two or three inputs — `In<'a> = (&A, &B)` emits
+  `module.name(stream, other)`, `(&A, &B, &C)` emits
+  `module.name(stream, second, third)`. All inputs are active; a passive edge
+  still needs a hand-written method.
+
+  A tuple `Cfg` gets one named Python parameter per element:
+  ```rust
+  #[pyop(name = zscore, arg = (window, decay))]   // Cfg = (usize, f64)
+  ```
+  which reads as `zscore(stream, window, decay)` instead of taking a tuple.
+
+  **Arity 4+ is not a macro gap — it is a missing primitive.** Add
+  `Builder::register_op<n>` (mirror `register_op3`, which mirrors
+  `register_op2` line for line) and `PyStream::wire_op<n>`, then the macro
+  extends by one arm. Until then such ops use the object form directly.
 
 Then:
 

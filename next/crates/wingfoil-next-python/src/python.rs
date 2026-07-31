@@ -394,6 +394,53 @@ impl Op for WeightedAdd {
     }
 }
 
+// `blend3` — a **three-input** `#[pyop]` (`In<'a> = (&'a f64, &'a f64, &'a f64)`,
+// the `join3` shape): proves the proc macro handles three inputs and emits a
+// `module.blend3(stream, second, third)` function over the `wire_op3` seam.
+struct Blend3;
+
+#[pyop(name = blend3)]
+impl Op for Blend3 {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 + input.1 * 10.0 + input.2 * 100.0))
+    }
+}
+
+// `clamped_scale` — a **tuple-`Cfg`** `#[pyop]`: `arg = (factor, ceiling)` gives
+// each element of `Cfg = (f64, f64)` its own named Python parameter, so the call
+// reads `clamped_scale(stream, factor, ceiling)` rather than passing a tuple.
+struct ClampedScale;
+
+#[pyop(name = clamped_scale, arg = (factor, ceiling))]
+impl Op for ClampedScale {
+    type Cfg = (f64, f64);
+    type State = ();
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut (f64, f64),
+        _state: &mut (),
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        let (factor, ceiling) = *cfg;
+        Ok(Tick::Value((input.0 * factor).min(ceiling)))
+    }
+}
+
 // `doubled_running_total` — a **`#[pygraph]`**: a whole Rust-authored sub-graph
 // (double each value, then cumulative-sum) exposed as one Python callable that
 // splices its nodes into the caller's graph. The interior runs at native `f64`;
@@ -530,6 +577,8 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(square, m)?)?;
     m.add_function(wrap_pyfunction!(running_total, m)?)?;
     m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
+    m.add_function(wrap_pyfunction!(blend3, m)?)?;
+    m.add_function(wrap_pyfunction!(clamped_scale, m)?)?;
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
