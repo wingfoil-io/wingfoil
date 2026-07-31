@@ -520,8 +520,10 @@ fn parse_log_level(level: &str) -> PyResult<log::Level> {
 }
 
 /// The `wingfoil_next` Python module.
+/// The compiled extension, imported as the private `wingfoil_next._wingfoil`;
+/// the `wingfoil_next` package under `python/` re-exports it.
 #[pymodule]
-fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
     m.add_function(wrap_pyfunction!(scale, m)?)?;
