@@ -23,6 +23,7 @@
 // downstream crates — also resolves when the macro is used inside this crate.
 extern crate self as wingfoil_next_python;
 
+pub mod adapters;
 pub mod element;
 pub mod graph;
 #[macro_use]
@@ -31,7 +32,7 @@ mod python;
 
 pub use element::PyElement;
 pub use graph::{PyGraph, PyStream};
-pub use python::{Graph, Stream};
+pub use python::{Graph, Stream, to_pyerr};
 
 /// Derive a Python-callable function from an `Op` impl. See
 /// [`wingfoil_next_python_macros`] — placed on `impl Op for MyOp`, it generates

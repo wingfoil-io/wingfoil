@@ -23,7 +23,14 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 use crate::graph::{PyGraph, PyStream};
 use crate::{Activation, Ctx, Op, PyElement, Tick, pyadapter, pygraph, pyop};
 
-fn to_pyerr(err: anyhow::Error) -> PyErr {
+/// Map an `anyhow::Error` to a Python exception, preserving the whole context
+/// chain (`{:#}`).
+///
+/// Public because `#[pyadapter]`-generated code names it: an adapter whose
+/// wiring is fallible (`Result<Stream<T>>`) turns that error into a Python
+/// exception at the seam, in this crate and in third-party op/adapter crates
+/// alike.
+pub fn to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(format!("{err:#}"))
 }
 
@@ -526,5 +533,30 @@ fn wingfoil_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;
     m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
+    register_adapters(m)?;
+    Ok(())
+}
+
+/// Register the per-adapter bindings the wheel was built with. Each adapter is
+/// behind its own cargo feature (see `crate::adapters`), so a wheel built
+/// without it simply has no such attribute.
+fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "postgres")]
+    {
+        // Imported by name (rather than called through the module path) because
+        // `wrap_pyfunction!` resolves the hidden wrapper pyo3 defines alongside
+        // each `#[pyfunction]`, which needs the name in scope.
+        use crate::adapters::postgres::{
+            postgres_notify_trigger_sql, postgres_read, postgres_source, postgres_sub,
+            postgres_write,
+        };
+        m.add_function(wrap_pyfunction!(postgres_read, m)?)?;
+        m.add_function(wrap_pyfunction!(postgres_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(postgres_source, m)?)?;
+        m.add_function(wrap_pyfunction!(postgres_write, m)?)?;
+        m.add_function(wrap_pyfunction!(postgres_notify_trigger_sql, m)?)?;
+    }
+    // `m` is unused when no adapter feature is on.
+    let _ = m;
     Ok(())
 }

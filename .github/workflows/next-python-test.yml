@@ -57,7 +57,12 @@ jobs:
         # embedded-interpreter unit and integration tests link libpython and run.
         # These do not run in the rust-test leg, which is scoped to
         # `-p wingfoil` / `-p wingfoil-next`.
-        run: cargo test -p wingfoil-next-python
+        #
+        # `all-adapters` additionally covers the per-adapter `#[pyadapter]`
+        # bindings and their marshaling tests, which are feature-gated off by
+        # default. Adapters needing a system library at build time must stay out
+        # of that roll-up (or be installed above) so this step keeps working.
+        run: cargo test -p wingfoil-next-python --features all-adapters
 
       - name: Build module and run pytest
         working-directory: next/crates/wingfoil-next-python

@@ -1185,6 +1185,26 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
+- **Per-adapter Python bindings** 🟡 *postgres landed*: the `#[pyadapter]`
+  exposure of the real `adapters::*` I/O adapters, each behind a
+  `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
+  registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
+  first and the template: `postgres_read` / `postgres_sub` / `postgres_source` /
+  `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict`
+  edge and declared-column write marshaling, unit-level marshaling tests, and a
+  service-backed pytest leg in `postgres-next-integration.yml`. Landing it
+  closed three gaps in the seam itself, now available to every adapter that
+  follows: `#[pyadapter]` accepts **fallible** wiring (`Result<Stream<T>>` → a
+  `PyResult` fn, so a wiring rejection raises a Python exception), it **forwards
+  `#[pyo3(signature = …)]`** so optional args get Python defaults, and
+  `PyGraph::run` now **releases the GIL** for the run — without which no
+  real-time adapter source can deliver, since its worker (and every other Python
+  thread) stays blocked until `run` returns. It also grew a **free-fn form**
+  (receiver as the first param) so a binding needs no throwaway trait and no
+  duplicated signature, and the shared run-shape helpers live in
+  `crate::adapters::common` (`historical_params` / `realtime_params` /
+  `run_mode` / `secs_to_nanotime`) for the mode-aware sources that follow.
+  Remaining: the other adapters.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

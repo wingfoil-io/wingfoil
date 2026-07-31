@@ -21,9 +21,24 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7"]
 [tool.maturin]
 # `extension-module` resolves Python symbols at load time (no libpython link in
 # the wheel). Importing `wingfoil_next` gives the Graph / Stream classes.
-features = ["extension-module"]
+#
+# Adapter features are listed one by one rather than via the `all-adapters`
+# roll-up, so each new adapter binding is a considered decision: an adapter that
+# is pure Rust (postgres, on tokio-postgres) can ship in the default wheel,
+# whereas one needing a system library at build time must stay opt-in
+# (`maturin develop -F kdb`) or it breaks the build for everyone.
+features = ["extension-module", "postgres"]
 module-name = "wingfoil_next"
 include = ["Cargo.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Integration tests are deselected by default so the regular `pytest` run is
+# never silently green against a service that is not actually up. Each
+# integration workflow opts in explicitly, e.g. `pytest -m requires_postgres`.
+# Running a marker selection without the backing service fails loudly with a
+# real ConnectionRefused/import error — not a skip.
+markers = [
+    "requires_postgres: needs PostgreSQL on localhost:5432",
+]
+addopts = "-m 'not requires_postgres'"
