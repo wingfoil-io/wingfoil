@@ -28,7 +28,12 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7"]
 # whereas one needing a system library at build time must stay opt-in
 # (`maturin develop -F kdb`) or it breaks the build for everyone.
 features = ["extension-module", "postgres"]
-module-name = "wingfoil_next"
+# Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
+# and the importable `wingfoil_next` is the Python package under `python/`, which
+# re-exports it wholesale and adds the pure-Python surface (`CustomStream`).
+# `import wingfoil_next as wf` is unchanged for callers.
+python-source = "python"
+module-name = "wingfoil_next._wingfoil"
 include = ["Cargo.toml"]
 
 [tool.pytest.ini_options]

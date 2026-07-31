@@ -12,7 +12,9 @@ import pytest
 EXAMPLES = pathlib.Path(__file__).resolve().parent.parent / "examples"
 
 
-@pytest.mark.parametrize("name", ["quick_start", "custom_stream", "plugin_sdk"])
+@pytest.mark.parametrize(
+    "name", ["quick_start", "custom_stream", "custom_stream_subclass", "plugin_sdk"]
+)
 def test_example_runs(name):
     runpy.run_path(str(EXAMPLES / f"{name}.py"), run_name="__main__")
 
