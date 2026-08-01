@@ -65,6 +65,10 @@ augurs = ["wingfoil-next/augurs"]
 # (kdb-plus-fixed over TCP); the binding names `K` / `qtype` through the
 # engine's re-exports rather than depending on that crate directly.
 kdb = ["wingfoil-next/kdb"]
+# FIX: the `fix_connect` / `fix_accept` sources, the `fix_send` sink, and the
+# hand-written `fix_connect_tls` + `FixConnection` handle class. Pure Rust
+# (rustls for the TLS initiator).
+fix = ["wingfoil-next/fix"]
 all-adapters = [
     "postgres",
     "kafka",
@@ -76,6 +80,7 @@ all-adapters = [
     "otlp",
     "augurs",
     "kdb",
+    "fix",
 ]
 
 [dependencies]

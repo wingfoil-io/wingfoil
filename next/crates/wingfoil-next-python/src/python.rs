@@ -724,6 +724,17 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(kdb_sub, m)?)?;
         m.add_function(wrap_pyfunction!(kdb_write, m)?)?;
     }
+    #[cfg(feature = "fix")]
+    {
+        use crate::adapters::fix::{
+            PyFixConnection, fix_accept, fix_connect, fix_connect_tls, fix_send,
+        };
+        m.add_class::<PyFixConnection>()?;
+        m.add_function(wrap_pyfunction!(fix_connect, m)?)?;
+        m.add_function(wrap_pyfunction!(fix_accept, m)?)?;
+        m.add_function(wrap_pyfunction!(fix_send, m)?)?;
+        m.add_function(wrap_pyfunction!(fix_connect_tls, m)?)?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;
