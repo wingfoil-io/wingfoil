@@ -735,6 +735,11 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(fix_send, m)?)?;
         m.add_function(wrap_pyfunction!(fix_connect_tls, m)?)?;
     }
+    #[cfg(feature = "prometheus")]
+    {
+        use crate::adapters::prometheus::PyPrometheusExporter;
+        m.add_class::<PyPrometheusExporter>()?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;

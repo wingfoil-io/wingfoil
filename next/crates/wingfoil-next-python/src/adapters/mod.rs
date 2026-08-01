@@ -46,6 +46,8 @@ pub mod kdb;
 pub mod otlp;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(feature = "prometheus")]
+pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
 #[cfg(feature = "zmq")]

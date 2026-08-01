@@ -1473,10 +1473,23 @@ tests covered — not "legacy pytest passes unchanged."
   service — and a message crossing that session round-trips both marshaling
   directions.
 
-  **Remaining: 4.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **prometheus** opened the *handle pyclass* tier, and is the smallest possible
+  version of it: a `#[pyclass]` wrapping `PrometheusExporter` with `serve()` and
+  `gauge(name, stream)`, the latter erasing at the same `typed_input` /
+  `erased_output` seams `#[pyadapter]` emits. Legacy's `register` is renamed
+  `gauge` (the engine calls it `prometheus_gauge`, and the metric type belongs
+  in the name), and stringification fails loudly where legacy's
+  `unwrap_or_default()` published an empty string. Its whole test tier runs by
+  **default** with no marker: the exporter *is* the server, so a test binds port
+  0, runs a graph and scrapes `/metrics` over loopback with `urllib` — the full
+  register → cycle → render → scrape path, no service. (The Rust
+  `prometheus_integration.rs` remains the complementary test that a real
+  Prometheus can scrape it.)
+
+  **Remaining: 3.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — **done**: kdb, fix;
-  - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):
+  - *handle pyclass* — **prometheus done**; web (`WebServer`) remains:
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;
