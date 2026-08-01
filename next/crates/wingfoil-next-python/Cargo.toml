@@ -36,7 +36,11 @@ postgres = ["wingfoil-next/postgres", "dep:chrono"]
 # linking a system library, so it can join `all-adapters` — it needs a C
 # toolchain, which every CI image already has, just build time.
 kafka = ["wingfoil-next/kafka"]
-all-adapters = ["postgres", "kafka"]
+# Redis: the `redis_sub` / `redis_stream_read` sources and the `redis_pub` /
+# `redis_stream_write` sinks. Pure Rust (the `redis` crate), so it ships in the
+# default wheel alongside postgres.
+redis = ["wingfoil-next/redis"]
+all-adapters = ["postgres", "kafka", "redis"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
