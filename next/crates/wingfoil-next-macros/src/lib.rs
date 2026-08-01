@@ -957,13 +957,20 @@ pub fn graph(input: TokenStream) -> TokenStream {
 /// emits the interpreted engine's `Builder::<name>` wiring method, so an op's
 /// semantics and its interpreted entry point are single-sourced.
 ///
-/// Scoped to the **single-active-input** shape: `type In<'a> = (&'a I,)`,
-/// engine-owned `Cfg`/`State` with `State: Default`, and no lifecycle hooks
-/// (the common case — `map`, `distinct`, `ewma`, …). The generated method is a
-/// thin wrapper over [`Builder::register_op1`], with the node label derived
-/// from `type_name::<X>()` rather than a hand-written string. Ops that don't
-/// fit (multiple inputs, passive edges, tick-flag inputs, sources, custom
-/// state seeds, lifecycle hooks) keep their hand-written `Builder` methods.
+/// The generated method takes one `Handle` parameter per edge of the op's
+/// `type In<'a>`, in order, then the op's `Cfg` (omitted when it is `()`), and
+/// returns the output `Handle`. It covers every `In` shape the macro parses:
+/// **sources** (`In = ()`), **single- and multi-input** ops, edges read with
+/// their **tick flag** (`(&'a T, bool)` — `delay`, `merge`), any per-edge
+/// **`passive` mask**, the op's **`start` / `stop` / `teardown` hooks**, and —
+/// with `init_arg` — a **seeded accumulator** whose state and value slot come
+/// from a call-site argument rather than `Default`. Node labels derive from
+/// `type_name::<X>()` rather than a hand-written string.
+///
+/// `no_builder` opts out, for ops whose interpreted *signature* deliberately
+/// differs from their shape: `bimap`/`trimap` take runtime active/passive
+/// flags rather than a compile-time mask, and `with_time` seeds its value slot
+/// from the input's current value so it never requires `Out: Default`.
 #[proc_macro_attribute]
 pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as OpArgs);
@@ -980,8 +987,9 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Parsed `#[op(...)]` arguments:
 ///
 /// - `build = <name>` — the fluent/graph method name (required, first);
-/// - `no_builder` — skip the interpreted `Builder` method (ops with
-///   hand-written builder wiring: sources, multi-input, seeded shapes);
+/// - `no_builder` — skip the interpreted `Builder` method, for the few ops
+///   whose hand-written wiring has a deliberately different signature
+///   (`bimap`/`trimap`, `with_time`);
 /// - `passive = [i, ...]` — the listed edge positions are **passive** (read
 ///   but not activating; sample's data edge is `passive = [0]`). Becomes the
 ///   `__WF_OP_<NAME>_PASSIVE` bitmask const the emission folds into dispatch
@@ -989,9 +997,9 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `init_arg` — the **seeded-accumulator** shape (fold): the call site's
 ///   single plain argument is the initial `State`, cloned into both the
 ///   state and the value slot (so passive reads before the first tick see
-///   the seed), and the op's `Cfg` is a literal closure passed by value.
-///   Implies `no_builder` (the interpreted side needs a seeded slot, which
-///   `register_op1` does not express).
+///   the seed), and the op's `Cfg` is a literal closure passed by value. The
+///   generated `Builder` method takes that seed as an `init` parameter ahead
+///   of the config — `fold(src, init, f)`.
 struct OpArgs {
     build: Ident,
     no_builder: bool,
@@ -1045,14 +1053,6 @@ impl Parse for OpArgs {
                 }
             }
         }
-        if init_arg && !no_builder {
-            return Err(syn::Error::new(
-                build.span(),
-                "`init_arg` requires `no_builder`: the interpreted Builder method for a \
-                 seeded op must seed its value slot, which the generated `register_op1` \
-                 wrapper does not express — write it by hand",
-            ));
-        }
         Ok(OpArgs {
             build,
             no_builder,
@@ -1060,23 +1060,6 @@ impl Parse for OpArgs {
             passive,
         })
     }
-}
-
-/// The `T` of a single-element reference tuple type `(&'a T,)`, or an error if
-/// the type is not that shape (which is how `#[op]` scopes its *Builder
-/// method* generation; the `graph!` forwarders support any [`InShape`]).
-fn single_ref_tuple_elem(ty: &Type) -> syn::Result<Type> {
-    if let Type::Tuple(tup) = ty
-        && tup.elems.len() == 1
-        && let Type::Reference(r) = &tup.elems[0]
-    {
-        return Ok((*r.elem).clone());
-    }
-    Err(syn::Error::new(
-        ty.span(),
-        "#[op] generates a Builder method only for single-input ops (`type In<'a>` = `(&'a T,)`); \
-         add `no_builder` to keep a hand-written Builder method and still get graph! forwarders",
-    ))
 }
 
 /// True for the unit type `()` — a `Cfg = ()` op takes no config argument.
@@ -1150,6 +1133,11 @@ struct InShape {
     edge_ref_tys: Vec<Type>,
     /// Per-edge value types (`T`), for `'static` predicates.
     edge_val_tys: Vec<Type>,
+    /// Per edge: does the op's `In` actually read that edge's tick flag? The
+    /// interpreted builder only reads the engine's tick vector for edges
+    /// where it does (every other edge's flag is a constant `false` the op
+    /// never looks at).
+    edge_uses_tick: Vec<bool>,
     /// Builds the op's `In` from the pairs param `__input`.
     in_expr: TokenStream2,
 }
@@ -1163,6 +1151,7 @@ fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
     };
     let mut edge_ref_tys = Vec::new();
     let mut edge_val_tys = Vec::new();
+    let mut edge_uses_tick: Vec<bool> = Vec::new();
     let mut elems: Vec<TokenStream2> = Vec::new();
     for elem in &tup.elems {
         match elem {
@@ -1170,6 +1159,7 @@ fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
                 let ix = syn::Index::from(edge_ref_tys.len());
                 edge_ref_tys.push(strip_lifetimes(elem));
                 edge_val_tys.push(strip_lifetimes(&r.elem));
+                edge_uses_tick.push(false);
                 elems.push(quote! { __input.#ix.0 });
             }
             Type::Tuple(pair)
@@ -1183,6 +1173,7 @@ fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
                 };
                 edge_ref_tys.push(strip_lifetimes(&pair.elems[0]));
                 edge_val_tys.push(strip_lifetimes(&r.elem));
+                edge_uses_tick.push(true);
                 elems.push(quote! { (__input.#ix.0, __input.#ix.1) });
             }
             other if is_bool(other) => {
@@ -1192,7 +1183,9 @@ fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
                         "#[op]: a bare `bool` In element must follow the edge it is the tick of",
                     ));
                 }
-                let ix = syn::Index::from(edge_ref_tys.len() - 1);
+                let last = edge_ref_tys.len() - 1;
+                edge_uses_tick[last] = true;
+                let ix = syn::Index::from(last);
                 elems.push(quote! { __input.#ix.1 });
             }
             other => {
@@ -1212,6 +1205,7 @@ fn parse_in_shape(in_ty: &Type) -> syn::Result<InShape> {
     Ok(InShape {
         edge_ref_tys,
         edge_val_tys,
+        edge_uses_tick,
         in_expr,
     })
 }
@@ -1225,6 +1219,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let (mut in_ty, mut cfg_ty, mut state_ty, mut out_ty) = (None, None, None, None);
     let mut activation_expr: Option<Expr> = None;
     let mut overrides_start = false;
+    let (mut overrides_stop, mut overrides_teardown) = (false, false);
     for it in &imp.items {
         match it {
             ImplItem::Type(t) => match t.ident.to_string().as_str() {
@@ -1237,9 +1232,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             ImplItem::Const(c) if c.ident == "ACTIVATION" => {
                 activation_expr = Some(c.expr.clone());
             }
-            ImplItem::Fn(f) if f.sig.ident == "start" => {
-                overrides_start = true;
-            }
+            ImplItem::Fn(f) => match f.sig.ident.to_string().as_str() {
+                "start" => overrides_start = true,
+                "stop" => overrides_stop = true,
+                "teardown" => overrides_teardown = true,
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -1289,6 +1287,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     for val_ty in &shape.edge_val_tys {
         preds.push(quote! { #val_ty: 'static });
     }
+    // The forwarders always seed the value slot with `Default::default()`;
+    // the generated `Builder` method does too *unless* `init_arg` seeds it
+    // from the call site, so that predicate is added per consumer rather than
+    // baked into the shared list (an `init_arg` accumulator need not be
+    // `Default` — `fold` over a non-`Default` type stays legal fluently).
+    let base_preds = preds.clone();
     preds.push(quote! { #out_ty: ::core::default::Default });
     let generics = if bare_params.is_empty() {
         quote! {}
@@ -1617,53 +1621,327 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         #seed_value
     };
 
-    // ---- interpreted Builder method (single-input ops only) ----------------
+    // ---- interpreted Builder method ----------------------------------------
     let builder = if args.no_builder {
         quote! {}
     } else {
-        let input_ty = single_ref_tuple_elem(&in_ty)?;
-        let has_cfg = !is_unit_type(&cfg_ty);
-        let cfg_param = if has_cfg {
-            quote! { , cfg: #cfg_ty }
-        } else {
-            quote! {}
-        };
-        let cfg_arg = if has_cfg {
-            quote! { cfg }
-        } else {
-            quote! { () }
-        };
-        let doc = format!("Interpreted-engine wiring for [`{name}`]. Generated by `#[op]`.");
-        quote! {
-            impl crate::interp::Builder {
-                #[doc = #doc]
-                pub fn #name #generics (
-                    &mut self,
-                    src: crate::interp::Handle<#input_ty>
-                    #cfg_param
-                ) -> crate::interp::Handle<#out_ty>
-                #where_tokens
-                {
-                    self.register_op1(
-                        src,
-                        ::core::any::type_name::<#self_ty>(),
-                        <#self_ty as crate::op::Op>::ACTIVATION,
-                        #cfg_arg,
-                        // A factory, not a value, so the interpreted engine can
-                        // re-seed the op's state on a re-run (see `ResetFn`).
-                        || ::core::default::Default::default(),
-                        |__cfg, __state, __a, __ctx| {
-                            <#self_ty as crate::op::Op>::cycle(__cfg, __state, (__a,), __ctx)
-                        },
-                    )
-                }
-            }
-        }
+        expand_builder(
+            args,
+            &BuilderShape {
+                self_ty,
+                shape: &shape,
+                cfg_ty: &cfg_ty,
+                state_ty: &state_ty,
+                out_ty: &out_ty,
+                generics: &generics,
+                preds: &base_preds,
+                overrides_start,
+                overrides_stop,
+                overrides_teardown,
+            },
+        )?
     };
 
     Ok(quote! {
         #forwarders
         #builder
+    })
+}
+
+/// What [`expand_builder`] needs from the `#[op]` impl to write the op's
+/// interpreted `Builder` method.
+struct BuilderShape<'a> {
+    self_ty: &'a Type,
+    shape: &'a InShape,
+    cfg_ty: &'a Type,
+    state_ty: &'a Type,
+    out_ty: &'a Type,
+    /// The impl's generic parameters, bare (`<A, B, F>`).
+    generics: &'a TokenStream2,
+    /// The impl's own bounds, routed into one `where` list. Does **not**
+    /// include the `Out: Default` the forwarders add — see `base_preds`.
+    preds: &'a [TokenStream2],
+    overrides_start: bool,
+    overrides_stop: bool,
+    overrides_teardown: bool,
+}
+
+/// Generate the op's interpreted `Builder` method — the wiring the engine
+/// would otherwise carry by hand, once per op.
+///
+/// This covers **every** `In` shape [`parse_in_shape`] accepts: zero or more
+/// edges, each read by value (`&T`) or with its tick flag (`(&T, bool)`, or a
+/// trailing bare `bool`), any per-edge `passive` mask, the op's `start` /
+/// `stop` / `teardown` hooks, and either a `Default`-seeded state or an
+/// `init_arg` seed taken from the call site. The emitted body is exactly the
+/// sequence the `#[op]` wiring seam on `Builder` exposes
+/// (`next_node_index` → `slot`/`new_slot` → `push_node` → the `set_*`
+/// attachers), so a hand-written builder and a generated one are the same
+/// code; the remaining hand-written ones exist because their *signature*
+/// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
+/// flags; `with_time` seeds its slot from the input rather than `Default`),
+/// not because the shape is out of reach.
+fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
+    let (self_ty, shape) = (b.self_ty, b.shape);
+    let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
+    let (generics, name) = (b.generics, &args.build);
+    let n = shape.edge_ref_tys.len();
+    if n > 26 {
+        return Err(syn::Error::new(
+            self_ty.span(),
+            "#[op]: a generated Builder method supports at most 26 input edges",
+        ));
+    }
+    if n < 32 && args.passive >> n != 0 {
+        return Err(syn::Error::new(
+            self_ty.span(),
+            format!("#[op]: `passive` names an edge position beyond this op's {n} inputs"),
+        ));
+    }
+
+    // One parameter per edge, in `In` order — `src` when there is only one
+    // (reading `map(src, f)`), else `a`, `b`, `c`, … (reading `join(a, b, f)`).
+    let edge_names: Vec<Ident> = (0..n)
+        .map(|i| {
+            if n == 1 {
+                format_ident!("src")
+            } else {
+                format_ident!("{}", char::from(b'a' + i as u8))
+            }
+        })
+        .collect();
+    let slot_ids: Vec<Ident> = (0..n).map(|i| format_ident!("__slot{i}")).collect();
+    let up_ids: Vec<Ident> = (0..n).map(|i| format_ident!("__up{i}")).collect();
+    let borrow_ids: Vec<Ident> = (0..n).map(|i| format_ident!("__val{i}")).collect();
+    let edge_params = edge_names
+        .iter()
+        .zip(&shape.edge_val_tys)
+        .map(|(nm, ty)| quote! { #nm: crate::interp::Handle<#ty> });
+
+    // Active vs passive edges: an active edge triggers the node when it ticks
+    // (it goes into `push_node`'s upstream list); a passive one is read but
+    // recorded separately, only so `build()` can raise this node's dispatch
+    // layer above the value it reads.
+    let (mut active, mut passive) = (Vec::new(), Vec::new());
+    for (i, up) in up_ids.iter().enumerate() {
+        if args.passive & (1 << i) == 0 {
+            active.push(up);
+        } else {
+            passive.push(up);
+        }
+    }
+    let passive_stmt = if passive.is_empty() {
+        quote! {}
+    } else {
+        quote! { self.set_passive_ups(__idx, ::std::vec![#(#passive),*]); }
+    };
+
+    // Only edges whose `In` shape reads a tick flag cost a lookup in the
+    // engine's tick vector; the rest are handed a constant `false` the op
+    // never reads.
+    let uses_ticks = shape.edge_uses_tick.iter().any(|t| *t);
+    let ticked_let = if uses_ticks {
+        quote! { let __ticked = self.ticked_flags(); }
+    } else {
+        quote! {}
+    };
+    let tick_lets = shape
+        .edge_uses_tick
+        .iter()
+        .enumerate()
+        .filter(|(_, used)| **used)
+        .map(|(i, _)| {
+            let (t, up) = (format_ident!("__tick{i}"), &up_ids[i]);
+            quote! { let #t = __ticked.borrow()[#up]; }
+        });
+    let tick_exprs: Vec<TokenStream2> = shape
+        .edge_uses_tick
+        .iter()
+        .enumerate()
+        .map(|(i, used)| {
+            if *used {
+                let t = format_ident!("__tick{i}");
+                quote! { #t }
+            } else {
+                quote! { false }
+            }
+        })
+        .collect();
+
+    // The call into the op, with every edge's slot borrowed for exactly the
+    // duration of the call: the borrows end with the block, before the tick's
+    // value is written back to the output slot.
+    let in_expr = &shape.in_expr;
+    let cycle_call = if n == 0 {
+        quote! { <#self_ty as crate::op::Op>::cycle(__cfg, __state, (), &mut __ctx)? }
+    } else {
+        quote! {{
+            #(let #borrow_ids = #slot_ids.borrow();)*
+            let __input = ( #((&*#borrow_ids, #tick_exprs),)* );
+            <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, &mut __ctx)?
+        }}
+    };
+
+    // `Cfg = ()` ops take no config argument; an `init_arg` op takes its
+    // accumulator seed ahead of the config, matching `fold(src, init, f)`.
+    let has_cfg = !is_unit_type(cfg_ty);
+    let cfg_param = if has_cfg {
+        quote! { cfg: #cfg_ty, }
+    } else {
+        quote! {}
+    };
+    let cfg_arg = if has_cfg {
+        quote! { cfg }
+    } else {
+        quote! { () }
+    };
+    let (init_param, state_seed, out_seed, reset_init) = if args.init_arg {
+        (
+            quote! { init: #state_ty, },
+            quote! { ::core::clone::Clone::clone(&init) },
+            quote! { ::core::clone::Clone::clone(&init) },
+            quote! { let __init_reset = init; },
+        )
+    } else {
+        (
+            quote! {},
+            quote! { <#state_ty as ::core::default::Default>::default() },
+            quote! { <#out_ty as ::core::default::Default>::default() },
+            quote! {},
+        )
+    };
+    let (state_reseed, out_reseed) = if args.init_arg {
+        (
+            quote! { ::core::clone::Clone::clone(&__init_reset) },
+            quote! { ::core::clone::Clone::clone(&__init_reset) },
+        )
+    } else {
+        (
+            quote! { <#state_ty as ::core::default::Default>::default() },
+            quote! { <#out_ty as ::core::default::Default>::default() },
+        )
+    };
+
+    // Lifecycle hooks: emitted only where the impl overrides one, so an op
+    // without them pays nothing (`push_node`'s defaults are no-ops).
+    let hook = |cell: &Ident, method: &Ident| {
+        quote! {
+            ::std::boxed::Box::new(move |__k| {
+                let (__cfg, __state) = &mut *#cell.borrow_mut();
+                let mut __ctx = crate::op::Ctx::new(__k, __idx);
+                <#self_ty as crate::op::Op>::#method(__cfg, __state, &mut __ctx)
+            })
+        }
+    };
+    let (start_clone, start_hook) = if b.overrides_start {
+        let cell = format_ident!("__cs_start");
+        let body = hook(&cell, &format_ident!("start"));
+        (quote! { let #cell = __cs.clone(); }, body)
+    } else {
+        (
+            quote! {},
+            quote! { ::std::boxed::Box::new(|_| ::core::result::Result::Ok(())) },
+        )
+    };
+    let (stop_clone, stop_stmt) = if b.overrides_stop {
+        let cell = format_ident!("__cs_stop");
+        let body = hook(&cell, &format_ident!("stop"));
+        (
+            quote! { let #cell = __cs.clone(); },
+            quote! { self.set_stop(#body); },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+    let (teardown_clone, teardown_stmt) = if b.overrides_teardown {
+        let cell = format_ident!("__cs_teardown");
+        let body = hook(&cell, &format_ident!("teardown"));
+        (
+            quote! { let #cell = __cs.clone(); },
+            quote! { self.set_teardown(#body); },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+
+    let mut preds: Vec<TokenStream2> = b.preds.to_vec();
+    preds.push(quote! { #cfg_ty: 'static });
+    preds.push(quote! { #state_ty: 'static });
+    preds.push(quote! { #out_ty: 'static });
+    if args.init_arg {
+        preds.push(quote! { #state_ty: ::core::clone::Clone });
+    } else {
+        preds.push(quote! { #state_ty: ::core::default::Default });
+        preds.push(quote! { #out_ty: ::core::default::Default });
+    }
+
+    let doc = format!(
+        "Interpreted-engine wiring for [`{name}`]. Generated by `#[op]` from the op's \
+         `In` shape — one `Handle` parameter per input edge, then its config."
+    );
+    Ok(quote! {
+        impl crate::interp::Builder {
+            #[doc = #doc]
+            #[allow(clippy::too_many_arguments)]
+            pub fn #name #generics (
+                &mut self,
+                #(#edge_params,)*
+                #init_param
+                #cfg_param
+            ) -> crate::interp::Handle<#out_ty>
+            where #(#preds),*
+            {
+                let __idx = self.next_node_index();
+                #(let #up_ids = #edge_names.index();)*
+                #(let #slot_ids = self.slot(#edge_names);)*
+                let __out = self.new_slot::<#out_ty>(#out_seed);
+                let __cs = ::std::rc::Rc::new(::core::cell::RefCell::new((
+                    #cfg_arg,
+                    #state_seed,
+                )));
+                #reset_init
+                #ticked_let
+                #start_clone
+                #stop_clone
+                #teardown_clone
+                let __cs_cycle = __cs.clone();
+                let __out_cycle = __out.clone();
+                let (__cs_reset, __out_reset) = (__cs, __out);
+                self.push_node(
+                    ::std::vec![#(#active),*],
+                    <#self_ty as crate::op::Op>::ACTIVATION,
+                    crate::interp::short_type_name(::core::any::type_name::<#self_ty>()),
+                    ::std::boxed::Box::new(move |__k| {
+                        let (__cfg, __state) = &mut *__cs_cycle.borrow_mut();
+                        let mut __ctx = crate::op::Ctx::new(__k, __idx);
+                        #(#tick_lets)*
+                        let __tick = #cycle_call;
+                        match __tick {
+                            crate::op::Tick::Value(__v) => {
+                                *__out_cycle.borrow_mut() = __v;
+                                ::core::result::Result::Ok(true)
+                            }
+                            crate::op::Tick::Silent(__v) => {
+                                *__out_cycle.borrow_mut() = __v;
+                                ::core::result::Result::Ok(false)
+                            }
+                            crate::op::Tick::Quiet => ::core::result::Result::Ok(false),
+                        }
+                    }),
+                    #start_hook,
+                );
+                #stop_stmt
+                #teardown_stmt
+                #passive_stmt
+                // A re-run restores the op's state and value slot to their
+                // wiring-time values (see `ResetFn`).
+                self.set_reset(::std::boxed::Box::new(move || {
+                    __cs_reset.borrow_mut().1 = #state_reseed;
+                    *__out_reset.borrow_mut() = #out_reseed;
+                }));
+                self.make_handle(__idx)
+            }
+        }
     })
 }
 

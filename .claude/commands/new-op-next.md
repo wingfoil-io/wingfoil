@@ -10,8 +10,9 @@ reference implementations; read them before writing code:
 
 - `src/ops.rs` — the core catalog. `Map` (`#[op(build = map)]`, the smallest
   single-input shape), `Fold` (`init_arg` seeded accumulator), `Ticker` /
-  `Const` (`no_builder` sources), `Sample` (`passive = [0]`), the multi-input
-  `bimap`/`trimap`/`join` family.
+  `Const` (sources, with a `start` hook), `Sample` (`passive = [0]`), `Delay`
+  (a tick-flag edge), the multi-input `join`/`join3` family and the
+  runtime-flag `bimap`/`trimap` methods they back.
 - `src/stats.rs` — `StatisticsOps`, the template for an op that lives in its
   own extension trait outside the prelude (EWMA family).
 - `src/op.rs` — the `Op` trait itself: `Cfg` / `State` / `In<'a>` / `Out` /
@@ -70,14 +71,36 @@ When you open the PR, its **base branch must be `next`** — not `main`.
 The shape decides how much you write and which engines you reach for free.
 Read the touch-point table in `port-plan.md` ("Adding an op"); the summary:
 
-| Shape | `In<'a>` | Interpreted (`ops.rs`) | `graph!` / compiled | Reference |
+**`#[op(build = name)]` generates the interpreted `Builder` method for every
+shape below** — one `Handle` parameter per edge of `In<'a>`, in `In` order,
+then the `Cfg` (omitted when it is `()`), returning the output `Handle`. So the
+shape decides what you *write in the op*, not how much wiring you hand-code:
+
+| Shape | `In<'a>` | Attribute | Generated `Builder` signature | Reference |
 |---|---|---|---|---|
-| **Single-input** | `(&'a I,)` | `#[op(build = name)]` — generates `Builder::name` over `register_op1` | **zero-touch** — `#[op]` emits the forwarders | `Map`, `Filter`, `Distinct` |
-| **Seeded accumulator** | `(&'a I,)` + init | `#[op(build = name, init_arg)]` (implies `no_builder`) + hand `Builder` method | zero-touch — attribute flags carry it | `Fold` |
-| **Passive edge** (read, don't trigger) | `(&'a I,)` | `#[op(build = name, passive = [0])]` | zero-touch | `Sample` |
-| **Multi-input, all-active** | `(&'a A, &'a B)` | `#[op(build = name, no_builder)]` + `register_op2`-based fluent method | zero-touch — `&stream` args classify as edges | `bimap` / `join` |
-| **Source** (no input) | `()` | `#[op(build = name, no_builder)]` + hand `Builder` method that `schedule`s | fluent-only if it's a cycle/IO source | `Ticker`, `Const` |
-| **Doesn't fit** (3+ inputs, tick-flag inputs, lifecycle hooks, custom state seed) | — | hand-written `Builder` method | add by hand or leave interpreted-only | see `port-plan.md` |
+| **Single-input** | `(&'a I,)` | `#[op(build = name)]` | `name(src, cfg)` | `Map`, `Distinct` |
+| **Multi-input, all-active** | `(&'a A, &'a B, …)` | `#[op(build = name)]` | `name(a, b, …, cfg)` | `Join`, `Filter`, `Join3` |
+| **Passive edge** (read, don't trigger) | any | `#[op(build = name, passive = [0])]` | same — the mask only changes dispatch | `Sample`, `JoinPassive` |
+| **Tick-flag edge** (needs "did it tick?") | `(&'a T, bool)` or `((&'a T, bool), …)` | `#[op(build = name)]` | same — the flag comes from the engine | `Delay`, `Merge2` |
+| **Lifecycle hooks** (`start`/`stop`/`teardown`) | any | `#[op(build = name)]` | same — hooks attached automatically | `Ticker`, `Window`, `Timed`, `Finally` |
+| **Seeded accumulator** | `(&'a I,)` + init | `#[op(build = name, init_arg)]` | `name(src, init, cfg)` — seeds state *and* slot | `Fold` |
+| **Source** (no input) | `()` | `#[op(build = name)]` + `start` that `schedule`s | `name(cfg)` | `Ticker`, `Const` |
+| **Signature ≠ shape** | any | `#[op(build = name, no_builder)]` + hand `Builder` method | — | `WithTime` |
+
+`no_builder` is the last resort, not the default: reach for it only when the
+interpreted method must have a *different signature* from the op's shape —
+`with_time` seeds its value slot from the input's current value so it never
+requires `Out: Default`, and `bimap`/`trimap` take runtime active/passive flags
+rather than a compile-time mask (those are extra hand-written methods over
+`Join`/`Join3`, alongside the generated `join`/`join_passive`/`join3`). If you
+find yourself adding `no_builder` for any other reason, the shape probably fits
+and you should check `expand_builder` in the macro crate first.
+
+`#[op]` is **in-crate tooling**: its output names `crate::interp::Builder`, so
+an op defined outside `wingfoil-next` writes its forwarders by hand and wires
+the interpreted side through the public `register_op1`…`register_op4` (or
+`bimap` / `fold`) primitives — see `tests/custom_op.rs`, which keeps a worked
+example of both.
 
 The two hard constraints behind this (from `macro-extensibility-decision.md`):
 a proc macro sees **tokens, not resolved types**, so `graph!` can't introspect
@@ -143,7 +166,8 @@ Rules the existing ops encode — follow them:
   capture. (See the `Map` doc comment for the full rationale.)
 - **`State: Default`** — the interpreted `#[op]` path seeds it with
   `Default::default()` per run (re-seeded each run, so a graph re-runs clean).
-  A non-`Default` seed needs a hand-written `Builder` method (`no_builder`).
+  A seed that must come from the call site is the `init_arg` shape (`Fold`),
+  which `#[op]` also generates — not a reason to hand-write a builder.
 - **Convert config once in `start`**, not per `cycle`, when the conversion is
   non-trivial (`Ticker` converts its `Duration` period to `NanoTime` in
   `start`).
@@ -178,13 +202,15 @@ A source's fluent method goes on `SourceOps` and calls `GraphBuilder::source`
 
 ## 5. `graph!` / compiled coverage
 
-For a single-input `#[op]` op this is **zero-touch**: the attribute emits the
+For any `#[op]` op this is **zero-touch**: the attribute emits the
 forwarder functions (`__wf_op_<name>_cycle`, `__WF_OP_<NAME>_ACTIVATION`) that
 compiled/nested emission dispatches through by naming convention, and rustc's
 inference resolves the op type the macro never names. Nothing to edit.
 
-For a shape outside `#[op]`'s scope (multi-input beyond `register_op2`,
-tick-flag inputs, cyclic/IO sources), the op may land **interpreted-only** —
+For a shape `#[op]` cannot parse (cyclic/IO sources; an `In` the uniform
+one-`(value, tick)`-pair-per-edge form can't express, as
+`DelayWithReset` — see its `DelayWithResetFwd` witness for the way out), the op
+may land **interpreted-only** —
 that is allowed, but it must be *consciously* placed: either give it an
 equivalent forwarder, or add it to the documented fluent-only allowlist in
 `tests/op_completeness.rs` (see step 6). Never leave it silently in neither.
@@ -355,8 +381,9 @@ Before opening a PR, run a clean-context review pass as a subagent:
    divergence, even intentional ones.
 2. **Validate the artifacts**: branch cut from `next`, PR base `next` (step 1);
    the `Op` impl with correct `ACTIVATION` and `Tick` variants (steps 2–3);
-   closure configs are `Fn` not `FnMut`; `State: Default` (or a justified
-   `no_builder`); a hand-written fluent method on the right trait, out of the
+   closure configs are `Fn` not `FnMut`; `State: Default` (or `init_arg`); a
+   `no_builder` is justified by a signature that differs from the shape, not by
+   the shape itself; a hand-written fluent method on the right trait, out of the
    prelude for a domain op (step 4); `graph!`/compiled coverage is zero-touch or
    the op is a documented fluent-only entry (step 5); catalog tests assert
    values **and** tick times and the op appears in `op_completeness.rs` (a

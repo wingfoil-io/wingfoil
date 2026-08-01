@@ -4,15 +4,21 @@
 //! the logic is identical, but here it is written once and executed by every
 //! engine, interpreted or compiled.
 //!
-//! Every op carries `#[op(build = name)]` (or hand-written equivalents),
-//! which generates the `graph!` forwarder functions (`__wf_op_<name>_*`) that
-//! all compiled/nested emission dispatches through, plus — for single-input
-//! shapes — the interpreted [`Builder`](crate::interp::Builder) wiring method
-//! (over `register_op1`), with the node label derived from `type_name`.
-//! Attribute flags cover every shape in the catalog: `passive = [..]` marks
-//! non-activating edges (sample), `init_arg` is the seeded-accumulator shape
-//! (fold), and multi-input and source ops use `no_builder` to keep their
-//! hand-written `Builder` methods.
+//! Every op carries `#[op(build = name)]`, which generates *both* engines'
+//! wiring from the op's declared shape: the `graph!` forwarder functions
+//! (`__wf_op_<name>_*`) that all compiled/nested emission dispatches through,
+//! and the interpreted [`Builder`](crate::interp::Builder) method, with the
+//! node label derived from `type_name`. That covers every shape in the
+//! catalog — sources (`In = ()`), single- and multi-input ops, edges read with
+//! their tick flag (delay, merge), lifecycle hooks (ticker, window, timed,
+//! finally), `passive = [..]` non-activating edges (sample), and `init_arg`
+//! seeded accumulators (fold). `no_builder` is left for the one op whose
+//! interpreted signature deliberately differs from its shape — `with_time`,
+//! which seeds its value slot from the input so it never needs
+//! `Out: Default`. (`bimap`/`trimap` are *extra* hand-written `Builder`
+//! methods over [`Join`]/[`Join3`], taking runtime active/passive flags rather
+//! than a compile-time mask; they sit alongside the generated `join` /
+//! `join_passive` / `join3`, they are not opt-outs.)
 //! See `next/docs/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
@@ -41,7 +47,7 @@ pub struct TickerState {
     next: Option<NanoTime>,
 }
 
-#[op(build = ticker, no_builder)]
+#[op(build = ticker)]
 impl Op for Ticker {
     /// The interval as passed at the call site (`Duration`, per the uniform
     /// arg-is-the-config convention); converted to engine time in `start`.
@@ -76,7 +82,7 @@ impl Op for Ticker {
 /// Ticks once with a fixed value, on the first cycle.
 pub struct Const<T>(PhantomData<T>);
 
-#[op(build = constant, no_builder)]
+#[op(build = constant)]
 impl<T: Clone + 'static> Op for Const<T> {
     type Cfg = T;
     type State = ();
@@ -262,7 +268,7 @@ impl<T: Clone + 'static> Op for Limit<T> {
 /// convention; converted to engine time in `cycle`), `State` = last emit time.
 pub struct Throttle<T>(PhantomData<T>);
 
-#[op(build = throttle, no_builder)]
+#[op(build = throttle)]
 impl<T: Clone + 'static> Op for Throttle<T> {
     type Cfg = Duration;
     type State = Option<NanoTime>;
@@ -325,9 +331,8 @@ where
 /// printing (a) drops the unbounded `Vec` buffer classic grows one entry per
 /// tick for the whole run, (b) streams output as the run progresses rather
 /// than in one dump at the end, and (c) still prints what was seen if a later
-/// cycle aborts the run. Shedding the teardown hook also lets `print` be an
-/// ordinary single-input `#[op]` (no hand-written `Builder` method), the same
-/// shape as `map` / `limit`.
+/// cycle aborts the run. Shedding the teardown hook also leaves `print` the
+/// same plain single-input shape as `map` / `limit`.
 pub struct Print<T>(PhantomData<T>);
 
 #[op(build = print)]
@@ -414,7 +419,7 @@ impl<T> Default for TimedState<T> {
 /// the wall-vs-engine speedup rather than branching on historical/realtime.
 pub struct Timed<T>(PhantomData<T>);
 
-#[op(build = timed, no_builder)]
+#[op(build = timed)]
 impl<T: Clone + 'static> Op for Timed<T> {
     type Cfg = ();
     type State = TimedState<T>;
@@ -480,7 +485,7 @@ impl<T> Default for WindowState<T> {
     }
 }
 
-#[op(build = window, no_builder)]
+#[op(build = window)]
 impl<T: Clone + 'static> Op for Window<T> {
     type Cfg = Duration;
     type State = WindowState<T>;
@@ -555,7 +560,7 @@ impl<T: Clone + 'static> Op for Buffer<T> {
 /// all three values are read. `Fn`, like [`Join`].
 pub struct Join3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
-#[op(build = join3, no_builder)]
+#[op(build = join3)]
 impl<A, B, C, D, F> Op for Join3<A, B, C, D, F>
 where
     A: 'static,
@@ -586,7 +591,7 @@ where
 /// [`Join3`].
 pub struct TryJoin3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
-#[op(build = try_join3, no_builder)]
+#[op(build = try_join3)]
 impl<A, B, C, D, F> Op for TryJoin3<A, B, C, D, F>
 where
     A: 'static,
@@ -2400,7 +2405,7 @@ impl Op for TimeWindowedMedianTimeWeighted {
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
-#[op(build = filter, no_builder)]
+#[op(build = filter)]
 impl<T: Clone + 'static> Op for Filter<T> {
     type Cfg = ();
     type State = ();
@@ -2429,7 +2434,7 @@ impl<T: Clone + 'static> Op for Filter<T> {
 /// which the engine owns.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = fold, no_builder, init_arg)]
+#[op(build = fold, init_arg)]
 impl<A, B, F> Op for Fold<A, B, F>
 where
     A: 'static,
@@ -2501,7 +2506,7 @@ impl<T: Clone + 'static> Op for Accumulate<T> {
 /// marks the data edge as non-activating), and its unit value is ignored.
 pub struct Sample<T>(PhantomData<T>);
 
-#[op(build = sample, no_builder, passive = [0])]
+#[op(build = sample, passive = [0])]
 impl<T: Clone + 'static> Op for Sample<T> {
     type Cfg = ();
     type State = ();
@@ -2583,7 +2588,7 @@ where
 /// source's last value. Emits nothing during the run.
 pub struct Finally<A, F>(PhantomData<(A, F)>);
 
-#[op(build = finally, no_builder)]
+#[op(build = finally)]
 impl<A, F> Op for Finally<A, F>
 where
     A: Clone + Default + 'static,
@@ -2611,7 +2616,7 @@ where
 /// upstreams: ticks when either input ticks, reading both current values.
 pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = join, no_builder)]
+#[op(build = join)]
 impl<A, B, C, F> Op for Join<A, B, C, F>
 where
     A: 'static,
@@ -2637,7 +2642,7 @@ where
 /// like [`Join`].
 pub struct TryJoin<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = try_join, no_builder)]
+#[op(build = try_join)]
 impl<A, B, C, F> Op for TryJoin<A, B, C, F>
 where
     A: 'static,
@@ -2658,16 +2663,16 @@ where
 
 /// The `graph!`/compiled forwarder witness for [`join_passive`] — [`Join`]'s
 /// semantics with the **second** edge passive (read but not activating: the
-/// `bimap(Active, Passive)` shape a feedback input takes). The interpreted path
-/// wires this shape through [`Builder::bimap`](crate::interp::Builder::bimap)
-/// (`join_passive` = `bimap(_, true, _, false)`); this separate witness exists
-/// only so `#[op(passive = [1])]` can emit the `__wf_op_join_passive_*`
-/// forwarders — a second `#[op]` cannot be attached to [`Join`], and the
-/// passive mask is the only thing that differs. `cycle` delegates to [`Join`]
+/// `bimap(Active, Passive)` shape a feedback input takes). This separate
+/// witness exists because a second `#[op]` cannot be attached to [`Join`] and
+/// the passive mask is the only thing that differs; carrying it lets
+/// `#[op(passive = [1])]` emit both the `__wf_op_join_passive_*` forwarders
+/// *and* the interpreted `Builder::join_passive`
+/// (`bimap(_, true, _, false)`'s generated twin). `cycle` delegates to [`Join`]
 /// so the semantics are single-sourced.
 pub struct JoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = join_passive, no_builder, passive = [1])]
+#[op(build = join_passive, passive = [1])]
 impl<A, B, C, F> Op for JoinPassive<A, B, C, F>
 where
     A: 'static,
@@ -2692,7 +2697,7 @@ where
 /// needed.
 pub struct TryJoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = try_join_passive, no_builder, passive = [1])]
+#[op(build = try_join_passive, passive = [1])]
 impl<A, B, C, F> Op for TryJoinPassive<A, B, C, F>
 where
     A: 'static,
@@ -2734,7 +2739,7 @@ impl<T: PartialEq> Default for DelayState<T> {
     }
 }
 
-#[op(build = delay, no_builder)]
+#[op(build = delay)]
 impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     type Cfg = Duration;
     type State = DelayState<T>;
@@ -2784,7 +2789,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
 /// wins. Tick flags arrive as input data, not via engine lookups.
 pub struct Merge2<T>(PhantomData<T>);
 
-#[op(build = merge, no_builder)]
+#[op(build = merge)]
 impl<T: Clone + 'static> Op for Merge2<T> {
     type Cfg = ();
     type State = ();
@@ -2814,9 +2819,10 @@ impl<T: Clone + 'static> Op for Merge2<T> {
 /// its unit value is never observed downstream. The idiomatic inert trigger —
 /// e.g. a [`DelayWithReset`] that never resets degrades to a plain [`Delay`].
 ///
-/// Kept a plain `Op` (no `#[op]`, hand-written `Builder::never`) because it is
-/// a zero-input source, the shape the single-input `#[op]` scope does not
-/// cover.
+/// Kept a plain `Op` with a hand-written `Builder::never` (no `#[op]`):
+/// nothing about the shape prevents the attribute — `#[op]` builds sources
+/// fine — but a node that never ticks has no `graph!`/compiled meaning worth
+/// forwarding, so it stays an interpreted-engine primitive.
 pub struct Never;
 
 impl Op for Never {
@@ -2856,8 +2862,10 @@ impl<T: PartialEq> Default for DelayWithResetState<T> {
 /// [`Delay`] receives its upstream tick flag; `SCHEDULES` grants the delayed
 /// re-emit its `Ctx::schedule`.
 ///
-/// Hand-written `Builder` (no `#[op]`): two tick-flag inputs plus custom state
-/// seeding put it outside the single-input `#[op]` scope, like [`Delay`].
+/// No `#[op]` on *this* impl: its `In` puts two tick flags in a row with no
+/// second value edge, which the uniform one-`(value, tick)`-pair-per-edge form
+/// cannot express. [`DelayWithResetFwd`] below restates the same shape in the
+/// two-edge form and carries the attribute for both engines.
 pub struct DelayWithReset<T>(PhantomData<T>);
 
 impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
@@ -2931,7 +2939,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
 /// [`delay_with_reset`](crate::fluent::StreamOps::delay_with_reset)`<U>`.
 pub struct DelayWithResetFwd<T, U>(PhantomData<(T, U)>);
 
-#[op(build = delay_with_reset, no_builder)]
+#[op(build = delay_with_reset)]
 impl<T: Clone + PartialEq + 'static, U: 'static> Op for DelayWithResetFwd<T, U> {
     type Cfg = Duration;
     type State = DelayWithResetState<T>;

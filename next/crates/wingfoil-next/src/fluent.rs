@@ -1058,7 +1058,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T, &B) -> C + 'static,
     {
         let other = other.handle();
-        self.wire(|b, h| b.bimap(h, true, other, false, f))
+        self.wire(|b, h| b.join_passive(h, other, f))
     }
 
     fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
@@ -1069,7 +1069,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T, &B, &C) -> D + 'static,
     {
         let (bh, ch) = (b.handle(), c.handle());
-        self.wire(|bld, h| bld.trimap(h, true, bh, true, ch, true, f))
+        self.wire(|bld, h| bld.join3(h, bh, ch, f))
     }
 
     fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
@@ -1079,7 +1079,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T, &B) -> Result<C> + 'static,
     {
         let other = other.handle();
-        self.wire(|b, h| b.try_bimap(h, true, other, true, f))
+        self.wire(|b, h| b.try_join(h, other, f))
     }
 
     fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
@@ -1089,7 +1089,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T, &B) -> Result<C> + 'static,
     {
         let other = other.handle();
-        self.wire(|b, h| b.try_bimap(h, true, other, false, f))
+        self.wire(|b, h| b.try_join_passive(h, other, f))
     }
 
     fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
@@ -1100,7 +1100,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(&T, &B, &C) -> Result<D> + 'static,
     {
         let (bh, ch) = (b.handle(), c.handle());
-        self.wire(|bld, h| bld.try_trimap(h, true, bh, true, ch, true, f))
+        self.wire(|bld, h| bld.try_join3(h, bh, ch, f))
     }
 
     fn filter(&self, condition: &Stream<bool>) -> Stream<T>
@@ -1124,7 +1124,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         T: Clone + Default + 'static,
     {
         let other = other.handle();
-        self.wire(|b, h| b.merge2(h, other))
+        self.wire(|b, h| b.merge(h, other))
     }
 
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>

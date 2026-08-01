@@ -609,7 +609,11 @@ fn multi_input_custom_op_in_nested_island() {
 // The two formerly-"exotic" shapes, as USER ops — proving they are ordinary:
 // a passive-edge op (sample's shape) and a seeded accumulator (fold's shape).
 // The hand-written forwarders below are exactly what `#[op(build = snap,
-// passive = [0])]` / `#[op(build = ratchet, init_arg)]` emit for in-crate ops.
+// passive = [0])]` / `#[op(build = ratchet, init_arg)]` emit for in-crate ops
+// (an out-of-crate op writes them by hand, as here, and wires the interpreted
+// side through the public `register_op*` / `bimap` / `fold` primitives — the
+// attribute's generated `Builder` method names `crate::interp::Builder`, so it
+// only applies inside this crate).
 // ---------------------------------------------------------------------------
 
 /// User sample: emit the (passive) data value when the trigger ticks.

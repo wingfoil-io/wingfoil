@@ -4,7 +4,7 @@
 //! construction, so the tie-break arm never runs and the compiled tick-pair
 //! ordering could be swapped with the tests staying green).
 //!
-//! `merge2` is `if a_ticked { a } else if b_ticked { b }` — the earliest-
+//! `merge` is `if a_ticked { a } else if b_ticked { b }` — the earliest-
 //! supplied ticked input wins. Two tickers of the *same* period tick on every
 //! cycle, so the merge fires its tie-break arm every cycle and the first input
 //! (`a`) must win. All three emission paths (interpreted, compiled, nested)

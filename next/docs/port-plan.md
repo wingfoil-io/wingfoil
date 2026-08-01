@@ -341,9 +341,9 @@ Recipe per node, in this order, no exceptions:
 2. move the classic `cycle` body verbatim into the op (same logic, inputs
    passed in instead of read from upstream `Rc`s);
 3. wire it up (see **Adding an op** below): `#[op(build = name)]` on the impl
-   generates the interpreted `Builder` method for single-input ops; add the
-   fluent method; for `graph!`/compiled support add the `OpKind` variant +
-   `info()` row + parse arm (IO-edge ops skip the macro);
+   generates the interpreted `Builder` method from the op's `In` shape *and*
+   the `graph!`/compiled forwarders the emission dispatches through; add the
+   fluent method (the one piece still hand-written);
 4. port the classic node's unit tests as parity tests (values **and** tick
    times).
 
@@ -362,12 +362,26 @@ is small and explained by two hard constraints on proc macros:
 What's automated:
 
 - **Interpreted engine** — `#[op(build = name)]` on `impl Op for X` generates
-  `Builder::name` (a thin wrapper over `Builder::register_op1`), for the
-  single-active-input shape (`In<'a> = (&'a I,)`, `State: Default`, no lifecycle
-  hooks). Node labels come from `type_name::<X>()` (shortened), not hand-written
-  strings. Ops that don't fit (multi-input, passive edges, tick-flag inputs,
-  sources, custom state seeds, lifecycle hooks) keep a hand-written `Builder`
-  method.
+  `Builder::name` from the op's declared shape: one `Handle` parameter per edge
+  of `In<'a>`, in order, then the `Cfg` (omitted when it is `()`). This covers
+  **every** shape the macro parses — sources (`In = ()`), single- and
+  multi-input ops, edges read with their tick flag (`(&'a T, bool)` — `delay`,
+  `merge`), `passive = [..]` non-activating edges, `start`/`stop`/`teardown`
+  lifecycle hooks, and `init_arg` seeded accumulators — so no op keeps a
+  hand-written `Builder` method for want of tooling. Node labels come from
+  `type_name::<X>()` (shortened), not hand-written strings. `no_builder` is
+  left for the case where the interpreted *signature* deliberately differs
+  from the shape: `with_time` (seeds its value slot from the input's current
+  value, so it never requires `Out: Default`) is the catalog's only one. The
+  `bimap`/`trimap` family are *additional* hand-written methods over the
+  `Join`/`Join3` ops — their active/passive split is a runtime argument rather
+  than the compile-time `passive` mask — alongside the generated `join` /
+  `join_passive` / `join3`. The generated body is the same
+  `next_node_index` → `slot`/`new_slot` → `push_node` → `set_*` sequence a
+  hand-written builder contains, against a `pub(crate)` seam on `Builder`; the
+  public `register_op1`…`register_op4` primitives remain the wiring path for
+  **out-of-crate** ops, which write their forwarders by hand (`#[op]`'s output
+  names `crate::…`, so it is in-crate tooling — see `tests/custom_op.rs`).
 - **Compiled / `graph!`** — one `OpKind::info()` row per op (an `OpInfo`:
   op type, dispatch flags, and the `Inputs`/`CfgInit`/`StateInit` shapes) drives
   every emitter. Named fields make a half-filled row a compile error.
@@ -377,9 +391,11 @@ zero-touch; there is no macro table**:
 
 | Op shape | Interpreted | `graph!`/compiled |
 |---|---|---|
-| Single-input (`#[op]` scope) | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
-| Multi-input, values-only, all-active (the `join` shape) | `ops.rs` `impl` (+ attr with `no_builder`) + `register_op2`-based fluent method | nothing — `&stream` args classify as edges |
-| Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | hand `Builder` method + fluent method (`bimap` / `fold` are the public primitives) | nothing — attribute flags on `#[op]` |
+| Single-input | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
+| Multi-input, values-only, all-active (the `join` shape) | same — `ops.rs` (`impl` + attr) + fluent method | nothing — `&stream` args classify as edges |
+| Source (`In = ()`), lifecycle hooks, tick-flag edges | same — `ops.rs` (`impl` + attr) + fluent method | nothing |
+| Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | same — `ops.rs` (`impl` + attr, with the flag) + fluent method | nothing — attribute flags on `#[op]` |
+| Interpreted signature ≠ the op's shape (`with_time`) | `no_builder` + a hand-written `Builder` method + fluent method | nothing |
 
 Constraint #1 still holds (a proc macro sees tokens, not types), but it is
 routed around rather than paid per-op: every method call is emitted through
@@ -449,13 +465,16 @@ not thread-offload. islands already cover *static* subgraphs composed procedural
 (append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
 and `Builder::demux` on the interpreted engine.
 
-**Engine coverage note:** `never`, `combine`, and `delay_with_reset` land as
-interpreted-engine (fluent) ports — like `feedback` — since a zero-input
-source, an n-ary fan-in, and a two-tick-flag scheduling op fall outside the
-`#[op]` single-input scope that auto-emits the `graph!`/compiled forwarders.
+**Engine coverage note:** `never` and `combine` land as interpreted-engine
+(fluent) ports — like `feedback` — since a source that never ticks and an
+n-ary fan-in have no `Op` witness for `#[op]` to hang forwarders on (`combine`'s
+arity is a runtime slice, which the fixed-arity tuple `In` cannot express).
+`delay_with_reset` since reached all three engines through its
+`DelayWithResetFwd` witness op, which restates its two-tick-flag `In` in the
+uniform one-`(value, tick)`-pair-per-edge form `#[op]` parses.
 `split`/`collapse` are pure sugar over `map`/`map_filter`, so they reach every
-engine for free. Extending `combine`/`delay_with_reset` to `graph!`/compiled is
-a follow-up (as it is for `feedback`).
+engine for free. Extending `combine` to `graph!`/compiled is a follow-up (as it
+is for `feedback`).
 
 **Gate 2:** every classic node test has a next twin producing identical
 values and tick times.
@@ -1148,16 +1167,39 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
   labels). Deferred deliberately — we want a better introspection/visualization
   story than a one-off GML dump, to be designed and scoped separately later
   rather than ported as-is from classic.
-- **`#[node]` retirement**: replaced by `Op` impls.
+- **`#[node]` retirement** ✅ **done in next**: replaced by `Op` impls. There
+  is no `#[node]`, and no dependency on `wingfoil-derive`, anywhere under
+  `next/` — every node in the catalog, the adapters, and the tests is an `Op`
+  impl (semantics as associated functions, `Cfg`/`State`/`In`/`Out`), which is
+  what let one body serve all three engines. The user-facing escape hatch
+  `#[node]` existed for — writing a node by hand — is
+  `GraphBuilder::custom_node` plus the public `register_op1`…`register_op4`
+  primitives (`tests/custom_node.rs`, `tests/custom_op.rs`). Deleting the
+  `wingfoil-derive` *crate* belongs to the cutover, when the legacy tree it
+  serves is removed; nothing in next blocks it.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
-  interpreted `Builder` method (over `register_op1`) for single-input ops;
-  labels derive from `type_name`; the `graph!`/compiled path is table-driven
-  (`OpKind::info`). See **Adding an op** under Phase 2. The completeness test
-  guarding against one-sided registration ✅ landed in Phase 1 as a
-  compile-guard (`tests/op_completeness.rs`) — see **Adding an op**. Still
-  open: extending `#[op]` coverage to more shapes; optionally generating the
-  fluent method (only clean as inherent-on-`Stream`, deliberately deferred to
-  keep it trait-based).
+  interpreted `Builder` method *and* the `graph!`/compiled forwarders from one
+  attribute, with labels derived from `type_name`; there is no per-op table in
+  the macro (see `macro-extensibility-decision.md`). See **Adding an op**
+  under Phase 2. The completeness test guarding against one-sided registration
+  ✅ landed in Phase 1 as a compile-guard (`tests/op_completeness.rs`) — see
+  **Adding an op**.
+  - **Shape coverage ✅ complete.** The generated `Builder` method used to be
+    scoped to the single-active-input shape, so ~13 ops kept a hand-written
+    method that repeated the same twenty-line wiring. It is now derived from
+    the op's `In` shape and covers all of them: sources (`In = ()`),
+    multi-input, tick-flag edges (`(&'a T, bool)`), `passive = [..]` masks,
+    `start`/`stop`/`teardown` hooks, and `init_arg` seeded accumulators —
+    `ticker`, `constant`, `throttle`, `window`, `timed`, `filter`, `fold`,
+    `sample`, `finally`, `join`, `delay`, `merge` and `delay_with_reset` all
+    dropped their hand-written wiring, and `try_join` / `join3` / `try_join3` /
+    `join_passive` / `try_join_passive` gained generated methods the fluent
+    layer now wires through. `no_builder` survives for one op, `with_time`,
+    whose signature deliberately differs from its shape (see **Adding an op**).
+    Per-shape tests in `tests/op_builder_shapes.rs`.
+  - Still open (deliberate): generating the **fluent** method too. Only clean
+    as inherent-on-`Stream`, which would close the open op vocabulary that the
+    extension-trait design exists to keep — deferred, not owed.
 
 ## Phase 6 — Python bindings, examples, benches
 
