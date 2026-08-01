@@ -5,7 +5,7 @@
 arity, optional builder, including compiled islands), `#[pyadapter]` (source,
 sink, burst, fallible, defaults), the edge conversions, and Python-defined
 nodes in both the composition and subclass forms. What remains is breadth, not
-mechanism: the per-adapter bindings (postgres done, seven to go) and the
+mechanism: the per-adapter bindings (postgres done, fourteen to go) and the
 Phase 4.5 mutable frontier for extending a *running* graph.
 **`wingfoil-next-python`
 is the go-forward Python binding: it supersedes the legacy `wingfoil-python`
@@ -218,6 +218,28 @@ method, where that argument is in scope. `PyElement: TryFrom<&PyElement>` (the
 identity conversion) is what lets such an adapter still go through the standard
 `typed_burst_input` seam rather than a hand-written `#[pyfunction]`.
 
+**What `#[pyadapter]` does not cover: a handle receiver.** The macro emits free
+functions over a `&GraphBuilder` (source) or `&Stream<T>` (sink/transform)
+receiver. A *stateful* server/exporter object — legacy's `WebServer`
+(constructed, then `.port()` / `.sub(topic)`) and `PrometheusExporter`
+(`.serve()` / `.register(name, stream)`) — has a lifecycle the free-fn form
+cannot express, so those two bindings are hand-written as a `#[pyclass]` with
+`#[pymethods]`, wiring through the same `PyGraph`/`PyStream` seams the macro
+uses. Two adapters is not enough surface to justify a handle form in the macro;
+revisit if a third appears.
+
+**Erasing a burst attaches the GIL once, not once per element.** `PyGraph::run`
+*detaches* for the duration of the run, so the graph thread does not hold the
+GIL while cycling and every `Python::attach` inside a cycle is a real
+`PyGILState_Ensure`/`Release` pair, contending with any other Python thread.
+`T: Into<PyElement>` attaches per element (as do `PyElement::list` and `Clone`),
+so an element-by-element erasure cost one full acquire per row — a thousand-row
+burst paid a thousand of them per tick. Nested attaches short-circuit on a
+thread-local count, so all three burst seams (`erase_burst_source`,
+`erased_burst_output`, `typed_burst_input`) hoist a single attach around the
+whole burst. A binding doing its own per-element Python work in a `map` /
+`try_map` must do the same.
+
 ### `#[pygraph]` — expose user wiring logic
 
 Write the wiring as a function over the shared builder; `#[pygraph]` exposes it
@@ -308,7 +330,7 @@ only the wiring seams are dynamic.
 | `#[pyop]` extensions | **done** — `State` is any `Default`-seedable type (re-seeded per run); `In<'a> = (&A, &B)` emits `module.name(stream, other)` over `wire_op2`, `(&A, &B, &C)` emits `module.name(stream, second, third)` over `wire_op3` / `Builder::register_op3` (the general form of the `Join3`-specialised `trimap`), and `(&A, …, &D)` over `wire_op4` / `register_op4`; stream parameters are named, so they take keywords. A tuple `Cfg` destructures into one named Python parameter per element via `arg = (p1, p2, …)`. The emitter is arity-generic — arity 5+ needs only a `register_op<n>`/`wire_op<n>` pair plus a parameter name. Note this ceiling is on *Rust-authored* ops (heterogeneous static input types, no variadic generics); a Python-defined node via `Graph.custom_node` takes any number of erased upstreams | ✅ done |
 | `#[pygraph]` macro (wiring reuse) | expose a Rust-authored sub-graph as a Python callable, spliced into the caller's graph; interior runs at native types, only the edges erase. **Any arity**: N `&Stream<T>` inputs, and a single `Stream<U>` or a tuple of them out (Python gets a tuple of streams). An optional leading `&GraphBuilder` — for wiring that creates nodes of its own — makes the generated fn take the graph first; builder-only (no stream inputs) is a *source* sub-graph, erasing via `erase_source`. Over the `typed_input`/`erased_output` seams | ✅ done |
 | `#[pyadapter]` macro (source + sink + burst) | **source, sink/transform, and burst adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. `Stream<Burst<T>>` erases to a Python `list` per tick, and on the way in a Python `list`/`tuple` rebuilds a multi-value burst (else a single-element burst) — so a burst source round-trips into a burst sink. Over the `builder`/`erase_source`/`erase_burst_source` and `typed_input`/`typed_burst_input`/`erased_output`/`erased_burst_output` seams; a sink's `Stream<()>` erases to `None`. Adapter method params must be `FromPyObject`. **Fallible wiring** (`Result<Stream<T>>` → a `PyResult` fn, wiring errors raised as Python exceptions) and **forwarded `#[pyo3(signature = …)]`** (Python defaults for optional args, with the generated receiver injected), and the **free-fn form** (receiver as the first param — no throwaway trait, no duplicated signature; the impl form remains for adapters wanting a fluent Rust trait) landed with the first real adapter binding | ✅ done |
-| Per-adapter Python bindings (`crate::adapters::*`) | The `#[pyadapter]` exposure of the real `wingfoil_next::adapters::*` I/O adapters, each behind a cargo feature of the same name and registered in the `#[pymodule]` under the same `#[cfg]`. **postgres done**: `postgres_read` / `postgres_sub` / `postgres_source` / `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict` edge (`PyPgRow`) and declared-column write marshaling; unit-level marshaling tests plus a service-backed pytest leg in `postgres-next-integration.yml`. Remaining: the other adapters as they are bound | 🟡 postgres done |
+| Per-adapter Python bindings (`crate::adapters::*`) | The `#[pyadapter]` exposure of the real `wingfoil_next::adapters::*` I/O adapters, each behind a cargo feature of the same name and registered in the `#[pymodule]` under the same `#[cfg]`. **postgres done**: `postgres_read` / `postgres_sub` / `postgres_source` / `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict` edge (`PyPgRow`) and declared-column write marshaling; unit-level marshaling tests plus a service-backed pytest leg in `postgres-next-integration.yml`. The recipe is the `/bind-adapter-next` skill. **Remaining: 14** — legacy `wingfoil-python` binds 15 adapters in all, in four tiers: *mechanical* (csv, kafka, redis, etcd, fluvio, zmq — a scalar/bytes payload and the free-fn form); *dynamic payload* (kdb, fix — a `PyPgRow`-shaped stand-in plus column marshaling); *handle pyclass* (web's `WebServer`, prometheus's `PrometheusExporter` — **not** a shape `#[pyadapter]` can generate, see below); and *stream transform* (augurs' six fns, otlp's `otlp_push` — legacy exposes these as `stream.method(…)`, next as free fns) | 🟡 postgres done, 14 to go |
 | Compiled graph reachable from Python | **done, and better than the original POC** — rather than one hard-coded `compiled()` graph, a `graph!`-generated **`nested()` island** is exposed through `#[pygraph]`: its signature is `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, i.e. exactly a builder-taking `#[pygraph]` wiring fn, so no island-specific machinery was needed. The interior is monomorphized straight-line code; Python wires around it dynamically. A pytest asserts the island's values *and* tick times match its interpreted twin, and that it composes with Python `map` on both sides. Still true: `compiled()`/`nested()` are not Python-*splittable* — an island is one opaque node | ✅ done |
 | Edge-conversion trait bounds | **done** — every integer width (`i8`…`isize`, `u8`…`usize`), `f32`/`f64`, `bool`, `String`/`&str`, `()`→`None`, `Vec<u8>`→**`bytes`** (not a list of ints), and `Option<T>`→`None`/value with the inner conversion propagating a wrong-typed value as an error rather than a silent `None`. A user record type crosses via its own `From`/`TryFrom` impls — legal from a downstream crate under the orphan rules, proven by a `Trade` struct defined in the external seam-test crate | ✅ done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |

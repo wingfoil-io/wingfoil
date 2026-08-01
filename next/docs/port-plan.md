@@ -1204,7 +1204,30 @@ tests covered — not "legacy pytest passes unchanged."
   duplicated signature, and the shared run-shape helpers live in
   `crate::adapters::common` (`historical_params` / `realtime_params` /
   `run_mode` / `secs_to_nanotime`) for the mode-aware sources that follow.
-  Remaining: the other adapters.
+  The recipe now lives in its own skill, **`/bind-adapter-next`**, extracted
+  from the Python step of `/new-adapter-next`.
+  **Remaining: 14.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — csv, kafka, redis, etcd, fluvio, zmq: a scalar/bytes payload
+    over the free-fn form, close to copy-postgres-and-shrink;
+  - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
+    stand-in plus column marshaling;
+  - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):
+    stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
+    generate (it has no handle receiver), so these are hand-written over the
+    same `PyGraph`/`PyStream` seams;
+  - *stream transform* — augurs (six fns), otlp (`otlp_push`): legacy exposes
+    these as `stream.method(…)`; next uses free fns, a deliberate ergonomic
+    deviation for uniformity with the plugin story.
+
+  Two cross-cutting decisions carried by the skill: mode/type selectors take
+  **strings** with a loud error rather than `#[pyclass]` enums (legacy has
+  `AeronMode` / `Iceoryx2ServiceVariant` / `Iceoryx2Mode`), and conversions
+  **fail loudly** rather than defaulting (legacy prometheus/otlp
+  `str().unwrap_or_default()` turns a failed conversion into an empty string).
+  Both are deviations to note per binding. Sequencing note: adapters needing a
+  system library at build time (aeron, iceoryx2) must not join the
+  `all-adapters` roll-up that `next-python-test.yml` builds without that job
+  also gaining the toolchain install.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

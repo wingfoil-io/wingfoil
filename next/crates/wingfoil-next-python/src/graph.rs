@@ -40,6 +40,30 @@ use crate::PyElement;
 /// [`PyStream`] wired from it so `value()` works on whichever you kept.
 type RunnerSlot = Rc<RefCell<Option<Runner>>>;
 
+/// Erase one burst to a Python `list` of its members — the shared body of
+/// [`PyGraph::erase_burst_source`] and [`PyStream::erased_burst_output`].
+///
+/// The single [`Python::attach`] around the whole burst is load-bearing, not
+/// tidiness. [`PyGraph::run`] *detaches* for the duration of the run, so the
+/// graph thread does not hold the GIL while cycling; every `attach` inside a
+/// cycle is therefore a real `PyGILState_Ensure`/`Release` pair, contending
+/// with any other Python thread. `T: Into<PyElement>` attaches per element (as
+/// do `PyElement::list` and `Clone`), so erasing element-by-element cost one
+/// full acquire per row — a thousand-row burst paid a thousand of them per
+/// tick. Nested attaches short-circuit on a thread-local count, so hoisting one
+/// attach to the outside turns all of those into the cheap path and leaves a
+/// single acquire per burst. This mirrors the input direction, where
+/// [`PyStream::typed_burst_input`] already attaches once per burst.
+fn erase_burst<T>(burst: &Burst<T>) -> PyElement
+where
+    T: Clone + Default + Into<PyElement> + 'static,
+{
+    Python::attach(|_py| {
+        let items: Vec<PyElement> = burst.iter().map(|v| v.clone().into()).collect();
+        PyElement::list(&items)
+    })
+}
+
 /// A raw pointer marked `Send` purely to satisfy the bound on
 /// [`Python::detach`], which requires a `Send` closure even though it runs that
 /// closure in place on the calling thread. See the safety note in
@@ -157,10 +181,7 @@ impl PyGraph {
     where
         T: Clone + Default + Into<PyElement> + 'static,
     {
-        self.wrap(typed.map(|burst: &Burst<T>| {
-            let items: Vec<PyElement> = burst.iter().map(|v| v.clone().into()).collect();
-            PyElement::list(&items)
-        }))
+        self.wrap(typed.map(erase_burst::<T>))
     }
 
     /// Run the graph to its bound, storing the runner so retained
@@ -1005,10 +1026,7 @@ impl PyStream {
     where
         U: Clone + Default + Into<PyElement> + 'static,
     {
-        self.wrap(typed.map(|burst: &Burst<U>| {
-            let items: Vec<PyElement> = burst.iter().map(|v| v.clone().into()).collect();
-            PyElement::list(&items)
-        }))
+        self.wrap(typed.map(erase_burst::<U>))
     }
 
     /// The stream's current value after [`PyGraph::run`].
