@@ -76,8 +76,13 @@ jobs:
 
       - name: Build module and run pytest
         working-directory: next/crates/wingfoil-next-python
+        # `-F all-adapters` rather than the `[tool.maturin] features` default:
+        # each adapter binding carries a service-free pytest tier (names exposed,
+        # argument defaults, wiring-time rejections), and those only run if the
+        # module was built with that adapter. The pyproject list stays the
+        # *packaging* decision for released wheels; this is the test build.
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip maturin pytest
-          .venv/bin/maturin develop
+          .venv/bin/maturin develop -F all-adapters
           .venv/bin/pytest -q

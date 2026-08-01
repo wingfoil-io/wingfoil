@@ -27,6 +27,12 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7"]
 # is pure Rust (postgres, on tokio-postgres) can ship in the default wheel,
 # whereas one needing a system library at build time must stay opt-in
 # (`maturin develop -F kdb`) or it breaks the build for everyone.
+#
+# kafka is deliberately *not* here, for a different reason: `rdkafka` builds
+# librdkafka from source, so it needs no system library but adds minutes to
+# every wheel build. Opt in with `maturin develop -F kafka`. CI builds it — the
+# next-python workflow develops with `-F all-adapters` so each binding's
+# service-free pytest tier actually runs.
 features = ["extension-module", "postgres"]
 # Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
 # and the importable `wingfoil_next` is the Python package under `python/`, which
@@ -45,5 +51,6 @@ testpaths = ["tests"]
 # real ConnectionRefused/import error — not a skip.
 markers = [
     "requires_postgres: needs PostgreSQL on localhost:5432",
+    "requires_kafka: needs a Kafka broker on localhost:9092",
 ]
-addopts = "-m 'not requires_postgres'"
+addopts = "-m 'not requires_postgres and not requires_kafka'"
