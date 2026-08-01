@@ -321,3 +321,50 @@ fn register_op3_state_re_seeds_between_runs() {
         "re-run must not continue state"
     );
 }
+
+/// `register_op4` — the four-active-input rung. Each arity is its own function
+/// because the inputs are heterogeneous static types; this proves the fourth
+/// slot is read and triggers like the rest.
+#[test]
+fn register_op4_reads_four_actives() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let a = counter.map(|n: &u64| *n as f64);
+    let b = counter.map(|n: &u64| *n as f64 * 2.0);
+    let c = counter.map(|n: &u64| *n as f64 * 3.0);
+    let d = counter.map(|n: &u64| *n as f64 * 4.0);
+
+    let (b_h, c_h, d_h) = (b.handle(), c.handle(), d.handle());
+    let blended: Stream<f64> = a.wire(move |bld, h| {
+        bld.register_op4(
+            h,
+            b_h,
+            c_h,
+            d_h,
+            "blend4",
+            Activation::NONE,
+            (),
+            || 0.0_f64,
+            |_cfg, total: &mut f64, w: &f64, x: &f64, y: &f64, z: &f64, _ctx| {
+                *total += w + x + y + z;
+                Ok(Tick::Value(*total))
+            },
+        )
+    });
+
+    let out = blended.with_time().accumulate();
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    // n=1: 1+2+3+4 = 10; n=2: +20 -> 30; n=3: +30 -> 60.
+    assert_eq!(
+        vec![
+            (NanoTime::ZERO, 10.0),
+            (NanoTime::new(100), 30.0),
+            (NanoTime::new(200), 60.0),
+        ],
+        runner.value(&out)
+    );
+}

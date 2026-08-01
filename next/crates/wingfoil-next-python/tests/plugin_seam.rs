@@ -597,3 +597,65 @@ fn wire_op3_seam_runs_three_inputs_from_an_external_crate() {
     let got: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
     assert_eq!(vec![6.0, 12.0, 18.0], got);
 }
+
+// A **four-input** external `#[pyop]` — the widest arity the macro emits.
+struct Blend4Ext;
+
+#[pyop(name = blend4_ext)]
+impl Op for Blend4Ext {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64, &'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64, &f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 + input.1 + input.2 + input.3))
+    }
+}
+
+#[test]
+fn pyop_four_input_expands_in_an_external_crate() {
+    let _f = blend4_ext;
+}
+
+#[test]
+fn wire_op4_seam_runs_four_inputs_from_an_external_crate() {
+    let g = PyGraph::new();
+    let counter = g.counter(Duration::from_nanos(100));
+    let scaled = |factor: &'static str| {
+        counter.map(Python::attach(|py| {
+            py.eval(
+                &std::ffi::CString::new(format!("lambda n: n * {factor}"))
+                    .expect("literal lambda has no interior nul"),
+                None,
+                None,
+            )
+            .expect("lambda compiles")
+            .unbind()
+        }))
+    };
+    let (b, c, d) = (scaled("2"), scaled("3"), scaled("4"));
+
+    let blended = counter.wire_op4::<f64, f64, f64, f64, _, _, f64, _, _>(
+        &b,
+        &c,
+        &d,
+        "blend4",
+        Activation::NONE,
+        (),
+        || (),
+        |_cf, _s, w: &f64, x: &f64, y: &f64, z: &f64, _ctx| Ok(Tick::Value(w + x + y + z)),
+    );
+    let acc = blended.accumulate();
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let got: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+    assert_eq!(vec![10.0, 20.0, 30.0], got);
+}

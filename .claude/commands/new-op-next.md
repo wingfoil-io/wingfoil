@@ -268,10 +268,11 @@ Pick the lightest tool that fits:
   impl Op for MyOp { /* … */ }
   ```
   Covers stateless and stateful ops (`State` is any `Default`-seedable type,
-  re-seeded per run) at one, two or three inputs — `In<'a> = (&A, &B)` emits
+  re-seeded per run) at one to four inputs — `In<'a> = (&A, &B)` emits
   `module.name(stream, other)`, `(&A, &B, &C)` emits
-  `module.name(stream, second, third)`. All inputs are active; a passive edge
-  still needs a hand-written method.
+  `module.name(stream, second, third)`, and four inputs adds `fourth`. All
+  inputs are active; a passive edge still needs a hand-written method. The
+  stream parameters are named, so callers may pass them by keyword.
 
   A tuple `Cfg` gets one named Python parameter per element:
   ```rust
@@ -279,10 +280,14 @@ Pick the lightest tool that fits:
   ```
   which reads as `zscore(stream, window, decay)` instead of taking a tuple.
 
-  **Arity 4+ is not a macro gap — it is a missing primitive.** Add
-  `Builder::register_op<n>` (mirror `register_op3`, which mirrors
-  `register_op2` line for line) and `PyStream::wire_op<n>`, then the macro
-  extends by one arm. Until then such ops use the object form directly.
+  **Arity 5+ is not a macro gap — it is a missing primitive.** Add
+  `Builder::register_op<n>` (mirror `register_op4`, which mirrors
+  `register_op3` line for line), `PyStream::wire_op<n>`, and the parameter name
+  in the macro's `receiver_names`; the emitter itself is arity-generic. Each
+  arity needs its own registration function because the inputs are
+  heterogeneous static types and Rust has no variadic generics — which is a
+  limit on *Rust-authored* ops only. A node authored in Python via
+  `Graph.custom_node` / `CustomStream` takes any number of erased upstreams.
 
 Then:
 

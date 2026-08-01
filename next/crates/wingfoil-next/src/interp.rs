@@ -1239,6 +1239,83 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// Register a **four-active-input** op: all four upstreams read by
+    /// reference, all triggering, one output slot, engine-owned `cfg`+`state`,
+    /// no lifecycle hooks. The next rung up from
+    /// [`register_op3`](Self::register_op3).
+    ///
+    /// Each arity is its own function because the inputs are *heterogeneous* —
+    /// `&A, &B, &C, &D` are distinct static types the step closure is
+    /// monomorphized over, and Rust has no variadic generics to fold them into
+    /// one signature. A wider op adds the next rung the same way.
+    // As the smaller arities: over clippy's limit because it is a registration
+    // primitive whose arguments mirror them plus one handle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_op4<A, B, C, D, Cfg, S, Out, Step, SInit>(
+        &mut self,
+        a: Handle<A>,
+        b: Handle<B>,
+        c: Handle<C>,
+        d: Handle<D>,
+        label: &'static str,
+        activation: Activation,
+        cfg: Cfg,
+        state_init: SInit,
+        mut step: Step,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        D: 'static,
+        Cfg: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &D, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let a_slot = self.slot(a);
+        let b_slot = self.slot(b);
+        let c_slot = self.slot(c);
+        let d_slot = self.slot(d);
+        let out = self.new_slot(Out::default());
+        let cs = Rc::new(RefCell::new((cfg, state_init())));
+        let (cs_reset, out_reset) = (cs.clone(), out.clone());
+        self.push_node(
+            vec![a.idx, b.idx, c.idx, d.idx],
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let va = a_slot.borrow();
+                let vb = b_slot.borrow();
+                let vc = c_slot.borrow();
+                let vd = d_slot.borrow();
+                match step(cfg, state, &va, &vb, &vc, &vd, &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop((va, vb, vc, vd));
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop((va, vb, vc, vd));
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out_reset.borrow_mut() = Out::default();
+        }));
+        self.make_handle(idx)
+    }
+
     pub fn ticker(&mut self, period: Duration) -> Handle<()> {
         let idx = self.nodes.len();
         let out = self.new_slot(());
