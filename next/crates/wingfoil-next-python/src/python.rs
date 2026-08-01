@@ -417,6 +417,30 @@ impl Op for Blend3 {
     }
 }
 
+// `blend4` — a **four-input** `#[pyop]`: the widest arity the macro emits,
+// over `wire_op4` / `Builder::register_op4`.
+struct Blend4;
+
+#[pyop(name = blend4)]
+impl Op for Blend4 {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64, &'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64, &f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(
+            input.0 + input.1 * 10.0 + input.2 * 100.0 + input.3 * 1000.0,
+        ))
+    }
+}
+
 // `clamped_scale` — a **tuple-`Cfg`** `#[pyop]`: `arg = (factor, ceiling)` gives
 // each element of `Cfg = (f64, f64)` its own named Python parameter, so the call
 // reads `clamped_scale(stream, factor, ceiling)` rather than passing a tuple.
@@ -578,6 +602,7 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(running_total, m)?)?;
     m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
     m.add_function(wrap_pyfunction!(blend3, m)?)?;
+    m.add_function(wrap_pyfunction!(blend4, m)?)?;
     m.add_function(wrap_pyfunction!(clamped_scale, m)?)?;
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;

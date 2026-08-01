@@ -29,16 +29,18 @@
 //! // => wingfoil_next.square(stream)   (register: wrap_pyfunction!(square, m)?)
 //! ```
 //!
-//! **Scope:** one-, two- or three-input concrete (non-generic) ops:
+//! **Scope:** one- to four-input concrete (non-generic) ops:
 //!
 //! | `In<'a>` | generated signature | seam |
 //! |---|---|---|
 //! | `(&'a A,)` | `module.name(stream)` | `wire_op1` |
 //! | `(&'a A, &'a B)` | `module.name(stream, other)` | `wire_op2` |
 //! | `(&'a A, &'a B, &'a C)` | `module.name(stream, second, third)` | `wire_op3` |
+//! | `(&'a A, …, &'a D)` | `module.name(stream, second, third, fourth)` | `wire_op4` |
 //!
 //! All inputs are **active** (any one ticking runs the op); a passive edge
-//! needs a hand-written method, as on the Rust side.
+//! needs a hand-written method, as on the Rust side. The stream parameters are
+//! named, so they can be passed by keyword.
 //!
 //! `Cfg` may be `()` (no config parameter), a single `FromPyObject` type
 //! (`arg = <name>`, defaulting to `cfg`), or a **tuple** destructured into one
@@ -49,12 +51,16 @@
 //! from `Default` on each run, so re-runs start clean).
 //!
 //! Wider ops need a `register_op<n>`/`wire_op<n>` pair for their arity —
-//! `register_op3` mirrors `register_op2` line for line — after which this macro
-//! extends by one arm. Until then they use the object form directly.
+//! `register_op4` mirrors `register_op3` line for line — plus the parameter
+//! name in `receiver_names`. The emitter itself is arity-generic, so nothing
+//! else changes. (Each arity needs its own registration function because the
+//! inputs are *heterogeneous* static types and Rust has no variadic generics;
+//! a Python-authored node has no such limit — `Graph.custom_node` takes any
+//! number of erased upstreams.)
 
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, TokenStream as TokenStream2, TokenTree};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -738,6 +744,19 @@ fn burst_inner(ty: &Type) -> Option<Type> {
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`
 /// supports one- or two-input ops.
+/// The generated function's stream parameters, by input arity.
+///
+/// `other` (rather than `second`) at arity two is the name that shipped with the
+/// two-input form; keeping it avoids breaking a caller who passes it by keyword.
+fn receiver_names(n: usize) -> &'static [&'static str] {
+    match n {
+        1 => &["stream"],
+        2 => &["stream", "other"],
+        3 => &["stream", "second", "third"],
+        _ => &["stream", "second", "third", "fourth"],
+    }
+}
+
 /// The generated function's config parameter list and the value handed to the
 /// op, from `Cfg` and the `arg = …` names.
 ///
@@ -810,16 +829,16 @@ fn ref_tuple_elems(ty: &Type) -> syn::Result<Vec<Type>> {
                 }
             }
         }
-        if matches!(elems.len(), 1..=3) {
+        if matches!(elems.len(), 1..=4) {
             return Ok(elems);
         }
     }
     Err(Error::new(
         ty.span(),
-        "#[pyop] supports one-, two- or three-input ops (`type In<'a> = (&'a A,)`, \
-         `(&'a A, &'a B)` or `(&'a A, &'a B, &'a C)`); a wider op needs a \
-         `register_op<n>`/`wire_op<n>` pair for its arity — add them the way \
-         `register_op3` mirrors `register_op2`, then extend this macro",
+        "#[pyop] supports one- to four-input ops (`type In<'a> = (&'a A,)` through \
+         `(&'a A, &'a B, &'a C, &'a D)`); a wider op needs a `register_op<n>`/`wire_op<n>` \
+         pair for its arity — add them the way `register_op4` mirrors `register_op3`, then \
+         add the parameter name to `receiver_names`",
     ))
 }
 
@@ -864,84 +883,50 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let (param, cfg_value) = cfg_params(args, &cfg_ty, name.span())?;
     let state_seed = quote! { || <#state_ty as ::core::default::Default>::default() };
 
-    let body = if elems.len() == 1 {
-        let a_ty = &elems[0];
-        quote! {
-            #[pyo3::pyfunction]
-            fn #name(
-                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
-                #param
-            ) -> ::wingfoil_next_python::Stream {
-                ::wingfoil_next_python::Stream::from(
-                    ::wingfoil_next_python::PyStream::wire_op1::<#a_ty, _, _, #out_ty, _, _>(
-                        stream.object(),
-                        #name_str,
-                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
-                        #cfg_value,
-                        #state_seed,
-                        |__c, __s, __a: &#a_ty, __ctx| {
-                            <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
-                        },
-                    )
+    // One emitter for every arity: the arms differed only in how many streams
+    // they took and which `wire_op<n>` they called, so they are derived rather
+    // than pasted — adding a rung is `register_op<n>` + `wire_op<n>` plus a name
+    // in `RECEIVER_NAMES`.
+    let n = elems.len();
+    let wire = format_ident!("wire_op{}", n);
+    let receivers: Vec<Ident> = receiver_names(n)
+        .iter()
+        .map(|s| Ident::new(s, name.span()))
+        .collect();
+    let receiver_params = receivers.iter().map(|r| {
+        quote! { #r: pyo3::PyRef<'_, ::wingfoil_next_python::Stream> }
+    });
+    let receiver_args = receivers.iter().map(|r| quote! { #r.object() });
+    let input_idents: Vec<Ident> = (0..n)
+        .map(|i| Ident::new(&format!("__a{i}"), name.span()))
+        .collect();
+    let closure_params = input_idents
+        .iter()
+        .zip(&elems)
+        .map(|(id, ty)| quote! { #id: &#ty });
+
+    let body = quote! {
+        #[pyo3::pyfunction]
+        fn #name(
+            #(#receiver_params),*
+            #param
+        ) -> ::wingfoil_next_python::Stream {
+            ::wingfoil_next_python::Stream::from(
+                ::wingfoil_next_python::PyStream::#wire::<
+                    #(#elems,)* _, _, #out_ty, _, _,
+                >(
+                    #(#receiver_args,)*
+                    #name_str,
+                    <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
+                    #cfg_value,
+                    #state_seed,
+                    |__c, __s, #(#closure_params,)* __ctx| {
+                        <#self_ty as ::wingfoil_next_python::Op>::cycle(
+                            __c, __s, (#(#input_idents),*,), __ctx,
+                        )
+                    },
                 )
-            }
-        }
-    } else if elems.len() == 3 {
-        let (a_ty, b_ty, c_ty) = (&elems[0], &elems[1], &elems[2]);
-        quote! {
-            #[pyo3::pyfunction]
-            fn #name(
-                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
-                second: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
-                third: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
-                #param
-            ) -> ::wingfoil_next_python::Stream {
-                ::wingfoil_next_python::Stream::from(
-                    ::wingfoil_next_python::PyStream::wire_op3::<
-                        #a_ty, #b_ty, #c_ty, _, _, #out_ty, _, _,
-                    >(
-                        stream.object(),
-                        second.object(),
-                        third.object(),
-                        #name_str,
-                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
-                        #cfg_value,
-                        #state_seed,
-                        |__c, __s, __a: &#a_ty, __b: &#b_ty, __d: &#c_ty, __ctx| {
-                            <#self_ty as ::wingfoil_next_python::Op>::cycle(
-                                __c, __s, (__a, __b, __d), __ctx,
-                            )
-                        },
-                    )
-                )
-            }
-        }
-    } else {
-        let a_ty = &elems[0];
-        let b_ty = &elems[1];
-        quote! {
-            #[pyo3::pyfunction]
-            fn #name(
-                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
-                other: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
-                #param
-            ) -> ::wingfoil_next_python::Stream {
-                ::wingfoil_next_python::Stream::from(
-                    ::wingfoil_next_python::PyStream::wire_op2::<#a_ty, #b_ty, _, _, #out_ty, _, _>(
-                        stream.object(),
-                        other.object(),
-                        #name_str,
-                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
-                        #cfg_value,
-                        #state_seed,
-                        |__c, __s, __a: &#a_ty, __b: &#b_ty, __ctx| {
-                            <#self_ty as ::wingfoil_next_python::Op>::cycle(
-                                __c, __s, (__a, __b), __ctx,
-                            )
-                        },
-                    )
-                )
-            }
+            )
         }
     };
     Ok(body)

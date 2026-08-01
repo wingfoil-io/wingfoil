@@ -239,6 +239,42 @@ def test_pyop_three_inputs_are_all_active():
     assert 4 == len(out.value())
 
 
+def test_pyop_four_input_op():
+    # blend4 is a four-input #[pyop] — the widest arity the macro emits,
+    # over module.blend4(stream, second, third, fourth).
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)  # 1,2,3
+    b = a.map(lambda n: n * 2)
+    c = a.map(lambda n: n * 3)
+    d = a.map(lambda n: n * 4)
+    out = wf.blend4(a, b, c, d).collect()
+    g.run(cycles=3)
+    # a + 10b + 100c + 1000d
+    assert [(0, 4321.0), (100, 8642.0), (200, 12963.0)] == out.value()
+
+
+def test_pyop_four_input_names_its_streams():
+    """The generated stream parameters are named, so they can be passed by
+    keyword — `other` at arity two, `second`/`third`/`fourth` beyond it."""
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = a.map(lambda n: n * 2)
+    c = a.map(lambda n: n * 3)
+    d = a.map(lambda n: n * 4)
+    out = wf.blend4(a, second=b, third=c, fourth=d).collect()
+    g.run(cycles=1)
+    assert [(0, 4321.0)] == out.value()
+
+
+def test_pyop_two_input_keeps_its_original_parameter_name():
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)
+    b = a.map(lambda n: n * 10)
+    out = wf.weighted_add(a, other=b)
+    g.run(cycles=3)
+    assert out.value() == 33.0
+
+
 def test_pyop_tuple_cfg_names_each_element():
     # clamped_scale declares `arg = (factor, ceiling)` over `Cfg = (f64, f64)`,
     # so each knob is its own Python parameter rather than one tuple argument.
