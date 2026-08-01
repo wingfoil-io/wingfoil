@@ -717,6 +717,13 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(augurs_dtw, m)?)?;
         m.add_function(wrap_pyfunction!(augurs_cluster, m)?)?;
     }
+    #[cfg(feature = "kdb")]
+    {
+        use crate::adapters::kdb::{kdb_read, kdb_sub, kdb_write};
+        m.add_function(wrap_pyfunction!(kdb_read, m)?)?;
+        m.add_function(wrap_pyfunction!(kdb_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(kdb_write, m)?)?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;

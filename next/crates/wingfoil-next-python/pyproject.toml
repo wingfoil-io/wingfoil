@@ -47,6 +47,7 @@ features = [
     "zmq",
     "otlp",
     "augurs",
+    "kdb",
 ]
 # Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
 # and the importable `wingfoil_next` is the Python package under `python/`, which
@@ -69,5 +70,6 @@ markers = [
     "requires_redis: needs Redis on localhost:6379",
     "requires_etcd: needs etcd on localhost:2379",
     "requires_fluvio: needs a Fluvio cluster on localhost:9003",
+    "requires_kdb: needs a q process on localhost:5000",
 ]
-addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio'"
+addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb'"

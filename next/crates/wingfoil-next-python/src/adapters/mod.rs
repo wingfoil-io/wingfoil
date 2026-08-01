@@ -22,7 +22,8 @@
     feature = "csv",
     feature = "zmq",
     feature = "otlp",
-    feature = "augurs"
+    feature = "augurs",
+    feature = "kdb"
 ))]
 pub mod common;
 
@@ -36,6 +37,8 @@ pub mod etcd;
 pub mod fluvio;
 #[cfg(feature = "kafka")]
 pub mod kafka;
+#[cfg(feature = "kdb")]
+pub mod kdb;
 #[cfg(feature = "otlp")]
 pub mod otlp;
 #[cfg(feature = "postgres")]
