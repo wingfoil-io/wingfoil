@@ -704,6 +704,11 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(csv_read, m)?)?;
         m.add_function(wrap_pyfunction!(csv_write, m)?)?;
     }
+    #[cfg(feature = "otlp")]
+    {
+        use crate::adapters::otlp::otlp_push;
+        m.add_function(wrap_pyfunction!(otlp_push, m)?)?;
+    }
     #[cfg(feature = "zmq")]
     {
         use crate::adapters::zmq::{zmq_pub, zmq_sub};
