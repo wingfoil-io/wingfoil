@@ -666,6 +666,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(redis_stream_read, m)?)?;
         m.add_function(wrap_pyfunction!(redis_stream_write, m)?)?;
     }
+    #[cfg(feature = "etcd")]
+    {
+        use crate::adapters::etcd::{etcd_pub, etcd_sub};
+        m.add_function(wrap_pyfunction!(etcd_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(etcd_pub, m)?)?;
+    }
     // `m` is unused when no adapter feature is on.
     let _ = m;
     Ok(())

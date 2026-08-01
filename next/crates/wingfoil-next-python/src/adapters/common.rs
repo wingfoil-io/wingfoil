@@ -123,6 +123,17 @@ impl<'a, 'py> RecordDict<'a, 'py> {
         }
     }
 
+    /// A **required** `str` field — the shape for a record whose target has no
+    /// binding-level fallback (an etcd key, say), as opposed to
+    /// [`str_or`](Self::str_or).
+    pub fn str(&self, name: &str) -> Result<String> {
+        let who = self.who;
+        self.get(name)?
+            .ok_or_else(|| anyhow!("{who}: record is missing '{name}'"))?
+            .extract::<String>()
+            .map_err(|e| anyhow!("{who}: '{name}' must be a str: {e}"))
+    }
+
     /// A required bytes-like field (`bytes` / `bytearray`, or a sequence of
     /// ints — whatever pyo3 will extract).
     pub fn bytes(&self, name: &str) -> Result<Vec<u8>> {

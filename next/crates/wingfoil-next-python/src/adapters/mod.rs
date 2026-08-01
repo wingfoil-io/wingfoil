@@ -13,9 +13,16 @@
 //! exactly as [`crate::graph`] describes.
 
 // Compiled whenever any adapter binding is, since that is its only consumer.
-#[cfg(any(feature = "postgres", feature = "kafka", feature = "redis"))]
+#[cfg(any(
+    feature = "postgres",
+    feature = "kafka",
+    feature = "redis",
+    feature = "etcd"
+))]
 pub mod common;
 
+#[cfg(feature = "etcd")]
+pub mod etcd;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "postgres")]
