@@ -1075,32 +1075,41 @@ a 200-cycle run. The oracle is asserted on too, so the gate cannot degrade into
 a tautology: if `node_visits` ever stopped being sensitive to graph size, the
 oracle half of the test fails first.
 
-### What the gate does *not* cover: an `O(depth)` term
+### The `O(depth)` drain term — ✅ fixed
 
 Measuring the tiers on sparse workloads (`benches/tiers.rs`, groups `sparse` /
 `sparse_wide`) turned up a real qualifier on the "work ∝ active nodes" claim.
-Node *count* is genuinely free — padding a graph with dangling quiet branches
+Node *count* was already free — padding a graph with dangling quiet branches
 costs nothing measurable, which is what the gate above pins. But the drain loop
-scans `0..=max_layer` **including empty buckets**, so per-cycle cost is really
+walked `0..=max_layer` **testing every bucket**, so per-cycle cost was really
+`O(active + deepest active layer)`, and a graph that is merely *deep* paid for
+its depth on every cycle even when almost none of it fired.
 
-> `O(active + deepest active layer)`
+Depth is not an exotic shape here: next's `fan` sugar **left-folds its branches
+into a binary merge chain**, so a 256-way fan-in is a ~256-deep graph (classic's
+`merge(vec)` is a single N-ary node, depth 1, which is why classic never showed
+the term). It also needs an *active* node above the quiet depth to bite — a join
+like `hot.merge(&deep)` — since otherwise `max_layer` never rises.
 
-and a graph that is merely *deep* pays for its depth every cycle even when
-almost none of it fires. On the benchmark this shows up as interpreted going
-2.70ms → 4.39ms for 4x the padding, which reads like an `N` dependency and is
-not one: it is the depth of the fan-in.
+**Fixed** (`interp.rs`): the drain now finds occupied layers through an
+`occupied` bitmask — one bit per layer, set on enqueue, cleared on drain — so one
+word test skips 64 empty layers, leaving `O(active + depth/64)`. Deliberately a
+bitmask rather than a heap of occupied layers: a heap costs a push/pop *per
+layer*, and on a linear chain every layer holds one node, which would reintroduce
+exactly the per-node heap traffic whose removal closed the `fanout` gap against
+classic. The mask adds one branchless bit-set per enqueue and nothing per node.
 
-It is amplified by a second, structural difference. Next's `fan` sugar
-**left-folds its branches into a binary merge chain**, so a 256-way fan-in is a
-~256-deep graph; classic's `merge(vec)` is a single N-ary node, depth 1. Classic
-therefore never exhibits the term at all on the same shape. Two independent
-follow-ons, neither required for cutover:
+Results: the marginal scan cost of 318 quiet layers fell from **636 steps per
+cycle to 10**, and the benchmark's depth slope from **+63%** (2.70ms → 4.39ms
+across the two padding widths) to **+8%** (2.94ms → 3.18ms). Gated by
+`quiet_depth_does_not_cost_per_cycle` (`tests/sparse_graph.rs`), which fails at
+636 against a bound of 39 if the walk returns.
 
-- Skip empty layers in the drain (track the occupied set, or the min/max active
-  layer, instead of scanning the range).
-- Give `fan` a balanced merge tree — `O(log n)` depth instead of `O(n)` — if the
-  left-fold tie-break order can be preserved (it is load-bearing: merge resolves
-  ties as "first supplied that ticked wins").
+One follow-on remains, independent and not required for cutover: give `fan` a
+balanced merge tree — `O(log n)` depth instead of `O(n)` — if the left-fold
+tie-break order can be preserved (it is load-bearing: merge resolves ties as
+"first supplied that ticked wins"). That attacks the depth itself rather than the
+cost of scanning it.
 
 ### Tier ranking on sparse graphs: no crossover, but `nested` inverts
 

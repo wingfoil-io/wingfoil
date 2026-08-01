@@ -49,25 +49,28 @@
 //! bench is the scaffold that keeps the relationship honest.)
 //!
 //! **On the sparse workloads the ranking holds, but two things surface that the
-//! dense groups hide.** Compiled still wins outright — ~705us vs interpreted's
-//! ~2.70ms at 267 nodes, ~755us vs ~4.39ms at 1035 — so there is no crossover
+//! dense groups hide.** Compiled still wins outright — ~774us vs interpreted's
+//! ~2.94ms at 267 nodes, ~734us vs ~3.18ms at 1035 — so there is no crossover
 //! where the dirty-list overtakes straight-line emission, even at ~97% quiet:
 //! compiled's per-node `__dirty[i]` predicate is cheap enough that walking 1035
 //! of them costs less than dispatching 8 dynamically. What does invert is
-//! `nested`, which *loses to plain interpreted* here (~3.79ms vs ~2.70ms) — the
+//! `nested`, which *loses to plain interpreted* here (~3.66ms vs ~2.94ms) — the
 //! island runs its whole compiled interior on every outer activation, so a
 //! mostly-quiet interior is exactly its worst case, the mirror image of the
 //! dense wins.
 //!
-//! The second finding is the interpreted growth itself: 2.70ms -> 4.39ms for 4x
-//! the padding looks like a violation of "work proportional to active nodes",
-//! and is not one. Node count is genuinely free — dangling padding of the same
-//! size costs nothing measurable. What grew is *depth*: `fan` left-folds its
-//! branches into a binary merge chain, so 256 branches is a ~256-deep graph, and
-//! the drain scans `0..=max_layer` including empty buckets. Per-cycle cost is
-//! therefore `O(active + deepest active layer)`. Classic does not show this
-//! because its `merge(vec)` is one N-ary node (depth 1) where next's `fan`
-//! emits a chain. See Phase 4.5 in `next/docs/port-plan.md`.
+//! The second finding was the interpreted growth itself, and it led to a fix.
+//! 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work
+//! proportional to active nodes" and was not one: node count is genuinely free
+//! (dangling padding of the same size costs nothing measurable). What grew was
+//! *depth*. `fan` left-folds its branches into a binary merge chain, so 256
+//! branches is a ~256-deep graph, and the drain used to walk `0..=max_layer`
+//! testing every bucket — `O(active + deepest active layer)` per cycle. Classic
+//! never showed it, its `merge(vec)` being one N-ary node (depth 1).
+//!
+//! The drain now scans an occupied-layer bitmask instead (64 layers per word
+//! test), which took the slope between these two groups from +63% to +8%:
+//! ~2.94ms and ~3.18ms. See Phase 4.5 in `next/docs/port-plan.md`.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -139,7 +142,7 @@ wingfoil_next::graph! {
 // the nodes and ~0% of the activity.
 //
 // **Measured: the crossover is not there at these sizes** — compiled wins by
-// ~4x at 267 nodes and ~6x at 1035. The predicate walk is far cheaper per idle
+// ~4x at 267 nodes and ~4x at 1035. The predicate walk is far cheaper per idle
 // node than dynamic dispatch is per active one, so the quiet fraction would have
 // to be enormous before the lines meet. `nested` is what inverts instead (it
 // loses to interpreted here). See the module header for both findings.

@@ -2705,8 +2705,48 @@ impl Builder {
             re_runnable: self.re_runnable,
             has_run: false,
             node_visits: 0,
+            layer_visits: 0,
             async_rt: self.async_rt,
         }
+    }
+}
+
+/// Lowest layer `>= from` (and `<= max`) whose bucket holds work, per the
+/// `occupied` bitmask — one bit per layer, set when a node is enqueued into that
+/// layer's bucket and cleared when the bucket is drained.
+///
+/// This is what keeps the drain off an `O(depth)` walk of empty buckets: one
+/// word test clears 64 layers at a time, so a deep-but-quiet graph costs
+/// `depth/64` rather than `depth` per cycle. `from` may exceed `max` (the drain
+/// has passed the deepest active layer), which reads as "nothing left".
+/// `steps` counts each word examined, so callers can account for the scan's real
+/// cost — see [`Runner::layer_visits`]. It is what makes the depth gate able to
+/// tell a bitmask scan from a walk of every bucket: both open the same buckets,
+/// but the walk examines 64x more to find them.
+fn next_occupied_layer(
+    occupied: &[u64],
+    from: usize,
+    max: usize,
+    steps: &mut u64,
+) -> Option<usize> {
+    if from > max {
+        return None;
+    }
+    let last_word = max >> 6;
+    let mut w = from >> 6;
+    // Mask off the bits below `from` in the first word — those layers are behind
+    // the drain. `from & 63` is in `0..64`, so the shift is always in range.
+    let mut word = occupied[w] & (!0u64 << (from & 63));
+    loop {
+        *steps += 1;
+        if word != 0 {
+            return Some((w << 6) | word.trailing_zeros() as usize);
+        }
+        w += 1;
+        if w > last_word {
+            return None;
+        }
+        word = occupied[w];
     }
 }
 
@@ -2804,6 +2844,10 @@ pub struct Runner {
     /// Accumulated once per cycle (`O(1)`, not per node), so it costs nothing
     /// on the hot path.
     node_visits: u64,
+    /// Cumulative count of *layer visits* — buckets the drain actually opened.
+    /// The depth-term counterpart of `node_visits`; see
+    /// [`layer_visits`](Runner::layer_visits).
+    layer_visits: u64,
     /// The graph-owned async runtime (or caller override), moved here from the
     /// [`Builder`] at [`build`](Builder::build). **Declared last on purpose:**
     /// Rust drops fields top-to-bottom, so `nodes` — and any offloaded sink whose
@@ -2844,6 +2888,7 @@ impl Runner {
         }
         self.has_run = true;
         self.node_visits = 0;
+        self.layer_visits = 0;
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
         // timestamps and runs in both modes. These are reachable user errors
@@ -2982,6 +3027,9 @@ impl Runner {
         //     `node_dirty` resets touch only these, not all `N`, so per-cycle
         //     work stays proportional to the active node count.
         let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // One bit per layer, marking which buckets hold work — see
+        // `next_occupied_layer`. All-zero on entry and exit of every cycle.
+        let mut occupied: Vec<u64> = vec![0; n.div_ceil(64).max(1)];
         let mut node_dirty = vec![false; n];
         let mut fired: Vec<usize> = Vec::new();
         // Check `finished` *before* `begin_cycle` parks: a channel that received
@@ -2989,9 +3037,14 @@ impl Runner {
         // waiting for the bound while a live sender clone keeps the waker
         // channel connected.
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-            if let Some(e) =
-                self.drain_cycle(kernel, &dirty, &mut buckets, &mut node_dirty, &mut fired)
-            {
+            if let Some(e) = self.drain_cycle(
+                kernel,
+                &dirty,
+                &mut buckets,
+                &mut occupied,
+                &mut node_dirty,
+                &mut fired,
+            ) {
                 return Some(e);
             }
             kernel.end_cycle(&mut dirty);
@@ -3013,6 +3066,7 @@ impl Runner {
         kernel: &mut Kernel,
         dirty: &[bool],
         buckets: &mut [Vec<usize>],
+        occupied: &mut [u64],
         node_dirty: &mut [bool],
         fired: &mut Vec<usize>,
     ) -> Option<anyhow::Error> {
@@ -3028,6 +3082,7 @@ impl Runner {
                 node_dirty[i] = true;
                 let l = self.layer[i];
                 buckets[l].push(i);
+                occupied[l >> 6] |= 1u64 << (l & 63);
                 max_layer = max_layer.max(l);
             }
         }
@@ -3038,14 +3093,29 @@ impl Runner {
         // never grows once its own layer is processed, so draining it fully is
         // safe and each node fires exactly once after everything it reads.
         // Sorting each bucket by index reproduces classic's within-layer wiring
-        // order (byte-identical to the full-index sweep). O(active + depth) —
-        // no per-node heap push/pop.
+        // order (byte-identical to the full-index sweep).
+        //
+        // The *occupied* layers are found through `occupied`, a bitmask with one
+        // bit per layer, rather than by walking `0..=max_layer` and testing each
+        // bucket. That walk made per-cycle cost `O(active + depth)`, which a deep
+        // graph pays every cycle even when almost none of it fires — and `fan`
+        // left-folds its branches into a merge chain, so a wide fan-in *is* deep
+        // (see Phase 4.5 in `next/docs/port-plan.md`). Scanning the mask skips 64
+        // empty layers per word test, leaving `O(active + depth/64)`.
+        //
+        // Deliberately a bitmask and not a heap of occupied layers: a heap would
+        // be `O(active log active)` with a push/pop *per layer*, and on a linear
+        // chain every layer holds one node — reintroducing the per-node heap
+        // traffic whose removal is what closed the `fanout` gap against classic.
+        // The mask adds one branchless bit-set per enqueue and nothing per node.
+        let mut scan_steps = 0u64;
         let mut l = 0usize;
-        while l <= max_layer {
-            if buckets[l].is_empty() {
-                l += 1;
-                continue;
-            }
+        while let Some(next) = next_occupied_layer(occupied, l, max_layer, &mut scan_steps) {
+            l = next;
+            scan_steps += 1;
+            // Clear the bit up front: pushes during this layer's drain all go to
+            // strictly higher layers, so nothing can re-occupy `l` behind us.
+            occupied[l >> 6] &= !(1u64 << (l & 63));
             // Move the layer's work out so downstream pushes (all to higher
             // layers) cannot alias it; the emptied allocation is returned below
             // for reuse next cycle.
@@ -3071,6 +3141,7 @@ impl Runner {
                             node_dirty[d] = true;
                             let dl = self.layer[d];
                             buckets[dl].push(d);
+                            occupied[dl >> 6] |= 1u64 << (dl & 63);
                             max_layer = max_layer.max(dl);
                         }
                     }
@@ -3086,6 +3157,7 @@ impl Runner {
                             node_dirty[target] = true;
                             let tl = self.layer[target];
                             buckets[tl].push(target);
+                            occupied[tl >> 6] |= 1u64 << (tl & 63);
                             max_layer = max_layer.max(tl);
                         }
                     }
@@ -3100,6 +3172,7 @@ impl Runner {
         // per-cycle cost drivers — neither mentions `N`, which is exactly the
         // property `sparse_work_is_independent_of_graph_size` pins.
         self.node_visits += (self.seed_nodes.len() + fired.len()) as u64;
+        self.layer_visits += scan_steps;
         // Reset only the nodes we touched (all buckets are empty again),
         // keeping the per-cycle reset sparse.
         {
@@ -3178,6 +3251,23 @@ impl Runner {
         self.node_visits
     }
 
+    /// Layer-scan steps performed by the most recent [`run`](Runner::run) — the
+    /// depth-term counterpart of [`node_visits`](Runner::node_visits).
+    ///
+    /// Counts the work the drain does to *find and open* its layers: one per
+    /// bucket opened, plus one per word examined while looking for the next
+    /// occupied layer. The second term is the point. Opening buckets is
+    /// unavoidable and identical under any strategy; what distinguishes them is
+    /// how much is examined to find those buckets. Walking `0..=max_layer` tests
+    /// every layer, so quiet depth costs `depth` per cycle; scanning the
+    /// occupied-layer bitmask clears 64 layers per word, so it costs `depth/64`.
+    /// A gate can tell those apart only if the examining is counted.
+    ///
+    /// Reset at the start of each run, like `node_visits`.
+    pub fn layer_visits(&self) -> u64 {
+        self.layer_visits
+    }
+
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
@@ -3237,6 +3327,7 @@ impl Runner {
     {
         // Source/run-mode validation, identical to `run`.
         self.node_visits = 0;
+        self.layer_visits = 0;
         let realtime = matches!(run_mode, RunMode::RealTime);
         if !realtime && self.has_external {
             bail!(
@@ -3280,6 +3371,7 @@ impl Runner {
             // `dirty` is sized to the current node count each cycle (the kernel
             // marks due callbacks into it by index).
             let mut buckets: Vec<Vec<usize>> = Vec::new();
+            let mut occupied: Vec<u64> = Vec::new();
             let mut node_dirty: Vec<bool> = Vec::new();
             let mut fired: Vec<usize> = Vec::new();
             let mut cycles: u32 = 0;
@@ -3293,6 +3385,11 @@ impl Runner {
                 if buckets.len() < n {
                     buckets.resize_with(n, Vec::new);
                 }
+                // Same for the occupied-layer mask: dynamic splices only add
+                // layers at the top, so growing it preserves the set bits.
+                if occupied.len() < n.div_ceil(64) {
+                    occupied.resize(n.div_ceil(64), 0);
+                }
                 let mut dirty = vec![false; n];
                 if self.finished.get() || !kernel.begin_cycle(&mut dirty) {
                     break;
@@ -3301,6 +3398,7 @@ impl Runner {
                     &mut kernel,
                     &dirty,
                     &mut buckets,
+                    &mut occupied,
                     &mut node_dirty,
                     &mut fired,
                 ) {

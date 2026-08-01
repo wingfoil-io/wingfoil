@@ -146,12 +146,9 @@ fn quiet_subgraph_is_not_cycled_on_unrelated_ticks() {
 /// proves this metric would catch a regression to an all-nodes sweep rather
 /// than being trivially constant.
 ///
-/// Scope, precisely: this pins independence from the node *count*. The padding
-/// here is deliberately shallow (dangling branches), because the drain also
-/// carries a separate `O(deepest active layer)` term — it scans `0..=max_layer`
-/// including empty buckets — so a graph that is merely *deep* does cost more per
-/// cycle even when little of it fires. See `benches/tiers.rs` (`sparse` /
-/// `sparse_wide`) and Phase 4.5 in `next/docs/port-plan.md` for the measurement.
+/// Scope, precisely: this pins independence from the node *count*, with shallow
+/// (dangling) padding. Independence from graph *depth* is a separate property
+/// with its own gate — see `quiet_depth_does_not_cost_per_cycle` below.
 #[test]
 fn sparse_work_is_independent_of_graph_size() {
     const HOT: Duration = Duration::from_nanos(10);
@@ -228,6 +225,106 @@ fn sparse_work_is_independent_of_graph_size() {
         sparse_long * 100 < full_long,
         "sparse pays {sparse_long} for the padding over {LONG} cycles, \
          full-sweep {full_long} — expected the sparse engine to be far cheaper"
+    );
+}
+
+/// **The depth half of the perf gate.** `sparse_work_is_independent_of_graph_size`
+/// pins independence from the node *count*; this pins independence from graph
+/// *depth*, which was a real cost until the drain stopped walking empty buckets.
+///
+/// The drain has to visit occupied layers in ascending order. Walking
+/// `0..=max_layer` and testing each bucket makes that `O(depth)` per cycle — and
+/// depth is not exotic: `fan` left-folds its branches into a binary merge chain,
+/// so a 256-way fan-in is a ~256-deep graph. A mostly-quiet graph then pays for
+/// its depth on every single cycle. The drain now finds occupied layers through
+/// a bitmask instead, so quiet depth costs `depth/64` word tests rather than
+/// `depth` bucket tests.
+///
+/// The shape matters, and it is the benchmark's shape rather than the obvious
+/// one. Dangling quiet depth proves nothing: with nothing active above it,
+/// `max_layer` stays down at the hot chain and *no* strategy ever looks at those
+/// layers. The pathology needs an **active node sitting above the quiet depth** —
+/// exactly what `hot.merge(&deep_quiet_chain)` produces, and exactly what `fan`
+/// emits, since its merge tree makes the join layer proportional to the branch
+/// count. Then `max_layer` is high on every cycle while nearly every bucket
+/// under it is empty.
+///
+/// The metric is [`Runner::layer_visits`], which counts buckets opened *plus
+/// words examined looking for them*. Counting only the buckets would be a
+/// tautology: both strategies open the identical set, and differ solely in how
+/// much they examine to find it.
+///
+/// The assertion is a ratio, not an equality. Quiet depth is not free even with
+/// the bitmask — it costs `depth/64` word tests per cycle — so what is pinned is
+/// that the per-cycle marginal cost of the extra depth is a *small fraction* of
+/// that depth. A walk of every bucket costs ~1 per layer per cycle and misses
+/// the bound by ~64x; the bitmask comes in at ~1/64 and passes with room to
+/// spare. Deterministic integers throughout — the margin absorbs implementation
+/// detail, not measurement noise.
+#[test]
+fn quiet_depth_does_not_cost_per_cycle() {
+    const HOT: Duration = Duration::from_nanos(10);
+    const NEVER: Duration = Duration::from_millis(1);
+    const SHALLOW: usize = 2;
+    const DEEP: usize = 320;
+    const SHORT: u32 = 200;
+    const LONG: u32 = 2_200;
+    /// The drain must examine at most `1/SKIP_FACTOR` of the quiet layers it
+    /// skips. Set well inside the bitmask's 64x so the gate tracks the property
+    /// and not the word size, but far outside a per-bucket walk's 1x.
+    const SKIP_FACTOR: u64 = 8;
+
+    /// The same hot chain either way, joined to a quiet chain of `quiet_depth`
+    /// merge/map pairs. The join is active every cycle and sits above the whole
+    /// quiet chain, so `max_layer` tracks the quiet depth even though none of it
+    /// fires.
+    fn run_with_depth(quiet_depth: usize, cycles: u32) -> (u64, Vec<u64>) {
+        let g = GraphBuilder::new();
+
+        let mut hot = g.ticker(HOT).count();
+        for _ in 0..4 {
+            hot = hot.map(|v| v.wrapping_add(1));
+        }
+
+        // Quiet chain: driven by a ticker due only at `t = 0`.
+        let cold = g.ticker(NEVER).count();
+        let mut deep = cold.map(|v| v.wrapping_mul(3));
+        for _ in 0..quiet_depth {
+            deep = deep.merge(&cold).map(|v| v.wrapping_add(1));
+        }
+
+        // The join — active on every hot tick, layered above all the quiet depth.
+        let out = hot.merge(&deep).accumulate();
+
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Cycles(cycles)).unwrap();
+        (r.layer_visits(), r.value(&out))
+    }
+
+    /// What burying `DEEP - SHALLOW` quiet layers costs over a run of `cycles`.
+    fn depth_cost(cycles: u32) -> u64 {
+        let (shallow, shallow_out) = run_with_depth(SHALLOW, cycles);
+        let (deep, deep_out) = run_with_depth(DEEP, cycles);
+        assert_eq!(
+            shallow_out.len(),
+            deep_out.len(),
+            "quiet depth changed how often the hot chain produced"
+        );
+        assert!(!shallow_out.is_empty(), "hot chain produces a series");
+        deep - shallow
+    }
+
+    // Marginal per-cycle cost of the extra depth: the one-off `t = 0` activation
+    // cancels in the difference, leaving only what each additional cycle paid.
+    let extra_depth = (DEEP - SHALLOW) as u64;
+    let marginal = (depth_cost(LONG) - depth_cost(SHORT)) / (LONG - SHORT) as u64;
+
+    assert!(
+        marginal * SKIP_FACTOR < extra_depth,
+        "each cycle examined {marginal} layer-scan steps for {extra_depth} quiet \
+         layers — expected under {} (a walk of every bucket costs ~1 per layer; \
+         the occupied-layer bitmask should cost ~1/64)",
+        extra_depth / SKIP_FACTOR
     );
 }
 
