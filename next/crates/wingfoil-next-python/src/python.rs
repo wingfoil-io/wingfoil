@@ -672,6 +672,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(etcd_sub, m)?)?;
         m.add_function(wrap_pyfunction!(etcd_pub, m)?)?;
     }
+    #[cfg(feature = "fluvio")]
+    {
+        use crate::adapters::fluvio::{fluvio_pub, fluvio_sub};
+        m.add_function(wrap_pyfunction!(fluvio_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(fluvio_pub, m)?)?;
+    }
     // `m` is unused when no adapter feature is on.
     let _ = m;
     Ok(())

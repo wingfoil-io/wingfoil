@@ -1230,7 +1230,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio landed*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1272,9 +1272,17 @@ tests covered — not "legacy pytest passes unchanged."
   target has no binding-level fallback) and the str-or-list endpoints form that
   exposes the engine's cluster support.
 
-  **Remaining: 11.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — csv, fluvio, zmq (kafka ✓, redis ✓, etcd ✓): a scalar/bytes
-    payload over the free-fn form, close to copy-postgres-and-shrink;
+  **fluvio** added `RecordDict::opt_str` and is the first binding to land
+  *without* its integration CI leg: a Fluvio cluster cannot be brought up from
+  bash (the SC must learn about the SPU through `FluvioAdmin`, a Rust API,
+  before the SPU connects — hence the ~100-line testcontainers helper in the
+  Rust integration test). Its `requires_fluvio` tests are written and runnable
+  by hand but have never been executed; wiring the Python leg is **open
+  follow-up work**.
+
+  **Remaining: 10.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — csv, zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓): a
+    scalar/bytes payload over the free-fn form;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):

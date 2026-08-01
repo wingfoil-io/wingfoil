@@ -17,12 +17,15 @@
     feature = "postgres",
     feature = "kafka",
     feature = "redis",
-    feature = "etcd"
+    feature = "etcd",
+    feature = "fluvio"
 ))]
 pub mod common;
 
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "fluvio")]
+pub mod fluvio;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "postgres")]
