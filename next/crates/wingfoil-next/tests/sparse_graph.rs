@@ -123,6 +123,114 @@ fn quiet_subgraph_is_not_cycled_on_unrelated_ticks() {
     );
 }
 
+/// **The Phase 4.5 perf gate.** The dirty-list's headline claim is that
+/// per-cycle work is proportional to the *active* node count and not to the
+/// graph size `N`. `benches/store_baseline.rs` measures that in wall-clock, but
+/// nothing runs benchmarks in CI and a timing ratio is not a pass/fail signal —
+/// so the claim is pinned here instead, exactly and deterministically, via
+/// [`Runner::node_visits`] (nodes the dispatch loop had to look at, fired or
+/// not).
+///
+/// The graph is one hot chain that fires every cycle, plus `cold` idle branches
+/// hung off a driver whose period exceeds the whole run — so the padding
+/// contributes to `N` and, after the first cycle, nothing to the active set.
+///
+/// The invariant is *not* that padding is free outright: every ticker is due at
+/// `t = 0`, so the cold branches genuinely fire once, and counting that is
+/// correct. The claim is that padding costs a **one-off**, never a per-cycle
+/// tax. So the gate measures what the padding adds, `visits(wide) −
+/// visits(narrow)`, at two run lengths 10x apart and asserts the two deltas are
+/// *equal*: a cost that does not grow with cycles is a cost the per-cycle loop
+/// does not pay. The full-sweep oracle is measured the same way as a
+/// sensitivity check — its delta scales with the run length, which is what
+/// proves this metric would catch a regression to an all-nodes sweep rather
+/// than being trivially constant.
+///
+/// Scope, precisely: this pins independence from the node *count*. The padding
+/// here is deliberately shallow (dangling branches), because the drain also
+/// carries a separate `O(deepest active layer)` term — it scans `0..=max_layer`
+/// including empty buckets — so a graph that is merely *deep* does cost more per
+/// cycle even when little of it fires. See `benches/tiers.rs` (`sparse` /
+/// `sparse_wide`) and Phase 4.5 in `next/docs/port-plan.md` for the measurement.
+#[test]
+fn sparse_work_is_independent_of_graph_size() {
+    const HOT: Duration = Duration::from_nanos(10);
+    // 1ms ≫ the simulated time these runs cover, so after the `t = 0` tick the
+    // cold driver is never due again.
+    const NEVER: Duration = Duration::from_millis(1);
+    const NARROW: usize = 8;
+    const WIDE: usize = 512;
+    const SHORT: u32 = 200;
+    const LONG: u32 = 2_000;
+
+    /// One hot chain (fires every cycle) + `cold` idle branches. Returns the
+    /// run's node-visit count and the hot output, so padding can be checked not
+    /// to perturb results either.
+    fn run_padded(cold: usize, cycles: u32, dispatch: Dispatch) -> (u64, Vec<u64>) {
+        let g = GraphBuilder::new();
+
+        let mut hot = g.ticker(HOT).count();
+        for _ in 0..4 {
+            hot = hot.map(|v| v.wrapping_add(1));
+        }
+        let out = hot.accumulate();
+
+        // Padding: present in `N`, absent from every work set after cycle 0.
+        // Handles are retained so nothing can be mistaken for dead and dropped.
+        let cold_driver = g.ticker(NEVER).count();
+        let _padding: Vec<_> = (0..cold)
+            .map(|_| cold_driver.map(|v| v.wrapping_mul(3)).accumulate())
+            .collect();
+
+        let mut r = g.build().with_dispatch(dispatch);
+        r.run(HISTORICAL, RunFor::Cycles(cycles)).unwrap();
+        (r.node_visits(), r.value(&out))
+    }
+
+    /// What `WIDE − NARROW` extra cold branches cost over a run of `cycles`.
+    fn padding_cost(cycles: u32, dispatch: Dispatch) -> u64 {
+        let (narrow, out_narrow) = run_padded(NARROW, cycles, dispatch);
+        let (wide, out_wide) = run_padded(WIDE, cycles, dispatch);
+        // Padding must not perturb results either — a sanity check that the
+        // wide graph really was built and really did run.
+        assert_eq!(out_narrow, out_wide, "cold padding changed the hot output");
+        assert!(!out_narrow.is_empty(), "hot chain produces a series");
+        wide - narrow
+    }
+
+    let sparse_short = padding_cost(SHORT, Dispatch::Sparse);
+    let sparse_long = padding_cost(LONG, Dispatch::Sparse);
+
+    // The gate: the padding's cost is a constant, not a rate. Sitting quietly
+    // in the graph for 10x as many cycles must not cost a quiet node anything.
+    assert_eq!(
+        sparse_short, sparse_long,
+        "{WIDE} vs {NARROW} cold branches cost {sparse_short} extra node visits \
+         over {SHORT} cycles but {sparse_long} over {LONG} — quiet nodes are \
+         being charged per cycle, so per-cycle work tracks N, not the active set"
+    );
+
+    // Sensitivity: the same measurement on the retained `O(N)` oracle *must*
+    // scale with the run length. Without this, the assertion above would still
+    // pass if `node_visits` were accidentally counting something constant.
+    let full_short = padding_cost(SHORT, Dispatch::FullSweep);
+    let full_long = padding_cost(LONG, Dispatch::FullSweep);
+    assert!(
+        full_long > full_short * 5,
+        "the full-sweep oracle should pay for every cold node every cycle \
+         ({full_short} extra visits over {SHORT} cycles -> {full_long} over \
+         {LONG}) — if it does not, node_visits is not measuring per-cycle \
+         graph-size sensitivity"
+    );
+    // And the gap itself: on the long run the oracle pays orders of magnitude
+    // more for the same quiet nodes — the ≪ that `Dispatch::Sparse` exists for.
+    assert!(
+        sparse_long * 100 < full_long,
+        "sparse pays {sparse_long} for the padding over {LONG} cycles, \
+         full-sweep {full_long} — expected the sparse engine to be far cheaper"
+    );
+}
+
 /// Randomised differential parity: build many pseudo-random graphs and assert
 /// the sparse engine and the retained full-sweep oracle agree on every one. A
 /// single hand-wired graph (see `sparse_matches_full_sweep_oracle`) only covers

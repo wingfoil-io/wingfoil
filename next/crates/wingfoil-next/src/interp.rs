@@ -2704,6 +2704,7 @@ impl Builder {
             dispatch: Dispatch::default(),
             re_runnable: self.re_runnable,
             has_run: false,
+            node_visits: 0,
             async_rt: self.async_rt,
         }
     }
@@ -2735,10 +2736,11 @@ pub enum Dispatch {
 /// busy-poll ops and kernel-marked callback-activated ops), then propagates the
 /// tick frontier forward: a node that ticks marks its active downstream
 /// neighbours ([`active_downs`](Runner::active_downs)) dirty. The work set is
-/// drained in ascending node **index** order (wiring order, a valid topological
-/// order over active *and* passive edges), so each node fires exactly once
-/// after everything it reads — glitch-free, single-fire, and byte-identical to
-/// the previous full-index sweep.
+/// drained in ascending **`(layer, index)`** order ([`layer`](Runner::layer) =
+/// longest path over active *and* passive edges), so each node fires exactly
+/// once after everything it reads — glitch-free, single-fire, and
+/// byte-identical to the previous full-index sweep, which index order alone
+/// already satisfied on a static graph.
 pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
@@ -2797,6 +2799,11 @@ pub struct Runner {
     /// Set after the first [`run`](Runner::run); a subsequent run first calls
     /// [`reset`](Runner::reset) to restore state.
     has_run: bool,
+    /// Cumulative count of *node visits* — the observability hook behind the
+    /// sparse-dispatch perf gate (see [`node_visits`](Runner::node_visits)).
+    /// Accumulated once per cycle (`O(1)`, not per node), so it costs nothing
+    /// on the hot path.
+    node_visits: u64,
     /// The graph-owned async runtime (or caller override), moved here from the
     /// [`Builder`] at [`build`](Builder::build). **Declared last on purpose:**
     /// Rust drops fields top-to-bottom, so `nodes` — and any offloaded sink whose
@@ -2836,6 +2843,7 @@ impl Runner {
             }
         }
         self.has_run = true;
+        self.node_visits = 0;
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
         // timestamps and runs in both modes. These are reachable user errors
@@ -3087,6 +3095,11 @@ impl Runner {
             buckets[l] = current;
             l += 1;
         }
+        // Per-cycle visit accounting for the perf gate: the seed scan plus the
+        // nodes actually drained. Both terms are the sparse engine's real
+        // per-cycle cost drivers — neither mentions `N`, which is exactly the
+        // property `sparse_work_is_independent_of_graph_size` pins.
+        self.node_visits += (self.seed_nodes.len() + fired.len()) as u64;
         // Reset only the nodes we touched (all buckets are empty again),
         // keeping the per-cycle reset sparse.
         {
@@ -3129,12 +3142,40 @@ impl Runner {
                 };
                 self.ticked.borrow_mut()[i] = did;
             }
+            // The oracle's whole cost model: every node is visited every cycle,
+            // whether or not it is due. This is the `O(N)` term the sparse loop
+            // above does not pay, and what makes `node_visits` a *sensitive*
+            // metric rather than one that reads the same for both strategies.
+            self.node_visits += n as u64;
             for t in self.ticked.borrow_mut().iter_mut() {
                 *t = false;
             }
             kernel.end_cycle(&mut dirty);
         }
         None
+    }
+
+    /// Node visits performed by the most recent [`run`](Runner::run) — the
+    /// deterministic metric behind the Phase 4.5 sparse-dispatch gate.
+    ///
+    /// A *visit* is one node the dispatch loop had to look at, whether or not it
+    /// fired. Under [`Dispatch::Sparse`] that is the per-cycle seed scan plus
+    /// the nodes actually drained; under [`Dispatch::FullSweep`] it is `N` per
+    /// cycle, since the oracle tests every node's due-ness. The difference is
+    /// the point: the sparse engine's count is a function of how much of the
+    /// graph is *active*, so padding a graph with quiet nodes must not move it,
+    /// while the oracle's count scales with the padding.
+    ///
+    /// Wall-clock benchmarks (`benches/store_baseline.rs`) measure the same
+    /// property with timing noise attached; this counter is exact, so a test can
+    /// assert on it and fail a regression to an all-nodes sweep outright. It is
+    /// accumulated once per cycle, not per node, so it is free on the hot path.
+    ///
+    /// Reset at the start of each run, so it always describes the latest one
+    /// (`run_dynamic` included — there the graph size itself moves, so the
+    /// count is only meaningful against a known mutation sequence).
+    pub fn node_visits(&self) -> u64 {
+        self.node_visits
     }
 
     /// Current value of a node's output slot.
@@ -3195,6 +3236,7 @@ impl Runner {
         F: FnMut(&mut Extension<'_>, u32) -> Result<()>,
     {
         // Source/run-mode validation, identical to `run`.
+        self.node_visits = 0;
         let realtime = matches!(run_mode, RunMode::RealTime);
         if !realtime && self.has_external {
             bail!(

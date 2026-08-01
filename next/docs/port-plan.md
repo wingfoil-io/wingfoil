@@ -114,14 +114,22 @@ today's interpreted engine.
   can be wired dynamically into the interpreted graph. See the Phase 4.5 note.
 ¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
-  deferred 4.5 arena rework can also improve on.
+  deferred 4.5 arena rework can also improve on. Next resets its *tick* state
+  sparsely (only the nodes that fired) but shares the kernel's `O(N)` dirty-flag
+  clear; it measures as negligible. Its measurable non-active term is depth, not
+  `N` — see Phase 4.5, "What the gate does *not* cover".
 ¹² Sparse dirty-list dispatch (classic's `dirty_nodes_by_layer` model) has
   landed as the default: per-cycle work ∝ active nodes, results byte-identical
   to classic and to the old full sweep (retained as `Dispatch::FullSweep`, an
-  executable oracle). The arena/SoA value store — the remaining dense-path
+  executable oracle). The work ∝ active claim is gated deterministically by
+  `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), not only
+  by benchmarks. The arena/SoA value store — the remaining dense-path
   speedup — is a deferred follow-on with the slot boundary frozen (Phase 4.5).
 ¹³ Straight-line per-node `if cond` checks (cheap, but every node); region
-  gating (skip quiet sub-graphs) is the planned compiled counterpart.
+  gating (skip quiet sub-graphs) is the planned compiled counterpart — though
+  the `sparse`/`sparse_wide` benchmarks now measure those checks as cheap enough
+  that compiled still beats the dirty-list on a ~97%-quiet graph, which lowers
+  the expected payoff (Phase 4.5, "Tier ranking on sparse graphs").
 ¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
 ¹⁵ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
 ## Phase 0 — design spikes
@@ -1000,7 +1008,8 @@ fire*, not the graph size `N`. Results are **byte-identical** to classic and to
 the old `O(N)` full-index sweep, which is retained as `Dispatch::FullSweep` — an
 executable reference oracle (`runner.with_dispatch(Dispatch::FullSweep)`) the
 parity suite can cross-check against. This closes the sparse-graph performance
-gap against classic (pending the benchmark below as the standing gate).
+gap against classic, gated by `sparse_work_is_independent_of_graph_size`
+(`tests/sparse_graph.rs`) and measured by `benches/store_baseline.rs`.
 
 **Dynamism: ✅ landed** (behind the `dynamic-graph` feature). The `(layer,
 index)` key is what makes runtime mutation possible — a node appended at the
@@ -1041,6 +1050,76 @@ surface over the existing mechanism — no engine/staging changes):
   classic's `HashSet`), so slot assignment is deterministic. Parity tests:
   `demux_map_auto_assigns_and_releases_slots` and
   `demux_it_routes_each_item_to_a_burst_per_child`.
+
+### The perf gate — a test, not a benchmark
+
+The dirty-list's headline claim is that per-cycle work tracks the *active* node
+count rather than the graph size `N`. That claim is now pinned by
+**`sparse_work_is_independent_of_graph_size`** (`tests/sparse_graph.rs`), which
+runs in CI with every other test.
+
+Benchmarks were the obvious home for it and are the wrong one: nothing in
+`.github/workflows/` runs `cargo bench`, and a wall-clock ratio is a reading,
+not a pass/fail. The test instead measures the property exactly, via
+`Runner::node_visits()` — a count of nodes the dispatch loop had to look at,
+fired or not, accumulated once per cycle (`O(1)`, free on the hot path).
+
+The invariant needs one piece of care: every ticker is due at `t = 0`, so cold
+padding does genuinely fire once, and no amount of padding is *free* outright.
+The gate is therefore that padding costs a **one-off, never a per-cycle tax** —
+it measures what the padding adds at two run lengths 10x apart and asserts the
+two deltas are equal. Measured today: 504 extra quiet branches cost the sparse
+engine **1,008 visits regardless of run length** (the `t = 0` activation, once),
+while the `FullSweep` oracle pays those same 1,008 *every cycle* — 201,600 over
+a 200-cycle run. The oracle is asserted on too, so the gate cannot degrade into
+a tautology: if `node_visits` ever stopped being sensitive to graph size, the
+oracle half of the test fails first.
+
+### What the gate does *not* cover: an `O(depth)` term
+
+Measuring the tiers on sparse workloads (`benches/tiers.rs`, groups `sparse` /
+`sparse_wide`) turned up a real qualifier on the "work ∝ active nodes" claim.
+Node *count* is genuinely free — padding a graph with dangling quiet branches
+costs nothing measurable, which is what the gate above pins. But the drain loop
+scans `0..=max_layer` **including empty buckets**, so per-cycle cost is really
+
+> `O(active + deepest active layer)`
+
+and a graph that is merely *deep* pays for its depth every cycle even when
+almost none of it fires. On the benchmark this shows up as interpreted going
+2.70ms → 4.39ms for 4x the padding, which reads like an `N` dependency and is
+not one: it is the depth of the fan-in.
+
+It is amplified by a second, structural difference. Next's `fan` sugar
+**left-folds its branches into a binary merge chain**, so a 256-way fan-in is a
+~256-deep graph; classic's `merge(vec)` is a single N-ary node, depth 1. Classic
+therefore never exhibits the term at all on the same shape. Two independent
+follow-ons, neither required for cutover:
+
+- Skip empty layers in the drain (track the occupied set, or the min/max active
+  layer, instead of scanning the range).
+- Give `fan` a balanced merge tree — `O(log n)` depth instead of `O(n)` — if the
+  left-fold tie-break order can be preserved (it is load-bearing: merge resolves
+  ties as "first supplied that ticked wins").
+
+### Tier ranking on sparse graphs: no crossover, but `nested` inverts
+
+The Phase 6 tier claim — compiled and nested beat the interpreters — was
+established only on *dense* workloads, where every node fires every cycle. The
+sparse groups now test the other regime, and the headline result is that
+**compiled still wins outright**: ~705µs vs interpreted's ~2.70ms at 267 nodes,
+~755µs vs ~4.39ms at 1035. There is no crossover where the dirty-list overtakes
+straight-line emission, even at ~97% quiet — a per-node `__dirty[i]` predicate
+is simply much cheaper than a dynamic dispatch, so idle nodes are nearly free to
+walk. This also *weakens the case for compiled-path region gating* (branch-1's
+idea, noted under "Scope notes" below): the cost it would remove measures as
+small.
+
+What does invert is **`nested`, which loses to plain interpreted on sparse
+graphs** (~3.79ms vs ~2.70ms) — the mirror image of its dense win. An island
+runs its whole compiled interior on every outer activation, so a mostly-quiet
+interior is its worst case. Worth knowing before recommending islands as a
+general accelerator: they pay off in proportion to how *busy* the interior is.
 
 **Two follow-ons remain, both deliberately separated from the scheduler:**
 
@@ -1089,10 +1168,11 @@ So the realistic per-graph win lives *between* this floor and that ceiling,
 weighted by how much payload the graph actually forwards by clone. Typical
 wingfoil workloads (scalars, small structs, statistics) sit near the floor —
 **evidence for keeping the arena deferred until a real big-payload-forwarding
-graph appears.** The same bench's `sparse_dispatch` group is the standing gate
-for the dirty-list: `Dispatch::Sparse` runs **~7.3×** faster than the
-`FullSweep` oracle (≈11.2 ms vs ≈81.6 ms) on a graph padded with cold nodes,
-confirming work ∝ active, not `N`.
+graph appears.** The same bench's `sparse_dispatch` group measures the
+dirty-list's win in wall-clock: `Dispatch::Sparse` runs **~7.3×** faster than
+the `FullSweep` oracle (≈11.2 ms vs ≈81.6 ms) on a graph padded with cold nodes.
+The pass/fail *gate* for that claim is the test described above, not this
+benchmark — nothing in CI runs `cargo bench`.
 
 ### Dynamic graphs (runtime add/remove) — ✅ landed
 
@@ -1115,17 +1195,16 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
 **Scope notes:**
 - The scheduler change was pure mechanism/performance — observable results
   stayed identical, so the full existing parity suite (catalog, macro,
-  feedback, channel) plus the `FullSweep` oracle guard it. Still owed: a
-  large-sparse-graph benchmark asserting per-cycle cost tracks the *active*
-  node count, not `N`, as the standing gate for the perf-parity claim.
+  feedback, channel) plus the `FullSweep` oracle guard it. The perf-parity
+  claim itself is now gated too — see "The perf gate" above.
 - The **compiled**/island path is unaffected in shape (it already emits
   straight-line per-node dispatch, the static-schedule analogue), but this is
   where branch-1's *region gating* idea (skip whole quiet sub-graphs) becomes
   the compiled counterpart of the dirty-list — worth doing alongside the
   arena/perf pass.
 - Bench gate ties to Phase 6: `next-interpreted ≥ classic-interpreted` on the
-  sparse workloads is now achievable in principle (the mechanism has landed);
-  the benchmark confirms it.
+  sparse workloads holds — `benches/tiers.rs` measures ~2.70ms vs classic's
+  ~3.23ms on the `sparse` group (and next wins the dense groups too).
 
 ## Phase 5 — infrastructure
 
@@ -1305,7 +1384,7 @@ tests covered — not "legacy pytest passes unchanged."
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Engine-owned init / evaluation-timing drift across the three emission paths | silent wrong values — the macro crate's interpreted/compiled/nested paths are the biggest drift surface; op-`cycle` semantics agree but engine-owned *seeding* and *timing* do not (fold init, closure-factory re-eval) | table-driven three-engine parity test (one micro-graph per macro-supported combinator, `interpreted == compiled == nested`); seed with the known divergences; single seed/init field per op so all three paths read one source |
-| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; remaining: the sparse-graph benchmark as the standing gate |
+| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; gated deterministically by `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), and `benches/tiers.rs` measures next-interpreted ahead of classic on the sparse groups. Qualifier: a separate `O(depth)` drain term remains — see Phase 4.5 |
 | Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — registrations capture the slot type | ✅ **resolved: boundary frozen by type.** `SlotRef<T>` (`interp.rs`) is the sole access path (`slot()`/`new_slot()` return it; ops only `borrow`/`borrow_mut`); the arena is an internal swap of its innards, zero capture sites touched. Macro uses locals; `Stream::__slot` returns `SlotRef` too |
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
