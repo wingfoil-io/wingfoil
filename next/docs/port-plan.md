@@ -1348,7 +1348,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *mechanical tier + otlp landed (8 of 15)*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1431,7 +1431,16 @@ tests covered — not "legacy pytest passes unchanged."
   an owned `String` satisfies — the bound was simply tighter than necessary, and
   relaxing it removes the leak with no effect on existing callers.
 
-  **Remaining: 7.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **augurs** closed the stream-transform tier: all six analytics ops, each
+  yielding the *full* result as a dict (prediction intervals, per-series
+  scores, every detected period) where legacy returned only the headline
+  number. Its two input shapes — a single `Stream<f64>` for forecast /
+  changepoint / seasons, a `Stream<Vec<f64>>` of one value per series for
+  outlier / DTW / cluster — are marshaled inside the fns rather than through
+  `typed_input`, because adding a `Vec<f64>` edge conversion would make a
+  Python `bytes` silently acceptable where a list of floats is meant.
+
+  **Remaining: 6.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
@@ -1439,7 +1448,7 @@ tests covered — not "legacy pytest passes unchanged."
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;
-  - *stream transform* — augurs (six fns) (otlp ✓): legacy exposes these as
+  - *stream transform* — **done**: otlp, augurs. Legacy exposed these as
     `stream.method(…)`; next uses free fns, a deliberate ergonomic deviation
     for uniformity with the plugin story.
 

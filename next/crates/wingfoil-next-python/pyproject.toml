@@ -46,6 +46,7 @@ features = [
     "csv",
     "zmq",
     "otlp",
+    "augurs",
 ]
 # Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
 # and the importable `wingfoil_next` is the Python package under `python/`, which

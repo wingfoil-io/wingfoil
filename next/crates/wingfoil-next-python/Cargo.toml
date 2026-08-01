@@ -58,7 +58,20 @@ csv = ["wingfoil-next/csv", "dep:csv"]
 zmq = ["wingfoil-next/zmq"]
 # OTLP: the `otlp_push` gauge sink. Pure Rust (the OTel SDK over reqwest).
 otlp = ["wingfoil-next/otlp"]
-all-adapters = ["postgres", "kafka", "redis", "etcd", "fluvio", "csv", "zmq", "otlp"]
+# augurs: the six time-series analytics ops (forecast, changepoint, seasons,
+# outlier, DTW, cluster). Pure Rust compute, no I/O.
+augurs = ["wingfoil-next/augurs"]
+all-adapters = [
+    "postgres",
+    "kafka",
+    "redis",
+    "etcd",
+    "fluvio",
+    "csv",
+    "zmq",
+    "otlp",
+    "augurs",
+]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
