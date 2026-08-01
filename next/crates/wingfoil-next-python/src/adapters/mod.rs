@@ -21,10 +21,13 @@
     feature = "fluvio",
     feature = "csv",
     feature = "zmq",
-    feature = "otlp"
+    feature = "otlp",
+    feature = "augurs"
 ))]
 pub mod common;
 
+#[cfg(feature = "augurs")]
+pub mod augurs;
 #[cfg(feature = "csv")]
 pub mod csv;
 #[cfg(feature = "etcd")]

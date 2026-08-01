@@ -704,6 +704,19 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(csv_read, m)?)?;
         m.add_function(wrap_pyfunction!(csv_write, m)?)?;
     }
+    #[cfg(feature = "augurs")]
+    {
+        use crate::adapters::augurs::{
+            augurs_changepoint, augurs_cluster, augurs_dtw, augurs_forecast, augurs_outlier,
+            augurs_seasons,
+        };
+        m.add_function(wrap_pyfunction!(augurs_forecast, m)?)?;
+        m.add_function(wrap_pyfunction!(augurs_changepoint, m)?)?;
+        m.add_function(wrap_pyfunction!(augurs_seasons, m)?)?;
+        m.add_function(wrap_pyfunction!(augurs_outlier, m)?)?;
+        m.add_function(wrap_pyfunction!(augurs_dtw, m)?)?;
+        m.add_function(wrap_pyfunction!(augurs_cluster, m)?)?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;
