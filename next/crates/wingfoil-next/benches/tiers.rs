@@ -22,6 +22,10 @@
 //! - `dense_chain` — a deep linear map/filter/fold chain (dispatch-bound);
 //! - `fanout` — the classic 10x10 wide fan-out -> fan-in (shared wiring, every
 //!   node fires every cycle);
+//! - `fan_in_16` / `fan_in_64` / `fan_in_256` — a *busy* fan-in at three
+//!   widths, all branches ticking every cycle. The width sweep is the point:
+//!   `fanout` is only 10 wide, which is why it missed the n-ary-merge gap for
+//!   as long as it did (see below);
 //! - `accumulate` — a fold-accumulate hot loop over many cycles (scheduler-loop
 //!   bound);
 //! - `sparse` / `sparse_wide` — a hot chain in a graph that is ~97% quiet, at
@@ -59,18 +63,37 @@
 //! mostly-quiet interior is exactly its worst case, the mirror image of the
 //! dense wins.
 //!
-//! The second finding was the interpreted growth itself, and it led to a fix.
-//! 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work
+//! The second finding was the interpreted growth itself, and it led to two
+//! fixes. 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work
 //! proportional to active nodes" and was not one: node count is genuinely free
 //! (dangling padding of the same size costs nothing measurable). What grew was
-//! *depth*. `fan` left-folds its branches into a binary merge chain, so 256
-//! branches is a ~256-deep graph, and the drain used to walk `0..=max_layer`
+//! *depth*. `fan` used to left-fold its branches into a binary merge chain, so
+//! 256 branches was a ~256-deep graph, and the drain used to walk `0..=max_layer`
 //! testing every bucket — `O(active + deepest active layer)` per cycle. Classic
 //! never showed it, its `merge(vec)` being one N-ary node (depth 1).
 //!
 //! The drain now scans an occupied-layer bitmask instead (64 layers per word
 //! test), which took the slope between these two groups from +63% to +8%:
-//! ~2.94ms and ~3.18ms. See Phase 4.5 in `next/docs/port-plan.md`.
+//! ~2.94ms and ~3.18ms.
+//!
+//! **The `fan_in_*` groups exist because chasing that depth term turned up its
+//! root cause, and it was a parity gap rather than a tuning opportunity**: next
+//! had no n-ary merge, so `merge_all`/`fan` cost `n - 1` merge nodes where
+//! classic's `merge(vec)` costs 1. On a *busy* fan-in — every branch ticking,
+//! the common case — that was a straight loss against classic that widened with
+//! width (1.45x at 16, 1.73x at 64, 1.86x at 256), i.e. a violation of the
+//! `next-interpreted >= classic-interpreted` gate. `fanout` could not see it at
+//! 10 wide: the 9 extra merge nodes were lost among ~105 others. next now wires
+//! a single [`MergeN`](wingfoil_next::ops::MergeN) node, and the node counts
+//! below match the classic twins exactly, which they did not before.
+//!
+//! Measured after the fix (10k cycles): interpreted 4.35ms / 13.08ms / 48.85ms
+//! against classic's 5.43ms / 16.76ms / 64.15ms — **0.80x / 0.78x / 0.76x**. The
+//! flatness across the three widths is the thing to check, not any one bar: the
+//! failure mode was a ratio that grew with width, so a regression reappears as a
+//! rising slope long before any single group looks slow.
+//!
+//! See Phase 4.5 in `next/docs/port-plan.md`.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -110,6 +133,45 @@ wingfoil_next::graph! {
 // codegen suite all measure the identical DAG shape. Defines module `fanout`
 // with a top-level `const PERIOD`.
 include!("../bench_support/fanout_10x10.rs");
+
+// --- Workload 2b: a *busy* fan-in, swept across three widths ----------------
+//
+// One source feeds `width` one-map branches that all fan back into a single
+// merge, so every branch ticks on every cycle. This is the shape the n-ary
+// merge exists for, and the shape `fanout` is too narrow to measure: the cost
+// of a fan-in's *merge* only separates from the cost of its *branches* once the
+// width is large. Compare the `interpreted` and `classic` bars within each
+// group, then read the three groups as a slope — a merge chain regression shows
+// up as a ratio that grows with width, not as any single bad number.
+wingfoil_next::graph! {
+    fn fan_in_16(g: &GraphBuilder) -> Stream<u64> {
+        let src = g.ticker(STEP).count();
+        let out = src
+            .fan(16, |s| s.map(|i: &u64| std::hint::black_box(i.wrapping_add(1))))
+            .fold(0u64, |acc, v| *acc = acc.wrapping_add(*v));
+        out
+    }
+}
+
+wingfoil_next::graph! {
+    fn fan_in_64(g: &GraphBuilder) -> Stream<u64> {
+        let src = g.ticker(STEP).count();
+        let out = src
+            .fan(64, |s| s.map(|i: &u64| std::hint::black_box(i.wrapping_add(1))))
+            .fold(0u64, |acc, v| *acc = acc.wrapping_add(*v));
+        out
+    }
+}
+
+wingfoil_next::graph! {
+    fn fan_in_256(g: &GraphBuilder) -> Stream<u64> {
+        let src = g.ticker(STEP).count();
+        let out = src
+            .fan(256, |s| s.map(|i: &u64| std::hint::black_box(i.wrapping_add(1))))
+            .fold(0u64, |acc, v| *acc = acc.wrapping_add(*v));
+        out
+    }
+}
 
 // --- Workload 3: a fold-accumulate hot loop (scheduler-loop bound) ----------
 //
@@ -213,6 +275,29 @@ fn fanout_classic() -> Rc<dyn wingfoil::Stream<u64>> {
         })
         .collect::<Vec<_>>();
     classic_merge(branches)
+}
+
+fn fan_in_classic_n(width: usize) -> Rc<dyn wingfoil::Stream<u64>> {
+    let src = classic_ticker(STEP).count();
+    let branches = (0..width)
+        .map(|_| {
+            src.clone()
+                .map(|i: u64| std::hint::black_box(i.wrapping_add(1)))
+        })
+        .collect::<Vec<_>>();
+    classic_merge(branches).fold(|acc: &mut u64, v: u64| *acc = acc.wrapping_add(v))
+}
+
+fn fan_in_16_classic() -> Rc<dyn wingfoil::Stream<u64>> {
+    fan_in_classic_n(16)
+}
+
+fn fan_in_64_classic() -> Rc<dyn wingfoil::Stream<u64>> {
+    fan_in_classic_n(64)
+}
+
+fn fan_in_256_classic() -> Rc<dyn wingfoil::Stream<u64>> {
+    fan_in_classic_n(256)
 }
 
 fn accumulate_classic() -> Rc<dyn wingfoil::Stream<u64>> {
@@ -329,8 +414,38 @@ fn tiers(c: &mut Criterion) {
         10_000u32
     );
 
-    // fanout: ticker + count + sample + fold + 10*10 maps + 10-way merge.
-    tier_group!(c, "fanout", fanout, fanout_classic, 10 * 10 + 5, 10_000u32);
+    // fanout: ticker + count + 10*10 maps + the 10-way merge = 103, the same
+    // count as the classic twin now that the fan-in is one n-ary node.
+    tier_group!(c, "fanout", fanout, fanout_classic, 10 * 10 + 3, 10_000u32);
+
+    // fan_in_*: ticker + count + `width` maps + the n-ary merge + fold. Every
+    // branch ticks every cycle, so this is the busy fan-in the n-ary merge
+    // exists for; the three widths make a merge-chain regression visible as a
+    // slope against `classic`.
+    tier_group!(
+        c,
+        "fan_in_16",
+        fan_in_16,
+        fan_in_16_classic,
+        16 + 4,
+        10_000u32
+    );
+    tier_group!(
+        c,
+        "fan_in_64",
+        fan_in_64,
+        fan_in_64_classic,
+        64 + 4,
+        10_000u32
+    );
+    tier_group!(
+        c,
+        "fan_in_256",
+        fan_in_256,
+        fan_in_256_classic,
+        256 + 4,
+        10_000u32
+    );
 
     // accumulate: ticker + count + fold, run long so the loop dominates.
     tier_group!(
@@ -343,16 +458,17 @@ fn tiers(c: &mut Criterion) {
     );
 
     // sparse: hot (ticker + count + 6 maps) + cold (ticker + count + 64*3 maps
-    // + 63 merges) + the joining merge + fold = 267 nodes, ~8 of them active.
-    tier_group!(c, "sparse", sparse, sparse_classic, 267, 10_000u32);
+    // + the n-ary merge) + the joining merge + fold = 205 nodes, ~8 of them
+    // active. (Was 267 while `fan` unrolled to 63 binary merges.)
+    tier_group!(c, "sparse", sparse, sparse_classic, 205, 10_000u32);
 
-    // sparse_wide: the same, with 256 cold branches — 1035 nodes, ~8 active.
+    // sparse_wide: the same, with 256 cold branches — 781 nodes, ~8 active.
     tier_group!(
         c,
         "sparse_wide",
         sparse_wide,
         sparse_wide_classic,
-        1035,
+        781,
         10_000u32
     );
 }

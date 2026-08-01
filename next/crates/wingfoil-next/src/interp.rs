@@ -51,7 +51,7 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
-use crate::ops::{Join, Join3, Never, Poll, TryJoin, TryJoin3, WithTime};
+use crate::ops::{Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
@@ -1430,6 +1430,60 @@ impl Builder {
         self.make_handle(idx)
     }
 
+    /// Merge N same-type streams into one — the n-ary [`MergeN`] node backing
+    /// `merge_all` / `fan`. The earliest-supplied upstream that ticked this
+    /// cycle wins; quiet when none ticked.
+    ///
+    /// Hand-written for the same reason as [`combine`](Self::combine): a
+    /// variadic fan-in does not fit the `Op` trait's fixed-arity tuple `In`,
+    /// so `#[op]` cannot generate the wiring. Unlike the generated shapes this
+    /// does **not** hand `Op::cycle` a materialised `&[(&T, bool)]` — that
+    /// would mean borrowing all N slots (and allocating) every cycle, which on
+    /// a wide merge costs more than the `n - 1` chained nodes it replaces.
+    /// Instead it applies [`MergeN::winner`] — the shared rule the op's own
+    /// `cycle` uses — to the engine's tick flags and clones only the winning
+    /// slot.
+    ///
+    /// `srcs` must be non-empty; a zero-input merge has no value to produce
+    /// (the fluent `merge_all(&[])` short-circuits to the receiver instead of
+    /// wiring a node).
+    pub fn merge_n<T: Clone + Default + 'static>(&mut self, srcs: &[Handle<T>]) -> Handle<T> {
+        assert!(
+            !srcs.is_empty(),
+            "invariant: Builder::merge_n requires at least one upstream"
+        );
+        let idx = self.nodes.len();
+        let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
+        let slots: Vec<SlotRef<T>> = srcs.iter().map(|h| self.slot(*h)).collect();
+        let out = self.new_slot(T::default());
+        let out_reset = out.clone();
+        let ticked = self.ticked.clone();
+        self.push_node(
+            indices.clone(),
+            MergeN::<T>::ACTIVATION,
+            "merge_n",
+            Box::new(move |_k| {
+                let winner = {
+                    let t = ticked.borrow();
+                    MergeN::<T>::winner(indices.iter().map(|&i| t[i]))
+                };
+                match winner {
+                    Some(i) => {
+                        let value = slots[i].borrow().clone();
+                        *out.borrow_mut() = value;
+                        Ok(true)
+                    }
+                    None => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        self.set_reset(Box::new(move || {
+            *out_reset.borrow_mut() = T::default();
+        }));
+        self.make_handle(idx)
+    }
+
     /// Pair each value with the current engine time: `(time, value)`. Kept
     /// hand-written (not `#[op]`): the output `(NanoTime, T)` is seeded from
     /// the input's current value, so it never requires `T: Default`.
@@ -2579,10 +2633,12 @@ impl Runner {
         // The *occupied* layers are found through `occupied`, a bitmask with one
         // bit per layer, rather than by walking `0..=max_layer` and testing each
         // bucket. That walk made per-cycle cost `O(active + depth)`, which a deep
-        // graph pays every cycle even when almost none of it fires — and `fan`
-        // left-folds its branches into a merge chain, so a wide fan-in *is* deep
-        // (see Phase 4.5 in `next/docs/port-plan.md`). Scanning the mask skips 64
-        // empty layers per word test, leaving `O(active + depth/64)`.
+        // graph pays every cycle even when almost none of it fires — and back when
+        // `fan` left-folded its branches into a merge chain, a wide fan-in *was*
+        // deep (see Phase 4.5 in `next/docs/port-plan.md`; `fan` now fans in
+        // through one `merge_n`, but depth is still cheap to build by hand).
+        // Scanning the mask skips 64 empty layers per word test, leaving
+        // `O(active + depth/64)`.
         //
         // Deliberately a bitmask and not a heap of occupied layers: a heap would
         // be `O(active log active)` with a push/pop *per layer*, and on a linear
@@ -2733,6 +2789,23 @@ impl Runner {
     #[doc(hidden)]
     pub fn node_visits(&self) -> u64 {
         self.node_visits
+    }
+
+    /// How many nodes the wired graph holds — the *static* counterpart of
+    /// [`node_visits`](Runner::node_visits)'s per-run count.
+    ///
+    /// Exists so a test can pin the cost of a wiring shape rather than of a
+    /// run. The gate it was added for: an n-way `merge_all` / `fan` must cost
+    /// **one** merge node, not the `n - 1` a binary chain costs. That
+    /// distinction is invisible to a results-parity test (a chain and an n-ary
+    /// node produce identical values) and was invisible to the benchmarks too,
+    /// which is how a 1.86x loss against classic on a wide fan-in survived —
+    /// see `MergeN`.
+    ///
+    /// Hidden: an engine-observability hook for the perf gates, not public API.
+    #[doc(hidden)]
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
     /// Layer-scan steps performed by the most recent [`run`](Runner::run) — the

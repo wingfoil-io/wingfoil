@@ -801,13 +801,12 @@ pub trait StreamOps<T>: Sized {
     /// this stream first, then `others` in slice order. `merge_all(&[])` is
     /// just this stream.
     ///
-    /// This unrolls to a left-associated chain of 2-ary
-    /// [`merge`](StreamOps::merge)s (`self.merge(a).merge(b)…`), which is
-    /// exactly equivalent — 2-ary merge's earliest-wins tie-break is
-    /// associative, so the chain and a single n-ary node fire identically. It
-    /// closes the n-ary-merge vocabulary gap without a bespoke variadic op (the
-    /// same sugar-over-primitive approach as [`fan`](StreamOps::fan) /
-    /// [`map_n`](StreamOps::map_n)).
+    /// Wires a **single** n-ary [`MergeN`](crate::ops::MergeN) node — classic
+    /// `merge(vec)`'s twin — not a left-associated chain of 2-ary
+    /// [`merge`](StreamOps::merge)s. The two are semantically identical (2-ary
+    /// merge's earliest-wins tie-break is associative), but a chain costs
+    /// `n - 1` extra nodes and `n - 1` extra depth, which measured 1.86x
+    /// classic on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -825,6 +824,10 @@ pub trait StreamOps<T>: Sized {
     /// of this stream — and merge their outputs back into one stream (earliest-
     /// supplied ticked branch wins, as `merge`). `n` must be at least 1. Inside
     /// `graph!` the count must be a literal so the DAG stays static.
+    ///
+    /// The fan-in is one n-ary [`merge_all`](StreamOps::merge_all) node, so a
+    /// 256-way fan costs 256 branch tails plus **one** merge — not the
+    /// 255-node, 255-deep binary chain it used to build.
     fn fan<B, F>(&self, n: usize, branch: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
@@ -1131,11 +1134,18 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     where
         T: Clone + Default + 'static,
     {
-        let mut merged = self.clone();
-        for other in others {
-            merged = merged.merge(other);
+        // No node at all for the degenerate case: `merge_all(&[])` is this
+        // stream, exactly as the old empty fold produced.
+        if others.is_empty() {
+            return self.clone();
         }
-        merged
+        let rest: Vec<Handle<T>> = others.iter().map(|s| s.handle()).collect();
+        self.wire(move |b, h| {
+            let mut srcs = Vec::with_capacity(rest.len() + 1);
+            srcs.push(h);
+            srcs.extend(rest);
+            b.merge_n(&srcs)
+        })
     }
 
     fn map_n<F>(&self, n: usize, f: F) -> Stream<T>
@@ -1156,11 +1166,12 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         F: Fn(Stream<T>) -> Stream<B>,
     {
         assert!(n >= 1, "`fan` requires at least one branch");
-        let mut merged = branch(self.clone());
-        for _ in 1..n {
-            merged = merged.merge(&branch(self.clone()));
-        }
-        merged
+        // Build every branch first, then fan them in through a single n-ary
+        // merge — the branch tails are the merge's upstreams, in branch order,
+        // so the tie-break stays "earliest branch that ticked wins".
+        let branches: Vec<Stream<B>> = (0..n).map(|_| branch(self.clone())).collect();
+        let rest: Vec<&Stream<B>> = branches[1..].iter().collect();
+        branches[0].merge_all(&rest)
     }
 
     fn limit(&self, limit: u32) -> Stream<T>

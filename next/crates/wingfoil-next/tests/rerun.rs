@@ -168,9 +168,11 @@ fn single_run_graph_errors_on_second_run() {
     );
 }
 
-/// `merge_all` (the n-ary merge sugar) is exactly the left-associated chain of
-/// 2-ary merges — same values, same earliest-wins tie-break — and both match a
-/// fresh graph.
+/// `merge_all` (one n-ary merge node) produces exactly what the left-associated
+/// chain of 2-ary merges it replaced did — same values, same earliest-wins
+/// tie-break — and both re-run cleanly. The *shape* difference the rewrite was
+/// for (one node, not `n - 1`) is gated in `merge_n.rs`; this is the
+/// behavioural half.
 #[test]
 fn merge_all_matches_chained_merge() {
     fn wire_nary(g: &GraphBuilder) -> Stream<Vec<u64>> {

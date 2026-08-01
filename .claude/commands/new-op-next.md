@@ -86,6 +86,7 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Seeded accumulator** | `(&'a I,)` + init | `#[op(build = name, init_arg)]` | `name(src, init, cfg)` — seeds state *and* slot | `Fold` |
 | **Source** (no input) | `()` | `#[op(build = name)]` + `start` that `schedule`s | `name(cfg)` | `Ticker`, `Const` |
 | **Signature ≠ shape** | any | `#[op(build = name, no_builder)]` + hand `Builder` method | — | `WithTime` |
+| **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
 
 `no_builder` is the last resort, not the default: reach for it only when the
 interpreted method must have a *different signature* from the op's shape —
@@ -95,6 +96,34 @@ rather than a compile-time mask (those are extra hand-written methods over
 `Join`/`Join3`, alongside the generated `join`/`join_passive`/`join3`). If you
 find yourself adding `no_builder` for any other reason, the shape probably fits
 and you should check `expand_builder` in the macro crate first.
+
+**Variadic ops** (`MergeN`, the n-ary merge behind `merge_all`/`fan`) are the
+one shape `#[op]` cannot touch at all: it parses `In` as a fixed-arity tuple, and
+a fan-in of runtime width has none. The route that works, if you need another:
+
+- Declare `In<'a> = &'a [(&'a T, bool)]` — the same uniform `(value, tick)` pairs
+  every other op gets, as a slice.
+- Hand-write the `Builder` method (`Builder::merge_n`, next to `combine`) and the
+  `__wf_op_<name>_*` forwarders + `__WF_OP_<NAME>_{ACTIVATION,PASSIVE}` consts.
+  Mirror what `expand_builder` / the forwarder block in the macro crate emit —
+  in particular `_start` must be **fully erased** (`<__Cfg, __State>`, no op
+  generics) unless the op overrides `start`, because `start` takes no input to
+  anchor them from. Getting that wrong fails at the call site with E0282, not in
+  the op.
+- On the `graph!` side, set `NodeDef::variadic` where you build the node;
+  `cycle_input` then emits a pair *slice* rather than a tuple, and the dispatch
+  condition drops the passive mask (a variadic op is all-active, and the mask is
+  a `u32` a wide fan-in would shift past).
+- **Do not** make the interpreted path materialise the slice: borrowing all N
+  slots per cycle allocates, which on a wide fan-in costs more than the node you
+  removed. Factor the semantics into a shared associated fn (`MergeN::winner`)
+  that both `Op::cycle` and the interpreted closure call, so they cannot drift.
+- **Gate the shape, not just the results.** A variadic op usually replaces a
+  chain of binary ones, and the two produce *identical values* — every
+  results-parity test passes either way, which is exactly how the merge chain's
+  1.86x loss against classic survived for so long. Assert on
+  `Runner::node_count()` that the wiring costs one node (`tests/merge_n.rs`), and
+  add a benchmark bar at a width where the difference can show.
 
 `#[op]` is **in-crate tooling**: its output names `crate::interp::Builder`, so
 an op defined outside `wingfoil-next` writes its forwarders by hand and wires
@@ -209,7 +238,8 @@ inference resolves the op type the macro never names. Nothing to edit.
 
 For a shape `#[op]` cannot parse (cyclic/IO sources; an `In` the uniform
 one-`(value, tick)`-pair-per-edge form can't express, as
-`DelayWithReset` — see its `DelayWithResetFwd` witness for the way out), the op
+`DelayWithReset` — see its `DelayWithResetFwd` witness for the way out;
+variadic, as `MergeN` — see step 2 for its route), the op
 may land **interpreted-only** —
 that is allowed, but it must be *consciously* placed: either give it an
 equivalent forwarder, or add it to the documented fluent-only allowlist in
