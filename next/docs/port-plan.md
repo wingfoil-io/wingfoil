@@ -1348,7 +1348,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio + csv landed*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1398,8 +1398,18 @@ tests covered — not "legacy pytest passes unchanged."
   same container) on the fixed host-network ports that harness pins, and brings
   the cluster up *after* the Rust tests so the two never contend for them.
 
-  **Remaining: 10.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — csv, zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓): a
+  **csv** is the first binding to need an *engine* change. Its sink derives the
+  header from the record type's serde field names, and a dynamic caller's
+  record is a positional `Vec<String>` with none — so a Python-written file
+  would have had no header row, which legacy did write. Rather than
+  reimplement the sink in the binding, `CsvSinkOps::csv_write_with_header`
+  landed on the Rust trait: the same sink with columns supplied explicitly, the
+  escape hatch any dynamic caller needs. The read side opens the file once at
+  wiring to learn its header, so a replayed row zips back into a dict in
+  *column order* (legacy's `HashMap` record lost it).
+
+  **Remaining: 9.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓, csv ✓): a
     scalar/bytes payload over the free-fn form;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
