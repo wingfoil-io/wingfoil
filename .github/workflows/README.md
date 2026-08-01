@@ -2,7 +2,11 @@
 
 ## CI (run on push / PR)
 
-* `rust-test.yml` — Rust build, test, clippy, coverage upload.
+* `rust-test.yml` — three parallel jobs: `Test (wingfoil) & Coverage`,
+  `Test (wingfoil-next)`, and `Lint (fmt & clippy)`. They were one serial job
+  until they were split; the legs share no build artifacts (coverage builds
+  into `target/llvm-cov-target` under `-C instrument-coverage`, the next-engine
+  tests build a third feature set), so serialising them bought nothing.
 * `python-test.yml` — Python (`wingfoil-python`) build + pytest with coverage.
 * `security-audit.yml` — fails on dependencies with known advisories
   (`cargo audit` for Cargo, `pnpm audit` for `wingfoil-js`, and
@@ -27,6 +31,18 @@ workflows below. `all-tests.yml` runs `rust-test.yml` + `python-test.yml` +
 * `kafka-python-integration.yml` — Kafka via Redpanda service container.
 * `zmq-etcd-integration.yml` — ZMQ + etcd Python tests.
 * `web-integration.yml` — `wingfoil-wasm` build + `wingfoil-js` typecheck.
+
+The per-adapter integration workflows above are the *only* place their
+`tests/*_integration.rs` binaries are executed. `rust-test.yml` compiles them
+(so they stay type- and link-checked) but filters them out of its test run:
+without the service each one needs, they only exercise connection-timeout
+paths, and they are slow doing it.
+
+Every push/PR workflow declares a `concurrency` group so a superseded PR push
+cancels its predecessor. The group name is a literal per file rather than
+`${{ github.workflow }}` — under `workflow_call` that expression resolves to
+the *caller's* workflow name, which would put every fanned-out leg of
+`integration-tests.yml` in one group where they cancel each other.
 
 ## Release & publish (manual dispatch)
 

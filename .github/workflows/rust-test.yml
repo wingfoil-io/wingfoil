@@ -2,15 +2,26 @@ name: test.rust
 
 on:
   workflow_call:
+  # No `paths-ignore: .github/workflows/**` here. It meant a change to this
+  # file was the one change CI never validated — a broken gate only showed up
+  # after it had merged. The legs below are parallel and cancel superseded PR
+  # pushes, so paying for the run on a workflow edit is cheap.
   push:
     branches: [ "main", "next" ]
-    paths-ignore:
-      - ".github/workflows/**"
   pull_request:
     branches: [ "main", "next" ]
-    paths-ignore:
-      - ".github/workflows/**"
   workflow_dispatch:
+
+# One in-flight run per ref. Superseded PR pushes are cancelled (the older
+# result is worthless once a new commit lands); pushes to main/next are not,
+# so every merged commit keeps a status of its own. The group name is a
+# literal, not ${{ github.workflow }}: when this workflow is reached through
+# `workflow_call` (from test.all) that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: rust-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,50 +31,44 @@ defaults:
   run:
     shell: bash
 
+# The three jobs below were one serial job ("Build, Test, & Lint") that took
+# ~17 minutes. They share no artifacts in practice — coverage builds into
+# `target/llvm-cov-target` with `-C instrument-coverage`, the next-engine tests
+# build a third feature set — so running them in parallel costs a little extra
+# runner time and roughly halves wall clock. Each keeps its own cargo cache
+# (`shared-key`) because each holds a different feature set's artifacts.
+
 jobs:
-  ci:
-    name: Build, Test, & Lint
+  test:
+    name: Test (wingfoil) & Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust Toolchains
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-          
+          components: llvm-tools-preview
+
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Install clippy-sarif
-        uses: taiki-e/cache-cargo-install-action@v2
         with:
-          tool: clippy-sarif
-
-      - name: Install sarif-fmt
-        uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: sarif-fmt
+          shared-key: rust-test-coverage
+          # Only main/next write the cache. Otherwise every PR branch races to
+          # save a multi-GB entry, and the repo's 10GB cache budget evicts the
+          # warm entries everything else restores from.
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
-
-      - name: Build
-        run: cargo build --verbose
-
       - name: Install nextest
         uses: taiki-e/install-action@nextest
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
       - name: Run tests with coverage
         # Restrict to --lib --tests: the 33 example binaries each statically link
@@ -71,18 +76,11 @@ jobs:
         # instrumentation exhausts the runner's disk (lld dies with SIGBUS writing
         # past EOF on its mmap'd output). Examples run no tests, so they add zero
         # coverage; they are still compile-checked by the clippy --all-targets step.
+        #
+        # `--no-capture` forces `--test-threads=1` in nextest, so these 500+ tests
+        # run serially. That is deliberate: they take 30s either way, and several
+        # bind loopback sockets, so the parallelism is not worth the flake risk.
         run: cargo llvm-cov nextest -p wingfoil --features full --lib --tests --no-capture --lcov --output-path lcov.info
-        env:
-          RUST_LOG: INFO
-
-      - name: Run wingfoil-next tests
-        # The coverage run above is scoped to `-p wingfoil`, so the next-engine
-        # crate's tests — the adapter parity suites (lines/csv/augurs) and the
-        # trybuild cases — would otherwise never execute in CI. Run them here
-        # with all features so the feature-gated csv/augurs adapters are
-        # exercised. `--lib --tests` skips the example binaries (already
-        # compile-checked by the workspace clippy step below).
-        run: cargo test -p wingfoil-next --all-features --lib --tests
         env:
           RUST_LOG: INFO
 
@@ -94,11 +92,97 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-      - name: Run rustfmt
+  test-next:
+    name: Test (wingfoil-next)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-test-next
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
+
+      - name: Run wingfoil-next tests
+        # The coverage job is scoped to `-p wingfoil`, so the next-engine crate's
+        # tests — the adapter parity suites (lines/csv/augurs) and the trybuild
+        # cases — would otherwise never execute in CI. Run them here with all
+        # features so the feature-gated csv/augurs adapters are exercised.
+        # `--lib --tests` skips the example binaries (already compile-checked by
+        # the workspace clippy job).
+        #
+        # nextest, not `cargo test`: `cargo test` runs one test *binary* at a
+        # time, and wingfoil-next has ~70 of them.
+        #
+        # The `*_integration` binaries are compiled (so they stay type- and
+        # link-checked) but not run here. Each has a dedicated workflow that
+        # first stands up the service it needs — a KDB+ container, an etcd
+        # container, an Aeron media driver. Without those services they only
+        # exercise their connection-timeout paths, and they are slow doing it:
+        # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
+        # through timeouts.
         run: |
-          cargo fmt --all -- --check
+          cargo nextest run -p wingfoil-next --all-features --lib --tests \
+            -E 'not binary(/_integration$/)'
+        env:
+          RUST_LOG: INFO
+
+  lint:
+    name: Lint (fmt & clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-lint
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+
+      - name: Install clippy-sarif
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: clippy-sarif
+
+      - name: Install sarif-fmt
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: sarif-fmt
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
+
+      - name: Run rustfmt
+        run: cargo fmt --all -- --check
 
       - name: Run rust-clippy
+        # Both passes are needed: `--all-features` is not a superset of default
+        # in every crate, and the default pass is what most contributors run.
+        # They are separate artifact sets (different feature unification), so
+        # neither reuses the other's work.
         run: |
           set -o pipefail
           cargo clippy --workspace --all-targets -- -D warnings
