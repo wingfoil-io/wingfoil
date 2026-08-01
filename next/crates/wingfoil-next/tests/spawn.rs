@@ -135,7 +135,39 @@ fn spawn_map_delivers_all_values_in_realtime() {
         .expect("realtime spawn_map run");
 
     let flat: Vec<u64> = runner.value(&collected).into_iter().flatten().collect();
-    assert_eq!(flat, vec![10, 20, 30, 40, 50]);
+
+    // The mapper sums each burst, and under realtime the grouping is timing
+    // dependent (as the doc comment says) — two counter values landing in one
+    // burst legitimately produce one summed output. Asserting
+    // `[10, 20, 30, 40, 50]` therefore asserted a *grouping*, not the values,
+    // and flaked on any runner that coalesced a pair: observed failures were
+    // `[10, 20, 70, 50]` (3+4 together) and `[10, 20, 120]` (3+4+5).
+    //
+    // So check what the transport actually promises: every value arrives, in
+    // order, grouped arbitrarily. Each output is `sum(group) * 10` over a
+    // contiguous run of the input, so walking the expected counts and
+    // consuming one run per output must reproduce the input exactly.
+    let mut expected = 1..=n;
+    for value in &flat {
+        assert_eq!(
+            0,
+            value % 10,
+            "each output is a burst sum scaled by 10: {flat:?}"
+        );
+        let mut remaining = value / 10;
+        while remaining > 0 {
+            let next = expected
+                .next()
+                .unwrap_or_else(|| panic!("more values delivered than sent: {flat:?}"));
+            remaining = remaining.checked_sub(next).unwrap_or_else(|| {
+                panic!("output {value} is not a run of consecutive counts: {flat:?}")
+            });
+        }
+    }
+    assert!(
+        expected.next().is_none(),
+        "not every value was delivered: {flat:?}"
+    );
 }
 
 /// `spawn_bounded` / `spawn_map_bounded`: a small transport bound applies
