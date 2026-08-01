@@ -119,12 +119,16 @@ def test_pub_then_sub_round_trips():
 
     payloads = [b"alpha", b"beta", b"gamma"]
 
+    # `values` replays exactly this list, one per tick — `counter` would depend
+    # on how many ticks a duration bound produces, which is not what is under
+    # test here.
     produce = wf.Graph()
-    records = produce.counter(period_nanos=SECOND_NANOS).map(
-        lambda i: {"topic": topic, "key": b"k", "value": payloads[int(i) - 1]}
+    records = produce.values(
+        [{"topic": topic, "key": b"k", "value": p} for p in payloads],
+        period_nanos=SECOND_NANOS,
     )
     wf.kafka_pub(records, BROKERS)
-    produce.run(realtime=False, start_nanos=0, duration_nanos=3 * SECOND_NANOS)
+    produce.run(realtime=False, start_nanos=0, duration_nanos=10 * SECOND_NANOS)
 
     # A fresh group reads from the beginning, so the batch above is replayed.
     consume = wf.Graph()
@@ -132,12 +136,10 @@ def test_pub_then_sub_round_trips():
     wf.kafka_sub(consume, BROKERS, topic, group).inspect(seen.append)
     consume.run(realtime=True, duration_nanos=15 * SECOND_NANOS)
 
-    values = [event["value"] for tick in seen for event in tick]
-    assert payloads == values
-    keys = {event["key"] for tick in seen for event in tick}
-    assert {b"k"} == keys
-    topics = {event["topic"] for tick in seen for event in tick}
-    assert {topic} == topics
+    events = [event for tick in seen for event in tick]
+    assert payloads == [e["value"] for e in events]
+    assert {b"k"} == {e["key"] for e in events}
+    assert {topic} == {e["topic"] for e in events}
 
 
 @pytest.mark.requires_kafka
@@ -156,11 +158,12 @@ def test_sub_sees_messages_produced_mid_run_from_another_thread():
         # Long enough that the consumer is running and subscribed.
         time.sleep(3)
         g = wf.Graph()
-        records = g.counter(period_nanos=SECOND_NANOS).map(
-            lambda i: {"topic": topic, "value": f"late-{int(i)}".encode()}
+        records = g.values(
+            [{"topic": topic, "value": b"late-1"}, {"topic": topic, "value": b"late-2"}],
+            period_nanos=SECOND_NANOS,
         )
         wf.kafka_pub(records, BROKERS)
-        g.run(realtime=False, start_nanos=0, duration_nanos=2 * SECOND_NANOS)
+        g.run(realtime=False, start_nanos=0, duration_nanos=10 * SECOND_NANOS)
 
     writer = threading.Thread(target=produce_later)
     writer.start()
@@ -181,11 +184,11 @@ def test_a_record_without_a_key_round_trips_as_none():
     group = f"g-{uuid.uuid4().hex[:8]}"
 
     produce = wf.Graph()
-    records = produce.counter(period_nanos=SECOND_NANOS).map(
-        lambda _: {"topic": topic, "value": b"no-key"}
+    records = produce.values(
+        [{"topic": topic, "value": b"no-key"}], period_nanos=SECOND_NANOS
     )
     wf.kafka_pub(records, BROKERS)
-    produce.run(realtime=False, start_nanos=0, duration_nanos=SECOND_NANOS)
+    produce.run(realtime=False, start_nanos=0, duration_nanos=10 * SECOND_NANOS)
 
     consume = wf.Graph()
     seen = []
