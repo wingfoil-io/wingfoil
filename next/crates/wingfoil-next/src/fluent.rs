@@ -990,29 +990,11 @@ pub trait StreamOps<T>: Sized {
 }
 
 impl<T: 'static> StreamOps<T> for Stream<T> {
-    fn map<B, F>(&self, f: F) -> Stream<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> B + 'static,
-    {
-        self.wire(|b, h| b.map(h, f))
-    }
+    __wf_fluent_map!(T);
 
-    fn try_map<B, F>(&self, f: F) -> Stream<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> Result<B> + 'static,
-    {
-        self.wire(|b, h| b.try_map(h, f))
-    }
+    __wf_fluent_try_map!(T);
 
-    fn map_filter<B, F>(&self, f: F) -> Stream<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> (B, bool) + 'static,
-    {
-        self.wire(|b, h| b.map_filter(h, f))
-    }
+    __wf_fluent_map_filter!(T);
 
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where
@@ -1021,114 +1003,31 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|b, h| b.with_time(h))
     }
 
-    fn ticked_at(&self) -> Stream<NanoTime> {
-        self.wire(|b, h| b.ticked_at(h))
-    }
+    __wf_fluent_ticked_at!(T);
 
-    fn ticked_at_elapsed(&self) -> Stream<NanoTime> {
-        self.wire(|b, h| b.ticked_at_elapsed(h))
-    }
+    __wf_fluent_ticked_at_elapsed!(T);
 
-    fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
-    where
-        B: Clone + 'static,
-        F: Fn(&mut B, &T) + 'static,
-    {
-        self.wire(|b, h| b.fold(h, init, f))
-    }
+    __wf_fluent_fold!(T);
 
-    fn accumulate(&self) -> Stream<Vec<T>>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.accumulate(h))
-    }
+    __wf_fluent_accumulate!(T);
 
-    fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
-    where
-        B: 'static,
-        C: Clone + Default + 'static,
-        F: Fn(&T, &B) -> C + 'static,
-    {
-        let other = other.handle();
-        self.wire(|b, h| b.join(h, other, f))
-    }
+    __wf_fluent_join!(T);
 
-    fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
-    where
-        B: 'static,
-        C: Clone + Default + 'static,
-        F: Fn(&T, &B) -> C + 'static,
-    {
-        let other = other.handle();
-        self.wire(|b, h| b.join_passive(h, other, f))
-    }
+    __wf_fluent_join_passive!(T);
 
-    fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
-    where
-        B: 'static,
-        C: 'static,
-        D: Clone + Default + 'static,
-        F: Fn(&T, &B, &C) -> D + 'static,
-    {
-        let (bh, ch) = (b.handle(), c.handle());
-        self.wire(|bld, h| bld.join3(h, bh, ch, f))
-    }
+    __wf_fluent_join3!(T);
 
-    fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
-    where
-        B: 'static,
-        C: Clone + Default + 'static,
-        F: Fn(&T, &B) -> Result<C> + 'static,
-    {
-        let other = other.handle();
-        self.wire(|b, h| b.try_join(h, other, f))
-    }
+    __wf_fluent_try_join!(T);
 
-    fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
-    where
-        B: 'static,
-        C: Clone + Default + 'static,
-        F: Fn(&T, &B) -> Result<C> + 'static,
-    {
-        let other = other.handle();
-        self.wire(|b, h| b.try_join_passive(h, other, f))
-    }
+    __wf_fluent_try_join_passive!(T);
 
-    fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
-    where
-        B: 'static,
-        C: 'static,
-        D: Clone + Default + 'static,
-        F: Fn(&T, &B, &C) -> Result<D> + 'static,
-    {
-        let (bh, ch) = (b.handle(), c.handle());
-        self.wire(|bld, h| bld.try_join3(h, bh, ch, f))
-    }
+    __wf_fluent_try_join3!(T);
 
-    fn filter(&self, condition: &Stream<bool>) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        let cond = condition.handle();
-        self.wire(|b, h| b.filter(h, cond))
-    }
+    __wf_fluent_filter!(T);
 
-    fn sample(&self, trigger: &Stream<()>) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        let trigger = trigger.handle();
-        self.wire(|b, h| b.sample(h, trigger))
-    }
+    __wf_fluent_sample!(T);
 
-    fn merge(&self, other: &Stream<T>) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        let other = other.handle();
-        self.wire(|b, h| b.merge(h, other))
-    }
+    __wf_fluent_merge!(T);
 
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
@@ -1174,41 +1073,15 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         branches[0].merge_all(&rest)
     }
 
-    fn limit(&self, limit: u32) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.limit(h, limit))
-    }
+    __wf_fluent_limit!(T);
 
-    fn throttle(&self, interval: Duration) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.throttle(h, interval))
-    }
+    __wf_fluent_throttle!(T);
 
-    fn window(&self, interval: Duration) -> Stream<Vec<T>>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.window(h, interval))
-    }
+    __wf_fluent_window!(T);
 
-    fn buffer(&self, capacity: usize) -> Stream<Vec<T>>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.buffer(h, capacity))
-    }
+    __wf_fluent_buffer!(T);
 
-    fn inspect<F>(&self, f: F) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-        F: Fn(&T) + 'static,
-    {
-        self.wire(|b, h| b.inspect(h, f))
-    }
+    __wf_fluent_inspect!(T);
 
     fn logged(&self, label: &str, level: log::Level) -> Stream<T>
     where
@@ -1217,19 +1090,9 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|b, h| b.logged(h, (label.to_string(), level)))
     }
 
-    fn distinct(&self) -> Stream<T>
-    where
-        T: Clone + Default + PartialEq + 'static,
-    {
-        self.wire(|b, h| b.distinct(h))
-    }
+    __wf_fluent_distinct!(T);
 
-    fn difference(&self) -> Stream<T>
-    where
-        T: Clone + Default + Sub<Output = T> + 'static,
-    {
-        self.wire(|b, h| b.difference(h))
-    }
+    __wf_fluent_difference!(T);
 
     fn not(&self) -> Stream<T>
     where
@@ -1238,26 +1101,11 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.map(|v| !v.clone())
     }
 
-    fn print(&self) -> Stream<T>
-    where
-        T: Clone + Default + Debug + 'static,
-    {
-        self.wire(|b, h| b.print(h))
-    }
+    __wf_fluent_print!(T);
 
-    fn timed(&self) -> Stream<T>
-    where
-        T: Clone + Default + 'static,
-    {
-        self.wire(|b, h| b.timed(h))
-    }
+    __wf_fluent_timed!(T);
 
-    fn delay(&self, delay: Duration) -> Stream<T>
-    where
-        T: Clone + Default + PartialEq + 'static,
-    {
-        self.wire(|b, h| b.delay(h, delay))
-    }
+    __wf_fluent_delay!(T);
 
     fn delay_with_reset<U>(&self, delay: Duration, trigger: &Stream<U>) -> Stream<T>
     where
@@ -1279,13 +1127,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         })
     }
 
-    fn for_each<F>(&self, f: F) -> Stream<()>
-    where
-        T: 'static,
-        F: Fn(&T) -> Result<()> + 'static,
-    {
-        self.wire(|b, h| b.for_each(h, f))
-    }
+    __wf_fluent_for_each!(T);
 
     fn for_each_mut<W, F>(&self, writer: W, f: F) -> Stream<()>
     where
@@ -1302,13 +1144,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         })
     }
 
-    fn finally<F>(&self, f: F) -> Stream<()>
-    where
-        T: Clone + Default + 'static,
-        F: Fn(&T) -> Result<()> + 'static,
-    {
-        self.wire(|b, h| b.finally(h, f))
-    }
+    __wf_fluent_finally!(T);
 
     fn feedback(&self, sink: &FeedbackSink<T>) -> Stream<T>
     where
