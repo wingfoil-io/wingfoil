@@ -1486,10 +1486,29 @@ tests covered — not "legacy pytest passes unchanged."
   `prometheus_integration.rs` remains the complementary test that a real
   Prometheus can scrape it.)
 
-  **Remaining: 3.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **web** closed the handle tier and is the largest of the three: `WebServer`
+  with `sub` / `pub` / `pub_bursts` / `stop` plus codec, TLS and no-op
+  introspection. It is the first handle whose method wires a *source*, so `sub`
+  takes the `Graph` explicitly (prometheus's exporter needs none). Payloads
+  marshal through `serde_json::Value`, so a Python publisher is wire-compatible
+  with a Rust one; `bytes` cross as an array of ints, as legacy did, which is
+  deliberately asymmetric on the way back. Deviations: marshaling **fails
+  loudly** where legacy's `py_to_serde(…).unwrap_or(Null)` published an
+  unsupported value as JSON `null`; publishing is a server method rather than
+  `stream.web_pub(…)`; and `pub_bursts`, TLS, `stop()` and the introspection are
+  new. Its pytest tier speaks the real wire protocol from a background thread
+  (`websockets`) while the graph runs — the client→server `sub` path included.
+
+  It also surfaced a general object-form bug: `Stream.value()` **panicked** on a
+  stream that had never ticked, because `PyElement::value` unwrapped the empty
+  element. It now hands back Python `None`, the same mapping `PyElement::list`
+  already used for an empty member.
+
+  **Remaining: 2.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — **done**: kdb, fix;
-  - *handle pyclass* — **prometheus done**; web (`WebServer`) remains:
+  - *handle pyclass* — **done**: prometheus (`PrometheusExporter`), web
+    (`WebServer`):
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;

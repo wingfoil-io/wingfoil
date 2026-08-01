@@ -7844,6 +7844,7 @@ dependencies = [
  "csv",
  "log",
  "pyo3",
+ "serde_json",
  "wingfoil",
  "wingfoil-next",
  "wingfoil-next-python-macros",

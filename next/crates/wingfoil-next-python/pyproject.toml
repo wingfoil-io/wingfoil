@@ -50,6 +50,7 @@ features = [
     "kdb",
     "fix",
     "prometheus",
+    "web",
 ]
 # Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
 # and the importable `wingfoil_next` is the Python package under `python/`, which
@@ -74,5 +75,6 @@ markers = [
     "requires_fluvio: needs a Fluvio cluster on localhost:9003",
     "requires_kdb: needs a q process on localhost:5000",
     "requires_fix: loopback FIX sessions on a live clock (no external service)",
+    "requires_web: WebSocket round trips — needs the `websockets` package",
 ]
-addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb and not requires_fix'"
+addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb and not requires_fix and not requires_web'"

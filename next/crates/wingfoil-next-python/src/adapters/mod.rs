@@ -50,5 +50,7 @@ pub mod postgres;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "web")]
+pub mod web;
 #[cfg(feature = "zmq")]
 pub mod zmq;

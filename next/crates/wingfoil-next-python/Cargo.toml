@@ -72,6 +72,13 @@ fix = ["wingfoil-next/fix"]
 # Prometheus: the `PrometheusExporter` handle class (`serve` + `gauge`). Pure
 # Rust — a hand-rolled HTTP endpoint plus `arc-swap`.
 prometheus = ["wingfoil-next/prometheus"]
+# web: the `WebServer` handle class (`sub` / `pub` / `pub_bursts` / `stop`).
+# Turns on the engine's `web-tls` (which implies `web`) so the constructor's
+# `cert_path` / `key_path` always exist rather than appearing and disappearing
+# with a feature — rustls is pure Rust, so it costs the wheel nothing but build
+# time. `dep:serde_json` is named here (not just transitively) because the
+# payload edge marshals Python values through `serde_json::Value`.
+web = ["wingfoil-next/web-tls", "dep:serde_json"]
 all-adapters = [
     "postgres",
     "kafka",
@@ -85,6 +92,7 @@ all-adapters = [
     "kdb",
     "fix",
     "prometheus",
+    "web",
 ]
 
 [dependencies]
@@ -109,6 +117,10 @@ chrono = { workspace = true, optional = true }
 # The csv binding reads the file's header row at wiring so a replayed row can be
 # zipped back into a named dict. Workspace-pinned to match the engine's.
 csv = { version = "1.4", optional = true }
+# The web binding's payload edge: Python values marshal through
+# `serde_json::Value`, which the adapter's codec serialises. Workspace-pinned to
+# match the engine's.
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `auto-initialize` starts an embedded interpreter so the boundary type and the

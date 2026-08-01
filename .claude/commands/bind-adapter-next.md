@@ -259,7 +259,8 @@ bending the adapter into a free fn that loses the lifecycle.
 `prometheus` is the minimal one: `PrometheusExporter` with `serve()` and
 `gauge(name, stream)`. Note what it does *not* need — the exporter owns no graph
 state, so it takes no `Graph` at all; the stream it is handed carries its own.
-Take a `Graph` only when the handle actually wires a source.
+Take a `Graph` only when the handle actually wires a source, as web's
+`server.sub(graph, topic)` does.
 
 A handle's own methods are the *only* place marshaling runs synchronously
 (`FixConnection.send` converts before the message reaches the session thread),
