@@ -23,7 +23,8 @@
     feature = "zmq",
     feature = "otlp",
     feature = "augurs",
-    feature = "kdb"
+    feature = "kdb",
+    feature = "fix"
 ))]
 pub mod common;
 
@@ -33,6 +34,8 @@ pub mod augurs;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "fix")]
+pub mod fix;
 #[cfg(feature = "fluvio")]
 pub mod fluvio;
 #[cfg(feature = "kafka")]

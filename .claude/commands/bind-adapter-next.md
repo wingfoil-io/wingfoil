@@ -242,6 +242,26 @@ through the same `PyGraph`/`PyStream` seams the macro uses
 (`builder()`, `erase_source`, `typed_input`, …). Flag it in the PR rather than
 bending the adapter into a free fn that loses the lifecycle.
 
+`fix` is the worked example, and shows the two rules that matter:
+
+- **A binding can be a mix.** `fix_connect` / `fix_accept` / `fix_send` are
+  `#[pyadapter]`; only `fix_connect_tls` (which returns the engine's
+  `FixConnection` handle) is hand-written. Do not hand-write the whole module
+  because one entry point needs to be.
+- **The hand-written fn erases at the same seams.** Take
+  `graph: PyRef<'_, Graph>`, call `graph.object()`, wire on `.builder()`, and
+  erase each output with `erase_burst_source::<T>` / `erase_source::<T>` —
+  exactly what the macro's source arm emits. Store the resulting `PyStream`s in
+  the `#[pyclass]` (`PyStream` is `Clone`) and hand them out through `#[getter]`s
+  as `Stream::from(…)`. Register the class with `m.add_class::<…>()` beside the
+  functions, under the same `#[cfg]`.
+
+A handle's own methods are the *only* place marshaling runs synchronously
+(`FixConnection.send` converts before the message reaches the session thread),
+which makes them a free unit harness for the dict→record path — no run, no
+service. Reach for that when a sink's own errors are unreachable because the
+adapter connects at `start()` before the first cycle.
+
 ## 5. Boundary rules
 
 - **Attach the GIL once per burst, never per element.** `PyGraph::run`

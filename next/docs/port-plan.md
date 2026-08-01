@@ -1457,10 +1457,25 @@ tests covered — not "legacy pytest passes unchanged."
   for table setup — ~30 lines, no client library — while every *value*
   assertion goes back through `kdb_read`.
 
-  **Remaining: 5.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **fix** closed the dynamic-payload tier and is the first *mixed* binding:
+  `fix_connect` / `fix_accept` / `fix_send` are `#[pyadapter]`-generated, but
+  `fix_connect_tls` returns the engine's `FixConnection` — two streams plus a
+  live sender — which the macro has no shape for, so it is hand-written as a
+  `#[pyfunction]` returning a `#[pyclass]`, erasing at the same
+  `erase_burst_source` seam the macro emits. That is the rehearsal for web and
+  prometheus. Deviations: session status is **always a dict** (legacy erased
+  three of five states to a bare string and the other two to a dict, so
+  consumers had to type-check); tag values stay `str` on both edges, since FIX
+  is a text protocol and coercing a float would silently change the bytes on the
+  wire; and `fix_send`, `FixConnection.fix_sub` and the `poll_mode` selector are
+  new. The pytest tier stands up an acceptor and an initiator in **one graph**
+  over loopback TCP — the same shape as `tests/fix_integration.rs`, no external
+  service — and a message crossing that session round-trips both marshaling
+  directions.
+
+  **Remaining: 4.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
-  - *dynamic payload* — **kdb done**; fix remains: postgres-shaped, needing a
-    `PyPgRow`-style stand-in plus column marshaling;
+  - *dynamic payload* — **done**: kdb, fix;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
