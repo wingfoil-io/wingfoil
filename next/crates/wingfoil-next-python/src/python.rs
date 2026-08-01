@@ -565,6 +565,25 @@ impl PairSourceOps for ::wingfoil_next::prelude::GraphBuilder {
     }
 }
 
+// `split_source` — a **tuple-returning source `#[pyadapter]`**: one wiring call
+// producing two streams, exposed as `module.split_source(graph) -> (Stream,
+// Stream)`. This is the `(data, status)` shape a live source with a
+// connection-status stream has (`zmq_sub`), and the reason `#[pyadapter]`
+// accepts a tuple return at all.
+#[pyadapter(name = split_source, source)]
+fn split_source_demo(
+    g: &::wingfoil_next::prelude::GraphBuilder,
+) -> (
+    ::wingfoil_next::prelude::Stream<f64>,
+    ::wingfoil_next::prelude::Stream<bool>,
+) {
+    use ::wingfoil_next::prelude::{SourceOps, StreamOps};
+    let counted = g.ticker(Duration::from_secs(1)).count();
+    let values = counted.map(|i: &u64| *i as f64);
+    let even = counted.map(|i: &u64| i.is_multiple_of(2));
+    (values, even)
+}
+
 // `burst_list_sink` — a **burst sink `#[pyadapter]`** on `Stream<Burst<f64>>`:
 // appends each burst (as a Python list) to a target list. Its `typed_burst_input`
 // rebuilds a multi-value burst from each Python list, so a burst source
@@ -629,6 +648,7 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;
     m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
+    m.add_function(wrap_pyfunction!(split_source, m)?)?;
     register_adapters(m)?;
     Ok(())
 }
@@ -683,6 +703,18 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         use crate::adapters::csv::{csv_read, csv_write};
         m.add_function(wrap_pyfunction!(csv_read, m)?)?;
         m.add_function(wrap_pyfunction!(csv_write, m)?)?;
+    }
+    #[cfg(feature = "zmq")]
+    {
+        use crate::adapters::zmq::{zmq_pub, zmq_sub};
+        m.add_function(wrap_pyfunction!(zmq_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(zmq_pub, m)?)?;
+        #[cfg(feature = "etcd")]
+        {
+            use crate::adapters::zmq::{zmq_pub_etcd, zmq_sub_etcd};
+            m.add_function(wrap_pyfunction!(zmq_sub_etcd, m)?)?;
+            m.add_function(wrap_pyfunction!(zmq_pub_etcd, m)?)?;
+        }
     }
     // `m` is unused when no adapter feature is on.
     let _ = m;

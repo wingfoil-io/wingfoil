@@ -1348,7 +1348,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio + csv landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *the whole mechanical tier landed (7 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1408,9 +1408,15 @@ tests covered — not "legacy pytest passes unchanged."
   wiring to learn its header, so a replayed row zips back into a dict in
   *column order* (legacy's `HashMap` record lost it).
 
-  **Remaining: 9.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓, csv ✓): a
-    scalar/bytes payload over the free-fn form;
+  **zmq** closed the mechanical tier and extended the seam once more:
+  `#[pyadapter]` now accepts a **tuple return**, so a source handing back
+  `(data, status)` erases element-wise into a Python tuple of `Stream`s — the
+  same spelling `#[pygraph]` already had. `zmq_sub`/`zmq_pub` plus their
+  etcd-discovery twins (gated on both features) are bound; `ZmqStatus` erases to
+  a `"connected"`/`"disconnected"` string, per the string-selector convention.
+
+  **Remaining: 8.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):

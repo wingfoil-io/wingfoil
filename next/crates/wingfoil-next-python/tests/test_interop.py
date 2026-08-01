@@ -666,3 +666,26 @@ def test_compiled_island_composes_with_dynamic_python_wiring():
     g.run(cycles=2)
     # n+1 -> (2(n+1)+1)^2 -> /2
     assert [(0, 12.5), (100, 24.5)] == out.value()
+
+
+def test_a_tuple_returning_source_adapter_gives_a_tuple_of_streams():
+    """`#[pyadapter]` accepts a tuple return — the `(data, status)` shape.
+
+    `split_source` wires once and hands back two streams; both are ordinary
+    `Stream`s on the same graph, so Python composes onward from either.
+    """
+    g = wf.Graph()
+    result = wf.split_source(g)
+    assert isinstance(result, tuple)
+    assert 2 == len(result)
+    values, even = result
+    assert isinstance(values, wf.Stream)
+    assert isinstance(even, wf.Stream)
+
+    seen_values, seen_even = [], []
+    values.inspect(seen_values.append)
+    even.inspect(seen_even.append)
+    g.run(cycles=3)
+
+    assert [1.0, 2.0, 3.0] == seen_values
+    assert [False, True, False] == seen_even

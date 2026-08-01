@@ -705,24 +705,76 @@ fn emit_pyadapter(
         Some(inner) => (inner, true),
         None => (out_ty, false),
     };
-    let out_inner = stream_inner(&out_ty)?;
     let py_name = &args.name;
+    // One output stream, or a **tuple** of them — the `(data, status)` shape a
+    // live source with a connection-status stream returns (`zmq_sub`), and the
+    // same spelling `#[pygraph]` already accepts. A tuple erases element-wise
+    // into a Python tuple of `Stream`s.
+    let (out_inners, is_tuple) = match &out_ty {
+        Type::Tuple(t) if !t.elems.is_empty() => (
+            t.elems
+                .iter()
+                .map(stream_inner)
+                .collect::<syn::Result<Vec<_>>>()?,
+            true,
+        ),
+        other => (vec![stream_inner(other)?], false),
+    };
 
+    let stream_ty = quote! { ::wingfoil_next_python::Stream };
+    let ret_core = if is_tuple {
+        let each = out_inners.iter().map(|_| stream_ty.clone());
+        quote! { ( #(#each),* ) }
+    } else {
+        stream_ty.clone()
+    };
     let (ret_ty, unwrap) = if fallible {
         (
-            quote! { pyo3::PyResult<::wingfoil_next_python::Stream> },
+            quote! { pyo3::PyResult<#ret_core> },
             quote! { .map_err(::wingfoil_next_python::to_pyerr)? },
         )
     } else {
-        (quote! { ::wingfoil_next_python::Stream }, quote! {})
+        (ret_core, quote! {})
     };
-    // `Stream::from(..)`, wrapped in `Ok(..)` when the signature is fallible.
-    let wrap_ret = |expr: TokenStream2| {
-        let built = quote! { ::wingfoil_next_python::Stream::from(#expr) };
-        if fallible {
-            quote! { Ok(#built) }
+
+    // Bind the wiring call's result: one name, or a destructured tuple.
+    let bind_outputs = |slot: &str, call: TokenStream2, unwrap: &TokenStream2| {
+        if is_tuple {
+            let names: Vec<Ident> = (0..out_inners.len())
+                .map(|i| Ident::new(&format!("{slot}{i}"), py_name.span()))
+                .collect();
+            quote! { let ( #(#names),* ) = #call #unwrap; }
         } else {
-            built
+            let name = Ident::new(slot, py_name.span());
+            quote! { let #name = #call #unwrap; }
+        }
+    };
+    // The name holding output `i` — `__slot` for a single, `__slot{i}` for a
+    // tuple element.
+    let slot_name = |slot: &str, i: usize| {
+        let n = if is_tuple {
+            format!("{slot}{i}")
+        } else {
+            slot.to_string()
+        };
+        Ident::new(&n, py_name.span())
+    };
+    // Assemble the return value from the per-output erase expressions.
+    let wrap_ret = |erased: Vec<TokenStream2>| {
+        let built: Vec<TokenStream2> = erased
+            .into_iter()
+            .map(|e| quote! { ::wingfoil_next_python::Stream::from(#e) })
+            .collect();
+        let value = if is_tuple {
+            quote! { ( #(#built),* ) }
+        } else {
+            let only = &built[0];
+            quote! { #only }
+        };
+        if fallible {
+            quote! { Ok(#value) }
+        } else {
+            value
         }
     };
     // The generated fn takes the graph/stream as its first param, so a forwarded
@@ -744,16 +796,24 @@ fn emit_pyadapter(
         // Source: `(&GraphBuilder, args…) -> Stream<T> | Stream<Burst<T>>` =>
         // `module.name(graph, args…)`: run the adapter on the caller's builder,
         // erase the output (a `Burst<T>` becomes a Python list).
-        let erase = match burst_inner(&out_inner) {
-            Some(t) => quote! { __obj.erase_burst_source::<#t>(__typed) },
-            None => quote! { __obj.erase_source::<#out_inner>(__typed) },
-        };
         let call = callee.call(
             quote! { __obj.builder() },
             quote! { __obj.builder() },
             param_names,
         );
-        let body = wrap_ret(erase);
+        let bind = bind_outputs("__typed", call, &unwrap);
+        let erased = out_inners
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let src = slot_name("__typed", i);
+                match burst_inner(t) {
+                    Some(b) => quote! { __obj.erase_burst_source::<#b>(#src) },
+                    None => quote! { __obj.erase_source::<#t>(#src) },
+                }
+            })
+            .collect();
+        let body = wrap_ret(erased);
         Ok(quote! {
             #preamble
             pub fn #py_name(
@@ -761,7 +821,7 @@ fn emit_pyadapter(
                 #(#param_decls),*
             ) -> #ret_ty {
                 let __obj = graph.object();
-                let __typed = #call #unwrap;
+                #bind
                 #body
             }
         })
@@ -776,12 +836,20 @@ fn emit_pyadapter(
             Some(t) => quote! { __obj.typed_burst_input::<#t>() },
             None => quote! { __obj.typed_input::<#in_inner>() },
         };
-        let erase = match burst_inner(&out_inner) {
-            Some(u) => quote! { __obj.erased_burst_output::<#u>(__out) },
-            None => quote! { __obj.erased_output::<#out_inner>(__out) },
-        };
         let call = callee.call(quote! { __typed }, quote! { &__typed }, param_names);
-        let body = wrap_ret(erase);
+        let bind = bind_outputs("__out", call, &unwrap);
+        let erased = out_inners
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                let src = slot_name("__out", i);
+                match burst_inner(u) {
+                    Some(b) => quote! { __obj.erased_burst_output::<#b>(#src) },
+                    None => quote! { __obj.erased_output::<#u>(#src) },
+                }
+            })
+            .collect();
+        let body = wrap_ret(erased);
         Ok(quote! {
             #preamble
             pub fn #py_name(
@@ -790,7 +858,7 @@ fn emit_pyadapter(
             ) -> #ret_ty {
                 let __obj = stream.object();
                 let __typed = #typed_in;
-                let __out = #call #unwrap;
+                #bind
                 #body
             }
         })

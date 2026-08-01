@@ -19,7 +19,8 @@
     feature = "redis",
     feature = "etcd",
     feature = "fluvio",
-    feature = "csv"
+    feature = "csv",
+    feature = "zmq"
 ))]
 pub mod common;
 
@@ -35,3 +36,5 @@ pub mod kafka;
 pub mod postgres;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "zmq")]
+pub mod zmq;
