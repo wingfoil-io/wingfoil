@@ -134,6 +134,19 @@ impl<'a, 'py> RecordDict<'a, 'py> {
             .map_err(|e| anyhow!("{who}: '{name}' must be a str: {e}"))
     }
 
+    /// An optional `str` field — `None` when not supplied. The `str` twin of
+    /// [`opt_bytes`](Self::opt_bytes), for a record whose key is textual.
+    pub fn opt_str(&self, name: &str) -> Result<Option<String>> {
+        let who = self.who;
+        match self.get(name)? {
+            Some(v) => v
+                .extract::<String>()
+                .map(Some)
+                .map_err(|e| anyhow!("{who}: '{name}' must be a str: {e}")),
+            None => Ok(None),
+        }
+    }
+
     /// A required bytes-like field (`bytes` / `bytearray`, or a sequence of
     /// ints — whatever pyo3 will extract).
     pub fn bytes(&self, name: &str) -> Result<Vec<u8>> {

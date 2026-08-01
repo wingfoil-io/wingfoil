@@ -391,6 +391,10 @@ fix-integration-test = ["fix"]
 dynamic-graph = []
 
 [[example]]
+name = "fluvio_admin"
+required-features = ["fluvio-integration-test"]
+
+[[example]]
 name = "async_source"
 required-features = ["async"]
 

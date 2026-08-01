@@ -1230,7 +1230,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio landed*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1272,9 +1272,17 @@ tests covered — not "legacy pytest passes unchanged."
   target has no binding-level fallback) and the str-or-list endpoints form that
   exposes the engine's cluster support.
 
-  **Remaining: 11.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — csv, fluvio, zmq (kafka ✓, redis ✓, etcd ✓): a scalar/bytes
-    payload over the free-fn form, close to copy-postgres-and-shrink;
+  **fluvio** added `RecordDict::opt_str`, and needed the most CI work of the
+  six: a Fluvio cluster cannot be started with a single `docker run` — the SC
+  must be told about the SPU *before* the SPU process connects, or it closes the
+  connection. Its Python leg mirrors the sequence `tests/fluvio_integration.rs`
+  documents (start the SC, `fluvio cluster spu register`, exec the SPU into the
+  same container) on the fixed host-network ports that harness pins, and brings
+  the cluster up *after* the Rust tests so the two never contend for them.
+
+  **Remaining: 10.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — csv, zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓): a
+    scalar/bytes payload over the free-fn form;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):

@@ -7,6 +7,8 @@ on:
     paths:
       - 'next/crates/wingfoil-next/src/adapters/fluvio**'
       - 'next/crates/wingfoil-next/tests/fluvio_integration.rs'
+      - 'next/crates/wingfoil-next-python/src/adapters/fluvio.rs'
+      - 'next/crates/wingfoil-next-python/tests/test_fluvio.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -60,3 +62,89 @@ jobs:
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
+
+      # --- Python bindings (wingfoil-next-python) ---
+      # The Rust tests above run their cluster inside a testcontainer that is
+      # torn down when the test binary exits, and host networking pins the SC to
+      # 9003 and the SPU to 9010 — so a second cluster cannot coexist with it.
+      # The Python leg therefore brings up its own afterwards, following the
+      # same sequence `tests/fluvio_integration.rs` documents: start the SC,
+      # register the SPU with it *before* the SPU process connects (otherwise
+      # the SC closes the connection), then exec the SPU into the same
+      # container.
+      # Bootstrapping the cluster needs two `FluvioAdmin` calls — register the
+      # SPU with the SC *before* the SPU process connects (or the SC closes the
+      # connection), then create the topic. Neither has a shell equivalent
+      # available here: the image ships only `/fluvio-run`, not the `fluvio`
+      # CLI, and this runner has no network route to hub.infinyon.cloud to
+      # install one. So they run through the `fluvio_admin` example, which is
+      # the same code `tests/fluvio_integration.rs` uses and is already built
+      # by the feature set this job compiled above.
+      - name: Start a Fluvio cluster for Python tests
+        run: |
+          set -euo pipefail
+          docker run -d --name fluvio-next-py --network host \
+            infinyon/fluvio:0.18.1 \
+            /bin/sh -c '/fluvio-run sc --local /tmp/fluvio & wait'
+
+          # The SC logs "started successfully" before its listener is bound, so
+          # probe the port rather than trusting the log line.
+          for i in $(seq 1 30); do
+            nc -z localhost 9003 && echo "fluvio SC ready" && break
+            echo "Waiting for SC... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 9003 || (echo "fluvio SC never became ready" && exit 1)
+
+          cargo run --features fluvio-integration-test --example fluvio_admin \
+            -- register-spu 127.0.0.1:9003
+
+          docker exec -d fluvio-next-py /bin/sh -c \
+            '/fluvio-run spu --id 5001 \
+               --public-server 127.0.0.1:9010 \
+               --private-server 127.0.0.1:9011 \
+               --sc-addr 127.0.0.1:9004 \
+               --log-base-dir /tmp/fluvio &'
+
+          for i in $(seq 1 30); do
+            nc -z localhost 9010 && echo "fluvio SPU ready" && break
+            echo "Waiting for SPU... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 9010 || (echo "fluvio SPU never became ready" && exit 1)
+
+          # `fluvio_pub` requires the topic to exist.
+          cargo run --features fluvio-integration-test --example fluvio_admin \
+            -- create-topic 127.0.0.1:9003 py-fluvio-test
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the next Python bindings
+        working-directory: next/crates/wingfoil-next-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop -F fluvio
+
+      - name: Run Python fluvio (next) integration tests
+        working-directory: next/crates/wingfoil-next-python
+        run: .venv/bin/pytest -m requires_fluvio tests/test_fluvio.py -v
+        env:
+          RUST_LOG: INFO
+
+      - name: Dump Fluvio logs on failure
+        if: failure()
+        run: docker logs fluvio-next-py
+
+      - name: Stop the Fluvio cluster
+        if: always()
+        run: docker rm -f fluvio-next-py || true
