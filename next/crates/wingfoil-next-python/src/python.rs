@@ -745,6 +745,16 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         use crate::adapters::web::PyWebServer;
         m.add_class::<PyWebServer>()?;
     }
+    #[cfg(feature = "aeron")]
+    {
+        use crate::adapters::aeron::{
+            aeron_pub, aeron_pub_with_status, aeron_sub, aeron_sub_with_status,
+        };
+        m.add_function(wrap_pyfunction!(aeron_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(aeron_sub_with_status, m)?)?;
+        m.add_function(wrap_pyfunction!(aeron_pub, m)?)?;
+        m.add_function(wrap_pyfunction!(aeron_pub_with_status, m)?)?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;

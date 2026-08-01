@@ -26,59 +26,74 @@ extension-module = ["pyo3/extension-module"]
 # adapter feature so a wheel only carries the adapters it was built with.
 # `all-adapters` is the convenience roll-up the maturin build and CI use.
 #
+# Internal, not for callers: what `adapters::common` needs. That module is
+# compiled whenever *any* adapter is on and it names
+# `async_source::RunParams`, so every adapter feature below enables this —
+# otherwise a lone `-F <adapter>` build compiles only when some *other*
+# adapter happens to supply `async`, which is exactly the trap the
+# `all-adapters` roll-up hides. `maturin develop -F x` replaces the
+# pyproject feature list rather than adding to it, so lone builds are real.
+_common = ["wingfoil-next/async"]
+
 # PostgreSQL: `postgres_read` / `postgres_sub` / `postgres_source` sources, the
 # `postgres_write` sink, and the `postgres_notify_trigger_sql` helper. `chrono`
 # is needed here (not just transitively) because the row decoder names
 # `NaiveDateTime` to read `timestamp` / `timestamptz` columns.
-postgres = ["wingfoil-next/postgres", "dep:chrono"]
+postgres = ["wingfoil-next/postgres", "dep:chrono", "_common"]
 # Kafka: the `kafka_sub` consumer source and the `kafka_pub` producer sink.
 # `rdkafka` builds librdkafka from source (`./configure` + `make`) rather than
 # linking a system library — it needs a C toolchain, which every CI image
 # already has.
-kafka = ["wingfoil-next/kafka"]
+kafka = ["wingfoil-next/kafka", "_common"]
 # Redis: the `redis_sub` / `redis_stream_read` sources and the `redis_pub` /
 # `redis_stream_write` sinks. Pure Rust (the `redis` crate).
-redis = ["wingfoil-next/redis"]
+redis = ["wingfoil-next/redis", "_common"]
 # etcd: the `etcd_sub` watch source and the `etcd_pub` PUT sink. Pure Rust
 # (etcd-client over tonic); needs `protoc` at build time to compile the etcd
 # protos, which `pypi-publish.yml` installs.
-etcd = ["wingfoil-next/etcd"]
+etcd = ["wingfoil-next/etcd", "_common"]
 # Fluvio: the `fluvio_sub` consumer source and the `fluvio_pub` producer sink.
 # Pure Rust; the client pulls a large dependency tree, but nothing platform-specific.
-fluvio = ["wingfoil-next/fluvio"]
+fluvio = ["wingfoil-next/fluvio", "_common"]
 # CSV: the `csv_read` replay source and the `csv_write` file sink. Pure Rust and
 # dependency-light. `dep:csv` is named here
 # (not just transitively) because the reader opens the file at wiring to learn
 # its header (the engine pins the same 1.4).
-csv = ["wingfoil-next/csv", "dep:csv"]
+csv = ["wingfoil-next/csv", "dep:csv", "_common"]
 # ZeroMQ: the `zmq_sub` subscriber (a `(data, status)` tuple) and the `zmq_pub`
 # sink, plus their etcd-discovery twins when the `etcd` feature is also on.
 # `zmq-sys` builds libzmq from source rather than linking a system one, so a C
 # toolchain is all it needs.
-zmq = ["wingfoil-next/zmq"]
+zmq = ["wingfoil-next/zmq", "_common"]
 # OTLP: the `otlp_push` gauge sink. Pure Rust (the OTel SDK over reqwest).
-otlp = ["wingfoil-next/otlp"]
+otlp = ["wingfoil-next/otlp", "_common"]
 # augurs: the six time-series analytics ops (forecast, changepoint, seasons,
 # outlier, DTW, cluster). Pure Rust compute, no I/O.
-augurs = ["wingfoil-next/augurs"]
+augurs = ["wingfoil-next/augurs", "_common"]
 # KDB+: the `kdb_read` / `kdb_sub` sources and the `kdb_write` sink. Pure Rust
 # (kdb-plus-fixed over TCP); the binding names `K` / `qtype` through the
 # engine's re-exports rather than depending on that crate directly.
-kdb = ["wingfoil-next/kdb"]
+kdb = ["wingfoil-next/kdb", "_common"]
 # FIX: the `fix_connect` / `fix_accept` sources, the `fix_send` sink, and the
 # hand-written `fix_connect_tls` + `FixConnection` handle class. Pure Rust
 # (rustls for the TLS initiator).
-fix = ["wingfoil-next/fix"]
+fix = ["wingfoil-next/fix", "_common"]
 # Prometheus: the `PrometheusExporter` handle class (`serve` + `gauge`). Pure
 # Rust — a hand-rolled HTTP endpoint plus `arc-swap`.
-prometheus = ["wingfoil-next/prometheus"]
+prometheus = ["wingfoil-next/prometheus", "_common"]
 # web: the `WebServer` handle class (`sub` / `pub` / `pub_bursts` / `stop`).
 # Turns on the engine's `web-tls` (which implies `web`) so the constructor's
 # `cert_path` / `key_path` always exist rather than appearing and disappearing
 # with a feature — rustls is pure Rust, so it costs the wheel nothing but build
 # time. `dep:serde_json` is named here (not just transitively) because the
 # payload edge marshals Python values through `serde_json::Value`.
-web = ["wingfoil-next/web-tls", "dep:serde_json"]
+web = ["wingfoil-next/web-tls", "dep:serde_json", "_common"]
+# Aeron: the `aeron_sub` / `aeron_pub` pair and their `_with_status` twins.
+# Deliberately **not** in `all-adapters` and **not** in the wheel's default
+# feature set: `rusteron-client` builds the Aeron C library from source, needing
+# clang, libuuid and CMake >= 3.30. Its tests run in
+# `aeron-next-integration.yml`, which installs that toolchain.
+aeron = ["wingfoil-next/aeron", "_common"]
 all-adapters = [
     "postgres",
     "kafka",

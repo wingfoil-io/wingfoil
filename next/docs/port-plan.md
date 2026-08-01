@@ -1504,7 +1504,22 @@ tests covered — not "legacy pytest passes unchanged."
   element. It now hands back Python `None`, the same mapping `PyElement::list`
   already used for an empty member.
 
-  **Remaining: 2.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **aeron** is the first binding deliberately kept *out* of both roll-ups:
+  `rusteron-client` builds the Aeron C library from source (clang, libuuid,
+  CMake ≥ 3.30), so joining `all-adapters` would break `next-python-test.yml`
+  and shipping it in the wheel would make the published artifact
+  un-buildable for everyone else. `maturin develop -F aeron` opts in; the tests
+  live in `aeron-next-integration.yml`, which already installs that toolchain.
+  Four entry points — `aeron_sub` / `aeron_pub` and their `_with_status` twins,
+  neither of which legacy bound. Deviations: `mode` is a string rather than the
+  `AeronMode` `#[pyclass]` enum; publishing **fails loudly** where legacy's
+  `unwrap_or_else(|e| { log::error!(…); Vec::new() })` sent an *empty message*
+  for a non-bytes value; and a tick may carry a list to publish several messages
+  at once. Every argument is validated *before* the media driver is contacted,
+  including the historical-run rejection — otherwise a Python caller's typo
+  reports itself as a driver timeout.
+
+  **Remaining: 1.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — **done**: kdb, fix;
   - *handle pyclass* — **done**: prometheus (`PrometheusExporter`), web
@@ -1512,6 +1527,8 @@ tests covered — not "legacy pytest passes unchanged."
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;
+  - *system-library* — **aeron done**; iceoryx2 remains: out of the
+    `all-adapters` roll-up and out of the wheel, tested in their own workflows;
   - *stream transform* — **done**: otlp, augurs. Legacy exposed these as
     `stream.method(…)`; next uses free fns, a deliberate ergonomic deviation
     for uniformity with the plugin story.

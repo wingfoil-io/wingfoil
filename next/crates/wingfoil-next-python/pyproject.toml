@@ -76,5 +76,6 @@ markers = [
     "requires_kdb: needs a q process on localhost:5000",
     "requires_fix: loopback FIX sessions on a live clock (no external service)",
     "requires_web: WebSocket round trips — needs the `websockets` package",
+    "requires_aeron: needs a running Aeron media driver (AERON_DIR)",
 ]
-addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb and not requires_fix and not requires_web'"
+addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb and not requires_fix and not requires_web and not requires_aeron'"

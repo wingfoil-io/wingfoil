@@ -24,10 +24,13 @@
     feature = "otlp",
     feature = "augurs",
     feature = "kdb",
-    feature = "fix"
+    feature = "fix",
+    feature = "aeron"
 ))]
 pub mod common;
 
+#[cfg(feature = "aeron")]
+pub mod aeron;
 #[cfg(feature = "augurs")]
 pub mod augurs;
 #[cfg(feature = "csv")]
