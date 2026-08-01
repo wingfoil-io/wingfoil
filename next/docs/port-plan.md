@@ -1272,13 +1272,13 @@ tests covered — not "legacy pytest passes unchanged."
   target has no binding-level fallback) and the str-or-list endpoints form that
   exposes the engine's cluster support.
 
-  **fluvio** added `RecordDict::opt_str` and is the first binding to land
-  *without* its integration CI leg: a Fluvio cluster cannot be brought up from
-  bash (the SC must learn about the SPU through `FluvioAdmin`, a Rust API,
-  before the SPU connects — hence the ~100-line testcontainers helper in the
-  Rust integration test). Its `requires_fluvio` tests are written and runnable
-  by hand but have never been executed; wiring the Python leg is **open
-  follow-up work**.
+  **fluvio** added `RecordDict::opt_str`, and needed the most CI work of the
+  six: a Fluvio cluster cannot be started with a single `docker run` — the SC
+  must be told about the SPU *before* the SPU process connects, or it closes the
+  connection. Its Python leg mirrors the sequence `tests/fluvio_integration.rs`
+  documents (start the SC, `fluvio cluster spu register`, exec the SPU into the
+  same container) on the fixed host-network ports that harness pins, and brings
+  the cluster up *after* the Rust tests so the two never contend for them.
 
   **Remaining: 10.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — csv, zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓): a

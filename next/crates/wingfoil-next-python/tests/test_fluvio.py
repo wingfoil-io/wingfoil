@@ -8,21 +8,26 @@ Two groups:
   dict-to-record marshaling. The Fluvio client connects at run start, so wiring
   against an unreachable SC is a local operation.
 - Integration tests (``@pytest.mark.requires_fluvio``): deselected by default.
+  The fluvio-next integration workflow opts in with ``-m requires_fluvio``;
+  without a cluster on localhost:9003 they fail loudly rather than skipping.
 
-.. warning::
+Unlike redis / etcd / kafka, a Fluvio cluster cannot be started with a single
+``docker run``: the SC must be told about the SPU *before* the SPU process
+connects, or the SC closes the connection. The workflow mirrors the sequence
+``next/crates/wingfoil-next/tests/fluvio_integration.rs`` documents — start the
+SC, ``fluvio cluster spu register``, then exec the SPU into the same container —
+using host networking on the fixed ports that harness pins (SC 9003, SPU 9010).
 
-   **The integration group is not yet wired into CI, and has never been run.**
-   Unlike redis / etcd / kafka, a Fluvio cluster cannot be brought up from bash:
-   the SC must be told about the SPU through ``FluvioAdmin`` (a Rust API) before
-   the SPU process connects, which is why the Rust integration test carries a
-   ~100-line ``FluvioCluster`` helper using testcontainers with host networking
-   on fixed ports. Wiring an equivalent for the Python leg is tracked as
-   follow-up work; until then these tests document the intended behaviour and
-   are runnable by hand against a cluster on ``localhost:9003`` with the topic
-   already created::
+Local setup::
 
-       fluvio topic create py-fluvio-test
-       pytest -m requires_fluvio tests/test_fluvio.py
+    docker run -d --name fluvio --network host infinyon/fluvio:0.18.1 \
+        /bin/sh -c '/fluvio-run sc --local /tmp/fluvio & wait'
+    docker exec fluvio fluvio cluster spu register --id 5001 \
+        --public-server 127.0.0.1:9010 --private-server 127.0.0.1:9011
+    docker exec -d fluvio /bin/sh -c '/fluvio-run spu --id 5001 \
+        --public-server 127.0.0.1:9010 --private-server 127.0.0.1:9011 \
+        --sc-addr 127.0.0.1:9004 --log-base-dir /tmp/fluvio &'
+    docker exec fluvio fluvio topic create py-fluvio-test
 """
 
 import threading
@@ -122,7 +127,6 @@ def test_pub_rejects_a_bytes_key():
 
 
 # ---- Integration coverage (needs a Fluvio cluster on localhost:9003) ----
-# See the module docstring: not yet wired into CI, never executed.
 
 
 @pytest.mark.requires_fluvio
