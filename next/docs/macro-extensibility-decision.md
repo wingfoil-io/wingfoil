@@ -199,10 +199,13 @@ Zero table rows edited; zero engine-semantics changes; full suite + clippy
 2. **stop/teardown in compiled()** — pre-existing gap, same forwarder pattern.
 3. **Collision hygiene**: a denylist for `Stream`'s own inherent methods
    (`clone`, `handle`, `wire`) so typos there keep a curated error.
-4. **`#[op]` for multi-input ops**: the derive currently generates
-   forwarders for the single-input `In` shape only; extending it to emit the
-   n-ary forwarders + a `register_op2`-based builder method is the same
-   mechanical pattern (the macro-side emission already handles any arity).
+4. ~~**`#[op]` for multi-input ops**~~ ✅ **done** (Phase 5). The forwarders
+   already handled any arity; the *builder* emission was the single-input part,
+   and it is now derived from the op's `In` shape for every shape the macro
+   parses — arity, tick-flag edges, passive masks, lifecycle hooks, seeded
+   accumulators. Thirteen ops dropped their hand-written `Builder` methods; see
+   port-plan Phase 5 and `tests/op_builder_shapes.rs`. (Item 1 above is
+   unchanged: the generated builder is still an in-crate inherent impl.)
 
 ## 5. Convergence: how the residue was absorbed (the table is deleted)
 

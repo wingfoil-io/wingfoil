@@ -76,7 +76,10 @@
 //!       `DelayWithReset::cycle`.
 //!     - `with_time` — `#[op(build = with_time, no_builder)]` on the op itself
 //!       (the hand-written `Builder::with_time` stays for its `T: Clone`-only
-//!       interpreted seeding). Inside `graph!`/compiled the output must be
+//!       interpreted seeding — it is now the catalog's *only* `no_builder`
+//!       op; every other shape gets its `Builder` method generated, and the
+//!       `bimap`/`trimap` family are extra hand-written methods over the
+//!       `Join`/`Join3` ops, not opt-outs). Inside `graph!`/compiled the output must be
 //!       `Default` (`(NanoTime, T): Default`), which holds for every value type
 //!       used here; the differing pre-first-tick seed is never observed because
 //!       the op ticks in lockstep with its source.

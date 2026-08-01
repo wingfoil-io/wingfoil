@@ -49,10 +49,10 @@
 //!   the sources), and **[`stats`]** — EWMA and rolling-window statistics as a
 //!   separate opt-in [`StatisticsOps`](stats::StatisticsOps) trait. An op is
 //!   single-sourced through **one mechanism**: `#[op(build = name)]` on its
-//!   `Op` impl generates the interpreted `Builder` method (single-input
-//!   shapes) *and* the `graph!` forwarder functions every compiled/nested
-//!   emission dispatches through — there is no per-op table in the macro, so
-//!   built-in and user ops take the identical path — see
+//!   `Op` impl generates the interpreted `Builder` method *and* the `graph!`
+//!   forwarder functions every compiled/nested emission dispatches through,
+//!   both derived from the op's declared shape — there is no per-op table in
+//!   the macro, so built-in and user ops take the identical path — see
 //!   `next/docs/port-plan.md` "Adding an op".
 //! - **Sources in every activation mode**: `Activation::THREADED`
 //!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`
