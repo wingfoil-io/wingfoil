@@ -2814,6 +2814,145 @@ impl<T: Clone + 'static> Op for Merge2<T> {
     }
 }
 
+/// Merges **N** streams: the earliest-supplied input that ticked this cycle
+/// wins — the n-ary generalisation of [`Merge2`], and the twin of classic
+/// wingfoil's `merge(vec)`.
+///
+/// It exists as its own op rather than as sugar over a chain of [`Merge2`]s
+/// because the chain is not free: `merge_all`/`fan` used to left-fold into
+/// `n - 1` binary merges, costing `n - 1` extra *nodes* and `n - 1` extra
+/// *depth* against classic's single node. On a busy 256-wide fan-in that
+/// measured 1.86x classic — a Phase 6 gate violation, not a tuning
+/// opportunity. Rebalancing the chain recovers only the depth half; only a
+/// real n-ary node removes both.
+///
+/// The catalog's only **variadic** op: its `In` is a *slice* of
+/// `(value, tick)` pairs rather than a fixed-arity tuple, so `#[op]` cannot
+/// parse its shape. Its interpreted wiring
+/// ([`Builder::merge_n`](crate::interp::Builder::merge_n)) and its
+/// `graph!`/compiled forwarders (below) are hand-written instead — the same
+/// concession [`Builder::combine`](crate::interp::Builder::combine) makes for
+/// the other n-ary fan-in.
+pub struct MergeN<T>(PhantomData<T>);
+
+impl<T: Clone> MergeN<T> {
+    /// The n-ary merge rule itself: the position of the earliest-supplied
+    /// input that ticked, or `None` when none did.
+    ///
+    /// Factored out because the interpreted engine cannot call
+    /// [`Op::cycle`] directly here. Building the `&[(&T, bool)]` slice
+    /// `cycle` wants means borrowing every upstream slot at once, which for a
+    /// 256-wide merge is a heap allocation on every cycle — exactly the cost
+    /// this op exists to remove. The interpreted path therefore finds the
+    /// winner from the engine's tick flags and borrows only *that* slot,
+    /// routing through this shared rule so the two paths cannot disagree
+    /// about which input wins.
+    #[inline]
+    pub fn winner(ticks: impl IntoIterator<Item = bool>) -> Option<usize> {
+        ticks.into_iter().position(|ticked| ticked)
+    }
+}
+
+impl<T: Clone + 'static> Op for MergeN<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = &'a [(&'a T, bool)];
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: &[(&T, bool)],
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        Ok(
+            match Self::winner(input.iter().map(|&(_, ticked)| ticked)) {
+                Some(i) => Tick::Value(input[i].0.clone()),
+                None => Tick::Quiet,
+            },
+        )
+    }
+}
+
+// ---- `merge_n` graph!/compiled forwarders (hand-written) -------------------
+//
+// `#[op]` generates these from an op's `In` shape; it cannot for a variadic
+// op, so they are written out here. The `graph!` emission calls them by the
+// same naming convention as every generated family — the only difference is
+// that a variadic node's `cycle_input` is a pair *slice* (`&[(v, t), ..]`)
+// rather than a fixed-arity tuple, which is what lets one signature serve a
+// fan-in of any width.
+
+/// [`MergeN`] never schedules itself — it is driven purely by upstream ticks.
+#[doc(hidden)]
+pub const __WF_OP_MERGE_N_ACTIVATION: Activation = <MergeN<()> as Op>::ACTIVATION;
+
+/// Bit i set = edge i is passive. A variadic merge is all-active by
+/// construction: every input it is given can trigger it.
+#[doc(hidden)]
+pub const __WF_OP_MERGE_N_PASSIVE: u32 = 0;
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_merge_n_cycle<T: Clone + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<Tick<T>> {
+    <MergeN<T> as Op>::cycle(__cfg, __state, __input, __ctx)
+}
+
+/// [`MergeN`] does not override `start`, so — exactly as `#[op]` does for a
+/// hook-free op — this is a **fully erased** no-op. A forwarder carrying the
+/// op's `T` would leave it un-inferable at the call site: `start` takes no
+/// input, so nothing there anchors it.
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_merge_n_start<__Cfg, __State>(
+    _cfg: &mut __Cfg,
+    _state: &mut __State,
+    _ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    Ok(())
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_merge_n_stop<T: Clone + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = __input;
+    <MergeN<T> as Op>::stop(__cfg, __state, __ctx)
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_merge_n_teardown<T: Clone + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = __input;
+    <MergeN<T> as Op>::teardown(__cfg, __state, __ctx)
+}
+
+#[doc(hidden)]
+#[inline(always)]
+#[allow(clippy::unused_unit)]
+pub fn __wf_op_merge_n_seed_state<__P>(_cfg: &__P) -> () {}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_merge_n_seed_value<T: Default, __P>(_cfg: &__P) -> T {
+    T::default()
+}
+
 /// A source that never ticks — the classic `never` node. It has no upstreams
 /// and never schedules itself, so it stays [`Tick::Quiet`] for the whole run;
 /// its unit value is never observed downstream. The idiomatic inert trigger —

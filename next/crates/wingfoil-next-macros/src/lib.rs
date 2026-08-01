@@ -163,6 +163,15 @@ struct NodeDef {
     plain: Vec<Expr>,
     /// At most one literal-closure argument.
     closure: Option<Expr>,
+    /// The op takes its edges as a **pair slice** (`&[(value, tick), ..]`)
+    /// rather than a fixed-arity tuple, so it accepts a fan-in of any width
+    /// from one signature. Set only by the fan-in arms of `apply_call`
+    /// (`fan` / `merge_all`, both of which emit the variadic `merge_n`); every
+    /// other node keeps the uniform tuple input. A variadic op is all-active
+    /// by construction, so its dispatch condition skips the passive mask —
+    /// which also keeps the mask's `>> position` shift inside `u32` when the
+    /// fan-in is wider than 32.
+    variadic: bool,
 }
 
 impl NodeDef {
@@ -384,7 +393,20 @@ impl ChainWalker {
             refs,
             plain,
             closure,
+            variadic: false,
         });
+        ix
+    }
+
+    /// Push the single n-ary `merge_n` node that fans `tails` back in, in
+    /// supplied order (so the tie-break stays "earliest supplied that ticked
+    /// wins"). One tail needs no merge at all — it *is* the result.
+    fn push_merge_n(&mut self, name: Ident, span: proc_macro2::Span, tails: Vec<usize>) -> usize {
+        if let [only] = tails[..] {
+            return only;
+        }
+        let ix = self.push_node(name, Some(Ident::new("merge_n", span)), tails, vec![], None);
+        self.nodes[ix].variadic = true;
         ix
     }
 
@@ -600,25 +622,30 @@ impl ChainWalker {
                 let tails: Vec<usize> = (0..n)
                     .map(|_| self.walk_template(&param, cur, &closure.body))
                     .collect::<syn::Result<_>>()?;
-                // Left-fold the branch tails through binary merges, matching
-                // the fluent layer's N-ary "first supplied that ticked wins".
-                let merge = Ident::new("merge", method.span());
-                let mut merged = tails[0];
-                for (j, &tail) in tails.iter().enumerate().skip(1) {
-                    let node_name = if j + 1 == tails.len() {
-                        name.clone()
-                    } else {
-                        self.anon_name(method.span())
-                    };
-                    merged = self.push_node(
-                        node_name,
-                        Some(merge.clone()),
-                        vec![merged, tail],
-                        vec![],
-                        None,
-                    );
+                // Fan the branch tails back in through one n-ary merge, as the
+                // fluent `fan` does — "first supplied that ticked wins", and a
+                // 256-way fan stays 1 merge node deep instead of 255.
+                self.push_merge_n(name, method.span(), tails)
+            }
+            // The n-ary merge, spelled as the fluent method: its argument is a
+            // slice *literal* of stream references, which the generic arm
+            // cannot classify (a `&[..]` expression is not a `&stream` edge),
+            // so its elements are destructured into edges here.
+            "merge_all" => {
+                expect_arity(method, args, 1)?;
+                let elems = match args[0] {
+                    Expr::Reference(r) => match &*r.expr {
+                        Expr::Array(a) => &a.elems,
+                        _ => return Err(merge_all_arg_error(args[0])),
+                    },
+                    Expr::Array(a) => &a.elems,
+                    _ => return Err(merge_all_arg_error(args[0])),
+                };
+                let mut tails = vec![cur];
+                for elem in elems {
+                    tails.push(self.stream_ref_arg(elem)?);
                 }
-                merged
+                self.push_merge_n(name, method.span(), tails)
             }
             // Everything else — built-in or user op — dispatches through its
             // naming-convention forwarders. A typo (or an op with no
@@ -701,6 +728,18 @@ fn expect_arity(method: &Ident, args: &[&Expr], want: usize) -> syn::Result<()> 
             ),
         ))
     }
+}
+
+/// The `merge_all` bad-argument error. Its fan-in must be spelled as a slice
+/// literal of stream references so the macro can see the individual edges; a
+/// runtime-built slice would make the DAG non-static, like a non-literal
+/// `map_n` count.
+fn merge_all_arg_error(arg: &Expr) -> syn::Error {
+    syn::Error::new(
+        arg.span(),
+        "`.merge_all(..)` takes a slice literal of stream references — \
+         `merge_all(&[&a, &b])` — so the merged edges are visible statically",
+    )
 }
 
 impl Parse for GraphDef {
@@ -2174,12 +2213,18 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize) -> TokenStream2 {
     let act = node.op_const("ACTIVATION");
     let passive = node.op_const("PASSIVE");
 
+    // A variadic op is all-active by construction, so it needs no per-edge
+    // passive-mask guard — and must not have one: the mask is a `u32`, so a
+    // fan-in wider than 32 would shift past its width.
     let mut cond_parts: Vec<TokenStream2> = node
         .refs
         .iter()
         .enumerate()
         .map(|(pos, &u)| {
             let t = format_ident!("__t_{}", def.nodes[u].name);
+            if node.variadic {
+                return quote! { #t };
+            }
             let p = pos as u32;
             quote! { (((#passive >> #p) & 1) == 0 && #t) }
         })
@@ -2515,6 +2560,12 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
         let t = format_ident!("__t_{}", def.nodes[u].name);
         quote! { (#v, #t) }
     });
+    // A variadic op takes the same pairs as a *slice*, which is what lets one
+    // forwarder signature serve a fan-in of any width (a tuple impl would cap
+    // at whatever arity the crate spelled out).
+    if node.variadic {
+        return quote! { &[ #(#pairs,)* ] };
+    }
     quote! { ( #(#pairs,)* ) }
 }
 
@@ -2541,5 +2592,8 @@ fn lifecycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
         };
         quote! { (#v, false) }
     });
+    if node.variadic {
+        return quote! { &[ #(#pairs,)* ] };
+    }
     quote! { ( #(#pairs,)* ) }
 }
