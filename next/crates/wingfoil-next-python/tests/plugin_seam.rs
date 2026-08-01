@@ -659,3 +659,193 @@ fn wire_op4_seam_runs_four_inputs_from_an_external_crate() {
     let got: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
     assert_eq!(vec![10.0, 20.0, 30.0], got);
 }
+
+// A **user struct at the boundary**, defined in this (third-party) crate. The
+// build-list's "user types via user impls" claim rests on the orphan rules
+// allowing both directions from a downstream crate: `From<Trade> for PyElement`
+// is legal because `Trade` is local, and `TryFrom<&PyElement> for Trade` because
+// the self type is. If this file compiles, a plugin crate can put its own record
+// type on a Python-facing edge.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Trade {
+    symbol: String,
+    price: f64,
+    size: u32,
+}
+
+impl From<Trade> for PyElement {
+    fn from(trade: Trade) -> Self {
+        Python::attach(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            // A wiring-time conversion cannot fail usefully here, so a failure
+            // to build the dict is a bug in this impl, not user input.
+            dict.set_item("symbol", trade.symbol)
+                .and_then(|()| dict.set_item("price", trade.price))
+                .and_then(|()| dict.set_item("size", trade.size))
+                .expect("invariant: inserting owned scalars into a fresh dict cannot fail");
+            PyElement::new(dict.into_any().unbind())
+        })
+    }
+}
+
+impl TryFrom<&PyElement> for Trade {
+    type Error = anyhow::Error;
+
+    fn try_from(element: &PyElement) -> anyhow::Result<Self> {
+        Python::attach(|py| {
+            let obj = element.object().bind(py);
+            let get = |key: &str| {
+                obj.get_item(key)
+                    .map_err(|err| anyhow::anyhow!("trade is missing `{key}`: {err}"))
+            };
+            Ok(Trade {
+                symbol: get("symbol")?.extract()?,
+                price: get("price")?.extract()?,
+                size: get("size")?.extract()?,
+            })
+        })
+    }
+}
+
+#[test]
+fn a_user_struct_round_trips_across_the_boundary() {
+    let trade = Trade {
+        symbol: "ETHUSD".into(),
+        price: 42.5,
+        size: 7,
+    };
+    let element = PyElement::from(trade.clone());
+    assert_eq!(trade, Trade::try_from(&element).unwrap());
+}
+
+#[test]
+fn a_user_struct_flows_through_a_typed_op() {
+    // The edge erases, the op runs at native `Trade`: notional = price * size.
+    let g = PyGraph::new();
+    let source = g
+        .counter(Duration::from_nanos(100))
+        .map(Python::attach(|py| {
+            py.eval(
+                pyo3::ffi::c_str!("lambda n: {'symbol': 'ETHUSD', 'price': float(n), 'size': 2}"),
+                None,
+                None,
+            )
+            .expect("lambda compiles")
+            .unbind()
+        }));
+
+    let notional = source.wire_op1::<Trade, _, _, f64, _, _>(
+        "notional",
+        Activation::NONE,
+        (),
+        || (),
+        |_c, _s, trade: &Trade, _ctx| Ok(Tick::Value(trade.price * f64::from(trade.size))),
+    );
+    let acc = notional.accumulate();
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let got: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+    assert_eq!(vec![2.0, 4.0, 6.0], got);
+}
+
+#[test]
+fn a_malformed_user_struct_aborts_the_run_with_context() {
+    let g = PyGraph::new();
+    let source = g
+        .counter(Duration::from_nanos(100))
+        .map(Python::attach(|py| {
+            py.eval(pyo3::ffi::c_str!("lambda n: {'symbol': 'X'}"), None, None)
+                .expect("lambda compiles")
+                .unbind()
+        }));
+    let _ = source.wire_op1::<Trade, _, _, f64, _, _>(
+        "notional",
+        Activation::NONE,
+        (),
+        || (),
+        |_c, _s, trade: &Trade, _ctx| Ok(Tick::Value(trade.price)),
+    );
+
+    let err = g
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .expect_err("a trade missing `price` must abort the run");
+    assert!(
+        format!("{err:#}").contains("missing `price`"),
+        "want the field name in the error, got: {err:#}"
+    );
+}
+
+// A **multi-input, multi-output** `#[pygraph]` from an external crate: two
+// streams in, a tuple of two out. Proves the tuple return erases element-wise
+// cross-crate.
+#[pygraph(name = min_max_pair)]
+fn build_min_max_pair(a: &Stream<f64>, b: &Stream<f64>) -> (Stream<f64>, Stream<f64>) {
+    use wingfoil_next::prelude::StreamOps;
+    let lo = a.join(b, |x: &f64, y: &f64| x.min(*y));
+    let hi = a.join(b, |x: &f64, y: &f64| x.max(*y));
+    (lo, hi)
+}
+
+// A **builder-taking** `#[pygraph]`: the wiring fn creates nodes of its own
+// rather than only extending its input, so it needs `&GraphBuilder` — the same
+// shape a `graph!` island's `nested()` has. The generated fn takes the graph as
+// its first Python argument.
+#[pygraph(name = against_own_ticker)]
+fn build_against_own_ticker(
+    g: &wingfoil_next::prelude::GraphBuilder,
+    input: &Stream<f64>,
+) -> Stream<f64> {
+    use wingfoil_next::prelude::{SourceOps, StreamOps};
+    let own = g
+        .ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n: &u64| *n as f64);
+    input.join(&own, |a: &f64, b: &f64| a + b)
+}
+
+// A **source** `#[pygraph]`: builder only, no stream inputs. Its output erases
+// through `erase_source` rather than `erased_output`.
+#[pygraph(name = own_ramp)]
+fn build_own_ramp(g: &wingfoil_next::prelude::GraphBuilder) -> Stream<f64> {
+    use wingfoil_next::prelude::{SourceOps, StreamOps};
+    g.ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n: &u64| *n as f64 * 3.0)
+}
+
+#[test]
+fn pygraph_shapes_expand_in_an_external_crate() {
+    let _a = min_max_pair;
+    let _b = against_own_ticker;
+    let _c = own_ramp;
+}
+
+#[test]
+fn pygraph_multi_output_erases_each_element() {
+    let g = PyGraph::new();
+    let counter = g.counter(Duration::from_nanos(100));
+    let other = counter.map(Python::attach(|py| {
+        py.eval(pyo3::ffi::c_str!("lambda n: 5.0 - n"), None, None)
+            .expect("lambda compiles")
+            .unbind()
+    }));
+
+    let (lo, hi) = Python::attach(|py| {
+        let l = pyo3::Py::new(py, wingfoil_next_python::Stream::from(counter.clone()))
+            .expect("stream pyclass");
+        let r = pyo3::Py::new(py, wingfoil_next_python::Stream::from(other.clone()))
+            .expect("stream pyclass");
+        let pair = min_max_pair(l.borrow(py), r.borrow(py));
+        (pair.0.object().clone(), pair.1.object().clone())
+    });
+    let (lo_acc, hi_acc) = (lo.accumulate(), hi.accumulate());
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let got_lo: Vec<f64> = Python::attach(|py| lo_acc.value().value().extract(py).unwrap());
+    let got_hi: Vec<f64> = Python::attach(|py| hi_acc.value().value().extract(py).unwrap());
+    // counter 1,2,3 against 4,3,2 -> min 1,2,2 / max 4,3,3
+    assert_eq!(vec![1.0, 2.0, 2.0], got_lo);
+    assert_eq!(vec![4.0, 3.0, 3.0], got_hi);
+}

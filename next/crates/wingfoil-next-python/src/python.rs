@@ -479,6 +479,23 @@ fn build_doubled_running_total(
     input.map(|x: &f64| x * 2.0).cumulative_sum()
 }
 
+// `spread_and_mid` — a **multi-input, multi-output `#[pygraph]`**: two streams
+// in, two out. The tuple return erases element-wise, so Python receives a tuple
+// of streams and can wire onward from each.
+#[pygraph(name = spread_and_mid)]
+fn build_spread_and_mid(
+    bid: &::wingfoil_next::prelude::Stream<f64>,
+    ask: &::wingfoil_next::prelude::Stream<f64>,
+) -> (
+    ::wingfoil_next::prelude::Stream<f64>,
+    ::wingfoil_next::prelude::Stream<f64>,
+) {
+    use ::wingfoil_next::prelude::StreamOps;
+    let spread = bid.join(ask, |b: &f64, a: &f64| a - b);
+    let mid = bid.join(ask, |b: &f64, a: &f64| (a + b) / 2.0);
+    (spread, mid)
+}
+
 // `ramp_source` — a **source `#[pyadapter]`**: a user-style adapter trait
 // implemented on `GraphBuilder`, exposed as `module.ramp_source(graph, start,
 // step)`. This synthetic source (no real IO) emits `start, start+step, …` as
@@ -605,6 +622,9 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blend4, m)?)?;
     m.add_function(wrap_pyfunction!(clamped_scale, m)?)?;
     m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
+    m.add_function(wrap_pyfunction!(spread_and_mid, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::island::compiled_island, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::island::interpreted_twin, m)?)?;
     m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
     m.add_function(wrap_pyfunction!(list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;

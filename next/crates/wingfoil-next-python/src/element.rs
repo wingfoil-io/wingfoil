@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use pyo3::BoundObject;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyBytes};
 
 /// An erased Python value flowing on a wingfoil-next edge.
 ///
@@ -201,7 +201,29 @@ macro_rules! from_scalar {
         }
     )*};
 }
-from_scalar!(f64, i64, bool);
+from_scalar!(
+    f32, f64, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, bool,
+);
+
+/// `Vec<u8>` erases to Python **`bytes`**, not a list of ints — the shape a
+/// binary payload wants (pyo3's blanket `Vec<T>` conversion would give a
+/// `list[int]`, which is both wrong-typed and far slower for a message body).
+impl From<Vec<u8>> for PyElement {
+    fn from(value: Vec<u8>) -> Self {
+        Python::attach(|py| PyElement(Some(PyBytes::new(py, &value).into_any().unbind())))
+    }
+}
+
+/// `Option<T>` erases with `None` as Python `None`, so a nullable field crosses
+/// the boundary without the adapter hand-rolling the empty case.
+impl<T: Into<PyElement>> From<Option<T>> for PyElement {
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(v) => v.into(),
+            None => PyElement::none(),
+        }
+    }
+}
 
 /// The unit type erases to Python `None` — so a **sink** adapter that produces a
 /// `Stream<()>` (a terminal, no meaningful value) can cross the boundary like
@@ -242,7 +264,42 @@ macro_rules! try_into_scalar {
         }
     )*};
 }
-try_into_scalar!(f64, i64, bool, String);
+try_into_scalar!(
+    f32, f64, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, bool, String,
+);
+
+/// The inverse of the `bytes` edge. Accepts `bytes`/`bytearray` (and, via
+/// pyo3's extraction, a sequence of ints) so a Python caller can hand back
+/// whichever it has.
+impl TryFrom<&PyElement> for Vec<u8> {
+    type Error = anyhow::Error;
+
+    fn try_from(el: &PyElement) -> Result<Self> {
+        let obj =
+            el.0.as_ref()
+                .context("cannot extract Vec<u8> from an empty PyElement")?;
+        Python::attach(|py| {
+            obj.extract::<Vec<u8>>(py)
+                .context("PyElement is not bytes-like")
+        })
+    }
+}
+
+/// The inverse of the `Option<T>` edge: Python `None` (or an empty element)
+/// reads back as `None`, anything else as `Some`.
+impl<T> TryFrom<&PyElement> for Option<T>
+where
+    T: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error>,
+{
+    type Error = anyhow::Error;
+
+    fn try_from(el: &PyElement) -> Result<Self> {
+        if el.is_none() {
+            return Ok(None);
+        }
+        T::try_from(el).map(Some)
+    }
+}
 
 /// The **identity** edge conversion: extracting a `PyElement` from a
 /// `PyElement` is a clone.
@@ -316,5 +373,75 @@ mod tests {
 
         let out: f64 = (&runner.value(&doubled)).try_into().unwrap();
         assert_eq!(42.0, out);
+    }
+
+    #[test]
+    fn integer_widths_round_trip() {
+        // Every width goes out and comes back; the narrow ones matter because a
+        // record field is rarely an i64.
+        assert_eq!(7_u8, u8::try_from(&PyElement::from(7_u8)).unwrap());
+        assert_eq!(7_u16, u16::try_from(&PyElement::from(7_u16)).unwrap());
+        assert_eq!(7_u32, u32::try_from(&PyElement::from(7_u32)).unwrap());
+        assert_eq!(7_u64, u64::try_from(&PyElement::from(7_u64)).unwrap());
+        assert_eq!(7_usize, usize::try_from(&PyElement::from(7_usize)).unwrap());
+        assert_eq!(-7_i8, i8::try_from(&PyElement::from(-7_i8)).unwrap());
+        assert_eq!(-7_i16, i16::try_from(&PyElement::from(-7_i16)).unwrap());
+        assert_eq!(-7_i32, i32::try_from(&PyElement::from(-7_i32)).unwrap());
+        assert_eq!(
+            -7_isize,
+            isize::try_from(&PyElement::from(-7_isize)).unwrap()
+        );
+    }
+
+    #[test]
+    fn f32_round_trips() {
+        assert_eq!(1.5_f32, f32::try_from(&PyElement::from(1.5_f32)).unwrap());
+    }
+
+    #[test]
+    fn a_negative_value_does_not_silently_become_unsigned() {
+        let element = PyElement::from(-1_i64);
+        assert!(
+            u32::try_from(&element).is_err(),
+            "a negative must not wrap into an unsigned width"
+        );
+    }
+
+    #[test]
+    fn bytes_erase_to_python_bytes_not_a_list() {
+        let element = PyElement::from(vec![1_u8, 2, 255]);
+        Python::attach(|py| {
+            let obj = element.object().bind(py);
+            assert!(
+                obj.is_instance_of::<PyBytes>(),
+                "Vec<u8> must erase to bytes, got {obj:?}"
+            );
+        });
+        assert_eq!(vec![1_u8, 2, 255], Vec::<u8>::try_from(&element).unwrap());
+    }
+
+    #[test]
+    fn empty_bytes_round_trip() {
+        let element = PyElement::from(Vec::<u8>::new());
+        assert_eq!(Vec::<u8>::new(), Vec::<u8>::try_from(&element).unwrap());
+    }
+
+    #[test]
+    fn option_maps_none_to_python_none() {
+        let empty = PyElement::from(None::<f64>);
+        assert!(empty.is_none());
+        assert_eq!(None, Option::<f64>::try_from(&empty).unwrap());
+
+        let full = PyElement::from(Some(2.5_f64));
+        assert!(!full.is_none());
+        assert_eq!(Some(2.5), Option::<f64>::try_from(&full).unwrap());
+    }
+
+    #[test]
+    fn option_propagates_a_wrong_typed_inner() {
+        // Present but not extractable is an error, not a silent None — that
+        // distinction is the whole point of the nullable edge.
+        let text = PyElement::from("not a number");
+        assert!(Option::<f64>::try_from(&text).is_err());
     }
 }

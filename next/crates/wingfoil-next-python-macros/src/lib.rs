@@ -159,14 +159,28 @@ impl Parse for PyGraphArgs {
 }
 
 /// `#[pygraph(name = ...)]` — expose a Rust-authored sub-graph wiring function
-/// (`fn(&Stream<T>) -> Stream<U>`) as a Python callable `module.name(stream)`
-/// that splices the sub-graph's nodes into the caller's builder and returns the
-/// erased output. `T`/`U` edge-convert at the boundary (`T: TryFrom<&PyElement>`,
-/// `U: Into<PyElement>`); the interior runs at native types.
+/// as a Python callable that splices the sub-graph's nodes into the caller's
+/// builder and returns the erased output(s). Inputs and outputs edge-convert at
+/// the boundary (`T: TryFrom<&PyElement>`, `U: Into<PyElement>`); the interior
+/// runs at native types.
+///
+/// The wiring fn is `fn([&GraphBuilder,] &Stream<T>…) -> Stream<U> | (Stream<U>…)`:
+///
+/// - **N inputs** — each becomes a Python stream parameter, named by the same
+///   convention `#[pyop]` uses (`stream`, then `other` at arity two, else
+///   `second`/`third`/…), so they can be passed by keyword.
+/// - **N outputs** — a tuple return becomes a Python tuple of streams, each
+///   erased independently and each chainable.
+/// - **An optional leading `&GraphBuilder`** — for wiring that creates nodes of
+///   its own rather than only extending its inputs. The generated callable then
+///   takes the graph first. This is what makes a `graph!`-generated
+///   **`nested()` compiled island** expressible: its signature is exactly
+///   `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, so an island needs no
+///   island-specific macro. With the builder and no stream inputs, the
+///   sub-graph is a *source* and its outputs erase via `erase_source`.
 ///
 /// The `name` must differ from the wiring function's own name (the macro emits a
-/// `#[pyfunction]` of that name alongside the untouched function). Single-input,
-/// single-output in v1.
+/// `#[pyfunction]` of that name alongside the untouched function).
 #[proc_macro_attribute]
 pub fn pygraph(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PyGraphArgs);
@@ -201,6 +215,24 @@ fn stream_inner(ty: &Type) -> syn::Result<Type> {
     ))
 }
 
+/// Is this the wiring fn's optional leading `&GraphBuilder` parameter?
+///
+/// A sub-graph needs the builder when it creates nodes of its own rather than
+/// only extending its inputs — most importantly a `graph!`-generated
+/// `nested()` **compiled island**, whose signature is
+/// `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`.
+fn is_graph_builder(ty: &Type) -> bool {
+    let bare = match ty {
+        Type::Reference(r) => &*r.elem,
+        other => other,
+    };
+    matches!(bare, Type::Path(p) if p
+        .path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "GraphBuilder"))
+}
+
 fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2> {
     let fn_name = &func.sig.ident;
     let py_name = &args.name;
@@ -211,42 +243,146 @@ fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2
              `#[pyfunction]` of that name)",
         ));
     }
-    if func.sig.inputs.len() != 1 {
+
+    let mut params = func.sig.inputs.iter();
+    let mut peeked = params.clone();
+    // An optional leading `&GraphBuilder`; the rest are the stream inputs.
+    let takes_builder = matches!(peeked.next(), Some(FnArg::Typed(pt)) if is_graph_builder(&pt.ty));
+    if takes_builder {
+        params.next();
+    }
+    let in_tys = params
+        .map(|arg| match arg {
+            FnArg::Typed(pt) => stream_inner(&pt.ty),
+            FnArg::Receiver(r) => Err(Error::new(
+                r.span(),
+                "#[pygraph] goes on a free wiring fn, not a method",
+            )),
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    if in_tys.is_empty() && !takes_builder {
         return Err(Error::new(
             func.sig.span(),
-            "#[pygraph] supports a single-input wiring fn (`fn(&Stream<T>) -> Stream<U>`) in v1",
+            "#[pygraph] wiring fn takes `&Stream<T>` inputs, a leading `&GraphBuilder`, or both",
         ));
     }
-    let in_ty = match func.sig.inputs.first() {
-        Some(FnArg::Typed(pt)) => &*pt.ty,
-        _ => {
-            return Err(Error::new(
-                func.sig.span(),
-                "#[pygraph] wiring fn takes a `&Stream<T>` argument",
-            ));
-        }
-    };
-    let t_ty = stream_inner(in_ty)?;
+
     let out_ty = match &func.sig.output {
-        ReturnType::Type(_, ty) => &**ty,
+        ReturnType::Type(_, ty) => (**ty).clone(),
         ReturnType::Default => {
             return Err(Error::new(
                 func.sig.span(),
-                "#[pygraph] wiring fn must return `Stream<U>`",
+                "#[pygraph] wiring fn must return `Stream<U>` or a tuple of streams",
             ));
         }
     };
-    let u_ty = stream_inner(out_ty)?;
+    // One output, or a tuple of them — a sub-graph routinely produces several.
+    let (out_tys, single_output) = match &out_ty {
+        Type::Tuple(t) if !t.elems.is_empty() => (
+            t.elems
+                .iter()
+                .map(stream_inner)
+                .collect::<syn::Result<Vec<_>>>()?,
+            false,
+        ),
+        other => (vec![stream_inner(other)?], true),
+    };
+
+    let receivers: Vec<Ident> = receiver_names(in_tys.len())
+        .iter()
+        .map(|s| Ident::new(s, py_name.span()))
+        .collect();
+    let receiver_params = receivers.iter().map(|r| {
+        quote! { #r: pyo3::PyRef<'_, ::wingfoil_next_python::Stream> }
+    });
+    let graph_param = takes_builder.then(|| {
+        quote! { graph: pyo3::PyRef<'_, ::wingfoil_next_python::Graph>, }
+    });
+
+    // Everything is spliced onto one graph, so any node on it can host the
+    // conversions. With stream inputs the first is the anchor; with none (a
+    // builder-only *source* sub-graph) the graph itself is, and its outputs
+    // erase through `erase_source` rather than `erased_output`.
+    let (anchor, erase): (TokenStream2, Vec<TokenStream2>) = if let Some(first) = receivers.first()
+    {
+        (
+            quote! { #first.object() },
+            out_tys
+                .iter()
+                .enumerate()
+                .map(|(i, u)| {
+                    let out = Ident::new(&format!("__out{i}"), py_name.span());
+                    quote! { __anchor.erased_output::<#u>(#out) }
+                })
+                .collect(),
+        )
+    } else {
+        (
+            quote! { graph.object() },
+            out_tys
+                .iter()
+                .enumerate()
+                .map(|(i, u)| {
+                    let out = Ident::new(&format!("__out{i}"), py_name.span());
+                    quote! { __anchor.erase_source::<#u>(#out) }
+                })
+                .collect(),
+        )
+    };
+
+    let typed_binds = receivers
+        .iter()
+        .zip(&in_tys)
+        .enumerate()
+        .map(|(i, (r, t))| {
+            let typed = Ident::new(&format!("__typed{i}"), py_name.span());
+            quote! { let #typed = #r.object().typed_input::<#t>(); }
+        });
+    let call_args = (0..in_tys.len()).map(|i| {
+        let typed = Ident::new(&format!("__typed{i}"), py_name.span());
+        quote! { &#typed }
+    });
+    // The builder always comes from the graph parameter (emitted whenever the
+    // wiring fn takes it) — not from `__anchor`, which is a `PyStream` when
+    // there are stream inputs and carries no builder.
+    let builder_arg = takes_builder.then(|| quote! { graph.object().builder(), });
+
+    let out_idents: Vec<Ident> = (0..out_tys.len())
+        .map(|i| Ident::new(&format!("__out{i}"), py_name.span()))
+        .collect();
+    let bind_outs = if single_output {
+        let out0 = &out_idents[0];
+        quote! { let #out0 = #fn_name(#builder_arg #(#call_args),*); }
+    } else {
+        quote! { let (#(#out_idents),*) = #fn_name(#builder_arg #(#call_args),*); }
+    };
+    let (ret_ty, ret_expr) = if single_output {
+        let e = &erase[0];
+        (
+            quote! { ::wingfoil_next_python::Stream },
+            quote! { ::wingfoil_next_python::Stream::from(#e) },
+        )
+    } else {
+        let tys = out_tys
+            .iter()
+            .map(|_| quote! { ::wingfoil_next_python::Stream });
+        (
+            quote! { ( #(#tys),* ) },
+            quote! { ( #(::wingfoil_next_python::Stream::from(#erase)),* ) },
+        )
+    };
 
     Ok(quote! {
         #[pyo3::pyfunction]
-        fn #py_name(
-            stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
-        ) -> ::wingfoil_next_python::Stream {
-            let __obj = stream.object();
-            let __typed = __obj.typed_input::<#t_ty>();
-            let __out = #fn_name(&__typed);
-            ::wingfoil_next_python::Stream::from(__obj.erased_output::<#u_ty>(__out))
+        #[allow(clippy::too_many_arguments)]
+        pub fn #py_name(
+            #graph_param
+            #(#receiver_params),*
+        ) -> #ret_ty {
+            let __anchor = #anchor;
+            #(#typed_binds)*
+            #bind_outs
+            #ret_expr
         }
     })
 }
@@ -744,17 +880,25 @@ fn burst_inner(ty: &Type) -> Option<Type> {
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`
 /// supports one- or two-input ops.
-/// The generated function's stream parameters, by input arity.
+/// The generated function's stream parameter names, by input arity — shared by
+/// `#[pyop]` and `#[pygraph]` so one convention covers both.
 ///
 /// `other` (rather than `second`) at arity two is the name that shipped with the
-/// two-input form; keeping it avoids breaking a caller who passes it by keyword.
-fn receiver_names(n: usize) -> &'static [&'static str] {
-    match n {
-        1 => &["stream"],
-        2 => &["stream", "other"],
-        3 => &["stream", "second", "third"],
-        _ => &["stream", "second", "third", "fourth"],
+/// two-input `#[pyop]`; keeping it avoids breaking a caller who passes it by
+/// keyword.
+fn receiver_names(n: usize) -> Vec<String> {
+    const ORDINALS: [&str; 5] = ["second", "third", "fourth", "fifth", "sixth"];
+    if n == 2 {
+        return vec!["stream".to_string(), "other".to_string()];
     }
+    std::iter::once("stream".to_string())
+        .chain((1..n).map(|i| {
+            ORDINALS
+                .get(i - 1)
+                .map(|s| (*s).to_string())
+                .unwrap_or_else(|| format!("input{i}"))
+        }))
+        .collect()
 }
 
 /// The generated function's config parameter list and the value handed to the
