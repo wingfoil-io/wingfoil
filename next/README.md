@@ -142,7 +142,7 @@ Every example is runnable with `cargo run -p wingfoil-next --example <name>`
 |---|---|
 | [`csv_adapter`](crates/wingfoil-next/examples/csv_adapter.rs) | Replay a CSV as a deterministic historical burst stream, transform each row, write back to CSV. |
 | [`etcd_adapter`](crates/wingfoil-next/examples/etcd_adapter.rs) | Watch an etcd key prefix, transform values, and write the result back. |
-| [`augurs_adapter`](crates/wingfoil-next/examples/augurs_adapter.rs) | On-graph forecasting and outlier detection over sliding windows with the augurs toolkit. |
+| [`augurs_adapter`](crates/wingfoil-next/examples/augurs_adapter.rs) | On-graph forecasting, outlier / changepoint / season detection, DTW and clustering over sliding windows with the augurs toolkit. |
 | [`lines_adapter`](crates/wingfoil-next/examples/lines_adapter.rs) | Dependency-free line-oriented file adapter — replay a text file, transform it, write it out. |
 | [`async_source`](crates/wingfoil-next/examples/async_source.rs) | Bridge an async producer of timestamped values into a wingfoil-next graph. |
 

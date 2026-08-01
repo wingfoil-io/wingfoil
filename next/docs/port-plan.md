@@ -856,20 +856,23 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `spans_historical_mode_drains_without_connecting` in `tests/otlp_adapter.rs`
    and `otlp_spans_sends_successfully` in `tests/otlp_integration.rs`.
    ✅ **augurs** *(done)*: on-graph time-series analysis (a pure-Rust compute
-   adapter, no service/lifecycle), behind the `augurs` feature. Ports **2 of
-   classic's 6 operators** — `AugursForecastOps::augurs_forecast` (windowed ETS /
-   MSTL point forecast + prediction intervals) and
+   adapter, no service/lifecycle), behind the `augurs` feature. Ports **all 6 of
+   classic's operators** — `AugursForecastOps::augurs_forecast` (windowed ETS /
+   MSTL point forecast + prediction intervals),
    `AugursOutlierOps::augurs_outlier` (windowed MAD / DBSCAN multi-series outlier
-   detection) — both as sliding-window transform ops fitting their model inside
-   `cycle()` on the graph thread (same shape as the `stats` rolling ops). The
-   **4 unported operators** (`augurs_changepoint`, `augurs_seasons`,
-   `augurs_dtw`, `augurs_cluster`) are a tracked capability gap (register C5), not
-   yet needed downstream. **Deviations:** the ops validate config inside `cycle`
-   (returning `Result` / `anyhow::bail!`) rather than classic's wiring-time
-   `panic!` on a bad detector sensitivity — a deliberate improvement; see the
-   adapter's `# Deviations from classic` module-doc block plus
-   [`deviation-register.md`](./deviation-register.md). Test file
-   `tests/augurs_adapter.rs`; example `examples/augurs_adapter.rs`.
+   detection), `AugursChangepointOps::augurs_changepoint` (Bayesian online
+   changepoint detection), `AugursSeasonsOps::augurs_seasons` (periodogram
+   seasonality detection), `AugursDtwOps::augurs_dtw` (pairwise dynamic-time-warping
+   distance matrix) and `AugursClusterOps::augurs_cluster` (DBSCAN clustering over
+   those DTW distances) — all as sliding-window transform ops computing inside
+   `cycle()` on the graph thread (same shape as the `stats` rolling ops).
+   **Deviations:** the ops validate config inside `cycle` (returning `Result` /
+   `anyhow::bail!`) rather than classic's wiring-time `panic!` on a bad detector
+   sensitivity, and `augurs_cluster` floors its effective window at the
+   two-sample warm-up (classic's cluster node never ticks for `window == 1`) —
+   both deliberate improvements; see the adapter's `# Deviations from classic`
+   module-doc block plus [`deviation-register.md`](./deviation-register.md).
+   Test file `tests/augurs_adapter.rs`; example `examples/augurs_adapter.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
    their ring-buffer polling is the natural `ALWAYS`-cap shape.
    ✅ **fluvio** *(done)*: a streaming topic-partition consume source

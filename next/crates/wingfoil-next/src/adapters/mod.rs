@@ -13,9 +13,10 @@
 //!   the smallest complete demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
-//! - [`augurs`] — on-graph time-series analysis (forecasting + outlier
-//!   detection) over sliding windows, behind the `augurs` feature. A pure-Rust
-//!   compute adapter (no service), so it is transform ops, not a source/sink.
+//! - [`augurs`] — on-graph time-series analysis (forecasting, outlier /
+//!   changepoint / season detection, DTW distances and clustering) over sliding
+//!   windows, behind the `augurs` feature. A pure-Rust compute adapter (no
+//!   service), so it is transform ops, not a source/sink.
 //! - [`etcd`] — a streaming key-prefix snapshot + watch source (`etcd_sub`) and
 //!   a key-value PUT sink (`EtcdSinkOps::etcd_pub`) for the etcd key-value
 //!   store, behind the `etcd` feature (built on the async `produce_async`
