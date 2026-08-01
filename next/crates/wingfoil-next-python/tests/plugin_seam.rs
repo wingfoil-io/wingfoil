@@ -511,3 +511,89 @@ fn free_fn_pyadapter_wires_end_to_end() {
         "{err:#}"
     );
 }
+
+// A **three-input** external `#[pyop]` (`In<'a> = (&'a f64, &'a f64, &'a f64)`)
+// — compile proof that the macro emits a three-stream `#[pyfunction]` over the
+// `wire_op3` seam from a third-party crate.
+struct Blend3Ext;
+
+#[pyop(name = blend3_ext)]
+impl Op for Blend3Ext {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a f64, &'a f64, &'a f64);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&f64, &f64, &f64),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        Ok(Tick::Value(input.0 + input.1 + input.2))
+    }
+}
+
+// A **tuple-`Cfg`** external `#[pyop]`: `arg = (low, high)` destructures
+// `Cfg = (f64, f64)` into two named Python parameters instead of one tuple arg.
+struct ClampExt;
+
+#[pyop(name = clamp_ext, arg = (low, high))]
+impl Op for ClampExt {
+    type Cfg = (f64, f64);
+    type State = ();
+    type In<'a> = (&'a f64,);
+    type Out = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut (f64, f64),
+        _state: &mut (),
+        input: (&f64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> anyhow::Result<Tick<f64>> {
+        let (low, high) = *cfg;
+        Ok(Tick::Value(input.0.clamp(low, high)))
+    }
+}
+
+#[test]
+fn pyop_three_input_and_tuple_cfg_expand_in_an_external_crate() {
+    let _a = blend3_ext;
+    let _b = clamp_ext;
+}
+
+#[test]
+fn wire_op3_seam_runs_three_inputs_from_an_external_crate() {
+    // The seam the three-input macro builds on: three erased inputs extracted
+    // to native f64, all three active, output boxed back.
+    let g = PyGraph::new();
+    let counter = g.counter(Duration::from_nanos(100));
+    let doubled = counter.map(Python::attach(|py| {
+        py.eval(pyo3::ffi::c_str!("lambda n: n * 2"), None, None)
+            .expect("lambda compiles")
+            .unbind()
+    }));
+    let tripled = counter.map(Python::attach(|py| {
+        py.eval(pyo3::ffi::c_str!("lambda n: n * 3"), None, None)
+            .expect("lambda compiles")
+            .unbind()
+    }));
+
+    let blended = counter.wire_op3::<f64, f64, f64, _, _, f64, _, _>(
+        &doubled,
+        &tripled,
+        "blend3",
+        Activation::NONE,
+        (),
+        || (),
+        |_c, _s, a: &f64, b: &f64, c: &f64, _ctx| Ok(Tick::Value(a + b + c)),
+    );
+    let acc = blended.accumulate();
+
+    g.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+    let got: Vec<f64> = Python::attach(|py| acc.value().value().extract(py).unwrap());
+    assert_eq!(vec![6.0, 12.0, 18.0], got);
+}

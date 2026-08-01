@@ -215,6 +215,49 @@ def test_pyop_two_input_op():
     assert out.value() == 33.0  # 3 + 30
 
 
+def test_pyop_three_input_op():
+    # blend3 is a three-input #[pyop]: module.blend3(stream, second, third),
+    # the join3 shape over the wire_op3 seam.
+    g = wf.Graph()
+    a = g.counter(period_nanos=100)  # 1,2,3
+    b = a.map(lambda n: n * 2)  # 2,4,6
+    c = a.map(lambda n: n * 3)  # 3,6,9
+    out = wf.blend3(a, b, c).collect()
+    g.run(cycles=3)
+    # a + 10b + 100c, with tick times
+    assert [(0, 321.0), (100, 642.0), (200, 963.0)] == out.value()
+
+
+def test_pyop_three_inputs_are_all_active():
+    """Any of the three ticking activates the op — none is a passive read."""
+    g = wf.Graph()
+    fast = g.counter(period_nanos=100)
+    slow = g.counter(period_nanos=300)
+    out = wf.blend3(fast, slow, slow).collect()
+    g.run(cycles=4)
+    # `fast` alone ticks at t=100 and t=200, so the op runs on every cycle.
+    assert 4 == len(out.value())
+
+
+def test_pyop_tuple_cfg_names_each_element():
+    # clamped_scale declares `arg = (factor, ceiling)` over `Cfg = (f64, f64)`,
+    # so each knob is its own Python parameter rather than one tuple argument.
+    g = wf.Graph()
+    out = wf.clamped_scale(g.counter(period_nanos=100), 10.0, 25.0).collect()
+    g.run(cycles=3)
+    # 1,2,3 -> x10 -> 10,20,30 -> clamped at 25
+    assert [(0, 10.0), (100, 20.0), (200, 25.0)] == out.value()
+
+
+def test_pyop_tuple_cfg_accepts_keywords():
+    g = wf.Graph()
+    out = wf.clamped_scale(
+        g.counter(period_nanos=100), factor=10.0, ceiling=25.0
+    ).collect()
+    g.run(cycles=3)
+    assert [(0, 10.0), (100, 20.0), (200, 25.0)] == out.value()
+
+
 def test_pyop_and_pyop_fn_compose():
     # Both macro forms, chained: counter -> square -> scale x2.
     g = wf.Graph()

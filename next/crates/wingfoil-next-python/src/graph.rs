@@ -814,6 +814,62 @@ impl PyStream {
         self.wrap(wired)
     }
 
+    /// Wire a **three-input op** onto this stream, `second` and `third` at the
+    /// erased boundary — the three-active-input counterpart of
+    /// [`wire_op2`](Self::wire_op2) (the `#[pyop]` seam for
+    /// `In<'a> = (&'a A, &'a B, &'a C)` ops, the `join3` shape). All three
+    /// inputs are extracted from [`PyElement`], all three trigger the op, and
+    /// the output is boxed back; a `TryFrom`/`step` error aborts the run with
+    /// context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wire_op3<A, B, C, Cfg, S, Out, Step, SInit>(
+        &self,
+        second: &PyStream,
+        third: &PyStream,
+        label: &'static str,
+        activation: Activation,
+        cfg: Cfg,
+        state_init: SInit,
+        mut step: Step,
+    ) -> PyStream
+    where
+        A: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        B: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        C: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        Cfg: 'static,
+        S: 'static,
+        Out: Into<PyElement> + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let second_handle = second.stream.handle();
+        let third_handle = third.stream.handle();
+        let wired = self
+            .stream
+            .wire(move |b: &mut Builder, this: Handle<PyElement>| {
+                b.register_op3(
+                    this,
+                    second_handle,
+                    third_handle,
+                    label,
+                    activation,
+                    cfg,
+                    state_init,
+                    move |c, s, a: &PyElement, bb: &PyElement, cc: &PyElement, ctx| {
+                        let input_a = A::try_from(a)?;
+                        let input_b = B::try_from(bb)?;
+                        let input_c = C::try_from(cc)?;
+                        Ok(match step(c, s, &input_a, &input_b, &input_c, ctx)? {
+                            Tick::Value(v) => Tick::Value(v.into()),
+                            Tick::Silent(v) => Tick::Silent(v.into()),
+                            Tick::Quiet => Tick::Quiet,
+                        })
+                    },
+                )
+            });
+        self.wrap(wired)
+    }
+
     /// Extract this erased stream to a natively-typed `Stream<T>` — the input
     /// half of the `#[pygraph]` seam. Each value is converted from [`PyElement`]
     /// via `T: TryFrom<&PyElement>` at the boundary (a conversion error aborts

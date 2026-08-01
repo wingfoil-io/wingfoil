@@ -29,41 +29,79 @@
 //! // => wingfoil_next.square(stream)   (register: wrap_pyfunction!(square, m)?)
 //! ```
 //!
-//! **Scope:** one- or two-input (`In<'a> = (&'a A,)` → `module.name(stream)`,
-//! `(&'a A, &'a B)` → `module.name(stream, other)`), concrete (non-generic)
-//! ops, with `Cfg = ()` or a single `FromPyObject` type. State may be any
-//! `Default`-seedable type (`State = ()` for stateless, or e.g. `State = f64`
-//! for an accumulator — the engine re-seeds it from `Default` on each run, so
-//! re-runs start clean). Ops with 3+ inputs use `PyStream::wire_op1`/`wire_op2`
-//! (or the object form) directly.
+//! **Scope:** one-, two- or three-input concrete (non-generic) ops:
+//!
+//! | `In<'a>` | generated signature | seam |
+//! |---|---|---|
+//! | `(&'a A,)` | `module.name(stream)` | `wire_op1` |
+//! | `(&'a A, &'a B)` | `module.name(stream, other)` | `wire_op2` |
+//! | `(&'a A, &'a B, &'a C)` | `module.name(stream, second, third)` | `wire_op3` |
+//!
+//! All inputs are **active** (any one ticking runs the op); a passive edge
+//! needs a hand-written method, as on the Rust side.
+//!
+//! `Cfg` may be `()` (no config parameter), a single `FromPyObject` type
+//! (`arg = <name>`, defaulting to `cfg`), or a **tuple** destructured into one
+//! named parameter per element with `arg = (<p1>, <p2>, …)` — so an op with
+//! `Cfg = (usize, f64)` reads as `name(stream, window, alpha)` rather than
+//! taking a tuple. State may be any `Default`-seedable type (`State = ()` for
+//! stateless, or e.g. `State = f64` for an accumulator — the engine re-seeds it
+//! from `Default` on each run, so re-runs start clean).
+//!
+//! Wider ops need a `register_op<n>`/`wire_op<n>` pair for their arity —
+//! `register_op3` mirrors `register_op2` line for line — after which this macro
+//! extends by one arm. Until then they use the object form directly.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Error, FnArg, GenericArgument, Ident, ImplItem, Item, ItemFn, ItemImpl, Meta, Pat,
     PathArguments, ReturnType, Signature, Token, Type, parse_macro_input, parse_quote,
 };
 
-/// Parsed `#[pyop(name = <fn>, [arg = <cfg param>])]`.
+/// Parsed `#[pyop(name = <fn>, [arg = <cfg param> | arg = (<p1>, <p2>, ...)])]`.
+///
+/// `arg` names the generated function's config parameter(s). A single name
+/// takes the whole `Cfg`; a parenthesised list destructures a **tuple** `Cfg`
+/// into one named Python parameter per element, so an op configured by
+/// `Cfg = (usize, f64)` reads as `name(stream, window, alpha)` rather than
+/// `name(stream, (window, alpha))`.
 struct PyOpArgs {
     name: Ident,
-    arg: Option<Ident>,
+    args: Vec<Ident>,
 }
 
 impl Parse for PyOpArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name = None;
-        let mut arg = None;
+        let mut args = Vec::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
-            let val: Ident = input.parse()?;
             match key.to_string().as_str() {
-                "name" => name = Some(val),
-                "arg" => arg = Some(val),
+                "name" => name = Some(input.parse()?),
+                "arg" => {
+                    if input.peek(syn::token::Paren) {
+                        let inner;
+                        syn::parenthesized!(inner in input);
+                        let names: Punctuated<Ident, Token![,]> =
+                            Punctuated::parse_terminated(&inner)?;
+                        if names.is_empty() {
+                            return Err(Error::new(
+                                key.span(),
+                                "#[pyop] `arg = ()` names no parameters; drop it, or list one \
+                                 name per tuple element of `Cfg`",
+                            ));
+                        }
+                        args = names.into_iter().collect();
+                    } else {
+                        args = vec![input.parse()?];
+                    }
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -77,7 +115,7 @@ impl Parse for PyOpArgs {
         }
         let name =
             name.ok_or_else(|| Error::new(input.span(), "#[pyop] requires `name = <fn name>`"))?;
-        Ok(PyOpArgs { name, arg })
+        Ok(PyOpArgs { name, args })
     }
 }
 
@@ -700,6 +738,64 @@ fn burst_inner(ty: &Type) -> Option<Type> {
 
 /// The `T`s of a reference tuple `(&'a T, …)` — one entry per op input. `#[pyop]`
 /// supports one- or two-input ops.
+/// The generated function's config parameter list and the value handed to the
+/// op, from `Cfg` and the `arg = …` names.
+///
+/// Three shapes: a unit `Cfg` contributes nothing; a single name takes the
+/// whole `Cfg` (defaulting to `cfg`); a parenthesised list destructures a tuple
+/// `Cfg` element-wise, so each knob is its own named Python argument and the
+/// caller writes `name(stream, window, alpha)` instead of passing a tuple.
+fn cfg_params(
+    args: &PyOpArgs,
+    cfg_ty: &Type,
+    span: proc_macro2::Span,
+) -> syn::Result<(TokenStream2, TokenStream2)> {
+    if is_unit(cfg_ty) {
+        if !args.args.is_empty() {
+            return Err(Error::new(
+                span,
+                "#[pyop] `arg` names a config parameter, but this op has `type Cfg = ()`",
+            ));
+        }
+        return Ok((quote! {}, quote! { () }));
+    }
+    if args.args.len() <= 1 {
+        let arg = args
+            .args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Ident::new("cfg", span));
+        return Ok((quote! { , #arg: #cfg_ty }, quote! { #arg }));
+    }
+    // Several names: `Cfg` must be a tuple of matching arity, and each element
+    // becomes its own parameter.
+    let Type::Tuple(tuple) = cfg_ty else {
+        return Err(Error::new(
+            span,
+            format!(
+                "#[pyop] `arg` lists {} names, so `Cfg` must be a tuple of {} elements; \
+                 it is not a tuple — use a single `arg = <name>`",
+                args.args.len(),
+                args.args.len(),
+            ),
+        ));
+    };
+    if tuple.elems.len() != args.args.len() {
+        return Err(Error::new(
+            span,
+            format!(
+                "#[pyop] `arg` lists {} names but `Cfg` is a tuple of {} elements — \
+                 give one name per element",
+                args.args.len(),
+                tuple.elems.len(),
+            ),
+        ));
+    }
+    let names = &args.args;
+    let tys = tuple.elems.iter();
+    Ok((quote! { #(, #names: #tys)* }, quote! { ( #(#names),* ) }))
+}
+
 fn ref_tuple_elems(ty: &Type) -> syn::Result<Vec<Type>> {
     if let Type::Tuple(t) = ty {
         let mut elems = Vec::with_capacity(t.elems.len());
@@ -714,14 +810,16 @@ fn ref_tuple_elems(ty: &Type) -> syn::Result<Vec<Type>> {
                 }
             }
         }
-        if matches!(elems.len(), 1 | 2) {
+        if matches!(elems.len(), 1..=3) {
             return Ok(elems);
         }
     }
     Err(Error::new(
         ty.span(),
-        "#[pyop] supports one- or two-input ops (`type In<'a> = (&'a A,)` or \
-         `(&'a A, &'a B)`); use `PyStream::wire_op1`/`wire_op2` for other shapes",
+        "#[pyop] supports one-, two- or three-input ops (`type In<'a> = (&'a A,)`, \
+         `(&'a A, &'a B)` or `(&'a A, &'a B, &'a C)`); a wider op needs a \
+         `register_op<n>`/`wire_op<n>` pair for its arity — add them the way \
+         `register_op3` mirrors `register_op2`, then extend this macro",
     ))
 }
 
@@ -763,15 +861,7 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let name = &args.name;
     let name_str = name.to_string();
 
-    let (param, cfg_value) = if is_unit(&cfg_ty) {
-        (quote! {}, quote! { () })
-    } else {
-        let arg = args
-            .arg
-            .clone()
-            .unwrap_or_else(|| Ident::new("cfg", name.span()));
-        (quote! { , #arg: #cfg_ty }, quote! { #arg })
-    };
+    let (param, cfg_value) = cfg_params(args, &cfg_ty, name.span())?;
     let state_seed = quote! { || <#state_ty as ::core::default::Default>::default() };
 
     let body = if elems.len() == 1 {
@@ -791,6 +881,36 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                         #state_seed,
                         |__c, __s, __a: &#a_ty, __ctx| {
                             <#self_ty as ::wingfoil_next_python::Op>::cycle(__c, __s, (__a,), __ctx)
+                        },
+                    )
+                )
+            }
+        }
+    } else if elems.len() == 3 {
+        let (a_ty, b_ty, c_ty) = (&elems[0], &elems[1], &elems[2]);
+        quote! {
+            #[pyo3::pyfunction]
+            fn #name(
+                stream: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
+                second: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>,
+                third: pyo3::PyRef<'_, ::wingfoil_next_python::Stream>
+                #param
+            ) -> ::wingfoil_next_python::Stream {
+                ::wingfoil_next_python::Stream::from(
+                    ::wingfoil_next_python::PyStream::wire_op3::<
+                        #a_ty, #b_ty, #c_ty, _, _, #out_ty, _, _,
+                    >(
+                        stream.object(),
+                        second.object(),
+                        third.object(),
+                        #name_str,
+                        <#self_ty as ::wingfoil_next_python::Op>::ACTIVATION,
+                        #cfg_value,
+                        #state_seed,
+                        |__c, __s, __a: &#a_ty, __b: &#b_ty, __d: &#c_ty, __ctx| {
+                            <#self_ty as ::wingfoil_next_python::Op>::cycle(
+                                __c, __s, (__a, __b, __d), __ctx,
+                            )
                         },
                     )
                 )
