@@ -94,6 +94,11 @@ web = ["wingfoil-next/web-tls", "dep:serde_json", "_common"]
 # clang, libuuid and CMake >= 3.30. Its tests run in
 # `aeron-next-integration.yml`, which installs that toolchain.
 aeron = ["wingfoil-next/aeron", "_common"]
+# iceoryx2: the `iceoryx2_sub` / `iceoryx2_pub` slice pair. Pure Rust, so it
+# *is* in `all-adapters` and its tests run in the normal job — but it stays out
+# of the **wheel**'s default features because it is Linux/POSIX-only, and a
+# wheel carrying it cannot be built for the platforms that would otherwise work.
+iceoryx2 = ["wingfoil-next/iceoryx2", "_common"]
 all-adapters = [
     "postgres",
     "kafka",
@@ -108,6 +113,7 @@ all-adapters = [
     "fix",
     "prometheus",
     "web",
+    "iceoryx2",
 ]
 
 [dependencies]

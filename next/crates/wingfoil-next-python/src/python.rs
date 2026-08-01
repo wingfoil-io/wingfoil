@@ -755,6 +755,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(aeron_pub, m)?)?;
         m.add_function(wrap_pyfunction!(aeron_pub_with_status, m)?)?;
     }
+    #[cfg(feature = "iceoryx2")]
+    {
+        use crate::adapters::iceoryx2::{iceoryx2_pub, iceoryx2_sub};
+        m.add_function(wrap_pyfunction!(iceoryx2_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(iceoryx2_pub, m)?)?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;

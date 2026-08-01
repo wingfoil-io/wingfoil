@@ -8,6 +8,8 @@ on:
       - 'next/crates/wingfoil-next/src/adapters/iceoryx2/**'
       - 'next/crates/wingfoil-next/tests/iceoryx2_adapter.rs'
       - 'next/crates/wingfoil-next/tests/iceoryx2_integration.rs'
+      - 'next/crates/wingfoil-next-python/src/adapters/iceoryx2.rs'
+      - 'next/crates/wingfoil-next-python/tests/test_iceoryx2.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -50,5 +52,40 @@ jobs:
         run: |
           cargo test --features iceoryx2-integration-test -p wingfoil-next \
             -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
+      # --- Python bindings (wingfoil-next-python) ---
+      # Daemonless here too: nothing to start, the marker only keeps a live-clock
+      # tier out of the default run.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the next Python bindings
+        working-directory: next/crates/wingfoil-next-python
+        # iceoryx2 is out of the wheel's default features (Linux/POSIX-only), so
+        # it is requested explicitly here.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop -F extension-module,iceoryx2
+
+      # As with aeron: `test_iceoryx2.py` skips itself when the module lacks the
+      # surface, and an all-skipped run still exits 0 — so prove it is in.
+      - name: Check the iceoryx2 surface is present
+        working-directory: next/crates/wingfoil-next-python
+        run: .venv/bin/python -c "import wingfoil_next as wf; assert hasattr(wf, 'iceoryx2_sub')"
+
+      - name: Run Python iceoryx2 (next) integration tests
+        working-directory: next/crates/wingfoil-next-python
+        run: .venv/bin/pytest -m requires_iceoryx2 tests/test_iceoryx2.py -v
         env:
           RUST_LOG: INFO
