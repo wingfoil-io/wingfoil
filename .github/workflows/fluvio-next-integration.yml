@@ -72,22 +72,17 @@ jobs:
       # register the SPU with it *before* the SPU process connects (otherwise
       # the SC closes the connection), then exec the SPU into the same
       # container.
-      # The image ships only `/fluvio-run` (the server), not the `fluvio` CLI,
-      # so the admin calls below run from a CLI installed on the *runner*. Host
-      # networking means it reaches the SC at 127.0.0.1:9003 directly. The CLI
-      # is pinned to the same platform version as the image; a mismatched CLI
-      # and server disagree about the admin protocol.
-      - name: Install the Fluvio CLI
-        run: |
-          set -euo pipefail
-          curl -fsS https://hub.infinyon.cloud/install/install.sh | VERSION=0.18.1 bash
-          echo "$HOME/.fluvio/bin" >> "$GITHUB_PATH"
-
+      # Bootstrapping the cluster needs two `FluvioAdmin` calls — register the
+      # SPU with the SC *before* the SPU process connects (or the SC closes the
+      # connection), then create the topic. Neither has a shell equivalent
+      # available here: the image ships only `/fluvio-run`, not the `fluvio`
+      # CLI, and this runner has no network route to hub.infinyon.cloud to
+      # install one. So they run through the `fluvio_admin` example, which is
+      # the same code `tests/fluvio_integration.rs` uses and is already built
+      # by the feature set this job compiled above.
       - name: Start a Fluvio cluster for Python tests
         run: |
           set -euo pipefail
-          fluvio version || true
-
           docker run -d --name fluvio-next-py --network host \
             infinyon/fluvio:0.18.1 \
             /bin/sh -c '/fluvio-run sc --local /tmp/fluvio & wait'
@@ -101,27 +96,8 @@ jobs:
           done
           nc -z localhost 9003 || (echo "fluvio SC never became ready" && exit 1)
 
-          # Point the CLI at the SC. Written directly rather than via
-          # `fluvio profile add`, whose argument order has moved between
-          # releases; the config format is stable and this is unambiguous.
-          mkdir -p "$HOME/.fluvio"
-          printf '%s\n' \
-            'version = "2"' \
-            'current_profile = "local"' \
-            '[profile.local]' \
-            'cluster = "local"' \
-            '[cluster.local]' \
-            'endpoint = "127.0.0.1:9003"' \
-            'use_spu_local_address = true' \
-            > "$HOME/.fluvio/config"
-          fluvio profile list || true
-
-          # Register the SPU *before* starting it: the SC closes the connection
-          # of an SPU it does not know about.
-          fluvio cluster spu register \
-            --id 5001 \
-            --public-server 127.0.0.1:9010 \
-            --private-server 127.0.0.1:9011
+          cargo run --features fluvio-integration-test --example fluvio_admin \
+            -- register-spu 127.0.0.1:9003
 
           docker exec -d fluvio-next-py /bin/sh -c \
             '/fluvio-run spu --id 5001 \
@@ -137,10 +113,9 @@ jobs:
           done
           nc -z localhost 9010 || (echo "fluvio SPU never became ready" && exit 1)
 
-          fluvio cluster spu list || true
-
           # `fluvio_pub` requires the topic to exist.
-          fluvio topic create py-fluvio-test
+          cargo run --features fluvio-integration-test --example fluvio_admin \
+            -- create-topic 127.0.0.1:9003 py-fluvio-test
 
       - name: Set up Python
         uses: actions/setup-python@v5

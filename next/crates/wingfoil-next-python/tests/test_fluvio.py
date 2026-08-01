@@ -16,10 +16,12 @@ Unlike redis / etcd / kafka, a Fluvio cluster cannot be started with a single
 connects, or the SC closes the connection. The workflow mirrors the sequence
 ``next/crates/wingfoil-next/tests/fluvio_integration.rs`` documents, on the
 fixed host-network ports that harness pins (SC 9003, SPU 9010). Note the
-``infinyon/fluvio`` image ships only ``/fluvio-run`` — the admin calls need the
-``fluvio`` CLI, which the workflow installs on the runner.
+``infinyon/fluvio`` image ships only ``/fluvio-run``, and CI has no route to
+install the ``fluvio`` CLI — so the workflow makes those admin calls through
+the ``fluvio_admin`` example in ``wingfoil-next``, the same code the Rust
+harness uses.
 
-Local setup (with the CLI already installed)::
+Local setup (with the CLI installed)::
 
     fluvio cluster start --local
     fluvio topic create py-fluvio-test
