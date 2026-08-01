@@ -1188,7 +1188,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis landed*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1220,8 +1220,14 @@ tests covered — not "legacy pytest passes unchanged."
   *packaging* decision for released wheels (kafka is out of it: librdkafka
   builds from source and costs minutes, though it needs no system library).
 
-  **Remaining: 13.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — csv, redis, etcd, fluvio, zmq (kafka ✓): a scalar/bytes
+  **redis** followed, and factored the sink-side marshaling out: `RecordDict`
+  in `crate::adapters::common` is the record-`dict` reader every sink binding
+  needs (a required payload, an optional key, a name with a caller-supplied
+  fallback), each accessor failing loudly. kafka was migrated onto it in the
+  same PR.
+
+  **Remaining: 12.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — csv, etcd, fluvio, zmq (kafka ✓, redis ✓): a scalar/bytes
     payload over the free-fn form, close to copy-postgres-and-shrink;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;

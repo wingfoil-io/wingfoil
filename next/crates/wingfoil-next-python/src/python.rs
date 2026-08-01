@@ -658,6 +658,14 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(kafka_sub, m)?)?;
         m.add_function(wrap_pyfunction!(kafka_pub, m)?)?;
     }
+    #[cfg(feature = "redis")]
+    {
+        use crate::adapters::redis::{redis_pub, redis_stream_read, redis_stream_write, redis_sub};
+        m.add_function(wrap_pyfunction!(redis_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(redis_pub, m)?)?;
+        m.add_function(wrap_pyfunction!(redis_stream_read, m)?)?;
+        m.add_function(wrap_pyfunction!(redis_stream_write, m)?)?;
+    }
     // `m` is unused when no adapter feature is on.
     let _ = m;
     Ok(())

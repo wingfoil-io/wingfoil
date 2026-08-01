@@ -45,7 +45,7 @@
 //!    topics. Pass `topic` to supply the default for dicts that omit it — a dict
 //!    with neither is an error rather than a publish to `""`.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::Result;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use wingfoil_next::adapters::kafka::{
@@ -53,8 +53,11 @@ use wingfoil_next::adapters::kafka::{
 };
 use wingfoil_next::prelude::{Burst, GraphBuilder, Stream, StreamOps};
 
-use crate::adapters::common::run_mode;
+use crate::adapters::common::{RecordDict, record_dict, run_mode};
 use crate::{PyElement, pyadapter};
+
+/// The error-message prefix for the sink's marshaling failures.
+const WHO: &str = "kafka_pub";
 
 // ---------------------------------------------------------------------------
 // Reading: an event -> a Python dict.
@@ -117,56 +120,24 @@ impl From<KafkaEvent> for PyElement {
 /// names the field, so a malformed value aborts the run rather than publishing
 /// an empty or mis-topiced record.
 fn dict_to_record(dict: &Bound<'_, PyDict>, default_topic: Option<&str>) -> Result<KafkaRecord> {
-    let field = |name: &str| {
-        dict.get_item(name)
-            .map_err(|e| anyhow!("kafka_pub: reading key '{name}': {e}"))
-    };
-
-    let topic = match field("topic")? {
-        Some(v) if !v.is_none() => v
-            .extract::<String>()
-            .map_err(|e| anyhow!("kafka_pub: 'topic' must be a str: {e}"))?,
-        _ => default_topic
-            .ok_or_else(|| {
-                anyhow!(
-                    "kafka_pub: record has no 'topic' and no default was given \
-                     (pass topic=… to kafka_pub)"
-                )
-            })?
-            .to_string(),
-    };
-
-    let key = match field("key")? {
-        Some(v) if !v.is_none() => Some(
-            v.extract::<Vec<u8>>()
-                .map_err(|e| anyhow!("kafka_pub: 'key' must be bytes-like: {e}"))?,
-        ),
-        _ => None,
-    };
-
-    let value = field("value")?
-        .ok_or_else(|| anyhow!("kafka_pub: record is missing 'value'"))?
-        .extract::<Vec<u8>>()
-        .map_err(|e| anyhow!("kafka_pub: 'value' must be bytes-like: {e}"))?;
-
-    Ok(KafkaRecord { topic, key, value })
+    let record = RecordDict::new(dict, WHO);
+    Ok(KafkaRecord {
+        topic: record.str_or("topic", default_topic, "topic")?,
+        key: record.opt_bytes("key")?,
+        value: record.bytes("value")?,
+    })
 }
 
 /// Marshal one erased stream value — a Python `dict` — into a record.
 fn element_to_record(elem: &PyElement, default_topic: Option<&str>) -> Result<KafkaRecord> {
-    if elem.is_none() {
-        bail!("kafka_pub: stream value is empty (the upstream produced no value)");
-    }
     Python::attach(|py| {
-        let obj = elem.object().bind(py);
-        let dict = obj.cast::<PyDict>().map_err(|_| {
-            anyhow!(
-                "kafka_pub: stream value must be a dict with 'value' (and optionally \
-                 'topic' / 'key'), or a list of such dicts, got {}",
-                obj.get_type()
-            )
-        })?;
-        dict_to_record(dict, default_topic)
+        let dict = record_dict(
+            elem,
+            py,
+            WHO,
+            "with 'value' (and optionally 'topic' / 'key')",
+        )?;
+        dict_to_record(&dict, default_topic)
     })
 }
 
