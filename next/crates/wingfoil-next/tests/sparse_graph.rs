@@ -123,6 +123,211 @@ fn quiet_subgraph_is_not_cycled_on_unrelated_ticks() {
     );
 }
 
+/// **The Phase 4.5 perf gate.** The dirty-list's headline claim is that
+/// per-cycle work is proportional to the *active* node count and not to the
+/// graph size `N`. `benches/store_baseline.rs` measures that in wall-clock, but
+/// nothing runs benchmarks in CI and a timing ratio is not a pass/fail signal —
+/// so the claim is pinned here instead, exactly and deterministically, via
+/// [`Runner::node_visits`] (nodes the dispatch loop had to look at, fired or
+/// not).
+///
+/// The graph is one hot chain that fires every cycle, plus `cold` idle branches
+/// hung off a driver whose period exceeds the whole run — so the padding
+/// contributes to `N` and, after the first cycle, nothing to the active set.
+///
+/// The invariant is *not* that padding is free outright: every ticker is due at
+/// `t = 0`, so the cold branches genuinely fire once, and counting that is
+/// correct. The claim is that padding costs a **one-off**, never a per-cycle
+/// tax. So the gate measures what the padding adds, `visits(wide) −
+/// visits(narrow)`, at two run lengths 10x apart and asserts the two deltas are
+/// *equal*: a cost that does not grow with cycles is a cost the per-cycle loop
+/// does not pay. The full-sweep oracle is measured the same way as a
+/// sensitivity check — its delta scales with the run length, which is what
+/// proves this metric would catch a regression to an all-nodes sweep rather
+/// than being trivially constant.
+///
+/// Scope, precisely: this pins independence from the node *count*, with shallow
+/// (dangling) padding. Independence from graph *depth* is a separate property
+/// with its own gate — see `quiet_depth_does_not_cost_per_cycle` below.
+#[test]
+fn sparse_work_is_independent_of_graph_size() {
+    const HOT: Duration = Duration::from_nanos(10);
+    // 1ms ≫ the simulated time these runs cover, so after the `t = 0` tick the
+    // cold driver is never due again.
+    const NEVER: Duration = Duration::from_millis(1);
+    const NARROW: usize = 8;
+    const WIDE: usize = 512;
+    const SHORT: u32 = 200;
+    const LONG: u32 = 2_000;
+
+    /// One hot chain (fires every cycle) + `cold` idle branches. Returns the
+    /// run's node-visit count and the hot output, so padding can be checked not
+    /// to perturb results either.
+    fn run_padded(cold: usize, cycles: u32, dispatch: Dispatch) -> (u64, Vec<u64>) {
+        let g = GraphBuilder::new();
+
+        let mut hot = g.ticker(HOT).count();
+        for _ in 0..4 {
+            hot = hot.map(|v| v.wrapping_add(1));
+        }
+        let out = hot.accumulate();
+
+        // Padding: present in `N`, absent from every work set after cycle 0.
+        // Handles are retained so nothing can be mistaken for dead and dropped.
+        let cold_driver = g.ticker(NEVER).count();
+        let _padding: Vec<_> = (0..cold)
+            .map(|_| cold_driver.map(|v| v.wrapping_mul(3)).accumulate())
+            .collect();
+
+        let mut r = g.build().with_dispatch(dispatch);
+        r.run(HISTORICAL, RunFor::Cycles(cycles)).unwrap();
+        (r.node_visits(), r.value(&out))
+    }
+
+    /// What `WIDE − NARROW` extra cold branches cost over a run of `cycles`.
+    fn padding_cost(cycles: u32, dispatch: Dispatch) -> u64 {
+        let (narrow, out_narrow) = run_padded(NARROW, cycles, dispatch);
+        let (wide, out_wide) = run_padded(WIDE, cycles, dispatch);
+        // Padding must not perturb results either — a sanity check that the
+        // wide graph really was built and really did run.
+        assert_eq!(out_narrow, out_wide, "cold padding changed the hot output");
+        assert!(!out_narrow.is_empty(), "hot chain produces a series");
+        wide - narrow
+    }
+
+    let sparse_short = padding_cost(SHORT, Dispatch::Sparse);
+    let sparse_long = padding_cost(LONG, Dispatch::Sparse);
+
+    // The gate: the padding's cost is a constant, not a rate. Sitting quietly
+    // in the graph for 10x as many cycles must not cost a quiet node anything.
+    assert_eq!(
+        sparse_short, sparse_long,
+        "{WIDE} vs {NARROW} cold branches cost {sparse_short} extra node visits \
+         over {SHORT} cycles but {sparse_long} over {LONG} — quiet nodes are \
+         being charged per cycle, so per-cycle work tracks N, not the active set"
+    );
+
+    // Sensitivity: the same measurement on the retained `O(N)` oracle *must*
+    // scale with the run length. Without this, the assertion above would still
+    // pass if `node_visits` were accidentally counting something constant.
+    let full_short = padding_cost(SHORT, Dispatch::FullSweep);
+    let full_long = padding_cost(LONG, Dispatch::FullSweep);
+    assert!(
+        full_long > full_short * 5,
+        "the full-sweep oracle should pay for every cold node every cycle \
+         ({full_short} extra visits over {SHORT} cycles -> {full_long} over \
+         {LONG}) — if it does not, node_visits is not measuring per-cycle \
+         graph-size sensitivity"
+    );
+    // And the gap itself: on the long run the oracle pays orders of magnitude
+    // more for the same quiet nodes — the ≪ that `Dispatch::Sparse` exists for.
+    assert!(
+        sparse_long * 100 < full_long,
+        "sparse pays {sparse_long} for the padding over {LONG} cycles, \
+         full-sweep {full_long} — expected the sparse engine to be far cheaper"
+    );
+}
+
+/// **The depth half of the perf gate.** `sparse_work_is_independent_of_graph_size`
+/// pins independence from the node *count*; this pins independence from graph
+/// *depth*, which was a real cost until the drain stopped walking empty buckets.
+///
+/// The drain has to visit occupied layers in ascending order. Walking
+/// `0..=max_layer` and testing each bucket makes that `O(depth)` per cycle — and
+/// depth is not exotic: `fan` left-folds its branches into a binary merge chain,
+/// so a 256-way fan-in is a ~256-deep graph. A mostly-quiet graph then pays for
+/// its depth on every single cycle. The drain now finds occupied layers through
+/// a bitmask instead, so quiet depth costs `depth/64` word tests rather than
+/// `depth` bucket tests.
+///
+/// The shape matters, and it is the benchmark's shape rather than the obvious
+/// one. Dangling quiet depth proves nothing: with nothing active above it,
+/// `max_layer` stays down at the hot chain and *no* strategy ever looks at those
+/// layers. The pathology needs an **active node sitting above the quiet depth** —
+/// exactly what `hot.merge(&deep_quiet_chain)` produces, and exactly what `fan`
+/// emits, since its merge tree makes the join layer proportional to the branch
+/// count. Then `max_layer` is high on every cycle while nearly every bucket
+/// under it is empty.
+///
+/// The metric is [`Runner::layer_visits`], which counts buckets opened *plus
+/// words examined looking for them*. Counting only the buckets would be a
+/// tautology: both strategies open the identical set, and differ solely in how
+/// much they examine to find it.
+///
+/// The assertion is a ratio, not an equality. Quiet depth is not free even with
+/// the bitmask — it costs `depth/64` word tests per cycle — so what is pinned is
+/// that the per-cycle marginal cost of the extra depth is a *small fraction* of
+/// that depth. A walk of every bucket costs ~1 per layer per cycle and misses
+/// the bound by ~64x; the bitmask comes in at ~1/64 and passes with room to
+/// spare. Deterministic integers throughout — the margin absorbs implementation
+/// detail, not measurement noise.
+#[test]
+fn quiet_depth_does_not_cost_per_cycle() {
+    const HOT: Duration = Duration::from_nanos(10);
+    const NEVER: Duration = Duration::from_millis(1);
+    const SHALLOW: usize = 2;
+    const DEEP: usize = 320;
+    const SHORT: u32 = 200;
+    const LONG: u32 = 2_200;
+    /// The drain must examine at most `1/SKIP_FACTOR` of the quiet layers it
+    /// skips. Set well inside the bitmask's 64x so the gate tracks the property
+    /// and not the word size, but far outside a per-bucket walk's 1x.
+    const SKIP_FACTOR: u64 = 8;
+
+    /// The same hot chain either way, joined to a quiet chain of `quiet_depth`
+    /// merge/map pairs. The join is active every cycle and sits above the whole
+    /// quiet chain, so `max_layer` tracks the quiet depth even though none of it
+    /// fires.
+    fn run_with_depth(quiet_depth: usize, cycles: u32) -> (u64, Vec<u64>) {
+        let g = GraphBuilder::new();
+
+        let mut hot = g.ticker(HOT).count();
+        for _ in 0..4 {
+            hot = hot.map(|v| v.wrapping_add(1));
+        }
+
+        // Quiet chain: driven by a ticker due only at `t = 0`.
+        let cold = g.ticker(NEVER).count();
+        let mut deep = cold.map(|v| v.wrapping_mul(3));
+        for _ in 0..quiet_depth {
+            deep = deep.merge(&cold).map(|v| v.wrapping_add(1));
+        }
+
+        // The join — active on every hot tick, layered above all the quiet depth.
+        let out = hot.merge(&deep).accumulate();
+
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Cycles(cycles)).unwrap();
+        (r.layer_visits(), r.value(&out))
+    }
+
+    /// What burying `DEEP - SHALLOW` quiet layers costs over a run of `cycles`.
+    fn depth_cost(cycles: u32) -> u64 {
+        let (shallow, shallow_out) = run_with_depth(SHALLOW, cycles);
+        let (deep, deep_out) = run_with_depth(DEEP, cycles);
+        assert_eq!(
+            shallow_out.len(),
+            deep_out.len(),
+            "quiet depth changed how often the hot chain produced"
+        );
+        assert!(!shallow_out.is_empty(), "hot chain produces a series");
+        deep - shallow
+    }
+
+    // Marginal per-cycle cost of the extra depth: the one-off `t = 0` activation
+    // cancels in the difference, leaving only what each additional cycle paid.
+    let extra_depth = (DEEP - SHALLOW) as u64;
+    let marginal = (depth_cost(LONG) - depth_cost(SHORT)) / (LONG - SHORT) as u64;
+
+    assert!(
+        marginal * SKIP_FACTOR < extra_depth,
+        "each cycle examined {marginal} layer-scan steps for {extra_depth} quiet \
+         layers — expected under {} (a walk of every bucket costs ~1 per layer; \
+         the occupied-layer bitmask should cost ~1/64)",
+        extra_depth / SKIP_FACTOR
+    );
+}
+
 /// Randomised differential parity: build many pseudo-random graphs and assert
 /// the sparse engine and the retained full-sweep oracle agree on every one. A
 /// single hand-wired graph (see `sparse_matches_full_sweep_oracle`) only covers
