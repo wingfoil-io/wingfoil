@@ -25,7 +25,8 @@
     feature = "augurs",
     feature = "kdb",
     feature = "fix",
-    feature = "aeron"
+    feature = "aeron",
+    feature = "iceoryx2"
 ))]
 pub mod common;
 
@@ -41,6 +42,8 @@ pub mod etcd;
 pub mod fix;
 #[cfg(feature = "fluvio")]
 pub mod fluvio;
+#[cfg(feature = "iceoryx2")]
+pub mod iceoryx2;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 #[cfg(feature = "kdb")]

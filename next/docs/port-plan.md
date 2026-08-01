@@ -1613,7 +1613,21 @@ tests covered — not "legacy pytest passes unchanged."
   including the historical-run rejection — otherwise a Python caller's typo
   reports itself as a driver timeout.
 
-  **Remaining: 1.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **iceoryx2** closed the port. Two entry points over the **slice** API — Python
+  has no `ZeroCopySend` type to name, so `[u8]` is the only surface it can use,
+  which is what legacy did too. Unlike aeron it is pure Rust, so it *is* in
+  `all-adapters` and its tests run in the normal job; it stays out of the
+  **wheel** for a different reason — Linux/POSIX-only. `variant` and `mode`
+  become strings (legacy had two `#[pyclass]` enums). One legacy capability is
+  deliberately **not** ported: the `stages` latency-tracing path, which split a
+  `[u64; N]` header off each sample into `TracedBytes` / `Latency` pyclasses.
+  Those belong to legacy's `latency` module, which has no next equivalent yet;
+  they return with the tracing port, and that is recorded here rather than
+  faked. Its round-trip tier needs no service at all — the `"local"` variant
+  talks in-process over the heap, and `"ipc"` is daemonless.
+
+  **Remaining: 0 — the Python binding surface is complete.** Legacy
+  `wingfoil-python` binds 15 adapters, in four tiers, all now done:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — **done**: kdb, fix;
   - *handle pyclass* — **done**: prometheus (`PrometheusExporter`), web
@@ -1621,8 +1635,8 @@ tests covered — not "legacy pytest passes unchanged."
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;
-  - *system-library* — **aeron done**; iceoryx2 remains: out of the
-    `all-adapters` roll-up and out of the wheel, tested in their own workflows;
+  - *platform-specific* — **done**: aeron (out of both roll-ups — it builds a C
+    library), iceoryx2 (in `all-adapters`, out of the wheel — Linux/POSIX-only);
   - *stream transform* — **done**: otlp, augurs. Legacy exposed these as
     `stream.method(…)`; next uses free fns, a deliberate ergonomic deviation
     for uniformity with the plugin story.
