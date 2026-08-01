@@ -14,20 +14,15 @@ Two groups:
 Unlike redis / etcd / kafka, a Fluvio cluster cannot be started with a single
 ``docker run``: the SC must be told about the SPU *before* the SPU process
 connects, or the SC closes the connection. The workflow mirrors the sequence
-``next/crates/wingfoil-next/tests/fluvio_integration.rs`` documents — start the
-SC, ``fluvio cluster spu register``, then exec the SPU into the same container —
-using host networking on the fixed ports that harness pins (SC 9003, SPU 9010).
+``next/crates/wingfoil-next/tests/fluvio_integration.rs`` documents, on the
+fixed host-network ports that harness pins (SC 9003, SPU 9010). Note the
+``infinyon/fluvio`` image ships only ``/fluvio-run`` — the admin calls need the
+``fluvio`` CLI, which the workflow installs on the runner.
 
-Local setup::
+Local setup (with the CLI already installed)::
 
-    docker run -d --name fluvio --network host infinyon/fluvio:0.18.1 \
-        /bin/sh -c '/fluvio-run sc --local /tmp/fluvio & wait'
-    docker exec fluvio fluvio cluster spu register --id 5001 \
-        --public-server 127.0.0.1:9010 --private-server 127.0.0.1:9011
-    docker exec -d fluvio /bin/sh -c '/fluvio-run spu --id 5001 \
-        --public-server 127.0.0.1:9010 --private-server 127.0.0.1:9011 \
-        --sc-addr 127.0.0.1:9004 --log-base-dir /tmp/fluvio &'
-    docker exec fluvio fluvio topic create py-fluvio-test
+    fluvio cluster start --local
+    fluvio topic create py-fluvio-test
 """
 
 import threading
