@@ -8,6 +8,8 @@ on:
       - 'next/crates/wingfoil-next/src/adapters/aeron/**'
       - 'next/crates/wingfoil-next/tests/aeron_adapter.rs'
       - 'next/crates/wingfoil-next/tests/aeron_integration.rs'
+      - 'next/crates/wingfoil-next-python/src/adapters/aeron.rs'
+      - 'next/crates/wingfoil-next-python/tests/test_aeron.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -68,3 +70,72 @@ jobs:
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
+
+      # --- Python bindings (wingfoil-next-python) ---
+      # The Rust tests drive the driver container through testcontainers; the
+      # Python ones need it at a known AERON_DIR, so start one explicitly with
+      # the same /dev/shm bind mount and uid so the CNC file is shared and
+      # writable (see `start_media_driver` in tests/aeron_integration.rs).
+      - name: Start an Aeron media driver for the Python tests
+        run: |
+          sudo rm -rf /dev/shm/aeron-next-python
+          docker run -d --name aeron-driver-py \
+            -v /dev/shm:/dev/shm \
+            -e AERON_DIR=/dev/shm/aeron-next-python \
+            --user "$(id -u):$(id -g)" \
+            neomantra/aeron-cpp-debian:latest
+          for i in $(seq 1 30); do
+            [ -f /dev/shm/aeron-next-python/cnc.dat ] && echo "driver ready" && break
+            echo "Waiting for the CNC file... ($i/30)"
+            sleep 1
+          done
+          test -f /dev/shm/aeron-next-python/cnc.dat \
+            || (echo "aeronmd never created its CNC file" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the next Python bindings with the aeron feature
+        working-directory: next/crates/wingfoil-next-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop -F extension-module,aeron
+
+      # `test_aeron.py` skips itself when the module lacks the aeron surface, and
+      # an all-skipped run still exits 0 — so assert the feature is actually in
+      # the build rather than letting a silent skip look like a pass.
+      - name: Check the aeron surface is present
+        working-directory: next/crates/wingfoil-next-python
+        run: |
+          export LD_LIBRARY_PATH="$(dirname "$(find "$GITHUB_WORKSPACE/target" \
+            -name libaeron.so | head -1)")"
+          .venv/bin/python -c "import wingfoil_next as wf; assert hasattr(wf, 'aeron_sub')"
+
+      - name: Run Python aeron (next) integration tests
+        working-directory: next/crates/wingfoil-next-python
+        # The extension links libaeron.so dynamically out of the rusteron build
+        # directory, which is not on the loader path.
+        run: |
+          export LD_LIBRARY_PATH="$(dirname "$(find "$GITHUB_WORKSPACE/target" \
+            -name libaeron.so | head -1)")"
+          .venv/bin/pytest -m requires_aeron tests/test_aeron.py -v
+        env:
+          AERON_DIR: /dev/shm/aeron-next-python
+          RUST_LOG: INFO
+
+      - name: Dump media driver logs on failure
+        if: failure()
+        run: docker logs aeron-driver-py
+
+      - name: Stop the media driver
+        if: always()
+        run: docker rm -f aeron-driver-py || true

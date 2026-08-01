@@ -68,9 +68,16 @@ Each binding lives behind a `wingfoil-next-python` cargo feature of the **same
 name** as the adapter, which turns on the matching engine feature:
 
 ```toml
-$ARGUMENTS = ["wingfoil-next/$ARGUMENTS"]           # + any dep: it names directly
+$ARGUMENTS = ["wingfoil-next/$ARGUMENTS", "_common"]  # + any dep: it names directly
 all-adapters = ["postgres", "$ARGUMENTS", ...]
 ```
+
+`_common` is internal: `adapters::common` is compiled for *any* adapter and
+names `async_source::RunParams`, so every adapter feature must reach
+`wingfoil-next/async` through it. Leaving it off still builds under
+`all-adapters` — some other adapter supplies `async` — and fails only for
+someone building yours alone. Verify with
+`cargo check -p wingfoil-next-python --features $ARGUMENTS`.
 
 Add a comment saying what the feature exposes, as the `postgres` entry does.
 
@@ -87,10 +94,30 @@ Two roll-ups to keep straight:
   `all-adapters` without also adding the install step to that workflow. Say
   which you did in the PR.
 - **`[tool.maturin] features` in `pyproject.toml`** is what ships in the default
-  wheel. Features are listed one by one there on purpose — adding one is a
+  wheel. A published wheel is the only copy a user gets, so ship everything you
+  can; the criterion for leaving one out is **portability**, not build time. Features are listed one by one there on purpose — adding one is a
   considered decision. Pure-Rust adapters can ship by default; anything needing
   a system library stays opt-in (`maturin develop -F $ARGUMENTS`) or it breaks
   the wheel build for everyone.
+
+`aeron` is the worked example of an adapter that stays out of both: it builds
+the Aeron C library from source, so it is opt-in via `maturin develop -F aeron`
+and tested only in its own workflow. Two consequences to plan for:
+
+- your Rust `#[cfg(test)]` tests do **not** run in `next-python-test.yml` — the
+  adapter workflow's Python leg is their only home, so make that leg run them
+  (or say plainly in the PR that they do not run there);
+- **`maturin develop -F x` REPLACES the `pyproject.toml` feature list, it does
+  not add to it.** So an opt-in leg must spell out `-F extension-module,x`, and
+  the feature must be **self-sufficient on its own**. Check it:
+  `cargo check -p wingfoil-next-python --features <name>` — the `all-adapters`
+  roll-up hides a missing implication, because some other adapter supplies it.
+  `adapters::common` names `async_source::RunParams`, so every adapter feature
+  has to reach `wingfoil-next/async` — that is what the internal `_common`
+  feature is for, and your new feature must list it;
+- a dynamically-linked native library (aeron's `libaeron.so`) lives in the
+  cargo build directory and is not on the loader path, so the pytest step needs
+  `LD_LIBRARY_PATH` pointed at it or the extension fails to *import*.
 
 ## 3. Module registration
 
@@ -224,6 +251,13 @@ with a message naming the field and listing what *is* supported. Never a silent
 `NULL`, `None`, or empty string. (Legacy prometheus/otlp do
 `elem.str().unwrap_or_default()` — a failed conversion becomes an empty string.
 Do not port that; note it as a deviation.)
+
+**Validate every argument before contacting the service.** A binding that
+resolves a connection at wiring (aeron through the media driver, kdb's
+credentials) must run its own checks first — otherwise a caller's typo in
+`mode=` or `realtime=` reports itself as a *driver timeout*, and costs a
+connect attempt to say so. Where the engine's own check comes too late, repeat
+it in the binding rather than accept the worse message.
 
 **Prefer string arguments to `#[pyclass]` enums** for mode/type selectors, with
 a loud error listing the accepted values — the convention postgres set for SQL
