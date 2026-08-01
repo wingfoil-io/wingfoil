@@ -26,6 +26,7 @@ extern crate self as wingfoil_next_python;
 pub mod adapters;
 pub mod element;
 pub mod graph;
+pub mod island;
 #[macro_use]
 mod macros;
 mod python;

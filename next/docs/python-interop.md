@@ -1,8 +1,12 @@
 # Python interop — user-authored Rust components, composed and extended from Python
 
-**Status:** partially landed (the plugin-SDK layer — `#[pyop]` (stateless,
-stateful, one- and two-input), `#[pygraph]`, source `#[pyadapter]`, and the
-`#[pyadapter]` (source, sink, and burst), and the object form — is built).
+**Status:** the plugin-SDK layer is **built** — the object form, `#[pyop]`
+(one to four inputs, stateless or stateful, tuple configs), `#[pygraph]` (any
+arity, optional builder, including compiled islands), `#[pyadapter]` (source,
+sink, burst, fallible, defaults), the edge conversions, and Python-defined
+nodes in both the composition and subclass forms. What remains is breadth, not
+mechanism: the per-adapter bindings (postgres done, seven to go) and the
+Phase 4.5 mutable frontier for extending a *running* graph.
 **`wingfoil-next-python`
 is the go-forward Python binding: it supersedes the legacy `wingfoil-python`
 bindings (decision 2026-07), it is not a new capability bolted beside a
@@ -221,42 +225,51 @@ as a Python callable that **splices its nodes into the caller's builder** and
 returns erased handles — so Python can wire onward from its outputs.
 
 ```rust
-#[pygraph(name = "vwap_pipeline")]
-pub fn vwap_pipeline(g: &mut GraphBuilder, trades: Handle<Trade>) -> Handle<f64> {
-    let px  = g.register_op1(trades, /* price */ ..);
-    let vol = g.register_op1(trades, /* size  */ ..);
-    // ... six-node vwap sub-graph ...
-    vwap
+#[pygraph(name = vwap_pipeline)]
+fn build_vwap(trades: &Stream<Trade>) -> Stream<f64> {
+    // ... six-node vwap sub-graph, all at native `Trade`/`f64` ...
 }
-// => wingfoil.vwap_pipeline(trades: PyStream) -> PyStream, nodes spliced into the live builder
+// => wingfoil_next.vwap_pipeline(trades) -> Stream, nodes spliced into the live builder
 ```
+
+Any arity works: N `&Stream<T>` inputs, and a tuple return becomes a Python
+tuple of streams. A leading `&GraphBuilder` — for wiring that creates nodes of
+its own rather than only extending its inputs — makes the generated callable
+take the graph first, `vwap_pipeline(graph, trades)`. With the builder and *no*
+stream inputs, the sub-graph is a source. As with `#[pygraph]`'s other rule,
+`name` must differ from the wiring fn's own name.
 
 ## Worked example — all three, composed and extended from Python
 
 ```python
-import wingfoil as wf
-from my_plugin import my_socket_source, vwap_pipeline   # user's Rust cdylib
+import wingfoil_next as wf
+from my_plugin import my_socket_source, vwap_pipeline, zscore   # user's Rust cdylib
 
-g = wf.GraphBuilder()
+g = wf.Graph()
 
-# 1. user Rust IO adapter (source)
-trades = g.my_socket_source("tcp://feed:9000")
+# 1. user Rust IO adapter (source) — #[pyadapter(source)]
+trades = my_socket_source(g, "tcp://feed:9000")
 
-# 2. user Rust wiring logic, reused — nodes spliced into g
+# 2. user Rust wiring logic, reused — #[pygraph], nodes spliced into g
 vwap = vwap_pipeline(trades)
 
-# 3. user Rust op, reused
-z = vwap.zscore(window=100)
+# 3. user Rust op, reused — #[pyop]
+z = zscore(vwap, window=100)
 
-# 4. EXTEND in Python: mix built-ins + a Python closure + another user op
+# 4. EXTEND in Python: mix built-ins with a Python closure
 signal = (z
           .filter(z.map(lambda v: abs(v) > 3.0))   # built-in filter + Python map
-          .throttle("1s")                          # built-in
+          .throttle(interval_nanos=1_000_000_000)  # built-in
           .distinct())                             # built-in
 
 signal.print()
 g.run(realtime=True)
 ```
+
+Note the shapes pyo3 forces: a user op or adapter is a **free function**
+(`zscore(vwap, …)`, not `vwap.zscore(…)`) because `#[pymethods]` cannot be added
+to a foreign pyclass; and a source takes the graph explicitly, since Python has
+no ambient graph.
 
 Every node above — user adapter, user sub-graph, user op, built-ins, and a raw
 Python lambda — is a peer in one erased interpreted graph. That is the whole
@@ -268,7 +281,10 @@ The Python lane lives on the **interpreted** engine, so the `compiled()` /
 `nested()` LLVM-fusion path is off the table *for the Python-spliced portion* —
 you cannot splice a Python node into a monomorphized graph. But a user can
 author a hot sub-graph as a **`nested()` compiled island** and expose *that
-island as a single erased node* Python wires around:
+island as a single erased node* Python wires around. **This is built**: an
+island's `nested()` is `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, which is
+exactly a builder-taking `#[pygraph]` wiring fn, so it needed no island-specific
+macro — see `src/island.rs`:
 
 ```
 compiled-speed interior (Rust, nested island)  ──►  dynamic wiring (Python)
@@ -276,8 +292,7 @@ compiled-speed interior (Rust, nested island)  ──►  dynamic wiring (Python
 
 So the envelope is strictly better than legacy: legacy was `PyElement` dynamic
 dispatch on every node; here the expensive interiors run at compiled speed and
-only the wiring seams are dynamic. `#[pygraph(nested)]` would emit the island
-form.
+only the wiring seams are dynamic.
 
 ## What's missing (build list)
 
@@ -291,11 +306,11 @@ form.
 | `pyop_fn!` seam + declarative macro | `PyStream::wire_op1` + `pyop_fn!` for stateless single-input ops | ✅ done (`macros.rs`) |
 | `#[pyop]` **proc** macro | reads an `Op` impl → `#[pyfunction]`; v1 stateless single-input concrete | ✅ done (`wingfoil-next-python-macros`) |
 | `#[pyop]` extensions | **done** — `State` is any `Default`-seedable type (re-seeded per run); `In<'a> = (&A, &B)` emits `module.name(stream, other)` over `wire_op2`, `(&A, &B, &C)` emits `module.name(stream, second, third)` over `wire_op3` / `Builder::register_op3` (the general form of the `Join3`-specialised `trimap`), and `(&A, …, &D)` over `wire_op4` / `register_op4`; stream parameters are named, so they take keywords. A tuple `Cfg` destructures into one named Python parameter per element via `arg = (p1, p2, …)`. The emitter is arity-generic — arity 5+ needs only a `register_op<n>`/`wire_op<n>` pair plus a parameter name. Note this ceiling is on *Rust-authored* ops (heterogeneous static input types, no variadic generics); a Python-defined node via `Graph.custom_node` takes any number of erased upstreams | ✅ done |
-| `#[pygraph]` macro (wiring reuse) | expose a Rust `fn(&Stream<T>) -> Stream<U>` sub-graph as `module.name(stream)`, spliced into the caller's graph; interior runs at native `T`, only the edge erases. Single-input/output v1, over the `PyStream::typed_input`/`erased_output` seam | ✅ done |
+| `#[pygraph]` macro (wiring reuse) | expose a Rust-authored sub-graph as a Python callable, spliced into the caller's graph; interior runs at native types, only the edges erase. **Any arity**: N `&Stream<T>` inputs, and a single `Stream<U>` or a tuple of them out (Python gets a tuple of streams). An optional leading `&GraphBuilder` — for wiring that creates nodes of its own — makes the generated fn take the graph first; builder-only (no stream inputs) is a *source* sub-graph, erasing via `erase_source`. Over the `typed_input`/`erased_output` seams | ✅ done |
 | `#[pyadapter]` macro (source + sink + burst) | **source, sink/transform, and burst adapters done** — `#[pyadapter(name = …, source)]` on `impl Trait for GraphBuilder { … -> Stream<T> }` emits `module.m(graph, …)`; `#[pyadapter(name = …)]` (no marker) on `impl Trait for Stream<T> { … -> Stream<U> }` emits `module.m(stream, …)`. `Stream<Burst<T>>` erases to a Python `list` per tick, and on the way in a Python `list`/`tuple` rebuilds a multi-value burst (else a single-element burst) — so a burst source round-trips into a burst sink. Over the `builder`/`erase_source`/`erase_burst_source` and `typed_input`/`typed_burst_input`/`erased_output`/`erased_burst_output` seams; a sink's `Stream<()>` erases to `None`. Adapter method params must be `FromPyObject`. **Fallible wiring** (`Result<Stream<T>>` → a `PyResult` fn, wiring errors raised as Python exceptions) and **forwarded `#[pyo3(signature = …)]`** (Python defaults for optional args, with the generated receiver injected), and the **free-fn form** (receiver as the first param — no throwaway trait, no duplicated signature; the impl form remains for adapters wanting a fluent Rust trait) landed with the first real adapter binding | ✅ done |
 | Per-adapter Python bindings (`crate::adapters::*`) | The `#[pyadapter]` exposure of the real `wingfoil_next::adapters::*` I/O adapters, each behind a cargo feature of the same name and registered in the `#[pymodule]` under the same `#[cfg]`. **postgres done**: `postgres_read` / `postgres_sub` / `postgres_source` / `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict` edge (`PyPgRow`) and declared-column write marshaling; unit-level marshaling tests plus a service-backed pytest leg in `postgres-next-integration.yml`. Remaining: the other adapters as they are bound | 🟡 postgres done |
-| POC: call a fixed `compiled()` graph from Python | Wire `wingfoil-next` as a path dep; expose one fixed `graph!` wiring (`ticker → count → map(i*i) → accumulate`) as `compiled_squares`/`interpreted_squares` (both from a single wiring so they can't drift). Proved **compiled == interpreted output from Python** across cycle- and duration-bound runs; GIL released for the run; no `.unwrap()` in binding code. Honest limit: **one fixed, compile-time graph** — not general Python-defined-graph codegen (timing ~neutral at that ticker-bound size; a dispatch-heavy graph shows `compiled()`'s win). Consistent with the non-goal below (`compiled()`/`nested()` expose as single island nodes). Revisit against the post-refactor `compiled()` API. | ⬜ (was #506) |
-| Edge-conversion trait bounds | `PyElement <-> f64/i64/bool/String` shipped; `Trade`/user types via user impls | 🟡 scalars done |
+| Compiled graph reachable from Python | **done, and better than the original POC** — rather than one hard-coded `compiled()` graph, a `graph!`-generated **`nested()` island** is exposed through `#[pygraph]`: its signature is `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, i.e. exactly a builder-taking `#[pygraph]` wiring fn, so no island-specific machinery was needed. The interior is monomorphized straight-line code; Python wires around it dynamically. A pytest asserts the island's values *and* tick times match its interpreted twin, and that it composes with Python `map` on both sides. Still true: `compiled()`/`nested()` are not Python-*splittable* — an island is one opaque node | ✅ done |
+| Edge-conversion trait bounds | **done** — every integer width (`i8`…`isize`, `u8`…`usize`), `f32`/`f64`, `bool`, `String`/`&str`, `()`→`None`, `Vec<u8>`→**`bytes`** (not a list of ints), and `Option<T>`→`None`/value with the inner conversion propagating a wrong-typed value as an error rather than a silent `None`. A user record type crosses via its own `From`/`TryFrom` impls — legal from a downstream crate under the orphan rules, proven by a `Trade` struct defined in the external seam-test crate | ✅ done |
 | Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |
 
 ## Constraints / non-goals
@@ -318,7 +333,8 @@ form.
 2. `#[pyop]` first (smallest, highest-leverage; unlocks user ops).
 3. `#[pygraph]` (wiring reuse — the "extend in Python" headline).
 4. `#[pyadapter]` (sources/sinks; leans on the threaded-source plumbing).
-5. `#[pygraph(nested)]` compiled-island form once the above is proven.
+5. ✅ the compiled-island form — which fell out of giving `#[pygraph]` a
+   `&GraphBuilder` parameter, rather than needing a `nested` marker of its own.
 
 One PR per macro; each carries a round-trip test (author in Rust → compose and
 extend in Python → assert values + tick times against the same graph authored

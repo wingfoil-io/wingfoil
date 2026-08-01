@@ -616,3 +616,53 @@ def test_bimap_exception_aborts_run():
     a.bimap(b, boom)
     with pytest.raises(RuntimeError, match="Python bimap callable raised"):
         g.run(cycles=1)
+
+
+def test_pygraph_multi_input_multi_output():
+    """Two streams in, a tuple of two streams out — each wired onward."""
+    g = wf.Graph()
+    bid = g.counter(period_nanos=100).map(lambda n: float(n))
+    ask = g.counter(period_nanos=100).map(lambda n: float(n) + 4.0)
+    spread, mid = wf.spread_and_mid(bid, ask)
+    spreads = spread.collect()
+    mids = mid.collect()
+    g.run(cycles=3)
+    assert [(0, 4.0), (100, 4.0), (200, 4.0)] == spreads.value()
+    assert [(0, 3.0), (100, 4.0), (200, 5.0)] == mids.value()
+
+
+def test_pygraph_outputs_chain_like_any_stream():
+    g = wf.Graph()
+    bid = g.counter(period_nanos=100).map(lambda n: float(n))
+    ask = g.counter(period_nanos=100).map(lambda n: float(n) + 4.0)
+    _, mid = wf.spread_and_mid(bid, ask)
+    out = mid.map(lambda v: v * 2).collect()
+    g.run(cycles=2)
+    assert [(0, 6.0), (100, 8.0)] == out.value()
+
+
+def test_compiled_island_matches_its_interpreted_twin():
+    """The island's interior is monomorphized straight-line code; Python wires
+    around it. It must produce identical values *and* tick times."""
+    g = wf.Graph()
+    source = g.counter(period_nanos=100).map(lambda n: float(n))
+    island = wf.compiled_island(g, source).collect()
+    twin = wf.interpreted_twin(source).collect()
+    g.run(cycles=4)
+    # (2n + 1)^2 -> 9, 25, 49, 81
+    assert [(0, 9.0), (100, 25.0), (200, 49.0), (300, 81.0)] == island.value()
+    assert twin.value() == island.value()
+
+
+def test_compiled_island_composes_with_dynamic_python_wiring():
+    """The point of the island: a compiled interior with Python on both sides."""
+    g = wf.Graph()
+    source = g.counter(period_nanos=100).map(lambda n: float(n))
+    out = (
+        wf.compiled_island(g, source.map(lambda v: v + 1.0))
+        .map(lambda v: v / 2.0)
+        .collect()
+    )
+    g.run(cycles=2)
+    # n+1 -> (2(n+1)+1)^2 -> /2
+    assert [(0, 12.5), (100, 24.5)] == out.value()
