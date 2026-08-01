@@ -13,6 +13,13 @@
 //!   [`GraphBuilder`]: streams records from one topic partition starting at a
 //!   caller-chosen offset, emitting each record as a [`FluvioEvent`] in a
 //!   `Stream<Burst<FluvioEvent>>`.
+//! - **Mode-agnostic source** — [`fluvio_source`] with a
+//!   [`FluvioSourceConfig`], which dispatches on the run's [`RunMode`] at wiring
+//!   so the mode choice stays at `run()` rather than in the function name. Only
+//!   the live half exists today (a bounded offset-range replay reader is not
+//!   implemented — deviation register B2), so a historical run errors at wiring;
+//!   prefer it over [`fluvio_sub`] at call sites that may want to flip modes
+//!   later.
 //! - **Sink** — the [`FluvioSinkOps`] extension trait on
 //!   `Stream<Burst<FluvioRecord>>` (and, for convenience,
 //!   `Stream<FluvioRecord>`), enabled with
@@ -320,6 +327,113 @@ pub fn fluvio_sub(
         },
         None,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Mode-agnostic source
+// ---------------------------------------------------------------------------
+
+/// The per-mode specs for [`fluvio_source`], each optional.
+///
+/// [`RunMode`] is a *run-time* choice — build the graph once, pick real-time vs
+/// historical at `run()` — but a mode-locked source function forces that choice
+/// into *wiring*. This config carries one spec per mode so a single
+/// [`fluvio_source`] call can dispatch on the run's mode at wiring, exactly as
+/// [`postgres_source`](crate::adapters::postgres::postgres_source) does.
+///
+/// Fluvio has **only a live half today**: the durable log makes a bounded
+/// offset-range replay feasible, but no such reader is implemented (deviation
+/// register B2 — it needs an end bound *and* a record timestamp on
+/// [`FluvioEvent`], which today is stamped `NanoTime::now()` at yield). A
+/// `HistoricalFrom` run therefore errors at wiring, naming the unimplemented
+/// half rather than a config option that does not exist. When the bounded reader
+/// lands it becomes a `.historical(..)` builder here and existing call sites keep
+/// working unchanged.
+#[derive(Default)]
+pub struct FluvioSourceConfig {
+    live: Option<LiveSpec>,
+}
+
+/// The live half — see [`FluvioSourceConfig::live`].
+struct LiveSpec {
+    start_offset: Option<i64>,
+}
+
+impl FluvioSourceConfig {
+    /// An empty config — add the live half with [`live`](Self::live).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure the **live** (unbounded partition tail) half — the
+    /// [`fluvio_sub`] mechanism. `start_offset` is where to begin consuming:
+    /// `None` from the beginning of the partition, `Some(n)` from absolute offset
+    /// `n` (inclusive).
+    pub fn live(mut self, start_offset: Option<i64>) -> Self {
+        self.live = Some(LiveSpec { start_offset });
+        self
+    }
+}
+
+/// A **mode-agnostic** Fluvio source: dispatches on the run's [`RunMode`] at
+/// wiring time to the mechanism that mode needs, per the
+/// [`FluvioSourceConfig`] halves.
+///
+/// - [`RunMode::RealTime`] → the live partition tail ([`fluvio_sub`]), which
+///   requires [`FluvioSourceConfig::live`].
+/// - [`RunMode::HistoricalFrom`] → **unsupported**: fluvio has no bounded
+///   historical reader yet (see [`FluvioSourceConfig`]).
+///
+/// Wiring through `_source` rather than [`fluvio_sub`] directly costs nothing
+/// today and means the call site does not change when the historical half lands
+/// — the mode choice already lives at `run()`, not in the function name.
+/// [`fluvio_sub`] remains the low-level primitive; this wires through it. See the
+/// deviation register's "B2 — agreed plan: unified `<adapter>_source`".
+///
+/// `params` is the run the graph will be driven with; only
+/// [`run_mode`](RunParams::run_mode) is read today, but taking the full
+/// [`RunParams`] means the signature is already the one a bounded historical
+/// reader needs (it slices the run's `[start, end)` window), matching
+/// [`postgres_source`](crate::adapters::postgres::postgres_source).
+///
+/// # Errors
+///
+/// Returns an error at **wiring time** if the run mode is
+/// [`RunMode::HistoricalFrom`], if a [`RunMode::RealTime`] run has no live half
+/// configured (the message names the missing half), or for any error
+/// [`fluvio_sub`] itself surfaces at wiring (a negative `start_offset`).
+pub fn fluvio_source(
+    g: &GraphBuilder,
+    params: RunParams,
+    conn: impl Into<FluvioConnection>,
+    topic: impl Into<String>,
+    partition: u32,
+    cfg: FluvioSourceConfig,
+) -> Result<Stream<Burst<FluvioEvent>>> {
+    match params.run_mode {
+        RunMode::HistoricalFrom(_) => anyhow::bail!(
+            "fluvio_source: run mode is RunMode::HistoricalFrom, but the fluvio adapter has no \
+             historical half — a bounded offset-range replay reader is not implemented, and the \
+             live consumer is an unbounded, wall-clock-stamped tail with no historical timeline \
+             to replay; run under RunMode::RealTime with a .live(..) config"
+        ),
+        RunMode::RealTime => {
+            let live = cfg.live.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fluvio_source: run mode is RunMode::RealTime but no live config was \
+                     supplied — add .live(start_offset)"
+                )
+            })?;
+            fluvio_sub(
+                g,
+                params.run_mode,
+                conn,
+                topic,
+                partition,
+                live.start_offset,
+            )
+        }
+    }
 }
 
 /// Extension trait providing a fluent API for producing streams to Fluvio.
