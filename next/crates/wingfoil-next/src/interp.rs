@@ -3247,6 +3247,9 @@ impl Runner {
     /// Reset at the start of each run, so it always describes the latest one
     /// (`run_dynamic` included — there the graph size itself moves, so the
     /// count is only meaningful against a known mutation sequence).
+    ///
+    /// Hidden: an engine-observability hook for the perf gates, not public API.
+    #[doc(hidden)]
     pub fn node_visits(&self) -> u64 {
         self.node_visits
     }
@@ -3264,6 +3267,9 @@ impl Runner {
     /// A gate can tell those apart only if the examining is counted.
     ///
     /// Reset at the start of each run, like `node_visits`.
+    ///
+    /// Hidden: an engine-observability hook for the perf gates, not public API.
+    #[doc(hidden)]
     pub fn layer_visits(&self) -> u64 {
         self.layer_visits
     }

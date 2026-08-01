@@ -1105,11 +1105,41 @@ across the two padding widths) to **+8%** (2.94ms → 3.18ms). Gated by
 `quiet_depth_does_not_cost_per_cycle` (`tests/sparse_graph.rs`), which fails at
 636 against a bound of 39 if the walk returns.
 
-One follow-on remains, independent and not required for cutover: give `fan` a
-balanced merge tree — `O(log n)` depth instead of `O(n)` — if the left-fold
-tie-break order can be preserved (it is load-bearing: merge resolves ties as
-"first supplied that ticked wins"). That attacks the depth itself rather than the
-cost of scanning it.
+### The missing n-ary merge — a real Phase 6 gate violation ⚠️
+
+Chasing the depth term turned up its root cause, which is a **parity gap, not a
+tuning opportunity**: next has no n-ary merge node. `merge_all` and `fan` both
+unroll to a left-associated chain of binary `merge2`s (deliberately — "closes the
+n-ary-merge vocabulary gap without a bespoke variadic op"), so an n-way fan-in
+costs next `n-1` nodes where classic's `merge(vec)` costs **1**.
+
+On a *busy* fan-in — every branch ticking every cycle, the common case — that is
+a straight loss against classic, and it widens with width (20k cycles):
+
+| width | next (chain) | next (balanced tree) | classic | chain/classic |
+|-------|--------------|----------------------|---------|---------------|
+| 16    | 14.2ms       | 10.9ms               | 9.8ms   | **1.45x**     |
+| 64    | 48.3ms       | 41.8ms               | 28.0ms  | **1.73x**     |
+| 256   | 194.4ms      | 157.2ms              | 104.7ms | **1.86x**     |
+
+This violates the Phase 6 gate **`next-interpreted ≥ classic-interpreted`**. The
+`fanout` benchmark misses it because it is only 10 wide, where the 9 extra merge
+nodes are lost among ~105 others — the loss needs width to show.
+
+**A balanced merge tree is not the fix.** The third column measures it: `O(log n)`
+depth recovers roughly 40% of the gap (1.86x → 1.50x) and stops there, because
+the remaining cost is the `n-1` extra *nodes*, which rebalancing does not remove.
+Depth and node count are separate halves and only a real n-ary node removes both.
+
+The fix is therefore a genuine variadic merge. The engine side is easier than the
+`merge_all` doc implies: `push_node` already takes `Vec<usize>` upstreams, so
+arbitrary arity is native and only the registration closure is hardcoded to two
+slots. The work is a `merge_n` in `interp.rs` capturing `Vec<SlotRef<T>>`, the
+fluent `merge_all`/`fan` redirected onto it, exact tie-break parity tests
+("first supplied that ticked wins", plus burst semantics), and the harder part —
+teaching `graph!`/compiled emission to emit an n-ary node instead of a chain.
+Worth a widened `fanout` benchmark bar at the same time, so the gate that missed
+this can catch it next time.
 
 ### Tier ranking on sparse graphs: no crossover, but `nested` inverts
 
@@ -1393,7 +1423,7 @@ tests covered — not "legacy pytest passes unchanged."
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Engine-owned init / evaluation-timing drift across the three emission paths | silent wrong values — the macro crate's interpreted/compiled/nested paths are the biggest drift surface; op-`cycle` semantics agree but engine-owned *seeding* and *timing* do not (fold init, closure-factory re-eval) | table-driven three-engine parity test (one micro-graph per macro-supported combinator, `interpreted == compiled == nested`); seed with the known divergences; single seed/init field per op so all three paths read one source |
-| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; gated deterministically by `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), and `benches/tiers.rs` measures next-interpreted ahead of classic on the sparse groups. Qualifier: a separate `O(depth)` drain term remains — see Phase 4.5 |
+| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; gated deterministically by `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), and `benches/tiers.rs` measures next-interpreted ahead of classic on the sparse groups. Qualifier: ⚠️ **wide *active* fan-ins are 1.45–1.86x slower than classic** — next has no n-ary merge node, so an n-way fan-in costs `n-1` nodes against classic's 1. A Phase 6 gate violation the 10-wide `fanout` bench misses; see Phase 4.5 |
 | Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — registrations capture the slot type | ✅ **resolved: boundary frozen by type.** `SlotRef<T>` (`interp.rs`) is the sole access path (`slot()`/`new_slot()` return it; ops only `borrow`/`borrow_mut`); the arena is an internal swap of its innards, zero capture sites touched. Macro uses locals; `Stream::__slot` returns `SlotRef` too |
 | Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
 | Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
