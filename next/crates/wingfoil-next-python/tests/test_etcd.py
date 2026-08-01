@@ -11,9 +11,12 @@ Two groups:
   The etcd-next integration workflow opts in with ``-m requires_etcd``; without
   etcd on localhost:2379 they fail loudly rather than skipping.
 
-Local setup:
-    docker run --rm -p 2379:2379 -e ALLOW_NONE_AUTHENTICATION=yes \
-        bitnami/etcd:3.5
+Local setup (the same image the Rust integration tests use)::
+
+    docker run --rm -p 2379:2379 \
+        -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+        -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+        gcr.io/etcd-development/etcd:v3.5.0
 """
 
 import threading

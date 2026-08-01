@@ -68,14 +68,16 @@ jobs:
       # The Rust tests above use testcontainers (per-test container); the Python
       # tests expect a fixed localhost:2379, so start one explicitly.
       - name: Start etcd container for Python tests
+        # The same image the Rust tests use (pre-pulled above, so it is already
+        # cached): the official etcd build, configured through the env vars its
+        # entrypoint reads.
         run: |
           docker run -d \
             --name etcd-next-py \
             -p 2379:2379 \
-            -e ALLOW_NONE_AUTHENTICATION=yes \
-            -e ETCD_ADVERTISE_CLIENT_URLS=http://localhost:2379 \
             -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
-            bitnami/etcd:3.5
+            -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+            gcr.io/etcd-development/etcd:v3.5.0
           for i in $(seq 1 30); do
             nc -z localhost 2379 && echo "etcd ready" && break
             echo "Waiting... ($i/30)"
