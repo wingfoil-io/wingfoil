@@ -7,6 +7,8 @@ on:
     paths:
       - 'next/crates/wingfoil-next/src/adapters/etcd**'
       - 'next/crates/wingfoil-next/tests/etcd_integration.rs'
+      - 'next/crates/wingfoil-next-python/src/adapters/etcd.rs'
+      - 'next/crates/wingfoil-next-python/tests/test_etcd.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -61,3 +63,58 @@ jobs:
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
+
+      # --- Python bindings (wingfoil-next-python) ---
+      # The Rust tests above use testcontainers (per-test container); the Python
+      # tests expect a fixed localhost:2379, so start one explicitly.
+      - name: Start etcd container for Python tests
+        # The same image the Rust tests use (pre-pulled above, so it is already
+        # cached): the official etcd build, configured through the env vars its
+        # entrypoint reads.
+        run: |
+          docker run -d \
+            --name etcd-next-py \
+            -p 2379:2379 \
+            -e ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379 \
+            -e ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379 \
+            gcr.io/etcd-development/etcd:v3.5.0
+          for i in $(seq 1 30); do
+            nc -z localhost 2379 && echo "etcd ready" && break
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          nc -z localhost 2379 || (echo "etcd never became ready" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the next Python bindings
+        working-directory: next/crates/wingfoil-next-python
+        # `-F etcd` explicitly: the adapter is not in the default wheel feature
+        # list (etcd-client needs protoc at build time).
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop -F etcd
+
+      - name: Run Python etcd (next) integration tests
+        working-directory: next/crates/wingfoil-next-python
+        run: .venv/bin/pytest -m requires_etcd tests/test_etcd.py -v
+        env:
+          RUST_LOG: INFO
+
+      - name: Dump etcd logs on failure
+        if: failure()
+        run: docker logs etcd-next-py
+
+      - name: Stop etcd container
+        if: always()
+        run: docker rm -f etcd-next-py || true

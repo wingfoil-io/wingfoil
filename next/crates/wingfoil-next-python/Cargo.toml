@@ -40,7 +40,11 @@ kafka = ["wingfoil-next/kafka"]
 # `redis_stream_write` sinks. Pure Rust (the `redis` crate), so it ships in the
 # default wheel alongside postgres.
 redis = ["wingfoil-next/redis"]
-all-adapters = ["postgres", "kafka", "redis"]
+# etcd: the `etcd_sub` watch source and the `etcd_pub` PUT sink. Pure Rust
+# (etcd-client over tonic), but it needs `protoc` at build time to compile the
+# etcd protos, so it stays out of the default wheel.
+etcd = ["wingfoil-next/etcd"]
+all-adapters = ["postgres", "kafka", "redis", "etcd"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
