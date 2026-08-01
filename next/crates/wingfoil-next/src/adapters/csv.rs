@@ -185,6 +185,33 @@ pub trait CsvSinkOps<T> {
     /// written) at wiring time. A per-row I/O or serialization failure aborts
     /// the run with context.
     fn csv_write(&self, path: impl AsRef<Path>) -> Result<Stream<()>>;
+
+    /// Like [`csv_write`](Self::csv_write), but with the column names supplied
+    /// **explicitly** rather than derived from `T`'s serde field names.
+    ///
+    /// [`csv_write`](Self::csv_write) reads its header off the record type, so a
+    /// record whose shape is only known at runtime — a positional `Vec<String>`
+    /// built from a caller-supplied column list, which is what a *dynamic*
+    /// caller such as the Python binding has — gets no header at all (serde
+    /// introspection reports no named fields, the same as for a tuple). This is
+    /// the escape hatch for that case: pass the columns and they are written as
+    /// the header, after the leading `time` column.
+    ///
+    /// `header` is the record's own columns; the `time` column is prepended for
+    /// you, exactly as `csv_write` does. An empty `header` writes no header row
+    /// at all, matching the positional-tuple behaviour.
+    ///
+    /// # Errors
+    ///
+    /// As [`csv_write`](Self::csv_write). Additionally, the row width is *not*
+    /// checked against `header` — serde decides the row shape, so a mismatched
+    /// header is a caller error that shows up as a ragged file rather than a
+    /// wiring failure.
+    fn csv_write_with_header(
+        &self,
+        path: impl AsRef<Path>,
+        header: &[String],
+    ) -> Result<Stream<()>>;
 }
 
 impl<T> CsvSinkOps<T> for Stream<Burst<T>>
@@ -192,13 +219,35 @@ where
     T: Serialize + DeserializeOwned + Clone + Default + 'static,
 {
     fn csv_write(&self, path: impl AsRef<Path>) -> Result<Stream<()>> {
-        let path = path.as_ref();
+        self.write_rows(path.as_ref(), None)
+    }
+
+    fn csv_write_with_header(
+        &self,
+        path: impl AsRef<Path>,
+        header: &[String],
+    ) -> Result<Stream<()>> {
+        self.write_rows(path.as_ref(), Some(header))
+    }
+}
+
+impl<T> Stream<Burst<T>>
+where
+    T: Serialize + DeserializeOwned + Clone + Default + 'static,
+{
+    /// The shared body of both sink methods. `header` is `None` to derive the
+    /// column names from `T` (the `csv_write` default) or `Some(cols)` to use
+    /// the caller's.
+    fn write_rows(&self, path: &Path, header: Option<&[String]>) -> Result<Stream<()>> {
         let mut writer = csv::WriterBuilder::new()
             .has_headers(false)
             .from_path(path)
             .with_context(|| format!("csv_write: failed to open {} for writing", path.display()))?;
-        write_header::<T>(&mut writer)
-            .with_context(|| format!("csv_write: writing header to {}", path.display()))?;
+        match header {
+            Some(cols) => write_given_header(&mut writer, cols),
+            None => write_header::<T>(&mut writer),
+        }
+        .with_context(|| format!("csv_write: writing header to {}", path.display()))?;
         let display = path.display().to_string();
         Ok(self
             .with_time()
@@ -234,6 +283,30 @@ where
         self.map(|v: &T| -> Burst<T> { burst![v.clone()] })
             .csv_write(path)
     }
+
+    fn csv_write_with_header(
+        &self,
+        path: impl AsRef<Path>,
+        header: &[String],
+    ) -> Result<Stream<()>> {
+        self.map(|v: &T| -> Burst<T> { burst![v.clone()] })
+            .csv_write_with_header(path, header)
+    }
+}
+
+/// Write a caller-supplied CSV header: a leading `time` field followed by
+/// `cols`. An empty `cols` writes nothing, matching the tuple-record case in
+/// [`write_header`].
+fn write_given_header(writer: &mut csv::Writer<File>, cols: &[String]) -> Result<()> {
+    if !cols.is_empty() {
+        writer
+            .write_field("time")
+            .context("failed to write CSV time header")?;
+        writer
+            .write_record(cols)
+            .context("failed to write CSV header record")?;
+    }
+    Ok(())
 }
 
 /// Write the CSV header: a leading `time` field followed by the record's serde

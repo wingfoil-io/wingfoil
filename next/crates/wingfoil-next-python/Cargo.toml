@@ -48,7 +48,12 @@ etcd = ["wingfoil-next/etcd"]
 # Pure Rust, but the fluvio client pulls a large dependency tree, so it stays
 # out of the default wheel.
 fluvio = ["wingfoil-next/fluvio"]
-all-adapters = ["postgres", "kafka", "redis", "etcd", "fluvio"]
+# CSV: the `csv_read` replay source and the `csv_write` file sink. Pure Rust and
+# dependency-light, so it ships in the default wheel. `dep:csv` is named here
+# (not just transitively) because the reader opens the file at wiring to learn
+# its header (the engine pins the same 1.4).
+csv = ["wingfoil-next/csv", "dep:csv"]
+all-adapters = ["postgres", "kafka", "redis", "etcd", "fluvio", "csv"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
@@ -69,6 +74,9 @@ log = { workspace = true }
 # `timestamp` / `timestamptz` columns as. Workspace-pinned so it matches the
 # `with-chrono-0_4` tokio-postgres the engine's postgres adapter builds against.
 chrono = { workspace = true, optional = true }
+# The csv binding reads the file's header row at wiring so a replayed row can be
+# zipped back into a named dict. Workspace-pinned to match the engine's.
+csv = { version = "1.4", optional = true }
 
 [dev-dependencies]
 # `auto-initialize` starts an embedded interpreter so the boundary type and the

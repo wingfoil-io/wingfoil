@@ -678,6 +678,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(fluvio_sub, m)?)?;
         m.add_function(wrap_pyfunction!(fluvio_pub, m)?)?;
     }
+    #[cfg(feature = "csv")]
+    {
+        use crate::adapters::csv::{csv_read, csv_write};
+        m.add_function(wrap_pyfunction!(csv_read, m)?)?;
+        m.add_function(wrap_pyfunction!(csv_write, m)?)?;
+    }
     // `m` is unused when no adapter feature is on.
     let _ = m;
     Ok(())

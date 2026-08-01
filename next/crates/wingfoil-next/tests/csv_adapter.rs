@@ -284,3 +284,88 @@ fn csv_read_bounded_is_deterministic_and_survives_large_bursts() {
     assert_eq!(unbounded, read_with(Some(2)));
     assert_eq!(unbounded, read_with(Some(5)));
 }
+
+/// `csv_write_with_header` names the columns explicitly, for a record whose
+/// shape is only known at runtime.
+///
+/// A positional record (here a `Vec<String>` built from a caller-supplied
+/// column list — the shape the Python binding marshals into) has no serde field
+/// names, so plain `csv_write` writes no header. This is the escape hatch.
+#[test]
+fn write_with_header_names_the_columns_explicitly() {
+    let path = write_tmp("with_header.csv", "");
+    let header = vec!["sym".to_string(), "px".to_string()];
+
+    let g = GraphBuilder::new();
+    let rows: Stream<Vec<String>> = g
+        .ticker(std::time::Duration::from_secs(1))
+        .count()
+        .map(|i: &u64| vec![format!("S{i}"), format!("{i}.5")]);
+    rows.csv_write_with_header(&path, &header).unwrap();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+    drop(runner);
+
+    let lines = output_lines(&path);
+    assert_eq!("time,sym,px", lines[0]);
+    assert_eq!(3, lines.len(), "header + 2 rows, got {lines:?}");
+    assert!(lines[1].ends_with("S1,1.5"), "{:?}", lines[1]);
+    std::fs::remove_file(&path).ok();
+}
+
+/// An empty header writes no header row — the positional-tuple behaviour, so a
+/// caller that genuinely wants a headerless file can ask for one.
+#[test]
+fn write_with_an_empty_header_writes_no_header_row() {
+    let path = write_tmp("empty_header.csv", "");
+
+    let g = GraphBuilder::new();
+    let rows: Stream<Vec<String>> = g
+        .ticker(std::time::Duration::from_secs(1))
+        .count()
+        .map(|i: &u64| vec![format!("S{i}")]);
+    rows.csv_write_with_header(&path, &[]).unwrap();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    drop(runner);
+
+    let lines = output_lines(&path);
+    assert!(
+        !lines[0].starts_with("time,"),
+        "expected no header, got {lines:?}"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// Plain `csv_write` on the same positional record writes *no* header — the
+/// gap `csv_write_with_header` exists to close.
+#[test]
+fn plain_write_gives_a_positional_record_no_header() {
+    let path = write_tmp("no_header.csv", "");
+
+    let g = GraphBuilder::new();
+    let rows: Stream<Vec<String>> = g
+        .ticker(std::time::Duration::from_secs(1))
+        .count()
+        .map(|i: &u64| vec![format!("S{i}")]);
+    rows.csv_write(&path).unwrap();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    drop(runner);
+
+    let lines = output_lines(&path);
+    assert!(
+        !lines[0].starts_with("time,sym"),
+        "expected no header, got {lines:?}"
+    );
+    std::fs::remove_file(&path).ok();
+}

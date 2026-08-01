@@ -18,10 +18,13 @@
     feature = "kafka",
     feature = "redis",
     feature = "etcd",
-    feature = "fluvio"
+    feature = "fluvio",
+    feature = "csv"
 ))]
 pub mod common;
 
+#[cfg(feature = "csv")]
+pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
 #[cfg(feature = "fluvio")]
