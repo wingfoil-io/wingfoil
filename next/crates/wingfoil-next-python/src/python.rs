@@ -652,6 +652,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(postgres_write, m)?)?;
         m.add_function(wrap_pyfunction!(postgres_notify_trigger_sql, m)?)?;
     }
+    #[cfg(feature = "kafka")]
+    {
+        use crate::adapters::kafka::{kafka_pub, kafka_sub};
+        m.add_function(wrap_pyfunction!(kafka_sub, m)?)?;
+        m.add_function(wrap_pyfunction!(kafka_pub, m)?)?;
+    }
     // `m` is unused when no adapter feature is on.
     let _ = m;
     Ok(())

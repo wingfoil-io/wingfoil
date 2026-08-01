@@ -31,7 +31,12 @@ extension-module = ["pyo3/extension-module"]
 # is needed here (not just transitively) because the row decoder names
 # `NaiveDateTime` to read `timestamp` / `timestamptz` columns.
 postgres = ["wingfoil-next/postgres", "dep:chrono"]
-all-adapters = ["postgres"]
+# Kafka: the `kafka_sub` consumer source and the `kafka_pub` producer sink.
+# `rdkafka` builds librdkafka from source (`./configure` + `make`) rather than
+# linking a system library, so it can join `all-adapters` — it needs a C
+# toolchain, which every CI image already has, just build time.
+kafka = ["wingfoil-next/kafka"]
+all-adapters = ["postgres", "kafka"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
