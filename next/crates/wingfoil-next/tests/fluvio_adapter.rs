@@ -10,7 +10,10 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::adapters::fluvio::{FluvioConnection, FluvioRecord, FluvioSinkOps, fluvio_sub};
+use wingfoil_next::adapters::fluvio::{
+    FluvioConnection, FluvioRecord, FluvioSinkOps, FluvioSourceConfig, fluvio_source, fluvio_sub,
+};
+use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
 
 /// `fluvio_sub` rejects a `HistoricalFrom` run at wiring time — the live,
@@ -123,4 +126,95 @@ fn pub_connection_refused_aborts_run() {
         .expect_err("an unreachable SC must abort the run");
     let msg = format!("{err:#}");
     assert!(msg.contains("fluvio_pub"), "names the adapter: {msg}");
+}
+
+// ---- fluvio_source: mode dispatch (no cluster needed) ----
+
+fn realtime() -> RunParams {
+    RunParams {
+        run_mode: RunMode::RealTime,
+        run_for: RunFor::Forever,
+        start_time: NanoTime::ZERO,
+    }
+}
+
+/// A `HistoricalFrom` run errors at wiring: fluvio has no bounded historical
+/// reader, so there is no half to dispatch to. The message must name the
+/// adapter and say the historical half is unimplemented — *not* point at a
+/// `.historical(..)` builder that does not exist.
+#[test]
+fn source_rejects_historical_mode() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let params = RunParams {
+        run_mode: RunMode::HistoricalFrom(NanoTime::ZERO),
+        run_for: RunFor::Cycles(10),
+        start_time: NanoTime::ZERO,
+    };
+    let cfg = FluvioSourceConfig::new().live(None);
+    let err = fluvio_source(&g, params, "127.0.0.1:9003", "topic", 0, cfg)
+        .err()
+        .expect("HistoricalFrom must be rejected — fluvio has no historical half");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("fluvio_source"), "names the adapter: {msg}");
+    assert!(
+        msg.contains("historical half"),
+        "names the unimplemented historical half: {msg}"
+    );
+    assert!(
+        !msg.contains(".historical("),
+        "must not point at a builder that does not exist: {msg}"
+    );
+}
+
+/// A `RealTime` run with no live half errors at wiring, naming the missing half.
+#[test]
+fn source_missing_live_half_errors_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let err = fluvio_source(
+        &g,
+        realtime(),
+        "127.0.0.1:9003",
+        "topic",
+        0,
+        FluvioSourceConfig::new(),
+    )
+    .err()
+    .expect("RealTime without a live config must be rejected");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("fluvio_source"), "names the adapter: {msg}");
+    assert!(msg.contains("live"), "names the missing live half: {msg}");
+}
+
+/// A `RealTime` run with a live half dispatches to the `fluvio_sub` mechanism,
+/// which connects lazily in its producer task — so wiring succeeds (the graph is
+/// never run here).
+#[test]
+fn source_dispatches_to_sub_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = FluvioSourceConfig::new().live(Some(7));
+    let wired = fluvio_source(&g, realtime(), "127.0.0.1:9003", "topic", 0, cfg);
+    assert!(
+        wired.is_ok(),
+        "RealTime with a live config wires (sub connects lazily): {:?}",
+        wired.err()
+    );
+}
+
+/// The realtime dispatch reaches `fluvio_sub` itself, not a copy of it: the
+/// primitive's negative-`start_offset` validation fires through `fluvio_source`.
+#[test]
+fn source_inherits_sub_offset_validation() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = FluvioSourceConfig::new().live(Some(-1));
+    let err = fluvio_source(&g, realtime(), "127.0.0.1:9003", "topic", 0, cfg)
+        .err()
+        .expect("a negative start_offset must be rejected by the sub mechanism");
+    assert!(
+        format!("{err:#}").contains("start_offset"),
+        "dispatched to fluvio_sub's validation: {err:#}"
+    );
 }

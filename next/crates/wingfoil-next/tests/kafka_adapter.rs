@@ -10,7 +10,9 @@
 use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
-use wingfoil_next::adapters::kafka::{KafkaConnection, KafkaRecord, KafkaSinkOps, kafka_sub};
+use wingfoil_next::adapters::kafka::{
+    KafkaConnection, KafkaRecord, KafkaSinkOps, KafkaSourceConfig, kafka_source, kafka_sub,
+};
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
 
@@ -92,4 +94,90 @@ fn pub_wires_from_single_record_stream() {
         })
         .kafka_pub("127.0.0.1:9092")
         .expect("kafka_pub wires from a single-record stream");
+}
+
+// ---- kafka_source: mode dispatch (no broker needed) ----
+
+fn realtime_params() -> RunParams {
+    RunParams {
+        run_mode: RunMode::RealTime,
+        run_for: RunFor::Forever,
+        start_time: NanoTime::ZERO,
+    }
+}
+
+/// A `HistoricalFrom` run errors at wiring: kafka has no bounded historical
+/// reader, so there is no half to dispatch to. The message must name the
+/// adapter and say the historical half is unimplemented — *not* point at a
+/// `.historical(..)` builder that does not exist.
+#[test]
+fn source_rejects_historical_mode() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let params = RunParams {
+        run_mode: RunMode::HistoricalFrom(NanoTime::ZERO),
+        run_for: RunFor::Cycles(10),
+        start_time: NanoTime::ZERO,
+    };
+    let cfg = KafkaSourceConfig::new().live("group");
+    let err = kafka_source(
+        &g,
+        params,
+        KafkaConnection::new("127.0.0.1:9092"),
+        "topic",
+        cfg,
+    )
+    .err()
+    .expect("HistoricalFrom must be rejected — kafka has no historical half");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("kafka_source"), "names the adapter: {msg}");
+    assert!(
+        msg.contains("historical half"),
+        "names the unimplemented historical half: {msg}"
+    );
+    assert!(
+        !msg.contains(".historical("),
+        "must not point at a builder that does not exist: {msg}"
+    );
+}
+
+/// A `RealTime` run with no live half errors at wiring, naming the missing half.
+#[test]
+fn source_missing_live_half_errors_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let err = kafka_source(
+        &g,
+        realtime_params(),
+        KafkaConnection::new("127.0.0.1:9092"),
+        "topic",
+        KafkaSourceConfig::new(),
+    )
+    .err()
+    .expect("RealTime without a live config must be rejected");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("kafka_source"), "names the adapter: {msg}");
+    assert!(msg.contains("live"), "names the missing live half: {msg}");
+}
+
+/// A `RealTime` run with a live half dispatches to the `kafka_sub` mechanism,
+/// whose consumer is created in its producer task at run start — so wiring
+/// succeeds (the graph is never run here).
+#[test]
+fn source_dispatches_to_sub_under_realtime() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
+    let cfg = KafkaSourceConfig::new().live("test-group");
+    let wired = kafka_source(
+        &g,
+        realtime_params(),
+        KafkaConnection::new("127.0.0.1:9092"),
+        "topic",
+        cfg,
+    );
+    assert!(
+        wired.is_ok(),
+        "RealTime with a live config wires (consumer is created at run start): {:?}",
+        wired.err()
+    );
 }
