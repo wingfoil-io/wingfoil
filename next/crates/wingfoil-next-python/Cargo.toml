@@ -69,6 +69,9 @@ kdb = ["wingfoil-next/kdb"]
 # hand-written `fix_connect_tls` + `FixConnection` handle class. Pure Rust
 # (rustls for the TLS initiator).
 fix = ["wingfoil-next/fix"]
+# Prometheus: the `PrometheusExporter` handle class (`serve` + `gauge`). Pure
+# Rust — a hand-rolled HTTP endpoint plus `arc-swap`.
+prometheus = ["wingfoil-next/prometheus"]
 all-adapters = [
     "postgres",
     "kafka",
@@ -81,6 +84,7 @@ all-adapters = [
     "augurs",
     "kdb",
     "fix",
+    "prometheus",
 ]
 
 [dependencies]

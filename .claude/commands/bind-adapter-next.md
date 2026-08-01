@@ -256,6 +256,11 @@ bending the adapter into a free fn that loses the lifecycle.
   as `Stream::from(…)`. Register the class with `m.add_class::<…>()` beside the
   functions, under the same `#[cfg]`.
 
+`prometheus` is the minimal one: `PrometheusExporter` with `serve()` and
+`gauge(name, stream)`. Note what it does *not* need — the exporter owns no graph
+state, so it takes no `Graph` at all; the stream it is handed carries its own.
+Take a `Graph` only when the handle actually wires a source.
+
 A handle's own methods are the *only* place marshaling runs synchronously
 (`FixConnection.send` converts before the message reaches the session thread),
 which makes them a free unit harness for the dict→record path — no run, no
@@ -304,6 +309,14 @@ adapter connects at `start()` before the first cycle.
    and test paths to the workflow's `paths:` triggers. If the Rust leg already
    pins a fixed host/port (rather than testcontainers), reuse that instance
    instead of starting a second one — kdb's licensed container serves both legs.
+
+   **When the adapter *is* the server** — prometheus binds its own HTTP
+   endpoint, fix can accept its own initiator — there is no service to start,
+   so the round trip belongs in the **default** tier, not behind a marker. Bind
+   port 0, run the graph, then read the result back over loopback with the
+   standard library. Mark it only if it needs a live wall clock (fix's sessions
+   do; prometheus's scrape-after-run does not), and say in the module docstring
+   why the marker exists, since "requires_x" otherwise implies a service.
 
    **When the service has no usable Python client**, do not add a heavyweight
    dependency or shell out to cargo. Speak enough of the wire protocol for
