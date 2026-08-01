@@ -1375,10 +1375,19 @@ tests covered — not "legacy pytest passes unchanged."
   PyElement`, so the source needs no intermediate type) and dict-to-
   `KafkaRecord` write marshaling with an optional `topic` fallback. It also set
   the rule that **`next-python-test.yml` builds the module with
-  `-F all-adapters`** — each binding's service-free pytest tier only runs if the
-  wheel carries that adapter, while `[tool.maturin] features` stays the
-  *packaging* decision for released wheels (kafka is out of it: librdkafka
-  builds from source and costs minutes, though it needs no system library).
+  `-F all-adapters`**, since each binding's service-free pytest tier only runs
+  if the module carries that adapter.
+
+  **The wheel ships every adapter.** An earlier pass kept kafka/etcd/fluvio/zmq
+  out of `[tool.maturin] features` on build-time grounds, which was wrong: a
+  published wheel is the only copy a user gets, so an omitted adapter is simply
+  absent from the module and their only recourse is a from-source build with a
+  Rust toolchain — while the build cost is paid once, in the release job. The
+  criterion that *does* justify an exclusion is **portability** (a system
+  library that cannot be vendored, or a platform-specific wheel), which is
+  exactly where legacy `wingfoil-python` draws it: everything ships except
+  aeron and iceoryx2. Those two are the expected exclusions when they are
+  bound.
 
   **redis** followed, and factored the sink-side marshaling out: `RecordDict`
   in `crate::adapters::common` is the record-`dict` reader every sink binding
