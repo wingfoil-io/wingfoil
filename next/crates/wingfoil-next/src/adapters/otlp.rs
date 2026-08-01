@@ -97,6 +97,7 @@
 //! docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 //! ```
 
+use std::borrow::Cow;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -165,8 +166,10 @@ pub trait OtlpSinkOps<T> {
     /// Push every tick of this stream as an OTLP gauge metric named
     /// `metric_name`, exporting to `config`'s endpoint off the graph thread.
     ///
-    /// `metric_name` must be a `&'static str` (the OTel SDK's `f64_gauge`
-    /// builder requires a `'static` name). Values are converted to `f64` via
+    /// `metric_name` accepts a `&'static str` or an owned `String` — the OTel
+    /// SDK's gauge builder takes a `Cow<'static, str>`, so a name computed at
+    /// runtime (as a dynamic caller such as the Python binding has) needs no
+    /// leak. Values are converted to `f64` via
     /// `T::to_string().parse::<f64>()`; a value that does not format as a bare
     /// number records `0.0` and emits a `log::warn`.
     ///
@@ -191,7 +194,7 @@ pub trait OtlpSinkOps<T> {
     #[must_use = "otlp_push returns a sink Stream that must be added to the graph"]
     fn otlp_push(
         &self,
-        metric_name: &'static str,
+        metric_name: impl Into<Cow<'static, str>>,
         config: impl Into<OtlpConfig>,
     ) -> Result<Stream<()>>;
 }
@@ -202,10 +205,11 @@ where
 {
     fn otlp_push(
         &self,
-        metric_name: &'static str,
+        metric_name: impl Into<Cow<'static, str>>,
         config: impl Into<OtlpConfig>,
     ) -> Result<Stream<()>> {
         let config = config.into();
+        let metric_name = metric_name.into();
 
         // The off-thread export. `consume_async`'s consumer task runs on the
         // graph's runtime, so building the `rt-tokio` PeriodicReader and
@@ -219,7 +223,7 @@ where
             let result = build_and_record(
                 &mut gauge,
                 &mut provider,
-                metric_name,
+                metric_name.as_ref(),
                 &config,
                 &value.to_string(),
             );
@@ -258,7 +262,7 @@ where
 fn build_and_record(
     gauge: &mut Option<opentelemetry::metrics::Gauge<f64>>,
     provider: &mut Option<SdkMeterProvider>,
-    metric_name: &'static str,
+    metric_name: &str,
     config: &OtlpConfig,
     value_str: &str,
 ) -> anyhow::Result<()> {
@@ -279,7 +283,7 @@ fn build_and_record(
             .with_resource(resource)
             .build();
         let meter = built.meter("wingfoil");
-        *gauge = Some(meter.f64_gauge(metric_name).build());
+        *gauge = Some(meter.f64_gauge(metric_name.to_string()).build());
         *provider = Some(built);
     }
     let v: f64 = value_str.parse().unwrap_or_else(|_| {

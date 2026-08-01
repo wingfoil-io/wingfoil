@@ -1348,7 +1348,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *the whole mechanical tier landed (7 of 15)*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *mechanical tier + otlp landed (8 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1424,7 +1424,14 @@ tests covered — not "legacy pytest passes unchanged."
   etcd-discovery twins (gated on both features) are bound; `ZmqStatus` erases to
   a `"connected"`/`"disconnected"` string, per the string-selector convention.
 
-  **Remaining: 8.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **otlp** is the second binding to need an engine change, for the same reason
+  csv did: `otlp_push` took a `&'static str` metric name, so a dynamic caller
+  had to `Box::leak` it (as legacy's binding did, on every wiring call). The
+  OTel SDK's gauge builder actually takes `impl Into<Cow<'static, str>>`, which
+  an owned `String` satisfies — the bound was simply tighter than necessary, and
+  relaxing it removes the leak with no effect on existing callers.
+
+  **Remaining: 7.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
@@ -1432,9 +1439,9 @@ tests covered — not "legacy pytest passes unchanged."
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the
     same `PyGraph`/`PyStream` seams;
-  - *stream transform* — augurs (six fns), otlp (`otlp_push`): legacy exposes
-    these as `stream.method(…)`; next uses free fns, a deliberate ergonomic
-    deviation for uniformity with the plugin story.
+  - *stream transform* — augurs (six fns) (otlp ✓): legacy exposes these as
+    `stream.method(…)`; next uses free fns, a deliberate ergonomic deviation
+    for uniformity with the plugin story.
 
   Two cross-cutting decisions carried by the skill: mode/type selectors take
   **strings** with a loud error rather than `#[pyclass]` enums (legacy has
