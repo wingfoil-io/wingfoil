@@ -54,6 +54,26 @@ impl PyStream {
     }
 }
 
+/// Map a `PyElement` stream to an `f64` stream, failing the graph run with a
+/// contextual error naming `op` on a value that is not a float.
+///
+/// This is [`PyStream::extract`] with a caller-supplied label: the numeric
+/// adapters (statistics, augurs) take an arbitrary Python stream, so the error
+/// has to point back at the operator that demanded a number rather than report
+/// a bare conversion failure.
+pub(crate) fn as_floats(
+    stream: &Rc<dyn Stream<PyElement>>,
+    op: &'static str,
+) -> Rc<dyn Stream<f64>> {
+    stream.try_map(move |elem: PyElement| {
+        Python::attach(|py| {
+            elem.as_ref().extract::<f64>(py).map_err(|e| {
+                anyhow::Error::new(e).context(format!("{op}: expected a float input value"))
+            })
+        })
+    })
+}
+
 /// Convert a native Rust value into a `Py<PyAny>`.
 ///
 /// Only ever called with concrete types (`f64`, `u64`, `Vec<Py<PyAny>>`) whose
@@ -203,6 +223,7 @@ impl PyStream {
         PyStream(strm)
     }
 
+    /// Cumulative arithmetic mean — shorthand for `.mean()`.
     fn average(&self) -> PyStream {
         self.extract::<f64>()
             .mean(Window::Unbounded, Weighting::Count)
@@ -364,9 +385,133 @@ impl PyStream {
         })
     }
 
-    /// sum the stream (extracts f64 values before summing)
-    fn sum(&self) -> PyStream {
-        self.extract::<f64>().sum(Window::Unbounded).as_py_stream()
+    /// Mean of this stream of numbers over `window`.
+    ///
+    /// Args:
+    ///     window: `Window.count(n)`, `Window.seconds(s)`, `Window.unbounded()`,
+    ///         a plain `int` (shorthand for a count window), or `None`
+    ///         (cumulative — the default).
+    ///     weighting: `Weighting.Count` / `"count"` (default) for the ordinary
+    ///         arithmetic mean, or `Weighting.Time` / `"time"` to weight each
+    ///         sample by how long it was in effect.
+    ///
+    /// Returns:
+    ///     A Stream of floats.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn mean(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_moment_inner(
+            &self.0,
+            crate::py_statistics::PyMoment::Mean,
+            window,
+            weighting,
+        )?
+        .as_py_stream())
+    }
+
+    /// Variance of this stream of numbers over `window`.
+    ///
+    /// `Weighting.Count` gives the sample variance (ddof = 1); `Weighting.Time`
+    /// gives the time-weighted population variance. Yields `0.0` until enough
+    /// data is present. See `mean` for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn variance(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_moment_inner(
+            &self.0,
+            crate::py_statistics::PyMoment::Variance,
+            window,
+            weighting,
+        )?
+        .as_py_stream())
+    }
+
+    /// Standard deviation over `window` — the square root of `variance` under
+    /// the same weighting. See `mean` for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn std(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_moment_inner(
+            &self.0,
+            crate::py_statistics::PyMoment::Std,
+            window,
+            weighting,
+        )?
+        .as_py_stream())
+    }
+
+    /// Sum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn sum(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_aggregate_inner(
+            &self.0,
+            crate::py_statistics::PyAggregate::Sum,
+            window,
+        )?
+        .as_py_stream())
+    }
+
+    /// Minimum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn min(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_aggregate_inner(
+            &self.0,
+            crate::py_statistics::PyAggregate::Min,
+            window,
+        )?
+        .as_py_stream())
+    }
+
+    /// Maximum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn max(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_aggregate_inner(
+            &self.0,
+            crate::py_statistics::PyAggregate::Max,
+            window,
+        )?
+        .as_py_stream())
+    }
+
+    /// Median of this stream of numbers over `window`.
+    ///
+    /// `Weighting.Time` gives the time-weighted median (the value at which
+    /// cumulative in-effect time crosses one half). Over an unbounded window
+    /// this retains every sample, so memory grows with the stream. See `mean`
+    /// for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn median(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_median_inner(&self.0, window, weighting)?.as_py_stream())
+    }
+
+    /// Exponentially weighted moving average of this stream of numbers.
+    ///
+    /// Args:
+    ///     span: `EwmaSpan.per_tick(alpha)` for a fixed smoothing factor
+    ///         applied once per tick, `EwmaSpan.half_life(seconds)` to decay by
+    ///         elapsed graph time, or a plain `float` (shorthand for
+    ///         `per_tick`). The first sample seeds the average.
+    ///
+    /// Returns:
+    ///     A Stream of floats.
+    fn ewma(&self, span: &Bound<'_, PyAny>) -> PyResult<PyStream> {
+        Ok(crate::py_statistics::py_ewma_inner(&self.0, span)?.as_py_stream())
     }
 
     fn count(&self) -> PyStream {

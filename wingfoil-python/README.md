@@ -23,6 +23,7 @@ model, operators, and production-ready I/O adapters from Python.
 - [Quick Start](#-quick-start)
 - [Core Concepts](#-core-concepts)
 - [Stream Operators](#-stream-operators)
+  - [Statistics](#statistics)
 - [Composing Streams: `Graph`, `bimap`, `CustomStream`](#-composing-streams-graph-bimap-customstream)
 - [Backtesting with Historical Mode](#-backtesting-with-historical-mode)
 - [Pandas Integration](#-pandas-integration)
@@ -154,12 +155,62 @@ All methods are available on `Stream` instances. Examples assume
 | Operator | Description |
 | --- | --- |
 | `.count()` | Emit tick count: 1, 2, 3, ... |
-| `.sum()` | Running sum (values must be numeric). |
-| `.average()` | Running mean (values must be numeric). |
+| `.average()` | Running mean — shorthand for `.mean()` (see [Statistics](#statistics)). |
 | `.buffer(n)` | Tumbling window of size `n`. |
 | `.collect()` | Accumulate every value into a `list` emitted each cycle. |
 | `.with_time()` | Pair each value with graph-time as `(seconds, value)`. |
 | `.dataframe()` | Collect `[(time, value), ...]` for pandas (see below). |
+
+### Statistics
+
+Streaming statistics for numeric streams. Each operator emits a `float` per
+tick and is maintained incrementally, so a rolling mean over a million-sample
+window costs the same per tick as one over ten.
+
+| Operator | Description |
+| --- | --- |
+| `.mean(window, weighting)` | Mean over `window`. |
+| `.variance(window, weighting)` | Variance — sample (ddof = 1) when count weighted, population when time weighted. |
+| `.std(window, weighting)` | Standard deviation — the square root of `.variance()`. |
+| `.sum(window)` | Sum over `window`. |
+| `.min(window)` / `.max(window)` | Extremes over `window`. |
+| `.median(window, weighting)` | Median over `window`. |
+| `.ewma(span)` | Exponentially weighted moving average. |
+
+`window` says *which* samples an operator sees, `weighting` says *how* they
+count:
+
+| `window` | Meaning |
+| --- | --- |
+| omitted / `None` / `Window.unbounded()` | Every sample so far (cumulative). |
+| `Window.count(n)` or plain `n` | The most recent `n` samples. |
+| `Window.seconds(s)` | Every sample from the last `s` of graph time. |
+
+| `weighting` | Meaning |
+| --- | --- |
+| omitted / `Weighting.Count` / `"count"` | Every sample counts equally. |
+| `Weighting.Time` / `"time"` | Each sample is weighted by how long it was in effect. |
+
+A bare `float` is not accepted as a `window`: `.mean(10)` (ten samples) and
+`.mean(10.0)` (ten seconds?) would mean very different things, so a time window
+must say so with `Window.seconds(...)`.
+
+`.ewma()` takes an `EwmaSpan` instead: `EwmaSpan.per_tick(alpha)` applies a
+fixed smoothing factor once per tick (a plain `float` is shorthand for this),
+while `EwmaSpan.half_life(seconds)` decays by elapsed graph time, independent of
+tick rate.
+
+```python
+from wingfoil import EwmaSpan, Weighting, Window, ticker
+
+prices = ticker(0.1).count().map(float)
+
+rolling_mean = prices.mean(20)                             # last 20 samples
+twap         = prices.mean(Window.seconds(5.0), "time")    # 5s, time weighted
+band         = prices.std(Window.count(20))                # rolling volatility
+smoothed     = prices.ewma(EwmaSpan.half_life(2.0))        # 2s half-life
+spread       = prices.max(20).logged("high")
+```
 
 ### Observing and sinking
 

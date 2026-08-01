@@ -69,6 +69,12 @@ fix_accept = _ext.py_fix_accept
 # User-friendly aliases for OTLP
 # (otlp_push is exposed as a stream method, no top-level sub function needed)
 
+# Statistics operator arguments (stream.mean/variance/std/sum/min/max/median/ewma)
+Window = _ext.Window
+Weighting = _ext.Weighting
+EwmaSpan = _ext.EwmaSpan
+__all__.extend(["Window", "Weighting", "EwmaSpan"])
+
 # User-friendly aliases for Prometheus
 PrometheusExporter = _ext.PrometheusExporter
 __all__.append("PrometheusExporter")

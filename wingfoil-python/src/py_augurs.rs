@@ -24,21 +24,10 @@ use wingfoil::adapters::augurs::{
 use wingfoil::{Stream, StreamOperators};
 
 use crate::py_element::PyElement;
-
-/// Map a `PyElement` stream to an `f64` stream, failing the graph run with a
-/// contextual error on a value that is not a float. This mirrors
-/// [`PyStream::extract`] used by `.average()` / `.sum()`; substituting `NaN`
-/// instead would silently poison the model window and abort the run later with
-/// an augurs-internal message that never points back at the offending value.
-fn as_floats(stream: &Rc<dyn Stream<PyElement>>, op: &'static str) -> Rc<dyn Stream<f64>> {
-    stream.try_map(move |elem: PyElement| {
-        Python::attach(|py| {
-            elem.as_ref().extract::<f64>(py).map_err(|e| {
-                anyhow::Error::new(e).context(format!("{op}: expected a float input value"))
-            })
-        })
-    })
-}
+// Shared with the statistics bindings: substituting `NaN` for a non-float
+// instead would silently poison the model window and abort the run later with
+// an augurs-internal message that never points back at the offending value.
+use crate::py_stream::as_floats;
 
 /// Map a `PyElement` stream to a `Vec<f64>` (per-series readings) stream,
 /// failing the graph run with a contextual error on a value that is not a

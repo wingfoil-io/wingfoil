@@ -21,9 +21,17 @@ Quick index
 **Stream operators (methods on** :class:`Stream` **)**:
 
 ``map``, ``filter``, ``distinct``, ``difference``, ``delay``, ``not``,
-``limit``, ``sample``, ``count``, ``sum``, ``average``, ``buffer``,
+``limit``, ``sample``, ``count``, ``average``, ``buffer``,
 ``collect``, ``with_time``, ``dataframe``, ``inspect``, ``logged``,
 ``for_each``, ``finally``, ``peek_value``, ``run``.
+
+**Statistics operators (methods on** :class:`Stream` **)**:
+
+``mean``, ``variance``, ``std``, ``sum``, ``min``, ``max``, ``median``,
+``ewma`` — each takes a :class:`Window` (or a plain ``int`` for a count
+window, or ``None`` for cumulative); the moment operators additionally take a
+:class:`Weighting` (or ``"count"`` / ``"time"``), and ``ewma`` takes an
+:class:`EwmaSpan` (or a plain ``float`` for a per-tick smoothing factor).
 
 **Pandas helpers**: :func:`to_dataframe`, :func:`build_dataframe`.
 

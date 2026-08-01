@@ -17,6 +17,7 @@ mod py_otlp;
 mod py_postgres;
 mod py_prometheus;
 mod py_redis;
+mod py_statistics;
 mod py_stream;
 mod py_web;
 mod py_zmq;
@@ -232,6 +233,9 @@ fn _wingfoil(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<py_iceoryx2::PyIceoryx2Mode>()?;
     #[cfg(feature = "aeron")]
     module.add_class::<py_aeron::PyAeronMode>()?;
+    module.add_class::<py_statistics::PyWindow>()?;
+    module.add_class::<py_statistics::PyWeighting>()?;
+    module.add_class::<py_statistics::PyEwmaSpan>()?;
     module.add_class::<py_prometheus::PyPrometheusExporter>()?;
     module.add_class::<py_latency::PyLatency>()?;
     module.add_class::<py_latency::PyTracedBytes>()?;
