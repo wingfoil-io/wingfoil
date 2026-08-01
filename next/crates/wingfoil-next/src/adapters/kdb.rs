@@ -163,6 +163,13 @@ pub use kdb_plus_fixed::ipc::error::Error as KdbError;
 /// serialization in [`KdbSerialize`] impls.
 pub use kdb_plus_fixed::ipc::K;
 
+/// KDB type codes, for a caller decoding a column whose type is only known at
+/// runtime — a dynamic reader such as the Python binding, which has no record
+/// `struct` to deserialize into and must dispatch on the value's actual type.
+/// Re-exported alongside [`K`] so such a caller needs no direct dependency on
+/// the underlying IPC crate.
+pub use kdb_plus_fixed::qtype;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 

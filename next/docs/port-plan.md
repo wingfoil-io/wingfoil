@@ -1440,10 +1440,27 @@ tests covered — not "legacy pytest passes unchanged."
   `typed_input`, because adding a `Vec<f64>` edge conversion would make a
   Python `bytes` silently acceptable where a list of floats is meant.
 
-  **Remaining: 6.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  **kdb** is the second dynamic-payload edge, and the first where the payload's
+  type is only known *per value*: a q column carries its own type tag, so
+  `PyKdbRow` dispatches on `k.get_type()` rather than on a declared schema.
+  Temporal columns keep their raw integer form (nanoseconds since the KDB
+  epoch), as legacy did — converting would have to guess a timezone and would
+  not round-trip. Three deviations from legacy: reads yield a **list per tick**
+  rather than a `collapse()`d single dict (legacy silently dropped every row but
+  the last at a shared timestamp); an **unsupported column type is an error**
+  rather than a `format!("{k:?}")` string that reads as a plausible value; and
+  `kdb_sub` — the tickerplant tail — is bound at all, which legacy never was.
+  The binding names `K` / `qtype` through the engine's re-exports (`qtype` was
+  added to `adapters::kdb` for exactly this) rather than depending on
+  `kdb-plus-fixed` itself. Its Python CI leg reuses the licensed container the
+  Rust leg already starts, and the pytest tier speaks q's IPC framing directly
+  for table setup — ~30 lines, no client library — while every *value*
+  assertion goes back through `kdb_read`.
+
+  **Remaining: 5.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
-  - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
-    stand-in plus column marshaling;
+  - *dynamic payload* — **kdb done**; fix remains: postgres-shaped, needing a
+    `PyPgRow`-style stand-in plus column marshaling;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):
     stateful objects with a lifecycle, **not** a shape `#[pyadapter]` can
     generate (it has no handle receiver), so these are hand-written over the

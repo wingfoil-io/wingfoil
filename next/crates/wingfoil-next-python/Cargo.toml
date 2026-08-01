@@ -61,6 +61,10 @@ otlp = ["wingfoil-next/otlp"]
 # augurs: the six time-series analytics ops (forecast, changepoint, seasons,
 # outlier, DTW, cluster). Pure Rust compute, no I/O.
 augurs = ["wingfoil-next/augurs"]
+# KDB+: the `kdb_read` / `kdb_sub` sources and the `kdb_write` sink. Pure Rust
+# (kdb-plus-fixed over TCP); the binding names `K` / `qtype` through the
+# engine's re-exports rather than depending on that crate directly.
+kdb = ["wingfoil-next/kdb"]
 all-adapters = [
     "postgres",
     "kafka",
@@ -71,6 +75,7 @@ all-adapters = [
     "zmq",
     "otlp",
     "augurs",
+    "kdb",
 ]
 
 [dependencies]

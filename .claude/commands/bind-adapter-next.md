@@ -205,6 +205,19 @@ stand-in:
   identity `PyElement: TryFrom<&PyElement>`) and marshal inside the fn with a
   `try_map`.
 
+Two payload shapes show up. Postgres declares its schema once and decodes
+against it; kdb tags **every value** with its own type, so `PyKdbRow` dispatches
+on `k.get_type()` per column. Either way the *unsupported* arm is an error (see
+below), never a `format!("{v:?}")` fallback — a debug string in a dict reads as
+a plausible value.
+
+**Name the wire crate's types through the engine's re-export**, not by adding a
+dependency. If the adapter module does not already re-export what the decoder
+needs, add a `pub use` there (kdb's `qtype` constants landed in
+`adapters::kdb` for exactly this) — that keeps the binding pinned to whatever
+version the engine builds against, which is the only version that can be
+correct.
+
 **Marshaling fails loudly.** A missing key, an unsupported declared type, a
 wrong-typed value, or an unsupported column type from the wire aborts the run
 with a message naming the field and listing what *is* supported. Never a silent
@@ -268,7 +281,16 @@ bending the adapter into a free fn that loses the lifecycle.
    start the service on its fixed port (the Rust tests use testcontainers, the
    Python ones need a known host/port), `maturin develop -F $ARGUMENTS`, then
    `pytest -m requires_$ARGUMENTS tests/test_$ARGUMENTS.py -v`. Add the binding
-   and test paths to the workflow's `paths:` triggers.
+   and test paths to the workflow's `paths:` triggers. If the Rust leg already
+   pins a fixed host/port (rather than testcontainers), reuse that instance
+   instead of starting a second one — kdb's licensed container serves both legs.
+
+   **When the service has no usable Python client**, do not add a heavyweight
+   dependency or shell out to cargo. Speak enough of the wire protocol for
+   *setup only* — kdb's `_q` is ~30 lines: handshake, one framed text query,
+   raise if the reply is an error object — and route every **value** assertion
+   back through the adapter under test, so the tier never has to decode a
+   response.
 
 ## 7. Docs bookkeeping
 
