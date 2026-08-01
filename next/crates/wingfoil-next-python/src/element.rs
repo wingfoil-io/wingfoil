@@ -49,11 +49,16 @@ impl PyElement {
 
     /// Clone out the inner object for handing back to Python.
     ///
-    /// # Panics
-    ///
-    /// Panics on an empty element (see [`object`](Self::object)).
+    /// An empty element becomes Python `None` — the same mapping
+    /// [`list`](Self::list) uses for an empty member. This is the value a
+    /// caller sees for a stream that has not ticked (a source that never
+    /// produced, an `accumulate` over one of those), and `None` is the honest
+    /// answer there; it must not panic.
     pub fn value(&self) -> Py<PyAny> {
-        Python::attach(|py| self.object().clone_ref(py))
+        Python::attach(|py| match &self.0 {
+            Some(obj) => obj.clone_ref(py),
+            None => py.None(),
+        })
     }
 
     /// Box a slice of elements into a Python `list` — the edge conversion for
@@ -328,6 +333,15 @@ mod tests {
     fn default_is_empty() {
         assert!(PyElement::default().is_none());
         assert_eq!(PyElement::default(), PyElement::none());
+    }
+
+    #[test]
+    fn an_empty_element_hands_back_none_rather_than_panicking() {
+        // The value of a stream that never ticked. `None` is the honest
+        // answer; this used to panic out of `Stream.value()`.
+        Python::attach(|py| {
+            assert!(PyElement::default().value().bind(py).is_none());
+        });
     }
 
     #[test]

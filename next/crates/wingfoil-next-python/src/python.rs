@@ -740,6 +740,11 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         use crate::adapters::prometheus::PyPrometheusExporter;
         m.add_class::<PyPrometheusExporter>()?;
     }
+    #[cfg(feature = "web")]
+    {
+        use crate::adapters::web::PyWebServer;
+        m.add_class::<PyWebServer>()?;
+    }
     #[cfg(feature = "otlp")]
     {
         use crate::adapters::otlp::otlp_push;
