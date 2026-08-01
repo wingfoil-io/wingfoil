@@ -1,11 +1,11 @@
 //! augurs adapter parity tests — ports the classic
-//! `wingfoil::adapters::augurs` forecast + outlier unit tests to the
+//! `wingfoil::adapters::augurs` unit tests for all six operators to the
 //! wingfoil-next Op-pattern engine. augurs models are deterministic given their
-//! input (AutoETS/MSTL are optimizers with no RNG; MAD/DBSCAN are deterministic
-//! detectors), so the same known input series yields the same output on every
-//! run — the assertions match the classic ones (thresholds on the forecast /
-//! flagged-series, not brittle bit-exact values). Everything runs in historical
-//! mode for reproducibility.
+//! input (AutoETS/MSTL are optimizers with no RNG; MAD/DBSCAN, BOCPD, the
+//! periodogram and DTW are deterministic), so the same known input series yields
+//! the same output on every run — the assertions match the classic ones
+//! (thresholds on the forecast / flagged-series, not brittle bit-exact values).
+//! Everything runs in historical mode for reproducibility.
 
 #![cfg(feature = "augurs")]
 
@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::augurs::{
-    AugursForecastConfig, AugursForecastOps, AugursOutlierConfig, AugursOutlierOps,
+    AugursChangepointConfig, AugursChangepointOps, AugursClusterConfig, AugursClusterOps,
+    AugursDtwConfig, AugursDtwOps, AugursForecastConfig, AugursForecastOps, AugursOutlierConfig,
+    AugursOutlierOps, AugursSeasonsConfig, AugursSeasonsOps,
 };
 use wingfoil_next::prelude::*;
 
@@ -236,4 +238,355 @@ fn outlier_waits_for_two_samples() {
     // One cycle → fewer than two samples → never ticked, slot holds default.
     let last = r.value(&outliers);
     assert!(last.outlying.is_empty() && last.scores.is_empty());
+}
+
+// -------------------------------------------------------------------------
+// Changepoint detection.
+// -------------------------------------------------------------------------
+
+/// Classic `changepoint_detects_level_shift`: a series that jumps from a low
+/// mean to a high mean partway through produces a changepoint after the jump.
+#[test]
+fn changepoint_detects_level_shift() {
+    let g = GraphBuilder::new();
+    // First ~20 samples near 0, then a jump to near 50.
+    let series = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let noise = (n as f64 * 0.7).sin() * 0.5;
+        if n > 20 { 50.0 + noise } else { noise }
+    });
+    let changes = series.augurs_changepoint(AugursChangepointConfig::new(60));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(50))
+        .unwrap();
+
+    let last = r.value(&changes);
+    assert!(
+        last.any(),
+        "expected a changepoint after the level shift, got {last:?}"
+    );
+    // The shift happens around window index 20; a detected changepoint should
+    // land after the first few points.
+    assert!(
+        last.indices.iter().any(|&i| i >= 10),
+        "expected a changepoint past the initial regime, got {:?}",
+        last.indices
+    );
+}
+
+/// Classic `changepoint_quiet_when_steady`: a perfectly steady series yields no
+/// changepoints.
+#[test]
+fn changepoint_quiet_when_steady() {
+    let g = GraphBuilder::new();
+    let series = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| 10.0 + (n as f64 * 0.5).sin() * 0.1);
+    let changes = series.augurs_changepoint(40);
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(40))
+        .unwrap();
+    let last = r.value(&changes);
+    assert!(
+        !last.any(),
+        "steady series should have no changepoints, got {:?}",
+        last.indices
+    );
+}
+
+/// The changepoint op stays silent until `min_points` have arrived, and once it
+/// starts ticking it ticks on every upstream tick (one per ticker period).
+#[test]
+fn changepoint_waits_for_min_points() {
+    let g = GraphBuilder::new();
+    let series = g.ticker(Duration::from_secs(1)).count().map(|&n| n as f64);
+    let changes = series.augurs_changepoint(AugursChangepointConfig::new(40).with_min_points(10));
+    let ticks = changes.with_time().accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(12))
+        .unwrap();
+
+    // The ticker's first tick is at t=0, so the 10th sample lands at t=9s and
+    // the remaining three cycles each tick: one value per second, no gaps.
+    let times: Vec<NanoTime> = r.value(&ticks).iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        times,
+        vec![
+            NanoTime::new(9_000_000_000),
+            NanoTime::new(10_000_000_000),
+            NanoTime::new(11_000_000_000),
+        ]
+    );
+}
+
+// -------------------------------------------------------------------------
+// Seasonality detection.
+// -------------------------------------------------------------------------
+
+/// Classic `seasons_detects_known_period`: a clean period-12 sine wave is
+/// detected as having a ~12-sample season.
+#[test]
+fn seasons_detects_known_period() {
+    let g = GraphBuilder::new();
+    let series = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| (n as f64 * std::f64::consts::TAU / 12.0).sin());
+    let seasons = series.augurs_seasons(AugursSeasonsConfig::new(96));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(96))
+        .unwrap();
+
+    let last = r.value(&seasons);
+    assert!(
+        last.periods.iter().any(|&p| (10..=14).contains(&p)),
+        "expected a period near 12, got {:?}",
+        last.periods
+    );
+    let dominant = last.dominant().expect("a season was detected");
+    assert!((10..=14).contains(&dominant), "dominant was {dominant}");
+}
+
+/// Classic `seasons_window_below_floor_still_emits`: a `window` below the
+/// default `min_points` floor still warms up and emits rather than never
+/// ticking (the effective window grows to the floor).
+#[test]
+fn seasons_window_below_floor_still_emits() {
+    let g = GraphBuilder::new();
+    let series = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| (n as f64 * std::f64::consts::TAU / 6.0).sin());
+    // window 12 is below the default min_points floor of 16.
+    let seasons = series.augurs_seasons(AugursSeasonsConfig::new(12));
+    let ticks = seasons.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(40))
+        .unwrap();
+    assert!(
+        !r.value(&ticks).is_empty(),
+        "should emit despite window < floor"
+    );
+}
+
+/// Classic `seasons_waits_for_min_points`: the op stays silent until
+/// `min_points` have arrived.
+#[test]
+fn seasons_waits_for_min_points() {
+    let g = GraphBuilder::new();
+    let series = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| (n as f64 * std::f64::consts::TAU / 12.0).sin());
+    let seasons = series.augurs_seasons(AugursSeasonsConfig::new(96).with_min_points(50));
+    let ticks = seasons.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(20))
+        .unwrap();
+    assert!(r.value(&ticks).is_empty());
+}
+
+// -------------------------------------------------------------------------
+// Dynamic time warping.
+// -------------------------------------------------------------------------
+
+/// Classic `dtw_distances_reflect_similarity`: two similar series and one
+/// dissimilar one — the distance from the odd series out exceeds the distance
+/// between the similar pair.
+#[test]
+fn dtw_distances_reflect_similarity() {
+    let g = GraphBuilder::new();
+    // series 0 and 1 track each other; series 2 is scaled up and offset.
+    let readings = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let t = n as f64;
+        let a = (t * 0.3).sin();
+        vec![a, a + 0.02, 5.0 * (t * 0.3).sin() + 10.0]
+    });
+    let dists = readings.augurs_dtw(AugursDtwConfig::new(30));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+        .unwrap();
+
+    let m = r.value(&dists);
+    assert_eq!(m.rows.len(), 3, "3x3 distance matrix");
+    let d01 = m.get(0, 1).expect("in range");
+    let d02 = m.get(0, 2).expect("in range");
+    assert!(
+        m.get(0, 0).expect("in range") < 1e-9,
+        "self-distance is zero"
+    );
+    assert!(
+        d02 > d01,
+        "dissimilar series should be farther: d02={d02}, d01={d01}"
+    );
+}
+
+/// Classic `dtw_waits_for_two_samples`: with two series but only a single
+/// sample the op stays silent — a DTW distance over length-1 columns is not a
+/// windowed-history distance.
+#[test]
+fn dtw_waits_for_two_samples() {
+    let g = GraphBuilder::new();
+    let readings = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| vec![n as f64, n as f64 + 1.0]);
+    let dists = readings.augurs_dtw(8);
+    let ticks = dists.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    assert!(r.value(&ticks).is_empty());
+}
+
+/// Classic `dtw_waits_for_two_series`: the op stays silent until it has at
+/// least two series.
+#[test]
+fn dtw_waits_for_two_series() {
+    let g = GraphBuilder::new();
+    let readings = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| vec![n as f64]);
+    let dists = readings.augurs_dtw(8);
+    let ticks = dists.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
+        .unwrap();
+    assert!(r.value(&ticks).is_empty());
+}
+
+/// The Manhattan metric is selectable and still ranks a dissimilar series
+/// farther away than a near-identical one.
+#[test]
+fn dtw_manhattan_metric_ranks_similarity() {
+    use wingfoil_next::adapters::augurs::AugursDtwMetric;
+
+    let g = GraphBuilder::new();
+    let readings = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let t = n as f64;
+        let a = (t * 0.3).sin();
+        vec![a, a + 0.02, 5.0 * (t * 0.3).sin() + 10.0]
+    });
+    let dists =
+        readings.augurs_dtw(AugursDtwConfig::new(30).with_metric(AugursDtwMetric::Manhattan));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+        .unwrap();
+
+    let m = r.value(&dists);
+    assert_eq!(m.rows.len(), 3);
+    assert!(m.get(0, 2).expect("in range") > m.get(0, 1).expect("in range"));
+}
+
+// -------------------------------------------------------------------------
+// Clustering.
+// -------------------------------------------------------------------------
+
+/// Classic `cluster_groups_similar_series`: two tight groups of series plus one
+/// outlier form two clusters, with the outlier labelled as noise.
+#[test]
+fn cluster_groups_similar_series() {
+    let g = GraphBuilder::new();
+    // series 0,1 near a low sine; series 2,3 near a high sine; series 4 wild.
+    let readings = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let t = n as f64;
+        let low = (t * 0.3).sin();
+        let high = (t * 0.3).sin() + 20.0;
+        vec![
+            low,
+            low + 0.02,
+            high,
+            high + 0.02,
+            50.0 * (t * 0.9).cos() + 100.0,
+        ]
+    });
+    let clusters = readings.augurs_cluster(AugursClusterConfig::new(30, 1.0, 2));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+        .unwrap();
+
+    let last = r.value(&clusters);
+    assert_eq!(last.labels.len(), 5, "one label per series");
+    // series 0 and 1 belong to the same (non-noise) cluster.
+    assert!(last.labels[0] >= 0 && last.labels[0] == last.labels[1]);
+    // series 2 and 3 belong to the same cluster, distinct from 0/1.
+    assert!(last.labels[2] >= 0 && last.labels[2] == last.labels[3]);
+    assert_ne!(last.labels[0], last.labels[2]);
+    assert_eq!(last.cluster_count(), 2, "expected two clusters");
+    // the wild series is noise.
+    assert_eq!(last.labels[4], -1);
+}
+
+/// Classic `cluster_waits_for_two_series`: the op stays silent until it has at
+/// least two series.
+#[test]
+fn cluster_waits_for_two_series() {
+    let g = GraphBuilder::new();
+    let readings = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| vec![n as f64]);
+    let clusters = readings.augurs_cluster(AugursClusterConfig::new(8, 1.0, 2));
+    let ticks = clusters.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
+        .unwrap();
+    assert!(r.value(&ticks).is_empty());
+}
+
+/// Classic `cluster_waits_for_two_samples`: with two series but only a single
+/// sample the op stays silent — clustering length-1 columns compares single
+/// points, not histories.
+#[test]
+fn cluster_waits_for_two_samples() {
+    let g = GraphBuilder::new();
+    let readings = g
+        .ticker(Duration::from_secs(1))
+        .count()
+        .map(|&n| vec![n as f64, n as f64 + 1.0]);
+    let clusters = readings.augurs_cluster(AugursClusterConfig::new(8, 1.0, 2));
+    let ticks = clusters.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    assert!(r.value(&ticks).is_empty());
+}
+
+/// Classic `cluster_accepts_tuple_config`: `(window, epsilon,
+/// min_cluster_size)` tuples convert into a config.
+#[test]
+fn cluster_accepts_tuple_config() {
+    let g = GraphBuilder::new();
+    let readings = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let t = n as f64;
+        let low = (t * 0.3).sin();
+        vec![low, low + 0.02, low + 20.0, low + 20.02]
+    });
+    let clusters = readings.augurs_cluster((30, 1.0, 2));
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
+        .unwrap();
+    assert_eq!(r.value(&clusters).labels.len(), 4);
+}
+
+/// Next-specific: a `window` of 1 still reaches the two-sample warm-up floor
+/// and emits (classic's cluster node would never tick — see the adapter's
+/// `# Deviations from classic`).
+#[test]
+fn cluster_window_below_floor_still_emits() {
+    let g = GraphBuilder::new();
+    let readings = g.ticker(Duration::from_secs(1)).count().map(|&n| {
+        let t = n as f64;
+        vec![t, t + 0.01, t + 20.0]
+    });
+    let clusters = readings.augurs_cluster(AugursClusterConfig::new(1, 1.0, 2));
+    let ticks = clusters.accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+        .unwrap();
+    assert!(
+        !r.value(&ticks).is_empty(),
+        "should emit despite window < the two-sample floor"
+    );
 }

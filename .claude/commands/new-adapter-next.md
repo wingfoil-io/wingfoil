@@ -888,6 +888,28 @@ Then update `next/docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
 
+**Completing an earlier *partial* port** (an adapter already ✅ but with some
+classic operators/modes left behind) has three extra bookkeeping steps that are
+easy to miss because the adapter already looks done:
+
+1. **Widen the dependency's sub-feature list** in
+   `next/crates/wingfoil-next/Cargo.toml` to match classic's. The first pass
+   deliberately enabled only the sub-features its subset needed (augurs shipped
+   `ets, mstl, outlier`; the other four operators needed `changepoint, seasons,
+   dtw, clustering`), and the comment above the dep says so — update both.
+2. **Delete the capability-gap bullet from the module's `# Deviations from
+   classic` block.** A stale "only N of classic's M operators are ported" line
+   is worse than none: it is the first thing a cutover audit reads.
+3. **Flip the register row** in `next/docs/deviation-register.md` from ⚪ to ✅
+   with a `~~strikethrough~~` of the old gap text and a "**Resolved.**" note (the
+   C1/C5 rows are the template), and add the row to the "Resolved / ratified"
+   paragraph at the bottom. Any *new* deviation the completion introduces gets
+   its own D-row.
+
+Also sweep the prose that described the subset — the module docs' op list, the
+`src/adapters/mod.rs` bullet, `next/README.md`'s example table, and the
+example's own `//!` header all tend to name the ported subset explicitly.
+
 ## 14. Pre-commit checklist
 
 **Run every command in the FOREGROUND and wait for it to finish. Do NOT

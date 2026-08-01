@@ -129,7 +129,7 @@ motivated the reject only ever required two *mechanisms*, not two public
 | C2 | **zmq cross-language interop not ported.** | ⚪ | The `bincode` wire envelope is next-local; not wire-compatible with a classic/Python peer. Deferred with the Python bindings (Phase 6). `adapters/zmq.rs`. |
 | C3 | **Structural gaps** — multi-output islands; runtime graph-mutation surface; (closed: `StreamStore`, `demux_it` in #529). | ⚪ | See `port-plan.md` Phase 4.5 "Known parity gaps" and Phase 1 multi-output note. |
 | C4 | **Compiled-path IO ingestion** — busy-poll (`ALWAYS`) sources + bursts are not expressible in `compiled()`/`graph!`. | ⚪ | Deliberate exclusion; IO stays at the interpreted boundary + compiled islands. Full design + the gating decision (wake channel vs busy-spin) in `port-plan.md` "Deferred / post-v1 work". (was #502/#503) |
-| C5 | **augurs ports only `augurs_forecast` + `augurs_outlier`; `augurs_changepoint` / `augurs_seasons` / `augurs_dtw` / `augurs_cluster` are not ported.** | ⚪ | Deferred capability gap — 2 of classic's 6 operators ported; the 4 remaining are not yet needed downstream and have no next twin. `adapters/augurs.rs`; port-plan Phase-4 augurs. |
+| C5 | ~~**augurs ports only `augurs_forecast` + `augurs_outlier`; `augurs_changepoint` / `augurs_seasons` / `augurs_dtw` / `augurs_cluster` are not ported.**~~ | ✅ | **Resolved.** All 6 of classic's operators are ported: the four remaining ones landed as sliding-window transform ops in the same shape as the first two — `AugursChangepointOps::augurs_changepoint` (BOCPD, window-start index dropped), `AugursSeasonsOps::augurs_seasons` (periodogram, detector built once at wiring), `AugursDtwOps::augurs_dtw` (pairwise DTW distance matrix, Euclidean/Manhattan) and `AugursClusterOps::augurs_cluster` (DBSCAN over those distances). The `augurs` dep gained classic's `changepoint`/`seasons`/`dtw`/`clustering` sub-features. Classic's unit tests for all four are ported to `tests/augurs_adapter.rs`, and the example covers them. One new benign deviation, D12. `adapters/augurs.rs`; port-plan Phase-4 augurs. |
 
 ## D. Cosmetic / API — deliberate-and-benign (low review priority)
 
@@ -145,6 +145,7 @@ motivated the reject only ever required two *mechanisms*, not two public
 | D8 | **`print` emits per tick instead of buffering to teardown.** Classic `PrintStream` buffers every value in a `Vec` and prints the whole buffer at `Drop`; next's `Print` op prints each value immediately in `cycle`. | 🟢 | Deliberate — the observable value stream is identical (`print` is a pass-through); only the diagnostic emission differs. Per-tick printing drops the unbounded buffer (classic grows one entry/tick for the whole run), streams output as the run progresses, and survives a mid-run abort. Shedding the teardown hook also makes `print` a plain single-input `#[op]` (no hand-written `Builder`). `ops.rs::Print`. |
 | D10 | **kdb: credentials never reach an error message** — `KdbConnection::redacted()` returns `host:port` (the password is used only at the `QStream::connect` call site). | 🟢 | Credential-redaction rule (shared with postgres). Classic put no creds in error context either; next makes it explicit + test-pinned. |
 | D11 | **kdb: `kdb_read` takes classic's `buffer_size`.** | 🟢 | `kdb_read` is historical-only. The bound is **no longer inert**: after B5 (bounded historical back-pressure + lazy `chunk_stream` slicing) `buffer_size` now gives bounded-memory, pipelined historical replay (`Some(n)` paces slice fetches against the graph drain; `None` = unbounded, classic's default). `kdb_read_cached` stays unbounded like classic but streams lazily. The `kdb_write` sink takes a `buffer_size` per D3. |
+| D12 | **`augurs_cluster` floors its effective window at the two-sample warm-up.** Classic's cluster node sizes its buffer for two samples but evicts against the raw `window`, so a `window` of 1 never reaches the warm-up and the node never ticks; next grows the effective window to the floor (as classic's own `augurs_dtw` already does). | 🟢 | Only reachable for `window < 2`, where classic's behaviour is silent-never-tick. Same "grow the window to the model's floor so the node still emits" rule the forecast/seasons ops follow in both trees. `adapters/augurs.rs`; `tests/augurs_adapter.rs::cluster_window_below_floor_still_emits`. |
 | D9 | **`logged` always wires its node; classic skips it when the level is disabled.** Classic `logged` short-circuits at wiring (`log_enabled!` → return the source unchanged) and reads the tick time via `bimap` + `ticked_at_elapsed`; next always wires the op, leaning on `log!`'s internal enabled-check, and reads the time off `Ctx::time`. | 🟢 | Value stream identical (a pass-through); only the diagnostic differs, and a disabled level still costs only the internal `log!` check. Always-wiring keeps interpreted and compiled identical (a wiring-time skip is inexpressible in `compiled()`). `logged` is fluent-only (its `&str` param vs `String` cfg — see `tests/op_completeness.rs`). `ops.rs::Logged`. |
 
 ---
@@ -176,7 +177,10 @@ source, verified against `wingfoil/src/nodes/async_io.rs` + `channel.rs`; the
 register's "classic re-runs" was incorrect; the deterministic re-run subset was
 already at parity via the Phase-1 `reset` hook); **C1** (otlp trace/span export
 `OtlpSpanOps::otlp_spans` fully ported, landed with the Phase-5 latency
-infrastructure — was a ⚪ capability gap, now at metrics-parity).
+infrastructure — was a ⚪ capability gap, now at metrics-parity); **C5** (augurs
+`changepoint` / `seasons` / `dtw` / `cluster` ported, taking the adapter to all 6
+of classic's operators — was a ⚪ capability gap, now full-parity but for the
+benign D12 window floor).
 
 ## Keeping this current
 
