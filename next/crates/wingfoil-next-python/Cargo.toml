@@ -33,27 +33,30 @@ extension-module = ["pyo3/extension-module"]
 postgres = ["wingfoil-next/postgres", "dep:chrono"]
 # Kafka: the `kafka_sub` consumer source and the `kafka_pub` producer sink.
 # `rdkafka` builds librdkafka from source (`./configure` + `make`) rather than
-# linking a system library, so it can join `all-adapters` — it needs a C
-# toolchain, which every CI image already has, just build time.
+# linking a system library — it needs a C toolchain, which every CI image
+# already has.
 kafka = ["wingfoil-next/kafka"]
 # Redis: the `redis_sub` / `redis_stream_read` sources and the `redis_pub` /
-# `redis_stream_write` sinks. Pure Rust (the `redis` crate), so it ships in the
-# default wheel alongside postgres.
+# `redis_stream_write` sinks. Pure Rust (the `redis` crate).
 redis = ["wingfoil-next/redis"]
 # etcd: the `etcd_sub` watch source and the `etcd_pub` PUT sink. Pure Rust
-# (etcd-client over tonic), but it needs `protoc` at build time to compile the
-# etcd protos, so it stays out of the default wheel.
+# (etcd-client over tonic); needs `protoc` at build time to compile the etcd
+# protos, which `pypi-publish.yml` installs.
 etcd = ["wingfoil-next/etcd"]
 # Fluvio: the `fluvio_sub` consumer source and the `fluvio_pub` producer sink.
-# Pure Rust, but the fluvio client pulls a large dependency tree, so it stays
-# out of the default wheel.
+# Pure Rust; the client pulls a large dependency tree, but nothing platform-specific.
 fluvio = ["wingfoil-next/fluvio"]
 # CSV: the `csv_read` replay source and the `csv_write` file sink. Pure Rust and
-# dependency-light, so it ships in the default wheel. `dep:csv` is named here
+# dependency-light. `dep:csv` is named here
 # (not just transitively) because the reader opens the file at wiring to learn
 # its header (the engine pins the same 1.4).
 csv = ["wingfoil-next/csv", "dep:csv"]
-all-adapters = ["postgres", "kafka", "redis", "etcd", "fluvio", "csv"]
+# ZeroMQ: the `zmq_sub` subscriber (a `(data, status)` tuple) and the `zmq_pub`
+# sink, plus their etcd-discovery twins when the `etcd` feature is also on.
+# `zmq-sys` builds libzmq from source rather than linking a system one, so a C
+# toolchain is all it needs.
+zmq = ["wingfoil-next/zmq"]
+all-adapters = ["postgres", "kafka", "redis", "etcd", "fluvio", "csv", "zmq"]
 
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the

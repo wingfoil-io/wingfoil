@@ -1348,7 +1348,7 @@ tests covered — not "legacy pytest passes unchanged."
   the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
   bridge), then the per-adapter Python bindings as each Rust adapter lands.
-- **Per-adapter Python bindings** 🟡 *postgres + kafka + redis + etcd + fluvio + csv landed*: the `#[pyadapter]`
+- **Per-adapter Python bindings** 🟡 *the whole mechanical tier landed (7 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1375,10 +1375,19 @@ tests covered — not "legacy pytest passes unchanged."
   PyElement`, so the source needs no intermediate type) and dict-to-
   `KafkaRecord` write marshaling with an optional `topic` fallback. It also set
   the rule that **`next-python-test.yml` builds the module with
-  `-F all-adapters`** — each binding's service-free pytest tier only runs if the
-  wheel carries that adapter, while `[tool.maturin] features` stays the
-  *packaging* decision for released wheels (kafka is out of it: librdkafka
-  builds from source and costs minutes, though it needs no system library).
+  `-F all-adapters`**, since each binding's service-free pytest tier only runs
+  if the module carries that adapter.
+
+  **The wheel ships every adapter.** An earlier pass kept kafka/etcd/fluvio/zmq
+  out of `[tool.maturin] features` on build-time grounds, which was wrong: a
+  published wheel is the only copy a user gets, so an omitted adapter is simply
+  absent from the module and their only recourse is a from-source build with a
+  Rust toolchain — while the build cost is paid once, in the release job. The
+  criterion that *does* justify an exclusion is **portability** (a system
+  library that cannot be vendored, or a platform-specific wheel), which is
+  exactly where legacy `wingfoil-python` draws it: everything ships except
+  aeron and iceoryx2. Those two are the expected exclusions when they are
+  bound.
 
   **redis** followed, and factored the sink-side marshaling out: `RecordDict`
   in `crate::adapters::common` is the record-`dict` reader every sink binding
@@ -1408,9 +1417,15 @@ tests covered — not "legacy pytest passes unchanged."
   wiring to learn its header, so a replayed row zips back into a dict in
   *column order* (legacy's `HashMap` record lost it).
 
-  **Remaining: 9.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
-  - *mechanical* — zmq (kafka ✓, redis ✓, etcd ✓, fluvio ✓, csv ✓): a
-    scalar/bytes payload over the free-fn form;
+  **zmq** closed the mechanical tier and extended the seam once more:
+  `#[pyadapter]` now accepts a **tuple return**, so a source handing back
+  `(data, status)` erases element-wise into a Python tuple of `Stream`s — the
+  same spelling `#[pygraph]` already had. `zmq_sub`/`zmq_pub` plus their
+  etcd-discovery twins (gated on both features) are bound; `ZmqStatus` erases to
+  a `"connected"`/`"disconnected"` string, per the string-selector convention.
+
+  **Remaining: 8.** Legacy `wingfoil-python` binds 15 adapters, in four tiers:
+  - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — kdb, fix: postgres-shaped, needing a `PyPgRow`-style
     stand-in plus column marshaling;
   - *handle pyclass* — web (`WebServer`), prometheus (`PrometheusExporter`):

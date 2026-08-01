@@ -22,18 +22,30 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7"]
 # `extension-module` resolves Python symbols at load time (no libpython link in
 # the wheel). Importing `wingfoil_next` gives the Graph / Stream classes.
 #
-# Adapter features are listed one by one rather than via the `all-adapters`
-# roll-up, so each new adapter binding is a considered decision: an adapter that
-# is pure Rust (postgres, on tokio-postgres) can ship in the default wheel,
-# whereas one needing a system library at build time must stay opt-in
-# (`maturin develop -F kdb`) or it breaks the build for everyone.
+# **Every adapter binding ships**, because a published wheel is the only copy a
+# user gets: an adapter left out is simply absent from the module, and their
+# only recourse is a from-source build with a Rust toolchain. Build time is the
+# wrong criterion here — it is paid once, in the release job, never by a user —
+# so kafka and zmq (which build librdkafka / libzmq from source) and etcd (which
+# needs protoc, installed by `pypi-publish.yml`) are all in.
 #
-# kafka is deliberately *not* here, for a different reason: `rdkafka` builds
-# librdkafka from source, so it needs no system library but adds minutes to
-# every wheel build. Opt in with `maturin develop -F kafka`. CI builds it — the
-# next-python workflow develops with `-F all-adapters` so each binding's
-# service-free pytest tier actually runs.
-features = ["extension-module", "postgres", "redis", "csv"]
+# The criterion that *does* justify leaving one out is **portability**: an
+# adapter needing a system library that cannot be vendored, or one that would
+# make the wheel platform-specific. Legacy `wingfoil-python` draws the line in
+# exactly the same place, shipping everything except aeron and iceoryx2 ("can
+# make wheels Linux/POSIX-only"). Those two are the expected exclusions when
+# they are bound; keep this list explicit rather than pointing it at
+# `all-adapters` so adding one stays a decision.
+features = [
+    "extension-module",
+    "postgres",
+    "kafka",
+    "redis",
+    "etcd",
+    "fluvio",
+    "csv",
+    "zmq",
+]
 # Mixed layout: the compiled extension is the *private* `wingfoil_next._wingfoil`
 # and the importable `wingfoil_next` is the Python package under `python/`, which
 # re-exports it wholesale and adds the pure-Python surface (`CustomStream`).
