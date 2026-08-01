@@ -86,8 +86,8 @@ day-to-day next work targets `main`.
 
 ## Skills — and they are living documents
 
-Two skills carry the step-by-step recipes for the two kinds of surface you
-add to next. **Use them for their respective tasks:**
+Three skills carry the step-by-step recipes for the kinds of surface you add
+to next. **Use them for their respective tasks:**
 
 - **`/new-op-next`** (`.claude/commands/new-op-next.md`) — adding a node/op to
   the catalog (`ops.rs` / `stats.rs`): the `Op` shape, `#[op(build = …)]`, the
@@ -96,15 +96,22 @@ add to next. **Use them for their respective tasks:**
 - **`/new-adapter-next`** (`.claude/commands/new-adapter-next.md`) — adding an
   I/O adapter under `src/adapters/`: source/sink shapes, feature gating, the
   parity obligation, and the adapter tests.
+- **`/bind-adapter-next`** (`.claude/commands/bind-adapter-next.md`) — adding
+  the **Python bindings** for an adapter that is already ported:
+  `#[pyadapter]` shapes, the feature/wheel roll-ups, dynamic payloads, the GIL
+  rules, and the three test tiers. `/new-adapter-next` links here for its
+  Python step, so a brand-new adapter runs both.
 
-**Both files are living documents — keep them current.** Every time you
-onboard a new op or adapter, *or change an existing one*, check whether the
-work surfaced something the matching skill doesn't yet capture — a recurring
-pitfall, a new invariant, a CI gate, a pattern worth codifying, a deviation
-that should become a rule — and fold it back into that skill (ideally in the
-same PR). The adapter skill already grew several of its rules exactly this
-way. A skill that has drifted from how we actually build ops/adapters is a
-bug; treat updating it as part of "done", not an optional extra.
+**All three are living documents — keep them current.** Every time you
+onboard a new op, adapter, or binding, *or change an existing one*, check
+whether the work surfaced something the matching skill doesn't yet capture — a
+recurring pitfall, a new invariant, a CI gate, a pattern worth codifying, a
+deviation that should become a rule — and fold it back into that skill
+(ideally in the same PR). The adapter skill already grew several of its rules
+exactly this way, and the binding skill was extracted out of it once the first
+real adapter binding landed. A skill that has drifted from how we actually
+build ops/adapters is a bug; treat updating it as part of "done", not an
+optional extra.
 
 ## Pre-commit checklist (same as repo root)
 

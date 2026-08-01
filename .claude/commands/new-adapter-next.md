@@ -854,117 +854,25 @@ existing hub exactly as the classic adapters do:
 
 ### Exposing the adapter to Python — `#[pyadapter]`
 
-`wingfoil-next-python` is now the go-forward Python binding (it **supersedes**
-the legacy `wingfoil-python`; see `next/docs/python-interop.md`). A next adapter
+`wingfoil-next-python` is the go-forward Python binding (it **supersedes** the
+legacy `wingfoil-python`; see `next/docs/python-interop.md`). A next adapter
 reaches Python through the `#[pyadapter]` proc macro — values erase to
-`PyElement` at the boundary, the adapter's interior stays natively typed:
+`PyElement` at the boundary while the adapter's interior stays natively typed.
 
-Write the binding as **free functions**, receiver first — not as a trait. The
-`impl Trait for GraphBuilder` form also works, but its trait exists only to give
-the macro a receiver and costs a throwaway trait plus a second copy of every
-signature; a binding never calls itself fluently from Rust. `name` must differ
-from the fn's own name (the macro emits a `#[pyfunction]` of that name beside
-it), which is why the fns below are short — the module is already `$ARGUMENTS`.
+That is its own recipe, and it is long enough to have its own skill:
 
-- **Source** — `#[pyadapter(name = $ARGUMENTS_read, source)]` on
-  `fn read(g: &GraphBuilder, args…) -> Result<Stream<T>>` emits
-  `wingfoil_next.$ARGUMENTS_read(graph, args…) -> Stream`.
-- **Sink** — `#[pyadapter(name = $ARGUMENTS_write)]` (no `source` marker) on
-  `fn write(stream: &Stream<T>, args…) -> Result<Stream<()>>` emits
-  `wingfoil_next.$ARGUMENTS_write(stream, args…)`.
+**Run `/bind-adapter-next $ARGUMENTS`** (`.claude/commands/bind-adapter-next.md`)
+— it covers the free-fn source/sink/burst shapes, feature gating and the two
+roll-ups (`all-adapters` vs the maturin wheel), module registration, fallible
+wiring and forwarded `#[pyo3(signature = …)]`, the run-mode-as-argument rule and
+the `adapters::common` helpers, dynamic payloads, the GIL rules, the three test
+tiers, and the CI leg.
 
-The `ramp_source` (source) and `list_sink` (sink) demos in `src/python.rs` are
-the minimal templates, and `tests/plugin_seam.rs` shows the same from an
-external crate. **For a real, service-backed adapter, copy
-`crates/wingfoil-next-python/src/adapters/postgres.rs`** — the first one bound,
-and the template for everything below.
-
-**Where it goes, and how it is gated.** A real adapter binding lives in its own
-module, `crates/wingfoil-next-python/src/adapters/<name>.rs`, behind a
-`wingfoil-next-python` cargo feature of the same name that turns on the matching
-engine feature (`<name> = ["wingfoil-next/<name>", …]`) and is added to the
-`all-adapters` roll-up. Register the generated `#[pyfunction]`s in
-`python.rs`'s `register_adapters` under the same `#[cfg]`, importing them **by
-name** (`wrap_pyfunction!` needs pyo3's hidden wrapper in scope, so a
-module-qualified path does not resolve). List the feature in `pyproject.toml`'s
-`[tool.maturin] features` only if the adapter is pure Rust — one needing a
-system library at build time must stay opt-in or it breaks the wheel for
-everyone.
-
-**Fallible wiring.** Real adapters validate at wiring (run window, run mode,
-config), so the fn returns `Result<Stream<T>>`; `#[pyadapter]` then generates a
-`PyResult`-returning function and the error surfaces as a Python exception.
-
-**Optional arguments.** Put `#[pyo3(signature = (…))]` on the adapter fn over
-*your own* params — the macro forwards it and injects the generated
-`graph`/`stream` receiver.
-
-**Shared run-shape helpers.** `crate::adapters::common` already carries what
-every mode-aware source binding needs: `historical_params(start_nanos,
-duration_nanos)`, `realtime_params()`, `run_mode(realtime)` and
-`secs_to_nanotime(secs)`. Use them rather than rebuilding `RunParams` inline; add
-to that module when you find the next repeated conversion.
-
-**Dynamic payloads.** Where a Rust caller writes a record struct, Python has
-none — supply a dynamic stand-in. Reads decode into a plain-Rust intermediate
-(no `Py<PyAny>` inside, so it can cross to the adapter's worker thread) that
-implements `From<T> for PyElement`. Writes usually need a runtime `columns`-style
-argument to interpret the Python value, which is not in scope at the
-`typed_burst_input` seam — so keep the sink's input erased
-(`impl … for Stream<Burst<PyElement>>`, using the identity
-`PyElement: TryFrom<&PyElement>`) and marshal inside the method with a
-`try_map`. Marshaling must fail **loudly**: a missing key or wrong-typed value
-aborts the run rather than writing a silent `NULL`.
-
-**Tests, in the same PR**, split like the adapter's Rust tests:
-- Rust `#[cfg(test)]` marshaling tests in the binding module (row → `dict`,
-  `dict` → typed params, the error paths, query construction) — these run in
-  `next-python-test.yml` via `cargo test -p wingfoil-next-python --features
-  all-adapters`.
-- `crates/wingfoil-next-python/tests/test_<name>.py`, in two groups: unit-level
-  wiring tests with **no** service (argument defaults, wiring-time rejections,
-  marshaling errors) that run by default, and `@pytest.mark.requires_<name>`
-  integration tests, deselected by default via the `addopts` in
-  `pyproject.toml`. Register the marker there.
-- A Python leg in `.github/workflows/<name>-next-integration.yml`: start the
-  service on its fixed port (the Rust tests use testcontainers, the Python ones
-  need a known host/port), `maturin develop`, then
-  `pytest -m requires_<name> tests/test_<name>.py -v`. Add the binding and test
-  paths to the workflow's `paths:` triggers.
-
-`#[pyadapter]` handles **burst** adapters too — the common shape, since the
-layering conventions above make most real adapters `Stream<Burst<T>>`
-sources/sinks. A `Stream<Burst<T>>` erases to a Python **`list`** per tick
-(same-instant values grouped); on the way *in* a Python `list`/`tuple` rebuilds
-a multi-value burst (else a single-element burst), so a burst source
-round-trips into a burst sink. `Burst<T>` may appear as a source's return, a
-sink's `Self`, or a transform's output. Templates: the `pair_source` (burst
-source) and `burst_list_sink` (burst sink) demos in `src/python.rs`, and
-`burst_double` in `tests/plugin_seam.rs`.
-
-Constraints: the method's params become `#[pyfunction]` params, so they must be
-`FromPyObject` (`i64`/`f64`/`String`/`Py<PyAny>`/… — a Rust-only handle like
-`Rc<RefCell<…>>` can't cross); and the value type edge-converts
-(`T: TryFrom<&PyElement>` in, `U: Into<PyElement>` out).
-
-**A wiring-time `RunParams`/`RunMode` becomes an argument.** A Python `Graph`
-does not know its run mode until `run()`, so a source needing the run window (or
-the mode) at wiring — as `postgres_read` does to slice queries — takes it as
-explicit args (`start_nanos` / `duration_nanos` / `realtime`) that must match the
-eventual `graph.run(...)`. Expose the unified `<name>_source` too where the
-adapter has one: it is the mode-agnostic wiring, and Python is exactly where
-that ergonomic pays off.
-
-**Watch the GIL for real-time sources.** `PyGraph::run` releases the GIL for the
-duration of the run; without that a live-tail source's worker thread — and every
-other Python thread — is blocked until `run` returns, so the source only ever
-sees data that already existed. If you add a live-tail binding, cover it with an
-integration test that inserts **from another Python thread mid-run** — that is
-the only test shape which catches a regression here.
-
-So expose your adapter via `#[pyadapter]` (source, sink, or burst) and add the
-pytest case in the same PR — service-backed integration bindings follow the
-same recipe.
+Bind the adapter in the **same PR** as the port where you reasonably can — the
+binding is small once the Rust adapter exists, and a port that lands without one
+just becomes a second PR someone has to remember. If you do split it, say so in
+the PR and leave the Phase 6 bullet in `next/docs/port-plan.md` unticked for
+`$ARGUMENTS`.
 
 ## 13. Superset audit + roadmap bookkeeping
 
