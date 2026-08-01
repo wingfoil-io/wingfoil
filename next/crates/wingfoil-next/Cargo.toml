@@ -495,6 +495,20 @@ name = "iceoryx2_sub"
 path = "examples/iceoryx2/sub.rs"
 required-features = ["iceoryx2"]
 
+# Ports of the classic `wingfoil/examples/latency/{pub,sub}.rs` — the
+# cross-process demonstration of the Phase-5 latency infrastructure
+# (`latency_stages!` + `Traced<T, L>` + `.stamp::<Stage>()` + `latency_report`)
+# over an iceoryx2 shared-memory hop. Run the subscriber first.
+[[example]]
+name = "latency_pub"
+path = "examples/latency/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "latency_sub"
+path = "examples/latency/sub.rs"
+required-features = ["iceoryx2"]
+
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.
 [[example]]

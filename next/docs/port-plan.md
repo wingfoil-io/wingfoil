@@ -1363,6 +1363,16 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
 
 ## Phase 5 — infrastructure
 
+**Status: ✅ complete, with two ratified non-goals.** Every item below is
+either landed or explicitly ruled out — there is no open engineering work in
+this phase. The two things next will *not* do (graph export; latency on the
+compiled path) are now carried as **C6** and **C7** in the
+[deviation register](./deviation-register.md), so they get a cutover ruling
+instead of reading as unfinished port work. The one downstream consequence —
+deleting the `wingfoil-derive` crate once the legacy tree goes — is on the
+Phase 7 checklist. The remaining `#[op]` item (generating the *fluent* method
+too) is a deliberate deferral, not owed: see the sub-bullet below.
+
 - **Latency** ✅ **landed** (`src/latency.rs`): stamps ride values as today
   (`Traced` is just a payload, re-exported from classic together with
   `Latency`/`Stage`/`HasLatency`/`StageStats`/`LatencyStats` and the
@@ -1374,11 +1384,18 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
   **Deviation**: fluent/interpreted only (matching classic, which exposes
   latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
   *type* parameter, which does not map onto the `graph!` value-dispatch table,
-  so compiled/nested support is out of scope for this op family.
+  so compiled/nested support is out of scope for this op family. Registered as
+  **C7** in the [deviation register](./deviation-register.md).
+  Cross-process proof: the `latency` example (`examples/latency/`) runs the
+  full stamp → publish → subscribe → report loop over iceoryx2, and
+  `tests/iceoryx2_adapter.rs` pins the `Traced` round trip.
 - **Graph export**: ❌ **not doing this** (GML from `Builder` topology + debug
   labels). Deferred deliberately — we want a better introspection/visualization
   story than a one-off GML dump, to be designed and scoped separately later
-  rather than ported as-is from classic.
+  rather than ported as-is from classic. Because classic's `Graph::export`
+  is a *public* API, this is registered as **C6** in the
+  [deviation register](./deviation-register.md) and needs an explicit ruling
+  at cutover rather than silent omission.
 - **`#[node]` retirement** ✅ **done in next**: replaced by `Op` impls. There
   is no `#[node]`, and no dependency on `wingfoil-derive`, anywhere under
   `next/` — every node in the catalog, the adapters, and the tests is an `Op`
@@ -1388,7 +1405,8 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
   `GraphBuilder::custom_node` plus the public `register_op1`…`register_op4`
   primitives (`tests/custom_node.rs`, `tests/custom_op.rs`). Deleting the
   `wingfoil-derive` *crate* belongs to the cutover, when the legacy tree it
-  serves is removed; nothing in next blocks it.
+  serves is removed; nothing in next blocks it — it is on the **Phase 7**
+  checklist below so the retirement is not left half-done at the swap.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
   interpreted `Builder` method *and* the `graph!`/compiled forwarders from one
   attribute, with labels derived from `type_name`; there is no per-op table in
@@ -1658,9 +1676,13 @@ tests covered — not "legacy pytest passes unchanged."
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `graph!`),
   keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
   breadth_first, run_mode, statistics, threading, async, feedback, and the
-  runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`), and
-  `tracing` (the `log` mode — the `logged` debug tap through `env_logger`).
-  Remaining: `latency` / `telemetry` (adapter/cross-process); and the `tracing`
+  runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`),
+  `tracing` (the `log` mode — the `logged` debug tap through `env_logger`), and
+  `latency` (`examples/latency/{pub,sub}.rs` — the cross-process
+  `latency_stages!` + `Traced` + `.stamp::<Stage>()` + `latency_report` loop
+  over an iceoryx2 hop, closing the Phase-5 infrastructure end to end; it fixes
+  two defects in the classic pair, see that example's README).
+  Remaining: `telemetry` (adapter/cross-process); and the `tracing`
   example's other two modes — `tracing` (route events through a
   `tracing-subscriber`) and `instruments` (engine spans around `run`/cycle) —
   which are ⏳ *blocked* on porting next's `tracing` / `instrument-*` engine
@@ -1691,6 +1713,15 @@ tests covered — not "legacy pytest passes unchanged."
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
   files, and `wingfoil-codegen-build-example` are removed. `Kernel`,
   `KernelWaker`, `waker_channel` remain (they are the engine core now).
+- **Delete the `wingfoil-derive` crate** (the `#[node]` attribute macro).
+  Nothing under `next/` depends on it — the Phase-5 retirement is already
+  complete on the next side — so its removal is purely a consequence of the
+  legacy tree going away: drop the crate directory, its workspace member
+  entry, and the `wingfoil-derive` dependency from `wingfoil`'s manifest.
+- **Rule on the deviation register's open ⚪/🟡 items** — in particular **C6**
+  (`Graph::export` / GML, a public classic API next deliberately does not
+  provide) and **C7** (latency ops are interpreted-only). Every remaining 🔴
+  and 🟡 needs an explicit accept/fix decision before the swap.
 - Docs: rewrite crate docs + CLAUDE.md for the op pattern; migration guide
   from `#[node]` to `Op`.
 - Version: next merges into `wingfoil` as a major bump.
