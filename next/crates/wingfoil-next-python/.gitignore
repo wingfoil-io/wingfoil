@@ -1,3 +1,8 @@
 /dist/
 *.whl
 .venv/
+# A compiled extension staged into the package dir for a local docs build.
+*.so
+# Sphinx output and the autosummary stubs it generates (see docs/README.md).
+/docs/_build/
+/docs/api_generated/

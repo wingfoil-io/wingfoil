@@ -20,7 +20,7 @@
 use anyhow::Result;
 use axum::body::Bytes;
 use serde::Serialize;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 use super::codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope};
 use super::server::WebServer;
@@ -37,8 +37,8 @@ use crate::fluent::{Stream, StreamOps};
 pub trait WebSinkOps {
     /// Publish every upstream value on `topic`. Returns the sink `Stream<()>`.
     ///
-    /// Works identically under [`RunMode::RealTime`](wingfoil::RunMode::RealTime)
-    /// and [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom) — a
+    /// Works identically under [`RunMode::RealTime`](wingfoil_next::RunMode::RealTime)
+    /// and [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom) — a
     /// historical replay (or any finite `RunFor`) streams its values out to
     /// subscribed clients just like a live run, which is what powers
     /// browser-side visualisation of a backtest or slow computation. When the

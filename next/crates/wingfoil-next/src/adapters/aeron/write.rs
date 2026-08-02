@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::Result;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use super::error::TransportError;
 use super::status::AeronStatus;

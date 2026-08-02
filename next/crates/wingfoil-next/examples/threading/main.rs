@@ -28,9 +28,9 @@
 use std::thread;
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::channel::ChannelSender;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Run the producer-on-a-worker-thread pipeline in `run_mode` and return the
 /// scaled values the main graph collected, burst by burst.

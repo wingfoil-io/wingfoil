@@ -11,9 +11,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::zmq::{ZeroMqPub, zmq_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// `zmq_sub` rejects a `HistoricalFrom` run at wiring time — the live,
 /// never-closing subscriber has no historical timeline to replay, and next's

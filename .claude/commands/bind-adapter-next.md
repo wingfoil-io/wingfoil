@@ -245,6 +245,16 @@ stand-in:
   identity `PyElement: TryFrom<&PyElement>`) and marshal inside the fn with a
   `try_map`.
 
+A third case is an argument that changes the **value shape itself**, not just
+how a fixed one is interpreted — iceoryx2's `stages`, which turns each sample
+from `bytes` into a `TracedBytes`. A `#[pyadapter]` fn has one return type, so
+the branch cannot live at the erasure seam: return `Stream<Burst<PyElement>>`
+and do the decode in a `map`/`try_map` of your own (one `Python::attach` around
+the whole burst), leaving the seam to erase already-Python values to a `list`.
+The sink direction is the erased-input rule above. Say in the module header
+that the extra node is deliberate — it is the price of one signature covering
+both shapes, and it costs a `Vec` per tick, not a GIL acquire.
+
 Two payload shapes show up. Postgres declares its schema once and decodes
 against it; kdb tags **every value** with its own type, so `PyKdbRow` dispatches
 on `k.get_type()` per column. Either way the *unsupported* arm is an error (see
@@ -402,6 +412,14 @@ name in `Cfg`. Two consequences worth knowing before you start:
 - The binding module's `//!` header: the entry-point table (Python name → Rust
   fn → shape), how the dynamic edge works, and a numbered **deviations from the
   legacy `wingfoil-python` bindings** section. `postgres.rs` is the model.
+- **`next/crates/wingfoil-next/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
+  `## Python` section. That is where an agent picking the adapter up cold looks
+  for: the binding's cargo feature, whether it is in `all-adapters` and in the
+  **wheel** (and why not, if not), the entry points it exposes and any Rust
+  entry point it deliberately does *not*, whether it is `#[pyadapter]` or
+  hand-written, the test file and its marker, and which workflow leg runs the
+  marked tier. Every one of those is a fact this recipe made you decide — record
+  it there rather than leaving it to be reverse-engineered from `Cargo.toml`.
 - `next/docs/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
   add `$ARGUMENTS` and keep the remaining count honest.
 - `next/docs/python-interop.md` — the "Per-adapter Python bindings" row of the
@@ -443,7 +461,9 @@ Before opening the PR, run a clean-context review pass as a subagent:
 3. Check the boundary rules in step 5 hold — especially the per-burst attach and
    that no `Py<PyAny>` reaches a worker thread.
 4. Confirm the three test tiers exist, that the unit tier really needs no
-   service, and that a live-tail binding has the cross-thread test.
+   service, and that a live-tail binding has the cross-thread test. Confirm the
+   adapter's `CLAUDE.md` `## Python` section matches what actually shipped
+   (feature, roll-ups, entry points, marker, workflow leg).
 5. Run the step-8 checklist and confirm every command passes.
 6. Review for quality: no speculative abstraction, no dead code, no comments
    restating the code.

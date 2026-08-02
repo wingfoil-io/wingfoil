@@ -7,8 +7,8 @@
 //! ([`Activation`]) that tells engines statically whether it ever will.
 
 use anyhow::Result;
-use wingfoil::codegen::Kernel;
-use wingfoil::{NanoTime, RunMode, TimeQueue};
+use wingfoil_next::Kernel;
+use wingfoil_next::{NanoTime, RunMode, TimeQueue};
 
 /// Static declaration of how the engine must activate an op — beyond a plain
 /// upstream data-tick.
@@ -24,7 +24,7 @@ pub struct Activation {
     /// `start`, and can therefore be activated without an upstream tick.
     pub schedules: bool,
     /// The op is fed by an external thread or async task that wakes the
-    /// kernel (via a [`KernelWaker`](wingfoil::codegen::KernelWaker)).
+    /// kernel (via a [`KernelWaker`](wingfoil_next::KernelWaker)).
     /// Realtime mode only — external events have no place in a deterministic
     /// historical replay, and engines reject the combination.
     pub threaded: bool,

@@ -11,10 +11,10 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
 use wingfoil_next::latency::{Latency, Stage, Traced, latency_stages};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 latency_stages! {
     pub TestLatency {

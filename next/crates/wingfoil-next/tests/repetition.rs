@@ -2,7 +2,7 @@
 //! 1. the sugar unrolls to the *same* DAG as hand-written `map`s + `merge`s;
 //! 2. the dual-mode contract still holds (interpreted == compiled) for it.
 
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 

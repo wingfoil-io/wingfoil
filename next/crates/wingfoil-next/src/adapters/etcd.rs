@@ -119,7 +119,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use etcd_client::{Client, Compare, CompareOp, GetOptions, PutOptions, Txn, TxnOp, WatchOptions};
 use futures::StreamExt;
-use wingfoil::{NanoTime, RunMode};
+use wingfoil_next::{NanoTime, RunMode};
 
 use crate::Burst;
 use crate::async_source::{RunParams, consume_async, produce_async};

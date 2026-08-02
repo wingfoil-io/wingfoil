@@ -10,9 +10,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::csv::{CsvSinkOps, csv_read};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// The classic parity record: a positional `(time, value)` tuple.
 type Record = (NanoTime, u32);

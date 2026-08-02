@@ -15,8 +15,8 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A one-per-second counter, tapped by `logged` so each tick is emitted as a
 /// `log` record (`"{time} tick {value}"`, target `"wingfoil"`, level `info`).

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::*;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::Burst;
 use crate::channel::ChannelSender;

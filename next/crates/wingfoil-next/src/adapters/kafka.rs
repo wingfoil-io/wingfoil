@@ -110,7 +110,7 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::types::RDKafkaErrorCode;
 use std::time::Duration;
-use wingfoil::{NanoTime, RunMode};
+use wingfoil_next::{NanoTime, RunMode};
 
 use crate::Burst;
 use crate::async_source::{RunParams, consume_async_bursts, produce_async};

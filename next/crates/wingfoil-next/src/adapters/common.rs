@@ -27,7 +27,7 @@
 //! the gate later (`next/docs/port-plan.md`, Phase 4 items 4–5). Only the
 //! `TimeWindow`/`WindowFilter` surface above is always compiled.
 
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 /// A half-open on-graph time window `[lo, hi)`.
 #[derive(Clone, Copy, Debug)]

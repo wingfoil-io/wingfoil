@@ -10,19 +10,34 @@ description = "Design prototype: dual-mode (interpreted + compiled) stream graph
 workspace = true
 
 [dependencies]
-# Reuses the clock/scheduler core (`codegen::Kernel`), `NanoTime` and the
-# run-mode types. Everything else — the Op trait, ops, and engines — is
-# from-scratch.
-wingfoil = { path = "../../../wingfoil" }
+# NOTE: this crate must NOT depend on `wingfoil`. The dependency runs the other
+# way — `wingfoil` depends on this crate and re-exports `src/runtime/` (engine
+# time, run bounds, the time queue, `Burst` and the `Kernel`) — so that the
+# cutover can delete the legacy tree outright instead of disentangling it
+# first. The only edge back to `wingfoil` is a dev-dependency, for the parity
+# tests and the classic-vs-next comparison benches.
 wingfoil-next-macros = { path = "../wingfoil-next-macros" }
 anyhow = { workspace = true }
-# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the re-exported `burst!` macro
-# expands to `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for
-# that macro to resolve. Version mirrors the classic `wingfoil` crate.
+# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
+# `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro
+# to resolve.
 tinyvec = { version = "1.10.0", features = ["alloc"] }
 # Used by the always-compiled `adapters::common` module (the out-of-window row
-# filter's summary warning). Version mirrors the classic `wingfoil` crate.
+# filter's summary warning).
 log = { workspace = true }
+
+# --- the shared runtime core (`src/runtime/`), moved here from `wingfoil` ---
+# `NanoTime`: quanta for the cheap TSC-backed clock, chrono for the
+# NaiveDateTime conversions, formato for `pretty()`, serde for the wire
+# formats, derive_more/derive-new for its derives.
+quanta = "0.9.3"
+chrono = { workspace = true }
+derive_more = { workspace = true }
+derive-new = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+formato = "0.3.0"
+# `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`).
+crossbeam = "0.8.4"
 
 # `async` feature: the `produce_async` ergonomic source (async closure →
 # timestamped burst stream) over the channel. Optional so the core engine
@@ -39,7 +54,6 @@ tokio = { version = "1", features = [
 # so the default build stays dependency-free. Versions mirror the classic
 # `wingfoil` crate's csv adapter.
 csv = { version = "1.4", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
@@ -165,7 +179,6 @@ thiserror = { version = "2.0", optional = true }
 tokio-postgres = { version = "0.7", features = [
     "with-chrono-0_4",
 ], optional = true }
-chrono = { version = "0.4", optional = true }
 
 # `kdb` feature: KDB+/q connectivity — time-partitioned historical reads
 # (`kdb_read`, `kdb_read_cached`), a real-time tickerplant subscription
@@ -246,10 +259,30 @@ kanal = { version = "0.1.1", optional = true }
 # no subscriber is installed, matching classic's dependency.
 tracing = { workspace = true, features = ["log", "attributes"], optional = true }
 
+# `bench` feature: `criterion` is needed by the `bencher` helper module (the
+# `add_bench` harness the graph benches drive), which is part of the *library*
+# rather than the bench targets, so it cannot come from dev-dependencies.
+# Mirrors classic wingfoil's optional `criterion` + `bench` feature exactly.
+criterion = { version = "0.8.1", optional = true }
+
 [dev-dependencies]
+# The classic engine, as the port's parity oracle: `tests/engine_semantics.rs`
+# asserts next reproduces classic's values and tick times, and `benches/tiers.rs`
+# measures the tiers against it. Dev-only, so the *library* dependency still
+# runs `wingfoil` -> `wingfoil-next` and nothing under `next/` links legacy.
+# Cargo permits this cycle precisely because it is dev-only. It goes away with
+# the legacy tree at cutover.
+wingfoil = { path = "../../../wingfoil" }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
+# Comparison baseline for the `bfs_vs_dfs_reactive` bench — a depth-first
+# reactive framework measured against wingfoil's breadth-first scheduler.
+# Version mirrors the classic `wingfoil` crate's dev-dependency.
+rxrust = "1.0.0-rc.3"
+# Allocation profiling for the `aeron_allocation_tracking` bench (behind the
+# `dhat-heap` feature). Mirrors the classic `wingfoil` crate.
+dhat = "0.3"
 # The `latency_stages!` macro derives serde on the generated record, so a crate
 # invoking it (here, the latency tests) needs serde in scope.
 serde = { version = "1.0", features = ["derive"] }
@@ -260,9 +293,22 @@ env_logger = { workspace = true }
 # the engine-instrumentation tests (which collect the emitted span names through
 # a small custom `Layer`). Mirrors the classic tracing example's dev-dependency.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
+# (`sched_setaffinity`). Classic carries the same dev-dependency for the same
+# reason. `libc` is also an *optional* [dependencies] entry above, enabled by
+# `aeron-integration-test`; the two entries are independent.
+libc = "0.2"
 
 [features]
 default = []
+# Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
+# Off by default so consumers don't pull in criterion's dependency tree.
+# Mirrors classic wingfoil's `bench` feature.
+bench = ["dep:criterion"]
+# Turns on the `dhat` global allocator in the aeron allocation-tracking bench,
+# so its `offer` / `try_claim` / `poll` hot paths are profiled for allocations.
+# Mirrors classic wingfoil's `dhat-heap` feature.
+dhat-heap = []
 # `tokio/sync` backs `consume_async`'s bounded/unbounded sink channels; it is
 # part of the async module, so the feature enables it directly rather than
 # relying on a companion adapter (etcd-client) to pull it in transitively.
@@ -270,11 +316,11 @@ async = ["dep:tokio", "dep:futures", "tokio/sync"]
 # `async` + `async-stream` back the lazy, back-pressured `csv_read` replay
 # source (a lazy `produce_async` + `buffer_size` producer streaming rows on
 # demand, so a huge file is not read into memory up front). The sink stays synchronous.
-csv = ["dep:csv", "dep:serde", "dep:serde-aux", "async", "dep:async-stream"]
+csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
-cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
+cache = ["dep:sha2", "dep:bincode", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
@@ -285,7 +331,7 @@ redis-integration-test = ["redis", "dep:testcontainers"]
 # PostgreSQL adapter. Built on `async` (produce_async live tail + block_on
 # reader/sink) and `async-stream` (the sub's `stream!` macro); `chrono` for the
 # timestamp column conversions.
-postgres = ["dep:tokio-postgres", "dep:chrono", "dep:async-stream", "async"]
+postgres = ["dep:tokio-postgres", "dep:async-stream", "async"]
 postgres-integration-test = ["postgres", "dep:testcontainers"]
 # Streaming Kafka consume source + produce sink. Built on the async
 # `produce_async` / `consume_async` ergonomics; needs `async-stream` for the
@@ -298,7 +344,6 @@ kafka-integration-test = ["kafka", "dep:testcontainers"]
 # `stream!` macro). Mirrors classic wingfoil's `web` deps.
 web = [
     "async",
-    "dep:serde",
     "dep:axum",
     "dep:tower-http",
     "dep:tokio-tungstenite",
@@ -354,7 +399,7 @@ iceoryx2-integration-test = ["iceoryx2"]
 # `stream!` macros), `chrono` (the write timestamp column), and the `cache`
 # feature (the file cache behind `kdb_read_cached`, which also supplies
 # `sha2`/`bincode`/`serde`/`tokio/fs`). Mirrors classic wingfoil's `kdb` deps.
-kdb = ["dep:kdb-plus-fixed", "dep:chrono", "dep:async-stream", "cache"]
+kdb = ["dep:kdb-plus-fixed", "dep:async-stream", "cache"]
 # KDB+ cannot be run under `testcontainers` (no public, freely-licensed image),
 # so the integration tests probe an externally-provided instance (KDB_TEST_HOST
 # / KDB_TEST_PORT, default localhost:5000) and skip when unreachable — no
@@ -368,7 +413,7 @@ prometheus-integration-test = ["prometheus", "dep:reqwest"]
 # ZMQ pub/sub adapter. `bincode`/`serde` frame the wire envelope; the `zmq` crate
 # links the system `libzmq`. No `async` — the subscriber uses a background thread
 # over the `channel` layer (matching classic).
-zmq = ["dep:zmq", "dep:bincode", "dep:serde"]
+zmq = ["dep:zmq", "dep:bincode"]
 # Core pub/sub parity tests (real sockets, no external service / container).
 zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
@@ -392,7 +437,7 @@ otlp-integration-test = ["otlp", "dep:testcontainers"]
 # deliberately does NOT pull in `async`; `rustls`/`webpki-roots` back the TLS
 # initiator and `kanal` backs the lock-free outbound inject channel. Versions
 # mirror the classic `wingfoil` crate's `fix` adapter so the two trees don't drift.
-fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal", "dep:chrono"]
+fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal"]
 # The FIX adapter's cross-process parity tests spin up an in-process acceptor +
 # initiator over real loopback sockets (no external service / container), so this
 # gates the same-process integration tests. Mirrors classic wingfoil's
@@ -469,6 +514,71 @@ harness = false
 [[bench]]
 name = "store_baseline"
 harness = false
+
+# --- Ports of the classic `wingfoil/benches/*` suite --------------------------
+# Target names, paths and `required-features` gating mirror the classic
+# declarations one-for-one so `cargo bench --bench <name>` is the same
+# invocation on either tree. See `benches/README.md`.
+
+[[bench]]
+name = "graph"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "nanotime"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_wingfoil"
+path = "benches/bfs_vs_dfs/wingfoil.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "bfs_vs_dfs_reactive"
+path = "benches/bfs_vs_dfs/reactive.rs"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_async_streams"
+path = "benches/bfs_vs_dfs/async_streams.rs"
+harness = false
+required-features = ["async"]
+
+[[bench]]
+name = "iceoryx2"
+harness = false
+required-features = ["iceoryx2"]
+
+[[bench]]
+name = "iceoryx2_modes"
+harness = false
+required-features = ["iceoryx2"]
+
+[[bench]]
+name = "aeron_publication_latency"
+path = "benches/aeron/publication_latency.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_subscription_throughput"
+path = "benches/aeron/subscription_throughput.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_transceiver"
+path = "benches/aeron/transceiver.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_allocation_tracking"
+path = "benches/aeron/allocation_tracking.rs"
+harness = false
+required-features = ["aeron"]
 
 # The lines replay source is behind `async` (lazy `produce_async` +
 # `buffer_size` replay, like csv); the example uses it, so it requires the feature.
@@ -550,6 +660,20 @@ required-features = ["iceoryx2"]
 name = "latency_sub"
 path = "examples/latency/sub.rs"
 required-features = ["iceoryx2"]
+
+# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# the nine-stage, three-process end-to-end latency demo
+# (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
+# back). `required-features` mirror the classic manifest one-for-one.
+[[example]]
+name = "latency_e2e_ws_server"
+path = "examples/latency_e2e/ws_server.rs"
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
+
+[[example]]
+name = "latency_e2e_fix_gw"
+path = "examples/latency_e2e/fix_gw.rs"
+required-features = ["fix", "iceoryx2"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.

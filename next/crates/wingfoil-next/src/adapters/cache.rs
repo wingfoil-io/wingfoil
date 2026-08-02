@@ -27,14 +27,14 @@
 //! unit tests port across verbatim (`tests/cache_adapter.rs`). The one
 //! behavioural deviation is cosmetic: next's `FileCache` log messages drop the
 //! classic "KDB " prefix (the cache is not kdb-specific in next) — deviation
-//! register D7. The only surface change is the crate path (`wingfoil::NanoTime`
+//! register D7. The only surface change is the crate path (`wingfoil_next::NanoTime`
 //! for the time type).
 
 use anyhow::Result;
 use log::info;
 use std::path::PathBuf;
 use std::time::SystemTime;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 /// Opaque cache key derived from a query string.
 ///
