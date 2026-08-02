@@ -9,12 +9,12 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::fluvio::{
     FluvioConnection, FluvioRecord, FluvioSinkOps, FluvioSourceConfig, fluvio_source, fluvio_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// `fluvio_sub` rejects a `HistoricalFrom` run at wiring time — the live,
 /// unbounded, wall-clock consumer has no historical timeline to replay, and the

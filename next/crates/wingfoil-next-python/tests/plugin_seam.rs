@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use pyo3::prelude::*;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::Stream;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 use wingfoil_next_python::{
     Activation, Ctx, Op, PyElement, PyGraph, Tick, pyadapter, pygraph, pyop,
 };

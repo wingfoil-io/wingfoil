@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::DemuxEvent;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 type Instrument = u64;
 type Price = u64;

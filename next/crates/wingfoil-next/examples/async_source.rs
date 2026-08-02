@@ -15,8 +15,8 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn main() {
     let g = GraphBuilder::new();

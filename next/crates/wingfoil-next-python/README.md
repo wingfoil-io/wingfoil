@@ -53,7 +53,17 @@ engine has no hook to reset it, so a second `run()` raises.
 
 The `wingfoil_next::adapters::*` adapters are exposed as module-level functions
 (`src/adapters/`), each behind a cargo feature of the same name — a wheel only
-carries the adapters it was built with. **postgres** is bound today:
+carries the adapters it was built with. **All fifteen are bound**: postgres,
+kafka, redis, etcd, fluvio, csv, zmq, kdb, fix, augurs, otlp, prometheus, web,
+aeron and iceoryx2. The published wheel ships every one except aeron and
+iceoryx2, which are opt-in (`maturin develop -F aeron`) because they would make
+it platform-specific.
+
+Every source is **burst-shaped**, so a tick is a Python `list` of the values
+that share that instant — never collapsed to latest-wins, never dropped. Index
+`[0]` for the single-value case.
+
+postgres, as the worked example:
 
 ```python
 g = wf.Graph()
@@ -71,9 +81,10 @@ wf.postgres_write(stream, CONN_STR, "trades",
 ```
 
 Also `postgres_sub` (a real-time `LISTEN`/`NOTIFY` live tail), `postgres_source`
-(one wiring call for either run mode) and `postgres_notify_trigger_sql`. See the
-module docs in `src/adapters/postgres.rs` for the argument semantics and how the
-surface differs from the legacy `wingfoil-python` bindings.
+(one wiring call for either run mode) and `postgres_notify_trigger_sql`. Each
+adapter's module docs (`src/adapters/<name>.rs`) carry its entry-point table,
+its argument semantics, and how its surface differs from the legacy
+`wingfoil-python` binding — the same list `docs/migration.rst` collects.
 
 A source that needs the run window at wiring takes it as arguments
 (`start_nanos` / `duration_nanos` / `realtime`), which must match the eventual
@@ -100,7 +111,18 @@ print(stats["decode"]["p99_ns"], stats.report())
 `stamp_precise` reads a fresh clock per tick (intra-cycle resolution); every
 entry point has an `_if(…, enabled)` variant that wires nothing when disabled.
 `Latency.to_bytes()` / `Latency.from_bytes(data, stages)` are the little-endian
-header a Rust peer reads straight back as its `latency_stages!` record.
+header a Rust peer reads straight back as its `latency_stages!` record. An
+adapter can carry that header for you: `iceoryx2_sub` / `iceoryx2_pub` take an
+optional `stages=` list and then send `header ++ payload`, handing back
+`TracedBytes` instead of `bytes`.
+
+## Documentation
+
+`docs/` is the Sphinx source for the published module documentation — the API
+reference, and a **migration guide** for the legacy `wingfoil` package, which
+`wingfoil_next` supersedes (`import wingfoil` becomes `import wingfoil_next`,
+and a handful of entry points change shape). Build it with `maturin develop`
+followed by `make html` in `docs/`; see `docs/README.md`.
 
 ## Build / test
 

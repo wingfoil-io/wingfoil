@@ -22,12 +22,12 @@ use std::time::Duration;
 
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::ZeroCopySend;
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::{
     Iceoryx2ServiceVariant, Iceoryx2SinkOps, iceoryx2_sub, iceoryx2_sub_with,
 };
 use wingfoil_next::op::{Activation, Tick};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend, PartialEq)]

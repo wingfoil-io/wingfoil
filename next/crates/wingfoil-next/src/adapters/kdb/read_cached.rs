@@ -11,7 +11,7 @@ use crate::fluent::{GraphBuilder, Stream};
 use anyhow::{Context, Result};
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use log::info;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Cached version of [`kdb_read`](super::kdb_read).
 ///

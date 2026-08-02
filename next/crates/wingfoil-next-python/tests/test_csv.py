@@ -202,3 +202,24 @@ def test_write_then_read_round_trips(tmp_path):
         [{"time": "0", "sym": "AAPL", "px": "1.5"}],
         [{"time": "1000000000", "sym": "MSFT", "px": "2.5"}],
     ] == seen
+
+
+def test_write_escapes_separators_and_quotes(tmp_path):
+    """A field carrying the separator or a quote is quoted on the way out and
+    comes back byte-identical — the file stays a valid CSV."""
+    out = str(tmp_path / "escaped.csv")
+    awkward = 'a,b "quoted"'
+
+    write = wf.Graph()
+    rows = write.values([{"note": awkward}], period_nanos=SECOND_NANOS)
+    wf.csv_write(rows, out, ["note"])
+    write.run(realtime=False, start_nanos=0, duration_nanos=SECOND_NANOS)
+
+    assert '"a,b ""quoted"""' in (tmp_path / "escaped.csv").read_text()
+
+    read = wf.Graph()
+    seen = []
+    wf.csv_read(read, out, "time").inspect(seen.append)
+    read.run(realtime=False, start_nanos=0, duration_nanos=SECOND_NANOS)
+
+    assert [[{"time": "0", "note": awkward}]] == seen

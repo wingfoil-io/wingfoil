@@ -24,13 +24,13 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::augurs::{
     AugursChangepointConfig, AugursChangepointOps, AugursClusterConfig, AugursClusterOps,
     AugursDtwConfig, AugursDtwOps, AugursForecastConfig, AugursForecastOps, AugursOutlierConfig,
     AugursOutlierOps, AugursSeasonsConfig, AugursSeasonsOps,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 fn forecasting() -> anyhow::Result<()> {
     println!("== forecasting (ETS, 5 steps ahead, 90% interval) ==");

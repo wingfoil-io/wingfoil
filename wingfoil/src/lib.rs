@@ -233,13 +233,22 @@ mod channel;
 /// Retains the historical `codegen` name: the ahead-of-time retrofit code
 /// generator that once lived here has been removed, superseded by the
 /// `wingfoil-next` macro `compiled()` / islands path. The kernel it left
-/// behind is still the engine core that `wingfoil-next` builds on.
-pub mod codegen;
+/// behind is the engine core for *both* trees, and now lives in
+/// [`wingfoil_next::runtime::kernel`] — re-exported here so this path is
+/// unchanged for classic callers. See `next/docs/cutover-plan.md` for why the
+/// shared core sits on the next side of the boundary.
+pub mod codegen {
+    pub use wingfoil_next::runtime::kernel::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
+}
 mod graph;
 mod latency;
 mod nodes;
 mod queue;
-mod time;
+/// Engine time. Re-exported from [`wingfoil_next::runtime::time`] so both
+/// engines share one `NanoTime` type.
+mod time {
+    pub use wingfoil_next::runtime::time::NanoTime;
+}
 mod types;
 
 #[cfg(feature = "bench")]

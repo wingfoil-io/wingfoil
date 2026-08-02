@@ -9,13 +9,13 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
     PostgresSourceConfig, Row, ToSql, postgres_read, postgres_source, postgres_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct TestTrade {

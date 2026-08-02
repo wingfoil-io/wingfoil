@@ -31,9 +31,9 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::web::{WebServer, WebSinkOps, web_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Payload type published on topic "price".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -91,6 +91,27 @@ def test_several_gauges_share_one_exporter():
     assert "wingfoil_test_a" in body and "wingfoil_test_b" in body
 
 
+def test_metrics_render_in_name_order():
+    """The registry sorts by name, so a scrape is stable whatever the
+    registration order — the exporter's one formatting guarantee."""
+    g = wf.Graph()
+    exporter = wf.PrometheusExporter("127.0.0.1:0")
+    port = exporter.serve()
+    ticks = g.counter(period_nanos=50 * MS_NANOS)
+    for name in ("wingfoil_test_zulu", "wingfoil_test_alpha", "wingfoil_test_mike"):
+        exporter.gauge(name, ticks)
+
+    g.run(realtime=True, duration_nanos=300 * MS_NANOS)
+
+    body = scrape(port)
+    names = [
+        line.split()[0]
+        for line in body.splitlines()
+        if line.startswith("wingfoil_test_")
+    ]
+    assert names == sorted(names)
+
+
 def test_a_historical_run_publishes_nothing():
     """A backtest must not push fast-forwarded values to a live endpoint."""
     g = wf.Graph()

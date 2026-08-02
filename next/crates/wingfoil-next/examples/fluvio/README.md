@@ -28,7 +28,7 @@ cargo run -p wingfoil-next --example fluvio_adapter --features fluvio
 ## Code
 
 ```rust
-use wingfoil::{RunFor, RunMode};
+use wingfoil_next::{RunFor, RunMode};
 use wingfoil_next::adapters::fluvio::{FluvioEvent, FluvioRecord, FluvioSinkOps, fluvio_sub};
 use wingfoil_next::prelude::*;
 

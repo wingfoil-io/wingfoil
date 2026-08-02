@@ -245,6 +245,16 @@ stand-in:
   identity `PyElement: TryFrom<&PyElement>`) and marshal inside the fn with a
   `try_map`.
 
+A third case is an argument that changes the **value shape itself**, not just
+how a fixed one is interpreted — iceoryx2's `stages`, which turns each sample
+from `bytes` into a `TracedBytes`. A `#[pyadapter]` fn has one return type, so
+the branch cannot live at the erasure seam: return `Stream<Burst<PyElement>>`
+and do the decode in a `map`/`try_map` of your own (one `Python::attach` around
+the whole burst), leaving the seam to erase already-Python values to a `list`.
+The sink direction is the erased-input rule above. Say in the module header
+that the extra node is deliberate — it is the price of one signature covering
+both shapes, and it costs a `Vec` per tick, not a GIL acquire.
+
 Two payload shapes show up. Postgres declares its schema once and decodes
 against it; kdb tags **every value** with its own type, so `PyKdbRow` dispatches
 on `k.get_type()` per column. Either way the *unsupported* arm is an error (see

@@ -2,7 +2,6 @@ use derive_new::new;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::rc::Rc;
-use tinyvec::TinyVec;
 
 pub use crate::graph::GraphState;
 pub use crate::time::*;
@@ -24,9 +23,12 @@ pub use wingfoil_derive::node;
 /// engine cycles, so incoming data is always a `Burst<T>` rather than a
 /// plain `T`.  Use [`.collapse()`](crate::StreamOperators::collapse) to
 /// reduce a burst to its latest value.
-pub type Burst<T> = TinyVec<[T; 1]>;
+///
+/// Defined in [`wingfoil_next::runtime::burst`] and re-exported here (with its
+/// [`burst!`] constructor macro) so both engines share one grouping type.
+pub use wingfoil_next::Burst;
 
-/// Macro to create a `Burst<T>` with type inference.
+/// Macro to create a [`Burst<T>`] with type inference.
 ///
 /// # Examples
 ///
@@ -42,15 +44,7 @@ pub type Burst<T> = TinyVec<[T; 1]>;
 /// // Create a burst with multiple elements
 /// let many: Burst<i32> = burst![1, 2, 3];
 /// ```
-#[macro_export]
-macro_rules! burst {
-    () => {
-        ::tinyvec::TinyVec::new()
-    };
-    ($($item:expr),* $(,)?) => {
-        ::tinyvec::tiny_vec!($($item),*)
-    };
-}
+pub use wingfoil_next::burst;
 
 /// Wraps a [Stream] to indicate whether it is an active or passive dependency.
 /// Active dependencies trigger downstream nodes when they tick.

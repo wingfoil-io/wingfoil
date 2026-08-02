@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::op::{Activation, Ctx, Op, Tick};
-use wingfoil::{NanoTime, TimeQueue};
+use wingfoil_next::{NanoTime, TimeQueue};
 use wingfoil_next_macros::op;
 
 /// Ticks at a fixed interval, anchored to its first activation to avoid

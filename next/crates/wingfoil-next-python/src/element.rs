@@ -326,8 +326,8 @@ impl TryFrom<&PyElement> for PyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wingfoil::{NanoTime, RunFor, RunMode};
     use wingfoil_next::prelude::*;
+    use wingfoil_next::{NanoTime, RunFor, RunMode};
 
     #[test]
     fn default_is_empty() {

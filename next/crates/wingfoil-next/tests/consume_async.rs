@@ -8,9 +8,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::async_source::{consume_async, consume_async_bursts};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
@@ -80,7 +80,7 @@ fn consume_async_applies_backpressure() {
         })
         .unwrap();
         let values: Vec<u64> = (1..=20).collect();
-        let mut burst = wingfoil::Burst::new();
+        let mut burst = wingfoil_next::Burst::new();
         for v in values {
             burst.push(v);
         }

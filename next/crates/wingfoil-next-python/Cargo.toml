@@ -126,8 +126,11 @@ anyhow = { workspace = true }
 wingfoil-next = { path = "../wingfoil-next" }
 # The #[pyop] proc macro, re-exported so users depend only on this crate.
 wingfoil-next-python-macros = { path = "../wingfoil-next-python-macros" }
-# Run-mode and clock types (NanoTime / RunMode / RunFor) named by the object form.
-wingfoil = { path = "../../../wingfoil" }
+# NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
+# types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
+# `wingfoil_next`, which owns them (`runtime::run`, `runtime::time`). See
+# `next/docs/cutover-plan.md`: nothing under `next/` may depend on the tree the
+# cutover deletes.
 # `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
 # matches the `log` the `wingfoil-next` fluent signature names.
 log = { workspace = true }

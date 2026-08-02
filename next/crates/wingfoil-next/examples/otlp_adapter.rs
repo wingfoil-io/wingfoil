@@ -28,10 +28,10 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps};
 use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     // ── Prometheus exporter (pull) ─────────────────────────────────────────

@@ -117,7 +117,7 @@ use anyhow::{Context, Result};
 use fluvio::consumer::ConsumerConfigExt;
 use fluvio::{Fluvio, FluvioClusterConfig, Offset, RecordKey, TopicProducerPool};
 use futures::StreamExt;
-use wingfoil::{NanoTime, RunMode};
+use wingfoil_next::{NanoTime, RunMode};
 
 use crate::Burst;
 use crate::async_source::{RunParams, consume_async_bursts, produce_async};

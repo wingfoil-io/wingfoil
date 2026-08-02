@@ -32,11 +32,11 @@ use futures::StreamExt;
 use testcontainers::{
     GenericImage, ImageExt, core::ExecCommand, core::WaitFor, runners::SyncRunner,
 };
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::fluvio::{
     FluvioConnection, FluvioEvent, FluvioRecord, FluvioSinkOps, fluvio_sub,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 const FLUVIO_SC_PORT: u16 = 9003;
 const FLUVIO_SC_PRIVATE_PORT: u16 = 9004;

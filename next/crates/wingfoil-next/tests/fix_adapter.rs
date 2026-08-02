@@ -7,11 +7,11 @@
 //! `fix-integration-test`).
 #![cfg(feature = "fix")]
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::fix::{
     FixMessage, FixOperators, FixPollMode, fix_accept, fix_connect, fix_connect_tls,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 

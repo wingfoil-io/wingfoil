@@ -52,8 +52,8 @@ use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
-use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
-use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
+use wingfoil_next::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
+use wingfoil_next::{NanoTime, RunFor, RunMode, TimeQueue};
 
 // ---------------------------------------------------------------------------
 // Engine span instrumentation (the `instrument-*` features)
