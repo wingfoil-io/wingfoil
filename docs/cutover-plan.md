@@ -140,7 +140,7 @@ All of this is blocked on 1.2, which fixes the names everything here refers to.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 5.1 | **Workspace `Cargo.toml`.** Drop the three `legacy/*` members. The four next crates are already at `crates/*`, so no repointing is left. `wingfoil-wire-types` stays (next's web adapter depends on it); `wingfoil-wasm` stays excluded. | S |
+| 5.1 | **Workspace `Cargo.toml`.** Drop the three `legacy/*` members. The four next crates are already at `crates/*`, so no repointing is left. `crates/wingfoil-wire-types` stays (next's web adapter depends on it); `crates/wingfoil-wasm` stays excluded. | S |
 | 5.2 | **Collapse the workflow set.** 14 of 42 workflows carry `next` and lose the suffix; the legacy-side twins retire. The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil-next/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
 | 5.3 | **`crates-publish.yml` rewrite.** It publishes by directory in dependency order with crates.io index waits between; the crate set, the order and the paths all change. | M |
 | 5.4 | **`pypi-publish.yml` repoint**, plus a ruling on the wheel's adapter roll-up: aeron is out of both roll-ups (it builds a C library) and iceoryx2 is in `all-adapters` but out of the wheel (Linux/POSIX-only). That is open issue **#367** — decide whether cutover inherits it or fixes it. | S |

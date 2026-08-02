@@ -40,7 +40,7 @@ jobs:
           BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
           CARGO_VERSION=$(grep -m 1 '^version' legacy/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           NPM_VERSION=$(node -p "require('./wingfoil-js/package.json').version")
-          WASM_VERSION=$(grep -m 1 '^version' wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
+          WASM_VERSION=$(grep -m 1 '^version' crates/wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
           BASE=$(printf '%s\n%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" "$WASM_VERSION" | sort -V | tail -n 1)
           IFS='.' read -r MAJ MIN PATCH <<< "$BASE"
           case "$BUMP_TYPE" in
@@ -57,7 +57,7 @@ jobs:
       - name: Bump wingfoil-wasm (excluded from workspace)
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          WASM_TOML="wingfoil-wasm/Cargo.toml"
+          WASM_TOML="crates/wingfoil-wasm/Cargo.toml"
           # `cargo set-version --manifest-path` is not usable here: it runs
           # `cargo metadata` first, which refuses to resolve when the existing
           # path-dep pin (wingfoil-wire-types = "^OLD") doesn't match the

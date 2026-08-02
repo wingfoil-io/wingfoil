@@ -25,23 +25,24 @@ arranged so that cutover is a deletion, not a re-organisation.
 ## Repository Structure
 
 ```
-crates/
+crates/                     # every Cargo crate in the tree
   wingfoil-next/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
                             #   compat.rs, runtime/, examples/, tests/, benches/
   wingfoil-next-macros/     # nitro! / #[op] proc macros
   wingfoil-next-python/     # PyO3 Python bindings (built with maturin)
   wingfoil-next-python-macros/
+  wingfoil-wire-types/      # Wire-format types shared by the web adapter and
+                            #   wingfoil-wasm — survives cutover
+  wingfoil-wasm/            # Browser-side WASM codec (excluded from the default
+                            #   workspace) — survives cutover
 
 docs/                       # port-plan.md (the port roadmap), cutover-plan.md,
                             #   design reviews and decisions
 
-wingfoil-wire-types/        # Wire-format types shared by the web adapter and
-                            #   wingfoil-wasm — survives cutover
-wingfoil-wasm/              # Browser-side WASM codec (excluded from the default
-                            #   workspace) — survives cutover
-wingfoil-js/                # TypeScript client for the web adapter
-                            #   (@wingfoil/client) — survives cutover
+wingfoil-js/                # TypeScript client for the web adapter — an npm
+                            #   package, not a crate (@wingfoil/client).
+                            #   Survives cutover
 
 legacy/                     # The legacy MutableNode engine — deleted at cutover
   wingfoil/                 #   Core library, nodes/, adapters/, examples/, benches/
@@ -75,9 +76,10 @@ bounds, the time queue, `Burst`, the `Kernel`, the latency data layer), and
 is a **dev**-dependency, for parity tests and comparison benches against the
 legacy engine. See `docs/cutover-plan.md`.
 
-The same rule is why `wingfoil-wire-types`, `wingfoil-wasm` and `wingfoil-js`
-sit at the root rather than under `legacy/`: all three survive the cutover,
-and `crates/wingfoil-next` already depends on wire-types.
+The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
+`wingfoil-js` sit outside `legacy/`: all three survive the cutover, and
+`crates/wingfoil-next` already depends on wire-types. `wingfoil-js` is the one
+that stays at the repo root — it is an npm package, not a Cargo crate.
 
 ## Key concepts (how next differs from legacy)
 

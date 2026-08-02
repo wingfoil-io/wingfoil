@@ -6,8 +6,8 @@ on:
   push:
     paths:
       - 'legacy/wingfoil/src/adapters/web/**'
-      - 'wingfoil-wire-types/**'
-      - 'wingfoil-wasm/**'
+      - 'crates/wingfoil-wire-types/**'
+      - 'crates/wingfoil-wasm/**'
       - 'wingfoil-js/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
@@ -47,11 +47,11 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build wasm-pack bundle
-        working-directory: wingfoil-wasm
+        working-directory: crates/wingfoil-wasm
         run: wasm-pack build --target web --release
 
       - name: Rust unit tests (native target)
-        working-directory: wingfoil-wasm
+        working-directory: crates/wingfoil-wasm
         run: cargo test
 
   wingfoil-js-typecheck:
