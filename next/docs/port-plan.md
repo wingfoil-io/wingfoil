@@ -1750,6 +1750,70 @@ tests covered — not "legacy pytest passes unchanged."
   print a teardown summary.
 
   Unblocks the iceoryx2 `stages` argument (see the iceoryx2 note above).
+- **Pytest parity audit** 🟡 *audited 2026-08; two surface gaps remain* — the
+  gate stated at the top of this phase ("next-python's own pytest suite reaching
+  parity with the surface the legacy tests covered") had never been checked, only
+  assumed. Every test function in `wingfoil-python/tests/` (268, in 21 files) was
+  mapped case by case onto its next counterpart (`wingfoil-next-python/tests/`,
+  325 in 20 files). Name-matching is useless here — next's suite was written
+  fresh, and exactly **6** of the 268 legacy names appear on the next side (all
+  in postgres); the mapping is by *surface covered*, not by name.
+
+  **Seventeen of the 21 legacy files have a same-named twin**, and every one is
+  a superset once the gaps below are closed (aeron, augurs, csv, custom_stream,
+  etcd, fix, fluvio, iceoryx2, kafka, kdb, latency, otlp, postgres, prometheus,
+  redis, web, zmq).
+  Every adapter twin adds a `test_module_exposes_the_*` surface check, wiring-time
+  argument rejections legacy never asserted, and — where legacy had one — a
+  round trip; several bind entry points legacy never had at all (`kdb_sub`,
+  `fix_send`/`fix_sub`, the aeron `_with_status` twins, `web` `pub_bursts`/TLS/
+  `stop`, `postgres_source`).
+
+  **The four twin-less legacy files** resolve as:
+  - `test_streams.py` (45) → `test_interop.py`. The combinator surface is
+    covered one for one. The `Graph([node, …])` constructor and `PyNode`-vs-
+    `PyStream` distinctions are obsolete by design (next has one `Stream` type
+    and a `Graph` builder), as are the `run()` argument-validation tests whose
+    legacy failure modes are type errors in next's typed signature.
+  - `test_web_bindings.py` (21) → `test_web.py` plus the marshaling unit tests
+    inside `adapters/web.rs` (`bytes_marshal_as_an_array_of_ints`, the i64/u64/
+    beyond-u64 ladder). Legacy's "silently becomes null" cases invert: next
+    fails loudly, and `test_web.py` asserts the errors.
+  - `test_pandas.py` (12) → partially. `stream.dataframe()` builds the frame in
+    Rust (`test_interop.py::test_dataframe_from_stream`, `examples/dataframe.py`)
+    where legacy returned `(time, value)` tuples for a Python helper to assemble.
+    The **multi-stream** half — `pandas_helpers.build_dataframe`, which
+    outer-joins several streams on time (`test_dict_of_streams`,
+    `test_async_frequencies`, `test_massive_fan_out`) — has no next equivalent.
+  - `test_statistics.py` (37) → **not ported**. Legacy `py_statistics.rs` binds
+    the whole statistics adapter (`Window` / `Weighting` / `EwmaSpan` and their
+    int/str/float shorthands over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/
+    `ewma`); next-python binds only the cumulative `sum`/`mean`/`average` bridge
+    named in the "Surface build-out" bullet above. The engine has the full
+    surface (`stats.rs`, ported in Phase 2) — it is the *binding* that stops
+    short. Legacy grew this binding after that bullet was written, so the parity
+    target moved.
+
+  **Gaps found and closed in the audit's own PR** (next had the capability, and
+  nothing exercised it): `delay` and 2-ary `merge`; `run(duration_nanos=…)`,
+  `run(start_nanos=…)` and the cycles-wins-over-duration precedence;
+  `Stream.value()` returning `None` before a tick; `filter_value`'s raised
+  exception and its truthiness edge, and `filter`'s strict bool condition; the
+  zmq `pub`→`sub` round trip and its status stream, plus the `zmq_sub_etcd` /
+  `zmq_pub_etcd` discovery pair (bound but wholly untested — the Python leg
+  added to `zmq-next-integration.yml`); prometheus's name-ordered render;
+  augurs' `min_points` gate and its out-of-range sensitivity.
+
+  Writing the `Stream.value()` test found a **defect** the audit also fixes:
+  reading a stream before the graph had run at all still panicked
+  (`expect("invariant: PyGraph::run must be called before PyStream::value")`),
+  escaping to Python as a `PanicException`. The earlier web-binding fix covered
+  only the *ran but never ticked* case. Classic `peek_value` answers `None`
+  there, so `value()` now returns the empty element in both.
+
+  **Remaining** — both are missing *binding surface*, not missing tests, so they
+  belong to "Surface build-out" rather than here: the statistics adapter
+  binding, and a multi-stream `build_dataframe` equivalent.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form
