@@ -99,8 +99,11 @@ typed and slice payloads, all three polling modes, `Ipc`/`Local` variants, the
 option/`_with`/`_opts` constructor family, the service contracts, `FixedBytes`,
 and the typed `Iceoryx2Error` — is preserved.
 
-Classic's Criterion benches (`iceoryx2`, `iceoryx2_modes`) are **not** ported —
-next's bench suite is a separate work item, as for every adapter so far.
+Classic's Criterion benches are ported: `benches/iceoryx2.rs` and
+`benches/iceoryx2_modes.rs`, both gated on the `iceoryx2` feature and run with
+`cargo bench --bench iceoryx2[_modes]`. They need shared memory, so they are
+compiled in CI but not run; benches are deliberately not a CI gate (criterion
+wall-clock is too noisy on shared runners). See `benches/README.md`.
 
 ## Tests
 
@@ -153,6 +156,22 @@ cannot be built for the platforms that would otherwise work. (Contrast
   `iceoryx2_pub` — the **slice** pair. Mode and service-variant selectors are
   **strings**, not `#[pyclass]` enums (legacy used `Iceoryx2ServiceVariant` /
   `Iceoryx2Mode` pyclasses).
+- Both take an optional **`stages`** list (legacy's latency-tracing path). With
+  it, a sample is a `[u64; len(stages)]` little-endian stamp header followed by
+  the payload, and the Python value is a `TracedBytes` carrying a `Latency`
+  rather than `bytes` — the same layout a Rust peer's `latency_stages!` record
+  has, so a Python subscriber reads a Rust publisher's stamps. The split/pack
+  goes through the **transport seam** in `wingfoil-next-python/src/latency.rs`
+  (`STAMP_BYTES`, `PyLatency::create_from_bytes` / `header_bytes` /
+  `stages_ref`, `check_stages`), not a local decoder. Because a `#[pyadapter]`
+  fn has one return type, the shape branch cannot live at the erasure seam —
+  the subscriber returns `Stream<Burst<PyElement>>` on both paths and decodes
+  in a node of its own. Three deviations from legacy, all fail-loudly: a short
+  frame aborts (legacy returned the whole frame as payload with an all-zero
+  record), a record whose stage list disagrees with the wired one aborts, and
+  `stages` publishes bursts (legacy took a single value).
+- `src/latency.rs` is in this adapter's workflow `paths:` triggers, since the
+  traced round trip is the only thing exercising the header over a real hop.
 - Because it is out of the wheel, the workflow's Python leg builds it
   explicitly with `maturin develop -F …,iceoryx2` and asserts the symbol is
   present before running `pytest -m requires_iceoryx2`.

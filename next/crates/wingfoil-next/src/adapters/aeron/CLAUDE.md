@@ -128,8 +128,13 @@ items:
    next passes the same choice as a `track_status` flag. Same behaviour, no
    allocation.
 
-Classic's Criterion benches are **not** ported — next's bench suite is a
-separate work item, as for every adapter so far.
+Classic's Criterion benches are ported, all four gated on the `aeron` feature:
+`aeron_publication_latency`, `aeron_subscription_throughput`,
+`aeron_transceiver`, and `aeron_allocation_tracking` (which also wants
+`dhat-heap`), over the shared `benches/aeron/common/mod.rs`. They need a live
+media driver, so they are compiled but not run; benches are deliberately not a
+CI gate. Building them needs CMake ≥ 3.30 for `rusteron-client`'s bundled
+Aeron C build — see the repo-root `CLAUDE.md`. See `benches/README.md`.
 
 ## Tests
 
