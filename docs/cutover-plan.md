@@ -123,7 +123,98 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 |:--:|---|:--:|
 | 3.7 | **The statistics Python binding stops short of legacy.** Legacy `legacy/wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. The engine already has the whole surface (`crates/wingfoil-next/src/stats.rs`, with parity tests), so this is binding work, not engine work. 37 legacy tests have nowhere to map. | M |
 | 3.8 | **No multi-stream `build_dataframe` in next-python.** Legacy `pandas_helpers.build_dataframe` outer-joins several streams on time; next's `dataframe()` frames a single stream. 4 legacy tests have nowhere to map. The single-stream half is already ahead of legacy (a real `pandas.DataFrame` built in Rust), so only the multi-stream join is missing. | S |
-| 3.9 | **Sweep the legacy tree for drift since each phase was ticked.** 3.7 exists because legacy grew `py_statistics.rs` *after* Phase 6's "Surface build-out ✅" was written — the parity target moved under a bullet already marked done, and nothing detects that. `git log wingfoil/ wingfoil-python/` since each phase's completion date will show whether 3.7 is the only case. Until this runs, every ✅ in `port-plan.md` is a claim about the tree as it was, not as it is. | M |
+
+Row **3.9** (sweep the legacy tree for drift since each phase was ticked) has
+run; the findings are below, and it adds no rows.
+
+#### 3.9 — the legacy-drift sweep: ran, no new gaps
+
+**Ran 2026-08-02 against `next` @ `754514c`. Result: 3.7 is the only open
+case, so §3 gains no rows.**
+
+**Window.** `docs/port-plan.md` was created at `6eb7940` (2026-07-19), so no ✅
+in it can predate that. The sweep therefore covers the whole life of the file:
+every legacy-side commit from `dd94c7b` (2026-07-16, the last legacy commit the
+port branch started from) to HEAD. That is a superset of every individual
+phase's tick window, which is the point — it cannot miss a phase by getting its
+date wrong. The ticks that fall inside it, for reference: spikes 0.1/0.2 at
+`50bec39`/`7877be9` (07-19), 0.3/0.4 at `7115136`/`706a3af` (07-20), the Phase 2
+catalog at `b774731` (07-25), dynamism at `12592d6` (07-25), `graph_node` at
+`5e8299d` (07-26), the last adapter (iceoryx2) at `529085d` (07-30), Phase 4.5
+at `9fc68e0` (08-01), Phase 5 at `51c8260` (08-01), and Phase 6's "Surface
+build-out" at `5f99b04` (08-02).
+
+**Two git caveats, both of which defeat the obvious query.**
+
+1. The tree inversion `754514c` (#655) moved legacy from `wingfoil/`,
+   `wingfoil-python/`, `wingfoil-derive/` to `legacy/*`, so `git log --
+   legacy/` reaches back only as far as that commit. Use the pre-inversion
+   paths, or `--follow`.
+2. **`next` was rebased onto `main`.** Every commit from `13ba842` to `5f99b04`
+   carries a committer date of 2026-08-02 09:02–09:03 UTC against author dates
+   spanning 07-19 to 08-02. Ancestry order is therefore *not* chronological
+   order: `git log da919bb..HEAD` returns the entire port, because the whole
+   port line was re-parented onto `main`'s head. Select legacy commits by
+   author date, not by ancestry.
+
+Also note the clone in a fresh sandbox is shallow — `git fetch --unshallow`
+first, or the window silently truncates to the last 50 commits.
+
+**Method.** Enumerated every commit touching the legacy paths in the window
+(`git log --full-history -- wingfoil/ wingfoil-python/ wingfoil-derive/
+legacy/`), classified each as legacy-originated or next-originated, and read
+the diff of every legacy-originated one. Then cross-checked structurally, so
+that anything the date filter somehow missed would still surface as a missing
+file: legacy's 24 examples, 6 benches, 43 `src/nodes/` modules, 18
+`src/adapters/` entries and 21 `wingfoil-python/tests/` files against next's
+equivalents.
+
+**What actually landed on the legacy line during the port — four commits,
+`dd94c7b..da919bb`:**
+
+| Commit | Date | What | Verdict |
+|---|---|---|---|
+| `d561c52` (#589) | 2026-07-27 | `wingfoil/src/nodes/drop_small_change.rs`, `PyStream.drop_small_change`, 3 pytest cases | **Drift** — landed 2 days after the Phase 2 catalog ✅ (`b774731`). **Already closed** by `991bfa7`: the op across all three engines, the fluent method, the Python binding and all three tests (`crates/wingfoil-next/src/ops.rs`, `src/fluent.rs`, `tests/catalog.rs`, `tests/op_completeness.rs`, `crates/wingfoil-next-python/src/graph.rs`, `tests/test_interop.py`) |
+| `f5b6915` (#590), `23fa547` (#591) | 2026-07-27 | `wingfoil-js/package.json` + `pnpm-lock.yaml` npm-audit patches | **Not a parity target** — `wingfoil-js` is now `js/` and survives the cutover |
+| `da919bb` (#611) | 2026-08-01 | `wingfoil-python/src/py_statistics.rs` (319 lines), 8 statistics methods on `PyStream`, `Window`/`Weighting`/`EwmaSpan` exports, `tests/test_statistics.py` (249 lines) | **Drift, still open** — this is row **3.7**, whose description matches the diff exactly (the `py_augurs.rs` hunk in the same commit is a pure refactor, hoisting `as_floats` into `py_stream.rs`) |
+
+**Everything else that touched legacy files in the window was next-originated,
+and none of it is a parity target.** `13ba842` / `6465d3d` / `bfbe24f` /
+`9bd66cc` grew the `wingfoil::codegen` retrofit and `09359a9` (#480) deleted it
+outright; `5e8299d` and `af7284e` extended the surviving `codegen.rs` `Kernel`
+(since moved to `runtime::kernel`); `4601716` refactored `wingfoil/src/
+latency.rs` to share `record_stage_deltas` / `format_latency_report` with the
+Python surface; `8b5d6b9` (#604) fixed the kafka `consume_messages` helper in
+**both** trees in one commit; `0c49838` and `754514c` are the dependency and
+directory inversions.
+
+**Why 3.7 was missed — the mechanism, stated precisely.** 3.7's note says
+legacy grew `py_statistics.rs` *after* the "Surface build-out ✅" was written.
+The timestamps say the reverse — `da919bb` landed 2026-08-01 08:27 UTC, the ✅
+at `5f99b04` was authored 2026-08-02 08:57 UTC — but the real mechanism is the
+same failure and slightly worse. `next` had not yet been rebased onto `main`
+when that ✅ was written (the rebase is stamped 09:02 UTC, five minutes later),
+so the tree it was written against carried a legacy snapshot no newer than
+`dd94c7b` (2026-07-16). **Every ✅ from Phase 0 through Phase 6's surface
+build-out was written blind to both #589 and #611.** That is the stale-base
+hazard the Order section already warns about, in its documentation form: a ✅ is
+a claim about whatever legacy snapshot the branch happens to be carrying, not
+about `main`. `drop_small_change` is the proof — it was noticed at `991bfa7`,
+authored 09:39 UTC, 36 minutes *after* the rebase first brought the node into
+the tree, and by nothing more systematic than tripping over it.
+
+**Forward risk: low, and cheap to re-check.** `main` has had no functional
+legacy change since `da919bb` (2026-08-01) and the legacy tree is frozen in
+practice, so the expected yield of a re-run is zero. But the sweep is now one
+command rather than an archaeology exercise — everything is on one branch,
+under one path, past the inversion:
+
+```bash
+git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/
+```
+
+Anything that returns is a parity target that landed after this sweep. That is
+gate **6.5**, run immediately before the swap.
 
 ### 4. Docs the cutover owes
 
@@ -155,6 +246,7 @@ All of this is blocked on 1.2, which fixes the names everything here refers to.
 | 6.2 | `cargo test -p wingfoil-next --all-features` and the next-python pytest suite green. |
 | 6.3 | Every `*-next-integration` workflow green on the cutover branch — they gate the service-backed adapters the unit suites cannot. |
 | 6.4 | `cargo bench --bench tiers` re-read. The `next-interpreted ≥ legacy-interpreted` baseline can only be checked while the legacy bar exists, so this is the last chance. A manual read: wiring benches as a CI gate stays deliberately deferred, criterion wall-clock being too noisy on shared runners. |
+| 6.5 | Re-run the legacy-drift sweep: `git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/`. Empty output means every ✅ in `port-plan.md` still describes the legacy tree as it *is*, not as it was; anything it returns is a parity target that landed after the [3.9 sweep](#39--the-legacy-drift-sweep-ran-no-new-gaps) and needs a row in §3 before the swap. Seconds to run, and the sweep it replaces cost an afternoon. |
 
 ### Open issues to route
 
@@ -179,8 +271,8 @@ afterwards, since it repoints the names 1.2 creates.
 
 Everything else parallelises. Section 2's rulings need no code — 2.1 and 1.4
 should land early because 4.2 depends on both. Sections 3 and 4 are
-independent of each other and of 1.2. **3.9 is worth running before anything
-else in section 3**, since it may add rows to it.
+independent of each other and of 1.2. 3.9 has now run and added nothing, so
+section 3 is just 3.7 and 3.8; its standing replacement is gate 6.5.
 
 One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI

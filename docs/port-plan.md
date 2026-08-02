@@ -12,6 +12,13 @@ sources, and the `nitro!` macro deriving all of it from one fluent wiring
 function. This document plans the port of the entire legacy codebase onto
 that pattern.
 
+> **What a ✅ here means.** It is a claim about the legacy tree *as the
+> author's branch was carrying it*, not necessarily as `main` has it. Legacy
+> gained two capabilities under already-ticked bullets during the port — see
+> the [drift sweep](cutover-plan.md#39--the-legacy-drift-sweep-ran-no-new-gaps)
+> in `cutover-plan.md`, which enumerates both and closes the window to
+> 2026-08-02. Re-validate with cutover gate 6.5 before the swap.
+
 ## Strategy
 
 **Parallel port with a compat facade, not an in-place rewrite.**
