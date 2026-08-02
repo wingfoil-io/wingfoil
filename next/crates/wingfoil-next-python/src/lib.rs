@@ -27,6 +27,7 @@ pub mod adapters;
 pub mod element;
 pub mod graph;
 pub mod island;
+pub mod latency;
 #[macro_use]
 mod macros;
 mod python;

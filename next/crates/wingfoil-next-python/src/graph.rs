@@ -843,6 +843,52 @@ impl PyStream {
         self.wrap(wired)
     }
 
+    /// [`wire_op1`](Self::wire_op1) plus a **`stop` hook** — the seam for a sink
+    /// that has to do something once the run ends, which no `step` closure can
+    /// express (`ctx.is_last_cycle()` only fires for a cycle-bounded run in
+    /// which the node actually ticks). `latency_report`'s teardown summary is
+    /// the shape that needs it. `stop` sees the same `cfg`/`state` the cycle
+    /// does; an error from it fails the run.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wire_op1_with_stop<A, C, S, Out, Step, SInit, Stop>(
+        &self,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        mut step: Step,
+        stop: Stop,
+    ) -> PyStream
+    where
+        A: for<'a> TryFrom<&'a PyElement, Error = anyhow::Error> + 'static,
+        C: 'static,
+        S: 'static,
+        Out: Into<PyElement> + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+        Stop: FnMut(&mut C, &mut S, &mut Ctx<'_>) -> Result<()> + 'static,
+    {
+        let wired = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1_with_stop(
+                h,
+                label,
+                activation,
+                cfg,
+                state_init,
+                move |c, s, a: &PyElement, ctx| {
+                    let input = A::try_from(a)?;
+                    Ok(match step(c, s, &input, ctx)? {
+                        Tick::Value(v) => Tick::Value(v.into()),
+                        Tick::Silent(v) => Tick::Silent(v.into()),
+                        Tick::Quiet => Tick::Quiet,
+                    })
+                },
+                stop,
+            )
+        });
+        self.wrap(wired)
+    }
+
     /// Wire a **two-input op** onto this stream and `other` at the erased
     /// boundary — the two-active-input counterpart of [`wire_op1`](Self::wire_op1)
     /// (the `#[pyop]` seam for `In<'a> = (&'a A, &'a B)` ops). Both inputs are

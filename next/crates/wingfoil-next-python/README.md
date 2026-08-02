@@ -79,6 +79,29 @@ A source that needs the run window at wiring takes it as arguments
 (`start_nanos` / `duration_nanos` / `realtime`), which must match the eventual
 `graph.run(...)` — a Python `Graph` does not know its run mode until then.
 
+## Latency
+
+`wingfoil_next::latency` is bound too (`src/latency.rs`), unconditionally — it
+is not an adapter, so there is no feature to enable. A Rust caller names a stamp
+stage as a compile-time type; Python names it as a string, so a `Latency` record
+carries its stage list at runtime:
+
+```python
+stages = ["ingest", "decode", "publish"]
+messages = source.map(lambda payload: wf.TracedBytes(payload, wf.Latency(stages)))
+
+stamped = wf.stamp(wf.stamp(wf.stamp(messages, "ingest"), "decode"), "publish")
+_sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+
+g.run(cycles=1000)
+print(stats["decode"]["p99_ns"], stats.report())
+```
+
+`stamp_precise` reads a fresh clock per tick (intra-cycle resolution); every
+entry point has an `_if(…, enabled)` variant that wires nothing when disabled.
+`Latency.to_bytes()` / `Latency.from_bytes(data, stages)` are the little-endian
+header a Rust peer reads straight back as its `latency_stages!` record.
+
 ## Build / test
 
 ```bash

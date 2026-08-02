@@ -1677,14 +1677,14 @@ tests covered — not "legacy pytest passes unchanged."
   `all-adapters` and its tests run in the normal job; it stays out of the
   **wheel** for a different reason — Linux/POSIX-only. `variant` and `mode`
   become strings (legacy had two `#[pyclass]` enums). One legacy capability is
-  deliberately **not** ported: the `stages` latency-tracing path, which split a
+  still **not** ported: the `stages` latency-tracing path, which split a
   `[u64; N]` header off each sample into `TracedBytes` / `Latency` pyclasses.
-  It is blocked on the **next-python latency surface** (see the separate
-  bullet below), not on the engine — `wingfoil-next/src/latency.rs` landed in
-  Phase 5, so the earlier wording here, that these types "belong to legacy's
-  `latency` module, which has no next equivalent yet", named the wrong
-  blocker. Its round-trip tier needs no service at all — the `"local"` variant
-  talks in-process over the heap, and `"ipc"` is daemonless.
+  It is **no longer blocked**: the next-python latency surface (the bullet
+  below) landed, and its `PyLatency::create_from_bytes` is exactly the header
+  split that path needs. What remains is wiring it into the two iceoryx2 entry
+  points and testing the round trip — scoped as its own follow-up. That
+  round-trip tier needs no service at all — the `"local"` variant talks
+  in-process over the heap, and `"ipc"` is daemonless.
 
   **Remaining: 0 — the per-adapter binding surface is complete.** Legacy
   `wingfoil-python` binds 15 adapters, in four tiers, all now done:
@@ -1710,20 +1710,39 @@ tests covered — not "legacy pytest passes unchanged."
   system library at build time (aeron, iceoryx2) must not join the
   `all-adapters` roll-up that `next-python-test.yml` builds without that job
   also gaining the toolchain install.
-- **Python latency surface** ⏳ *not started* — the one legacy Python
-  capability next-python does not yet have, and the last non-adapter gap in
-  the binding. Legacy ships a whole `py_latency` module
-  (`wingfoil-python/src/py_latency.rs`): `Latency` and `TracedBytes`
-  pyclasses, a *runtime* stage list (Python cannot name a compile-time `Stage`
-  type, so stages are `Vec<String>` and stamping goes by index), and
-  `PyStampNode` / `PyLatencyReportNode`. It is what legacy's iceoryx2 `stages`
-  argument is built on — that argument splits a `[u64; N]` little-endian
-  header off each raw sample into `TracedBytes`, which is why the iceoryx2
-  binding above could not port it. The **engine** side is not the blocker:
-  `wingfoil-next/src/latency.rs` landed in Phase 5. What the binding needs is
-  the dynamic-stage twin of it, in the same shape as the other
-  dynamic-payload bindings (kdb, fix). Scoped as its own change, not folded
-  into an adapter binding.
+- **Python latency surface** 🟢 *landed* — the last non-adapter gap in the
+  binding, ported from legacy's `py_latency` module
+  (`wingfoil-python/src/py_latency.rs`) to
+  `wingfoil-next-python/src/latency.rs`. Same dynamic shape as legacy, because
+  Python cannot name a compile-time `Stage` type: a `Latency` pyclass carrying
+  a *runtime* `Vec<String>` of stage names beside its `Vec<u64>` stamps (so a
+  stamp resolves its slot by name), a `TracedBytes` carrier, and the
+  `stamp` / `stamp_if` / `stamp_precise` / `stamp_precise_if` /
+  `latency_report` / `latency_report_if` entry points — free functions rather
+  than `Stream` methods, like the otlp/augurs transforms. **Not feature-gated**
+  (the engine's `latency` module isn't either), so it ships in every wheel and
+  its tests run in `next-python-test.yml` with no new workflow.
+
+  Three things beyond legacy parity. `latency_report` returns
+  `(sink, LatencyStats)` — the engine's `LatencyReportOps` hands the stats
+  handle back, so Python can now *read* the per-hop numbers
+  (`stats["decode"]["p99_ns"]`, `stats.report()`) instead of only printing
+  them; bursts are stamped element-wise, under one GIL attach, so the ops
+  compose with the burst-shaped adapter sources; and aggregation and report
+  formatting are not re-implemented — classic's `LatencyStats::observe` /
+  `format_report` were split into runtime-named free fns
+  (`record_stage_deltas` / `format_latency_report`) that both the typed and
+  the dynamic aggregator delegate to, so a Python report is byte-identical to
+  a Rust one. Full deviation list in the module's `//!` header.
+
+  One **engine** addition it needed: `Builder::register_op1_with_stop`
+  (mirrored as `PyStream::wire_op1_with_stop`). `set_stop` is `pub(crate)` and
+  reachable only from `#[op]`-generated wiring, so an op registered through
+  `Stream::wire` — which is the only path available when the stage list is a
+  runtime value and there is no `Op` impl to hang the hook on — had no way to
+  print a teardown summary.
+
+  Unblocks the iceoryx2 `stages` argument (see the iceoryx2 note above).
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

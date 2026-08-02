@@ -656,7 +656,30 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;
     m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(split_source, m)?)?;
+    register_latency(m)?;
     register_adapters(m)?;
+    Ok(())
+}
+
+/// Register the latency surface (see [`crate::latency`]). Unconditional — the
+/// engine's `latency` module is not feature-gated, so every wheel has it.
+fn register_latency(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Imported by name for the same reason the adapter registrations are: the
+    // hidden wrapper `wrap_pyfunction!` resolves is defined beside each
+    // `#[pyfunction]`, so a module-qualified path does not resolve.
+    use crate::latency::{
+        PyLatency, PyLatencyStats, PyTracedBytes, latency_report, latency_report_if, stamp,
+        stamp_if, stamp_precise, stamp_precise_if,
+    };
+    m.add_class::<PyLatency>()?;
+    m.add_class::<PyTracedBytes>()?;
+    m.add_class::<PyLatencyStats>()?;
+    m.add_function(wrap_pyfunction!(stamp, m)?)?;
+    m.add_function(wrap_pyfunction!(stamp_if, m)?)?;
+    m.add_function(wrap_pyfunction!(stamp_precise, m)?)?;
+    m.add_function(wrap_pyfunction!(stamp_precise_if, m)?)?;
+    m.add_function(wrap_pyfunction!(latency_report, m)?)?;
+    m.add_function(wrap_pyfunction!(latency_report_if, m)?)?;
     Ok(())
 }
 

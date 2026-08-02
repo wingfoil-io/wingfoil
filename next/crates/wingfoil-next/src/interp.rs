@@ -1098,8 +1098,34 @@ impl Builder {
         activation: Activation,
         cfg: C,
         state_init: SInit,
-        mut step: Step,
+        step: Step,
     ) -> Handle<Out>
+    where
+        A: 'static,
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        self.register_op1_cell(src, label, activation, cfg, state_init, step)
+            .0
+    }
+
+    /// The body of [`register_op1`](Self::register_op1), additionally handing
+    /// back the shared cfg+state cell so
+    /// [`register_op1_with_stop`](Self::register_op1_with_stop) can give its
+    /// lifecycle hook the same view of them the cycle has.
+    #[allow(clippy::type_complexity)]
+    fn register_op1_cell<A, C, S, Out, Step, SInit>(
+        &mut self,
+        src: Handle<A>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        mut step: Step,
+    ) -> (Handle<Out>, Rc<RefCell<(C, S)>>)
     where
         A: 'static,
         C: 'static,
@@ -1112,7 +1138,7 @@ impl Builder {
         let src_slot = self.slot(src);
         let out = self.new_slot(Out::default());
         let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
+        let (cs_reset, out_reset, cs_out) = (cs.clone(), out.clone(), cs.clone());
         self.push_node(
             vec![src.idx],
             activation,
@@ -1141,7 +1167,46 @@ impl Builder {
             cs_reset.borrow_mut().1 = state_init();
             *out_reset.borrow_mut() = Out::default();
         }));
-        self.make_handle(idx)
+        (self.make_handle(idx), cs_out)
+    }
+
+    /// [`register_op1`](Self::register_op1) plus a **`stop` hook** — the shape a
+    /// sink with an end-of-run summary needs (`latency_report` prints one).
+    ///
+    /// Public because `set_stop` is not: an op wired from outside the `#[op]`
+    /// macro (the erased Python boundary registers its ops through
+    /// [`Stream::wire`](crate::fluent::Stream::wire), where the stage list is a
+    /// runtime value and no `Op` impl exists to carry the hook) otherwise has no
+    /// way to run anything after the last cycle. `stop` sees the same
+    /// `cfg`/`state` the cycle does, and runs once when the run ends normally.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_op1_with_stop<A, C, S, Out, Step, SInit, Stop>(
+        &mut self,
+        src: Handle<A>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        step: Step,
+        mut stop: Stop,
+    ) -> Handle<Out>
+    where
+        A: 'static,
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+        Stop: FnMut(&mut C, &mut S, &mut Ctx<'_>) -> Result<()> + 'static,
+    {
+        let idx = self.nodes.len();
+        let (handle, cs) = self.register_op1_cell(src, label, activation, cfg, state_init, step);
+        self.set_stop(Box::new(move |k| {
+            let (cfg, state) = &mut *cs.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            stop(cfg, state, &mut ctx)
+        }));
+        handle
     }
 
     /// Register a **two-active-input** op — the `join` shape: both upstreams

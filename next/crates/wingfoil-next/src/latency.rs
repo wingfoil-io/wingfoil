@@ -14,7 +14,10 @@
 //!
 //! - [`Traced<T, L>`] — payload `T` paired with a latency record `L`.
 //! - [`Latency`] / [`Stage`] / [`HasLatency`] — the record traits.
-//! - [`StageStats`] / [`LatencyStats`] — the non-allocating aggregators.
+//! - [`StageStats`] / [`LatencyStats`] — the non-allocating aggregators, plus
+//!   [`record_stage_deltas`] / [`format_latency_report`], the same aggregation
+//!   and report format over a *runtime* stage list (what the Python bindings
+//!   aggregate on, since Python cannot name a compile-time [`Stage`]).
 //! - [`latency_stages!`] — declares a record + per-stage marker types.
 //!
 //! Only the **node layer** is re-implemented as [`Op`]s on the next engine:
@@ -76,7 +79,10 @@ use crate::op::{Activation, Ctx, Op, Tick};
 
 // The pure data layer is engine-agnostic and reused verbatim from the classic
 // crate (its serde/iceoryx2 impls are already compiled there).
-pub use wingfoil::{HasLatency, Latency, LatencyStats, Stage, StageStats, Traced, latency_stages};
+pub use wingfoil::{
+    HasLatency, Latency, LatencyStats, Stage, StageStats, Traced, format_latency_report,
+    latency_stages, record_stage_deltas,
+};
 
 // ---------------------------------------------------------------------------
 // Stamp / StampPrecise — pass-through ops that stamp one stage

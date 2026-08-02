@@ -64,8 +64,19 @@ The PR targets base `next`.
 
 ## 2. Feature gate — `next/crates/wingfoil-next-python/Cargo.toml`
 
-Each binding lives behind a `wingfoil-next-python` cargo feature of the **same
-name** as the adapter, which turns on the matching engine feature:
+**First check whether the thing you are binding is feature-gated at all.** Not
+every Python surface is an adapter: `wingfoil_next::latency` is an
+unconditional engine module, so its binding (`src/latency.rs`, *not* under
+`adapters/`) has no cargo feature, is registered in the `#[pymodule]`
+unconditionally, ships in every wheel, and needs no integration workflow. If
+`grep '^pub mod <name>' next/crates/wingfoil-next/src/lib.rs` shows no
+`#[cfg(feature = …)]` above it, skip this whole step and step 3's `#[cfg]`s —
+gating a binding whose engine side is always compiled only creates a way to
+build a wheel that is missing it for no reason. Everything else in this file
+still applies.
+
+Each *adapter* binding lives behind a `wingfoil-next-python` cargo feature of
+the **same name** as the adapter, which turns on the matching engine feature:
 
 ```toml
 $ARGUMENTS = ["wingfoil-next/$ARGUMENTS", "_common"]  # + any dep: it names directly
@@ -152,6 +163,8 @@ pub mod common;
 path (`crate::adapters::foo::bar`) does **not** resolve. Import by name.
 
 ## 4. Write the bindings — `src/adapters/$ARGUMENTS.rs`
+
+(Or `src/$ARGUMENTS.rs`, for a non-adapter engine module — see step 2.)
 
 ### Use the free-fn form, receiver first
 
@@ -302,6 +315,24 @@ which makes them a free unit harness for the dict→record path — no run, no
 service. Reach for that when a sink's own errors are unreachable because the
 adapter connects at `start()` before the first cycle.
 
+The other gap is **an op whose config is a runtime value the typed Rust op
+takes as a type parameter**. `latency` is the worked example: a Rust stamp
+names its stage as a `Stage` *type*, so there is no `Op` impl the binding can
+wire — it registers its own step through `PyStream::wire_op1` with the stage
+name in `Cfg`. Two consequences worth knowing before you start:
+
+- **`wire_op1` has no lifecycle hooks**, and `Builder::set_stop` is
+  `pub(crate)` — only `#[op]`-generated wiring reaches it. A sink that must do
+  something *after the last cycle* (print a summary, flush a file) therefore
+  goes through `PyStream::wire_op1_with_stop` /
+  `Builder::register_op1_with_stop`. Do **not** reach for `ctx.is_last_cycle()`
+  instead: it only fires for a cycle-bounded run in which that node happens to
+  tick, so a duration-bounded, `Forever`, or aborted run silently skips it.
+- **`cfg` is not reset between runs; `state` is.** If your op holds shared
+  accumulator state in `cfg` (because a `#[pyclass]` handed back to Python
+  shares it), clear it from the `state_init` factory — the engine re-runs that
+  before a second `run()`, which is the only reset hook a `wire_op1` op gets.
+
 ## 5. Boundary rules
 
 - **Attach the GIL once per burst, never per element.** `PyGraph::run`
@@ -359,6 +390,12 @@ adapter connects at `start()` before the first cycle.
    raise if the reply is an error object — and route every **value** assertion
    back through the adapter under test, so the tier never has to decode a
    response.
+
+   **When there is no I/O at all** — a pure in-process surface like `latency` —
+   there is no third tier and no new workflow: everything runs by default in
+   `next-python-test.yml`. Say so in the module docstring, since a reader who
+   knows this skill will look for the marked tier and needs to know it is
+   absent by design rather than forgotten.
 
 ## 7. Docs bookkeeping
 

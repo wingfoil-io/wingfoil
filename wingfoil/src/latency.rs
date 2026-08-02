@@ -455,6 +455,63 @@ impl StageStats {
     }
 }
 
+/// Record one observation's adjacent-stage deltas into `stages`.
+///
+/// Free-standing (rather than only a [`LatencyStats`] method) because the stage
+/// list is not always known at compile time: the Python bindings aggregate over
+/// a *runtime* `Vec<String>` of stage names, which cannot implement [`Latency`]
+/// (`N` is a const and the names are `&'static`). Both aggregators call through
+/// here so they agree on which samples count — a stage whose stamp, or whose
+/// predecessor's, is unset (zero), or which went backwards, is skipped, so a
+/// partially-stamped pipeline still yields useful numbers for the hops that did
+/// stamp.
+///
+/// `stages[0]` is never written: stage 0 has no predecessor.
+pub fn record_stage_deltas(stages: &mut [StageStats], stamps: &[u64]) {
+    for i in 1..stages.len().min(stamps.len()) {
+        let prev = stamps[i - 1];
+        let cur = stamps[i];
+        if prev == 0 || cur == 0 || cur < prev {
+            continue;
+        }
+        stages[i].record(cur - prev);
+    }
+}
+
+/// Render the multi-line per-hop summary printed at shutdown, for the stage
+/// `names` and their accumulated `stages`.
+///
+/// The runtime-named counterpart of [`LatencyStats::format_report`], which
+/// delegates here — one source of truth for a user-facing report format shared
+/// by the Rust and Python surfaces.
+pub fn format_latency_report(names: &[&str], stages: &[StageStats]) -> String {
+    let mut out = String::new();
+    out.push_str("latency report (delta from previous stage, nanoseconds):\n");
+    out.push_str(&format!(
+        "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
+        "stage", "count", "min", "mean", "p50", "p99", "max"
+    ));
+    for i in 1..stages.len().min(names.len()) {
+        let s = &stages[i];
+        let label = format!("{} -> {}", names[i - 1], names[i]);
+        if s.count == 0 {
+            out.push_str(&format!("  {label:<24} {:>10}\n", "(no samples)"));
+            continue;
+        }
+        out.push_str(&format!(
+            "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
+            label,
+            s.count,
+            s.min_ns,
+            s.mean_ns(),
+            s.quantile_ns(0.5),
+            s.quantile_ns(0.99),
+            s.max_ns,
+        ));
+    }
+    out
+}
+
 /// Aggregated per-stage statistics for a [`Latency`] type.
 ///
 /// Records the **delta from the previous stage** for stages 1..N. Stage 0 has
@@ -485,45 +542,12 @@ impl<L: Latency> LatencyStats<L> {
     /// whose predecessor is zero are skipped, so partial pipelines still
     /// produce useful numbers for the stages that did record stamps.
     pub fn observe(&mut self, latency: &L) {
-        let stamps = latency.stamps();
-        for i in 1..L::N {
-            let prev = stamps[i - 1];
-            let cur = stamps[i];
-            if prev == 0 || cur == 0 || cur < prev {
-                continue;
-            }
-            self.stages[i].record(cur - prev);
-        }
+        record_stage_deltas(&mut self.stages, latency.stamps());
     }
 
     /// Render a multi-line summary suitable for printing on shutdown.
     pub fn format_report(&self) -> String {
-        let names = L::stage_names();
-        let mut out = String::new();
-        out.push_str("latency report (delta from previous stage, nanoseconds):\n");
-        out.push_str(&format!(
-            "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
-            "stage", "count", "min", "mean", "p50", "p99", "max"
-        ));
-        for i in 1..L::N {
-            let s = &self.stages[i];
-            let label = format!("{} -> {}", names[i - 1], names[i]);
-            if s.count == 0 {
-                out.push_str(&format!("  {label:<24} {:>10}\n", "(no samples)"));
-                continue;
-            }
-            out.push_str(&format!(
-                "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
-                label,
-                s.count,
-                s.min_ns,
-                s.mean_ns(),
-                s.quantile_ns(0.5),
-                s.quantile_ns(0.99),
-                s.max_ns,
-            ));
-        }
-        out
+        format_latency_report(L::stage_names(), &self.stages)
     }
 }
 
