@@ -68,7 +68,7 @@ jobs:
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
           cd ..
-          cargo llvm-cov report -p legacy/wingfoil-python \
+          cargo llvm-cov report -p wingfoil-python \
             --ignore-filename-regex 'py_etcd|py_kdb|py_zmq|py_iceoryx2' \
             --lcov \
             --output-path legacy/wingfoil-python/lcov-rust.info
