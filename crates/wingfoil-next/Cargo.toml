@@ -220,12 +220,11 @@ zmq = { version = "0.10.0", optional = true }
 # trace/span exporter (`otlp_spans`, over the ported `Traced`/`HasLatency`
 # latency infrastructure) — see `src/adapters/otlp.rs`.
 #
-# NOTE — deliberate divergence from legacy: next pins opentelemetry* 0.32 while
-# legacy still ships 0.28. This is to clear GHSA-w9wp-h8wv-79jx (opentelemetry_sdk
-# < 0.29: unbounded allocation in W3C Baggage propagation), which the dependency-
-# review gate flags on the newly added next dep. The 0.32 API is source-compatible
-# with the adapter's usage (no code change needed). Legacy should be bumped to
-# match in a follow-up to restore lockstep and fix the same advisory there.
+# 0.32 rather than the 0.28 legacy originally shipped, to clear
+# GHSA-w9wp-h8wv-79jx (opentelemetry_sdk < 0.29: unbounded allocation in W3C
+# Baggage propagation). This started as a deliberate divergence; legacy has since
+# been bumped to match, so the two trees are back in lockstep and the advisory is
+# fixed on both sides.
 opentelemetry = { version = "0.32", optional = true }
 opentelemetry_sdk = { version = "0.32", features = [
     "metrics",

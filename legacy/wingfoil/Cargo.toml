@@ -164,9 +164,13 @@ fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 iceoryx2 = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
 arc-swap = { version = "1.7", optional = true }
-opentelemetry = { version = "0.28", optional = true }
-opentelemetry_sdk = { version = "0.28", features = ["metrics", "trace", "rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"], optional = true }
+# 0.32, matching next. 0.28 is affected by GHSA-w9wp-h8wv-79jx (opentelemetry_sdk
+# < 0.29: unbounded allocation in W3C Baggage propagation). next pinned 0.32 when
+# its otlp adapter was ported and noted legacy should follow to restore lockstep;
+# this is that follow-up. The feature sets are unchanged.
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "trace", "rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.32", features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"], optional = true }
 rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rusteron-client = { version = "0.1", optional = true }
