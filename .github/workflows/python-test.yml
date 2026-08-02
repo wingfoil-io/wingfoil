@@ -67,7 +67,10 @@ jobs:
             --timeout=120 \
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
-          cd ..
+          # Back to the repo root, not `legacy/` — `--output-path` below is
+          # workspace-relative. Named explicitly so a future move cannot
+          # silently re-point it the way `cd ..` did.
+          cd "$GITHUB_WORKSPACE"
           cargo llvm-cov report -p wingfoil-python \
             --ignore-filename-regex 'py_etcd|py_kdb|py_zmq|py_iceoryx2' \
             --lcov \
