@@ -29,7 +29,7 @@ scaffold. The deterministic perf gates are *tests* — see
 | `store_baseline` | — | *(next-only)* | the pre-arena baseline: sparse-vs-full-sweep dispatch, and the payload-clone ceiling/floor |
 | `graph` | `bench` | `graph` | graph overhead: one engine cycle through a `width` × `depth` DAG |
 | `nanotime` | — | `nanotime` | cost of reading the graph clock |
-| `bfs_vs_dfs_wingfoil` | `bench` | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the next engine |
+| `bfs_vs_dfs_wingfoil` | `bench` | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the next engine, interpreted and as a compiled island |
 | `bfs_vs_dfs_reactive` | — | `bfs_vs_dfs_reactive` | the same pattern in rxrust (per-path comparison baseline) |
 | `bfs_vs_dfs_async_streams` | `async` | `bfs_vs_dfs_async_streams` | the same pattern in tokio async/await (per-path comparison baseline) |
 | `iceoryx2` | `iceoryx2` | `iceoryx2` | `Burst<T>` push / iterate / clone |
@@ -95,6 +95,12 @@ forces.** Each bench's own module doc records its deviations; in summary —
   `produce(closure)` becomes `map(closure)`, and `map(f)` takes `&T` instead of
   `T`. Node counts match the legacy graphs exactly, so the numbers stay
   comparable.
+- `bfs_vs_dfs_wingfoil` then goes one step further than a port: its depth sweep
+  is defined in `nitro!` blocks, so each depth's wiring drives *two* engines
+  (interpreted and a compiled island) instead of one, under two harnesses (per
+  tick through the `add_bench` handshake, and per cycle with the handshake
+  divided out). The legacy-comparable bar is still the interpreted, per-tick
+  one, under the same `depth_N` names.
 
 # Results
 
@@ -298,11 +304,26 @@ paths.
 
 <img src="topological_vs_per_path/latency.png" width="640">
 
-wingfoil-next stays flat (610 ns → 681 ns across ten levels, every node visited
-once per tick) while both path-at-a-time libraries double per level. At depth
-10 that is **59× faster than rxrust** (40.286 µs) and **81× faster than tokio
-async streams** (54.872 µs); at depth 20 the same slopes put the gap in the
-millions. Full numbers and commentary:
+wingfoil-next stays flat across ten levels — every node visited once per tick —
+while both path-at-a-time libraries double per level. At depth 10 the
+interpreted engine (541 ns) is **43× faster than rxrust** (23.110 µs) and **74×
+faster than tokio async streams** (40.072 µs); at depth 20 the same slopes put
+the gap in the millions. The second wingfoil series is the same `nitro!` wiring
+as a compiled island: also flat, ~1.2× the interpreted tier, the same direction
+`nested` takes in the [tier suite](#execution-tiers) above.
+
+A second harness in the same target runs those graphs for a fixed 10 000 cycles
+under a plain ticker, which divides the bench handshake out — ~450 ns of every
+per-tick sample above — and turns the flat line into the actual scaling law:
+**≈ 97 ns + 22 ns × depth** interpreted, one more node per level, while the path
+count runs to 1024.
+
+**This section is a reading from a different machine** — a 4-core 2.10 GHz Xeon
+VM ([`images/lscpu-topo.txt`](images/lscpu-topo.txt)), re-measured when the
+wingfoil target moved onto `nitro!`, where everything above it came from the
+2.80 GHz box. All four series in it were measured back to back on that one
+machine, so they compare to each other; they do not compare to the tables above.
+Full numbers and commentary:
 [`topological_vs_per_path/README.md`](topological_vs_per_path/README.md).
 
 ## Not covered here
