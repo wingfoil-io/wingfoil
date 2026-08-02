@@ -80,40 +80,11 @@ impl WiringFrame {
     }
 }
 
-/// Whether the [Graph] should run RealTime or Historical mode.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RunMode {
-    RealTime,
-    HistoricalFrom(NanoTime),
-}
-
-impl RunMode {
-    pub fn start_time(&self) -> NanoTime {
-        match self {
-            RunMode::RealTime => NanoTime::now(),
-            RunMode::HistoricalFrom(start_time) => *start_time,
-        }
-    }
-}
-
-/// Defines how long the graph should run for.  Can be a
-/// Duration, number of cycles or forever.
-#[derive(Clone, Copy, Debug)]
-pub enum RunFor {
-    Duration(Duration),
-    Cycles(u32),
-    Forever,
-}
-
-impl RunFor {
-    pub fn done(&self, cycle: u32, elapsed: NanoTime) -> bool {
-        match self {
-            RunFor::Cycles(cycles) => cycle > *cycles,
-            RunFor::Duration(duration) => elapsed > NanoTime::from(*duration),
-            RunFor::Forever => false,
-        }
-    }
-}
+/// How long a [Graph] runs, and against which clock.
+///
+/// Both types are defined in [`wingfoil_next::runtime::run`] and re-exported
+/// here, so a run bound crosses the engine boundary unchanged.
+pub use wingfoil_next::{RunFor, RunMode};
 
 /// Resolved start/end bounds for a run, computed once before the run loop.
 ///

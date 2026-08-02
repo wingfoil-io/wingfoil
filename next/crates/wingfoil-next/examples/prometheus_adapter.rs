@@ -23,9 +23,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     // Bind the exporter synchronously so a bind error surfaces before the run.

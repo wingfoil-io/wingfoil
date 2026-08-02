@@ -46,7 +46,7 @@
 //! # Historical / backtesting mode
 //!
 //! Telemetry is a **realtime** concept. Under
-//! [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom) the sink is a
+//! [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom) the sink is a
 //! no-op — no value is handed to the background task, so no meter provider is
 //! built and **no network calls are made** — matching classic, whose consumer
 //! checked the run mode and drained without connecting. Next reads the run mode
@@ -110,7 +110,7 @@ use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::async_source::consume_async;
 use crate::burst;
@@ -180,7 +180,7 @@ pub trait OtlpSinkOps<T> {
     /// driven from a non-async thread).
     ///
     /// The sink is a **no-op** under
-    /// [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom): no value
+    /// [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom): no value
     /// is exported and no meter provider is built, so a backtest never publishes
     /// fast-forwarded values to a live endpoint.
     ///
@@ -364,7 +364,7 @@ where
     /// driven from a non-async thread).
     ///
     /// The sink is a **no-op** under
-    /// [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom): no span
+    /// [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom): no span
     /// is exported and no tracer provider is built.
     ///
     /// The returned `Stream<()>` **must** be added to the graph for spans to be

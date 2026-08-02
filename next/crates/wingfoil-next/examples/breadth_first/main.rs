@@ -4,8 +4,8 @@
 //! cargo run -p wingfoil-next --example breadth_first
 //! ```
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();

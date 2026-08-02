@@ -184,7 +184,7 @@ fn message_from_dict(dict: &Bound<'_, PyDict>, who: &'static str) -> Result<FixM
     Ok(FixMessage {
         msg_type,
         seq_num: 0,
-        sending_time: wingfoil::NanoTime::ZERO,
+        sending_time: wingfoil_next::NanoTime::ZERO,
         fields,
     })
 }
@@ -420,7 +420,7 @@ mod tests {
         FixMessage {
             msg_type: "W".into(),
             seq_num: 7,
-            sending_time: wingfoil::NanoTime::ZERO,
+            sending_time: wingfoil_next::NanoTime::ZERO,
             fields: fields
                 .into_iter()
                 .map(|(t, v)| (t, v.to_string()))

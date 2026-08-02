@@ -13,9 +13,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn prometheus_url() -> String {
     std::env::var("PROMETHEUS_TEST_URL").unwrap_or_else(|_| "http://localhost:9090".into())

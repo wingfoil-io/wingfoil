@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use iceoryx2::prelude::ZeroCopySend;
 use log::Level::Info;
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::Iceoryx2SinkOps;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 /// Payload must be `#[repr(C)]` and implement `ZeroCopySend` for zero-copy IPC.
 #[repr(C)]

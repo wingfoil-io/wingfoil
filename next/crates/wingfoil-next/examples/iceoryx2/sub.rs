@@ -24,9 +24,9 @@
 
 use iceoryx2::prelude::ZeroCopySend;
 use log::Level::Info;
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::{Iceoryx2Mode, Iceoryx2SubOpts, iceoryx2_sub_opts};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 /// Must match the publisher's payload type exactly.
 #[repr(C)]

@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 use std::time::Duration;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kdb::{
     KdbConnection, KdbDeserialize, KdbError, Row, Sym, SymbolInterner, kdb_read,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]

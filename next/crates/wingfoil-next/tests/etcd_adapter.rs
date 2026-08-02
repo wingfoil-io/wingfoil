@@ -7,10 +7,10 @@
 //! ```
 #![cfg(feature = "etcd")]
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::etcd::{EtcdConnection, EtcdEntry, EtcdSinkOps, etcd_sub};
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// An unreachable endpoint must abort the source's run rather than hang or panic
 /// — the parity of classic `test_connection_refused`.

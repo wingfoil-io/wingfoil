@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::web::{
     CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WebBurstSinkOps, WebServer, WebSinkOps,
     web_sub,
 };
 use wingfoil_next::async_source::{RunParams, produce_async};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 type TungsteniteStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
