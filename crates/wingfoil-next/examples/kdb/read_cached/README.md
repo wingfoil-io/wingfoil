@@ -4,7 +4,7 @@ Reads from a KDB+ table using `kdb_read_cached`, which checks a local file cache
 before issuing each time-slice query. On the first run all slices are cache
 misses and results are fetched from KDB+ and written to disk; on a later run
 every slice is a cache hit — no TCP connection to KDB+ is opened. This is the
-wingfoil-next port of the classic `kdb_read_cached` example.
+wingfoil-next port of the legacy `kdb_read_cached` example.
 
 A 512 MiB cap is configured; oldest files are evicted automatically when the
 limit is exceeded. Delete the folder (or call `CacheConfig::clear()`) to force a

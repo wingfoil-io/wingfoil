@@ -1,5 +1,5 @@
 //! prometheus adapter tests that need no running service — the parity port of
-//! the classic `wingfoil::adapters::prometheus::exporter` unit tests (plus the
+//! the legacy `wingfoil::adapters::prometheus::exporter` unit tests (plus the
 //! self-contained `multiple_metrics` integration test).
 //!
 //! The end-to-end scrape test (a live Prometheus scraping the exporter) lives in
@@ -36,7 +36,7 @@ fn get_metrics(port: u16) -> String {
     panic!("could not connect to metrics server on port {port}");
 }
 
-/// Parity of classic `connection_refused_when_port_occupied`: binding a port
+/// Parity of legacy `connection_refused_when_port_occupied`: binding a port
 /// another listener already holds must fail at `serve()`, before any run.
 #[test]
 fn connection_refused_when_port_occupied() {
@@ -48,7 +48,7 @@ fn connection_refused_when_port_occupied() {
     assert!(result.is_err(), "expected bind error when port is occupied");
 }
 
-/// Parity of classic `serves_registered_metric`: a realtime run publishes the
+/// Parity of legacy `serves_registered_metric`: a realtime run publishes the
 /// stringified stream value into the scrape body, with the `# TYPE … gauge`
 /// header.
 #[test]
@@ -75,7 +75,7 @@ fn serves_registered_metric() {
     );
 }
 
-/// Parity of classic `historical_mode_produces_no_metrics`: under
+/// Parity of legacy `historical_mode_produces_no_metrics`: under
 /// `RunMode::HistoricalFrom` the sink is a no-op, so the scrape body is empty
 /// (the slot is never written, so it is omitted).
 #[test]
@@ -100,7 +100,7 @@ fn historical_mode_produces_no_metrics() {
     );
 }
 
-/// Parity of classic `returns_404_for_unknown_path`: any path other than
+/// Parity of legacy `returns_404_for_unknown_path`: any path other than
 /// `GET /metrics` gets a 404.
 #[test]
 fn returns_404_for_unknown_path() {
@@ -118,7 +118,7 @@ fn returns_404_for_unknown_path() {
     );
 }
 
-/// Parity of the classic self-contained `multiple_metrics_all_appear_in_scrape`
+/// Parity of the legacy self-contained `multiple_metrics_all_appear_in_scrape`
 /// integration test: two metrics sharing one graph both appear in the scrape.
 #[test]
 fn multiple_metrics_all_appear_in_scrape() {

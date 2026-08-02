@@ -1,5 +1,5 @@
 //! zmq adapter — real-time pub/sub messaging over ØMQ (ZeroMQ) sockets, with
-//! optional service discovery. It ports the classic `wingfoil::adapters::zmq`
+//! optional service discovery. It ports the legacy `wingfoil::adapters::zmq`
 //! module onto the Op model.
 //!
 //! # Layering
@@ -22,7 +22,7 @@
 //! background OS thread that polls the socket and feeds a
 //! [`channel`](crate::fluent::SourceOps::channel) — the sync-streaming-client
 //! shape from the adapter skill, rather than `produce_async`. Deliberately, the
-//! `zmq` feature does **not** pull in `async`/tokio (matching the classic
+//! `zmq` feature does **not** pull in `async`/tokio (matching the legacy
 //! adapter's design decision).
 //!
 //! Values arriving between graph cycles group into one [`Burst`]. A ZMQ *monitor*
@@ -48,7 +48,7 @@
 //! (up to [`BUFFER_TIMEOUT`], plus a short subscription-propagation delay). The
 //! publisher is realtime-only: a [`RunMode::HistoricalFrom`] run **aborts** with a
 //! "real-time" error at graph `start()` (publishing fast-forwarded historical
-//! data to a live socket is meaningless — matching classic, which errors rather
+//! data to a live socket is meaningless — matching legacy, which errors rather
 //! than the skill's no-op default for exporters).
 //!
 //! # Service discovery (pluggable backend)
@@ -68,9 +68,9 @@
 //! zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, ("quotes", EtcdRegistry::new(conn)))?; // discovery
 //! ```
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (sub with a status stream, pub with slow-joiner
+//! Every legacy *capability* (sub with a status stream, pub with slow-joiner
 //! buffering, the `ZmqRegistry`/`EtcdRegistry` discovery backend, `zmq_pub_on`
 //! for routable binds) is preserved. The surface differs in three deliberate
 //! ways:
@@ -78,25 +78,25 @@
 //! 1. **[`zmq_sub`] takes a [`GraphBuilder`] and a [`RunMode`].** It wires a
 //!    `channel` source on the builder (like every next source) and needs the run
 //!    mode to reject `HistoricalFrom` at wiring time — next's channel is bimodal
-//!    and would deadlock rather than erroring at run start the way classic's
+//!    and would deadlock rather than erroring at run start the way legacy's
 //!    realtime-only `ReceiverStream` does.
 //! 2. **[`ZeroMqPub::zmq_pub`] returns `Stream<()>`** (a sink to add to the
-//!    graph) instead of classic's `Rc<dyn Node>`. Binding, registration and the
-//!    run-mode check happen at graph `start()` (like classic's `start`), *before*
+//!    graph) instead of legacy's `Rc<dyn Node>`. Binding, registration and the
+//!    run-mode check happen at graph `start()` (like legacy's `start`), *before*
 //!    the first payload, so a fresh subscriber can connect and propagate its
 //!    subscription filter during the startup window instead of racing the first
 //!    publish. A historical run aborts at `start()` naming the run mode, *before*
 //!    touching the registry.
 //! 3. **The wire envelope is next-local.** Messages are `bincode`-framed with an
 //!    internal envelope, so a next publisher interoperates with a next
-//!    subscriber but is **not** wire-compatible with a classic/Python
+//!    subscriber but is **not** wire-compatible with a legacy/Python
 //!    `wingfoil` peer — cross-language interop lands with the Python bindings
 //!    (port-plan Phase 6).
 //!
 //! Two smaller surface reductions: the internal `ZmqEvent<T>` data/status
-//! multiplexing envelope is **private** here (classic exposed it as `pub`, but it
+//! multiplexing envelope is **private** here (legacy exposed it as `pub`, but it
 //! is purely an internal transport detail); and `ZmqStatus` derives `Eq` in
-//! addition to classic's `PartialEq` (harmless).
+//! addition to legacy's `PartialEq` (harmless).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -165,7 +165,7 @@ impl<T: Default> Default for ZmqEvent<T> {
 
 /// The `bincode`-framed wire envelope. Realtime-only, so a publisher only ever
 /// sends [`WireMessage::Value`] and [`WireMessage::EndOfStream`]. Mirrors the
-/// variants of classic wingfoil's `channel::Message` (including its `Error`
+/// variants of legacy wingfoil's `channel::Message` (including its `Error`
 /// case) but is **not** byte-compatible with it (see the module-level
 /// deviations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,7 +174,7 @@ enum WireMessage<T> {
     Value(T),
     /// The publisher is shutting down cleanly.
     EndOfStream,
-    /// An error, carried in the envelope for symmetry with classic. Not sent by
+    /// An error, carried in the envelope for symmetry with legacy. Not sent by
     /// this publisher; the subscriber synthesizes it locally on a decode failure
     /// (see [`run_subscriber`]) to route the error through the same match arm.
     Error(String),
@@ -225,7 +225,7 @@ impl Drop for ThreadStopGuard {
 ///
 /// A socket connect failure surfaces **during the run** via the channel's error
 /// path (the socket lives on the background thread), aborting the run with
-/// context — matching classic, whose subscriber also connects on its thread.
+/// context — matching legacy, whose subscriber also connects on its thread.
 pub fn zmq_sub<T>(
     g: &GraphBuilder,
     run_mode: RunMode,
@@ -400,8 +400,8 @@ where
 // ---------------------------------------------------------------------------
 
 /// Graph-thread-local publisher state. Bound and registered at graph `start()`
-/// (like classic's `start`); its [`Drop`] sends `EndOfStream` and revokes the
-/// registry handle at graph teardown (like classic's `stop`).
+/// (like legacy's `start`); its [`Drop`] sends `EndOfStream` and revokes the
+/// registry handle at graph teardown (like legacy's `stop`).
 struct ZmqPubState {
     port: u16,
     bind_address: String,
@@ -627,9 +627,9 @@ where
             // during the startup window, well before any payload, instead of
             // racing the first publish (the ZMQ slow-joiner problem — the source
             // of the earlier `first_message_not_dropped` flakiness). This also
-            // restores parity with classic, which binds in its `start`. The
+            // restores parity with legacy, which binds in its `start`. The
             // run-mode check moves here too, ahead of the bind and the registry,
-            // so a historical run still aborts naming the run mode (classic
+            // so a historical run still aborts naming the run mode (legacy
             // ordering). The returned handle wraps no guard: `ZmqPubState`'s own
             // `Drop` sends `EndOfStream` and revokes the registry at teardown.
             b.compose_spawn_at_start(sink.index(), move |run_mode, _run_for, _start_time| {

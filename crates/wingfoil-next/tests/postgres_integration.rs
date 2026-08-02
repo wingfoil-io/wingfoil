@@ -1,5 +1,5 @@
-//! Integration tests for the postgres adapter — parity port of the classic
-//! `wingfoil/src/adapters/postgres/integration_tests.rs`.
+//! Integration tests for the postgres adapter — parity port of the legacy
+//! `legacy/wingfoil/src/adapters/postgres/integration_tests.rs`.
 //!
 //! Requires Docker. Run with:
 //! ```sh

@@ -1,6 +1,6 @@
 //! Runtime graph dynamism (feature `dynamic-graph`): appending nodes and
 //! splicing edges onto a *live* interpreted graph mid-run. Each test is a next
-//! twin of a classic wingfoil `dynamic-graph` oracle (`wingfoil/src/graph.rs`
+//! twin of a legacy wingfoil `dynamic-graph` oracle (`legacy/wingfoil/src/graph.rs`
 //! `#[cfg(test)]`), reproducing its value/timing behaviour on the layered
 //! `(layer, index)` engine.
 #![cfg(feature = "dynamic-graph")]
@@ -13,12 +13,12 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-/// Twin of classic's `add_upstream_dynamically_fires_only_after_wired`
+/// Twin of legacy's `add_upstream_dynamically_fires_only_after_wired`
 /// (`graph.rs:2102`): a node appended at the end of cycle 3 must first fire on
 /// cycle 4, so across a 6-cycle run it fires exactly 3 times (cycles 4, 5, 6).
 ///
 /// The appended node is a `fold` counting its own activations, so its final
-/// value is the number of times it fired — the direct analogue of classic's
+/// value is the number of times it fired — the direct analogue of legacy's
 /// `extra_ticks` counter. It reads the shared per-cycle counter (`src`), which
 /// ticks every cycle, so once wired it fires every subsequent cycle.
 #[test]
@@ -69,7 +69,7 @@ fn appended_node_reads_live_source_value() {
     assert_eq!(runner.value(mapped.unwrap()), 50);
 }
 
-/// Twin of classic's `layer_resort_after_deep_upstream_addition`
+/// Twin of legacy's `layer_resort_after_deep_upstream_addition`
 /// (`graph.rs:2371`): splicing a *deep* node in as an active upstream of a
 /// *shallow* caller must lift the caller's layer above the deep node via
 /// `fix_layers`, even though the caller has the lower node index.
@@ -110,7 +110,7 @@ fn add_upstream_deep_resorts_caller_layer() {
     );
 }
 
-/// Twin of classic's `add_upstream_passive_does_not_trigger` (`graph.rs:2227`):
+/// Twin of legacy's `add_upstream_passive_does_not_trigger` (`graph.rs:2227`):
 /// a node spliced in as a *passive* upstream is read but never triggers the
 /// caller. Here the caller is a `fold` counting its activations; adding a
 /// passive upstream must not increase that count — it keeps firing only on its
@@ -144,7 +144,7 @@ fn add_upstream_passive_does_not_trigger() {
     );
 }
 
-/// Twin of classic's `remove_node_stops_firing_and_calls_lifecycle`
+/// Twin of legacy's `remove_node_stops_firing_and_calls_lifecycle`
 /// (`graph.rs:2064`): a node removed mid-run stops cycling immediately, and its
 /// value freezes at whatever it last held.
 ///
@@ -227,7 +227,7 @@ fn remove_runs_teardown_once_at_removal() {
     );
 }
 
-/// Twin of classic's `add_upstream_with_recycle_delivers_first_value`
+/// Twin of legacy's `add_upstream_with_recycle_delivers_first_value`
 /// (`graph.rs:2164`): with `recycle = true`, a node appended over a *quiet*
 /// source is scheduled to fire at `time + 1`, so it observes the source's real
 /// current value rather than the `Default` it would otherwise hold.
@@ -358,7 +358,7 @@ fn dynamic_group_maintains_a_live_price_book() {
     );
 }
 
-/// `demux` fixed-topology routing (twin of classic `demux`, `nodes/demux.rs`):
+/// `demux` fixed-topology routing (twin of legacy `demux`, `nodes/demux.rs`):
 /// the parent marks exactly the routed child each cycle — same-cycle, via the
 /// engine's mark-dirty primitive — and each child re-emits the source's current
 /// value only on the cycles it was selected, staying quiet otherwise. Routes a
@@ -473,7 +473,7 @@ fn dynamic_group_with_store_supports_non_ord_hashmap_key() {
     );
 }
 
-/// `demux_map` (twin of classic `StreamOperators::demux`): the auto-assigning
+/// `demux_map` (twin of legacy `StreamOperators::demux`): the auto-assigning
 /// `DemuxMap` key lifecycle over the raw `demux` primitive. Each new key claims
 /// a free slot from the pool of `capacity`; `DemuxEvent::Close` routes to the
 /// key's current slot then frees it; a key with no slot free lands on overflow.
@@ -538,7 +538,7 @@ fn demux_map_auto_assigns_and_releases_slots() {
     assert_eq!(runner.value(&ov), vec![3u64], "overflow: key3 (pool full)");
 }
 
-/// `demux_it` (twin of classic `StreamOperators::demux_it`): routes *each item*
+/// `demux_it` (twin of legacy `StreamOperators::demux_it`): routes *each item*
 /// of an iterable source value to its keyed child, and every selected child
 /// re-emits a `Burst` of exactly the items routed to it this cycle. Same
 /// `DemuxMap` lifecycle as `demux_map`; unselected children stay quiet.

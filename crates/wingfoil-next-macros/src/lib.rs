@@ -1437,7 +1437,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let (seed_state, seed_value) = if args.init_arg {
         // Seeded-accumulator shape: the call site's plain argument is the
         // initial `State`, cloned into the state *and* the value slot (so a
-        // passive read before the first tick sees the seed — fold's classic
+        // passive read before the first tick sees the seed — fold's legacy
         // parity). Generic only over the params the State/Out tokens
         // mention, like the Default-based seeds.
         let seed = |ret_ty: &Type, fn_name: &Ident| {
@@ -2295,7 +2295,7 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
 /// op's `_seed_state` / `_seed_value` forwarders. The macro writes no types
 /// anywhere; inference resolves them through the forwarder calls (fold's
 /// hand-written seeds clone the accumulator init into both, so a passive
-/// read before the first tick sees `init` — classic parity).
+/// read before the first tick sees `init` — legacy parity).
 fn node_decl(node: &NodeDef) -> TokenStream2 {
     // Inputs have no storage here — their value/tick are read from the outer
     // graph in the `nested` prologue.
@@ -2816,9 +2816,9 @@ fn lifecycle_input(def: &NitroDef, node: &NodeDef) -> TokenStream2 {
 // ---------------------------------------------------------------------------
 //
 // Moved here from `wingfoil-derive` so that the shared latency data layer
-// (`runtime::latency`) has no dependency on the legacy tree. The classic
+// (`runtime::latency`) has no dependency on the legacy tree. The legacy
 // `wingfoil` crate re-exports this macro, so `wingfoil::latency_stages!` is
-// unchanged for classic callers.
+// unchanged for legacy callers.
 
 struct LatencyStagesInput {
     visibility: Visibility,

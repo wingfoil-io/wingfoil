@@ -101,7 +101,7 @@ No — not in a single compilation. A proc macro expands *before* name
 resolution and type checking; rustc offers no API to ask "what type is this
 expression". The two approximations both exist in this repo's history:
 
-1. **Two-phase build-script codegen** (classic `wingfoil::codegen` /
+1. **Two-phase build-script codegen** (legacy `wingfoil::codegen` /
    `wingfoil-codegen-build-example`): `build.rs` runs the wiring against the
    interpreted builder, which records metadata, then generates runner source.
    It genuinely interrogates the built graph — but only at the fidelity a
@@ -169,7 +169,7 @@ correctness-critical); an op needing them runs interpreted or gets a row.
 
 One inference caveat, not specific to the fallback (built-in `join` defers
 closure inference the same way): with heavy generic-math crates in the linked
-impl universe (nalgebra via the classic crate's augurs adapter under
+impl universe (nalgebra via the legacy crate's augurs adapter under
 `--all-features`), an unannotated two-arg closure body like `a + 10.0 * b`
 can overflow trait search (E0275) before the input types unify. Annotating
 the closure params (`|a: &f64, b: &f64| …`) resolves it and is what user code
@@ -217,7 +217,7 @@ Each table-only capability moved to the trait/derive layer, exactly as
 | input shapes (value-only / tick-flag / pairs) | the macro always passes one `(value, tick)` pair per edge; the `#[op]` derive parses `In`'s tokens and emits the adapting forwarder — shape knowledge lives with the type |
 | activation / dirty checks | `__WF_OP_<M>_ACTIVATION` const, re-emitted by `#[op]`, folded post-mono (also composes the island's callback flag and supports `always` busy-poll ops) |
 | passive edges (sample) | `#[op(passive = [i, ..])]` → `__WF_OP_<M>_PASSIVE` bitmask const, folded into dispatch conditions and the island's input-activation list. Sample's `In` carries its unit trigger (`(&T, &())`), so the whole op is derive-generated |
-| state/value seeding (fold) | `#[op(init_arg)]` — the seeded-accumulator shape: the call's plain argument is the initial `State`, cloned into state *and* value slot by derive-emitted seeds (classic parity). Fold is fully derive-generated |
+| state/value seeding (fold) | `#[op(init_arg)]` — the seeded-accumulator shape: the call's plain argument is the initial `State`, cloned into state *and* value slot by derive-emitted seeds (legacy parity). Fold is fully derive-generated |
 | delay's zero-delay inline emit + silent first-value store | promoted into the `Op` contract as `Tick::Silent(T)` (the promotion `op.rs` had reserved); `Delay::cycle` now expresses its full semantics once, and all three engines handle `Silent` generically |
 | sources (ticker/constant) | same mechanism, rooted at builder methods; `Ticker`/`Delay` `Cfg` became the call-site `Duration` (arg-verbatim convention), with ticker caching the converted period in state at `start` |
 | `unit_output`, `CfgInit`, `StateInit`, `ValueSeed`, `Edges`, `Inputs`, `OpKind`, `OpInfo` | deleted |

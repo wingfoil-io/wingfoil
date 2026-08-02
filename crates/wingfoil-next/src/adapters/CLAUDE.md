@@ -4,8 +4,8 @@ Index and shared conventions for the I/O adapters under
 `crates/wingfoil-next/src/adapters/`. Each adapter also has its own
 `CLAUDE.md` — see the table below.
 
-> These are **next** adapters, built on the Op pattern. The classic
-> `wingfoil/src/adapters/<name>/CLAUDE.md` files describe a different
+> These are **next** adapters, built on the Op pattern. The legacy
+> `legacy/wingfoil/src/adapters/<name>/CLAUDE.md` files describe a different
 > implementation (`#[node]` / `MutableNode` / `Rc<dyn Stream<T>>`) and are the
 > *parity oracle*, not a description of this code. Do not treat them as
 > interchangeable.
@@ -14,11 +14,11 @@ Index and shared conventions for the I/O adapters under
 
 Every adapter gets `src/adapters/<name>/CLAUDE.md`, whether its code is a
 single file or a directory. That keeps one path shape across the tree (and the
-same shape classic uses, so the cutover does not move doc paths); for a
+same shape legacy uses, so the cutover does not move doc paths); for a
 single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 `zmq.rs` + `zmq/` already coexist that way.
 
-| Adapter | Code | Feature | Classic twin |
+| Adapter | Code | Feature | Legacy twin |
 |---|---|---|---|
 | [aeron](aeron/CLAUDE.md) | `aeron/` | `aeron` or `aeron-rs` | yes |
 | [augurs](augurs/CLAUDE.md) | `augurs.rs` | `augurs` | yes |
@@ -51,7 +51,7 @@ does not copy the helpers.
   `use wingfoil_next::adapters::<name>::…;`, mirroring `stats`.
 - **Sources are free functions** taking `&GraphBuilder` first; **sinks are
   extension traits** on `Stream<Burst<T>>` (often with a `Stream<T>`
-  convenience impl) returning `Stream<()>`. Classic's free-fn-*and*-operator-
+  convenience impl) returning `Stream<()>`. Legacy's free-fn-*and*-operator-
   trait pairs collapse into the trait (deviation register D1).
 - **Live, never-closing sources reject `RunMode::HistoricalFrom` at wiring**
   and return `Result` — the historical channel receiver block-collects the
@@ -72,7 +72,7 @@ does not copy the helpers.
   secret expose `redacted()` and use it at every error site
   (`PostgresConnection`, `RedisConnection`, `KdbConnection`), pinned by a unit
   test.
-- **The `# Deviations from classic` block in each module's `//!` header is the
+- **The `# Deviations from legacy` block in each module's `//!` header is the
   canonical deviation list**, with `docs/deviation-register.md` for the
   cross-cutting rows. These `CLAUDE.md` files summarise; they do not replace.
 

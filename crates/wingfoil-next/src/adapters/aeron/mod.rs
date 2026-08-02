@@ -1,5 +1,5 @@
 //! aeron adapter — the Aeron IPC/UDP low-latency message transport. It ports
-//! the classic `wingfoil::adapters::aeron` module onto the Op model.
+//! the legacy `wingfoil::adapters::aeron` module onto the Op model.
 //!
 //! # Layering
 //!
@@ -17,7 +17,7 @@
 //!   [`aeron_pub_with_status`](AeronSinkOps::aeron_pub_with_status)), enabled
 //!   with `use wingfoil_next::adapters::aeron::AeronSinkOps;`.
 //!
-//! Like classic (and unlike the networked async adapters) Aeron is synchronous
+//! Like legacy (and unlike the networked async adapters) Aeron is synchronous
 //! and poll-based, so the feature deliberately does **not** pull in
 //! `async`/tokio.
 //!
@@ -88,9 +88,9 @@
 //! and is carried in-band with the data so a `Connected` transition stays
 //! ordered before the fragments that followed it.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (both backends, both polling modes, the typed
+//! Every legacy *capability* (both backends, both polling modes, the typed
 //! parser with `FragmentHeader` access, the `fragment_limit` cap, the
 //! `Spin`→`Threaded` downgrade, both status side-channels, the `ChannelUri`
 //! builders, `ClaimBuffer`'s zero-copy commit/abort contract, and the
@@ -103,11 +103,11 @@
 //!    **reject `RunMode::HistoricalFrom` at wiring**: a live Aeron subscription
 //!    has no historical timeline to replay, and the `Threaded` mode rides the
 //!    channel layer, whose historical receiver would block-collect the
-//!    never-closing poll thread and deadlock at `start` (register B2). Classic's
+//!    never-closing poll thread and deadlock at `start` (register B2). Legacy's
 //!    spin subscriber silently ran against the fast-forwarded historical clock.
-//!    The **publisher** keeps classic's behaviour exactly: its real-time check
+//!    The **publisher** keeps legacy's behaviour exactly: its real-time check
 //!    fires at graph `start()`, aborting the run.
-//! 2. **The status side-channel is a plain stream, not a node type.** Classic
+//! 2. **The status side-channel is a plain stream, not a node type.** Legacy
 //!    exposed `AeronStatusStream`, a `MutableNode` the producer drove through
 //!    `clear()`/`record()` and wired as an active downstream. next multiplexes
 //!    status with data over one internal envelope and **splits** it into the
@@ -116,18 +116,18 @@
 //!    (transition-only emission, derivation order, in-band ordering in threaded
 //!    mode) is identical, but `AeronStatusStream` itself has no next twin; the
 //!    status half is an ordinary `Stream<Burst<AeronStatus>>`. Notably this also
-//!    makes the *spin* mode carry status in-band, where classic used a shared
+//!    makes the *spin* mode carry status in-band, where legacy used a shared
 //!    `Rc<RefCell<..>>`.
-//! 3. **The sink is an extension trait returning `Stream<()>`.** Classic's
+//! 3. **The sink is an extension trait returning `Stream<()>`.** Legacy's
 //!    `AeronPub` returned `Rc<dyn Node>`; [`AeronSinkOps`] returns the sink
 //!    stream, per the sink-as-trait convention shared with
 //!    [`lines`](crate::adapters::lines) / [`csv`](crate::adapters::csv) /
 //!    [`kafka`](crate::adapters::kafka).
-//! 4. **The mock backends are public.** Classic gated `MockSubscriber` /
+//! 4. **The mock backends are public.** Legacy gated `MockSubscriber` /
 //!    `MockPublisher` behind `#[cfg(test)]` inside the crate; next's adapter
 //!    tests live in `tests/` and compile against the public library, so they are
 //!    public, always-compiled test support (tiny and dependency-free).
-//! 5. **The plain `aeron_sub_fragment` never derives status.** Classic's spin
+//! 5. **The plain `aeron_sub_fragment` never derives status.** Legacy's spin
 //!    node held an `Option<Rc<RefCell<AeronStatusStream>>>` and skipped the
 //!    derivation when `None`; next passes the same choice as a `track_status`
 //!    flag. Same behaviour, no allocation.

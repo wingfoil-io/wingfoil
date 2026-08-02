@@ -1,7 +1,7 @@
 # CSV Adapter (wingfoil-next)
 
 A serde-typed CSV file adapter — a historical replay **source** and a file
-**sink**. The parsing cousin of [`lines`](../lines/CLAUDE.md); ports classic
+**sink**. The parsing cousin of [`lines`](../lines/CLAUDE.md); ports legacy
 `wingfoil::adapters::csv` onto the Op model.
 
 ## Layout
@@ -19,7 +19,7 @@ csv = ["dep:csv", "dep:serde", "dep:serde-aux", "async", "dep:async-stream"]
 ```
 
 Note the `async` implication — that is a **documented dependency gain over
-classic** (register B4). It buys the lazy, bounded replay: the sink itself is
+legacy** (register B4). It buys the lazy, bounded replay: the sink itself is
 still synchronous.
 
 ## Entry points
@@ -42,31 +42,31 @@ Records are ordinary Rust types: a named struct, or a positional tuple such as
   modes; `None` is unbounded. Do not move it back to `replay_results`.
 - **Timestamps must be non-decreasing.** `get_time(&record)` feeds the
   monotonic graph clock; an out-of-order record aborts the run. This is a
-  documented deviation — classic's `TryIteratorStream` imposed no explicit
+  documented deviation — legacy's `TryIteratorStream` imposed no explicit
   source-side ordering constraint.
 - **Rows sharing a timestamp ride one atomic `Burst`.** Use
   `.collapse_accumulate()` when the source is strictly ascending and you want a
   flat `Vec<T>`; `.collapse()` keeps only the last row of a burst and will
   silently drop same-timestamp siblings.
-- **The header is written eagerly, at wiring** — before `for_each_mut`. Classic
+- **The header is written eagerly, at wiring** — before `for_each_mut`. Legacy
   deferred it to the first tick via a `headers_written` flag. Observable
   difference: a graph that wires `csv_write` and produces zero rows leaves a
-  header-only file in next, an empty file in classic. Positional tuples have no
+  header-only file in next, an empty file in legacy. Positional tuples have no
   named fields, so no header is written either way and there is no difference.
 - The sink chains `with_time()` then `for_each_mut`, so every row carries a
-  leading `time` column — same as classic.
+  leading `time` column — same as legacy.
 - Both a `Stream<Burst<T>>` and a `Stream<T>` sink impl exist here (unlike
   `lines`): the bound is `Serialize`, which `Burst<T>` does not satisfy, so the
   two impls cannot collide.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `csv.rs`. In short —
+Canonical list: the `# Deviations from legacy` block in `csv.rs`. In short —
 non-decreasing timestamps required (above); eager header write (above);
 malformed-row errors now surface **mid-stream** as the reader reaches the row
 rather than at replay start (register D6 — the error string and run-failure
-outcome are unchanged, and `csv_read` deliberately reuses classic's "failed to
-deserialize row" context so classic's message assertions port verbatim).
+outcome are unchanged, and `csv_read` deliberately reuses legacy's "failed to
+deserialize row" context so legacy's message assertions port verbatim).
 
 ## Tests
 

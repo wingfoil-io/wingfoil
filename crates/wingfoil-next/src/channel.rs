@@ -25,7 +25,7 @@ use std::sync::Arc;
 use wingfoil_next::NanoTime;
 
 /// The wire envelope carried between a [`ChannelSender`] and its paired
-/// receiver source. Mirrors the classic `channel::Message`, minus the
+/// receiver source. Mirrors the legacy `channel::Message`, minus the
 /// serde/burst machinery that the cross-process adapters (zmq, kafka) will
 /// reintroduce when they land.
 #[derive(Debug)]
@@ -67,7 +67,7 @@ impl<T: PartialEq> PartialEq for Message<T> {
             (Message::ValueAt(a, ta), Message::ValueAt(b, tb)) => a == b && ta == tb,
             (Message::Checkpoint(a), Message::Checkpoint(b)) => a == b,
             (Message::EndOfStream, Message::EndOfStream) => true,
-            // Errors never compare equal (matching the classic envelope).
+            // Errors never compare equal (matching the legacy envelope).
             _ => false,
         }
     }
@@ -138,7 +138,7 @@ impl<T> ChannelSender<T> {
 
     /// Send a value stamped with an explicit graph time. In a **historical**
     /// run the receiver replays it deterministically at `time` on the graph
-    /// clock (the timestamped `(NanoTime, T)` shape of classic
+    /// clock (the timestamped `(NanoTime, T)` shape of legacy
     /// `produce_async`); in realtime the timestamp is ignored. Producers
     /// driving a historical replay send timestamped values, then [`close`](Self::close).
     pub fn send_at(&self, value: T, time: NanoTime) -> bool {

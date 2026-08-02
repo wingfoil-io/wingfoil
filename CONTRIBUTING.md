@@ -19,13 +19,13 @@ valuable contributions are:
   (`.claude/commands/new-adapter-next.md` from the repo root), which encodes
   the layering rules (sources over `channel`/`poll`, sinks over `for_each`,
   extension traits out of the prelude).
-- **Porting a legacy example or test** — every classic example and test
+- **Porting a legacy example or test** — every legacy example and test
   wants a next twin producing identical values and tick times. Parity gaps
   are bugs.
 
 ## Ground rules
 
-1. **Legacy is the oracle.** A port must match the classic implementation's
+1. **Legacy is the oracle.** A port must match the legacy implementation's
    observable behaviour (values *and* tick times), or document the deviation
    in the capability matrix. Never silently drop a capability.
 2. **One mechanism per op.** Semantics live in one `Op::cycle` — no

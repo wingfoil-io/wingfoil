@@ -1,6 +1,6 @@
 //! Phase 4 adapter porting, proof of tractability: the statistics adapter's
 //! EWMA operator ported as an `Op` — stateful, clock-aware (half-life decay
-//! off engine time), seeded with an explicit init flag. Mirrors the classic
+//! off engine time), seeded with an explicit init flag. Mirrors the legacy
 //! `adapters::statistics` EWMA unit tests exactly.
 
 use std::time::Duration;
@@ -57,7 +57,7 @@ fn ewma_does_not_reset_at_zero() {
     assert!((r.value(&ewma) - 2.5).abs() < 1e-10);
 }
 
-/// Rolling mean over a sliding window — mirrors classic
+/// Rolling mean over a sliding window — mirrors legacy
 /// `rolling_mean_over_window`. Window 3 over 1,2,3,4,5: 1, 1.5, 2, 3, 4.
 #[test]
 fn rolling_mean_over_window() {
@@ -68,7 +68,7 @@ fn rolling_mean_over_window() {
     assert_eq!(vec![1.0, 1.5, 2.0, 3.0, 4.0], r.value(&acc));
 }
 
-/// Rolling sum over a sliding window — mirrors classic
+/// Rolling sum over a sliding window — mirrors legacy
 /// `rolling_sum_over_window`. Window 3 over 1,2,3,4,5: 1, 3, 6, 9, 12.
 #[test]
 fn rolling_sum_over_window() {
@@ -95,7 +95,7 @@ fn ewma_half_life_of_constant_is_constant() {
     assert!((r.value(&ewma) - 7.0).abs() < 1e-10);
 }
 
-/// Real decay over a *varying* stream — mirrors classic
+/// Real decay over a *varying* stream — mirrors legacy
 /// `ewma_decay_matches_per_tick_when_dt_equals_half_life`. With Δt (100ns tick)
 /// equal to the half-life, alpha = 1 - 2^-1 = 0.5 every tick, so over 1,2,3,4
 /// the half-life EWMA matches `ewma_per_tick(0.5)`: e1=1, e2=1.5, e3=2.25,
@@ -110,7 +110,7 @@ fn ewma_half_life_matches_per_tick_when_dt_equals_half_life() {
     assert!((r.value(&ewma) - 3.125).abs() < 1e-10);
 }
 
-/// A window of 0 is meaningless and clamps to `max(1)` (mirrors classic's
+/// A window of 0 is meaningless and clamps to `max(1)` (mirrors legacy's
 /// `Window::Count(n.max(1))` / `window.max(1)` clamp), so `rolling_sum(0)` and
 /// `rolling_mean(0)` behave as a window of 1: each output is just the latest
 /// value.

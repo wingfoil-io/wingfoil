@@ -1,7 +1,7 @@
 //! The burst grouping type, shared by both engines.
 //!
 //! A group of same-instant values delivered atomically in one cycle — never
-//! coalesced / latest-wins, never dropped. The classic `wingfoil` crate
+//! coalesced / latest-wins, never dropped. The legacy `wingfoil` crate
 //! re-exports this type and its constructor macro, so `wingfoil::Burst<T>`
 //! and [`wingfoil_next::Burst<T>`](crate::Burst) are the *same* type and a
 //! burst crosses the engine boundary without conversion.

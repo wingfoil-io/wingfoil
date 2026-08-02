@@ -9,7 +9,7 @@
 #   cargo bench -p wingfoil-next --features async --bench bfs_vs_dfs_async_streams
 #   python plot.py
 #
-# The values currently in place are the classic-engine reading carried over
+# The values currently in place are the legacy-engine reading carried over
 # with the port (same workload, same machine class), so the shape of the plot
 # is right but the `wingfoil` series is *not* yet a next-engine measurement.
 import matplotlib

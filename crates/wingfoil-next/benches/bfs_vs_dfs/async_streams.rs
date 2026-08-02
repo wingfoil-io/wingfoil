@@ -5,7 +5,7 @@
 // equivalent of rxrust's combine_latest(src, src): one tick produces 2^N
 // sequential awaits across N levels.
 //
-// Ported verbatim from classic `wingfoil/benches/bfs_vs_dfs/async_streams.rs`:
+// Ported verbatim from legacy `legacy/wingfoil/benches/bfs_vs_dfs/async_streams.rs`:
 // this target measures tokio async/await, not wingfoil, so it is
 // engine-agnostic and there is nothing on the next side for it to change. It is
 // the second comparison baseline the `bfs_vs_dfs_wingfoil` bar is read against.

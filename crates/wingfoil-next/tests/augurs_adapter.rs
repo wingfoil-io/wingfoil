@@ -1,9 +1,9 @@
-//! augurs adapter parity tests — ports the classic
+//! augurs adapter parity tests — ports the legacy
 //! `wingfoil::adapters::augurs` unit tests for all six operators to the
 //! wingfoil-next Op-pattern engine. augurs models are deterministic given their
 //! input (AutoETS/MSTL are optimizers with no RNG; MAD/DBSCAN, BOCPD, the
 //! periodogram and DTW are deterministic), so the same known input series yields
-//! the same output on every run — the assertions match the classic ones
+//! the same output on every run — the assertions match the legacy ones
 //! (thresholds on the forecast / flagged-series, not brittle bit-exact values).
 //! Everything runs in historical mode for reproducibility.
 
@@ -23,7 +23,7 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 // Forecasting.
 // -------------------------------------------------------------------------
 
-/// Classic `forecast_ramp_predicts_ahead`: a clean upward ramp with mild
+/// Legacy `forecast_ramp_predicts_ahead`: a clean upward ramp with mild
 /// seasonality forecasts values above the last observed point, and the
 /// prediction intervals bracket the point forecast.
 #[test]
@@ -55,7 +55,7 @@ fn forecast_ramp_predicts_ahead() {
     }
 }
 
-/// Classic `forecast_waits_for_min_points`: the node stays silent until
+/// Legacy `forecast_waits_for_min_points`: the node stays silent until
 /// `min_points` have arrived.
 #[test]
 fn forecast_waits_for_min_points() {
@@ -69,7 +69,7 @@ fn forecast_waits_for_min_points() {
     assert!(r.value(&forecast).point.is_empty());
 }
 
-/// Classic `forecast_mstl_captures_season`: MSTL with a seasonal period
+/// Legacy `forecast_mstl_captures_season`: MSTL with a seasonal period
 /// reproduces the seasonal swing rather than a flat line.
 #[test]
 fn forecast_mstl_captures_season() {
@@ -98,7 +98,7 @@ fn forecast_mstl_captures_season() {
     );
 }
 
-/// Classic `forecast_window_below_floor_still_emits`: a `window` smaller than
+/// Legacy `forecast_window_below_floor_still_emits`: a `window` smaller than
 /// the model's warm-up floor still warms up and emits.
 #[test]
 fn forecast_window_below_floor_still_emits() {
@@ -119,7 +119,7 @@ fn forecast_window_below_floor_still_emits() {
     );
 }
 
-/// Classic `forecast_mstl_rejects_invalid_period`: an MSTL period below 2 is
+/// Legacy `forecast_mstl_rejects_invalid_period`: an MSTL period below 2 is
 /// rejected with a clear error at run time.
 #[test]
 fn forecast_mstl_rejects_invalid_period() {
@@ -135,7 +135,7 @@ fn forecast_mstl_rejects_invalid_period() {
     );
 }
 
-/// Classic `forecast_accepts_tuple_config`: `(window, horizon)` tuples convert
+/// Legacy `forecast_accepts_tuple_config`: `(window, horizon)` tuples convert
 /// into a config.
 #[test]
 fn forecast_accepts_tuple_config() {
@@ -152,7 +152,7 @@ fn forecast_accepts_tuple_config() {
 // Outlier detection.
 // -------------------------------------------------------------------------
 
-/// Classic `outlier_mad_flags_diverging_series`: three series move together
+/// Legacy `outlier_mad_flags_diverging_series`: three series move together
 /// except one, which jumps away part-way through — flagged by MAD.
 #[test]
 fn outlier_mad_flags_diverging_series() {
@@ -178,7 +178,7 @@ fn outlier_mad_flags_diverging_series() {
     assert!(!last.is_outlier(1));
 }
 
-/// Classic `outlier_dbscan_flags_diverging_series`: DBSCAN flags a series
+/// Legacy `outlier_dbscan_flags_diverging_series`: DBSCAN flags a series
 /// diverging from a cluster of similar series.
 #[test]
 fn outlier_dbscan_flags_diverging_series() {
@@ -202,7 +202,7 @@ fn outlier_dbscan_flags_diverging_series() {
     );
 }
 
-/// Classic `outlier_quiet_when_aligned`: with all series moving together,
+/// Legacy `outlier_quiet_when_aligned`: with all series moving together,
 /// nothing is flagged.
 #[test]
 fn outlier_quiet_when_aligned() {
@@ -222,7 +222,7 @@ fn outlier_quiet_when_aligned() {
     );
 }
 
-/// Classic `outlier_waits_for_two_samples`: the node stays silent until it has
+/// Legacy `outlier_waits_for_two_samples`: the node stays silent until it has
 /// at least two samples.
 #[test]
 fn outlier_waits_for_two_samples() {
@@ -244,7 +244,7 @@ fn outlier_waits_for_two_samples() {
 // Changepoint detection.
 // -------------------------------------------------------------------------
 
-/// Classic `changepoint_detects_level_shift`: a series that jumps from a low
+/// Legacy `changepoint_detects_level_shift`: a series that jumps from a low
 /// mean to a high mean partway through produces a changepoint after the jump.
 #[test]
 fn changepoint_detects_level_shift() {
@@ -273,7 +273,7 @@ fn changepoint_detects_level_shift() {
     );
 }
 
-/// Classic `changepoint_quiet_when_steady`: a perfectly steady series yields no
+/// Legacy `changepoint_quiet_when_steady`: a perfectly steady series yields no
 /// changepoints.
 #[test]
 fn changepoint_quiet_when_steady() {
@@ -323,7 +323,7 @@ fn changepoint_waits_for_min_points() {
 // Seasonality detection.
 // -------------------------------------------------------------------------
 
-/// Classic `seasons_detects_known_period`: a clean period-12 sine wave is
+/// Legacy `seasons_detects_known_period`: a clean period-12 sine wave is
 /// detected as having a ~12-sample season.
 #[test]
 fn seasons_detects_known_period() {
@@ -347,7 +347,7 @@ fn seasons_detects_known_period() {
     assert!((10..=14).contains(&dominant), "dominant was {dominant}");
 }
 
-/// Classic `seasons_window_below_floor_still_emits`: a `window` below the
+/// Legacy `seasons_window_below_floor_still_emits`: a `window` below the
 /// default `min_points` floor still warms up and emits rather than never
 /// ticking (the effective window grows to the floor).
 #[test]
@@ -369,7 +369,7 @@ fn seasons_window_below_floor_still_emits() {
     );
 }
 
-/// Classic `seasons_waits_for_min_points`: the op stays silent until
+/// Legacy `seasons_waits_for_min_points`: the op stays silent until
 /// `min_points` have arrived.
 #[test]
 fn seasons_waits_for_min_points() {
@@ -390,7 +390,7 @@ fn seasons_waits_for_min_points() {
 // Dynamic time warping.
 // -------------------------------------------------------------------------
 
-/// Classic `dtw_distances_reflect_similarity`: two similar series and one
+/// Legacy `dtw_distances_reflect_similarity`: two similar series and one
 /// dissimilar one — the distance from the odd series out exceeds the distance
 /// between the similar pair.
 #[test]
@@ -421,7 +421,7 @@ fn dtw_distances_reflect_similarity() {
     );
 }
 
-/// Classic `dtw_waits_for_two_samples`: with two series but only a single
+/// Legacy `dtw_waits_for_two_samples`: with two series but only a single
 /// sample the op stays silent — a DTW distance over length-1 columns is not a
 /// windowed-history distance.
 #[test]
@@ -439,7 +439,7 @@ fn dtw_waits_for_two_samples() {
     assert!(r.value(&ticks).is_empty());
 }
 
-/// Classic `dtw_waits_for_two_series`: the op stays silent until it has at
+/// Legacy `dtw_waits_for_two_series`: the op stays silent until it has at
 /// least two series.
 #[test]
 fn dtw_waits_for_two_series() {
@@ -483,7 +483,7 @@ fn dtw_manhattan_metric_ranks_similarity() {
 // Clustering.
 // -------------------------------------------------------------------------
 
-/// Classic `cluster_groups_similar_series`: two tight groups of series plus one
+/// Legacy `cluster_groups_similar_series`: two tight groups of series plus one
 /// outlier form two clusters, with the outlier labelled as noise.
 #[test]
 fn cluster_groups_similar_series() {
@@ -518,7 +518,7 @@ fn cluster_groups_similar_series() {
     assert_eq!(last.labels[4], -1);
 }
 
-/// Classic `cluster_waits_for_two_series`: the op stays silent until it has at
+/// Legacy `cluster_waits_for_two_series`: the op stays silent until it has at
 /// least two series.
 #[test]
 fn cluster_waits_for_two_series() {
@@ -535,7 +535,7 @@ fn cluster_waits_for_two_series() {
     assert!(r.value(&ticks).is_empty());
 }
 
-/// Classic `cluster_waits_for_two_samples`: with two series but only a single
+/// Legacy `cluster_waits_for_two_samples`: with two series but only a single
 /// sample the op stays silent — clustering length-1 columns compares single
 /// points, not histories.
 #[test]
@@ -553,7 +553,7 @@ fn cluster_waits_for_two_samples() {
     assert!(r.value(&ticks).is_empty());
 }
 
-/// Classic `cluster_accepts_tuple_config`: `(window, epsilon,
+/// Legacy `cluster_accepts_tuple_config`: `(window, epsilon,
 /// min_cluster_size)` tuples convert into a config.
 #[test]
 fn cluster_accepts_tuple_config() {
@@ -571,8 +571,8 @@ fn cluster_accepts_tuple_config() {
 }
 
 /// Next-specific: a `window` of 1 still reaches the two-sample warm-up floor
-/// and emits (classic's cluster node would never tick — see the adapter's
-/// `# Deviations from classic`).
+/// and emits (legacy's cluster node would never tick — see the adapter's
+/// `# Deviations from legacy`).
 #[test]
 fn cluster_window_below_floor_still_emits() {
     let g = GraphBuilder::new();

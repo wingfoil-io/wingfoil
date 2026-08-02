@@ -1,6 +1,6 @@
-//! Phase 2 node-catalog parity: each ported op reproduces the classic
+//! Phase 2 node-catalog parity: each ported op reproduces the legacy
 //! engine's observable behaviour for the equivalent graph. These mirror the
-//! classic nodes' own unit tests (`distinct`, `drop_small_change`,
+//! legacy nodes' own unit tests (`distinct`, `drop_small_change`,
 //! `difference`, `limit`, `map_filter`) — same values, same tick suppression.
 
 use std::cell::RefCell;
@@ -12,7 +12,7 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-/// `distinct` emits the first value then only on change — mirrors classic
+/// `distinct` emits the first value then only on change — mirrors legacy
 /// `distinct::suppresses_repeated_values`.
 #[test]
 fn distinct_suppresses_repeats() {
@@ -40,7 +40,7 @@ fn distinct_emits_first_value_equal_to_default() {
 }
 
 /// `drop_small_change` always propagates the first value, whatever the
-/// predicate says — mirrors classic
+/// predicate says — mirrors legacy
 /// `drop_small_change::first_tick_always_propagates`.
 #[test]
 fn drop_small_change_first_tick_always_propagates() {
@@ -54,7 +54,7 @@ fn drop_small_change_first_tick_always_propagates() {
 
 /// The predicate compares against the **last emitted** value, not the last
 /// seen one, so an accumulating drift of individually-small steps ticks once
-/// it crosses the threshold — mirrors classic
+/// it crosses the threshold — mirrors legacy
 /// `drop_small_change::compares_f64_changes_to_last_emitted_value`.
 #[test]
 fn drop_small_change_compares_to_last_emitted_value() {
@@ -83,7 +83,7 @@ fn drop_small_change_compares_to_last_emitted_value() {
 }
 
 /// A predicate that never calls a change small passes every tick through —
-/// mirrors classic
+/// mirrors legacy
 /// `drop_small_change::propagates_every_tick_when_predicate_returns_false`.
 #[test]
 fn drop_small_change_propagates_when_predicate_is_false() {
@@ -115,7 +115,7 @@ fn drop_small_change_with_equality_matches_distinct() {
 }
 
 /// `difference` is quiet on the first tick, then emits deltas — mirrors
-/// classic `difference::{first_tick_does_not_emit, delta_is_correct}`.
+/// legacy `difference::{first_tick_does_not_emit, delta_is_correct}`.
 #[test]
 fn difference_emits_deltas_after_first() {
     let g = GraphBuilder::new();
@@ -127,7 +127,7 @@ fn difference_emits_deltas_after_first() {
     assert_eq!(vec![1, 1, 1], r.value(&acc));
 }
 
-/// `limit` passes the first N then suppresses — mirrors classic
+/// `limit` passes the first N then suppresses — mirrors legacy
 /// `limit::suppresses_after_limit_reached`.
 #[test]
 fn limit_caps_ticks() {
@@ -139,7 +139,7 @@ fn limit_caps_ticks() {
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
-/// A passive `join` input is read but does not trigger — mirrors classic
+/// A passive `join` input is read but does not trigger — mirrors legacy
 /// `bimap::bimap_passive_does_not_trigger`. The combine fires only when the
 /// active (slow) input ticks, reading the passive (fast) input's current
 /// value at that instant.
@@ -158,7 +158,7 @@ fn join_passive_reads_without_triggering() {
     assert_eq!(vec![(1, 1), (2, 11), (3, 21)], r.value(&acc));
 }
 
-/// `map_filter` maps and filters in one pass — mirrors classic
+/// `map_filter` maps and filters in one pass — mirrors legacy
 /// `map_filter::emits_when_function_returns_true` (odd inputs squared).
 #[test]
 fn map_filter_maps_and_filters() {
@@ -173,7 +173,7 @@ fn map_filter_maps_and_filters() {
 }
 
 /// `throttle` suppresses ticks that arrive within `interval` of the last
-/// emit — mirrors classic `throttle::throttle_suppresses_fast_ticks`
+/// emit — mirrors legacy `throttle::throttle_suppresses_fast_ticks`
 /// (source every 10ns, interval 25ns → emit at 0, 30, 60, ...).
 #[test]
 fn throttle_suppresses_fast_ticks() {
@@ -188,7 +188,7 @@ fn throttle_suppresses_fast_ticks() {
 }
 
 /// `window` buffers values and flushes them on each time boundary — mirrors
-/// classic `window::window_stream_works` (100/250 grouping: [1,2,3], [4,5],
+/// legacy `window::window_stream_works` (100/250 grouping: [1,2,3], [4,5],
 /// [6,7,8], …). Exercises the `Ctx::is_last_cycle` engine service and a
 /// `start` hook that sets the first boundary.
 #[test]
@@ -205,7 +205,7 @@ fn window_flushes_on_time_boundaries() {
 }
 
 /// `buffer` flushes a `Vec` every `capacity` values, plus a final partial
-/// flush — mirrors classic `buffer::buffer_stream_works`.
+/// flush — mirrors legacy `buffer::buffer_stream_works`.
 #[test]
 fn buffer_flushes_by_capacity() {
     let g = GraphBuilder::new();
@@ -217,7 +217,7 @@ fn buffer_flushes_by_capacity() {
     assert_eq!(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7]], r.value(&acc));
 }
 
-/// `join3` (trimap) combines three streams — mirrors classic
+/// `join3` (trimap) combines three streams — mirrors legacy
 /// `trimap::trimap_all_active`.
 #[test]
 fn join3_combines_three_streams() {
@@ -234,7 +234,7 @@ fn join3_combines_three_streams() {
     assert_eq!(vec![6, 12, 18], r.value(&acc));
 }
 
-/// `with_time` pairs each value with the engine time — mirrors classic
+/// `with_time` pairs each value with the engine time — mirrors legacy
 /// `with_time::timestamps_match_graph_time`.
 #[test]
 fn with_time_pairs_value_with_engine_time() {
@@ -253,7 +253,7 @@ fn with_time_pairs_value_with_engine_time() {
     assert_eq!(expected, items);
 }
 
-/// `ticked_at` emits the engine time on each tick — mirrors classic
+/// `ticked_at` emits the engine time on each tick — mirrors legacy
 /// `graph_state::ticked_at_emits_graph_time`.
 #[test]
 fn ticked_at_emits_engine_time() {
@@ -268,7 +268,7 @@ fn ticked_at_emits_engine_time() {
     );
 }
 
-/// `not` negates a bool stream — mirrors classic `not_inverts_bool_stream`.
+/// `not` negates a bool stream — mirrors legacy `not_inverts_bool_stream`.
 #[test]
 fn not_inverts_bool_stream() {
     let g = GraphBuilder::new();
@@ -281,7 +281,7 @@ fn not_inverts_bool_stream() {
 }
 
 /// `inspect` observes each value and passes it through unchanged — mirrors
-/// classic `inspect::inspect_observes_and_passes_through`.
+/// legacy `inspect::inspect_observes_and_passes_through`.
 #[test]
 fn inspect_observes_and_passes_through() {
     let seen = Rc::new(RefCell::new(Vec::new()));
@@ -317,7 +317,7 @@ fn ticked_at_elapsed_emits_elapsed_time() {
 }
 
 /// `window` from a **non-zero** start. The boundary is anchored at `ctx.time()`
-/// during `start` (= ZERO, a quirk shared bug-for-bug with classic — see the
+/// during `start` (= ZERO, a quirk shared bug-for-bug with legacy — see the
 /// fable review), so the 250ns boundaries fall on 250/500/750/… absolute time,
 /// giving the same grouping as a zero-start run even though the data lives at
 /// 1000+. This pins that behaviour so a unilateral "fix" can't drift silently.

@@ -1,7 +1,7 @@
 # augurs Adapter (wingfoil-next)
 
 On-graph time-series analysis over the [`augurs`](https://docs.rs/augurs)
-toolkit. Ports classic `wingfoil::adapters::augurs` onto the Op model.
+toolkit. Ports legacy `wingfoil::adapters::augurs` onto the Op model.
 
 **A pure-compute adapter — no I/O edge, no service, no lifecycle.** It is
 *transform ops*, the same shape as `stats`, just with a heavier kernel. That
@@ -22,15 +22,15 @@ augurs = ["dep:augurs"]
 ```
 
 No `async`, no integration-test feature, no testcontainers. The `augurs`
-dependency is pinned `default-features = false` with **exactly** classic's
+dependency is pinned `default-features = false` with **exactly** legacy's
 sub-feature set, one per ported op:
 `ets, mstl, outlier, changepoint, seasons, dtw, clustering`. Prophet is
-deliberately excluded (it needs a bundled Stan toolchain) — as in classic.
+deliberately excluded (it needs a bundled Stan toolchain) — as in legacy.
 
 If you add an op needing another sub-feature, widen that list *and* the comment
 above the dep (skill step 13).
 
-## Entry points — all six of classic's operators
+## Entry points — all six of legacy's operators
 
 Each is an extension trait; bring in the ones you use.
 
@@ -57,7 +57,7 @@ signature serves several call sites.
   inside `nitro!` / `compiled()` — there is no per-op macro table to edit.
 - **Warm-up returns `Tick::Quiet`**, a full window returns `Tick::Value`.
 - **Config errors are `anyhow` errors from inside `cycle`, never a panic at
-  wiring.** Classic's outlier construction panics on a bad sensitivity
+  wiring.** Legacy's outlier construction panics on a bad sensitivity
   (`MADDetector::with_sensitivity(..).unwrap_or_else(|e| panic!(..))`); next
   builds the detector in `cycle` and bails. That is a deliberate improvement —
   do not "fix" it back.
@@ -66,16 +66,16 @@ signature serves several call sites.
   `O(n² · window²)` for `n` series. The docs tell callers to `throttle`
   upstream; keep that guidance rather than adding caching heuristics.
 - **`augurs_cluster` and `augurs_dtw` floor their effective window at 2.**
-  Classic's cluster node sizes its buffer for two samples but evicts against
+  Legacy's cluster node sizes its buffer for two samples but evicts against
   the raw `window`, so `window == 1` never warms up and never ticks. Next grows
   the effective window to the floor for both (register **D12**).
 - Some augurs errors are not `Send + Sync`, so they cannot flow through
   `Context` — they are mapped with `map_err(|e| anyhow::anyhow!(…))`. Keep that
   pattern for new ops.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `augurs.rs` — the
+Canonical list: the `# Deviations from legacy` block in `augurs.rs` — the
 fallible-config change and the `augurs_cluster` window floor, both above.
 Capability-wise the port is **complete**: register **C5** (originally "only
 `augurs_forecast` + `augurs_outlier` ported") is resolved, all six operators
@@ -88,7 +88,7 @@ land, and the sub-feature list was widened to match. Do not reintroduce a
 |---|---|---|
 | `tests/augurs_adapter.rs` | `#![cfg(feature = "augurs")]` | nothing |
 
-Parity port of classic's unit tests for all six operators (augurs models are
+Parity port of legacy's unit tests for all six operators (augurs models are
 deterministic given their inputs).
 
 ```bash
@@ -97,7 +97,7 @@ cargo test -p wingfoil-next --features augurs --test augurs_adapter
 
 No integration tier and no `augurs-next-integration.yml` — there is nothing to
 stand up (skill step 10, Option C). Runs in `rust-test.yml`'s `test-next` job.
-Note `.github/workflows/augurs-integration.yml` exists but is the **classic**
+Note `.github/workflows/augurs-integration.yml` exists but is the **legacy**
 adapter's.
 
 ## Example

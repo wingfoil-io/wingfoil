@@ -1,5 +1,5 @@
 //! web adapter — bidirectional streaming between a wingfoil-next graph and one
-//! or more browsers over WebSocket. It ports the classic
+//! or more browsers over WebSocket. It ports the legacy
 //! `wingfoil::adapters::web` module onto the Op model.
 //!
 //! The [`WebServer`] hosts an HTTP + WebSocket listener on its own dedicated
@@ -119,9 +119,9 @@
 //! server itself runs on its own thread and its own runtime, independent of the
 //! graph's.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (both codecs, the v2 control plane, the static
+//! Every legacy *capability* (both codecs, the v2 control plane, the static
 //! file server, TLS, the historical streaming path with its `Complete` marker,
 //! the historical no-op server, and the lossy never-back-pressuring transport)
 //! is preserved, and the **wire format is byte-identical** — the shared
@@ -133,14 +133,14 @@
 //!    builder; the `Result` covers the graph's tokio-runtime creation.
 //!    Historical mode is *not* rejected at wiring (unlike the live `_sub`
 //!    sources of register B2): `web_sub` is finite under historical replay —
-//!    it yields an immediately-ending empty stream, exactly as classic does.
-//! 2. **The sink is a trait only.** Classic exposed both a free `web_pub`
+//!    it yields an immediately-ending empty stream, exactly as legacy does.
+//! 2. **The sink is a trait only.** Legacy exposed both a free `web_pub`
 //!    function and a `WebPubOperators` trait; next folds the entry point into
 //!    the [`WebSinkOps`] trait, per the sink-as-trait convention shared with
 //!    [`lines`](crate::adapters::lines) / [`csv`](crate::adapters::csv) /
 //!    [`kafka`](crate::adapters::kafka), and it returns the sink `Stream<()>`
 //!    rather than an `Rc<dyn Node>`.
-//! 3. **A burst overload is added.** Classic could only publish an atomic
+//! 3. **A burst overload is added.** Legacy could only publish an atomic
 //!    same-instant array by mapping `Burst<T>` to `Vec<T>` by hand
 //!    (`Burst`/`TinyVec` is not `Serialize`, so it cannot be a second impl of
 //!    the same trait); next adds [`WebBurstSinkOps::web_pub_bursts`], which does
@@ -154,14 +154,14 @@
 //!    data frame, on the same broadcast channel, for both a finite `RunFor` and
 //!    the end of a historical replay.
 //! 5. **The envelope is encoded off the graph thread**, inside the
-//!    `consume_async` consumer, as classic did — the graph thread only clones
+//!    `consume_async` consumer, as legacy did — the graph thread only clones
 //!    the `(time, value)` pair into the sink channel. `tokio::sync::broadcast`
 //!    takes an internal lock on `send`, so it must not be touched from a cycle
 //!    (the no-locks-on-the-graph-path invariant).
 //!
 //! One smaller reduction: the server's `PUBLISH_BROADCAST_CAPACITY` /
 //! `CONNECTION_OUTBOUND_CAPACITY` / `SUBSCRIBE_MPSC_CAPACITY` constants stay
-//! crate-private here, as in classic.
+//! crate-private here, as in legacy.
 
 mod codec;
 mod read;

@@ -443,7 +443,7 @@ fn wide_fanout_is_correct() {
 /// edge is a shallow trigger (layer 1), yet it passively reads a layer-4 chain.
 /// A dispatch `layer` computed from *active* edges alone would sort the sample
 /// (layer 1) ahead of the chain (layers 2..4) and read a **stale** value; the
-/// layer must count passive edges too, matching classic wingfoil where every
+/// layer must count passive edges too, matching legacy wingfoil where every
 /// upstream — active or passive — raises the layer (`graph.rs:794`, and
 /// `fix_layers` at `graph.rs:1153`). The random-graph oracle only hits this
 /// probabilistically; this pins it deterministically.

@@ -1,7 +1,7 @@
 # kafka Adapter (wingfoil-next)
 
 A streaming topic-consume **source** and a topic-produce **sink** for Apache
-Kafka, over `rdkafka`. Ports classic `wingfoil::adapters::kafka` onto the Op
+Kafka, over `rdkafka`. Ports legacy `wingfoil::adapters::kafka` onto the Op
 model.
 
 ## Layout
@@ -20,7 +20,7 @@ kafka-integration-test = ["kafka", "dep:testcontainers"]
 ```
 
 `rdkafka` builds the bundled `librdkafka` via its default path
-(`./configure` + `make`), **not** `cmake-build` — same as classic; the cmake
+(`./configure` + `make`), **not** `cmake-build` — same as legacy; the cmake
 path's `curl.h` dependency breaks CI.
 
 ## Entry points
@@ -38,7 +38,7 @@ Types: `KafkaConnection` (+ `From<&str>`/`String`/`&String`), `KafkaRecord`
 
 - **`kafka_sub` is realtime-only, rejected at wiring** (register B2, ratified).
   Its `recv()` loop never ends, so the historical channel path would deadlock
-  at `start`. Classic technically *permitted* a `HistoricalFrom` run with
+  at `start`. Legacy technically *permitted* a `HistoricalFrom` run with
   wall-clock timestamps; next errors clearly instead. `run_mode` exists only
   for that check.
 - **Prefer `kafka_source` at new call sites.** It takes `RunParams` and
@@ -62,7 +62,7 @@ Types: `KafkaConnection` (+ `From<&str>`/`String`/`&String`), `KafkaRecord`
   `consume_async`.
 - **No explicit `producer.flush()`.** Every send is awaited to its delivery
   ack, so nothing is left queued, and the consumer drains all queued bursts at
-  teardown. Classic's end-of-stream flush is unnecessary here.
+  teardown. Legacy's end-of-stream flush is unnecessary here.
 - **The `FutureProducer` is created at wiring but connects lazily.**
   `ClientConfig::create()` is a config check with no socket, so the factory
   returns `Result` for a bad config while a bad *broker* surfaces as a produce
@@ -71,11 +71,11 @@ Types: `KafkaConnection` (+ `From<&str>`/`String`/`&String`), `KafkaRecord`
 - `consume_async_bursts` means the usual `block_on` footgun (A5a): build, run
   and drop the graph from a **non-async** thread.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `kafka.rs` — the
+Canonical list: the `# Deviations from legacy` block in `kafka.rs` — the
 graph-owned runtime (A5), the wiring-time historical rejection (B2), and the
-sink-as-trait fold (D1). Every classic capability (consumer-group offset
+sink-as-trait fold (D1). Every legacy capability (consumer-group offset
 tracking, earliest auto-offset-reset, per-record topic/key/partition,
 at-most-once via background auto-commit, multi-topic writes from one sink) is
 preserved.
@@ -103,7 +103,7 @@ docker run --rm -p 9092:9092 \
 
 **Workflow:** `.github/workflows/kafka-next-integration.yml` (in
 `integration-tests.yml`), Rust leg + `pytest -m requires_kafka` Python leg.
-Note `kafka-python-integration.yml` is the **classic** Python binding's.
+Note `kafka-python-integration.yml` is the **legacy** Python binding's.
 
 ## Example
 

@@ -4,7 +4,7 @@ A line-oriented file adapter: newline-delimited `String` records in and out,
 no serde. It is the **smallest complete Op-pattern I/O edge** in the tree and
 the reference every other adapter's shape is explained against.
 
-**Next-only — classic has no `lines` adapter.** There is no parity oracle;
+**Next-only — legacy has no `lines` adapter.** There is no parity oracle;
 instead, `lines` is the thing that keeps the *conventions* honest, so changes
 here ripple into `/new-adapter-next` and into the other adapters' docs.
 
@@ -60,9 +60,9 @@ All sources emit `Stream<Burst<String>>`; both sinks return `Result<Stream<()>>`
   `/new-adapter-next` step 8 — leave the trait burst-only.
 - Sinks use `for_each_mut`, not a hand-rolled `RefCell`-in-a-`Fn` dance.
 
-## Deviations from classic
+## Deviations from legacy
 
-None to record — there is no classic `lines`. The module `//!` header is the
+None to record — there is no legacy `lines`. The module `//!` header is the
 canonical description of behaviour.
 
 ## Tests

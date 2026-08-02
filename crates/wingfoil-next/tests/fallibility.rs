@@ -1,5 +1,5 @@
 //! Phase 0.1 spike: fallible `cycle` + lifecycle hooks, cross-checked
-//! against the classic engine's contract — a cycle error aborts the run and
+//! against the legacy engine's contract — a cycle error aborts the run and
 //! is reported with node context, and `stop`/`teardown` still run afterwards
 //! (here observed through a `finally` node) regardless of how the run ended.
 

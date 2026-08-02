@@ -17,7 +17,7 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
 /// Every FIX source factory rejects `RunMode::HistoricalFrom` at wiring time
 /// with a "real-time" error — a live session has no historical timeline to
-/// replay. Ports classic's `fix_historical_mode_fails` (which caught it at run
+/// replay. Ports legacy's `fix_historical_mode_fails` (which caught it at run
 /// start), moved earlier to wiring per the next live-source convention.
 #[test]
 fn sources_reject_historical_at_wiring() {
@@ -54,7 +54,7 @@ fn sources_reject_historical_at_wiring() {
 }
 
 /// The `fix_send` sink is realtime-only: a historical run aborts at graph
-/// `start()` with a "real-time" error (classic's `FixSenderNode::start` check),
+/// `start()` with a "real-time" error (legacy's `FixSenderNode::start` check),
 /// before any socket connect. Uses a dead port to prove no connection is
 /// attempted — the run fails on the run-mode check, not a connect error.
 #[test]

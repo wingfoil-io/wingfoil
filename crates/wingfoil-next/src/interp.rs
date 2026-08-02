@@ -8,7 +8,7 @@
 //! monomorphized function* a compiled runner calls; the engines share
 //! semantics by construction.
 //!
-//! Execution model: a sparse dirty-list, matching classic wingfoil's
+//! Execution model: a sparse dirty-list, matching legacy wingfoil's
 //! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
 //! each node gets an *active-downstream* adjacency list. Each cycle seeds a
 //! work set from the frontier — `always` busy-poll ops and kernel-marked
@@ -19,7 +19,7 @@
 //! topological order over *all* edges — active and passive, since the fluent
 //! API forces a stream to exist before it is referenced — so each node fires
 //! exactly once after everything it reads. This is glitch-free, gives results
-//! **identical** to classic wingfoil (and byte-identical to the previous
+//! **identical** to legacy wingfoil (and byte-identical to the previous
 //! full-index sweep it replaces), but per-cycle work is proportional to the
 //! nodes that actually fire, not the graph size `N`.
 //!
@@ -31,7 +31,7 @@
 //! "freeze the slot boundary" mitigation, made *by type* not just convention;
 //! see the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
-//! cleanup afterwards, matching the classic engine.
+//! cleanup afterwards, matching the legacy engine.
 
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -58,10 +58,10 @@ use wingfoil_next::{NanoTime, RunFor, RunMode, TimeQueue};
 // ---------------------------------------------------------------------------
 // Engine span instrumentation (the `instrument-*` features)
 //
-// Ported from classic wingfoil's `graph.rs`, feature for feature. Two shapes
+// Ported from legacy wingfoil's `graph.rs`, feature for feature. Two shapes
 // are in play: the whole-function spans (`run`, `run_dynamic`, `build`) use
 // `#[cfg_attr(feature = "…", tracing::instrument(skip_all))]` directly at the
-// definition, exactly as classic does; the spans that must scope to a *part* of
+// definition, exactly as legacy does; the spans that must scope to a *part* of
 // a function — a lifecycle loop, one cycle, one node — go through the macros
 // below, because there is no function boundary to hang an attribute on.
 //
@@ -72,7 +72,7 @@ use wingfoil_next::{NanoTime, RunFor, RunMode, TimeQueue};
 // ---------------------------------------------------------------------------
 
 /// Span covering one lifecycle phase (`start` / `stop` / `teardown`) applied
-/// across every node — classic's `apply_nodes` span, recording the phase in the
+/// across every node — legacy's `apply_nodes` span, recording the phase in the
 /// same `desc` field it does.
 macro_rules! apply_nodes_span {
     ($desc:expr) => {
@@ -81,7 +81,7 @@ macro_rules! apply_nodes_span {
     };
 }
 
-/// Span covering one engine cycle — classic's `cycle` span. Entered by both
+/// Span covering one engine cycle — legacy's `cycle` span. Entered by both
 /// dispatch strategies (sparse drain and the full-sweep oracle) so the two are
 /// indistinguishable to a subscriber.
 macro_rules! cycle_span {
@@ -91,8 +91,8 @@ macro_rules! cycle_span {
     };
 }
 
-/// Span covering a single node's `cycle` — classic's `cycle_node` span.
-/// Records the node index and its label (next's equivalent of classic's
+/// Span covering a single node's `cycle` — legacy's `cycle_node` span.
+/// Records the node index and its label (next's equivalent of legacy's
 /// `type_name`). One span per node per cycle: high frequency, hence its own
 /// opt-in feature.
 macro_rules! cycle_node_span {
@@ -173,17 +173,17 @@ impl<T: Default> Default for HistRead<T> {
 /// Reads messages until either every group with time `<= upto` is known
 /// complete (a strictly-later timestamp has been seen, or the stream ended)
 /// or — when `blocking` is `false` — the channel is momentarily empty. This is
-/// the port of classic `ChannelReceiverStream`'s "block while behind, stop once
-/// caught up" loop (`wingfoil/src/nodes/channel.rs`): it holds at most one group
+/// the port of legacy `ChannelReceiverStream`'s "block while behind, stop once
+/// caught up" loop (`legacy/wingfoil/src/nodes/channel.rs`): it holds at most one group
 /// of look-ahead, so memory is bounded and a producer that depends on the
 /// receiving graph's own output can make progress (the block-collect predecessor
 /// deadlocked it, which is why `spawn_map`'s historical mode was impossible).
 ///
 /// `state` is the receiver's persistent read state (see [`HistRead`]). Timestamps
-/// must be `>= start_time` and non-decreasing (classic errors on either); a
+/// must be `>= start_time` and non-decreasing (legacy errors on either); a
 /// `Message::Error` aborts the run.
 ///
-/// `read_past` distinguishes the two classic drive modes. A **self-driven**
+/// `read_past` distinguishes the two legacy drive modes. A **self-driven**
 /// receiver reads *past* `upto` (`seen_max > upto`) so a same-time burst
 /// delivered as separate messages is drained whole before delivery. A
 /// **triggered** receiver (the `spawn_map` worker feed) stops as soon as it has
@@ -250,7 +250,7 @@ fn pump_historical<T: Clone + Default>(
             }
         };
         // Reject a pre-start timestamp: the kernel schedules callbacks verbatim,
-        // so a time before `start_time` would rewind the run clock. Classic
+        // so a time before `start_time` would rewind the run clock. Legacy
         // errors on any time behind the graph clock; we mirror that.
         if t < start_time {
             return Err(anyhow::anyhow!(
@@ -259,14 +259,14 @@ fn pump_historical<T: Clone + Default>(
             ));
         }
         // Enforce non-decreasing send order (the graph clock only advances, so
-        // an earlier timestamp is the equivalent of classic's behind-the-clock
+        // an earlier timestamp is the equivalent of legacy's behind-the-clock
         // message).
         if let Some(mx) = state.seen_max
             && t < mx
         {
             return Err(anyhow::anyhow!(
                 "channel receiver: historical send_at time {t} is out of order (after {mx}) — \
-                 timestamped sends must be non-decreasing (classic errors on out-of-order)"
+                 timestamped sends must be non-decreasing (legacy errors on out-of-order)"
             ));
         }
         state.seen_max = Some(t);
@@ -368,7 +368,7 @@ pub(crate) type ResetFn = Box<dyn FnMut()>;
 /// cannot borrow the `Runner`), applied by [`Runner::run_dynamic`] at the next
 /// cycle boundary. This is how a self-contained dynamic node (e.g. a
 /// [`dynamic_group`](Builder::dynamic_group)) grows or shrinks the graph from
-/// inside its own logic — mirroring classic's `pending_additions` /
+/// inside its own logic — mirroring legacy's `pending_additions` /
 /// `pending_removals` (`graph.rs:369-392`). Shared via `Rc` between the staging
 /// node and the runner.
 #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
@@ -391,7 +391,7 @@ struct NodeRt {
     /// input). They never appear in `active_downs` (no tick propagates along
     /// them), but they *do* count toward the node's dispatch `layer`: a passive
     /// reader must run after the value it reads, exactly as an active one must.
-    /// Classic tracks the same fact (every upstream, active or passive, raises
+    /// Legacy tracks the same fact (every upstream, active or passive, raises
     /// the layer — `graph.rs:794`, `fix_layers` at `graph.rs:1153`); the
     /// index-order engine got this for free from wiring order, but the layered
     /// engine (and dynamic `fix_layers`) needs it explicit.
@@ -447,9 +447,9 @@ impl<T> ExternalSource<T> {
 /// the dependency cycle: the source node has no upstreams, so the graph sees
 /// no loop. Clone-able so one source can be fed from several sites.
 ///
-/// Unlike classic's `FeedbackSink::send(value, &mut GraphState)`, this type
+/// Unlike legacy's `FeedbackSink::send(value, &mut GraphState)`, this type
 /// exposes **no** public `send`: sending requires scheduling the paired source
-/// node (`source`), which is a *different* node than the caller's. Classic does
+/// node (`source`), which is a *different* node than the caller's. Legacy does
 /// this through `GraphState::add_callback_for_node`, but next's op-facing
 /// [`Ctx`](crate::op::Ctx) is deliberately narrow — self-scheduling only — and
 /// cannot schedule an arbitrary node. Exposing a user-callable `send` would
@@ -512,7 +512,7 @@ pub(crate) struct AsyncRuntimeSlot {
     inner: crate::async_source::GraphRuntime,
 }
 
-/// Wires a graph of [`Op`]s. Combinators mirror the classic fluent API but
+/// Wires a graph of [`Op`]s. Combinators mirror the legacy fluent API but
 /// the engine — not the node — owns state, config and values.
 pub struct Builder {
     nodes: Vec<NodeRt>,
@@ -529,7 +529,7 @@ pub struct Builder {
     /// Set by a channel node when it receives [`Message::EndOfStream`]
     /// (`close()`), so a realtime run ends even while a producer keeps a live
     /// [`ChannelSender`] clone — the kernel alone only ends the run when
-    /// *every* waker clone is dropped. Mirrors classic's per-receiver
+    /// *every* waker clone is dropped. Mirrors legacy's per-receiver
     /// `finished` flag (here one shared flag ends the run on any channel
     /// close, which is the single-channel realtime case the fix targets).
     finished: Rc<Cell<bool>>,
@@ -648,7 +648,7 @@ impl Builder {
     ///   the receiver collects them at `start`, groups same-timestamp values
     ///   into one burst, and schedules delivery on the graph clock — so they
     ///   replay **deterministically** at their timestamps regardless of
-    ///   wall-clock arrival (the classic `produce_async` model). Same-time
+    ///   wall-clock arrival (the legacy `produce_async` model). Same-time
     ///   values ride one atomic burst, never split or dropped.
     ///
     /// A `Message::Error` propagates into the graph and aborts the run.
@@ -787,7 +787,7 @@ impl Builder {
                                 // Nothing buffered ahead. If the stream is still
                                 // open, re-arm at `now` (the kernel bumps it one
                                 // tick forward) so the next cycle blocks for the
-                                // next message — classic's caught-up
+                                // next message — legacy's caught-up
                                 // `add_callback(now)` (channel.rs:238). A closed
                                 // (eof) stream just winds down.
                                 None => {
@@ -871,7 +871,7 @@ impl Builder {
     /// returns a [`StopHandle`] that is dropped at teardown (running its `Drop`),
     /// so the producer is torn down with the run (the `ThreadStopGuard` pattern,
     /// generalised). A `setup` error aborts the run at start with node context —
-    /// classic-consistent: a connection failure surfaces when the run begins,
+    /// legacy-consistent: a connection failure surfaces when the run begins,
     /// not at construction.
     ///
     /// This is what lets an adapter's wiring stay side-effect-free and
@@ -1473,7 +1473,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// A source that never ticks (the classic `never`). No upstreams and no
+    /// A source that never ticks (the legacy `never`). No upstreams and no
     /// scheduling, so the engine never cycles it; used as an inert trigger.
     pub fn never(&mut self) -> Handle<()> {
         let idx = self.nodes.len();
@@ -1495,13 +1495,13 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// Combine several same-type streams into a `Stream<Burst<T>>` (the classic
+    /// Combine several same-type streams into a `Stream<Burst<T>>` (the legacy
     /// `combine`): each cycle gathers the current values of every upstream that
     /// ticked *this* instant into one [`Burst`], in upstream order. Quiet on a
     /// cycle where none ticked (only reachable via a shared scheduled wake).
     ///
     /// Hand-written (no `Op` witness): an n-ary fan-in does not fit the `Op`
-    /// trait's fixed-arity tuple `In`, and — unlike the classic port's shared
+    /// trait's fixed-arity tuple `In`, and — unlike the legacy port's shared
     /// `Rc<RefCell<Burst>>` cell written by per-stream feeder nodes — the burst
     /// is built locally here, honouring next's no-shared-mutable-slot rule.
     pub fn combine<T: Clone + Default + 'static>(
@@ -1634,7 +1634,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The classic `trimap`: combine three streams, each independently active
+    /// The legacy `trimap`: combine three streams, each independently active
     /// or passive. All three values are read; only active inputs trigger.
     #[allow(clippy::too_many_arguments)]
     pub fn trimap<A, B, C, D, F>(
@@ -1711,7 +1711,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The classic `try_trimap`: [`trimap`](Self::trimap) with a *fallible*
+    /// The legacy `try_trimap`: [`trimap`](Self::trimap) with a *fallible*
     /// closure. Any `Err` propagates to abort the run with context; the
     /// active/passive edge and dispatch semantics are identical to `trimap`.
     #[allow(clippy::too_many_arguments)]
@@ -1789,7 +1789,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The classic `bimap`: combine two streams, each independently *active*
+    /// The legacy `bimap`: combine two streams, each independently *active*
     /// (triggers the node when it ticks) or *passive* (read but not
     /// triggering). Both values are always read; only the active inputs
     /// appear in the dispatch condition. `join` is `bimap(_, true, _, true)`.
@@ -1859,7 +1859,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The classic `try_bimap`: [`bimap`](Self::bimap) with a *fallible*
+    /// The legacy `try_bimap`: [`bimap`](Self::bimap) with a *fallible*
     /// closure. Any `Err` propagates to abort the run with context; the
     /// active/passive edge and dispatch semantics are identical to `bimap`.
     pub fn try_bimap<A, B, C, F>(
@@ -1967,7 +1967,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The classic `latency_report`: a sink that observes each payload's
+    /// The legacy `latency_report`: a sink that observes each payload's
     /// embedded latency record into the caller-provided `stats`, and prints a
     /// summary at `stop` when `print_on_teardown`. Hand-written (not
     /// `register_op1`) because it carries a stop hook. The stats handle is
@@ -2191,7 +2191,7 @@ impl Builder {
     }
 
     /// Register a **custom node** — the public, general-purpose extension point
-    /// for a caller-driven graph node, the next equivalent of classic
+    /// for a caller-driven graph node, the next equivalent of legacy
     /// `MutableNode` + `StreamPeekRef`. Where [`register_op1`](Self::register_op1)
     /// / [`register_op2`](Self::register_op2) fix the arity (1 or 2 active
     /// inputs) and own the op's state, `custom_node` declares an *arbitrary* set
@@ -2207,7 +2207,7 @@ impl Builder {
     /// [`Stream::value_slot`](crate::fluent::Stream::value_slot)) and
     /// `borrow()` it inside the closure — the engine never delivers inputs
     /// through [`Ctx`], which stays narrowed to time + self-scheduling. This
-    /// mirrors classic, where a `MutableNode` reaches its upstreams through the
+    /// mirrors legacy, where a `MutableNode` reaches its upstreams through the
     /// `Rc<dyn Stream>`s it holds.
     ///
     /// `activation` declares scheduling behaviour ([`Activation::NONE`] for a
@@ -2272,7 +2272,7 @@ impl Builder {
         self.ticked.clone()
     }
 
-    // Next's counterpart of classic's `Graph::initialise` — the one-shot pass
+    // Next's counterpart of legacy's `Graph::initialise` — the one-shot pass
     // that turns wiring into the dispatch topology. Named `initialise` in the
     // span so a subscriber (or a dashboard) reads the same across both engines.
     #[cfg_attr(
@@ -2302,7 +2302,7 @@ impl Builder {
         //
         // The work set drains by ascending **`(layer, index)`** (see
         // `Runner::run`), where `layer[i]` is the longest path to `i` over
-        // *all* upstream edges — active and passive. This is classic wingfoil's
+        // *all* upstream edges — active and passive. This is legacy wingfoil's
         // layer-order dispatch (`dirty_nodes_by_layer`, `graph.rs:205`); for a
         // statically wired graph index order is already a valid layer order, so
         // `(layer, index)` is a linear extension of the read relation identical
@@ -2324,7 +2324,7 @@ impl Builder {
             }
             // Passive edges do not propagate ticks (absent from `active_downs`)
             // but still raise the layer: a passive reader must drain after the
-            // value it reads, exactly as classic counts every upstream
+            // value it reads, exactly as legacy counts every upstream
             // (`graph.rs:794`). Index order is topological over all edges, so
             // `layer[u]` is already final here. `passive_downs` is the reverse,
             // used only by a dynamic `fix_layers`.
@@ -2424,7 +2424,7 @@ pub enum Dispatch {
     FullSweep,
 }
 
-/// Executes a wired graph. Dispatch is a sparse dirty-list — classic wingfoil's
+/// Executes a wired graph. Dispatch is a sparse dirty-list — legacy wingfoil's
 /// `dirty_nodes_by_layer` model — so per-cycle work is proportional to the
 /// nodes that actually fire, not the graph size `N`. Each cycle seeds a work
 /// set from the frontier ([`seed_nodes`](Runner::seed_nodes): `always`
@@ -2453,7 +2453,7 @@ pub struct Runner {
     /// `passive_downs[i]` = nodes that *passively* read `i` (reverse of
     /// `passive_ups`). Never used for tick propagation — only so a dynamic
     /// `fix_layers` can raise a passive reader's layer when the node it reads is
-    /// relayered (classic propagates through every downstream, active or
+    /// relayered (legacy propagates through every downstream, active or
     /// passive). Inert unless the graph is mutated at runtime.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     passive_downs: Vec<Vec<usize>>,
@@ -2461,7 +2461,7 @@ pub struct Runner {
     /// (`Extension::remove`). Its edges are unlinked and it is dropped from
     /// `seed_nodes` so it never cycles again; the flag additionally stops the
     /// end-of-run cleanup from calling its `stop`/`teardown` a second time
-    /// (they already ran at removal — classic parity, `graph.rs:1015-1028`).
+    /// (they already ran at removal — legacy parity, `graph.rs:1015-1028`).
     /// Slots are tombstoned, never freed, so a `Handle` stays valid. Always
     /// all-false on a static run.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
@@ -2585,7 +2585,7 @@ impl Runner {
             kernel.set_spin(true);
         }
         // First error (from start or a cycle) wins; `stop`/`teardown` still
-        // run afterwards regardless, matching the classic engine.
+        // run afterwards regardless, matching the legacy engine.
         let mut first_err: Option<anyhow::Error> = None;
 
         {
@@ -2678,7 +2678,7 @@ impl Runner {
         let n = self.nodes.len();
         let mut dirty = vec![false; n];
         // Sparse dirty-list scratch, allocated once and reused every cycle:
-        //   * `buckets` — the dirty work set as per-layer vectors (classic's
+        //   * `buckets` — the dirty work set as per-layer vectors (legacy's
         //     `dirty_nodes_by_layer`), indexed by `layer[i]` and drained in
         //     ascending layer order. Every active downstream has a strictly
         //     greater layer than its upstream, so a bucket never grows once its
@@ -2752,13 +2752,13 @@ impl Runner {
                 max_layer = max_layer.max(l);
             }
         }
-        // Drain layer by layer in ascending order (classic's
+        // Drain layer by layer in ascending order (legacy's
         // `dirty_nodes_by_layer`). A node that ticks marks its active downstream
         // neighbours — all at strictly higher layers, so their bucket has not
         // been reached yet — propagating the tick frontier. A bucket therefore
         // never grows once its own layer is processed, so draining it fully is
         // safe and each node fires exactly once after everything it reads.
-        // Sorting each bucket by index reproduces classic's within-layer wiring
+        // Sorting each bucket by index reproduces legacy's within-layer wiring
         // order (byte-identical to the full-index sweep).
         //
         // The *occupied* layers are found through `occupied`, a bitmask with one
@@ -2774,7 +2774,7 @@ impl Runner {
         // Deliberately a bitmask and not a heap of occupied layers: a heap would
         // be `O(active log active)` with a push/pop *per layer*, and on a linear
         // chain every layer holds one node — reintroducing the per-node heap
-        // traffic whose removal is what closed the `fanout` gap against classic.
+        // traffic whose removal is what closed the `fanout` gap against legacy.
         // The mask adds one branchless bit-set per enqueue and nothing per node.
         let mut scan_steps = 0u64;
         let mut l = 0usize;
@@ -2943,7 +2943,7 @@ impl Runner {
     /// **one** merge node, not the `n - 1` a binary chain costs. That
     /// distinction is invisible to a results-parity test (a chain and an n-ary
     /// node produce identical values) and was invisible to the benchmarks too,
-    /// which is how a 1.86x loss against classic on a wide fan-in survived —
+    /// which is how a 1.86x loss against legacy on a wide fan-in survived —
     /// see `MergeN`.
     ///
     /// Hidden: an engine-observability hook for the perf gates, not public API.
@@ -2995,11 +2995,11 @@ impl Runner {
 // (not raw node index), a new node can be appended at the end of the `nodes`
 // vec (highest index) and *spliced beneath* an existing lower-indexed caller —
 // `fix_layers` lifts the caller's layer above the new node so it still drains
-// after it, the reorder classic wingfoil does with its own `layer`/`fix_layers`
+// after it, the reorder legacy wingfoil does with its own `layer`/`fix_layers`
 // (`graph.rs:1149`) and index order alone cannot express.
 //
 // `run_dynamic` mirrors `run` but hands a mutation scope to a caller-supplied
-// hook at each cycle boundary — the exact point classic applies its staged
+// hook at each cycle boundary — the exact point legacy applies its staged
 // `pending_additions`/`pending_removals` (`graph.rs:934-939`), so a node added
 // after cycle N first fires in cycle N+1. This is the driver-thread surface;
 // the in-`cycle` node-driven path (what `DynamicGroup` needs) stages into the
@@ -3018,7 +3018,7 @@ impl Runner {
     /// Run the graph like [`run`](Runner::run), but call `between` at every
     /// cycle boundary with a mutation scope ([`Extension`]) over the live graph
     /// and the number of cycles completed so far. Nodes appended (or edges
-    /// spliced) through the scope take effect on the *next* cycle — classic
+    /// spliced) through the scope take effect on the *next* cycle — legacy
     /// wingfoil's "requested in cycle N, live in N+1" contract.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run_dynamic<F>(
@@ -3117,7 +3117,7 @@ impl Runner {
                 cycles += 1;
                 // Apply mutations staged by in-graph dynamic nodes during this
                 // cycle (e.g. a `dynamic_group`'s insert/remove), matching
-                // classic's end-of-cycle `process_pending_*` (`graph.rs:934-939`).
+                // legacy's end-of-cycle `process_pending_*` (`graph.rs:934-939`).
                 let staged = std::mem::take(&mut *self.pending.borrow_mut());
                 for apply in staged {
                     if let Err(e) = apply(self, &mut kernel) {
@@ -3143,7 +3143,7 @@ impl Runner {
 
         // Cleanup always runs; a stop/teardown error only surfaces if no
         // earlier error already won. A node removed mid-run already ran its
-        // `stop`/`teardown` at removal (classic parity), so the tombstone skips
+        // `stop`/`teardown` at removal (legacy parity), so the tombstone skips
         // it here — no double call.
         {
             apply_nodes_span!("stop");
@@ -3274,7 +3274,7 @@ impl Runner {
 
     /// Recompute `start`'s layer from its upstreams (active *and* passive) and
     /// propagate any increase to every node that reads it (active *and*
-    /// passive downstreams), iterative BFS. Port of classic's `fix_layers`
+    /// passive downstreams), iterative BFS. Port of legacy's `fix_layers`
     /// (`graph.rs:1149`): after splicing a new upstream into an existing
     /// caller, this lifts the caller — and anything reading it — above the new
     /// node so `(layer, index)` dispatch still drains each node after
@@ -3307,7 +3307,7 @@ impl Runner {
     /// up-list (both active and passive), drops it from `seed_nodes`, runs
     /// `stop` then `teardown` once, and tombstones it (`removed[idx] = true`).
     /// Because it no longer appears in any frontier or reverse-edge list it can
-    /// never be enqueued again. Port of classic's `process_pending_removals`
+    /// never be enqueued again. Port of legacy's `process_pending_removals`
     /// (`graph.rs:992-1028`). No-op if already removed.
     fn remove_node(&mut self, idx: usize, kernel: &mut Kernel) -> Result<()> {
         if self.removed[idx] {
@@ -3353,7 +3353,7 @@ impl Runner {
     /// `map`/`fold` is otherwise reached only by upstream propagation).
     /// Downstream appended nodes then fire by normal tick propagation, so the
     /// region evaluates in order and reads real values, not `Default`. Mirrors
-    /// classic's attachment-point walk (`graph.rs:1092-1115`).
+    /// legacy's attachment-point walk (`graph.rs:1092-1115`).
     fn recycle_schedule(&mut self, new: usize, appended: &[usize], kernel: &mut Kernel) {
         let time = kernel.time() + 1;
         let mut stack = vec![new];
@@ -3539,7 +3539,7 @@ impl Extension<'_> {
     /// scheduled to fire at `time + 1` in dependency order (its attachment
     /// points — nodes reading a pre-existing upstream, or new sources — are
     /// seeded), so `caller` observes real current values on the next cycle
-    /// rather than the `Default` a not-yet-run node would hold. Mirrors classic
+    /// rather than the `Default` a not-yet-run node would hold. Mirrors legacy
     /// `add_upstream(recycle)` (`graph.rs:1092-1116`). Takes effect next cycle.
     pub fn add_upstream<C, N>(
         &mut self,
@@ -3561,7 +3561,7 @@ impl Extension<'_> {
     /// dispatch frontier so it never cycles again, and run its `stop` then
     /// `teardown` exactly once (now, not at run end). The slot is tombstoned
     /// (never freed), so the handle stays valid and its last value is still
-    /// readable — classic parity (`graph.rs:992-1028`). Idempotent: removing an
+    /// readable — legacy parity (`graph.rs:992-1028`). Idempotent: removing an
     /// already-removed node is a no-op.
     pub fn remove<T>(&mut self, node: impl AsHandle<T>) -> Result<()> {
         self.runner.remove_node(node.as_handle().idx, self.kernel)
@@ -3582,7 +3582,7 @@ pub struct LiveStream<T> {
 }
 
 /// Backing-store abstraction for [`dynamic_group_with_store`](Builder::dynamic_group_with_store)
-/// — the next twin of classic `StreamStore` (`nodes/dynamic_group.rs`). A
+/// — the next twin of legacy `StreamStore` (`nodes/dynamic_group.rs`). A
 /// `dynamic_group` keeps its live per-key members in one of these; the trait
 /// abstracts over the container so the key can be `Ord` ([`BTreeMap`]) *or*
 /// merely `Hash + Eq` ([`HashMap`]). Blanket impls cover both; implement it for
@@ -3645,7 +3645,7 @@ impl<K: std::hash::Hash + Eq, V> StreamStore<K, V> for std::collections::HashMap
 #[cfg(feature = "dynamic-graph")]
 impl Builder {
     /// A keyed collection of dynamically-wired sub-graphs, kept in sync with the
-    /// graph — the next twin of classic `dynamic_group_stream`
+    /// graph — the next twin of legacy `dynamic_group_stream`
     /// (`nodes/dynamic_group.rs`). A single in-graph node reacts to two key
     /// streams and folds its live members into an output value `V`:
     ///
@@ -3695,7 +3695,7 @@ impl Builder {
     }
 
     /// Like [`dynamic_group`](Self::dynamic_group) but with the live members
-    /// held in a caller-supplied [`StreamStore`] — the next twin of classic
+    /// held in a caller-supplied [`StreamStore`] — the next twin of legacy
     /// `dynamic_group_stream_with_store`. Pass a `HashMap::new()` to key the
     /// group by a `Hash + Eq` type that is not `Ord`:
     ///
@@ -3814,7 +3814,7 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// Fixed-topology dynamic *routing* — the next twin of classic `demux`
+    /// Fixed-topology dynamic *routing* — the next twin of legacy `demux`
     /// (`nodes/demux.rs`). Pre-wires `size` child streams plus one overflow
     /// child; each cycle the parent reads `source`, calls `route(value)` for a
     /// slot, and marks **only** the chosen child to fire this cycle (via the
@@ -3825,7 +3825,7 @@ impl Builder {
     ///
     /// Returns `(children, overflow)`. This is the raw routing primitive:
     /// key→slot assignment and slot release are the caller's concern. For
-    /// classic's auto-assigning / `Close`-releasing key lifecycle, use
+    /// legacy's auto-assigning / `Close`-releasing key lifecycle, use
     /// [`demux_map`](Self::demux_map) (single value) or
     /// [`demux_it`](Self::demux_it) (a `Burst` per child), which layer a
     /// [`DemuxMap`] on top of this primitive.
@@ -3900,7 +3900,7 @@ impl Builder {
         (children, overflow.expect("overflow child built"))
     }
 
-    /// Auto-assigning demux — the next twin of classic `demux`
+    /// Auto-assigning demux — the next twin of legacy `demux`
     /// (`StreamOperators::demux`). Layers a [`DemuxMap`] key lifecycle over the
     /// raw [`demux`](Self::demux) primitive: each cycle `func(value)` yields a
     /// key and a [`DemuxEvent`]; the map hands each *new* key a free slot from a
@@ -3935,7 +3935,7 @@ impl Builder {
         self.demux(source, capacity, route)
     }
 
-    /// Iterable demux — the next twin of classic `demux_it`
+    /// Iterable demux — the next twin of legacy `demux_it`
     /// (`StreamOperators::demux_it`). Where [`demux_map`](Self::demux_map) routes
     /// one value to one child, this routes *each item* of an iterable source
     /// value to its keyed child, and every selected child re-emits a
@@ -4034,7 +4034,7 @@ impl Builder {
 }
 
 /// Signals, for a demuxed value, whether it opens/continues a key's slot or
-/// releases it. The next twin of classic `DemuxEvent` (`nodes/demux.rs`), used
+/// releases it. The next twin of legacy `DemuxEvent` (`nodes/demux.rs`), used
 /// by [`Builder::demux_map`] and [`Builder::demux_it`].
 #[cfg(feature = "dynamic-graph")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4046,7 +4046,7 @@ pub enum DemuxEvent {
 }
 
 /// Auto-assigning key→slot map backing [`Builder::demux_map`] /
-/// [`Builder::demux_it`] — the next twin of classic `DemuxMap`
+/// [`Builder::demux_it`] — the next twin of legacy `DemuxMap`
 /// (`nodes/demux.rs`). Hands each new key a free slot from a pool of `capacity`;
 /// [`DemuxEvent::Close`] frees a key's slot again. A key that arrives with no
 /// slot free is pinned to overflow until it is released.
@@ -4058,7 +4058,7 @@ struct DemuxMap<K: std::hash::Hash + Eq> {
 #[cfg(feature = "dynamic-graph")]
 struct DemuxMapInner<K: std::hash::Hash + Eq> {
     /// Slots `0..capacity` not currently assigned to a key. A `BTreeSet` (not
-    /// classic's `HashSet`) so a new key always claims the *lowest* free slot —
+    /// legacy's `HashSet`) so a new key always claims the *lowest* free slot —
     /// making slot assignment deterministic, the safer backtest default.
     available: std::collections::BTreeSet<usize>,
     /// Assigned keys → their slot (`None` means the key overflowed: no slot was
@@ -4099,7 +4099,7 @@ impl<K: std::hash::Hash + Eq> DemuxMap<K> {
 
     /// Route the key's final value to its current slot, then free that slot back
     /// to the pool. `None` means overflow. Releasing an unknown key routes to any
-    /// currently-free slot (classic parity) without mutating the pool.
+    /// currently-free slot (legacy parity) without mutating the pool.
     fn release(&self, key: &K) -> Option<usize> {
         let mut m = self.inner.borrow_mut();
         match m.in_use.remove(key) {

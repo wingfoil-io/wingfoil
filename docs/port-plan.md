@@ -9,19 +9,19 @@ interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
 `compiled()` expansion, compiled
 islands (`nested()`) mountable in interpreted graphs, busy-spin `poll`
 sources, and the `nitro!` macro deriving all of it from one fluent wiring
-function. This document plans the port of the entire classic codebase onto
+function. This document plans the port of the entire legacy codebase onto
 that pattern.
 
 ## Strategy
 
 **Parallel port with a compat facade, not an in-place rewrite.**
-`wingfoil-next` becomes the real engine. The classic `wingfoil` API
+`wingfoil-next` becomes the real engine. The legacy `wingfoil` API
 (`Rc<dyn Stream>`, `NodeOperators`, `#[node]`) survives as a facade over it
 until cutover, so:
 
-- nodes/adapters port one at a time, with the classic test suite as a
+- nodes/adapters port one at a time, with the legacy test suite as a
   permanent parity oracle;
-- Rust downstreams on the classic `wingfoil` API see no breakage until the
+- Rust downstreams on the legacy `wingfoil` API see no breakage until the
   facade is deliberately deprecated at cutover. (The **Python** bindings are the
   exception — they are *replaced*, not facaded: `wingfoil-next-python`
   supersedes legacy `wingfoil-python`, a deliberate breaking change — see
@@ -42,7 +42,7 @@ What each execution path supports, per wingfoil pattern. Legend: ✅ works ·
 🟡 partial · 📅 planned · ❌ not supported **by design** (not a missing
 feature — the path's value depends on the constraint).
 
-Classic is the reference the next engine converges toward: the interpreted
+Legacy is the reference the next engine converges toward: the interpreted
 engine aims to *match* it, while compiled/island add new fast
 paths that trade generality for speed (the ❌s are by-design, not gaps).
 
@@ -51,7 +51,7 @@ collapsed into one: the **sparse dirty-list scheduler has landed** as the
 default interpreted dispatch (see Phase 4.5), so what was the 4.5 column *is*
 today's interpreted engine.
 
-| Pattern / capability | Classic wingfoil | Interpreted | Compiled | Island |
+| Pattern / capability | Legacy wingfoil | Interpreted | Compiled | Island |
 |---|:--:|:--:|:--:|:--:|
 | Static DAG (map/filter/fold/sample/merge/join/…) | ✅ | ✅ | ✅ | ✅ |
 | Shared nodes / fan-out | ✅ | ✅ | ✅ | ✅ |
@@ -94,18 +94,18 @@ today's interpreted engine.
   literal-closure config through by value so a `finally` closure reaches its
   own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs::
   finally_teardown_fires_once_on_all_three_engines`. The one *structural*
-  difference from classic remains: no separate `setup` phase, because next's
+  difference from legacy remains: no separate `setup` phase, because next's
   ops are constructed at wiring time (register **D14**).
 ⁵ Only the declared output tuple is returned — no runner, no peeking
   intermediate nodes; an island exposes only its single output.
 ⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
   locals (compile-time), not values threaded in at the call. Interpreted
-  wiring (and classic) capture any runtime local.
-⁷ Classic holds state in `#[node]` struct fields; next holds it in `fold`
+  wiring (and legacy) capture any runtime local.
+⁷ Legacy holds state in `#[node]` struct fields; next holds it in `fold`
   accumulators — combinator closures are `Fn`, so a *mutating capture* (which
   would drift between the interpreted and compiled engines) is a compile
   error. Both express arbitrary per-node state, by different idioms.
-⁸ Classic is the reference — a fresh `Graph::run` re-initialises via
+⁸ Legacy is the reference — a fresh `Graph::run` re-initialises via
   `setup`. The interpreted engine now matches it: the per-node `reset` hook
   (Phase 1, landed) restores each node's state + value slot to its wiring-time
   initial value, so `Runner::run` re-runs for the deterministic historical
@@ -119,22 +119,22 @@ today's interpreted engine.
   the highest index can be spliced beneath an existing lower-indexed caller,
   `fix_layers` lifting the caller above it. Surfaces: `Runner::run_dynamic` with
   an `Extension` scope (`map`/`fold`/`filter_value`/`add_upstream`/`remove`,
-  active/passive + `recycle`), an in-graph `Builder::dynamic_group` (classic's
+  active/passive + `recycle`), an in-graph `Builder::dynamic_group` (legacy's
   `dynamic_group_stream` twin) that stages insert/remove from its own `cycle`,
   and `Builder::demux` (fixed-topology dynamic *routing* on a same-cycle
   mark-dirty primitive — no add/remove). Parity tests in
-  `tests/dynamic_graph.rs`; removed slots are tombstoned, not freed (classic
+  `tests/dynamic_graph.rs`; removed slots are tombstoned, not freed (legacy
   parity). The compiled/island interior stays fixed by design, but an island
   can be wired dynamically into the interpreted graph. See the Phase 4.5 note.
-¹¹ Classic propagates breadth-first through a dirty-list (work ∝ active
+¹¹ Legacy propagates breadth-first through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
   deferred 4.5 arena rework can also improve on. Next resets its *tick* state
   sparsely (only the nodes that fired) but shares the kernel's `O(N)` dirty-flag
   clear; it measures as negligible. Its measurable non-active term is depth, not
   `N` — see Phase 4.5, "The `O(depth)` drain term" (measured, then fixed).
-¹² Sparse dirty-list dispatch (classic's `dirty_nodes_by_layer` model) has
+¹² Sparse dirty-list dispatch (legacy's `dirty_nodes_by_layer` model) has
   landed as the default: per-cycle work ∝ active nodes, results byte-identical
-  to classic and to the old full sweep (retained as `Dispatch::FullSweep`, an
+  to legacy and to the old full sweep (retained as `Dispatch::FullSweep`, an
   executable oracle). The work ∝ active claim is gated deterministically by
   `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), not only
   by benchmarks. The arena/SoA value store — the remaining dense-path
@@ -146,11 +146,11 @@ today's interpreted engine.
   the expected payoff (Phase 4.5, "Tier ranking on sparse graphs").
 ¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
 ¹⁵ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
-¹⁶ Classic's `tracing` + `instrument-run`/`-cycle`/`-apply-nodes`/`-initialise`/
+¹⁶ Legacy's `tracing` + `instrument-run`/`-cycle`/`-apply-nodes`/`-initialise`/
   `-cycle-node` features are ported one-for-one onto the interpreted engine
   (`interp.rs`, gated identically, covered by `tests/instrumentation.rs`).
   By design the compiled/island paths stay uninstrumented: they exist to be a
-  monomorphized loop with no engine indirection, and classic has no compiled
+  monomorphized loop with no engine indirection, and legacy has no compiled
   path for them to be at parity with.
 ## Phase 0 — design spikes
 
@@ -186,8 +186,8 @@ fn teardown(..) -> anyhow::Result<()> {}   // new
 - For infallible ops the compiled path constructs `Ok(Tick::Value(x))` and
   matches immediately — LLVM folds the discriminant away; no branch
   survives in the binary. Fallible ops pay one predicted branch, same as
-  classic.
-- Classic parity contract to reproduce: first error wins and is reported
+  legacy.
+- Legacy parity contract to reproduce: first error wins and is reported
   with graph context; `stop`/`teardown` still run after a cycle error.
   Errors must name the failing node → `Builder` gains debug labels
   (fluent layer sets them from the bound name; the macro already knows it).
@@ -204,7 +204,7 @@ stream (no upstreams — the graph stays acyclic) plus a clonable
 that pushes each value onto a shared `TimeQueue` at `time + 1` and schedules
 the source node directly on the kernel (`Kernel::schedule(index, at)` — the
 engine-level edge the narrow `Ctx` can't express). The source pops due
-values on the next cycle. `tests/feedback.rs` reproduces classic
+values on the next cycle. `tests/feedback.rs` reproduces legacy
 `feedback_active_works` (1, 11, 111, …) plus a self-sustaining loop and sink
 cloning. Fluent-only, as planned. Passive feedback (a `bimap` whose feedback
 input is read but doesn't trigger) waits on the passive-input node in
@@ -220,9 +220,9 @@ downstream.feed(&fb_sink);                        // close the loop later
 
 Sink pushes `(value, time)` into a shared `TimeQueue` (dedup preserved — see
 CLAUDE.md: dedup is a feature) and schedules the source node via the kernel,
-reproducing classic active/passive feedback timing. V1 restriction: fluent
+reproducing legacy active/passive feedback timing. V1 restriction: fluent
 layer only — not expressible inside `nitro!`/islands (a cycle in the island
-DAG breaks straight-line emission). Oracle: classic `feedback_works`,
+DAG breaks straight-line emission). Oracle: legacy `feedback_works`,
 `feedback_active_works`, `feedback_passive_works`, `feedback_sink_clone_works`.
 
 ### 0.3 Bursts & channel messages  ✅ **burst pattern, both modes, landed**
@@ -233,7 +233,7 @@ throughout — never latest-wins, never a dropped value.** A source emits
 value occurring at one instant, grouped and delivered atomically in a single
 cycle. Same-time values ride *one* burst — they are not coalesced (the
 latest-wins bug of my first cut) and not split across the clock by
-monotonic bump (the earlier fallback, also wrong). This matches classic
+monotonic bump (the earlier fallback, also wrong). This matches legacy
 `Burst<T>` / `HistoricalValue(ValueAt<Burst<T>>)`.
 
 Channel sources (`GraphBuilder::channel`) run in **both** modes:
@@ -243,7 +243,7 @@ Channel sources (`GraphBuilder::channel`) run in **both** modes:
   ([`ChannelSender::send_at`]) then closes; the receiver groups same-time
   values into bursts at `start` and schedules delivery on the graph clock,
   so a wall-clock-arriving async feed replays **deterministically** at its
-  timestamps — the classic `produce_async` model. `external` likewise emits
+  timestamps — the legacy `produce_async` model. `external` likewise emits
   bursts (realtime-only, no timestamps). `Message::Error` aborts the run via
   the Phase 0.1 fallible cycle. `tests/channel.rs` covers all of it (lossless
   cross-thread delivery, deterministic historical replay, same-time-one-burst,
@@ -252,12 +252,12 @@ Channel sources (`GraphBuilder::channel`) run in **both** modes:
 
 Original design notes (retained for reference):
 
-Classic's channel envelope (`HistoricalValue` bursts, `Checkpoint`,
+Legacy's channel envelope (`HistoricalValue` bursts, `Checkpoint`,
 `EndOfStream`, error variants) vs next's one-value-per-cycle. Decision to
 validate: **keep the envelope as-is**; endpoints become ops
 (`External`/`Poll` + waker for realtime; a scheduling replay source for
 historical). Same-time burst members collapse per the kernel's monotonic
-time bump — assert against classic's
+time bump — assert against legacy's
 `same_time_burst_does_not_break_monotonic_engine_time` and the async_io
 burst tests. If parity fails, fall back to a burst payload
 (`Tick<Burst<T>>`-style) — decide here, not later.
@@ -272,13 +272,13 @@ Accumulators-continue + clocks-restart is not a coherent contract.
 
 **Decision for v1: a `Runner` is single-run** (external/poll already assert
 this; timer graphs get the same expectation, documented). Well-defined
-re-run — classic's setup-per-run *reset* semantics — needs a per-node
+re-run — legacy's setup-per-run *reset* semantics — needs a per-node
 `reset`/`setup` hook (same shape as the `stop`/`teardown` plumbing from
 0.1) that restores each op's state to its wiring-time initial value,
 including re-seeding schedules.
 
 **The compat facade is the use case, so the reset hook is Phase-1 contract
-work — not deferred.** Classic streams re-run, and the Phase 6 facade is
+work — not deferred.** Legacy streams re-run, and the Phase 6 facade is
 exactly what surfaces that: `compat::Signal` already breaks on a second
 `run()` (it silently runs a 0-node graph then panics out-of-bounds on
 `peek_value`), and wingfoil-python's pytest suite — the facade gate — depends
@@ -293,17 +293,17 @@ subset, restoring per-node state + slots to their wiring-time values, and
 `compat::Signal::run` is re-runnable. Single-run graphs (external/poll/channel/
 island) error on a second `run` rather than misbehaving.
 
-**Single-run I/O is classic parity (verified 2026).** The single-run restriction
-for I/O sources is *not* a deviation from classic: classic is single-run for
-them too. Classic builds a fresh `Graph` over the shared node tree each `.run()`,
-and its `AsyncProducerStream::setup` (`wingfoil/src/nodes/async_io.rs:214`) takes
+**Single-run I/O is legacy parity (verified 2026).** The single-run restriction
+for I/O sources is *not* a deviation from legacy: legacy is single-run for
+them too. Legacy builds a fresh `Graph` over the shared node tree each `.run()`,
+and its `AsyncProducerStream::setup` (`legacy/wingfoil/src/nodes/async_io.rs:214`) takes
 its `func`/sender with `.take().ok_or_else(|| "func is already taken")?` — so a
 second run **errors**; `ChannelReceiverStream::setup` (`nodes/channel.rs`) drains
 its receiver and consumes its notifier, so a second run produces nothing. next's
 explicit single-run error is therefore parity (and clearer). See deviation
-register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
+register A2 — the earlier "legacy re-runs I/O sources" claim was incorrect.
 
-**Gate 0:** all four spikes land with classic-parity tests green.
+**Gate 0:** all four spikes land with legacy-parity tests green.
 
 ## Phase 1 — contract completion
 
@@ -319,7 +319,7 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
   variadic op would add engine complexity for zero observable difference". The
   premise was right and the conclusion wrong: the difference is not observable
   in *values*, but a chain costs `n-1` extra nodes and `n-1` extra depth, which
-  measured up to 1.86x classic on a busy wide fan-in — a Phase 6 gate
+  measured up to 1.86x legacy on a busy wide fan-in — a Phase 6 gate
   violation. Replaced by a real variadic op; see Phase 4.5, "The missing n-ary
   merge". Worth remembering as a pattern: "identical results" is not the same
   claim as "identical cost", and only the first of those the parity suite can
@@ -327,7 +327,7 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
 - **Multi-output islands — re-deferred (written rationale).** An `Op`/island
   produces a single `Out`; a compiled node wanting K outputs would need
   projection nodes that fan a tuple output into N slots. Narrowed since first
-  written: the two classic multi-output nodes this was originally scoped
+  written: the two legacy multi-output nodes this was originally scoped
   against — `demux` and `dynamic_group` — have **landed on the interpreted
   engine** (Phase 4.5) *without* needing any of this. They write several slots
   from one `cycle` directly (`Builder::demux` returns `(Vec<Handle<T>>,
@@ -335,8 +335,8 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
   to work around. So the gap is now specifically the **compiled/island
   surface**, not the catalog. Still re-deferred for v1 because: (a) nothing in
   the catalog *ported so far* needs it — every Phase 2 op landed is
-  single-output, and the multi-output classic nodes are served by the
-  interpreted path — classic has no compiled tier at all, so nothing is lost
+  single-output, and the multi-output legacy nodes are served by the
+  interpreted path — legacy has no compiled tier at all, so nothing is lost
   against it; (b) an island already exposes
   its one output cleanly, and a caller wanting K outputs can mount K islands
   over the same inputs (wasteful only if the shared interior is expensive —
@@ -371,7 +371,7 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
   second_run_matches_the_first`.
 - **`Tick::Silent` (update-value-without-ticking) contract decision** — the
   `Tick` contract today cannot express "store a new value but don't tick,"
-  which classic relies on (e.g. `Delay`'s first-value seeding, so passive
+  which legacy relies on (e.g. `Delay`'s first-value seeding, so passive
   readers never see `T::default()` before the delay elapses). This is a
   Phase-1 contract-shape decision — add a `Tick::Silent(T)` variant (or
   equivalent) or document the deviation — **not** a delay-porting detail:
@@ -383,13 +383,13 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
 Recipe per node, in this order, no exceptions:
 
 1. identify `Cfg` / `State` / `In<'a>` / `Out` / `ACTIVATION`;
-2. move the classic `cycle` body verbatim into the op (same logic, inputs
+2. move the legacy `cycle` body verbatim into the op (same logic, inputs
    passed in instead of read from upstream `Rc`s);
 3. wire it up (see **Adding an op** below): `#[op(build = name)]` on the impl
    generates the interpreted `Builder` method from the op's `In` shape *and*
    the `nitro!`/compiled forwarders the emission dispatches through; add the
    fluent method (the one piece still hand-written);
-4. port the classic node's unit tests as parity tests (values **and** tick
+4. port the legacy node's unit tests as parity tests (values **and** tick
    times).
 
 ### Adding an op — current tooling
@@ -474,18 +474,18 @@ currently interpreted-only for want of a forwarder** — `join_passive` /
 (all hand-written builder methods, not `#[op]`); these are candidate follow-ups
 (give them `#[op]` or an equivalent forwarder), not by-design gaps.
 
-Inventory (classic `nodes/` → target), grouped by effort:
+Inventory (legacy `nodes/` → target), grouped by effort:
 
 | Group | Nodes | Notes |
 |---|---|---|
 | Done in prototype | map, filter, fold, constant, sample, merge (2-ary), delay, tick(er), producer(→poll), consumer(→for_each), try_map, finally, feedback | parity-tested |
-| Trivial state/closure | ✅ distinct, drop_small_change, difference, limit, map_filter, throttle, inspect, logged, window, buffer, with_time, ticked_at/-elapsed, not, print, timed (`tests/catalog.rs`, `tests/catalog_ops.rs`); ✅ split, combine, collapse (Burst/tuple structural, `tests/catalog_flow.rs`) | recipe proven; `window`/`buffer` use `Ctx::is_last_cycle`; `combine` builds the burst locally (no shared-cell port). `print` prints per-tick (deviation D8, dropping classic's teardown buffer); `logged` is fluent-only (deviation D9) — `&str` label vs `String` cfg |
+| Trivial state/closure | ✅ distinct, drop_small_change, difference, limit, map_filter, throttle, inspect, logged, window, buffer, with_time, ticked_at/-elapsed, not, print, timed (`tests/catalog.rs`, `tests/catalog_ops.rs`); ✅ split, combine, collapse (Burst/tuple structural, `tests/catalog_flow.rs`) | recipe proven; `window`/`buffer` use `Ctx::is_last_cycle`; `combine` builds the burst locally (no shared-cell port). `print` prints per-tick (deviation D8, dropping legacy's teardown buffer); `logged` is fluent-only (deviation D9) — `&str` label vs `String` cfg |
 | Scheduling | ✅ throttle, delay_with_reset, node_flow (node-level delay/filter/limit/throttle, run over the unit-stream path, `tests/catalog_flow.rs`) | `SCHEDULES`/time-gated; pattern proven by delay + throttle |
 | Multi-input | ✅ bimap (active/passive) + join, trimap + join3, try_* variants (`tests/catalog_ops.rs`) | passive `bimap` unlocked passive feedback; `trimap` is the 3-ary combine |
 | Engine-touching | always (→`ALWAYS`, done), ✅ never (`tests/catalog_flow.rs`), finally (needs teardown, done), callback stream, iterator_stream (replay source; needs 0.3), receiver, channel nodes (→Phase 3), async_io (→Phase 3) | |
 | Structural / deferred | demux ✅, dynamic_group ✅, ✅ graph_node (→`spawn`/`spawn_map`, `tests/spawn.rs`) | multi-output + dynamic-graph notes below |
 
-**`graph_node` (thread-offload) ✅ ported as `spawn` / `spawn_map`.** classic
+**`graph_node` (thread-offload) ✅ ported as `spawn` / `spawn_map`.** legacy
 `graph_node` is two combinators — `producer()` (a source sub-graph on a worker
 thread) and `.mapper()` (map an input stream through a worker sub-graph). Their
 next twins are `SourceOps::spawn` and `StreamOps::spawn_map` (`fluent.rs`), riding
@@ -493,12 +493,12 @@ the channel layer: the worker builds and runs its own graph at run start (under
 the driving run's inherited mode + bound) and exchanges timestamped values over
 the channel. Both run in **both** modes. Historical mode is deterministic and
 lock-step by graph time — which required replacing the channel's historical
-*block-collect* with an **incremental, timestamp-gated read** (classic's
+*block-collect* with an **incremental, timestamp-gated read** (legacy's
 "block-while-behind / non-block-once-caught-up" loop, `interp.rs::pump_historical`)
 so a worker that depends on the driving graph's output no longer deadlocks. That
 incremental read also gives every channel bounded (one-ahead) memory. Parity
-tests in `tests/spawn.rs`; the classic `graph_node_works` oracle. *Lock-step
-caveat (matches classic):* the sub-graph is expected to emit a result per input
+tests in `tests/spawn.rs`; the legacy `graph_node_works` oracle. *Lock-step
+caveat (matches legacy):* the sub-graph is expected to emit a result per input
 instant; bound historical `spawn_map` runs by duration, not a raw cycle count
 (the lock-step reader spends one no-op poll cycle between instants — a next
 monotonic-clock artifact with no effect on values/times).
@@ -527,7 +527,7 @@ as a pair slice rather than a tuple. `combine` can follow the same route; the
 "fixed-arity tuple `In` cannot express it" obstacle applies to `#[op]`
 generation, not to the engines.
 
-**Gate 2:** every classic node test has a next twin producing identical
+**Gate 2:** every legacy node test has a next twin producing identical
 values and tick times.
 
 ## Phase 3 — channel layer, threading, async
@@ -541,11 +541,11 @@ values and tick times.
 - ✅ `produce_async` ergonomic (async closure → timestamped burst stream)
   over the channel, gated behind the `async` feature (tokio + futures):
   `async_source::produce_async(&g, handle, params, |p| async {...})` matching
-  classic. `tests/produce_async.rs` (deterministic historical replay,
+  legacy. `tests/produce_async.rs` (deterministic historical replay,
   same-time-one-burst, mid-stream error abort) + `produce_async_feed`
   example.
 - ✅ `consume_async` ergonomic — the **sink** counterpart of `produce_async`,
-  completing the source/sink async symmetry (the classic `consume_async`),
+  completing the source/sink async symmetry (the legacy `consume_async`),
   gated behind `async`: `async_source::consume_async(handle, buffer_size, |v|
   async {...})` returns a closure to plug into `for_each`. A single background
   consumer task drains each burst so **write order is preserved**; a bounded
@@ -557,9 +557,9 @@ values and tick times.
   **last** cycle of a bounded run has no later cycle to surface it (the teardown
   flush cannot turn an `Ok` run into `Err`), so a sink that must abort
   deterministically on its final write cannot migrate to it yet (see etcd).
-- ✅ Classic `threading`/`async` examples re-implemented on next. `threading`
+- ✅ Legacy `threading`/`async` examples re-implemented on next. `threading`
   (`examples/threading/`) offloads a producer sub-graph to a worker thread that
-  feeds the main graph over the channel layer — the primitive under classic
+  feeds the main graph over the channel layer — the primitive under legacy
   `producer()`/`mapper()` (the `graph_node` node), which now **also** have direct
   fluent twins, `SourceOps::spawn` / `StreamOps::spawn_map` (see the Phase 2
   `graph_node` entry) — and runs in both modes (realtime bursts, deterministic
@@ -590,9 +590,9 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (`Weighting::Time`, mean/var/std over all three windows —
    `{Cumulative,Rolling,TimeWindowed}{Mean,Var,Std}TimeWeighted`, West's
    incremental weighted moments with an exact `remove` inverse for the sliding
-   windows, `tests/statistics_time_weighted.rs`) is ported. The final classic
+   windows, `tests/statistics_time_weighted.rs`) is ported. The final legacy
    statistics capability — the time-*weighted* **median**
-   (`median(_, Weighting::Time)` → the classic `WindowStream::weighted_median`;
+   (`median(_, Weighting::Time)` → the legacy `WindowStream::weighted_median`;
    `{Cumulative,Rolling,TimeWindowed}MedianTimeWeighted`, a recompute-per-tick
    weighted median over the retained `(value, time)` window rather than a moment
    accumulator, `tests/statistics_time_weighted_median.rs`) is now ported too, so
@@ -602,14 +602,14 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    out-of-window row filter (`adapters::common`, `tests/common_adapter.rs`);
    **cache** ports the file-backed, query-keyed, LRU-evicting result cache
    (`CacheKey`/`CacheConfig`/`FileCache`) behind the `cache` feature
-   (`adapters::cache`, `tests/cache_adapter.rs`, classic unit tests ported
-   verbatim). **Deviations** (none behavioural): (a) the classic time-slicing
+   (`adapters::cache`, `tests/cache_adapter.rs`, legacy unit tests ported
+   verbatim). **Deviations** (none behavioural): (a) the legacy time-slicing
    helpers (`compute_time_slices`/`compute_validated_time_slices`) land in
    `common` alongside the time-sliced readers — **ported with `postgres`**
    (Phase 4 item 4) and feature-gated on `any(postgres, kdb)` — the kdb port
    (Phase 4 item 5) widened the gate to reuse the same slicer; the always-compiled
    `WindowFilter`/`TimeWindow` surface is here from the start; (b) `FileCache`'s
-   log messages drop the classic "KDB " prefix (the cache is not kdb-specific in
+   log messages drop the legacy "KDB " prefix (the cache is not kdb-specific in
    next).
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
    ✅ *done*. The `csv` and `lines` adapters share two fluent primitives so the
@@ -619,7 +619,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `StreamOps::for_each_mut` (the `&mut`-writer sink, wrapping the owned resource
    in a `RefCell` once instead of in every sink). **Deviation (B4)**: next's
    `csv_read` reads and deserializes the whole file up front (it queues every row
-   onto the channel source before the run), whereas classic's `TryIteratorStream`
+   onto the channel source before the run), whereas legacy's `TryIteratorStream`
    streams rows lazily; behaviour is identical for finite files, but next holds
    the full row set in memory and surfaces a decode error at the start of replay
    rather than mid-stream. `csv` also gains the single-value `CsvSinkOps for
@@ -632,10 +632,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    ✅ **etcd** *(done)*: snapshot→watch source (`etcd_sub`) on `produce_async`
    and a key-value PUT sink (`EtcdSinkOps::etcd_pub`) with leases (background
    keepalive + revoke-on-teardown via a `Drop` guard) and the `force`
-   conditional write, behind the `etcd` feature. Parity port of the classic
+   conditional write, behind the `etcd` feature. Parity port of the legacy
    adapter's tests as `tests/etcd_integration.rs` (testcontainers, gated on
    `etcd-integration-test`) plus no-service tests in `tests/etcd_adapter.rs`.
-   **Deviations:** all classic capabilities preserved; after the systemic
+   **Deviations:** all legacy capabilities preserved; after the systemic
    defer-to-start migrations the snapshot→watch source and the PUT sink both
    establish their I/O at run start, not wiring — the graph owns the tokio
    runtime (no `&Handle`; register A5), `etcd_sub` takes only a `RunMode` and
@@ -644,7 +644,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    writes off the graph thread via `consume_async` — its `flush` teardown
    surfaces the final-cycle `force: false` conditional-write abort, so the old
    per-write `Handle::block_on` is gone (register A1/A4/B1). The canonical
-   deviation list is the adapter's `# Deviations from classic` module-doc block
+   deviation list is the adapter's `# Deviations from legacy` module-doc block
    plus [`deviation-register.md`](./deviation-register.md).
    ✅ **redis** *(done)*: Pub/Sub (`redis_sub` source + `RedisSinkOps::redis_pub`
    sink) and Streams (`redis_stream_read` snapshot→tail source +
@@ -652,10 +652,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    Both sources ride `produce_async`; both sinks ride the shared **`consume_async`**
    primitive (redis has no per-write conditional to abort synchronously, unlike
    `etcd_pub`, so the off-thread sink fits — writes land in order and flush at
-   teardown). Parity port of the classic adapter's tests as
+   teardown). Parity port of the legacy adapter's tests as
    `tests/redis_integration.rs` (testcontainers, gated on `redis-integration-test`)
-   plus no-service tests in `tests/redis_adapter.rs`; classic example ported to
-   `examples/redis_adapter.rs`. **Deviations:** all classic capabilities
+   plus no-service tests in `tests/redis_adapter.rs`; legacy example ported to
+   `examples/redis_adapter.rs`. **Deviations:** all legacy capabilities
    preserved; after the defer-to-start migrations both Pub/Sub and Streams
    sources ride `produce_async` and both sinks ride `consume_async`, all
    establishing their I/O at run start rather than wiring — the graph owns the
@@ -665,7 +665,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    no backlog, the stream tail blocks forever — with no historical timeline to
    replay; register B2, ratified). Burst-model note: `redis_stream_read`'s
    snapshot rides one atomic burst (one shared timestamp, as etcd). The canonical
-   deviation list is the adapter's `# Deviations from classic` module-doc block
+   deviation list is the adapter's `# Deviations from legacy` module-doc block
    plus [`deviation-register.md`](./deviation-register.md).
    ✅ **postgres** *(done)*: a time-partitioned historical replay source
    (`postgres_read` — one query per midnight-aligned time slice, clamped by
@@ -676,13 +676,13 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    time-partitioned adapter to port**, so it lands the shared time slicer
    (`compute_time_slices`/`compute_validated_time_slices`) in `adapters::common`
    (feature-gated `postgres` now; kdb adds its feature at item 5) alongside the
-   already-present `WindowFilter`/`TimeWindow`. Parity port of the classic
+   already-present `WindowFilter`/`TimeWindow`. Parity port of the legacy
    adapter's tests as `tests/postgres_integration.rs` (testcontainers, gated on
    `postgres-integration-test`) plus no-service tests in
-   `tests/postgres_adapter.rs`; classic example ported to
-   `examples/postgres_adapter/`. **Password redaction** (classic PR #433) is
+   `tests/postgres_adapter.rs`; legacy example ported to
+   `examples/postgres_adapter/`. **Password redaction** (legacy PR #433) is
    reproduced: `PostgresConnection::redacted()` masks the DSN `password=…` token
-   at every `connect()` error site. **Deviations:** all classic capabilities
+   at every `connect()` error site. **Deviations:** all legacy capabilities
    preserved; after the defer-to-start migrations the graph owns the tokio
    runtime (no `&Handle`; register A5), the `postgres_write` sink connects lazily
    on its first write inside `consume_async` (register A1/A4), and `postgres_read`
@@ -690,12 +690,12 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    B5 resolved) — the window is still validated + sliced at **wiring** (a pure,
    fail-fast check), but no I/O happens there, so a connection/query error aborts
    the run rather than graph construction. The `LISTEN`/`NOTIFY` live tail
-   **rejects `RunMode::HistoricalFrom` at wiring** (classic parity — classic
+   **rejects `RunMode::HistoricalFrom` at wiring** (legacy parity — legacy
    `postgres_sub` already required realtime; register B2). **Unified source
    landed (register B2):** `postgres_source(PostgresSourceConfig)` dispatches on
    `params.run_mode` at wiring — historical → `postgres_read`, realtime →
    `postgres_sub` — with the two primitives kept public underneath. The canonical
-   deviation list is the adapter's `# Deviations from classic` module-doc block
+   deviation list is the adapter's `# Deviations from legacy` module-doc block
    plus [`deviation-register.md`](./deviation-register.md).
 5. **zmq, kafka, kdb** — streaming; `poll`/`external` + lifecycle.
    ✅ **zmq** *(done)*: real-time ØMQ pub/sub — a `zmq_sub` source (a background
@@ -708,25 +708,25 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    trait-behind-a-feature: a `ZmqRegistry` trait with `ZmqPubRegistration` /
    `ZmqSubConfig` `Into`-wrappers (`()` / bare-address vs `(name, registry)`),
    and an `EtcdRegistry` implementation gated on the `etcd` feature. Parity port
-   of the classic tests: no-service wiring tests in `tests/zmq_adapter.rs`
+   of the legacy tests: no-service wiring tests in `tests/zmq_adapter.rs`
    (`zmq`), real-socket pub/sub tests in `tests/zmq_integration.rs`
    (`zmq-integration-test`), and etcd-discovery tests in
    `tests/zmq_etcd_integration.rs` (`zmq-etcd-integration-test`, testcontainers);
-   classic direct-mode example ported to `examples/zmq_adapter.rs`. Like classic,
+   legacy direct-mode example ported to `examples/zmq_adapter.rs`. Like legacy,
    the `zmq` feature deliberately does **not** depend on `async`. **Deviations**
    (capabilities all preserved): (a) `zmq_sub` takes a `&GraphBuilder` and a
    `RunMode` and **rejects `RunMode::HistoricalFrom` at wiring time** — next's
    channel is bimodal and would block-collect the never-closing subscriber and
    deadlock at `start`, so it errors rather than rejecting at run start the way
-   classic's realtime-only `ReceiverStream` does; (b) `zmq_pub` returns a sink
+   legacy's realtime-only `ReceiverStream` does; (b) `zmq_pub` returns a sink
    `Stream<()>` (not `Rc<dyn Node>`), binding/registering/run-mode-checking at
    graph `start()` (before the first payload, so a fresh subscriber's filter
    propagates during the startup window rather than racing the first publish)
    and a historical run still errors with "real-time" before touching the
    registry; (c) the `bincode` wire envelope is next-local,
    so a next publisher interoperates with a next subscriber but is **not**
-   wire-compatible with a classic/Python peer — cross-language interop lands with
-   the Python bindings (Phase 6), which is also why the classic `zmq-cross-lang`
+   wire-compatible with a legacy/Python peer — cross-language interop lands with
+   the Python bindings (Phase 6), which is also why the legacy `zmq-cross-lang`
    tests are not ported. Realtime-only, so the parity tests assert received
    values (consecutive counters, connection status) rather than exact tick times.
    ✅ **kdb** *(done)*: KDB+/q — two time-partitioned historical replay sources
@@ -734,19 +734,19 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    file-cached twin `kdb_read_cached` over the `cache` adapter's `FileCache`), a
    real-time tickerplant subscription (`kdb_sub`), and a streaming insert sink
    (`KdbSinkOps::kdb_write`), behind the `kdb` feature on the async `kdbplus` IPC
-   client (`kdb-plus-fixed` 0.5, mirroring classic). All ride the async
+   client (`kdb-plus-fixed` 0.5, mirroring legacy). All ride the async
    ergonomics: `kdb_read`/`kdb_read_cached`/`kdb_sub` over `produce_async`,
    `kdb_write` over `consume_async`. As the *reusing* time-sliced adapter, it
    **widened the slicer cfg-gate** in `adapters::common` from
    `#[cfg(feature = "postgres")]` to `#[cfg(any(feature = "postgres", feature =
    "kdb"))]` (the `WindowFilter` row-clamp is always compiled; only the slicer is
-   gated). Parity port of the classic adapter's + cache tests as
+   gated). Parity port of the legacy adapter's + cache tests as
    `tests/kdb_integration.rs` (KDB+ has no public licensed container image, so the
    tests probe an external `q -p 5000` and **skip** when unreachable — no
-   testcontainers; `kdb-next-integration.yml` reuses the classic adapter's KDB
+   testcontainers; `kdb-next-integration.yml` reuses the legacy adapter's KDB
    Docker image + license secret) plus no-service tests in `tests/kdb_adapter.rs`;
-   the three classic examples ported to `examples/kdb/{read,read_cached,round_trip}`.
-   **Deviations:** all classic capabilities preserved — the read/read_cached/sub
+   the three legacy examples ported to `examples/kdb/{read,read_cached,round_trip}`.
+   **Deviations:** all legacy capabilities preserved — the read/read_cached/sub
    sources, the write sink, the `KdbDeserialize`/`KdbSerialize`/`KdbExt` traits,
    `Sym`/`SymbolInterner`, and the `Row`/`Rows` access. After the defer-to-start
    and runtime-ownership migrations the graph owns the tokio runtime (no `&Handle`;
@@ -755,35 +755,35 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `produce_async` (the window is still validated + sliced at **wiring**, a pure
    check — register B5-style). `kdb_sub` takes a `RunMode` and **rejects
    `RunMode::HistoricalFrom` at wiring** (a live, unbounded tickerplant tail with
-   no bounded historical twin — register B2, ratified; classic checked the same
+   no bounded historical twin — register B2, ratified; legacy checked the same
    guard at run start). The sink is the `KdbSinkOps` extension trait (not the
-   classic free-fn + `KdbWriteOperators` pair) and takes a `buffer_size` for the
-   `consume_async` bound; `kdb_read` takes classic's `buffer_size`, now an
+   legacy free-fn + `KdbWriteOperators` pair) and takes a `buffer_size` for the
+   `consume_async` bound; `kdb_read` takes legacy's `buffer_size`, now an
    effective bound (B5 lazified the slice replay, so `Some(n)` gives
-   bounded-memory pipelined historical replay; `None` = unbounded, classic's
+   bounded-memory pipelined historical replay; `None` = unbounded, legacy's
    default). Credentials never reach an error message
    (`KdbConnection::redacted()` = `host:port`). The canonical deviation list is the
-   adapter's `# Deviations from classic` module-doc block plus
+   adapter's `# Deviations from legacy` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
    ✅ **kafka** *(done)*: a streaming topic-consume source (`kafka_sub`) on
    `produce_async` and a topic-produce sink (`KafkaSinkOps::kafka_pub`) on
    `consume_async`, behind the `kafka` feature (`rdkafka` 0.37, mirroring
-   classic). Parity port of the classic adapter's tests as
+   legacy). Parity port of the legacy adapter's tests as
    `tests/kafka_integration.rs` (testcontainers/Redpanda, gated on
    `kafka-integration-test`; `kafka-next-integration.yml`) plus no-service tests
    in `tests/kafka_adapter.rs`, and the round-trip example (`kafka_adapter`).
-   **Deviations:** all classic capabilities preserved; after the defer-to-start
+   **Deviations:** all legacy capabilities preserved; after the defer-to-start
    and concurrency migrations the graph owns the tokio runtime (no `&Handle`;
    register A5), `kafka_pub` connects lazily (librdkafka opens no socket until the
    first `send()`; register A1/A4), and — register B3 resolved — a burst's records
    are now produced **concurrently** via `consume_async_bursts` + `FuturesUnordered`
    (~one broker roundtrip/burst, order preserved across bursts, at throughput
-   parity with classic) rather than sequentially. `kafka_sub` takes a `RunMode`
+   parity with legacy) rather than sequentially. `kafka_sub` takes a `RunMode`
    and **rejects `RunMode::HistoricalFrom` at wiring** (a live, unbounded consumer
    with no historical timeline to replay; register B2, ratified until a bounded
-   offset-range reader exists — classic technically permitted a wall-clock
+   offset-range reader exists — legacy technically permitted a wall-clock
    historical run). The canonical deviation list is the adapter's `# Deviations
-   from classic` module-doc block plus [`deviation-register.md`](./deviation-register.md).
+   from legacy` module-doc block plus [`deviation-register.md`](./deviation-register.md).
    - **`async` feature fix:** enabling `async` now also enables `tokio/sync`
      (which `consume_async`'s sink channels need). Previously the `async` feature
      compiled only because a companion adapter (`etcd-client`) pulled `tokio/sync`
@@ -795,7 +795,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    [`fix_accept`], plain TCP or TLS) exposing inbound messages + session status
    as streams, a market-data subscription helper ([`FixConnection::fix_sub`]),
    and an outbound sender ([`FixOperators::fix_send`] + the [`FixSender`] inject
-   channel), behind the `fix` feature. Like classic (and unlike the async
+   channel), behind the `fix` feature. Like legacy (and unlike the async
    adapters) it uses **no** `async`/tokio: the hand-written FIX 4.4 tag-value
    codec, the `FixSession` state machine, and both poll modes are a verbatim
    port. **Both poll modes ported:** `FixPollMode::Threaded` rides
@@ -814,19 +814,19 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    actually driven every cycle (register A7). **Deviations** (all capabilities
    preserved): the source factories take a `&GraphBuilder` + `RunMode` and
    **reject `RunMode::HistoricalFrom` at wiring** (a live session has no historical
-   timeline to replay; classic checked real-time-ness at run `start()` — register
+   timeline to replay; legacy checked real-time-ness at run `start()` — register
    B2); the sources return `Stream`s (not `Rc<dyn Stream>`), `fix_send` returns
    `Result<Stream<()>>` and `fix_sub` a `Stream<()>` (checking real-time at
-   `start()` like classic, aborting a historical run there); and the `Threaded`
-   teardown drops classic's `Arc<Mutex<Option<TcpStream>>>` socket-shutdown handle
+   `start()` like legacy, aborting a historical run there); and the `Threaded`
+   teardown drops legacy's `Arc<Mutex<Option<TcpStream>>>` socket-shutdown handle
    for a stop-flag-against-the-read-timeout exit (the zmq pattern — no lock on the
    graph path; teardown costs up to one 200 ms read-timeout longer). No-service
    wiring tests in `tests/fix_adapter.rs` (`fix`); same-process socket round-trip +
    reconnect + connection-refused parity tests in `tests/fix_integration.rs`
-   (`fix-integration-test`, real loopback, no container); classic `fix_loopback`
+   (`fix-integration-test`, real loopback, no container); legacy `fix_loopback`
    example ported to `examples/fix_adapter.rs`. The credentialed LMAX-demo
    integration tests are **not** ported (external credentials). The canonical
-   deviation list is the adapter's `# Deviations from classic` module-doc block
+   deviation list is the adapter's `# Deviations from legacy` module-doc block
    plus [`deviation-register.md`](./deviation-register.md).
 7. **web** (+ wingfoil-wire-types, wingfoil-wasm, wingfoil-js untouched —
    the wire protocol is engine-agnostic), **prometheus, otlp, augurs**.
@@ -860,20 +860,20 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    `Complete` — so the marker still lands strictly after the last data frame. Both
    historical shapes are ported: streaming a replay through a live `start()`
    server (with `web_sub` yielding an empty source so the run never blocks) and
-   the `start_historical()` no-op server. Parity port of the classic adapter's
+   the `start_historical()` no-op server. Parity port of the legacy adapter's
    in-process tests as `tests/web_adapter.rs` (`web`; the wss:// round trip and
    the rcgen cert fixture behind `web-tls-integration-test`;
-   `web-next-integration.yml`) — 13 tests, no container; classic example ported to
-   `examples/web/`. **Deviations:** all classic capabilities preserved; `web_sub`
+   `web-next-integration.yml`) — 13 tests, no container; legacy example ported to
+   `examples/web/`. **Deviations:** all legacy capabilities preserved; `web_sub`
    takes a `&GraphBuilder` and returns `Result`, and — unlike the live `_sub`
    sources of register B2 — **does not reject `RunMode::HistoricalFrom`**, because
    it is finite in that mode (an immediately-ending empty stream, exactly as
-   classic); the sink is the `WebSinkOps` trait (not the classic free-fn +
+   legacy); the sink is the `WebSinkOps` trait (not the legacy free-fn +
    `WebPubOperators` pair) returning `Stream<()>`; and `WebBurstSinkOps::web_pub_bursts`
    is added so a `Stream<Burst<T>>` publishes an atomic same-instant array without
    the caller hand-mapping to `Vec<T>` (`Burst`/`TinyVec` is not `Serialize`, so it
    cannot be a second impl of the same trait). The canonical deviation list is the
-   adapter's `# Deviations from classic` module-doc block plus
+   adapter's `# Deviations from legacy` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
    ✅ **prometheus** *(done)*: a realtime, pull-based metrics **sink** —
    `PrometheusExporter` (owns the registry, spawns the hand-rolled `GET /metrics`
@@ -882,10 +882,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    wires the publish sink (over `register_op1`), behind the `prometheus` feature.
    No-op under historical replay (reads the new
    [`Ctx::run_mode`](../crates/wingfoil-next/src/op.rs) accessor). Self-contained
-   parity tests in `tests/prometheus_adapter.rs` (the classic exporter unit tests
+   parity tests in `tests/prometheus_adapter.rs` (the legacy exporter unit tests
    + the `multiple_metrics` self-contained integration test, raw-TCP scrape); the
    end-to-end Prometheus-scrape test is `tests/prometheus_integration.rs` behind
-   `prometheus-integration-test` (reuses the classic Docker stack;
+   `prometheus-integration-test` (reuses the legacy Docker stack;
    `prometheus-next-integration.yml`). **Deviations** (all capabilities
    preserved): (a) the sink is the `PrometheusSinkOps` extension trait
    (`stream.prometheus_gauge(&exporter, name)`), not an `exporter.register(...)`
@@ -899,17 +899,17 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    HTTP/protobuf, behind the `otlp` feature. Built on `consume_async` so the OTel
    SDK export (an `rt-tokio` 500 ms `PeriodicReader`) runs off the graph thread;
    the meter provider is built lazily in that task and dropped at teardown to
-   flush (matching classic's drop-not-`shutdown()`). No-op under historical
+   flush (matching legacy's drop-not-`shutdown()`). No-op under historical
    replay (reads `Ctx::run_mode()`, so no provider is built and no network calls
-   are made). Self-contained parity tests in `tests/otlp_adapter.rs` (classic
+   are made). Self-contained parity tests in `tests/otlp_adapter.rs` (legacy
    `push` unit tests: historical no-connect + bad-endpoint-graceful); the
    end-to-end export test is `tests/otlp_integration.rs` behind
    `otlp-integration-test` (a testcontainers OTel collector;
-   `otlp-next-integration.yml`). **Deviations:** all classic capabilities
+   `otlp-next-integration.yml`). **Deviations:** all legacy capabilities
    preserved; after the runtime-ownership migration the graph owns the tokio
    runtime (register A5), so `otlp_push` takes **no** `&Handle` —
    `stream.otlp_push(name, config)` — and the sink is the `OtlpSinkOps` extension
-   trait rather than a classic `OtlpPush` on `dyn Stream<T>` (the graph must be
+   trait rather than a legacy `OtlpPush` on `dyn Stream<T>` (the graph must be
    driven from a non-async thread, the `consume_async` footgun). **Trace/span
    export ✅ ported** (`OtlpSpanOps::otlp_spans`, register C1 resolved): emits one
    parent span per tick plus one child span per stage hop from
@@ -918,16 +918,16 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    the silent skip of all-zero / backwards timestamps. Same off-thread
    `consume_async` model as `otlp_push` (the tracer provider is built lazily on
    the first exported value and dropped at teardown to flush; no-op under
-   historical replay); note the span sink's argument order differs from classic —
-   next `otlp_spans(span_name, config, attrs)` vs classic
+   historical replay); note the span sink's argument order differs from legacy —
+   next `otlp_spans(span_name, config, attrs)` vs legacy
    `otlp_spans(config, span_name, attrs)`. The canonical deviation list is the
-   adapter's `# Deviations from classic` module-doc block plus
+   adapter's `# Deviations from legacy` module-doc block plus
    [`deviation-register.md`](./deviation-register.md). Parity tests:
    `spans_historical_mode_drains_without_connecting` in `tests/otlp_adapter.rs`
    and `otlp_spans_sends_successfully` in `tests/otlp_integration.rs`.
    ✅ **augurs** *(done)*: on-graph time-series analysis (a pure-Rust compute
    adapter, no service/lifecycle), behind the `augurs` feature. Ports **all 6 of
-   classic's operators** — `AugursForecastOps::augurs_forecast` (windowed ETS /
+   legacy's operators** — `AugursForecastOps::augurs_forecast` (windowed ETS /
    MSTL point forecast + prediction intervals),
    `AugursOutlierOps::augurs_outlier` (windowed MAD / DBSCAN multi-series outlier
    detection), `AugursChangepointOps::augurs_changepoint` (Bayesian online
@@ -937,10 +937,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    those DTW distances) — all as sliding-window transform ops computing inside
    `cycle()` on the graph thread (same shape as the `stats` rolling ops).
    **Deviations:** the ops validate config inside `cycle` (returning `Result` /
-   `anyhow::bail!`) rather than classic's wiring-time `panic!` on a bad detector
+   `anyhow::bail!`) rather than legacy's wiring-time `panic!` on a bad detector
    sensitivity, and `augurs_cluster` floors its effective window at the
-   two-sample warm-up (classic's cluster node never ticks for `window == 1`) —
-   both deliberate improvements; see the adapter's `# Deviations from classic`
+   two-sample warm-up (legacy's cluster node never ticks for `window == 1`) —
+   both deliberate improvements; see the adapter's `# Deviations from legacy`
    module-doc block plus [`deviation-register.md`](./deviation-register.md).
    Test file `tests/augurs_adapter.rs`; example `examples/augurs_adapter.rs`.
 8. **aeron, iceoryx2, fluvio** last — build-environment pain (CMake/clang);
@@ -948,14 +948,14 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    ✅ **fluvio** *(done)*: a streaming topic-partition consume source
    (`fluvio_sub`) on `produce_async` and a topic-produce sink
    (`FluvioSinkOps::fluvio_pub`) on `consume_async_bursts`, behind the `fluvio`
-   feature (`fluvio` 0.50.1, mirroring classic). Unlike aeron/iceoryx2 it is an
+   feature (`fluvio` 0.50.1, mirroring legacy). Unlike aeron/iceoryx2 it is an
    ordinary async network client, so it needs no native toolchain and lands
-   first of the three. Parity port of the classic adapter's tests as
+   first of the three. Parity port of the legacy adapter's tests as
    `tests/fluvio_integration.rs` (testcontainers, `infinyon/fluvio:0.18.1` with
    host networking + the SC/SPU registration dance, gated on
    `fluvio-integration-test`; `fluvio-next-integration.yml`) plus no-service
-   tests in `tests/fluvio_adapter.rs`, and the classic round-trip example ported
-   to `examples/fluvio/`. **Deviations:** all classic capabilities preserved
+   tests in `tests/fluvio_adapter.rs`, and the legacy round-trip example ported
+   to `examples/fluvio/`. **Deviations:** all legacy capabilities preserved
    (offset-selected partition consumption, keyed/keyless records, per-burst flush
    batching, the single-record convenience sink); the graph owns the tokio
    runtime (no `&Handle`; register A5), `fluvio_pub` connects + creates its
@@ -963,120 +963,120 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    A1/A4), and `fluvio_sub` takes a `RunMode` and **rejects
    `RunMode::HistoricalFrom` at wiring** (a live, unbounded consumer that tails
    forever after the retained records, with no historical timeline to replay;
-   register B2, ratified — classic technically permitted a wall-clock historical
-   run). The sink is the `FluvioSinkOps` extension trait (not the classic free-fn
+   register B2, ratified — legacy technically permitted a wall-clock historical
+   run). The sink is the `FluvioSinkOps` extension trait (not the legacy free-fn
    + `FluvioPubOperators` pair) and takes a `buffer_size` for the
    `consume_async_bursts` bound; a negative `start_offset` is rejected at wiring
    rather than deferred into the producer future. The canonical deviation list is
-   the adapter's `# Deviations from classic` module-doc block plus
+   the adapter's `# Deviations from legacy` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
 
    ✅ **aeron** *(done)*: the Aeron IPC/UDP low-latency message transport, behind
    the `aeron` (rusteron-client, C++ FFI — production) or `aeron-rs` (pure Rust —
    experimental) backend features, with `aeron-driver` embedding a media driver.
-   Versions mirror classic. **Both polling modes ported:** `AeronMode::Spin`
+   Versions mirror legacy. **Both polling modes ported:** `AeronMode::Spin`
    rides a busy-spin `custom_node` polling on the graph thread, and
    `AeronMode::Threaded` rides `source_at_start` (a background poll thread over
-   the `channel` layer with classic's exponential idle back-off). The typed
+   the `channel` layer with legacy's exponential idle back-off). The typed
    parser with `FragmentHeader` access, the `fragment_limit` per-poll cap, the
    `Spin`→`Threaded` downgrade for backends that lock on poll, both status
    side-channels, the `ChannelUri` builders, `ClaimBuffer`'s zero-copy
    commit/abort contract, and the `TransportError`/`AeronStatus` types are all
-   ported. Like classic it uses **no** `async`/tokio. Parity port of the classic
+   ported. Like legacy it uses **no** `async`/tokio. Parity port of the legacy
    node-level unit tests as `tests/aeron_adapter.rs` (`aeron` — 20 mock-backed
-   tests, no media driver) plus the classic integration suite as
+   tests, no media driver) plus the legacy integration suite as
    `tests/aeron_integration.rs` (`aeron-integration-test` — a testcontainers
    `neomantra/aeron-cpp-debian` media driver bind-mounting `/dev/shm`;
    `aeron-next-integration.yml`, which also installs the cmake ≥3.30 / clang /
-   uuid / libbsd toolchain rusteron needs); both classic examples ported to
-   `examples/aeron/`. **Deviations:** all classic capabilities preserved; the
+   uuid / libbsd toolchain rusteron needs); both legacy examples ported to
+   `examples/aeron/`. **Deviations:** all legacy capabilities preserved; the
    sources take a `&GraphBuilder` + `RunMode`, return `Result`, and **reject
    `RunMode::HistoricalFrom` at wiring** (a live Aeron subscription has no
    historical timeline, and the threaded mode's channel receiver would
    block-collect the never-closing poll thread and deadlock at `start` — register
-   B2, ratified; classic's spin subscriber silently ran against the
-   fast-forwarded historical clock, while the *publisher* keeps classic's
+   B2, ratified; legacy's spin subscriber silently ran against the
+   fast-forwarded historical clock, while the *publisher* keeps legacy's
    real-time check at graph `start()`). The **status side-channel is a plain
-   stream, not a node type**: classic's `AeronStatusStream` (a `MutableNode` the
+   stream, not a node type**: legacy's `AeronStatusStream` (a `MutableNode` the
    producer drove via `clear()`/`record()` and wired as an active downstream) has
    no next twin — next multiplexes status with data over one internal envelope
    and splits it with `map_filter`, the `zmq_sub` shape, so the *spin* mode now
    carries status in-band too. Observable behaviour (transition-only emission,
    derivation order, in-band ordering) is identical. The sink is the
-   `AeronSinkOps` extension trait returning `Stream<()>` (not classic's
+   `AeronSinkOps` extension trait returning `Stream<()>` (not legacy's
    `AeronPub` returning `Rc<dyn Node>`), and the `MockSubscriber`/`MockPublisher`
    backends are public test support (next's tests live outside the lib). The
-   classic Criterion benches (`aeron_publication_latency`,
+   legacy Criterion benches (`aeron_publication_latency`,
    `aeron_subscription_throughput`, `aeron_transceiver`,
    `aeron_allocation_tracking`) are ✅ **ported** with the Phase-6 bench suite
    (see the Benchmarks bullet): they drive the backends directly, so only the
    import path changed. The canonical deviation list
-   is the adapter's `# Deviations from classic` module-doc block plus
+   is the adapter's `# Deviations from legacy` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
    ✅ **iceoryx2** *(done)*: zero-copy inter-process (and intra-process)
    publish/subscribe over shared memory, behind the `iceoryx2` feature
-   (`iceoryx2` 0.8, mirroring classic). Pure Rust — unlike aeron it needs no
-   native toolchain. **All three classic polling modes ported:**
+   (`iceoryx2` 0.8, mirroring legacy). Pure Rust — unlike aeron it needs no
+   native toolchain. **All three legacy polling modes ported:**
    `Iceoryx2Mode::Spin` rides a busy-spin `custom_node` (port creation deferred to
    graph `start()` via `compose_spawn_at_start`, draining the subscriber port into
    one burst per cycle), and `Threaded`/`Signaled` ride `source_at_start` (a
    background thread over the `channel` layer — a 10 µs-yield poll loop, or a
    blocking `WaitSet` attached to the service's `<name>.signal` Event service).
    Both the typed (`ZeroCopySend`) and `[u8]` slice APIs are ported, in both the
-   `Ipc` and `Local` service variants, with the full classic constructor family
+   `Ipc` and `Local` service variants, with the full legacy constructor family
    (`_sub`/`_sub_with`/`_sub_opts`, `_sub_slice`/`_sub_slice_opts`), the service
-   contracts, `FixedBytes<N>`, and the typed `Iceoryx2Error`. Like classic (and
+   contracts, `FixedBytes<N>`, and the typed `Iceoryx2Error`. Like legacy (and
    unlike the networked adapters) it uses **no** `async`/tokio. Parity port of the
-   classic `local_tests.rs` as `tests/iceoryx2_adapter.rs` (`iceoryx2` — the
+   legacy `local_tests.rs` as `tests/iceoryx2_adapter.rs` (`iceoryx2` — the
    in-process `Local` round trips in all three modes, typed and slice, the
    contract-mismatch case, and the `Traced` latency round trip across an iceoryx2
-   hop) plus the classic `integration_tests.rs` as `tests/iceoryx2_integration.rs`
+   hop) plus the legacy `integration_tests.rs` as `tests/iceoryx2_integration.rs`
    (`iceoryx2-integration-test` — cross-process `Ipc` over real `/dev/shm`, no
-   container; `iceoryx2-next-integration.yml`); the two classic examples ported to
-   `examples/iceoryx2/{pub,sub}.rs`. **Deviations:** all classic capabilities
+   container; `iceoryx2-next-integration.yml`); the two legacy examples ported to
+   `examples/iceoryx2/{pub,sub}.rs`. **Deviations:** all legacy capabilities
    preserved; the sources take a `&GraphBuilder` + `RunMode`, return `Result`, and
    **reject `RunMode::HistoricalFrom` at wiring** (a live shared-memory
    subscription has no historical timeline, and the `Threaded`/`Signaled` channel
    path would block-collect the never-closing producer and deadlock at `start` —
-   register B2, ratified; classic silently ran its poll loop against the
+   register B2, ratified; legacy silently ran its poll loop against the
    fast-forwarded historical clock); the sinks are the `Iceoryx2SinkOps` /
-   `Iceoryx2SliceSinkOps` extension traits returning `Stream<()>` (not the classic
-   free-fn family returning `Rc<dyn Node>`); and — deliberate classic parity — the
+   `Iceoryx2SliceSinkOps` extension traits returning `Stream<()>` (not the legacy
+   free-fn family returning `Rc<dyn Node>`); and — deliberate legacy parity — the
    **sink does not reject or no-op under historical replay**, unlike `zmq_pub`
    (which errors) and the telemetry exporters (which no-op). Ports are created at
-   graph `start()` as in classic, so wiring is pure and a bad service name or
+   graph `start()` as in legacy, so wiring is pure and a bad service name or
    contract mismatch aborts the run with node context (register A1/A4). The
-   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are ✅ **ported**
+   legacy Criterion benches (`iceoryx2`, `iceoryx2_modes`) are ✅ **ported**
    with the Phase-6 bench suite (see the Benchmarks bullet); `iceoryx2_modes` is
    rewired onto the next builder node-for-node, `iceoryx2` measures the shared
    `Burst<T>` and is verbatim. The
-   canonical deviation list is the adapter's `# Deviations from classic`
+   canonical deviation list is the adapter's `# Deviations from legacy`
    module-doc block plus [`deviation-register.md`](./deviation-register.md).
 
 Each adapter: keep its directory CLAUDE.md, port its tests, one PR each.
 
-**Gate 4:** adapter test suites green on next; classic adapter code paths
+**Gate 4:** adapter test suites green on next; legacy adapter code paths
 untouched (still shipping) until Phase 7.
 
 ## Phase 4.5 — engine execution model: breadth-first dirty-list parity
 
 **Scheduling: ✅ landed.** The interpreted engine now runs a sparse dirty-list
-by default (`interp.rs`, `Dispatch::Sparse`), reproducing classic wingfoil's
+by default (`interp.rs`, `Dispatch::Sparse`), reproducing legacy wingfoil's
 `dirty_nodes_by_layer` model. Each cycle seeds a work set from the frontier —
 `always` busy-poll ops plus kernel-marked callback-activated ops (tickers,
 `delay` pops, the feedback source, channel replay) — then propagates the tick
 frontier forward: a node that ticks marks its active downstream neighbours
 dirty. The work set drains in ascending **`(layer, index)`** order — `layer[i]`
-is the longest path to `i` over active *and* passive edges (classic's layer
+is the longest path to `i` over active *and* passive edges (legacy's layer
 order); it collapses to plain index order on a static graph (a valid
 topological order, since the fluent API forces a stream to exist before it is
 referenced), so each node fires exactly once after everything it reads —
 glitch-free, and with per-cycle work proportional to the nodes that *actually
-fire*, not the graph size `N`. Results are **byte-identical** to classic and to
+fire*, not the graph size `N`. Results are **byte-identical** to legacy and to
 the old `O(N)` full-index sweep, which is retained as `Dispatch::FullSweep` — an
 executable reference oracle (`runner.with_dispatch(Dispatch::FullSweep)`) the
 parity suite can cross-check against. This closes the sparse-graph performance
-gap against classic, gated by `sparse_work_is_independent_of_graph_size`
+gap against legacy, gated by `sparse_work_is_independent_of_graph_size`
 (`tests/sparse_graph.rs`) and measured by `benches/store_baseline.rs`.
 
 **Dynamism: ✅ landed** (behind the `dynamic-graph` feature). The `(layer,
@@ -1085,16 +1085,16 @@ highest index can be spliced beneath an existing lower-indexed caller, with
 `fix_layers` lifting the caller's layer above the new upstream (the reorder
 plain index order cannot express). Surfaces: `Runner::run_dynamic` + an
 `Extension` scope (append / active-passive splice / remove / recycle), an
-in-graph `Builder::dynamic_group` (classic's `dynamic_group_stream` twin) that
+in-graph `Builder::dynamic_group` (legacy's `dynamic_group_stream` twin) that
 stages insert/remove from its own `cycle`, and `Builder::demux` (fixed-topology
 routing on a same-cycle mark-dirty primitive — no add/remove). Removed slots are
-tombstoned, not freed (classic parity). Parity tests in
+tombstoned, not freed (legacy parity). Parity tests in
 `tests/dynamic_graph.rs`.
 
 **N-ary merge: ✅ landed.** `merge_all` and `fan` wire a single variadic
-`MergeN` node rather than a chain of `n-1` binary merges, matching classic's
+`MergeN` node rather than a chain of `n-1` binary merges, matching legacy's
 `merge(vec)` in both node count and depth. This was the phase's one open *gate*
-violation (up to 1.86x classic on a busy wide fan-in) rather than a deferred
+violation (up to 1.86x legacy on a busy wide fan-in) rather than a deferred
 nicety — see "The missing n-ary merge" below.
 
 **Status of the phase.** Scheduling, the `O(depth)` drain term, dynamism and the
@@ -1103,7 +1103,7 @@ evidence (not pending work — see its section), and compiled-path region gating
 is argued *against* by the sparse benchmarks. Nothing here blocks the cutover.
 
 **Known parity gaps (for the cutover audit).** The runtime *behaviour* is a
-faithful twin (values + tick times match classic's oracles). The two
+faithful twin (values + tick times match legacy's oracles). The two
 dynamic-graph ergonomic gaps below are now **closed** (both were ergonomic
 surface over the existing mechanism — no engine/staging changes):
 
@@ -1120,13 +1120,13 @@ surface over the existing mechanism — no engine/staging changes):
   `tests/dynamic_graph.rs`.
 - **`DemuxMap` key lifecycle + `demux_it`. ✅ closed.** `Builder::demux` stays
   the raw routing primitive (`route(value) -> slot` + overflow). Layered on top
-  of it (no engine changes): `Builder::demux_map` (twin of classic
+  of it (no engine changes): `Builder::demux_map` (twin of legacy
   `StreamOperators::demux`) adds the auto-assigning / `Close`-releasing
   `DemuxMap` key lifecycle over a single value, and `Builder::demux_it` (twin of
-  classic `demux_it`) routes each item of an iterable source value to its keyed
+  legacy `demux_it`) routes each item of an iterable source value to its keyed
   child, each selected child re-emitting a `Burst` of exactly its items. next's
   `DemuxMap` assigns the *lowest* free slot (a `BTreeSet` pool rather than
-  classic's `HashSet`), so slot assignment is deterministic. Parity tests:
+  legacy's `HashSet`), so slot assignment is deterministic. Parity tests:
   `demux_map_auto_assigns_and_releases_slots` and
   `demux_it_routes_each_item_to_a_burst_per_child`.
 
@@ -1166,12 +1166,12 @@ its depth on every cycle even when almost none of it fired.
 
 Depth was not an exotic shape here: next's `fan` sugar **left-folded its
 branches into a binary merge chain**, so a 256-way fan-in was a ~256-deep graph
-(classic's `merge(vec)` is a single N-ary node, depth 1, which is why classic
+(legacy's `merge(vec)` is a single N-ary node, depth 1, which is why legacy
 never showed the term). It also needs an *active* node above the quiet depth to
 bite — a join like `hot.merge(&deep)` — since otherwise `max_layer` never rises.
 
 That particular source of depth is gone: `fan` now fans in through one `merge_n`
-node (see the next section), so a 256-way fan is depth 1 like classic's. The
+node (see the next section), so a 256-way fan is depth 1 like legacy's. The
 drain fix below stands on its own regardless — depth is trivial to build with an
 ordinary chain of ops, and the gate that pins it does exactly that rather than
 going through `fan`.
@@ -1182,7 +1182,7 @@ word test skips 64 empty layers, leaving `O(active + depth/64)`. Deliberately a
 bitmask rather than a heap of occupied layers: a heap costs a push/pop *per
 layer*, and on a linear chain every layer holds one node, which would reintroduce
 exactly the per-node heap traffic whose removal closed the `fanout` gap against
-classic. The mask adds one branchless bit-set per enqueue and nothing per node.
+legacy. The mask adds one branchless bit-set per enqueue and nothing per node.
 
 Results: the marginal scan cost of 318 quiet layers fell from **636 steps per
 cycle to 10**, and the benchmark's depth slope from **+63%** (2.70ms → 4.39ms
@@ -1196,18 +1196,18 @@ Chasing the depth term turned up its root cause, which was a **parity gap, not a
 tuning opportunity**: next had no n-ary merge node. `merge_all` and `fan` both
 unrolled to a left-associated chain of binary `merge2`s (deliberately — "closes
 the n-ary-merge vocabulary gap without a bespoke variadic op"), so an n-way
-fan-in cost next `n-1` nodes where classic's `merge(vec)` costs **1**.
+fan-in cost next `n-1` nodes where legacy's `merge(vec)` costs **1**.
 
 On a *busy* fan-in — every branch ticking every cycle, the common case — that was
-a straight loss against classic, and it widened with width (20k cycles):
+a straight loss against legacy, and it widened with width (20k cycles):
 
-| width | next (chain) | next (balanced tree) | classic | chain/classic |
+| width | next (chain) | next (balanced tree) | legacy | chain/legacy |
 |-------|--------------|----------------------|---------|---------------|
 | 16    | 14.2ms       | 10.9ms               | 9.8ms   | **1.45x**     |
 | 64    | 48.3ms       | 41.8ms               | 28.0ms  | **1.73x**     |
 | 256   | 194.4ms      | 157.2ms              | 104.7ms | **1.86x**     |
 
-This violated the Phase 6 gate **`next-interpreted ≥ classic-interpreted`**. The
+This violated the Phase 6 gate **`next-interpreted ≥ legacy-interpreted`**. The
 `fanout` benchmark missed it because it is only 10 wide, where the 9 extra merge
 nodes are lost among ~105 others — the loss needs width to show.
 
@@ -1219,7 +1219,7 @@ removes both.
 
 **Landed: `MergeN`, the catalog's only variadic op.** `merge_all` and `fan` now
 wire a single node of arbitrary arity, so a k-way fan-in costs 1 merge node and 1
-layer of depth, matching classic's `merge(vec)` exactly. The pieces:
+layer of depth, matching legacy's `merge(vec)` exactly. The pieces:
 
 - **The op** (`ops.rs`): `MergeN<T>` with `In<'a> = &'a [(&'a T, bool)]` — a pair
   *slice* rather than the fixed-arity tuple every other op declares, which is
@@ -1250,15 +1250,15 @@ layer of depth, matching classic's `merge(vec)` exactly. The pieces:
 **Measured after** (a different machine from the table above, so read the two
 right-hand columns, not the milliseconds — 10k cycles, one map per branch):
 
-| width | next chain (old) | next n-ary (new) | classic | new/classic | old/new |
+| width | next chain (old) | next n-ary (new) | legacy | new/legacy | old/new |
 |-------|------------------|------------------|---------|-------------|---------|
 | 16    | 7.61ms           | 3.83ms           | 5.43ms  | **0.80x**   | 1.98x   |
 | 64    | 31.93ms          | 13.16ms          | 16.76ms | **0.78x**   | 2.43x   |
 | 256   | 117.45ms         | 45.46ms          | 64.15ms | **0.76x**   | 2.58x   |
 
 The gate is not merely met but inverted — next-interpreted is now *faster* than
-classic at every width — and, more importantly, the ratio no longer degrades
-with width (1.45x → 1.73x → 1.86x against classic became 0.80x → 0.78x →
+legacy at every width — and, more importantly, the ratio no longer degrades
+with width (1.45x → 1.73x → 1.86x against legacy became 0.80x → 0.78x →
 0.76x). That flatness is the actual claim: the old numbers were bad because the
 cost grew with `n`, so a fixed improvement at one width would have proved
 nothing.
@@ -1275,10 +1275,10 @@ both `merge_all` and `fan`.
 
 **And the benchmark bar that missed it is widened**: `benches/tiers.rs` gains
 `fan_in_16` / `fan_in_64` / `fan_in_256` — busy fan-ins at the three widths of
-the table above, each with its classic twin, so the ratio is readable as a slope
+the table above, each with its legacy twin, so the ratio is readable as a slope
 rather than a single number. The `sparse` groups' node counts fell out of this
 too (267 → 205, 1035 → 781, since `fan(64)`/`fan(256)` no longer contribute 63
-and 255 merge nodes), and now match their classic twins exactly.
+and 255 merge nodes), and now match their legacy twins exactly.
 
 ### Tier ranking on sparse graphs: no crossover, but `nested` inverts
 
@@ -1311,7 +1311,7 @@ small). Neither blocks the cutover.
 ### Arena / SoA value store — deferred perf follow-on (boundary frozen by type)
 
 **Decision: do the arena later, not now.** It's a pure perf follow-on; the
-interpreted engine is already at parity with classic (the dirty-list did that),
+interpreted engine is already at parity with legacy (the dirty-list did that),
 and nothing correctness- or cutover-related depends on it. The critical path to
 cutover is *breadth* — catalog, adapters, facade, python — so the arena waits
 for a measured need. Two cheap de-risking steps were done now instead (below),
@@ -1362,19 +1362,19 @@ benchmark — nothing in CI runs `cargo bench`.
 ### Dynamic graphs (runtime add/remove) — ✅ landed
 
 The sparse dirty-list maintains a mutable frontier of active nodes — the
-natural home for classic's `graph_node` / `dynamic_group` (add/remove nodes
+natural home for legacy's `graph_node` / `dynamic_group` (add/remove nodes
 and sub-graphs mid-run), which the old all-nodes sweep could not cleanly
 express. The enabler *and* the feature are now both in place, behind the
 `dynamic-graph` cargo feature: `Runner::run_dynamic` appends nodes + slots and
 splices active/passive edges at runtime (with `fix_layers` updating the layer
 bookkeeping for the affected region), plus the in-graph `Builder::dynamic_group`
-(classic's `dynamic_group_stream` twin, with a pluggable `StreamStore`) and the
+(legacy's `dynamic_group_stream` twin, with a pluggable `StreamStore`) and the
 `Builder::demux` routing primitive (`demux_map` / `demux_it` layered on top).
 Parity tests in `tests/dynamic_graph.rs`. The open *decision* the plan flagged —
 is runtime mutation a cutover blocker or a v1 deviation — is thereby settled by
-building it: it is supported, matching classic. The compiled and island paths
+building it: it is supported, matching legacy. The compiled and island paths
 stay static by design (their whole value is a fixed monomorphized schedule);
-dynamism is an interpreted-engine capability, matching classic. See the Phase
+dynamism is an interpreted-engine capability, matching legacy. See the Phase
 4.5 header and capability-matrix note ¹⁰ for the surface detail.
 
 **Scope notes:**
@@ -1387,8 +1387,8 @@ dynamism is an interpreted-engine capability, matching classic. See the Phase
   where branch-1's *region gating* idea (skip whole quiet sub-graphs) becomes
   the compiled counterpart of the dirty-list — worth doing alongside the
   arena/perf pass.
-- Bench gate ties to Phase 6: `next-interpreted ≥ classic-interpreted` on the
-  sparse workloads holds — `benches/tiers.rs` measures ~2.70ms vs classic's
+- Bench gate ties to Phase 6: `next-interpreted ≥ legacy-interpreted` on the
+  sparse workloads holds — `benches/tiers.rs` measures ~2.70ms vs legacy's
   ~3.23ms on the `sparse` group (and next wins the dense groups too). The one
   workload where it did *not* hold — a busy wide fan-in — is the n-ary merge
   gap above, now closed and covered by the new `fan_in_16/64/256` bars.
@@ -1408,14 +1408,14 @@ Phase 7 checklist. The remaining `#[op]` item (generating the *fluent* method
 too) is a deliberate deferral, not owed: see the sub-bullet below.
 
 - **Latency** ✅ **landed** (`src/latency.rs`): stamps ride values as today
-  (`Traced` is just a payload, re-exported from classic together with
+  (`Traced` is just a payload, re-exported from legacy together with
   `Latency`/`Stage`/`HasLatency`/`StageStats`/`LatencyStats` and the
   `latency_stages!` derive — all engine-agnostic, unchanged). `Ctx` gained
   `wall_time()` (a per-cycle snap, from a new `Kernel::wall_time`) and
   `wall_time_precise()` (fresh TSC read); the node layer is re-implemented as
   ops — `stamp`/`stamp_precise` (over `register_op1`) and the `latency_report`
   sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
-  **Deviation**: fluent/interpreted only (matching classic, which exposes
+  **Deviation**: fluent/interpreted only (matching legacy, which exposes
   latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
   *type* parameter, which does not map onto the `nitro!` value-dispatch table,
   so compiled/nested support is out of scope for this op family. Registered as
@@ -1426,7 +1426,7 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
 - **Graph export**: ❌ **not doing this** (GML from `Builder` topology + debug
   labels). Deferred deliberately — we want a better introspection/visualization
   story than a one-off GML dump, to be designed and scoped separately later
-  rather than ported as-is from classic. Because classic's `Graph::export`
+  rather than ported as-is from legacy. Because legacy's `Graph::export`
   is a *public* API, this is registered as **C6** in the
   [deviation register](./deviation-register.md) and needs an explicit ruling
   at cutover rather than silent omission.
@@ -1512,7 +1512,7 @@ tests covered — not "legacy pytest passes unchanged."
   listed as remaining facade work — with `PyElement` erasure, re-runnable
   graphs, and the `#[pyop]`/`pyop_fn!` op-authoring seams.
 - **Custom-node seam** ✅ *landed*: the public `GraphBuilder::custom_node`
-  primitive (the next twin of classic `MutableNode` + `StreamPeekRef`,
+  primitive (the next twin of legacy `MutableNode` + `StreamPeekRef`,
   `tests/custom_node.rs`) plus its next-python exposure (`Graph.custom_node`,
   a `cycle(values) -> bool` + `peek()` protocol), so a Python object can be a
   graph node (legacy's `CustomStream`). Single-run in v1 (caller-owned Python
@@ -1742,7 +1742,7 @@ tests covered — not "legacy pytest passes unchanged."
   also gaining the toolchain install.
 - **Python latency surface** 🟢 *landed* — the last non-adapter gap in the
   binding, ported from legacy's `py_latency` module
-  (`wingfoil-python/src/py_latency.rs`) to
+  (`legacy/wingfoil-python/src/py_latency.rs`) to
   `wingfoil-next-python/src/latency.rs`. Same dynamic shape as legacy, because
   Python cannot name a compile-time `Stage` type: a `Latency` pyclass carrying
   a *runtime* `Vec<String>` of stage names beside its `Vec<u64>` stamps (so a
@@ -1759,7 +1759,7 @@ tests covered — not "legacy pytest passes unchanged."
   (`stats["decode"]["p99_ns"]`, `stats.report()`) instead of only printing
   them; bursts are stamped element-wise, under one GIL attach, so the ops
   compose with the burst-shaped adapter sources; and aggregation and report
-  formatting are not re-implemented — classic's `LatencyStats::observe` /
+  formatting are not re-implemented — legacy's `LatencyStats::observe` /
   `format_report` were split into runtime-named free fns
   (`record_stage_deltas` / `format_latency_report`) that both the typed and
   the dynamic aggregator delegate to, so a Python report is byte-identical to
@@ -1781,7 +1781,7 @@ tests covered — not "legacy pytest passes unchanged."
 - **Pytest parity audit** 🟡 *audited 2026-08; two surface gaps remain* — the
   gate stated at the top of this phase ("next-python's own pytest suite reaching
   parity with the surface the legacy tests covered") had never been checked, only
-  assumed. Every test function in `wingfoil-python/tests/` (268, in 21 files) was
+  assumed. Every test function in `legacy/wingfoil-python/tests/` (268, in 21 files) was
   mapped case by case onto its next counterpart (`wingfoil-next-python/tests/`,
   325 in 20 files). Name-matching is useless here — next's suite was written
   fresh, and exactly **6** of the 268 legacy names appear on the next side (all
@@ -1836,94 +1836,94 @@ tests covered — not "legacy pytest passes unchanged."
   reading a stream before the graph had run at all still panicked
   (`expect("invariant: PyGraph::run must be called before PyStream::value")`),
   escaping to Python as a `PanicException`. The earlier web-binding fix covered
-  only the *ran but never ticked* case. Classic `peek_value` answers `None`
+  only the *ran but never ticked* case. Legacy `peek_value` answers `None`
   there, so `value()` now returns the empty element in both.
 
   **Remaining** — both are missing *binding surface*, not missing tests, so they
   belong to "Surface build-out" rather than here: the statistics adapter
   binding, and a multi-stream `build_dataframe` equivalent.
-- **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
+- **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form
   `PyStream` above).
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `nitro!`),
-  keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
+  keeping legacy versions until Phase 7. 🟢 *landed so far*: order_book,
   breadth_first, run_mode, statistics, threading, async, feedback, and the
   runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`),
   `tracing` (the `log` mode — the `logged` debug tap through `env_logger`),
   `latency` (`examples/latency/{pub,sub}.rs` — the cross-process
   `latency_stages!` + `Traced` + `.stamp::<Stage>()` + `latency_report` loop
   over an iceoryx2 hop, closing the Phase-5 infrastructure end to end; it fixes
-  two defects in the classic pair, see that example's README), `latency_e2e`
+  two defects in the legacy pair, see that example's README), `latency_e2e`
   (`examples/latency_e2e/{ws_server,fix_gw}.rs` plus the whole engine-agnostic
   deployment kit — the nine-stage
   `browser --WS--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX` round trip;
   the single largest consumer of the adapter surface, exercising `web`(+TLS),
   `iceoryx2`, `fix`, `prometheus` and `otlp` in one graph. Wire types, stamp
-  stages, metric names and CLI/env surface are byte-parity with classic, so the
-  classic browser client and Grafana dashboard work unchanged; deviations are
+  stages, metric names and CLI/env surface are byte-parity with legacy, so the
+  legacy browser client and Grafana dashboard work unchanged; deviations are
   wiring-idiom only — see that example's README. The three
-  `*-latency-e2e-*.yml` workflows still target the classic copy by path;
+  `*-latency-e2e-*.yml` workflows still target the legacy copy by path;
   repointing them is cutover-time work), and `telemetry`.
 
   **`telemetry`** was already ported as graph code — `prometheus_adapter.rs`
-  and `otlp_adapter.rs`. What landed now is the rest of the classic example:
+  and `otlp_adapter.rs`. What landed now is the rest of the legacy example:
   the pull-vs-push guide, a self-contained Grafana + Prometheus compose stack
   (`examples/telemetry/docker/`), and a `run.sh` that brings it up and launches
   either example. **Deviations**: one `run.sh` taking the example name instead
-  of classic's two near-identical scripts; the compose file lives with the
-  example rather than under the adapter source tree (classic keeps it there
+  of legacy's two near-identical scripts; the compose file lives with the
+  example rather than under the adapter source tree (legacy keeps it there
   because its integration tests share it — next's adapter tests need no
   stack); and no `grafana-init` service, which exists to mint a Grafana API
-  token for those classic tests that no example reads (classic's `otlp/run.sh`
+  token for those legacy tests that no example reads (legacy's `otlp/run.sh`
   blocked up to 30s waiting on a token it never used).
 
   The `tracing` example's other two modes — `tracing` (route events through a
   `tracing-subscriber`) and `instruments` (engine spans around `run`/cycle) —
   are 🟢 *landed* alongside the engine instrumentation port below, so all three
-  classic modes now work.
-- **Engine tracing / instrumentation** 🟢 *landed*: classic's `tracing` +
+  legacy modes now work.
+- **Engine tracing / instrumentation** 🟢 *landed*: legacy's `tracing` +
   `instrument-run` / `-cycle` / `-apply-nodes` / `-initialise` / `-cycle-node` /
   `-default` / `-all` features are ported one-for-one into
   `wingfoil-next`, with the span sites in `interp.rs`
   (`Runner::run` / `run_dynamic`, the lifecycle-phase loops, `drain_cycle` and
   the full-sweep oracle's cycle body, and the per-node `cycle` call). Coverage:
   `tests/instrumentation.rs` (span names, the `desc`/`index`/`node` fields, the
-  nesting, and sparse-vs-full-sweep equivalence). **Deviations from classic**,
-  both benign: next's `tracing` dependency is *optional* (classic takes it
+  nesting, and sparse-vs-full-sweep equivalence). **Deviations from legacy**,
+  both benign: next's `tracing` dependency is *optional* (legacy takes it
   unconditionally because its `logged` tap routes through the `tracing` event
   macros — next's `logged` goes through `log`, and reaches a `tracing`
   subscriber via `tracing_subscriber`'s `tracing-log` bridge); and there are
   three `apply_nodes` phases rather than four, since next has no separate
   `setup` phase — its ops are constructed at wiring time. The `compiled()` /
   `nested()` emissions are **not** instrumented: their whole point is a
-  monomorphized loop with no engine indirection, and classic has no compiled
+  monomorphized loop with no engine indirection, and legacy has no compiled
   path to be at parity with.
 - **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
-  runs a `classic` (legacy interpreted) bar beside next's
-  `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`
+  runs a `legacy` (legacy interpreted) bar beside next's
+  `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ legacy-interpreted`
   is directly readable via `cargo bench --bench tiers`. The baseline now **holds
-  on all three workloads**: next-interpreted meets or beats classic on
+  on all three workloads**: next-interpreted meets or beats legacy on
   `dense_chain` (dispatch-bound), `accumulate` (loop-bound), and wide `fanout`
   (every node fires every cycle); compiled/island win decisively across the
   board (compiled fan-out ~25× either interpreter). ✅ *Resolved*: the earlier
   dense-`fanout` gap (next-interpreted ~40% slower) was the sparse dispatch's
-  per-node `BinaryHeap` push/pop; replacing it with classic's layer-bucketed
+  per-node `BinaryHeap` push/pop; replacing it with legacy's layer-bucketed
   drain (`dirty_nodes_by_layer`) closed it — fanout interpreted ~2× faster,
   byte-identical results (guarded by the `Sparse`/`FullSweep`/compiled/nested
   differential suite), no regression on the other workloads. Wiring the bench as
   an automated CI gate is deferred — criterion wall-clock thresholds are too
   noisy for the shared CI runners; it stays a run-on-demand scaffold.
 
-  **The classic bench suite is now ported too** 🟢 *landed* — all eight classic
+  **The legacy bench suite is now ported too** 🟢 *landed* — all eight legacy
   targets have next twins declared under the same names with the same
   `required-features` gating (`graph`, `nanotime`, `bfs_vs_dfs_wingfoil` /
   `_reactive` / `_async_streams`, `iceoryx2`, `iceoryx2_modes`, and the four
-  `aeron_*`), alongside classic's `bench` and `dhat-heap` features and its
+  `aeron_*`), alongside legacy's `bench` and `dhat-heap` features and its
   `bencher` (`add_bench`) harness. Workloads are kept identical so a next
-  reading sits beside the classic one — the point of the ports, and something
-  that disappears at cutover when the classic bar goes away. Only three targets
+  reading sits beside the legacy one — the point of the ports, and something
+  that disappears at cutover when the legacy bar goes away. Only three targets
   genuinely move onto the next engine (`graph`, `bfs_vs_dfs_wingfoil`,
   `iceoryx2_modes`), and their rewiring is node-count-preserving; the rest
   measure other libraries or ported backend/value types and are verbatim. Per-
@@ -1933,7 +1933,7 @@ tests covered — not "legacy pytest passes unchanged."
 
 ## Phase 7 — cutover
 
-- Deprecate classic engine internals (`MutableNode` wiring path), keep the
+- Deprecate legacy engine internals (`MutableNode` wiring path), keep the
   facade API.
 - Branch-1 codegen has been retired: `wingfoil::codegen::{generate,
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
@@ -1945,7 +1945,7 @@ tests covered — not "legacy pytest passes unchanged."
   legacy tree going away: drop the crate directory, its workspace member
   entry, and the `wingfoil-derive` dependency from `wingfoil`'s manifest.
 - **Rule on the deviation register's open ⚪/🟡 items** — in particular **C6**
-  (`Graph::export` / GML, a public classic API next deliberately does not
+  (`Graph::export` / GML, a public legacy API next deliberately does not
   provide) and **C7** (latency ops are interpreted-only). Every remaining 🔴
   and 🟡 needs an explicit accept/fix decision before the swap.
 - Docs: rewrite crate docs + CLAUDE.md for the op pattern; migration guide
@@ -1954,7 +1954,7 @@ tests covered — not "legacy pytest passes unchanged."
 
 ## Testing strategy
 
-- **Parity oracle**: every ported unit asserts against classic behavior —
+- **Parity oracle**: every ported unit asserts against legacy behavior —
   same values, same tick times, same error/bound semantics. Where a test
   would drift for a *documented* reason (e.g. none known today), the test
   states the reason inline.
@@ -1973,9 +1973,9 @@ tests covered — not "legacy pytest passes unchanged."
   `..base` struct-update would let compile silently now fails a parity row.
   Seed it with the known-divergent cases first (non-default fold init;
   side-effecting closure factory; `delay(0)` and delay first-value seeding).
-- **Duration/bound semantics**: pinned by classic-vs-next parity tests
-  (see `duration_bound_matches_classic_engine` — the trailing-cycle
-  behavior is classic semantics, deliberately preserved).
+- **Duration/bound semantics**: pinned by legacy-vs-next parity tests
+  (see `duration_bound_matches_legacy_engine` — the trailing-cycle
+  behavior is legacy semantics, deliberately preserved).
 - CI: `cargo lint` / `cargo lint-all` / `fmt --check` as today; adapters
   keep feature gates.
 
@@ -1984,10 +1984,10 @@ tests covered — not "legacy pytest passes unchanged."
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Engine-owned init / evaluation-timing drift across the three emission paths | silent wrong values — the macro crate's interpreted/compiled/nested paths are the biggest drift surface; op-`cycle` semantics agree but engine-owned *seeding* and *timing* do not (fold init, closure-factory re-eval) | table-driven three-engine parity test (one micro-graph per macro-supported combinator, `interpreted == compiled == nested`); seed with the known divergences; single seed/init field per op so all three paths read one source |
-| Interpreted engine slower than classic on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, classic's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; gated deterministically by `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), and `benches/tiers.rs` measures next-interpreted ahead of classic on the sparse groups. Former qualifier, ✅ **resolved**: wide *active* fan-ins were 1.45–1.86x slower than classic because next had no n-ary merge node, so an n-way fan-in cost `n-1` nodes against classic's 1 — a Phase 6 gate violation the 10-wide `fanout` bench could not see. `MergeN` / `Builder::merge_n` closed it (one node at any width, all three engines); pinned by `node_count` shape gates in `tests/merge_n.rs` and measured by the new `fan_in_16/64/256` bars. See Phase 4.5 |
+| Interpreted engine slower than legacy on sparse graphs | perf parity claim | ✅ **Phase 4.5 dirty-list landed** (`Dispatch::Sparse`, legacy's `dirty_nodes_by_layer` model; `FullSweep` retained as oracle) — results byte-identical, work ∝ active nodes; gated deterministically by `sparse_work_is_independent_of_graph_size` (`tests/sparse_graph.rs`), and `benches/tiers.rs` measures next-interpreted ahead of legacy on the sparse groups. Former qualifier, ✅ **resolved**: wide *active* fan-ins were 1.45–1.86x slower than legacy because next had no n-ary merge node, so an n-way fan-in cost `n-1` nodes against legacy's 1 — a Phase 6 gate violation the 10-wide `fanout` bench could not see. `MergeN` / `Builder::merge_n` closed it (one node at any width, all three engines); pinned by `node_count` shape gates in `tests/merge_n.rs` and measured by the new `fan_in_16/64/256` bars. See Phase 4.5 |
 | Arena/SoA slot swap forces a second pass over the ported catalog | rework cost — registrations capture the slot type | ✅ **resolved: boundary frozen by type.** `SlotRef<T>` (`interp.rs`) is the sole access path (`slot()`/`new_slot()` return it; ops only `borrow`/`borrow_mut`); the arena is an internal swap of its innards, zero capture sites touched. Macro uses locals; `Stream::__slot` returns `SlotRef` too |
-| Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; classic tests as oracle; fallback design named in advance |
-| Feedback timing mismatch | correctness of feedback graphs | engine-level edge + classic's 4 feedback tests; fluent-only v1 |
+| Burst/replay semantics drift | backtest determinism is the product | Phase 0.3 spike; legacy tests as oracle; fallback design named in advance |
+| Feedback timing mismatch | correctness of feedback graphs | engine-level edge + legacy's 4 feedback tests; fluent-only v1 |
 | Fallibility retrofit cost | touches every emitter | do it first (0.1); never retrofit later |
 | Dynamic graph expectations | `graph_node` users | dirty-list engine (the mutable-frontier enabler) has landed; ✅ **the mutation feature has landed** (behind `dynamic-graph`): `Runner::run_dynamic` + an `Extension` scope (append / splice / remove / recycle), `Builder::dynamic_group`, and `Builder::demux`. Islands also cover static composition |
 | Python API change (next-python supersedes legacy `wingfoil-python`) | existing `import wingfoil` code must migrate — an accepted breaking change, not drift to avoid | new object-form binding at parity before cutover; next-python `test_interop.py` pytest as gate; migration guide + `wingfoil` module-name takeover at cutover |
@@ -2053,7 +2053,7 @@ ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
 footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
 `poll`) and feed a compiled island through its inputs.
 
-**Busy-poll ingest (`ALWAYS` sources — classic `poll`/`producer`).**
+**Busy-poll ingest (`ALWAYS` sources — legacy `poll`/`producer`).**
 - *Current state:* excluded — `compiled()` runs its own closed monomorphized
   loop with no external wake, and `nitro!` forbids IO-edge sources; `poll` lives
   at the fluent/interpreted layer and feeds a compiled island through its inputs.
@@ -2073,10 +2073,10 @@ footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst
   never latest-wins, never dropped. Excluded from compiled because no burst
   *sources* exist in the macro vocabulary and the burst pattern is about IO
   ingestion (which compiled excludes). Works on the interpreted engine today
-  (`Burst`, matching classic `Burst`/`HistoricalValue`).
+  (`Burst`, matching legacy `Burst`/`HistoricalValue`).
 - *Scope:* a burst-source shape the `nitro!` macro can express and the compiled
   path can drive, delivering same-time-grouped values in one cycle (identical to
-  interpreted/classic burst semantics — same-time values ride one burst, not
+  interpreted/legacy burst semantics — same-time values ride one burst, not
   coalesced, not split by a monotonic bump).
 
 **Coupling & first decision:** these land together or the exclusion stays —
@@ -2102,7 +2102,7 @@ go stale through it). Sections to regenerate against the post-refactor code:
   shared `Kernel`.
 - Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,
   no macro op-table).
-- Testing strategy: parity-oracle vs classic + three-engine agreement.
+- Testing strategy: parity-oracle vs legacy + three-engine agreement.
 
 ## Sequencing and parallelism
 

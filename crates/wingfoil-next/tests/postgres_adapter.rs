@@ -146,7 +146,7 @@ fn read_rejects_cycles() {
 
 /// `postgres_read` connects at the start of the run (not wiring), so an
 /// unreachable endpoint aborts the *run*, and the error context must **redact**
-/// the password (parity with classic PR #433).
+/// the password (parity with legacy PR #433).
 #[test]
 fn read_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");

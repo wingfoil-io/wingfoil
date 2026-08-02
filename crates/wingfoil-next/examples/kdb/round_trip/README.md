@@ -7,7 +7,7 @@ Demonstrates the KDB+ adapter end to end by:
 3. reading it back (`kdb_read`), and
 4. validating that the read data matches the generated data.
 
-This is the wingfoil-next port of the classic `kdb` round-trip example.
+This is the wingfoil-next port of the legacy `kdb` round-trip example.
 
 ## Setup
 

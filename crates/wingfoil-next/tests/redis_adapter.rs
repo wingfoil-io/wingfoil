@@ -34,7 +34,7 @@ fn historical() -> RunParams {
 }
 
 /// An unreachable endpoint must abort the Pub/Sub source's run rather than hang
-/// or panic — the parity of classic `test_connection_refused`.
+/// or panic — the parity of legacy `test_connection_refused`.
 #[test]
 fn sub_connection_refused_aborts_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -135,7 +135,7 @@ fn pub_connection_refused_surfaces_an_error() {
 /// A connection URL can embed a password (`redis://user:pass@host`). When the
 /// deferred connect fails at run time, the error context must **redact** that
 /// password — it must never reach a log or the aborted-run error (parity with
-/// the postgres adapter; a leak regression versus classic that this restores).
+/// the postgres adapter; a leak regression versus legacy that this restores).
 #[test]
 fn pub_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");

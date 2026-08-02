@@ -1,5 +1,5 @@
 This folder contains the files Sphinx uses to generate the `wingfoil_next`
-Python module documentation. It mirrors the legacy `wingfoil-python/docs/`
+Python module documentation. It mirrors the legacy `legacy/wingfoil-python/docs/`
 layout, so the cutover is a directory promotion rather than a re-organisation.
 
 ## Building locally
@@ -35,7 +35,7 @@ smaller generated table, not an error.
 
 ## Read the Docs
 
-The root `.readthedocs.yaml` still points at `wingfoil-python/docs/conf.py` —
+The root `.readthedocs.yaml` still points at `legacy/wingfoil-python/docs/conf.py` —
 the legacy tree keeps shipping until the cutover, and repointing it early would
 break the published build. Repointing it at this directory is cutover-time work
 (prerequisite row 5.5 in `docs/cutover-plan.md`), and needs three changes

@@ -3,11 +3,11 @@
 //! Measures performance when publishing and subscribing concurrently,
 //! including request/response roundtrip latency and bidirectional exchange.
 //!
-//! Port of classic `wingfoil/benches/aeron/transceiver.rs`. The workload is
+//! Port of legacy `legacy/wingfoil/benches/aeron/transceiver.rs`. The workload is
 //! unchanged — next's `RusteronPublisher` / `RusteronSubscriber` are the ported
 //! twins with identical signatures, and the bench drives the *backends*
 //! directly (no graph), so only the crate in the import path changes. Stream
-//! IDs are kept byte-for-byte identical to classic's so a side-by-side run
+//! IDs are kept byte-for-byte identical to legacy's so a side-by-side run
 //! against the same media driver stays comparable.
 
 #[path = "common/mod.rs"]

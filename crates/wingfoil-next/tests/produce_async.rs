@@ -1,5 +1,5 @@
 //! Phase 3: the `produce_async` ergonomic — an async closure yielding
-//! timestamped values, matching classic `produce_async`. Same producer runs
+//! timestamped values, matching legacy `produce_async`. Same producer runs
 //! deterministically in historical mode (replayed on the graph clock) and
 //! propagates a mid-stream error into the graph. Gated by the `async` feature.
 //!
@@ -16,7 +16,7 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
 /// A finite async producer of timestamped values replays deterministically on
-/// the graph clock — the classic `produce_async` historical contract.
+/// the graph clock — the legacy `produce_async` historical contract.
 #[test]
 fn produce_async_replays_deterministically() {
     let g = GraphBuilder::new();

@@ -1,7 +1,7 @@
 //! fluvio adapter example — publish records to a topic, consume and transform
 //! them, write the results to a second topic.
 //!
-//! A port of the classic `wingfoil/examples/fluvio` example onto the next
+//! A port of the legacy `legacy/wingfoil/examples/fluvio` example onto the next
 //! engine. Two independent graph roots share one [`GraphBuilder`]:
 //!
 //! - `seed`      — writes source records once via `constant` + `fluvio_pub`.

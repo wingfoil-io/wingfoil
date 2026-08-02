@@ -2,7 +2,7 @@
 
 A realtime, **push-based** OpenTelemetry sink: stream values exported as OTLP
 gauge metrics over HTTP/protobuf, plus a trace/span exporter for
-latency-stamped payloads. Ports classic `wingfoil::adapters::otlp` onto the Op
+latency-stamped payloads. Ports legacy `wingfoil::adapters::otlp` onto the Op
 model.
 
 **Sink only** — no source. It is the *push telemetry* half of
@@ -24,9 +24,9 @@ otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", 
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 ```
 
-**Version divergence from classic is deliberate**: next pins opentelemetry
-**0.32** where classic is still on 0.28, rolled forward for GHSA-w9wp-h8wv-79jx
-(register **D5**, won't-fix — classic retires at cutover, so 0.32 is the
+**Version divergence from legacy is deliberate**: next pins opentelemetry
+**0.32** where legacy is still on 0.28, rolled forward for GHSA-w9wp-h8wv-79jx
+(register **D5**, won't-fix — legacy retires at cutover, so 0.32 is the
 surviving version). This is the worked example of the `dependency-review`
 gate's "roll forward rather than allowlist" rule in `/new-adapter-next` step 3.
 
@@ -55,27 +55,27 @@ cardinality tax.
   timeout can fail when the async runtime is unavailable
   (opentelemetry-rust #3137). Do not "improve" this into an explicit shutdown.
 - **Historical replay is a no-op** — no value reaches the background task, so
-  no meter provider is built and **no network calls happen at all**. Classic's
+  no meter provider is built and **no network calls happen at all**. Legacy's
   consumer checked the run mode and drained without connecting; next reads
   `Ctx::run_mode()` in the cycle. A backtest that includes the sink stays
   inert.
 - **A non-numeric `Display` records `0.0` and logs a `log::warn`** (e.g.
-  `"42 units"`). Classic parity. Callers `.map()` upstream to extract a numeric
+  `"42 units"`). Legacy parity. Callers `.map()` upstream to extract a numeric
   field. Note this is *not* the same as the Python-binding rule about silent
-  fallbacks — here it is classic-preserved behaviour with a warning.
+  fallbacks — here it is legacy-preserved behaviour with a warning.
 - `consume_async` ⇒ the `block_on` footgun (A5a): build, run and drop the graph
   from a **non-async** thread.
-- **Argument order differs from classic** for spans: next is
-  `otlp_spans(span_name, config, attrs)`, classic was
+- **Argument order differs from legacy** for spans: next is
+  `otlp_spans(span_name, config, attrs)`, legacy was
   `otlp_spans(config, span_name, attrs)`. Easy to get wrong when porting a
   call site.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `otlp.rs` — three
+Canonical list: the `# Deviations from legacy` block in `otlp.rs` — three
 items: the graph-owned runtime, so `otlp_push` takes no `&Handle` (A5); the
 sink-as-extension-trait fold (D1); and the span exporter's per-value
-`consume_async` model with a lazily-built provider (classic built its tracer
+`consume_async` model with a lazily-built provider (legacy built its tracer
 provider once up front inside its own consumer loop), plus the argument-order
 change above.
 

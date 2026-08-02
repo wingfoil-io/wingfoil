@@ -1,10 +1,10 @@
 //! A file-backed result cache for time-sliced query readers — the
-//! wingfoil-next port of the classic `wingfoil::adapters::cache` module onto the
+//! wingfoil-next port of the legacy `wingfoil::adapters::cache` module onto the
 //! Op-pattern crate.
 //!
 //! This is a **pure utility** adapter (no graph edge): a stable, query-keyed,
 //! LRU-evicting on-disk cache of `Vec<(NanoTime, T)>` result batches, used by
-//! caller-parameterised historical readers (classic `kdb_read_cached`) to avoid
+//! caller-parameterised historical readers (legacy `kdb_read_cached`) to avoid
 //! re-fetching a slice that was already downloaded. It is *not* a source or
 //! sink op — it exposes plain (async) `get`/`put` methods a reader calls from
 //! its own producer path.
@@ -23,10 +23,10 @@
 //!   helper.
 //! - [`FileCache`] — the async `get`/`put` store with LRU eviction.
 //!
-//! Every public capability of the classic module is preserved, so the classic
+//! Every public capability of the legacy module is preserved, so the legacy
 //! unit tests port across verbatim (`tests/cache_adapter.rs`). The one
 //! behavioural deviation is cosmetic: next's `FileCache` log messages drop the
-//! classic "KDB " prefix (the cache is not kdb-specific in next) — deviation
+//! legacy "KDB " prefix (the cache is not kdb-specific in next) — deviation
 //! register D7. The only surface change is the crate path (`wingfoil_next::NanoTime`
 //! for the time type).
 

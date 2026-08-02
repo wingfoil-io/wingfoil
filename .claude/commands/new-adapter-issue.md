@@ -11,7 +11,7 @@ Before drafting the issue body, collect:
 - **I/O shape** — producer-only, consumer-only, or bidirectional pub/sub; batch vs. streaming; snapshot+watch or pure event-stream.
 - **Threading model** — async (`produce_async` / `consume_async`), sync poll-based (`ReceiverStream` / `MutableNode`), or spin-loop (`always_callback`). Pick based on how the upstream client is shaped.
 - **Test infrastructure** — testcontainers (preferred), external service with skip-if-unavailable, or no external service.
-- **Existing adapters to mirror** — pick the closest analogue from `wingfoil/src/adapters/` and cite it; this is how the issue signals the intended shape.
+- **Existing adapters to mirror** — pick the closest analogue from `legacy/wingfoil/src/adapters/` and cite it; this is how the issue signals the intended shape.
 
 If any of these are unclear, ask the user before filing the issue rather than guessing.
 
@@ -27,7 +27,7 @@ Structure the issue body in this order. Every section is required unless marked 
 1. **Motivation** — one short paragraph: what this adapter enables, why it belongs in wingfoil, and what concrete use case motivates it (trading signal, telemetry sink, IPC, forecasting, etc.). Link any related issue.
 2. **Upstream library** — crate name + version + link + license, and one line on why it was chosen over alternatives.
 3. **Scope** — bullet list of the node(s) this adapter exposes: `$ARGUMENTS_sub`, `$ARGUMENTS_pub`, or the adapter-specific verbs (`_read` / `_write`, `_connect` / `_accept`, `_push`, `.register()`). State input and output stream types.
-4. **File layout** — the directory tree under `wingfoil/src/adapters/$ARGUMENTS/` (`mod.rs`, `read.rs`, `write.rs`, `integration_tests.rs`, `CLAUDE.md`), called out against the `new-adapter` step-5 defaults and any deviation justified.
+4. **File layout** — the directory tree under `legacy/wingfoil/src/adapters/$ARGUMENTS/` (`mod.rs`, `read.rs`, `write.rs`, `integration_tests.rs`, `CLAUDE.md`), called out against the `new-adapter` step-5 defaults and any deviation justified.
 5. **Feature flags** — `$ARGUMENTS` and `$ARGUMENTS-integration-test`, plus any sub-feature for pluggable backends (cite the zmq/etcd pattern if relevant).
 6. **Threading / execution model** — which of `produce_async`, `ReceiverStream`, `MutableNode`, or spin-loop applies, and why. If multiple modes are offered, name the poll-mode enum variants.
 7. **Test infrastructure** — testcontainers image + tag, or "external service / skip-if-unavailable", or "unit tests only". Note any license constraint.
@@ -39,11 +39,11 @@ Structure the issue body in this order. Every section is required unless marked 
     - [ ] Producer (`read.rs` or equivalent)
     - [ ] Consumer (`write.rs` or equivalent)
     - [ ] Integration tests gated behind `$ARGUMENTS-integration-test`
-    - [ ] Example under `wingfoil/examples/$ARGUMENTS/` + README
-    - [ ] `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
+    - [ ] Example under `legacy/wingfoil/examples/$ARGUMENTS/` + README
+    - [ ] `legacy/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
     - [ ] CI workflow + hub registration
     - [ ] Python bindings (or explicit non-goal)
-    - [ ] Top-level README + `wingfoil/examples/README.md` entries
+    - [ ] Top-level README + `legacy/wingfoil/examples/README.md` entries
     - [ ] Implementation validated end-to-end against the `/new-adapter` skill (every step followed or deviation justified in-thread)
 11. **Non-goals** — what is explicitly out of scope (training, schema evolution, auth methods deferred, etc.).
 12. **Open questions** — unresolved design questions for discussion in the issue thread.

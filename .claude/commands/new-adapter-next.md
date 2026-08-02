@@ -22,8 +22,8 @@ reference implementations; read them before writing code:
 ## The parity obligation (read first)
 
 Wingfoil Next's governing design objective (see `README.md`) is to become
-a **strict superset of legacy wingfoil**. If a classic adapter named
-`$ARGUMENTS` exists under `wingfoil/src/adapters/$ARGUMENTS/`, it is your
+a **strict superset of legacy wingfoil**. If a legacy adapter named
+`$ARGUMENTS` exists under `legacy/wingfoil/src/adapters/$ARGUMENTS/`, it is your
 **parity oracle**:
 
 - Read its `mod.rs` docs, its `CLAUDE.md`, its tests, and its example first.
@@ -32,10 +32,10 @@ a **strict superset of legacy wingfoil**. If a classic adapter named
   and, if it's a capability gap, in the matrix in `docs/port-plan.md`.
 - Port its unit tests as parity tests: identical values **and** tick times.
 - Keep error-message compatibility where tests assert on messages (see how
-  `csv_read` reuses the classic "failed to deserialize row" context).
+  `csv_read` reuses the legacy "failed to deserialize row" context).
 - Port its example too — examples are part of the superset objective.
 
-If no classic adapter exists, you are defining new surface: keep the naming
+If no legacy adapter exists, you are defining new surface: keep the naming
 and layering conventions below so a future legacy backport stays mechanical.
 
 ## Feed lessons back into this skill
@@ -47,7 +47,7 @@ this file** (`.claude/commands/new-adapter-next.md`), ideally in the same PR, or
 flag it for a follow-up skill update. This skill is meant to grow with every
 port: several rules below (credential redaction, live-source rejection, the
 slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
-after a port hit them. Record cross-cutting classic↔next differences in
+after a port hit them. Record cross-cutting legacy↔next differences in
 `docs/deviation-register.md`, and note open design items you brushed up
 against (e.g. `docs/source-lifecycle-defer-to-start.md`,
 `docs/runtime-ownership.md`).
@@ -85,8 +85,8 @@ graph consumes) — use `arc_swap::ArcSwap<T>` for a lock-free atomic pointer
 swap. The sink `for_each` calls `slot.store(Arc::new(v))` per cycle (no lock on
 the graph path) and the background thread `.load()`s the latest off-thread.
 This is exactly the **pull-based exporter** shape (a Prometheus `/metrics`
-scraper thread reading per-metric slots): see the per-slot pattern in classic
-`wingfoil/src/adapters/prometheus/exporter.rs`, ported to next's
+scraper thread reading per-metric slots): see the per-slot pattern in legacy
+`legacy/wingfoil/src/adapters/prometheus/exporter.rs`, ported to next's
 `adapters::prometheus`.
 
 ### Historical replay must be deterministic
@@ -107,9 +107,9 @@ Same-instant records must ride **one atomic `Burst`** — the channel receiver
 does this grouping for you; do not pre-flatten or coalesce.
 
 If the adapter replays a **caller-parameterised time range** from a service
-(time-sliced queries, cursor replays — the classic `kdb_read`/`postgres_read`
-shape), do not hand-roll window clamping or slicing: port the classic
-`wingfoil/src/adapters/common.rs` helpers (`WindowFilter`,
+(time-sliced queries, cursor replays — the legacy `kdb_read`/`postgres_read`
+shape), do not hand-roll window clamping or slicing: port the legacy
+`legacy/wingfoil/src/adapters/common.rs` helpers (`WindowFilter`,
 `compute_validated_time_slices`) into a shared `adapters/common.rs` first, and
 build on those. First such adapter pays the porting cost; every later one
 reuses it.
@@ -146,7 +146,7 @@ run mode from the `RunParams` the factory already takes.
   registry lookup / historical rejection only) and the connect+spawn happen in
   the `setup` closure at run start (see step 7). The factory still returns
   `Result` for the pure validation; a *connection* error then surfaces at
-  run-start with node context (classic-consistent) rather than at wiring. `zmq_sub`
+  run-start with node context (legacy-consistent) rather than at wiring. `zmq_sub`
   is the reference.
 - **Run-time errors** flow through the fallible cycle: `for_each`/`try_map`
   closures return `Result`, custom `Op` lifecycle functions return `Result`,
@@ -162,7 +162,7 @@ run mode from the `RunParams` the factory already takes.
   graph-abort error. Give the connection config a `redacted()` method that masks
   the secret (`password=***`) and use it at **every** `connect()` error site;
   assert in a no-service test that the raw secret never appears. (This is the
-  classic postgres password-redaction fix — reproduce it for any networked
+  legacy postgres password-redaction fix — reproduce it for any networked
   adapter with credentials: redis, kafka, zmq, kdb, …)
 
 ### Layering: extension traits, out of the prelude
@@ -177,11 +177,11 @@ run mode from the `RunParams` the factory already takes.
 - Third-party-reachable wiring only: implement traits via [`Stream::wire`] /
   [`GraphBuilder::source`], the same primitives external crates get.
 
-**Naming:** keep the classic verb conventions —
+**Naming:** keep the legacy verb conventions —
 
 | Pattern | Verbs | Precedent |
 |---------|-------|-----------|
-| Pub/sub or event streaming | `_sub` / `_pub` | classic etcd, zmq |
+| Pub/sub or event streaming | `_sub` / `_pub` | legacy etcd, zmq |
 | Batch/file replay | `_read` / `_write` | csv (`csv_read`/`csv_write`) |
 | File tail / live follow | `replay_*` / `tail_*` | lines |
 | Push-only telemetry | `_pub` / `_push` sink trait method | otlp |
@@ -217,11 +217,11 @@ load-bearing decision:
 | Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq.rs`, pattern below |
 | Async client library (tokio-based) | `produce_async` (`async` feature; optional `buffer_size` for back-pressure in both modes) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
-| Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (classic), step 8 |
+| Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (legacy), step 8 |
 | Pull-based exporter (scraped, no source) | n/a | `for_each` → `ArcSwap` slot read by a background HTTP thread | prometheus, step 8 |
 | Pure compute (no external service) | n/a — transform ops | n/a | `augurs.rs`, step 9 |
 
-An adapter may offer **multiple strategies behind a mode enum** (the classic
+An adapter may offer **multiple strategies behind a mode enum** (the legacy
 `FixPollMode`/`Iceoryx2Mode` pattern): a `#[derive(Debug, Clone, Default)]
 pub enum <Name>Mode { #[default] Threaded, Spin }` selected at the factory,
 returning the same `Result<Stream<Burst<T>>>` either way. Document the
@@ -235,7 +235,7 @@ historical replay** so a backtest that happens to include the sink stays inert
 and deterministic. A `for_each`/`register_op1` sink reads the run mode from its
 `Ctx` — `ctx.run_mode()` — and returns early when it isn't `RunMode::RealTime`
 (inside an island the ctx reports `RealTime`, consistent with `is_last_cycle`).
-This mirrors classic's `state.run_mode()` guard in spin-mode adapters.
+This mirrors legacy's `state.run_mode()` guard in spin-mode adapters.
 
 ## 3. Feature flags — `crates/wingfoil-next/Cargo.toml`
 
@@ -252,8 +252,8 @@ some-client-crate = { version = "x.y", optional = true }
 testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 ```
 
-- Pin versions to whatever the **classic** adapter uses, so the two trees
-  don't drift (see how next's `csv`/`augurs` deps mirror classic's).
+- Pin versions to whatever the **legacy** adapter uses, so the two trees
+  don't drift (see how next's `csv`/`augurs` deps mirror legacy's).
 - `testcontainers` goes in `[dependencies]` as optional (feature flags cannot
   gate dev-deps). Skip the `-integration-test` flag entirely for file-based
   and pure-compute adapters (Option C in step 10).
@@ -262,17 +262,17 @@ testcontainers = { version = "0.27", features = ["blocking"], optional = true }
 **The `dependency-review` gate — expect it, and prefer rolling forward.** CI's
 `dependency-review` job (`.github/workflows/security-audit.yml`, fails on
 `moderate`+) flags a **newly added** dependency that carries a known advisory —
-**even if the classic `wingfoil` crate already ships that exact version**,
-because it's new *to this PR's diff*. So pinning to classic's version can still
+**even if the legacy `wingfoil` crate already ships that exact version**,
+because it's new *to this PR's diff*. So pinning to legacy's version can still
 turn the gate red. Two fixes, in order of preference:
 1. **Roll the dependency forward** to a fixed version if one exists, and note the
-   deliberate divergence from classic in the dep's Cargo.toml comment (then bump
-   classic to match in a follow-up, to restore lockstep). This is the real fix —
+   deliberate divergence from legacy in the dep's Cargo.toml comment (then bump
+   legacy to match in a follow-up, to restore lockstep). This is the real fix —
    the advisory is gone, not suppressed. (otlp did this: opentelemetry 0.28→0.32
    for GHSA-w9wp-h8wv-79jx.)
 2. If you genuinely can't roll forward, **allowlist the specific advisory** with
    `allow-ghsas: GHSA-…` in the workflow and a comment explaining *why it's safe*
-   (e.g. classic already ships it; the vulnerable code path is unused). A
+   (e.g. legacy already ships it; the vulnerable code path is unused). A
    last resort, not the default.
 Run `cargo audit` too (a separate CI job) — it catches advisories
 `dependency-review` may not, and vice-versa.
@@ -295,7 +295,7 @@ pub trait <Name>Backend: Send + 'static { /* ... */ }
 impl <Name>Backend for AltBackend { /* ... */ }
 ```
 
-This is the classic zmq pattern — `zmq` works standalone for direct TCP
+This is the legacy zmq pattern — `zmq` works standalone for direct TCP
 addresses, but with the `etcd` feature also enabled `EtcdRegistry` becomes a
 `ZmqRegistry` discovery backend. Model the choice as an `impl Into<Config>`
 wrapper with `From` impls (bare address vs `(service, backend)`), not an
@@ -329,15 +329,15 @@ Two edits, not one:
 - **Every adapter carries `src/adapters/$ARGUMENTS/CLAUDE.md`** — including a
   single-file one, where the directory holds only that doc. (`kdb.rs` + `kdb/`
   and `zmq.rs` + `zmq/` already coexist that way, and it matches the path shape
-  classic uses, so the cutover does not move doc paths.) It is the *agent-facing*
+  legacy uses, so the cutover does not move doc paths.) It is the *agent-facing*
   companion to the module `//!` docs, not a copy of them: layout, entry-point
   table, the gotchas that bite (run-mode constraints, ordering guarantees,
   redaction, the `block_on` footgun), a pointer to the canonical
-  `# Deviations from classic` block, **how to run each test tier and which
+  `# Deviations from legacy` block, **how to run each test tier and which
   workflow runs it**, the example(s), and the Python binding's feature/wheel
   roll-up status. Keep it short and factual — an inaccurate `CLAUDE.md` is worse
   than a missing one. `src/adapters/CLAUDE.md` is the index; add a row there too.
-  Do **not** copy the classic `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`: it
+  Do **not** copy the legacy `legacy/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`: it
   describes the `#[node]`/`MutableNode` implementation and would be actively
   misleading.
 
@@ -348,7 +348,7 @@ Every adapter's module docs follow the established shape (compare `lines.rs`,
 
 ```rust
 //! $ARGUMENTS adapter — <one-line description>. <If porting: "It ports the
-//! classic `wingfoil::adapters::$ARGUMENTS` module onto the Op model.">
+//! legacy `wingfoil::adapters::$ARGUMENTS` module onto the Op model.">
 //!
 //! # Layering
 //!
@@ -362,7 +362,7 @@ Every adapter's module docs follow the established shape (compare `lines.rs`,
 //! # <Source semantics — e.g. "Historical replay (the burst model)">
 //!
 //! <How records map onto graph time; burst grouping; determinism caveats;
-//! deviations from classic, called out explicitly.>
+//! deviations from legacy, called out explicitly.>
 //!
 //! # Sink
 //!
@@ -423,7 +423,7 @@ closure — which connects and spawns the feeder thread — at graph `start()`, 
 returns the running producer as a [`StopHandle`] dropped at teardown to stop it
 (the generalised `ThreadStopGuard`). That keeps wiring side-effect-free and
 unit-testable (no live socket to construct the graph), and surfaces a connection
-error at run-start with node context — classic-consistent. `zmq_sub` is the
+error at run-start with node context — legacy-consistent. `zmq_sub` is the
 reference.
 
 ```rust
@@ -556,7 +556,7 @@ without a realtime run (`poll_line` precedent).
 **When `poll` is too narrow — a busy-spin `custom_node`.** `g.poll`'s closure is
 `Fn() -> Option<T>`: no start hook, no `Ctx`, and no way to propagate a
 `Result` from the cycle. If your spin source needs a **deferred connect at
-`start()`**, a **fallible cycle** (`?` a read error into a run abort — classic's
+`start()`**, a **fallible cycle** (`?` a read error into a run abort — legacy's
 spin `cycle` shape), or a **teardown hook** (a logout/close), reach for
 `g.custom_node(&[], &[], Activation::ALWAYS, cycle)` instead — the general
 `MutableNode` twin, whose `cycle` returns `Result<Tick<T>>` and which busy-spins
@@ -687,7 +687,7 @@ values outward. The shape:
 - **Realtime-only**: guard on `ctx.run_mode()` and no-op under historical
   replay (see step 2) — a backtest that includes the sink stays inert.
 
-Reference: classic `wingfoil/src/adapters/{prometheus,otlp}/`, ported to next's
+Reference: legacy `legacy/wingfoil/src/adapters/{prometheus,otlp}/`, ported to next's
 `adapters::prometheus`. Both are single-direction, so there is no source
 function and no `_read`/`_sub`.
 
@@ -697,7 +697,7 @@ Adapters with a connection lifecycle (connect / disconnect / back-pressure /
 close) can expose that state as a **first-class stream** alongside the data
 stream, so downstream ops react to transport health on-graph — circuit
 breakers, health gates, reconnect metrics — without reaching outside the graph.
-Classic's Aeron adapter is the reference (`status.rs`, `status_stream.rs`).
+Legacy's Aeron adapter is the reference (`status.rs`, `status_stream.rs`).
 
 Build it as a **parallel-additive sibling** — never change the primary
 factory's signature:
@@ -725,7 +725,7 @@ factory's signature:
 
 In next this rides the existing vocabulary — the status stream is just another
 `channel`/`poll` source the producer also feeds — so no engine change is
-needed. Port the classic behaviour (transition-only, post-success recording)
+needed. Port the legacy behaviour (transition-only, post-success recording)
 exactly; it's the parity oracle.
 
 ## 9. Pure-compute adapters (custom `Op`s)
@@ -777,11 +777,11 @@ Conventions (see `tests/lines_adapter.rs` / `tests/csv_adapter.rs`):
   write test delivered 2 of 5 rows). Either start the window at the data
   (`HistoricalFrom(NanoTime::from_kdb_timestamp(0))`) or, for a finite feed that
   closes itself, run `RunFor::Forever` so the `[0, MAX]` window covers any epoch
-  — this is what the classic kdb write test does. Match the classic test's
+  — this is what the legacy kdb write test does. Match the legacy test's
   window when porting.
 - **Unique temp paths** per test (pid + atomic counter) so parallel tests
   never collide.
-- **Parity first**: port every classic adapter unit test, then add
+- **Parity first**: port every legacy adapter unit test, then add
   next-specific ones (burst grouping, `send_error` propagation, wiring-time
   `Err` on a missing resource).
 
@@ -822,7 +822,7 @@ Container infrastructure — choose one:
 - Single file `examples/$ARGUMENTS_adapter.rs` for a simple demonstration
   (the `csv_adapter`/`lines_adapter` precedent), or a directory
   `examples/$ARGUMENTS/{main.rs,README.md}` for a realistic end-to-end story
-  (the `order_book` precedent). If the classic tree has an example for this
+  (the `order_book` precedent). If the legacy tree has an example for this
   adapter, port it — same scenario, same output.
 - Top with a `//!` doc comment including the exact run command.
 - Register in `crates/wingfoil-next/Cargo.toml`:
@@ -831,7 +831,7 @@ Container infrastructure — choose one:
   name = "$ARGUMENTS_adapter"          # add `path = ...` for the directory form
   required-features = ["$ARGUMENTS"]
   ```
-- Directory-form README follows the classic pattern: title, one paragraph,
+- Directory-form README follows the legacy pattern: title, one paragraph,
   `## Setup` (docker one-liner, if any), `## Run` (cargo command), `## Code`,
   `## Output`.
 - If `README.md` or the crate docs grow an adapters index table by the
@@ -850,7 +850,7 @@ hot path.
 ## 12. CI — only for service-backed adapters
 
 If (and only if) the adapter has `-integration-test` tests, wire them into the
-existing hub exactly as the classic adapters do:
+existing hub exactly as the legacy adapters do:
 
 1. Create `.github/workflows/$ARGUMENTS-next-integration.yml` following the
    etcd workflow's shape (`workflow_call` + `workflow_dispatch` + `push` with
@@ -890,29 +890,29 @@ the PR and leave the Phase 6 bullet in `docs/port-plan.md` unticked for
 
 ## 13. Superset audit + roadmap bookkeeping
 
-Before the pre-commit checklist, diff against the classic adapter one more
+Before the pre-commit checklist, diff against the legacy adapter one more
 time (skip if none exists):
 
 - every public function/type/config knob → equivalent or documented deviation;
-- every classic test → ported parity test (or a comment naming why not);
-- classic example → ported example;
-- classic `CLAUDE.md` design decisions → carried into the module docs.
+- every legacy test → ported parity test (or a comment naming why not);
+- legacy example → ported example;
+- legacy `CLAUDE.md` design decisions → carried into the module docs.
 
 Then update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
 
 **Completing an earlier *partial* port** (an adapter already ✅ but with some
-classic operators/modes left behind) has three extra bookkeeping steps that are
+legacy operators/modes left behind) has three extra bookkeeping steps that are
 easy to miss because the adapter already looks done:
 
 1. **Widen the dependency's sub-feature list** in
-   `crates/wingfoil-next/Cargo.toml` to match classic's. The first pass
+   `crates/wingfoil-next/Cargo.toml` to match legacy's. The first pass
    deliberately enabled only the sub-features its subset needed (augurs shipped
    `ets, mstl, outlier`; the other four operators needed `changepoint, seasons,
    dtw, clustering`), and the comment above the dep says so — update both.
 2. **Delete the capability-gap bullet from the module's `# Deviations from
-   classic` block.** A stale "only N of classic's M operators are ported" line
+   legacy` block.** A stale "only N of legacy's M operators are ported" line
    is worse than none: it is the first thing a cutover audit reads.
 3. **Flip the register row** in `docs/deviation-register.md` from ⚪ to ✅
    with a `~~strikethrough~~` of the old gap text and a "**Resolved.**" note (the
@@ -945,7 +945,7 @@ All must pass before committing. `cargo lint-all` is what CI runs — it is the
 only lint pass that sees your feature-gated code.
 
 **Sandbox caveat:** `cargo lint-all` is a *workspace* all-features build, so it
-also compiles the classic **aeron** adapter's C library — which fails to build
+also compiles the legacy **aeron** adapter's C library — which fails to build
 in a dev sandbox without the native toolchain (`CMake "Inappropriate ioctl for
 device"`), unrelated to your change. When that blocks you, run the scoped
 equivalent that still lints every `wingfoil-next` feature/target:
@@ -987,7 +987,7 @@ parent context stays clean) with these tasks:
    source rejects `RunMode::HistoricalFrom` at wiring (returns `Result`);
    errors carry context; no `.unwrap()` outside tests; producer loops exit
    quietly when `send` returns `false`; nothing added to the prelude.
-4. **Check parity**: rerun the step-13 diff against the classic adapter and
+4. **Check parity**: rerun the step-13 diff against the legacy adapter and
    confirm the deviations list in the module docs is complete.
 5. **Run the pre-commit checklist from step 14** and confirm every command
    passes. Do not skip any.

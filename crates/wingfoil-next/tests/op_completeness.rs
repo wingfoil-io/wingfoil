@@ -49,7 +49,7 @@
 //!
 //!     `merge_all` was in this list while it *was* sugar (a chain of 2-ary
 //!     `merge`s). It is now a real op — `MergeN`, the catalog's only variadic
-//!     one — because the chain cost `n - 1` extra nodes and lost to classic's
+//!     one — because the chain cost `n - 1` extra nodes and lost to legacy's
 //!     single `merge(vec)` on a wide fan-in. Its forwarders are hand-written
 //!     (a slice `In` is unparseable by `#[op]`), so the two-sided guard this
 //!     file provides matters more for it than for a generated op, not less:
@@ -58,7 +58,7 @@
 //! **2b. Ergonomic fluent signature ≠ the op's `Cfg` — fluent-only:**
 //!   * `logged` — the `Logged` op's `Cfg` is `(String, log::Level)`, but the
 //!     fluent method takes `&str` and converts (so dynamic `format!` labels
-//!     work, matching classic). `nitro!`/compiled uses the *call-site arg
+//!     work, matching legacy). `nitro!`/compiled uses the *call-site arg
 //!     types* as the `Cfg` verbatim, so the same tokens cannot satisfy both a
 //!     `&str` fluent param and a `String` cfg. `#[op(build = logged)]` still
 //!     emits forwarders (harmless) and the interpreted `Builder::logged` the

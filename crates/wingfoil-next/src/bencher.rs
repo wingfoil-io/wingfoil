@@ -1,10 +1,10 @@
-//! Criterion harness for benchmarking a live graph — the next twin of classic
-//! wingfoil's `add_bench` (`wingfoil/src/bencher.rs`).
+//! Criterion harness for benchmarking a live graph — the next twin of legacy
+//! wingfoil's `add_bench` (`legacy/wingfoil/src/bencher.rs`).
 //!
-//! Gated behind the `bench` feature, exactly as classic gates its own, so a
+//! Gated behind the `bench` feature, exactly as legacy gates its own, so a
 //! default build does not pull in criterion's dependency tree.
 //!
-//! # How it works (identical to classic)
+//! # How it works (identical to legacy)
 //!
 //! The graph runs `Forever` on a worker thread, driven by a source node that
 //! ticks only when the criterion thread asks it to. One `iter()` step is:
@@ -22,7 +22,7 @@
 //!
 //! # Engine mapping
 //!
-//! | classic | next |
+//! | legacy | next |
 //! |---|---|
 //! | `MutableNode` + `state.always_callback()` | [`GraphBuilder::custom_node`] + [`Activation::ALWAYS`] |
 //! | `cycle -> Ok(true)` / `Ok(false)` | [`Tick::Value`] / [`Tick::Quiet`] |
@@ -34,7 +34,7 @@
 //! `Rc<dyn Node>` values, and it returns a type-erased [`Upstream`] so a graph
 //! of any output type can be benchmarked.
 //!
-//! One naming deviation: classic re-exports the helper at its crate root
+//! One naming deviation: legacy re-exports the helper at its crate root
 //! (`wingfoil::add_bench`), while next keeps it on its module path
 //! (`wingfoil_next::bencher::add_bench`), matching how the rest of the crate is
 //! organised (`interp`, `op`, `fluent`, `stats`, `adapters::*`).
@@ -192,7 +192,7 @@ impl From<Signal> for u8 {
 mod tests {
     use super::*;
 
-    // ── Signal conversions (ported one-for-one from classic) ──────────────
+    // ── Signal conversions (ported one-for-one from legacy) ──────────────
 
     #[test]
     fn signal_from_u8_all_variants() {
@@ -226,7 +226,7 @@ mod tests {
 
     // ── The trigger node's cycle branches ─────────────────────────────────
     //
-    // Classic drives these through a one-cycle historical run. Next rejects
+    // Legacy drives these through a one-cycle historical run. Next rejects
     // `Activation::ALWAYS` under historical replay (there is no external
     // resource to poll), so the branches are exercised through a realtime run
     // bounded to a single cycle instead — same three assertions.

@@ -1,5 +1,5 @@
-//! aeron adapter tests that need no media driver — a parity port of the classic
-//! node-level unit tests in `wingfoil/src/adapters/aeron/{mod,sub_fragment_node,
+//! aeron adapter tests that need no media driver — a parity port of the legacy
+//! node-level unit tests in `legacy/wingfoil/src/adapters/aeron/{mod,sub_fragment_node,
 //! pub_node}.rs`, driven by the [`MockSubscriber`] / [`MockPublisher`] backends.
 //!
 //! The media-driver-backed tests live in `tests/aeron_integration.rs` behind the
@@ -41,7 +41,7 @@ fn threaded_opts() -> AeronSubOptions {
 }
 
 /// Subscriber with controllable `is_connected` / `is_closed` flags, so the
-/// status side-channel can be exercised without a driver. Mirrors classic's
+/// status side-channel can be exercised without a driver. Mirrors legacy's
 /// `ConnectedMockSubscriber`.
 struct ConnectedMockSubscriber {
     batches: std::collections::VecDeque<Vec<Vec<u8>>>,
@@ -183,7 +183,7 @@ fn spin_parser_none_skips_the_fragment() {
 #[test]
 fn spin_parser_err_drops_the_fragment_and_the_cycle_continues() {
     // The middle fragment yields `TransportError::Invalid`; the valid fragments
-    // either side must still be collected (classic's zero-stopping rule).
+    // either side must still be collected (legacy's zero-stopping rule).
     let batch = vec![
         1i64.to_le_bytes().to_vec(),
         vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD], // 6 bytes — neither 8 nor 4
@@ -285,7 +285,7 @@ fn spin_status_close_is_terminal_and_checked_first() {
 fn plain_sub_never_derives_status() {
     // The plain factory does not track status at all, so a connected backend
     // produces data (none here) and nothing else — the regression guard for
-    // classic's `status: None` branch.
+    // legacy's `status: None` branch.
     assert!(spin_values(ConnectedMockSubscriber::new(vec![], true), 3).is_empty());
 }
 
@@ -320,7 +320,7 @@ fn threaded_status_connected_backend_propagates_the_transition() {
 #[test]
 fn threaded_status_disconnected_backend_emits_nothing() {
     // A never-connected backend derives `Disconnected`, which equals the initial
-    // state, so no transition is sent — classic's parity case.
+    // state, so no transition is sent — legacy's parity case.
     let g = GraphBuilder::new();
     let (_data, status) = aeron_sub_fragment_with_status(
         &g,

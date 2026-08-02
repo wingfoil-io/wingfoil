@@ -6,7 +6,7 @@
 #   ./run.sh prometheus
 #   ./run.sh otlp         # prometheus + OTLP push
 #
-# A port of the classic `wingfoil/examples/telemetry/{prometheus,otlp}/run.sh`,
+# A port of the legacy `legacy/wingfoil/examples/telemetry/{prometheus,otlp}/run.sh`,
 # collapsed into one script since the two differed only in which example they
 # launched.
 set -euo pipefail

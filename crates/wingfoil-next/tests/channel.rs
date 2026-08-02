@@ -36,7 +36,7 @@ fn channel_delivers_all_values_across_threads() {
 
 /// A channel drives a **historical** replay: the producer sends timestamped
 /// values (with wall-clock delays) then closes, and the receiver replays them
-/// deterministically at their graph timestamps as bursts — the classic
+/// deterministically at their graph timestamps as bursts — the legacy
 /// `produce_async` model. This is the case my first cut wrongly rejected.
 #[test]
 fn channel_replays_deterministically_in_historical_mode() {
@@ -138,11 +138,11 @@ fn channel_error_aborts_the_run() {
     );
 }
 
-/// The message envelope's equality mirrors the classic `Message`: values and
+/// The message envelope's equality mirrors the legacy `Message`: values and
 /// checkpoints compare structurally, end-of-stream is a unit, errors never
 /// compare equal.
 #[test]
-fn message_equality_matches_classic() {
+fn message_equality_matches_legacy() {
     assert_eq!(Message::<u64>::Value(7), Message::Value(7));
     assert_ne!(Message::<u64>::Value(7), Message::Value(8));
     let t = NanoTime::new(42);

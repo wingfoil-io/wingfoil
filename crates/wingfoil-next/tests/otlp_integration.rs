@@ -1,4 +1,4 @@
-//! Integration test for the otlp adapter — parity port of the classic
+//! Integration test for the otlp adapter — parity port of the legacy
 //! `wingfoil::adapters::otlp::integration_tests::otlp_push_sends_successfully`.
 //!
 //! Uses testcontainers to start an OpenTelemetry collector automatically (no
@@ -65,7 +65,7 @@ fn otlp_push_sends_successfully() -> anyhow::Result<()> {
 }
 
 /// A realtime run exports trace spans to the collector without error. Parity of
-/// classic `otlp_spans_sends_successfully`: each tick carries a fully-stamped
+/// legacy `otlp_spans_sends_successfully`: each tick carries a fully-stamped
 /// latency record, so `otlp_spans` emits a parent span plus one child per hop.
 #[test]
 fn otlp_spans_sends_successfully() -> anyhow::Result<()> {

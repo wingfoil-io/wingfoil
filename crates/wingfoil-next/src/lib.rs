@@ -23,7 +23,7 @@
 //! - [`interp::Builder`] is the interpreted engine: it owns the value slots
 //!   and the state, adapts each `Op` behind one dyn boundary, and drives the
 //!   shared [`Kernel`](runtime::kernel::Kernel). [`fluent`] layers the
-//!   classic chaining style (`ticker(d).count().map(f)`) on top — wiring
+//!   legacy chaining style (`ticker(d).count().map(f)`) on top — wiring
 //!   sugar only, identical execution.
 //! - A compiled runner is a plain function with state in locals that calls
 //!   **the same `Op::cycle` functions**, monomorphized — see
@@ -66,12 +66,12 @@
 //! - **Fallible lifecycle** — every `Op` function returns `anyhow::Result`;
 //!   the interpreted [`Runner`](interp::Runner) reports the first
 //!   `start`/`cycle`/`stop`/`teardown` error with node context and still runs
-//!   cleanup. **[`compat`]** offers a classic-style `Signal` facade over it.
+//!   cleanup. **[`compat`]** offers a legacy-style `Signal` facade over it.
 //!
 //! # Tracing and instrumentation
 //!
 //! The engine can emit `tracing` spans around its own execution, ported
-//! feature-for-feature from classic wingfoil. Every span site is behind its own
+//! feature-for-feature from legacy wingfoil. Every span site is behind its own
 //! feature, and the `tracing` dependency itself is optional, so a default build
 //! carries neither the dependency nor a single span:
 //!
@@ -81,7 +81,7 @@
 //! | `instrument-run` | A span around [`Runner::run`](interp::Runner::run) (and `run_dynamic`, under `dynamic-graph`) — the whole start→cycles→stop→teardown lifecycle. |
 //! | `instrument-cycle` | A span around each engine cycle (one per dirty-node batch). |
 //! | `instrument-apply-nodes` | A span around each lifecycle phase (start / stop / teardown) applied over all nodes, recording the phase in `desc`. |
-//! | `instrument-initialise` | A span around graph initialisation ([`Builder::build`](interp::Builder::build)), named `initialise` after classic's. |
+//! | `instrument-initialise` | A span around graph initialisation ([`Builder::build`](interp::Builder::build)), named `initialise` after legacy's. |
 //! | `instrument-cycle-node` | A span per node execution, recording the node index and label. High frequency — opt in deliberately. |
 //! | `instrument-default` | `instrument-run` + `instrument-cycle` + `instrument-apply-nodes` + `instrument-initialise`. |
 //! | `instrument-all` | `instrument-default` plus `instrument-cycle-node`. |
@@ -108,7 +108,7 @@ pub mod adapters;
 #[cfg(feature = "async")]
 pub mod async_source;
 /// The criterion harness (`add_bench`) used by the graph benchmarks — the
-/// twin of classic wingfoil's `bench`-gated `bencher` module.
+/// twin of legacy wingfoil's `bench`-gated `bencher` module.
 #[cfg(feature = "bench")]
 pub mod bencher;
 pub mod channel;
@@ -142,14 +142,14 @@ pub mod prelude {
 
 /// A group of same-instant values, delivered atomically in one cycle (never
 /// coalesced / latest-wins). A `tinyvec::TinyVec<[T; 1]>`, defined here and
-/// re-exported by the classic `wingfoil` crate (with its [`burst!`]
+/// re-exported by the legacy `wingfoil` crate (with its [`burst!`]
 /// constructor macro), so both engines share one grouping type.
 #[doc(inline)]
 pub use crate::runtime::burst::Burst;
 
 /// The shared runtime core, re-exported at the crate root: engine time, the
 /// run bounds, the scheduled-callback queue and the [`Kernel`] that drives a
-/// run. The classic `wingfoil` crate re-exports these same items — they are
+/// run. The legacy `wingfoil` crate re-exports these same items — they are
 /// one set of types, not two — see [`runtime`] for why the core lives here.
 #[doc(inline)]
 pub use crate::runtime::kernel::{Kernel, KernelWaker, ReadyReceiver, waker_channel};

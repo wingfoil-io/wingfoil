@@ -1,22 +1,22 @@
 //! Graph overhead: the cost of one engine cycle through a trivial DAG.
 //!
-//! Port of classic `wingfoil/benches/graph.rs`. The workload is unchanged — a
+//! Port of legacy `legacy/wingfoil/benches/graph.rs`. The workload is unchanged — a
 //! trigger-driven `count` source fanned into `width` chains of `depth` identity
 //! maps, recombined by one n-ary merge, with every node ticking on every engine
-//! cycle — so the numbers stay directly comparable against the classic bar.
+//! cycle — so the numbers stay directly comparable against the legacy bar.
 //!
-//! Deliberate deviations from the classic source, both mechanical:
+//! Deliberate deviations from the legacy source, both mechanical:
 //!
 //! - the builder closure takes `(&GraphBuilder, &Stream<()>)` and returns an
 //!   [`Upstream`] instead of `Rc<dyn Node> -> Rc<dyn Node>`, because next wires
 //!   nodes through a builder (see `wingfoil_next::bencher`);
-//! - `map` takes `&T` rather than `T`, so classic's `map(std::hint::black_box)`
+//! - `map` takes `&T` rather than `T`, so legacy's `map(std::hint::black_box)`
 //!   is spelled `map(|i: &u64| std::hint::black_box(*i))`. Same one black-boxed
 //!   copy per node per cycle.
 //!
-//! The node count matches classic exactly: `width * depth` maps plus the
+//! The node count matches legacy exactly: `width * depth` maps plus the
 //! `count` source plus one merge (next's `merge_all` wires a single `MergeN`
-//! node, as classic's `merge(vec)` does).
+//! node, as legacy's `merge(vec)` does).
 //!
 //! Run with: `cargo bench -p wingfoil-next --features bench --bench graph`
 

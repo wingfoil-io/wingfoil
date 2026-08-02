@@ -1,5 +1,5 @@
 //! otlp adapter tests that need no running collector — the parity port of the
-//! classic `wingfoil::adapters::otlp::push` unit tests.
+//! legacy `wingfoil::adapters::otlp::push` unit tests.
 //!
 //! The end-to-end export test (against a live OTel collector) lives in
 //! `tests/otlp_integration.rs` behind the `otlp-integration-test` feature. Run
@@ -30,7 +30,7 @@ struct TestPayload {
     session: u64,
 }
 
-/// Parity of classic `historical_mode_drains_without_connecting`: with no
+/// Parity of legacy `historical_mode_drains_without_connecting`: with no
 /// collector running, a historical run must complete without any network calls
 /// — the sink no-ops (never hands a value to the background exporter) under
 /// `RunMode::HistoricalFrom`.
@@ -51,10 +51,10 @@ fn historical_mode_drains_without_connecting() {
         .unwrap();
 }
 
-/// Parity of classic `bad_endpoint_is_handled_gracefully`: pointing at a port
+/// Parity of legacy `bad_endpoint_is_handled_gracefully`: pointing at a port
 /// nothing is listening on must not panic. Export failures happen on the OTel
 /// SDK's own background thread and are non-fatal, so the run result is ignored —
-/// exactly as classic does.
+/// exactly as legacy does.
 #[test]
 fn bad_endpoint_is_handled_gracefully() {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -71,7 +71,7 @@ fn bad_endpoint_is_handled_gracefully() {
     let _ = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
 }
 
-/// Parity of classic `traces::historical_mode_drains_without_connecting`: an
+/// Parity of legacy `traces::historical_mode_drains_without_connecting`: an
 /// `otlp_spans` sink in historical mode must complete without building a tracer
 /// provider or making any network calls — the sink no-ops under
 /// `RunMode::HistoricalFrom`.

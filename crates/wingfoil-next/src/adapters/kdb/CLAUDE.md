@@ -2,7 +2,7 @@
 
 KDB+/q connectivity over the async `kdbplus` IPC client (`QStream`):
 time-partitioned historical **reads** and their file-cached twin, a real-time
-tickerplant **subscription**, and a streaming insert **sink**. Ports classic
+tickerplant **subscription**, and a streaming insert **sink**. Ports legacy
 `wingfoil::adapters::kdb` onto the Op model.
 
 ## Layout
@@ -42,7 +42,7 @@ gate rather than duplicating the helpers.
 | Item | Kind | Notes |
 |---|---|---|
 | `kdb_read(g, params, conn, period, query_fn, buffer_size)` | source | bounded historical replay, one query per slice |
-| `kdb_read_cached(g, params, conn, period, cache_config, query_fn)` | source | same, file-cached; `CacheConfig` **replaces** `buffer_size` (classic signature) |
+| `kdb_read_cached(g, params, conn, period, cache_config, query_fn)` | source | same, file-cached; `CacheConfig` **replaces** `buffer_size` (legacy signature) |
 | `kdb_sub(g, run_mode, conn, table, symbols)` | source | realtime tickerplant tail |
 | `KdbSinkOps::kdb_write(conn, table, buffer_size)` | sink trait | on `Stream<Burst<T>>` |
 
@@ -71,10 +71,10 @@ Serde traits: `KdbDeserialize` (row → `(NanoTime, T)`) and `KdbSerialize`
 - **Rows sharing a timestamp ride one `Burst<T>`.** Iterate the burst;
   `.collapse()` keeps only the last row per tick and silently drops the rest.
 - **Slices are queried lazily, one at a time** (an `async_stream` generator —
-  classic's `chunk_stream` shape), so `buffer_size` is *not* inert: `Some(n)`
+  legacy's `chunk_stream` shape), so `buffer_size` is *not* inert: `Some(n)`
   paces slice fetches against the graph's drain, keeping memory bounded and
   pipelining KDB I/O with compute (registers **B5**, **D11**).
-  `kdb_read_cached` stays unbounded like classic but still streams lazily.
+  `kdb_read_cached` stays unbounded like legacy but still streams lazily.
 - **`kdb_read_cached` clamps on emit for hits *and* misses.** The cache key is
   the query string, which does not encode `start_time`/`end_time`, so the cache
   stores the **full** `[t0, t1)` slice. A full-hit replay opens no TCP
@@ -86,7 +86,7 @@ Serde traits: `KdbDeserialize` (row → `(NanoTime, T)`) and `KdbSerialize`
   impl — no re-query, no cursor (unlike postgres's `LISTEN`/`NOTIFY`). It tails
   from the moment of subscription and does **not** replay the tickerplant log /
   RDB buffer. Non-`upd` control messages (heartbeats, `.u.end`) are ignored.
-  Realtime-only, rejected at wiring — **classic parity** (classic's `kdb_sub`
+  Realtime-only, rejected at wiring — **legacy parity** (legacy's `kdb_sub`
   also bailed unless `RunMode::RealTime`; register B2).
 - **Write serialization details worth preserving** (each has a unit test in
   `write.rs`): non-finite floats map to q's native null/infinity literals
@@ -101,17 +101,17 @@ Serde traits: `KdbDeserialize` (row → `(NanoTime, T)`) and `KdbSerialize`
   `block_on`s at teardown ⇒ build, run and drop the graph from a **non-async**
   thread (A5a).
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `kdb.rs` — five items:
+Canonical list: the `# Deviations from legacy` block in `kdb.rs` — five items:
 graph-owned runtime with `RunParams`/`RunMode` params (A5); reader defers
 connect + queries to the run and streams lazily (A1/B5); sink-as-trait fold
 with lazy connect (D1/A1); the live subscription's historical rejection moved
 from run-start to wiring (B2, ratified); and `buffer_size` on `kdb_read` now
-being real back-pressure (D11). Every classic capability is preserved,
+being real back-pressure (D11). Every legacy capability is preserved,
 including `KdbExt`, `Sym`/`SymbolInterner`, and `Row`/`Rows`.
 
-**kdb deliberately keeps classic's separate `kdb_read`/`kdb_sub` shape** — a
+**kdb deliberately keeps legacy's separate `kdb_read`/`kdb_sub` shape** — a
 unified `kdb_source` is a possible follow-up, *not* a parity gap: the two are
 genuinely different mechanisms (a time-sliced historical query vs a
 tickerplant push tail). See register B2.
@@ -137,7 +137,7 @@ cargo test -p wingfoil-next --features kdb --test kdb_adapter
 cargo test -p wingfoil-next --features kdb-integration-test -- --test-threads=1
 ```
 
-`tests/kdb_integration.rs` ports **both** classic files —
+`tests/kdb_integration.rs` ports **both** legacy files —
 `integration_tests.rs` and `cache_integration_tests.rs`.
 
 > **Test-window gotcha, learned here.** `NanoTime::from_kdb_timestamp(i * 1e9)`
@@ -146,11 +146,11 @@ cargo test -p wingfoil-next --features kdb-integration-test -- --test-threads=1
 > and the round-trip count silently comes up short (the write test once
 > delivered 2 of 5 rows). Either start the window at the data, or — for a
 > finite self-closing feed — use `RunFor::Forever` so `[0, MAX]` covers any
-> epoch. Match the classic test's window when porting.
+> epoch. Match the legacy test's window when porting.
 
 **Workflow:** `.github/workflows/kdb-next-integration.yml` (in
-`integration-tests.yml`). It builds the **classic** tree's image
-(`wingfoil/src/adapters/kdb/docker/`) — there is one licensed container and it
+`integration-tests.yml`). It builds the **legacy** tree's image
+(`legacy/wingfoil/src/adapters/kdb/docker/`) — there is one licensed container and it
 serves both the Rust leg and the `pytest -m requires_kdb` Python leg.
 
 ## Examples

@@ -4,7 +4,7 @@
 //!
 //! Because `nitro!` v1 requires straight-line wiring (the DAG must be static),
 //! the 100 `.map()` nodes cannot be built with a `for` loop the way the
-//! classic fluent wiring does — they are spelled out literally in the shared
+//! legacy fluent wiring does — they are spelled out literally in the shared
 //! `bench_support/fanout_10x10.rs`. From those tokens the macro derives both
 //! engines; this example runs both and checks they agree.
 //!

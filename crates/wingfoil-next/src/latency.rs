@@ -1,4 +1,4 @@
-//! Latency capture for wingfoil-next — the Phase 5 port of the classic
+//! Latency capture for wingfoil-next — the Phase 5 port of the legacy
 //! [`wingfoil::latency`] infrastructure.
 //!
 //! Stamp wall-clock timestamps onto messages as they hop through ops (and
@@ -7,7 +7,7 @@
 //!
 //! # What is reused vs. new
 //!
-//! The **data layer is reused wholesale** from the classic crate — `Traced`
+//! The **data layer is reused wholesale** from the legacy crate — `Traced`
 //! is just a `#[repr(C)]` payload, and the [`latency_stages!`] derive is
 //! engine-agnostic, so they are re-exported unchanged (per the port-plan:
 //! *"stamps ride values as today; latency_stages derive unchanged"*):
@@ -43,9 +43,9 @@
 //! Each method has an `_if` variant taking a bool and returning the upstream
 //! unchanged when disabled — no node inserted, zero runtime cost.
 //!
-//! # Deviation from classic
+//! # Deviation from legacy
 //!
-//! Exposed via the **fluent (interpreted)** path only, matching classic
+//! Exposed via the **fluent (interpreted)** path only, matching legacy
 //! (which offers latency solely through `LatencyStreamOps`). A stamp's stage
 //! is a compile-time *type* parameter, which does not map onto the
 //! `nitro!`/compiled value-dispatch table; compiled/nested support is out of
@@ -78,7 +78,7 @@ use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
 
 // The pure data layer is engine-agnostic and lives in `runtime::latency`,
-// shared with the classic crate (which re-exports it from here).
+// shared with the legacy crate (which re-exports it from here).
 pub use crate::runtime::latency::{
     HasLatency, Latency, LatencyStats, Stage, StageStats, Traced, format_latency_report,
     latency_stages, record_stage_deltas,
@@ -91,7 +91,7 @@ pub use crate::runtime::latency::{
 /// Op: forward the payload unchanged while stamping
 /// [`Ctx::wall_time`](crate::op::Ctx::wall_time) (cycle-start snap) into a
 /// single named stage `S` of the embedded [`Latency`] record. One `u64` store
-/// per tick, no allocation. The next twin of classic `StampStream`.
+/// per tick, no allocation. The next twin of legacy `StampStream`.
 pub struct Stamp<P, S>(PhantomData<fn() -> (P, S)>);
 
 impl<P, S> Op for Stamp<P, S>
@@ -115,7 +115,7 @@ where
 /// Like [`Stamp`] but reads
 /// [`Ctx::wall_time_precise`](crate::op::Ctx::wall_time_precise) — a fresh TSC
 /// snap on every tick — so stages running in the same engine cycle get
-/// distinct timestamps. The next twin of classic `StampPreciseStream`.
+/// distinct timestamps. The next twin of legacy `StampPreciseStream`.
 pub struct StampPrecise<P, S>(PhantomData<fn() -> (P, S)>);
 
 impl<P, S> Op for StampPrecise<P, S>
@@ -228,7 +228,7 @@ pub struct LatencyReportCfg<L: Latency> {
 
 /// Sink op consuming a stream of `P: HasLatency`, accumulating per-stage delta
 /// statistics into a shared [`LatencyStats`]. At [`stop`](Op::stop) it prints
-/// the summary when configured. The next twin of classic `LatencyReport`.
+/// the summary when configured. The next twin of legacy `LatencyReport`.
 pub struct LatencyReport<P>(PhantomData<fn() -> P>);
 
 impl<P> Op for LatencyReport<P>

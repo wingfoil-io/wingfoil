@@ -1,7 +1,7 @@
 # etcd Adapter (wingfoil-next)
 
 A streaming key-prefix snapshot + live watch **source** and a key-value PUT
-**sink** for etcd. Ports classic `wingfoil::adapters::etcd` onto the Op model.
+**sink** for etcd. Ports legacy `wingfoil::adapters::etcd` onto the Op model.
 
 This was the **first async adapter ported**, so several of the cross-cutting
 async rules (live-source rejection, graph-owned runtime, lazy sink connect)
@@ -57,7 +57,7 @@ Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
 - **`force: false` must still abort a single-cycle run.** The conditional write
   (`create_revision == 0`) returns an error which `consume_async` surfaces on a
   later cycle — or, for the **final** write, via the `flush` teardown wired
-  here as `finally`. That teardown path is exactly how classic's
+  here as `finally`. That teardown path is exactly how legacy's
   `AsyncConsumerNode::teardown` aborts a `RunFor::Cycles(1)` run, and it is
   what made the per-write `block_on` removable (register B1). If you touch the
   sink's teardown, re-check `RunFor::Cycles(1)` + `force: false`.
@@ -66,13 +66,13 @@ Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
   and drop the graph from a non-async thread**.
 - The keepalive task renews every `ttl/3` via `tokio::spawn`.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `etcd.rs` —
+Canonical list: the `# Deviations from legacy` block in `etcd.rs` —
 (1) the graph owns the tokio runtime and `etcd_sub` takes a `RunMode`
 (register A5); (2) the sink connects lazily on the first write (A1/A4);
-(3) the sink is a **trait only** — classic had both a free `etcd_pub` and an
-`EtcdPubOperators` trait (register D1). Every classic capability
+(3) the sink is a **trait only** — legacy had both a free `etcd_pub` and an
+`EtcdPubOperators` trait (register D1). Every legacy capability
 (snapshot→watch, deletes, leases with keepalive and revoke-on-shutdown, the
 `force` conditional write) is preserved.
 

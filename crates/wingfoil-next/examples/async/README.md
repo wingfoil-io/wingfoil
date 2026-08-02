@@ -1,7 +1,7 @@
 ## async / tokio integration
 
 An async producer of **timestamped** values driving a wingfoil-next graph — the
-classic `produce_async` model, ported to next.
+legacy `produce_async` model, ported to next.
 
 Async streams are a natural fit for IO but an awkward one for business logic:
 their execution is implicit and depth-first. Wingfoil's is explicit,
@@ -13,13 +13,13 @@ single typed edge. That separation is exactly what tends to blur in
 async-oriented systems.
 
 The key call is **`produce_async`**, which maps an async `futures::Stream` of
-`(NanoTime, T)` onto a graph source. The graph itself is the consumer: classic
+`(NanoTime, T)` onto a graph source. The graph itself is the consumer: legacy
 hands the stream to an async `consume_async` closure, whereas on next an
 on-graph `for_each` plays that role — keeping the consumer in the
 explicitly-timed, breadth-first world. The producer runs on the graph's own tokio
 runtime (created lazily) and each yielded value wakes the kernel.
 
-`produce_async` also carries the two guarantees classic gives for free:
+`produce_async` also carries the two guarantees legacy gives for free:
 **back-pressure** (`produce_async` bounds how far a realtime producer
 may run ahead of the graph) and **`RunParams` validation** (a historical
 `start_time` that disagrees with the actual run is rejected rather than

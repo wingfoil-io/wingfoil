@@ -1,11 +1,11 @@
 //! Parity tests for `spawn` / `spawn_map` — the thread-offload combinators
-//! (next's twins of classic `producer()` / `mapper()`, the `graph_node` node).
+//! (next's twins of legacy `producer()` / `mapper()`, the `graph_node` node).
 //!
 //! Historical assertions are exact (values *and* tick times); realtime
 //! assertions check values only (wall-clock burst grouping is timing-dependent),
-//! matching how classic's `graph_node_works` treats the two modes.
+//! matching how legacy's `graph_node_works` treats the two modes.
 //!
-//! The worker inherits the driving run's mode **and** bound (as classic
+//! The worker inherits the driving run's mode **and** bound (as legacy
 //! `producer` does), so a perpetual producer (a ticker) is bounded by the run —
 //! these tests use bounded runs, never `Forever` with a ticker.
 

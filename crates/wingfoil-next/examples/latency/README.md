@@ -4,7 +4,7 @@ A two-process pipeline over iceoryx2 that demonstrates per-hop latency
 stamping with `latency_stages!` + `Traced<T, L>` + `.stamp::<Stage>()`, and
 end-of-run reporting via `latency_report`.
 
-A port of the classic `wingfoil/examples/latency` onto the next engine. It is
+A port of the legacy `legacy/wingfoil/examples/latency` onto the next engine. It is
 also the cross-process acceptance test for the Phase-5 latency infrastructure:
 the stamps written in one process are read back and differenced in another,
 with `Traced<Quote, QuoteLatency>` riding shared memory as a plain `#[repr(C)]`
@@ -117,9 +117,9 @@ let (sink, _) = pipe.latency_report_if(stamp, /* print */ true);
   the next run then fails at start with `IncompatibleTypes` or a config
   mismatch. Clear it with `rm -rf /tmp/iceoryx2 /dev/shm/iox2_*`.
 
-## Deviations from the classic example
+## Deviations from the legacy example
 
-Both are fixes for defects in the classic pair, not changes to what the
+Both are fixes for defects in the legacy pair, not changes to what the
 example teaches. Neither affects the library surface, so neither is a
 [deviation-register](../../../../docs/deviation-register.md) entry.
 
@@ -129,13 +129,13 @@ example teaches. Neither affects the library surface, so neither is a
    by two binary crates, that is `latency_pub::shared::Quote` in one process
    and `latency_sub::shared::Quote` in the other. iceoryx2 compares those
    strings when opening the service and rejects the second process with
-   `IncompatibleTypes`. Classic documents this hazard on its `Traced<T, L>`
+   `IncompatibleTypes`. Legacy documents this hazard on its `Traced<T, L>`
    `ZeroCopySend` impl and ships `#[type_name(...)]` to escape it, but never
-   applies it in `examples/latency` — so the classic pair aborts at publisher
+   applies it in `examples/latency` — so the legacy pair aborts at publisher
    start. Pinning both names fixes it.
-2. **The subscriber takes an optional run duration.** Classic runs
+2. **The subscriber takes an optional run duration.** Legacy runs
    `RunFor::Forever` and its README says to stop with Ctrl-C to get the
    report — but `print_on_teardown` fires from graph teardown, which a
    `SIGINT` never reaches, so on that path the report is never printed.
    Passing a duration runs to a clean stop and emits the report; omitting it
-   keeps classic's run-forever behaviour.
+   keeps legacy's run-forever behaviour.

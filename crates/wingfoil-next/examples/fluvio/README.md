@@ -4,7 +4,7 @@ This example demonstrates using the next Fluvio adapter to seed records into a
 topic, consume them in a graph, apply a transformation (uppercase), and write the
 results to a second topic — all from a single `GraphBuilder`.
 
-A port of the classic `wingfoil/examples/fluvio` example onto the next engine.
+A port of the legacy `legacy/wingfoil/examples/fluvio` example onto the next engine.
 
 ## Setup
 

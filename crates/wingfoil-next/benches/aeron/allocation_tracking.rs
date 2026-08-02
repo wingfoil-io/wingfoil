@@ -4,7 +4,7 @@
 //! allocation profiling. This helps ensure the transport layer
 //! maintains its performance guarantees.
 //!
-//! Port of classic `wingfoil/benches/aeron/allocation_tracking.rs`. The
+//! Port of legacy `legacy/wingfoil/benches/aeron/allocation_tracking.rs`. The
 //! workload is unchanged — next's `RusteronPublisher` / `RusteronSubscriber` /
 //! `ClaimBuffer` are the ported twins with identical signatures, and the bench
 //! drives the *backends* directly (no graph), so only the crate in the import

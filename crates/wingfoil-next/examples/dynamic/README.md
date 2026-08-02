@@ -24,7 +24,7 @@ The engine primitive is [`Builder::dynamic_group`]: give it an `add` stream, a
 `del` stream, and a factory that builds a per-key sub-graph. On each `add` it
 splices the sub-graph in; on each `del` it tears it down; every cycle it folds
 each live member's current value into an aggregate you own. This is the next
-twin of classic wingfoil's `dynamic_group_stream`.
+twin of legacy wingfoil's `dynamic_group_stream`.
 
 ```bash
 cargo run -p wingfoil-next --example dynamic --features dynamic-graph

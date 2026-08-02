@@ -1,12 +1,12 @@
 //! Circuit-breaker example driven by the Aeron status side-channel.
 //!
-//! A port of the classic `wingfoil/examples/aeron/status_circuit_breaker.rs`
+//! A port of the legacy `legacy/wingfoil/examples/aeron/status_circuit_breaker.rs`
 //! onto the next engine. [`aeron_sub_fragment_with_status`] returns
 //! `(data, status)`; here the status half drives a "healthy" gate — while the
 //! subscriber's last observed [`AeronStatus`] is `Connected`, incoming values
 //! pass through; otherwise they are dropped (and the drop is logged).
 //!
-//! Where classic needed a hand-written `MutableNode` reading both streams, next
+//! Where legacy needed a hand-written `MutableNode` reading both streams, next
 //! expresses the same thing with the ordinary fluent vocabulary: `fold` latches
 //! the latest transition into a running status, and a two-input `custom_node`
 //! gates the data on it (the status is a *passive* upstream, so the gate fires

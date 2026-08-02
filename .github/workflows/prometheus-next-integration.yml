@@ -40,7 +40,7 @@ jobs:
           shared-key: integration
 
       - name: Start Grafana + Prometheus stack
-        # Reuses the classic prometheus adapter's Docker stack — the exporter's
+        # Reuses the legacy prometheus adapter's Docker stack — the exporter's
         # `/metrics` text format is identical, and the stack scrapes
         # WINGFOIL_METRICS_PORT (9091) on the host.
         run: docker compose up -d

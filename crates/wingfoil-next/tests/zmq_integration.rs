@@ -1,5 +1,5 @@
 //! Real-socket parity tests for the zmq adapter — a port of the core pub/sub
-//! tests from the classic `wingfoil/src/adapters/zmq/integration_tests.rs`.
+//! tests from the legacy `legacy/wingfoil/src/adapters/zmq/integration_tests.rs`.
 //!
 //! These need `libzmq` and real TCP sockets, but no external service or
 //! container. Because they run against a live wall clock, they assert received
@@ -11,15 +11,15 @@
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!
-//! Parity coverage note: `first_message_not_dropped` ports classic's
+//! Parity coverage note: `first_message_not_dropped` ports legacy's
 //! `zmq_first_message_not_dropped` — publisher and subscriber in one graph, with
 //! a delayed publisher, asserting counter value 1 is never lost to the ZMQ
-//! slow-joiner. Classic only asserts first-message-not-dropped in that
+//! slow-joiner. Legacy only asserts first-message-not-dropped in that
 //! single-graph layout; its cross-thread test asserts consecutiveness only,
 //! which `round_trip_consecutive_counters` covers here. The publisher delay is
-//! larger than classic's 200 ms ([`SUB_SETTLE`]) because next's subscriber runs
+//! larger than legacy's 200 ms ([`SUB_SETTLE`]) because next's subscriber runs
 //! over the `channel` layer (a background thread feeding the graph) rather than
-//! classic's `ReceiverStream`, and takes longer to connect and propagate its
+//! legacy's `ReceiverStream`, and takes longer to connect and propagate its
 //! subscription filter after the graph starts.
 #![cfg(feature = "zmq-integration-test")]
 
@@ -82,11 +82,11 @@ fn round_trip_consecutive_counters() {
 }
 
 /// Head-start the publisher gives the subscriber to connect and propagate its
-/// subscription filter before the first message is sent. Classic uses 200 ms
+/// subscription filter before the first message is sent. Legacy uses 200 ms
 /// with its `ReceiverStream` subscriber; next's `channel`-based subscriber
 /// (a background thread feeding the graph) establishes more slowly, so the test
 /// allows a wider, machine-safe window. Purely a test settle time — the adapter
-/// keeps classic's 50 ms post-accept flush window unchanged.
+/// keeps legacy's 50 ms post-accept flush window unchanged.
 ///
 /// This window is now genuinely effective: `zmq_pub` binds its `PUB` socket at
 /// graph `start()` (not lazily on the first publish), so the subscriber connects
@@ -98,11 +98,11 @@ const SUB_SETTLE: Duration = Duration::from_millis(1500);
 
 #[test]
 fn first_message_not_dropped() {
-    // Faithful port of classic's `zmq_first_message_not_dropped`: publisher and
+    // Faithful port of legacy's `zmq_first_message_not_dropped`: publisher and
     // subscriber share ONE graph so they start together deterministically, and
     // the publisher's output is delayed by `SUB_SETTLE` so the subscriber's
     // filter is live before the first message. That makes the slow-joiner
-    // buffering race-free, so counter value 1 is never dropped. Classic only
+    // buffering race-free, so counter value 1 is never dropped. Legacy only
     // asserts first-message-not-dropped in this single-graph layout; across
     // *separate* threads (where the publisher can race ahead of the subscriber's
     // connect) it asserts consecutiveness only — which
@@ -139,7 +139,7 @@ fn first_message_not_dropped() {
 
 #[test]
 fn first_message_not_dropped_no_delay() {
-    // Faithful port of classic's `zmq_first_message_not_dropped_no_delay` — the
+    // Faithful port of legacy's `zmq_first_message_not_dropped_no_delay` — the
     // sibling of `first_message_not_dropped` with NO artificial startup delay on
     // the publisher. Publisher and subscriber share ONE graph (so they start
     // together) and the publisher begins ticking immediately, isolating the
@@ -178,7 +178,7 @@ fn first_message_not_dropped_no_delay() {
 #[test]
 fn reports_connected_status() {
     // The subscriber's socket monitor surfaces a `Connected` transition on the
-    // status stream — parity of classic `zmq_reports_connected_status`.
+    // status stream — parity of legacy `zmq_reports_connected_status`.
     let port = 5713;
     let address = format!("tcp://127.0.0.1:{port}");
     let publisher = spawn_publisher(port, Duration::from_millis(50), Duration::from_secs(2));
@@ -213,7 +213,7 @@ fn reports_connected_status() {
 #[test]
 fn deserialization_error_propagates() {
     // A publisher sending frames the subscriber cannot decode must abort the
-    // subscriber's run with an error — parity of classic
+    // subscriber's run with an error — parity of legacy
     // `zmq_deserialization_error_propagates`.
     let port = 5714;
     let address = format!("tcp://127.0.0.1:{port}");
@@ -246,7 +246,7 @@ fn deserialization_error_propagates() {
 fn sub_stops_cleanly_without_publisher_endofstream() {
     // A publisher that binds then drops the socket without sending EndOfStream
     // (a crash) must not hang the subscriber; the runner's duration bounds the
-    // run and the background thread stops via its stop flag — parity of classic
+    // run and the background thread stops via its stop flag — parity of legacy
     // `zmq_sub_stops_cleanly_without_publisher_endofstream`.
     let port = 5715;
     let address = format!("tcp://127.0.0.1:{port}");

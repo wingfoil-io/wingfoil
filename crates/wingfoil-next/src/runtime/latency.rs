@@ -4,7 +4,7 @@
 //! Engine-agnostic by construction — it is plain data plus the
 //! [`latency_stages!`] generator, with no reference to either engine's node or
 //! op machinery. Both trees use it: this crate's `latency` module builds its
-//! stamping ops on top, and the classic `wingfoil` crate re-exports these
+//! stamping ops on top, and the legacy `wingfoil` crate re-exports these
 //! items and builds its `StampStream` nodes on the same types, so a `Traced`
 //! payload crosses the engine boundary unchanged.
 //!

@@ -1,4 +1,4 @@
-//! Helpers shared across I/O adapters — the wingfoil-next port of the classic
+//! Helpers shared across I/O adapters — the wingfoil-next port of the legacy
 //! `wingfoil::adapters::common` module.
 //!
 //! Currently this is the out-of-window row filter used by historical/replay
@@ -10,7 +10,7 @@
 //! etc.) can over-read its bounds, so it should pass each emitted row through a
 //! [`WindowFilter`] first.
 //!
-//! Like the classic module it is **always compiled** (no feature gate) so any
+//! Like the legacy module it is **always compiled** (no feature gate) so any
 //! adapter can use it without touching feature flags, and it stays *out* of the
 //! [`prelude`](crate::prelude): reach for it with
 //! `use wingfoil_next::adapters::common::{TimeWindow, WindowFilter};`.
@@ -22,7 +22,7 @@
 //! run's `[start, end)` window into contiguous, half-open, midnight-aligned
 //! slices — one query per slice for the time-partitioned historical readers
 //! (`postgres_read`, and `kdb_read` when it ports). They are adapter-agnostic
-//! but, like classic, feature-gated so the default build does not carry unused
+//! but, like legacy, feature-gated so the default build does not carry unused
 //! code: gated on `postgres` today, and the kdb port adds its own feature to
 //! the gate later (`docs/port-plan.md`, Phase 4 items 4–5). Only the
 //! `TimeWindow`/`WindowFilter` surface above is always compiled.

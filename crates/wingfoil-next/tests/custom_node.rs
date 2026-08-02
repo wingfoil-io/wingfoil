@@ -1,5 +1,5 @@
 //! Parity tests for the public custom-node primitive
-//! ([`GraphBuilder::custom_node`]) — the next equivalent of classic
+//! ([`GraphBuilder::custom_node`]) — the next equivalent of legacy
 //! `MutableNode` + `StreamPeekRef`, and the extension point the wingfoil-python
 //! `PyProxyStream` (a Python object acting as a graph node) is rewired onto.
 //!
@@ -7,7 +7,7 @@
 //! closure producing a [`Tick`]. These tests assert it reproduces the
 //! observable behaviour (values **and** tick times) of the equivalent
 //! combinator graph — `map`, `map_filter`, and `sample` — so the primitive is
-//! a faithful twin of the classic node path it replaces.
+//! a faithful twin of the legacy node path it replaces.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,7 +19,7 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
 /// A custom node reading its active upstream reproduces `map`, tick-for-tick.
 /// It reads the upstream value through a [`Stream::value_slot`] captured at
-/// wiring time — the next analogue of a classic `MutableNode` reaching its
+/// wiring time — the next analogue of a legacy `MutableNode` reaching its
 /// upstream `Rc<dyn Stream>`. Asserts values *and* tick times against a `map`
 /// twin wired into the same graph.
 #[test]
@@ -46,7 +46,7 @@ fn custom_node_reading_upstream_matches_map() {
 }
 
 /// A custom node returning `Tick::Quiet` on some cycles suppresses the tick —
-/// the classic `cycle() -> bool` "did I tick?" shape the Python proxy uses.
+/// the legacy `cycle() -> bool` "did I tick?" shape the Python proxy uses.
 /// Reproduces `map_filter` keeping only even counts.
 #[test]
 fn custom_node_quiet_suppresses_tick_like_map_filter() {

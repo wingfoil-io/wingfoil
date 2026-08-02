@@ -25,7 +25,7 @@ bid 100   ask 101   spread 1
 
 ### Scope and idiom
 
-This is a *simplified* port of the classic `order_book` example. The classic
+This is a *simplified* port of the legacy `order_book` example. The legacy
 version reads real LOBSTER market-data CSV, executes it through a `lobster`
 matching engine, and `split()`s the result into two output streams — a fills
 stream and a prices stream — written to separate CSV files.
@@ -33,7 +33,7 @@ stream and a prices stream — written to separate CSV files.
 Two of those pieces are **not yet available on the next engine**, so the port
 takes a different shape rather than forcing them:
 
-- **`split()` / multi-output nodes** — the classic example emits *both* fills
+- **`split()` / multi-output nodes** — the legacy example emits *both* fills
   and prices from one node. The next engine's ops are single-output, so this
   port emits a single top-of-book stream. (A stateful book that produced fills
   and prices would need a demux/split op.)

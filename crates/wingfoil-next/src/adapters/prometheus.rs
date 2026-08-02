@@ -1,7 +1,7 @@
 //! prometheus adapter — a realtime, pull-based metrics **sink**: it serves a
 //! hand-rolled `GET /metrics` endpoint in Prometheus text format so Grafana (or
 //! any Prometheus-compatible system) can scrape stream values. It ports the
-//! classic `wingfoil::adapters::prometheus` module onto the Op model.
+//! legacy `wingfoil::adapters::prometheus` module onto the Op model.
 //!
 //! # Layering
 //!
@@ -36,34 +36,34 @@
 //! [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom) the sink is a
 //! no-op — no slot is written — so a backtest never publishes fast-forwarded
 //! values to a live endpoint. The HTTP server (if [`serve`](PrometheusExporter::serve)
-//! was called) still answers, but with an empty body. This mirrors classic,
+//! was called) still answers, but with an empty body. This mirrors legacy,
 //! whose metric node detected the run mode in `setup` and short-circuited
 //! `cycle`; next reads it from [`Ctx::run_mode`](crate::op::Ctx::run_mode) in
 //! the cycle itself.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (the `GET /metrics` text endpoint, per-metric
+//! Every legacy *capability* (the `GET /metrics` text endpoint, per-metric
 //! slots omitted until first written, the historical no-op, the 404 for other
 //! paths, synchronous bind so errors surface before the run) is preserved. The
 //! surface differs in two deliberate ways:
 //!
-//! 1. **The sink is an extension trait, not an exporter method.** Classic called
+//! 1. **The sink is an extension trait, not an exporter method.** Legacy called
 //!    `exporter.register(name, stream)`; next uses the sink-as-trait convention
 //!    shared with [`lines`](crate::adapters::lines) / [`etcd`](crate::adapters::etcd):
 //!    `stream.prometheus_gauge(&exporter, name)`. The exporter still owns the
 //!    registry; the trait method registers a slot in it and wires the sink.
-//! 2. **`serve` returns [`anyhow::Result`].** Classic returned
+//! 2. **`serve` returns [`anyhow::Result`].** Legacy returned
 //!    `Result<u16, std::io::Error>`; next attaches `.context` at the bind, per
 //!    the fallible-with-context convention. The bind is still synchronous, so a
 //!    bind error surfaces at `serve()` time, before the run.
 //!
 //! # Setup (integration test)
 //!
-//! The end-to-end Prometheus scrape test reuses the classic Docker stack:
+//! The end-to-end Prometheus scrape test reuses the legacy Docker stack:
 //!
 //! ```sh
-//! docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
+//! docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
 //! ```
 
 use std::io::{BufRead, BufReader, Write};

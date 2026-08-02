@@ -1,5 +1,5 @@
 //! Semantic cross-validation: the prototype engines must reproduce the
-//! *classic* wingfoil engine's observable behaviour for equivalent graphs —
+//! *legacy* wingfoil engine's observable behaviour for equivalent graphs —
 //! same tick times, same values, same run-bound handling. Wired through the
 //! fluent layer, which also exercises the underlying `Builder`.
 
@@ -13,10 +13,10 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-/// Mirrors `long_delay_works` in the classic engine (delay.rs): a 10ns
+/// Mirrors `long_delay_works` in the legacy engine (delay.rs): a 10ns
 /// ticker counted then delayed 100ns, run for 120ns, emits [1, 2, 3, 4].
 #[test]
-fn delay_matches_classic_engine() {
+fn delay_matches_legacy_engine() {
     let g = GraphBuilder::new();
     let acc = g
         .ticker(Duration::from_nanos(10))
@@ -29,10 +29,10 @@ fn delay_matches_classic_engine() {
     assert_eq!(vec![1, 2, 3, 4], r.value(&acc));
 }
 
-/// Mirrors the classic `constant` + `sample` behaviour: a constant ticks
+/// Mirrors the legacy `constant` + `sample` behaviour: a constant ticks
 /// once; sampling it on a ticker re-emits it each trigger tick.
 #[test]
-fn constant_and_sample_match_classic_engine() {
+fn constant_and_sample_match_legacy_engine() {
     let g = GraphBuilder::new();
     let tick = g.ticker(Duration::from_nanos(100));
     let acc = g.constant(7u64).sample(&tick).accumulate();
@@ -43,7 +43,7 @@ fn constant_and_sample_match_classic_engine() {
 
 /// Filter suppresses quiet cycles: only even counts pass.
 #[test]
-fn filter_suppresses_like_classic_engine() {
+fn filter_suppresses_like_legacy_engine() {
     let g = GraphBuilder::new();
     let count = g.ticker(Duration::from_nanos(100)).count();
     let is_even = count.map(|i| i.is_multiple_of(2));
@@ -105,27 +105,27 @@ fn for_each_observes_every_tick() {
     assert_eq!(vec![1, 2, 3], *seen.borrow());
 }
 
-/// The duration bound must terminate exactly like the classic engine's —
+/// The duration bound must terminate exactly like the legacy engine's —
 /// both engines run the same trailing-cycle semantics (a 100ns ticker under
 /// a 305ns bound runs cycles at 0..=500: the bound is checked against the
 /// *previous* cycle's time, then one marked-last cycle still runs).
 #[test]
-fn duration_bound_matches_classic_engine() {
+fn duration_bound_matches_legacy_engine() {
     use wingfoil::NodeOperators;
     let period = Duration::from_nanos(100);
     let bound = Duration::from_nanos(305);
 
-    let classic = wingfoil::ticker(period).count();
-    classic
+    let legacy = wingfoil::ticker(period).count();
+    legacy
         .run(HISTORICAL, RunFor::Duration(bound))
-        .expect("classic run");
+        .expect("legacy run");
 
     let g = GraphBuilder::new();
     let next = g.ticker(period).count();
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Duration(bound)).unwrap();
 
-    assert_eq!(classic.peek_value(), r.value(&next));
+    assert_eq!(legacy.peek_value(), r.value(&next));
 }
 
 /// The activation contract is `const`, so it can be checked at compile time

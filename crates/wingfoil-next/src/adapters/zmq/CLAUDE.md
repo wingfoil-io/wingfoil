@@ -1,7 +1,7 @@
 # ZMQ Adapter (wingfoil-next)
 
 Real-time pub/sub over ØMQ sockets, with optional service discovery. Ports
-classic `wingfoil::adapters::zmq` onto the Op model.
+legacy `wingfoil::adapters::zmq` onto the Op model.
 
 `zmq_sub` is the **reference implementation of `source_at_start`** — the
 sync-streaming-client shape that `/new-adapter-next` step 7 tells you to copy.
@@ -24,7 +24,7 @@ zmq-integration-test = ["zmq"]                              # real sockets, no s
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
 ```
 
-**No `async`** — deliberately, matching classic: ZeroMQ sockets are synchronous
+**No `async`** — deliberately, matching legacy: ZeroMQ sockets are synchronous
 and poll-based, so the subscriber uses a background thread over the `channel`
 layer. The `zmq` crate links the system `libzmq`.
 
@@ -77,26 +77,26 @@ zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, ("quotes", EtcdRegistry::new(conn)))?;
   `first_message_not_dropped` flaky under CI load (register **A6** — the same
   bug, diagnosed).
 - **The publisher errors under historical replay**, it does not no-op. That is
-  classic parity and a deliberate exception to the skill's exporter default:
+  legacy parity and a deliberate exception to the skill's exporter default:
   publishing fast-forwarded historical data to a live socket is meaningless.
   The abort happens at `start()`, naming the run mode, **before** touching the
   registry.
 - **The wire envelope is `bincode` and next-local** — a next publisher
   interoperates with a next subscriber but is **not** wire-compatible with a
-  classic/Python `wingfoil` peer (register **C2**, deferred with the Python
+  legacy/Python `wingfoil` peer (register **C2**, deferred with the Python
   bindings).
 - No locks on the graph path: the subscriber thread talks to the graph only
   through `ChannelSender`.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `zmq.rs` — three
+Canonical list: the `# Deviations from legacy` block in `zmq.rs` — three
 items: `zmq_sub` takes a `GraphBuilder` + `RunMode` (needed for the wiring
 rejection, since next's channel is bimodal); `zmq_pub` returns `Stream<()>`
 with bind/registration/run-mode-check at `start()`; and the next-local wire
-envelope (C2). Two smaller reductions: `ZmqEvent<T>` is private here (classic
+envelope (C2). Two smaller reductions: `ZmqEvent<T>` is private here (legacy
 exposed it, but it is purely an internal transport detail), and `ZmqStatus`
-additionally derives `Eq`. Every classic capability — sub with a status stream,
+additionally derives `Eq`. Every legacy capability — sub with a status stream,
 pub with slow-joiner buffering, the `ZmqRegistry`/`EtcdRegistry` backend,
 `zmq_pub_on` — is preserved.
 
@@ -114,7 +114,7 @@ cargo test -p wingfoil-next --features zmq-integration-test -- --test-threads=1
 cargo test -p wingfoil-next --features zmq-etcd-integration-test -- --test-threads=1
 ```
 
-`zmq_integration.rs` ports the core pub/sub tests from classic's
+`zmq_integration.rs` ports the core pub/sub tests from legacy's
 `integration_tests.rs`; `zmq_etcd_integration.rs` ports its `etcd_tests`
 module. `first_message_not_dropped` is the slow-joiner regression guard — if
 you touch bind timing, run it repeatedly under load.

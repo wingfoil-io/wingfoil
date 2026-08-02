@@ -43,7 +43,7 @@ jobs:
         with:
           shared-key: integration
 
-      # Reuses the classic adapter's KDB Docker image + license secret; KDB+ has
+      # Reuses the legacy adapter's KDB Docker image + license secret; KDB+ has
       # no public, freely-licensed image, so the tests probe this instance (and
       # skip if unreachable — but in CI it must be present).
       - name: Build KDB image

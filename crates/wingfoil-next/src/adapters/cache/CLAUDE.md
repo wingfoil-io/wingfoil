@@ -1,14 +1,14 @@
 # cache Adapter (wingfoil-next)
 
 A file-backed, query-keyed, LRU-evicting result cache for time-sliced
-historical readers. Ports classic `wingfoil::adapters::cache`.
+historical readers. Ports legacy `wingfoil::adapters::cache`.
 
 **Not a source or sink.** There is no graph edge here: it is a plain utility
 with async `get`/`put`, called by a reader from its own producer path.
 [`kdb_read_cached`](../kdb/CLAUDE.md) is its only consumer today.
 
-> Classic has the `cache` module but never had a directory `CLAUDE.md` for it.
-> This one is new; the parity oracle is `wingfoil/src/adapters/cache/`.
+> Legacy has the `cache` module but never had a directory `CLAUDE.md` for it.
+> This one is new; the parity oracle is `legacy/wingfoil/src/adapters/cache/`.
 
 ## Layout
 
@@ -62,11 +62,11 @@ cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
 - File I/O is tokio's `fs` — this module is async, so its callers already need
   a runtime (the graph's).
 
-## Deviations from classic
+## Deviations from legacy
 
-One, cosmetic: `FileCache`'s log messages drop classic's `"KDB "` prefix — the
+One, cosmetic: `FileCache`'s log messages drop legacy's `"KDB "` prefix — the
 cache is not kdb-specific in next (register **D7**). Every public capability is
-otherwise preserved, which is why the classic unit tests port verbatim.
+otherwise preserved, which is why the legacy unit tests port verbatim.
 
 ## Tests
 
@@ -74,7 +74,7 @@ otherwise preserved, which is why the classic unit tests port verbatim.
 |---|---|---|
 | `tests/cache_adapter.rs` | `#![cfg(feature = "cache")]` | nothing |
 
-Ported verbatim from classic `wingfoil::adapters::cache` (`mod.rs` +
+Ported verbatim from legacy `wingfoil::adapters::cache` (`mod.rs` +
 `file_cache.rs` test modules): key stability/uniqueness, `CacheConfig::clear`,
 and the store round-trip + eviction.
 
@@ -83,7 +83,7 @@ cargo test -p wingfoil-next --features cache --test cache_adapter
 ```
 
 The cache's behaviour *in a reader* is covered by the kdb tier:
-`tests/kdb_integration.rs` (`kdb-integration-test`) ports classic's
+`tests/kdb_integration.rs` (`kdb-integration-test`) ports legacy's
 `cache_integration_tests.rs`.
 
 No dedicated workflow. Runs in `rust-test.yml`'s `test-next` job.

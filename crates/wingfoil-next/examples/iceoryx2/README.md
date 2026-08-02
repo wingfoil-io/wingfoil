@@ -5,7 +5,7 @@ inter-process communication (IPC) library. It uses shared memory to pass data
 between processes without serialization or kernel involvement, making it a good
 fit for latency-sensitive systems like market data distribution or robotics.
 
-A port of the classic `wingfoil/examples/iceoryx2` examples onto the next engine.
+A port of the legacy `legacy/wingfoil/examples/iceoryx2` examples onto the next engine.
 
 Key characteristics:
 - **Zero-copy** — publishers write directly into shared memory; subscribers read in-place with no memcpy
@@ -74,7 +74,7 @@ let _publisher = g
     .count()
     .map(|seq: &u64| burst![Counter { seq: *seq }])
     .logged("pub", Info)
-    .iceoryx2_pub("wingfoil/examples/counter");
+    .iceoryx2_pub("legacy/wingfoil/examples/counter");
 
 g.build().run(RunMode::RealTime, RunFor::Forever)?;
 ```
@@ -90,7 +90,7 @@ let opts = Iceoryx2SubOpts {
 };
 
 let g = GraphBuilder::new();
-let _sub = iceoryx2_sub_opts::<Counter>(&g, RunMode::RealTime, "wingfoil/examples/counter", opts)?
+let _sub = iceoryx2_sub_opts::<Counter>(&g, RunMode::RealTime, "legacy/wingfoil/examples/counter", opts)?
     .collapse()
     .inspect(|c: &Counter| println!("received seq={}", c.seq))
     .logged("sub", Info);

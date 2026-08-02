@@ -4,7 +4,7 @@ Streams a synthetic mid-price to any connected browser over WebSocket and
 receives UI events back into the graph. Demonstrates both directions of the
 `web` adapter — `web_pub` (outbound) and `web_sub` (inbound).
 
-A port of the classic `wingfoil/examples/web` example onto the next engine. The
+A port of the legacy `legacy/wingfoil/examples/web` example onto the next engine. The
 wire protocol is unchanged (the shared `wingfoil-wire-types` crate), so the
 existing `wingfoil-js` browser client works against it untouched.
 

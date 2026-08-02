@@ -1,7 +1,7 @@
 # fluvio Adapter (wingfoil-next)
 
 A streaming topic-partition consume **source** and a topic-produce **sink** for
-[Fluvio](https://fluvio.io) clusters. Ports classic
+[Fluvio](https://fluvio.io) clusters. Ports legacy
 `wingfoil::adapters::fluvio` onto the Op model. Structurally the
 [`kafka`](../kafka/CLAUDE.md) port's twin — read that one alongside this.
 
@@ -45,18 +45,18 @@ Types: `FluvioConnection` (+ `From<&str>`/`String`/`&String`), `FluvioRecord`
   invent hidden offset persistence.
 - **`fluvio_sub` is realtime-only, rejected at wiring** (register B2). It
   replays retained records and then blocks forever, so the historical channel
-  path would deadlock at `start`. Classic technically permitted a
+  path would deadlock at `start`. Legacy technically permitted a
   `HistoricalFrom` run with wall-clock timestamps.
 - **`fluvio_source` exists for the same reason as `kafka_source`** — mode
   dispatch at `run()` instead of in the function name — and likewise has only
   the **live half** today; a historical run errors at wiring naming the missing
   bounded offset-range reader.
-- **A negative `start_offset` is rejected at wiring.** Classic deferred that
+- **A negative `start_offset` is rejected at wiring.** Legacy deferred that
   into the producer future so it surfaced at run start; the check is pure, so
   next fails fast.
 - **The sink batches per burst**: one `send()` per record, then a single
   `flush()` per burst — throughput within a tick, delivery guaranteed before
-  the run moves on (classic parity). `key: None` sends with `RecordKey::NULL`.
+  the run moves on (legacy parity). `key: None` sends with `RecordKey::NULL`.
 - **The sink connects lazily on its first burst** (register A1/A4), so an
   unreachable cluster aborts the *run*, not graph construction.
 - `consume_async_bursts` ⇒ the `block_on` footgun (A5a): build, run and drop
@@ -64,12 +64,12 @@ Types: `FluvioConnection` (+ `From<&str>`/`String`/`&String`), `FluvioRecord`
 - **Topics must exist before connecting** — Fluvio returns `TopicNotFound`
   otherwise. That is why there is a `fluvio_admin` example.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `fluvio.rs` — five
+Canonical list: the `# Deviations from legacy` block in `fluvio.rs` — five
 items: graph-owned runtime (A5), wiring-time historical rejection (B2),
 sink-as-trait fold (D1), lazy sink connect (A1/A4), and the wiring-time
-negative-offset rejection. Every classic capability (offset-selected partition
+negative-offset rejection. Every legacy capability (offset-selected partition
 consumption, keyed and keyless records, per-burst flush batching, the
 single-record convenience sink) is preserved.
 

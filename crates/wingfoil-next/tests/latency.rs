@@ -1,7 +1,7 @@
-//! Latency capture parity tests — ports the node-layer cases from classic
+//! Latency capture parity tests — ports the node-layer cases from legacy
 //! `wingfoil::latency` to the wingfoil-next Op engine. The pure data layer
 //! (`Traced`/`Latency`/`Stage`/`StageStats`/`LatencyStats` layout + arithmetic)
-//! is reused verbatim from the classic crate and is covered by its own unit
+//! is reused verbatim from the legacy crate and is covered by its own unit
 //! tests; here we assert the *engine* behaviour: that `stamp`/`stamp_precise`
 //! write wall-clock time (shared per cycle, fresh for `_precise`) and that
 //! `latency_report` aggregates per-stage deltas.
@@ -65,7 +65,7 @@ fn has_latency_round_trip() {
 
 // ── stamp ───────────────────────────────────────────────────────────────────
 
-/// Classic `stamp_stream_writes_wall_time_into_named_stage`: stamps use
+/// Legacy `stamp_stream_writes_wall_time_into_named_stage`: stamps use
 /// wall-clock time, so in historical mode we assert monotonicity, not exact
 /// values. Untouched stages stay zero; the payload passes through.
 #[test]
@@ -90,7 +90,7 @@ fn stamp_writes_wall_time_into_named_stage() {
     assert!(collected[1].latency.strategy >= collected[0].latency.strategy);
 }
 
-/// Classic `stamp_works_identically_in_historical_and_realtime`: same wiring,
+/// Legacy `stamp_works_identically_in_historical_and_realtime`: same wiring,
 /// both run modes produce non-zero, monotonic wall-clock stamps.
 #[test]
 fn stamp_works_identically_in_historical_and_realtime() {
@@ -116,7 +116,7 @@ fn stamp_works_identically_in_historical_and_realtime() {
     assert!(u64::from(realtime) > 1_000_000_000);
 }
 
-/// Classic `stamp_if_disabled_inserts_no_node`: `stamp_if(false)` is identity —
+/// Legacy `stamp_if_disabled_inserts_no_node`: `stamp_if(false)` is identity —
 /// the stage it would have written stays zero.
 #[test]
 fn stamp_if_disabled_is_identity() {
@@ -135,7 +135,7 @@ fn stamp_if_disabled_is_identity() {
     assert_eq!(collected[0].latency.ingest, 0);
 }
 
-/// Classic `stamp_precise_writes_fresh_timestamps`: two `stamp_precise`
+/// Legacy `stamp_precise_writes_fresh_timestamps`: two `stamp_precise`
 /// wrappers in series both produce non-zero, ordered stamps.
 #[test]
 fn stamp_precise_writes_fresh_timestamps() {
@@ -155,7 +155,7 @@ fn stamp_precise_writes_fresh_timestamps() {
     assert!(l.publish >= l.ingest);
 }
 
-/// Classic `multiple_stamps_compose`: three cached-`stamp` wrappers in the same
+/// Legacy `multiple_stamps_compose`: three cached-`stamp` wrappers in the same
 /// engine cycle share the cycle-start wall snap — the key check that
 /// `Ctx::wall_time` is snapped once per cycle (the Kernel change).
 #[test]
@@ -182,7 +182,7 @@ fn multiple_stamps_compose() {
 
 // ── latency_report ──────────────────────────────────────────────────────────
 
-/// Classic `latency_report_aggregates_across_ticks`: three fully-stamped
+/// Legacy `latency_report_aggregates_across_ticks`: three fully-stamped
 /// messages give exact per-stage delta means. The latency records are set on
 /// the payload (deltas 10 / 20 / 30 ns), so aggregation is deterministic.
 #[test]

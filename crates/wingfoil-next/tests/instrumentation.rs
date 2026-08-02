@@ -3,8 +3,8 @@
 //! Pins the spans the interpreted engine emits: one `run`, one `initialise`,
 //! one `apply_nodes` per lifecycle phase, one `cycle` per engine cycle, and —
 //! under `instrument-cycle-node` — one `cycle_node` per node execution, tagged
-//! with the node's index and label. The set mirrors classic wingfoil's
-//! (`wingfoil/src/graph.rs`), so a subscriber written against one engine reads
+//! with the node's index and label. The set mirrors legacy wingfoil's
+//! (`legacy/wingfoil/src/graph.rs`), so a subscriber written against one engine reads
 //! the other.
 //!
 //! Runs under `instrument-all` (which CI's `--all-features` build enables). The
@@ -113,7 +113,7 @@ fn run_emits_one_span() {
 }
 
 /// `instrument-initialise` wraps `Builder::build` — next's counterpart of
-/// classic's `Graph::initialise`, and named after it so the two engines read
+/// legacy's `Graph::initialise`, and named after it so the two engines read
 /// alike.
 #[test]
 fn build_emits_the_initialise_span() {
@@ -121,9 +121,9 @@ fn build_emits_the_initialise_span() {
 }
 
 /// `instrument-apply-nodes` wraps each lifecycle phase applied across all
-/// nodes, recording the phase in `desc` (classic's field name). Next has no
+/// nodes, recording the phase in `desc` (legacy's field name). Next has no
 /// separate `setup` phase — its ops are constructed at wiring time — so three
-/// phases are emitted where classic emits four.
+/// phases are emitted where legacy emits four.
 #[test]
 fn each_lifecycle_phase_emits_an_apply_nodes_span() {
     let phases: Vec<String> = record(Dispatch::Sparse)

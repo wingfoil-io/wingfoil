@@ -97,7 +97,7 @@ pub trait WebBurstSinkOps {
     /// otherwise identical to [`WebSinkOps::web_pub`] — including the
     /// end-of-run [`ControlMessage::Complete`] and the historical-no-op server.
     ///
-    /// Classic had no burst overload: callers mapped `Burst<T>` to `Vec<T>`
+    /// Legacy had no burst overload: callers mapped `Burst<T>` to `Vec<T>`
     /// themselves and used `web_pub`. This does that conversion internally and
     /// produces byte-identical frames.
     ///

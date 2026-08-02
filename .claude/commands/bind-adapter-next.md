@@ -28,13 +28,13 @@ cutover `import wingfoil` becomes `import wingfoil_next`.
 
 ## The parity obligation
 
-Legacy `wingfoil-python/src/py_$ARGUMENTS.rs` is your **parity oracle**, the
-same way the classic adapter is for the Rust port. Before writing anything,
+Legacy `legacy/wingfoil-python/src/py_$ARGUMENTS.rs` is your **parity oracle**, the
+same way the legacy adapter is for the Rust port. Before writing anything,
 inventory it:
 
 - every `#[pyfunction]`, `#[pyclass]`, and `*_inner` helper it exposes;
 - every argument, including defaults and the types they accept;
-- the pytest cases in `wingfoil-python/tests/` that cover it.
+- the pytest cases in `legacy/wingfoil-python/tests/` that cover it.
 
 Every one needs a next equivalent **or** an explicit deviation note in the
 binding module's `//!` header. Do not silently drop a legacy entry point. Where
@@ -42,7 +42,7 @@ next's Rust adapter has capability legacy never had — a unified
 `$ARGUMENTS_source`, a `buffer_size` bound — expose it too and say so in the
 docs; the superset objective runs through the bindings as well.
 
-Cross-cutting classic↔next differences go in `docs/deviation-register.md`.
+Cross-cutting legacy↔next differences go in `docs/deviation-register.md`.
 
 ## Feed lessons back into this skill
 
@@ -441,7 +441,7 @@ cd crates/wingfoil-next-python && maturin develop -F $ARGUMENTS && pytest -q
 ```
 
 Sandbox caveat (same as `/new-adapter-next`): `cargo lint-all` is a workspace
-all-features build and also compiles the classic **aeron** C library, which
+all-features build and also compiles the legacy **aeron** C library, which
 fails without the native toolchain. When that blocks you, substitute the scoped
 equivalent and say so in the PR:
 

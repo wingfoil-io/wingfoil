@@ -165,7 +165,7 @@ impl KdbDeserialize for PyKdbRow {
         columns: &[String],
         _interner: &mut SymbolInterner,
     ) -> std::result::Result<(NanoTime, Self), KdbError> {
-        // Convention (as classic): the query wrapper `xcols`-es the time column
+        // Convention (as legacy): the query wrapper `xcols`-es the time column
         // first, so column 0 is always the row's timestamp.
         let time = row.get_timestamp(0)?;
         let mut decoded = Vec::with_capacity(columns.len().saturating_sub(1));

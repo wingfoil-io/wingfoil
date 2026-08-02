@@ -1,18 +1,18 @@
 //! Branch/recombine at depths 1–10 on the wingfoil-next engine — the
 //! breadth-first arm of the BFS-vs-DFS comparison.
 //!
-//! Port of classic `wingfoil/benches/bfs_vs_dfs/wingfoil.rs`. The workload is
+//! Port of legacy `legacy/wingfoil/benches/bfs_vs_dfs/wingfoil.rs`. The workload is
 //! unchanged: at depth N the graph has 2^N source→sink paths, and a
 //! breadth-first scheduler visits each node exactly once per tick, so the
 //! measured cost should stay flat as the depth grows (see
 //! `benches/bfs_vs_dfs/README.md`).
 //!
-//! Deliberate deviations from the classic source, all mechanical:
+//! Deliberate deviations from the legacy source, all mechanical:
 //!
 //! - the builder closure takes `(&GraphBuilder, &Stream<()>)` and returns an
 //!   [`Upstream`] instead of `Rc<dyn Node> -> Rc<dyn Node>`, because next wires
 //!   nodes through a builder (see `wingfoil_next::bencher`);
-//! - classic's free function `add(&s, &s)` — a `bimap` with *both* upstreams
+//! - legacy's free function `add(&s, &s)` — a `bimap` with *both* upstreams
 //!   active — is spelled `s.join(&s, |a, b| a + b)` here, next's two-active-input
 //!   combine. Same node, same both-arms-active shape, same one node per level.
 //!

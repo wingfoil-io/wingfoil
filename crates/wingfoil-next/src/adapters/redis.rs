@@ -1,5 +1,5 @@
 //! redis adapter — Pub/Sub (`SUBSCRIBE`/`PUBLISH`) and Streams
-//! (`XRANGE`/`XREAD`/`XADD`) transports for Redis. It ports the classic
+//! (`XRANGE`/`XREAD`/`XADD`) transports for Redis. It ports the legacy
 //! `wingfoil::adapters::redis` module onto the Op model.
 //!
 //! Two transports, each with a source and a sink:
@@ -10,7 +10,7 @@
 //!   snapshot of existing entries then tails live appends;
 //!   [`RedisStreamSinkOps::redis_stream_write`] appends via `XADD`.
 //!
-//! `HSET`/key-value operations are intentionally out of scope, matching classic.
+//! `HSET`/key-value operations are intentionally out of scope, matching legacy.
 //!
 //! # Layering
 //!
@@ -25,13 +25,13 @@
 //!   traits on `Stream<Burst<T>>` (and, for convenience, `Stream<T>`), enabled
 //!   with `use wingfoil_next::adapters::redis::{RedisSinkOps, RedisStreamSinkOps};`.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (Pub/Sub sub+pub, Streams snapshot→tail read +
+//! Every legacy *capability* (Pub/Sub sub+pub, Streams snapshot→tail read +
 //! append, all four value types) is preserved. The surface differs in three
 //! deliberate ways, mirroring the [`etcd`](crate::adapters::etcd) port:
 //!
-//! 1. **The graph owns the tokio runtime.** Classic hides a never-dropped global
+//! 1. **The graph owns the tokio runtime.** Legacy hides a never-dropped global
 //!    runtime inside `produce_async`/`consume_async`. Next's `GraphBuilder` owns
 //!    one runtime, created lazily on first async use and dropped at teardown,
 //!    shared by every async adapter — so the common call needs no `&Handle` and
@@ -40,12 +40,12 @@
 //!    spawns in `start()` and derives its `RunParams` from the actual run. Embed
 //!    in an existing runtime by installing an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
-//! 2. **The sinks connect lazily, on the first write.** Like classic, `redis_pub`
+//! 2. **The sinks connect lazily, on the first write.** Like legacy, `redis_pub`
 //!    / `redis_stream_write` open the socket inside the async consumer on the
 //!    first write (`Client::open` — a pure URL parse — still validates at
 //!    wiring), so wiring does no I/O and a connection failure surfaces during
 //!    the run (via `consume_async`'s error channel), not at graph construction.
-//! 3. **The sinks are traits only.** Classic exposed free `redis_pub` /
+//! 3. **The sinks are traits only.** Legacy exposed free `redis_pub` /
 //!    `redis_stream_write` functions *and* operator traits; next folds each into
 //!    a single sink trait ([`RedisSinkOps`] / [`RedisStreamSinkOps`]), per the
 //!    sink-as-trait convention shared with [`lines`](crate::adapters::lines) /
@@ -56,7 +56,7 @@
 //! - **Snapshot bursts.** [`redis_stream_read`]'s snapshot phase stamps every
 //!   existing entry with one shared `NanoTime::now()`, so the whole snapshot
 //!   rides a single atomic [`Burst`] (never latest-wins, never split across
-//!   cycles) — matching the [`etcd`](crate::adapters::etcd) port. Classic
+//!   cycles) — matching the [`etcd`](crate::adapters::etcd) port. Legacy
 //!   stamped each snapshot entry with its own `NanoTime::now()`.
 //! - **Realtime only.** Both sources are live, unbounded, wall-clock-stamped
 //!   streams with no historical timeline to replay (Pub/Sub has no backlog; the
@@ -133,7 +133,7 @@ impl RedisConnection {
     /// port, and path are preserved. A URL without userinfo is returned
     /// unchanged. Used at every `Client::open` / connect error site so the raw
     /// URL's password never reaches a log or an aborted-run error (parity with
-    /// the postgres adapter's `PostgresConnection::redacted`, classic PR #433).
+    /// the postgres adapter's `PostgresConnection::redacted`, legacy PR #433).
     #[must_use]
     pub fn redacted(&self) -> String {
         redact_redis_url(&self.url)
@@ -183,7 +183,7 @@ impl From<&String> for RedisConnection {
 /// The socket is opened lazily on the consumer task the first time a sink
 /// writes — deferred off the wiring path — so a connect failure aborts the
 /// *run* (via `consume_async`'s error channel), not graph construction. This
-/// matches classic, which connected lazily inside the async consumer. `who`
+/// matches legacy, which connected lazily inside the async consumer. `who`
 /// names the sink for error context.
 async fn get_or_connect(
     client: &redis::Client,

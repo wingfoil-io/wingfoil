@@ -338,7 +338,7 @@ pub trait KdbDeserialize: Sized {
 type Slice = (String, TimeWindow);
 
 /// Lazily query each slice and yield its in-window rows as a `(NanoTime, T)`
-/// stream — the streaming counterpart of classic `chunk_stream`.
+/// stream — the streaming counterpart of legacy `chunk_stream`.
 ///
 /// This is an `async_stream` generator: it calls `next_slice()` (→ runs the next
 /// KDB query) only when polled past the previous slice's rows, so — driven by
@@ -348,7 +348,7 @@ type Slice = (String, TimeWindow);
 /// graph compute (legacy's model).
 ///
 /// A query, decode, or non-monotonic-time failure yields a trailing `Err` and
-/// stops (aborting the run through the producer stream — classic's per-row
+/// stops (aborting the run through the producer stream — legacy's per-row
 /// abort). Rows outside the slice's [`TimeWindow`] are dropped via
 /// [`WindowFilter`]. `prev_time` is reset each slice so time-of-day columns work
 /// across date partitions (timestamps restart at midnight on each new date).
@@ -429,7 +429,7 @@ where
 /// `RunMode::HistoricalFrom` / `RunFor` described by `params`.
 ///
 /// `buffer_size` bounds the producer→graph backlog as back-pressure (like
-/// classic): `Some(n)` caps the replay to ~`n` timestamp-groups of look-ahead, so
+/// legacy): `Some(n)` caps the replay to ~`n` timestamp-groups of look-ahead, so
 /// a slice is fetched only as the graph drains — bounded memory, pipelined I/O.
 /// `None` is unbounded (a fast KDB feeding a slower graph accumulates a backlog).
 ///
@@ -474,7 +474,7 @@ where
 
     // Defer the connect + slice queries to the run via `produce_async`: nothing
     // touches the network at wiring, so a connection or query failure aborts the
-    // *run* (not graph construction) — matching classic's lazy `produce_async`
+    // *run* (not graph construction) — matching legacy's lazy `produce_async`
     // reader. The connect happens here (in the closure, before the stream); the
     // per-slice queries run lazily inside `chunk_stream` as the graph drains.
     produce_async(
@@ -550,7 +550,7 @@ mod tests {
     }
 
     /// Round-trip test for `KdbSerialize` + `KdbDeserialize` covering every
-    /// supported KDB column type, ported verbatim from classic `read.rs`.
+    /// supported KDB column type, ported verbatim from legacy `read.rs`.
     #[test]
     fn test_all_types_serde_round_trip() {
         use super::super::KdbSerialize;

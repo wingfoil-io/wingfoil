@@ -96,7 +96,7 @@ fn time_value_tuple(time: NanoTime, value: &PyElement) -> PyElement {
     })
 }
 
-/// A held graph with the classic `run` / read-value ergonomics, erased to
+/// A held graph with the legacy `run` / read-value ergonomics, erased to
 /// [`PyElement`]. Clones share the same underlying builder and runner slot.
 #[derive(Default, Clone)]
 pub struct PyGraph {
@@ -228,13 +228,13 @@ impl PyGraph {
     }
 
     /// Wire a **Python-defined custom node** — a Python object acting as a graph
-    /// node, the object-form twin of the classic `CustomStream`
+    /// node, the object-form twin of the legacy `CustomStream`
     /// (`MutableNode` + `StreamPeekRef`). This is the erased-boundary use of
     /// [`GraphBuilder::custom_node`]: the node is activated by its `upstreams`'
     /// ticks and, each activation, calls the Python object's protocol:
     ///
     /// - `cycle(values) -> bool` — invoked with the list of upstream current
-    ///   values; returns whether the node ticked this cycle (the classic
+    ///   values; returns whether the node ticked this cycle (the legacy
     ///   `cycle() -> bool` decision). A not-yet-ticked upstream reads as Python
     ///   `None`.
     /// - `peek() -> value` — read only when `cycle` returned `True`, producing
@@ -344,7 +344,7 @@ impl PyStream {
         self.wrap(self.stream.delay(delay))
     }
 
-    /// Merge with several other streams at once (the classic n-ary `merge`); on
+    /// Merge with several other streams at once (the legacy n-ary `merge`); on
     /// any tick the earliest-supplied ticked input wins. Equivalent to a chain
     /// of 2-ary [`merge`](Self::merge)s.
     pub fn merge_all(&self, others: &[PyStream]) -> PyStream {
@@ -367,7 +367,7 @@ impl PyStream {
     /// The predicate cannot be an infallible Rust `Fn` (a Python call may
     /// raise), so this wires `register_op1` directly rather than the
     /// [`drop_small_change`](StreamOps::drop_small_change) op. It must return
-    /// a real `bool`; anything else aborts the run, matching the classic
+    /// a real `bool`; anything else aborts the run, matching the legacy
     /// binding.
     pub fn drop_small_change(&self, is_small: Py<PyAny>) -> PyStream {
         let dropped = self.stream.wire(move |b: &mut Builder, h| {
@@ -392,7 +392,7 @@ impl PyStream {
                                     )
                                 })?;
                             // Strict `bool`, not truthiness (unlike
-                            // `filter_value`): the classic binding extracts a
+                            // `filter_value`): the legacy binding extracts a
                             // `bool` and reports a clear error otherwise, and
                             // this is its parity twin.
                             let small = result.extract::<bool>(py).map_err(|err| {
@@ -446,7 +446,7 @@ impl PyStream {
     }
 
     /// Negate each value with [`PyElement`]'s `Not`, which maps to Python
-    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the classic
+    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the legacy
     /// `not` node's `T: Not` semantics. Named `not` on the Python side.
     pub fn not_(&self) -> PyStream {
         self.wrap(self.stream.not())
@@ -467,14 +467,14 @@ impl PyStream {
     }
 
     /// Print each value (`{value:?}`) to stdout as it ticks, passing it through
-    /// unchanged (the classic `print` debug tap). Prints per tick rather than
+    /// unchanged (the legacy `print` debug tap). Prints per tick rather than
     /// buffering to teardown — see the `Print` op's deviation note.
     pub fn print(&self) -> PyStream {
         self.wrap(self.stream.print())
     }
 
     /// Log each value (`"{time} {label} {value:?}"` at `level`, via the `log`
-    /// crate) as it ticks, passing it through unchanged (the classic `logged`
+    /// crate) as it ticks, passing it through unchanged (the legacy `logged`
     /// debug tap). Wire up any `log` backend (e.g. Python `logging` bridged in,
     /// or `env_logger`) to see the output.
     pub fn logged(&self, label: &str, level: log::Level) -> PyStream {
@@ -482,7 +482,7 @@ impl PyStream {
     }
 
     /// Collect every emitted value into a growing Python `list`, re-emitted each
-    /// tick (the classic `accumulate`).
+    /// tick (the legacy `accumulate`).
     pub fn accumulate(&self) -> PyStream {
         let acc = self
             .stream
@@ -512,7 +512,7 @@ impl PyStream {
     }
 
     /// Pair each value with the current engine time as a Python `(nanos, value)`
-    /// tuple (the classic `with_time`, nanoseconds as an int).
+    /// tuple (the legacy `with_time`, nanoseconds as an int).
     pub fn with_time(&self) -> PyStream {
         let timed = self
             .stream
@@ -522,7 +522,7 @@ impl PyStream {
     }
 
     /// Collect every `(nanos, value)` pair into a growing Python `list` of
-    /// tuples, re-emitted each tick (the classic `collect` — value + time,
+    /// tuples, re-emitted each tick (the legacy `collect` — value + time,
     /// what `dataframe` builds on).
     pub fn collect(&self) -> PyStream {
         let collected =
@@ -540,7 +540,7 @@ impl PyStream {
     }
 
     /// Fold values into an accumulator with a Python callable, emitting the
-    /// accumulator after each fold (the classic `fold`). `func(acc, value)`
+    /// accumulator after each fold (the legacy `fold`). `func(acc, value)`
     /// returns the new accumulator, seeded from `init`. The accumulator is
     /// **engine-owned state** re-seeded from `init` on a graph reset, so a
     /// re-run restarts the fold (it does not continue). A raised exception
@@ -567,7 +567,7 @@ impl PyStream {
         self.wrap(folded)
     }
 
-    /// Map-and-filter with a Python callable (the classic `filter_map`):
+    /// Map-and-filter with a Python callable (the legacy `filter_map`):
     /// `func(value)` returning Python `None` drops the tick, any other result
     /// is emitted. A raised exception aborts the run with context.
     pub fn filter_map(&self, func: Py<PyAny>) -> PyStream {
@@ -585,7 +585,7 @@ impl PyStream {
         })
     }
 
-    /// Keep a value only when a Python predicate returns truthy (the classic
+    /// Keep a value only when a Python predicate returns truthy (the legacy
     /// `filter_value`); drop it otherwise. A raised exception aborts the run.
     pub fn filter_value(&self, predicate: Py<PyAny>) -> PyStream {
         self.wire_stateless("filter_value", move |value| {
@@ -605,7 +605,7 @@ impl PyStream {
     }
 
     /// Drop values whose payload is Python `None`, passing everything else
-    /// through unchanged (the classic `filter_none`).
+    /// through unchanged (the legacy `filter_none`).
     pub fn filter_none(&self) -> PyStream {
         self.wire_stateless("filter_none", |value| {
             let is_py_none = Python::attach(|py| value.object().is_none(py));
@@ -617,7 +617,7 @@ impl PyStream {
         })
     }
 
-    /// Cumulative running **sum** over the values (the classic `sum`,
+    /// Cumulative running **sum** over the values (the legacy `sum`,
     /// `Window::Unbounded`). Each value is read as `f64` at the edge — a
     /// non-numeric value aborts the run with context — and the running total is
     /// re-boxed as a float [`PyElement`].
@@ -626,7 +626,7 @@ impl PyStream {
         self.wrap(as_f64.cumulative_sum().map(|v: &f64| PyElement::from(*v)))
     }
 
-    /// Cumulative running **mean** over the values (the classic `mean` /
+    /// Cumulative running **mean** over the values (the legacy `mean` /
     /// `average`, `Window::Unbounded`, count-weighted). Values are read as `f64`
     /// at the edge (a non-numeric value aborts the run) and the running mean is
     /// re-boxed as a float [`PyElement`].
@@ -635,11 +635,11 @@ impl PyStream {
         self.wrap(as_f64.cumulative_mean().map(|v: &f64| PyElement::from(*v)))
     }
 
-    /// Combine this stream with `other` through a Python callable (the classic
+    /// Combine this stream with `other` through a Python callable (the legacy
     /// `bimap`): whenever either input ticks, `func(this_value, other_value)` is
     /// called with both inputs' current values and its result is emitted. Both
     /// inputs are active. A raised exception aborts the run with context — so
-    /// this one method also covers the classic `try_bimap` (a Python callable
+    /// this one method also covers the legacy `try_bimap` (a Python callable
     /// always propagates its exception).
     pub fn bimap(&self, other: &PyStream, func: Py<PyAny>) -> PyStream {
         let other_handle = other.stream.handle();
@@ -671,7 +671,7 @@ impl PyStream {
     }
 
     /// Build a pandas `DataFrame` (columns `time`, `value`) from every emitted
-    /// value paired with its engine time (the classic `dataframe`). The frame is
+    /// value paired with its engine time (the legacy `dataframe`). The frame is
     /// assembled **once, on the last cycle**, so the stream's final value is the
     /// completed `DataFrame`; earlier cycles stay quiet. Rows are engine-owned
     /// state re-seeded on a graph reset, so a re-run rebuilds cleanly.
@@ -718,7 +718,7 @@ impl PyStream {
     }
 
     /// Reduce values with a Python callable, emitting the running result (the
-    /// classic `reduce`). The **first** value seeds the accumulator and is
+    /// legacy `reduce`). The **first** value seeds the accumulator and is
     /// emitted as-is; each later value emits `func(acc, value)`
     /// (functools.reduce-style, no explicit initial). The accumulator is
     /// engine-owned state re-seeded on a graph reset, so a re-run restarts. A
@@ -756,7 +756,7 @@ impl PyStream {
     }
 
     /// Decompose a stream of 2-tuples into its two component streams (the
-    /// classic `split`); both branches tick whenever the source does. Reading a
+    /// legacy `split`); both branches tick whenever the source does. Reading a
     /// non-indexable value aborts the run with context.
     pub fn split(&self) -> (PyStream, PyStream) {
         (self.item(0), self.item(1))
@@ -1137,7 +1137,7 @@ impl PyStream {
     ///
     /// Before the owning graph has run there is no value slot to read, so this
     /// hands back the **empty** element — Python `None`, the same answer a
-    /// stream that ran but never ticked gives. That mirrors the classic
+    /// stream that ran but never ticked gives. That mirrors the legacy
     /// infallible `peek_value`, which returns `None` before a run rather than
     /// raising: reading a value early is a question with an answer, not a
     /// programming error, and a panic here escapes to Python as an unhelpful
@@ -1227,7 +1227,7 @@ mod tests {
     #[test]
     fn not_negates_value() {
         let g = PyGraph::new();
-        // `not` maps to __neg__ (arithmetic negation), matching the classic node.
+        // `not` maps to __neg__ (arithmetic negation), matching the legacy node.
         let negated = g.constant(PyElement::from(5_i64)).not_();
         run_cycles(&g, 1);
         let v: i64 = (&negated.value()).try_into().unwrap();
@@ -1618,7 +1618,7 @@ mod tests {
         let _ = out;
     }
 
-    /// Parity with the classic binding's `must return a bool` contract.
+    /// Parity with the legacy binding's `must return a bool` contract.
     #[test]
     fn drop_small_change_non_bool_return_aborts_run() {
         let g = PyGraph::new();
@@ -1677,7 +1677,7 @@ mod tests {
     }
 
     /// A custom node returning `False` from `cycle` stays quiet that cycle —
-    /// the classic "did I tick?" decision. Emits only on even counter values.
+    /// the legacy "did I tick?" decision. Emits only on even counter values.
     #[test]
     fn python_custom_node_can_stay_quiet() {
         let g = PyGraph::new();

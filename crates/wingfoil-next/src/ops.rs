@@ -222,7 +222,7 @@ impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
 /// The predicate *is* the config — a type parameter, `Fn` not `FnMut`, for
 /// the drift-safety reason spelled out on [`Map`].
 ///
-/// Ports classic `wingfoil::nodes::DropSmallChangeStream`.
+/// Ports legacy `wingfoil::nodes::DropSmallChangeStream`.
 pub struct DropSmallChange<T, F>(PhantomData<(T, F)>);
 
 #[op(build = drop_small_change, fluent)]
@@ -369,14 +369,14 @@ where
 }
 
 /// Passes each value through unchanged, printing it (`{value:?}` on its own
-/// line) to stdout as it ticks. The classic `print` node. Stateless.
+/// line) to stdout as it ticks. The legacy `print` node. Stateless.
 ///
-/// **Deviation from classic (justified — tracked as D8 in
-/// `docs/deviation-register.md`).** Classic `print` *buffers* every value
+/// **Deviation from legacy (justified — tracked as D8 in
+/// `docs/deviation-register.md`).** Legacy `print` *buffers* every value
 /// and prints the whole buffer at `Drop` (teardown); this twin prints each
 /// value immediately in `cycle`. The observable value stream is identical —
 /// `print` is a pass-through — only the diagnostic emission differs. Per-tick
-/// printing (a) drops the unbounded `Vec` buffer classic grows one entry per
+/// printing (a) drops the unbounded `Vec` buffer legacy grows one entry per
 /// tick for the whole run, (b) streams output as the run progresses rather
 /// than in one dump at the end, and (c) still prints what was seen if a later
 /// cycle aborts the run. Shedding the teardown hook also leaves `print` the
@@ -399,10 +399,10 @@ impl<T: Clone + Debug + 'static> Op for Print<T> {
 
 /// Logs each value as it ticks — `"{time} {label} {value:?}"` at `level`, via
 /// the `log` crate (target `"wingfoil"`) — and passes it through unchanged.
-/// The classic `logged` debug tap. `Cfg` = `(label, level)`; stateless.
+/// The legacy `logged` debug tap. `Cfg` = `(label, level)`; stateless.
 ///
-/// Deviations from classic (both benign; the value stream is a pass-through,
-/// only the diagnostic differs). Classic `logged` (a) skips wiring the node
+/// Deviations from legacy (both benign; the value stream is a pass-through,
+/// only the diagnostic differs). Legacy `logged` (a) skips wiring the node
 /// entirely when `level` is disabled — a wiring-time `log_enabled!` short
 /// circuit that returns the source unchanged — and (b) reads the tick time via
 /// a `bimap` with `ticked_at_elapsed`. The next twin (a) always wires the
@@ -458,9 +458,9 @@ impl<T> Default for TimedState<T> {
 /// Passes its source value through unchanged, recording the wall-clock start
 /// at [`start`](Op::start) and printing a performance summary at
 /// [`stop`](Op::stop) (tick count, wall-clock duration, per-tick average, and
-/// the engine-time span covered). The classic `timed` node.
+/// the engine-time span covered). The legacy `timed` node.
 ///
-/// Deviations from classic (observable value stream is identical — a
+/// Deviations from legacy (observable value stream is identical — a
 /// pass-through — only the diagnostic differs): the summary goes to `stderr`
 /// via `eprintln!` rather than `log::info!` (wingfoil-next has no `log`
 /// dependency), and — since [`Ctx`] exposes no run mode — it always reports
@@ -603,7 +603,7 @@ impl<T: Clone + 'static> Op for Buffer<T> {
     }
 }
 
-/// Combines three streams with a closure — the classic `trimap`. Ticks when
+/// Combines three streams with a closure — the legacy `trimap`. Ticks when
 /// any active input ticks (active/passive is an engine dispatch concern);
 /// all three values are read. `Fn`, like [`Join`].
 pub struct Join3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
@@ -633,7 +633,7 @@ where
     }
 }
 
-/// Combines three streams with a *fallible* closure — the classic
+/// Combines three streams with a *fallible* closure — the legacy
 /// `try_trimap`. The `try_` counterpart to [`Join3`]: any returned `Err`
 /// propagates to abort the run with context. The closure is `Fn`, like
 /// [`Join3`].
@@ -949,7 +949,7 @@ impl Op for RollingMean {
 /// Ring-buffer state for the rolling variance / std ops: the most recent
 /// `window` samples plus incrementally maintained count-weighted moments
 /// (Welford's algorithm with exact removal), so a tick is O(1). Mirrors the
-/// classic `RollingMomentStream` under `Weighting::Count`.
+/// legacy `RollingMomentStream` under `Weighting::Count`.
 pub struct RollingMomentState {
     buffer: VecDeque<f64>,
     count: u64,
@@ -1013,7 +1013,7 @@ impl RollingMomentState {
         }
     }
 
-    /// Sample variance (ddof = 1) — the classic `Weighting::Count` convention.
+    /// Sample variance (ddof = 1) — the legacy `Weighting::Count` convention.
     /// Yields `0.0` while fewer than two samples are present (rather than NaN).
     fn variance(&self) -> f64 {
         if self.count < 2 {
@@ -1024,7 +1024,7 @@ impl RollingMomentState {
 }
 
 /// Rolling **sample** variance (ddof = 1) over the most recent `window` `f64`
-/// samples. Matches the classic statistics adapter's `Weighting::Count`
+/// samples. Matches the legacy statistics adapter's `Weighting::Count`
 /// convention: the divisor is `n - 1`, and the result is `0.0` until at least
 /// two samples are in the window. `Cfg` = window.
 pub struct RollingVar;
@@ -1076,9 +1076,9 @@ impl Op for RollingStd {
 
 /// Monotonic-deque state for the rolling min & max ops. Holds `(index, value)`
 /// candidates kept monotonic in value, so the front is always the window
-/// extreme — O(1) amortised per tick. Mirrors the classic `RollingExtremeStream`
+/// extreme — O(1) amortised per tick. Mirrors the legacy `RollingExtremeStream`
 /// (a monotonic deque, not a per-tick window scan, so the tick semantics match
-/// the classic node exactly even though a scan would give the same values).
+/// the legacy node exactly even though a scan would give the same values).
 #[derive(Default)]
 pub struct RollingExtremeState {
     deque: VecDeque<(u64, f64)>,
@@ -1172,7 +1172,7 @@ impl Op for RollingMax {
 
 /// Ring-buffer state for the rolling median op — retains the most recent
 /// `window` samples and recomputes the median (sort) each tick, matching the
-/// classic recompute-per-tick `WindowStream` (the median has no cheap
+/// legacy recompute-per-tick `WindowStream` (the median has no cheap
 /// incremental form here).
 #[derive(Default)]
 pub struct RollingMedianState {
@@ -1182,7 +1182,7 @@ pub struct RollingMedianState {
 impl RollingMedianState {
     /// Push a sample (evicting the oldest past `window`) and return the median
     /// of the retained samples. An even-sized window averages the two middle
-    /// values, so unit weights reproduce the ordinary median — the classic
+    /// values, so unit weights reproduce the ordinary median — the legacy
     /// `Weighting::Count` behaviour.
     fn push(&mut self, sample: f64, window: usize) -> f64 {
         self.buffer.push_back(sample);
@@ -1202,7 +1202,7 @@ impl RollingMedianState {
 
 /// Rolling median over the most recent `window` `f64` samples. Recomputed per
 /// tick (O(window)); an even window averages its two middle values, matching
-/// the classic statistics adapter's count-weighted median. `Cfg` = window.
+/// the legacy statistics adapter's count-weighted median. `Cfg` = window.
 pub struct RollingMedian;
 
 #[op(build = rolling_median)]
@@ -1226,7 +1226,7 @@ impl Op for RollingMedian {
 /// Incrementally maintained count-weighted moments over the **whole** stream
 /// (a cumulative / unbounded window), via Welford's online algorithm — O(1)
 /// time and memory, numerically stable (never a naive sum-of-squares). Mirrors
-/// the classic `MomentStream` under `Weighting::Count`: samples never leave, so
+/// the legacy `MomentStream` under `Weighting::Count`: samples never leave, so
 /// unlike [`RollingMomentState`] there is no buffer and no removal.
 #[derive(Default)]
 pub struct CumulativeMomentState {
@@ -1244,7 +1244,7 @@ impl CumulativeMomentState {
         self.m2 += (x - mean_old) * (x - self.mean);
     }
 
-    /// Sample variance (ddof = 1) — the classic `Weighting::Count` convention.
+    /// Sample variance (ddof = 1) — the legacy `Weighting::Count` convention.
     /// Yields `0.0` while fewer than two samples have been seen (rather than
     /// NaN).
     fn variance(&self) -> f64 {
@@ -1256,7 +1256,7 @@ impl CumulativeMomentState {
 }
 
 /// Cumulative arithmetic mean over every sample seen so far — O(1) per tick via
-/// Welford (see [`CumulativeMomentState`]). Mirrors the classic
+/// Welford (see [`CumulativeMomentState`]). Mirrors the legacy
 /// `mean(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeMean;
 
@@ -1282,7 +1282,7 @@ impl Op for CumulativeMean {
 /// Cumulative **sample** variance (ddof = 1) over every sample seen so far —
 /// O(1) per tick via Welford (see [`CumulativeMomentState`]). The divisor is
 /// `n - 1`, and the result is `0.0` until at least two samples are present.
-/// Mirrors the classic `variance(Window::Unbounded, Weighting::Count)`.
+/// Mirrors the legacy `variance(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeVar;
 
 #[op(build = cumulative_var)]
@@ -1330,7 +1330,7 @@ impl Op for CumulativeStd {
 }
 
 /// Cumulative sum over every sample seen so far — a running total, O(1) per
-/// tick. Mirrors the classic `sum(Window::Unbounded)` (`CumulativeStream` with
+/// tick. Mirrors the legacy `sum(Window::Unbounded)` (`CumulativeStream` with
 /// `CumulativeStat::Sum`).
 pub struct CumulativeSum;
 
@@ -1357,7 +1357,7 @@ impl Op for CumulativeSum {
 /// Cumulative minimum over every sample seen so far — a running extreme, O(1)
 /// per tick. The `Option` state distinguishes "no sample yet" from a genuine
 /// `0.0`, so the first sample seeds the extreme rather than `min(0.0, x)`.
-/// Mirrors the classic `min(Window::Unbounded)`.
+/// Mirrors the legacy `min(Window::Unbounded)`.
 pub struct CumulativeMin;
 
 #[op(build = cumulative_min)]
@@ -1387,7 +1387,7 @@ impl Op for CumulativeMin {
 
 /// Cumulative maximum over every sample seen so far — a running extreme, O(1)
 /// per tick. `Option` state seeds on the first sample (see [`CumulativeMin`]).
-/// Mirrors the classic `max(Window::Unbounded)`.
+/// Mirrors the legacy `max(Window::Unbounded)`.
 pub struct CumulativeMax;
 
 #[op(build = cumulative_max)]
@@ -1416,7 +1416,7 @@ impl Op for CumulativeMax {
 }
 
 /// Retains **every** sample so far and recomputes the median (sort) each tick,
-/// mirroring the classic recompute-per-tick `WindowStream` in its unbounded
+/// mirroring the legacy recompute-per-tick `WindowStream` in its unbounded
 /// mode (the median has no cheap incremental form here, so — unlike the other
 /// cumulative stats — its memory grows with the stream).
 #[derive(Default)]
@@ -1427,7 +1427,7 @@ pub struct CumulativeMedianState {
 impl CumulativeMedianState {
     /// Push a sample (retaining all history) and return the median of every
     /// sample seen so far. An even count averages the two middle values, so
-    /// this reproduces the classic count-weighted median.
+    /// this reproduces the legacy count-weighted median.
     fn push(&mut self, sample: f64) -> f64 {
         self.buffer.push(sample);
         let mut sorted = self.buffer.clone();
@@ -1443,8 +1443,8 @@ impl CumulativeMedianState {
 
 /// Cumulative median over every sample seen so far. Recomputed per tick
 /// (O(n log n)); an even count averages the two middle values, matching the
-/// classic count-weighted median. Retains all samples, so its memory grows with
-/// the stream. Mirrors the classic `median(Window::Unbounded, Weighting::Count)`.
+/// legacy count-weighted median. Retains all samples, so its memory grows with
+/// the stream. Mirrors the legacy `median(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeMedian;
 
 #[op(build = cumulative_median)]
@@ -1469,15 +1469,15 @@ impl Op for CumulativeMedian {
 //
 // Each op keeps the samples currently inside a bounded time window — the last
 // `window` nanoseconds of graph time — and computes a statistic over them.
-// Eviction semantics, reproduced from the classic `WindowStream` /
-// `RollingMomentStream` `Window::Time` path (`wingfoil/src/adapters/statistics.rs`):
+// Eviction semantics, reproduced from the legacy `WindowStream` /
+// `RollingMomentStream` `Window::Time` path (`legacy/wingfoil/src/adapters/statistics.rs`):
 //
 //   * on each tick the current sample is pushed at `now = ctx.time()`, then
 //     every front entry whose age `now - t` is **strictly greater** than
 //     `window` is evicted — so an entry exactly `window` old is retained (an
 //     inclusive trailing boundary);
 //   * the just-pushed sample has age 0, so it is always in window and the window
-//     is **never empty** (classic has no empty-window instant — even a zero-width
+//     is **never empty** (legacy has no empty-window instant — even a zero-width
 //     window keeps the current sample); and
 //   * `var`/`std` use the sample (ddof = 1) convention — `0.0` until at least two
 //     samples are in the window.
@@ -1487,7 +1487,7 @@ impl Op for CumulativeMedian {
 // `Window::Time`) is a separate follow-up.
 
 /// True when an entry at time `t` observed from `now` has aged past `window`
-/// nanoseconds (the classic strictly-greater trailing boundary). Time is
+/// nanoseconds (the legacy strictly-greater trailing boundary). Time is
 /// monotonic, so `now >= t` and the subtraction never underflows.
 fn aged_out(now: NanoTime, t: NanoTime, window: u64) -> bool {
     u64::from(now) - u64::from(t) > window
@@ -1521,7 +1521,7 @@ impl TimeWindowSumState {
 }
 
 /// Sum over a bounded time window of the last `window` (a [`NanoTime`] duration)
-/// of graph time — O(1) per tick. Mirrors the classic `sum(Window::Time(_))`.
+/// of graph time — O(1) per tick. Mirrors the legacy `sum(Window::Time(_))`.
 pub struct TimeWindowedSum;
 
 #[op(build = time_windowed_sum)]
@@ -1546,7 +1546,7 @@ impl Op for TimeWindowedSum {
 /// Ring-buffer state for the time-windowed mean / variance / std: the
 /// `(time, value)` samples in the window plus incrementally maintained
 /// count-weighted moments (Welford's algorithm with exact removal), so a tick
-/// is O(1) amortised. Mirrors the classic `RollingMomentStream` under
+/// is O(1) amortised. Mirrors the legacy `RollingMomentStream` under
 /// `Weighting::Count` with a `Window::Time` eviction rule.
 #[derive(Default)]
 pub struct TimeWindowMomentState {
@@ -1611,7 +1611,7 @@ impl TimeWindowMomentState {
 }
 
 /// Arithmetic mean over a bounded time window — O(1) amortised per tick.
-/// Mirrors the classic `mean(Window::Time(_), Weighting::Count)`.
+/// Mirrors the legacy `mean(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedMean;
 
 #[op(build = time_windowed_mean)]
@@ -1636,7 +1636,7 @@ impl Op for TimeWindowedMean {
 }
 
 /// **Sample** variance (ddof = 1) over a bounded time window — O(1) amortised
-/// per tick. Mirrors the classic `variance(Window::Time(_), Weighting::Count)`.
+/// per tick. Mirrors the legacy `variance(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedVar;
 
 #[op(build = time_windowed_var)]
@@ -1660,7 +1660,7 @@ impl Op for TimeWindowedVar {
 
 /// **Sample** standard deviation over a bounded time window — the square root of
 /// [`TimeWindowedVar`], clamped at zero before the root so a constant window
-/// yields `0.0`, not `NaN`. Mirrors the classic `std(Window::Time(_),
+/// yields `0.0`, not `NaN`. Mirrors the legacy `std(Window::Time(_),
 /// Weighting::Count)`.
 pub struct TimeWindowedStd;
 
@@ -1686,8 +1686,8 @@ impl Op for TimeWindowedStd {
 /// Monotonic-deque state for the time-windowed min & max. Holds `(time, value)`
 /// candidates kept monotonic in value and increasing in time front-to-back, so
 /// the front is always the window extreme — O(1) amortised per tick. Unlike the
-/// classic time-windowed `WindowStream` (a per-tick scan), this uses the same
-/// monotonic-deque trick as the classic *count*-windowed `RollingExtremeStream`,
+/// legacy time-windowed `WindowStream` (a per-tick scan), this uses the same
+/// monotonic-deque trick as the legacy *count*-windowed `RollingExtremeStream`,
 /// front-evicting by age instead of by index; the emitted values are identical.
 #[derive(Default)]
 pub struct TimeWindowExtremeState {
@@ -1732,7 +1732,7 @@ impl TimeWindowExtremeState {
 }
 
 /// Minimum over a bounded time window, via a monotonic deque — O(1) amortised
-/// per tick. Mirrors the classic `min(Window::Time(_))`.
+/// per tick. Mirrors the legacy `min(Window::Time(_))`.
 pub struct TimeWindowedMin;
 
 #[op(build = time_windowed_min)]
@@ -1755,7 +1755,7 @@ impl Op for TimeWindowedMin {
 }
 
 /// Maximum over a bounded time window, via a monotonic deque — O(1) amortised
-/// per tick. Mirrors the classic `max(Window::Time(_))`.
+/// per tick. Mirrors the legacy `max(Window::Time(_))`.
 pub struct TimeWindowedMax;
 
 #[op(build = time_windowed_max)]
@@ -1779,7 +1779,7 @@ impl Op for TimeWindowedMax {
 
 /// Ring-buffer state for the time-windowed median — retains the `(time, value)`
 /// samples in the window and recomputes the median (sort) each tick, matching
-/// the classic recompute-per-tick `WindowStream` (the median has no cheap
+/// the legacy recompute-per-tick `WindowStream` (the median has no cheap
 /// incremental form here).
 #[derive(Default)]
 pub struct TimeWindowMedianState {
@@ -1789,7 +1789,7 @@ pub struct TimeWindowMedianState {
 impl TimeWindowMedianState {
     /// Push `sample` at `now`, evict aged entries, and return the median of the
     /// retained samples. An even count averages the two middle values, so this
-    /// reproduces the classic count-weighted median.
+    /// reproduces the legacy count-weighted median.
     fn push(&mut self, now: NanoTime, sample: f64, window: u64) -> f64 {
         self.buffer.push_back((now, sample));
         while let Some(&(t, _)) = self.buffer.front() {
@@ -1812,7 +1812,7 @@ impl TimeWindowMedianState {
 
 /// Median over a bounded time window. Recomputed per tick (O(w log w) over the
 /// `w` retained samples); an even count averages the two middle values,
-/// matching the classic count-weighted median. Mirrors the classic
+/// matching the legacy count-weighted median. Mirrors the legacy
 /// `median(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedMedian;
 
@@ -1841,8 +1841,8 @@ impl Op for TimeWindowedMedian {
 // count-windowed, and time-windowed mean/var/std): each sample is weighted by
 // how long it was in effect — the elapsed Δt until its successor, read from
 // engine time via `ctx.time()` — rather than by a unit count. Ported verbatim
-// from the classic `MomentStream` / `RollingMomentStream` under
-// `Weighting::Time` (`wingfoil/src/adapters/statistics.rs`). Semantics
+// from the legacy `MomentStream` / `RollingMomentStream` under
+// `Weighting::Time` (`legacy/wingfoil/src/adapters/statistics.rs`). Semantics
 // reproduced:
 //
 //   * on each tick the *previous* sample is credited with the elapsed Δt before
@@ -1859,7 +1859,7 @@ impl Op for TimeWindowedMedian {
 /// Incremental weighted mean and variance via West's algorithm (the weighted
 /// generalisation of Welford's — numerically stable, single pass), with an
 /// exact `remove` inverse so a sliding window can evict a contribution in O(1).
-/// Ported verbatim from the classic statistics adapter's `WeightedMoments`.
+/// Ported verbatim from the legacy statistics adapter's `WeightedMoments`.
 #[derive(Default)]
 struct WeightedMoments {
     w_sum: f64,
@@ -1918,7 +1918,7 @@ impl WeightedMoments {
 
     /// Time-weighted (population) variance — `m2 / w_sum`, `0.0` until weight is
     /// present. Reliability-weighted variance has no clean ddof correction, so
-    /// this is the population form (matching the classic `Weighting::Time`).
+    /// this is the population form (matching the legacy `Weighting::Time`).
     fn variance(&self) -> f64 {
         if self.w_sum <= 0.0 {
             return 0.0;
@@ -1930,7 +1930,7 @@ impl WeightedMoments {
 /// State for the cumulative time-weighted moment ops: the running
 /// [`WeightedMoments`] plus the previous sample and the time it was last seen,
 /// so each tick credits the previous value with the elapsed Δt before the new
-/// sample takes over. Mirrors the classic `MomentStream` under
+/// sample takes over. Mirrors the legacy `MomentStream` under
 /// `Weighting::Time`.
 #[derive(Default)]
 pub struct CumulativeTimeWeightedMomentState {
@@ -1969,7 +1969,7 @@ impl CumulativeTimeWeightedMomentState {
 /// Cumulative time-weighted mean over every sample seen so far — each sample
 /// weighted by how long it was in effect (Δt from the graph clock). The most
 /// recent sample only starts contributing once the next tick advances the
-/// clock. Mirrors the classic `mean(Window::Unbounded, Weighting::Time)`.
+/// clock. Mirrors the legacy `mean(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeMeanTimeWeighted;
 
 #[op(build = cumulative_mean_time_weighted)]
@@ -1994,7 +1994,7 @@ impl Op for CumulativeMeanTimeWeighted {
 
 /// Cumulative time-weighted **population** variance over every sample seen so
 /// far — `m2 / w_sum` (no ddof correction), `0.0` until weight is present.
-/// Mirrors the classic `variance(Window::Unbounded, Weighting::Time)`.
+/// Mirrors the legacy `variance(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeVarTimeWeighted;
 
 #[op(build = cumulative_var_time_weighted)]
@@ -2018,7 +2018,7 @@ impl Op for CumulativeVarTimeWeighted {
 
 /// Cumulative time-weighted standard deviation over every sample seen so far —
 /// the square root of [`CumulativeVarTimeWeighted`], clamped at zero before the
-/// root so a constant stream yields `0.0`, not `NaN`. Mirrors the classic
+/// root so a constant stream yields `0.0`, not `NaN`. Mirrors the legacy
 /// `std(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeStdTimeWeighted;
 
@@ -2046,7 +2046,7 @@ impl Op for CumulativeStdTimeWeighted {
 /// maintained [`WeightedMoments`]. Each sample's weight is the Δt until its
 /// successor, committed when that successor arrives (so the newest sample
 /// contributes nothing until the next tick) and reverted when the sample leaves
-/// the window. Mirrors the classic `RollingMomentStream` under
+/// the window. Mirrors the legacy `RollingMomentStream` under
 /// `Weighting::Time`; only the eviction rule differs between the count and time
 /// windows.
 #[derive(Default)]
@@ -2118,7 +2118,7 @@ impl WindowedTimeWeightedMomentState {
 }
 
 /// Time-weighted mean over the most recent `window` samples (a count window).
-/// Mirrors the classic `mean(Window::Count(_), Weighting::Time)`.
+/// Mirrors the legacy `mean(Window::Count(_), Weighting::Time)`.
 pub struct RollingMeanTimeWeighted;
 
 #[op(build = rolling_mean_time_weighted)]
@@ -2142,7 +2142,7 @@ impl Op for RollingMeanTimeWeighted {
 }
 
 /// Time-weighted **population** variance over the most recent `window` samples
-/// (a count window). Mirrors the classic `variance(Window::Count(_),
+/// (a count window). Mirrors the legacy `variance(Window::Count(_),
 /// Weighting::Time)`.
 pub struct RollingVarTimeWeighted;
 
@@ -2167,7 +2167,7 @@ impl Op for RollingVarTimeWeighted {
 
 /// Time-weighted standard deviation over the most recent `window` samples (a
 /// count window) — the square root of [`RollingVarTimeWeighted`], clamped at
-/// zero. Mirrors the classic `std(Window::Count(_), Weighting::Time)`.
+/// zero. Mirrors the legacy `std(Window::Count(_), Weighting::Time)`.
 pub struct RollingStdTimeWeighted;
 
 #[op(build = rolling_std_time_weighted)]
@@ -2190,7 +2190,7 @@ impl Op for RollingStdTimeWeighted {
 }
 
 /// Time-weighted mean over a bounded time window of the last `window` (a
-/// [`NanoTime`] duration) of graph time. Mirrors the classic
+/// [`NanoTime`] duration) of graph time. Mirrors the legacy
 /// `mean(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedMeanTimeWeighted;
 
@@ -2215,7 +2215,7 @@ impl Op for TimeWindowedMeanTimeWeighted {
 }
 
 /// Time-weighted **population** variance over a bounded time window. Mirrors the
-/// classic `variance(Window::Time(_), Weighting::Time)`.
+/// legacy `variance(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedVarTimeWeighted;
 
 #[op(build = time_windowed_var_time_weighted)]
@@ -2238,7 +2238,7 @@ impl Op for TimeWindowedVarTimeWeighted {
 }
 
 /// Time-weighted standard deviation over a bounded time window — the square root
-/// of [`TimeWindowedVarTimeWeighted`], clamped at zero. Mirrors the classic
+/// of [`TimeWindowedVarTimeWeighted`], clamped at zero. Mirrors the legacy
 /// `std(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedStdTimeWeighted;
 
@@ -2266,9 +2266,9 @@ impl Op for TimeWindowedStdTimeWeighted {
 // The time-*weighted* twin of the count-weighted median ops (cumulative,
 // count-windowed, and time-windowed). Unlike the moment ops above it is **not**
 // an incremental West's-algorithm accumulator: the median has no cheap
-// incremental form, so — like the classic `WindowStream::weighted_median` — it
+// incremental form, so — like the legacy `WindowStream::weighted_median` — it
 // retains the `(value, time)` samples in the window and recomputes over them
-// each tick. Ported verbatim from `wingfoil/src/adapters/statistics.rs`
+// each tick. Ported verbatim from `legacy/wingfoil/src/adapters/statistics.rs`
 // (`WindowStream` + `for_each_weight` + `weighted_median`, `Weighting::Time`).
 // Semantics reproduced:
 //
@@ -2289,7 +2289,7 @@ impl Op for TimeWindowedStdTimeWeighted {
 /// Recompute-per-tick buffer for the time-weighted median: the `(value, time)`
 /// samples currently in the window. Each tick pushes the new sample, evicts per
 /// the window rule, then recomputes the weighted median over what remains — the
-/// same `VecDeque<(f64, NanoTime)>` and algorithm as the classic `WindowStream`
+/// same `VecDeque<(f64, NanoTime)>` and algorithm as the legacy `WindowStream`
 /// under `Weighting::Time`; only the eviction rule differs between the three
 /// windows.
 #[derive(Default)]
@@ -2302,7 +2302,7 @@ impl TimeWeightedMedianState {
     /// its successor (the newest by the gap to `now`, i.e. zero), drop zero
     /// weights, then return the value at which cumulative weight crosses half the
     /// total (averaging the two straddling values on an exact boundary). Ported
-    /// verbatim from the classic `WindowStream::weighted_median`.
+    /// verbatim from the legacy `WindowStream::weighted_median`.
     fn weighted_median(&self, now: NanoTime) -> f64 {
         let n = self.buffer.len();
         let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
@@ -2378,7 +2378,7 @@ impl TimeWeightedMedianState {
 /// Cumulative time-weighted median over every sample seen so far — each sample
 /// weighted by how long it was in effect (Δt from the graph clock). Recomputed
 /// per tick (O(n log n)); retains all samples, so its memory grows with the
-/// stream. Mirrors the classic `median(Window::Unbounded, Weighting::Time)`.
+/// stream. Mirrors the legacy `median(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeMedianTimeWeighted;
 
 #[op(build = cumulative_median_time_weighted)]
@@ -2401,7 +2401,7 @@ impl Op for CumulativeMedianTimeWeighted {
 
 /// Time-weighted median over the most recent `window` samples (a count window),
 /// each weighted by how long it was in effect. Recomputed per tick (O(w log w)).
-/// Mirrors the classic `median(Window::Count(_), Weighting::Time)`.
+/// Mirrors the legacy `median(Window::Count(_), Weighting::Time)`.
 pub struct RollingMedianTimeWeighted;
 
 #[op(build = rolling_median_time_weighted)]
@@ -2424,7 +2424,7 @@ impl Op for RollingMedianTimeWeighted {
 
 /// Time-weighted median over a bounded time window — the samples seen in the last
 /// `window` of graph time, each weighted by how long it was in effect. Recomputed
-/// per tick (O(w log w) over the `w` retained samples). Mirrors the classic
+/// per tick (O(w log w) over the `w` retained samples). Mirrors the legacy
 /// `median(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedMedianTimeWeighted;
 
@@ -2630,7 +2630,7 @@ where
 }
 
 /// Runs a closure once at [`teardown`](Op::teardown), after the run ends —
-/// even if a cycle aborted it. The classic `finally` node: cleanup that must
+/// even if a cycle aborted it. The legacy `finally` node: cleanup that must
 /// happen regardless of how the run terminated. Passively observes its
 /// source (so it never itself triggers a cycle); the closure sees the
 /// source's last value. Emits nothing during the run.
@@ -2660,7 +2660,7 @@ where
     }
 }
 
-/// Joins two streams with a closure — the classic `bimap` with two active
+/// Joins two streams with a closure — the legacy `bimap` with two active
 /// upstreams: ticks when either input ticks, reading both current values.
 pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
@@ -2683,7 +2683,7 @@ where
     }
 }
 
-/// Joins two streams with a *fallible* closure — the classic `try_bimap`. The
+/// Joins two streams with a *fallible* closure — the legacy `try_bimap`. The
 /// `try_` counterpart to [`Join`]: any returned `Err` propagates to abort the
 /// run with context. Each upstream is independently active or passive (an
 /// engine dispatch concern); both values are always read. The closure is `Fn`,
@@ -2804,7 +2804,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     ) -> Result<Tick<T>> {
         let (value, src_ticked) = input;
         let delay = NanoTime::from(*cfg);
-        // Classic parity: a zero delay emits inline in the *same* cycle
+        // Legacy parity: a zero delay emits inline in the *same* cycle
         // (scheduling `time + 0` would instead pop next cycle).
         if delay == NanoTime::ZERO {
             return Ok(if src_ticked {
@@ -2822,7 +2822,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
         while let Some(due) = state.queue.pop_if_pending(ctx.time()) {
             out = Tick::Value(due);
         }
-        // Classic parity: the first upstream value is stored into the slot
+        // Legacy parity: the first upstream value is stored into the slot
         // *without* ticking, so passive readers see it (not `T::default()`)
         // before the delay elapses.
         if matches!(out, Tick::Quiet) && src_ticked && !state.seeded {
@@ -2863,14 +2863,14 @@ impl<T: Clone + 'static> Op for Merge2<T> {
 }
 
 /// Merges **N** streams: the earliest-supplied input that ticked this cycle
-/// wins — the n-ary generalisation of [`Merge2`], and the twin of classic
+/// wins — the n-ary generalisation of [`Merge2`], and the twin of legacy
 /// wingfoil's `merge(vec)`.
 ///
 /// It exists as its own op rather than as sugar over a chain of [`Merge2`]s
 /// because the chain is not free: `merge_all`/`fan` used to left-fold into
 /// `n - 1` binary merges, costing `n - 1` extra *nodes* and `n - 1` extra
-/// *depth* against classic's single node. On a busy 256-wide fan-in that
-/// measured 1.86x classic — a Phase 6 gate violation, not a tuning
+/// *depth* against legacy's single node. On a busy 256-wide fan-in that
+/// measured 1.86x legacy — a Phase 6 gate violation, not a tuning
 /// opportunity. Rebalancing the chain recovers only the depth half; only a
 /// real n-ary node removes both.
 ///
@@ -3001,7 +3001,7 @@ pub fn __wf_op_merge_n_seed_value<T: Default, __P>(_cfg: &__P) -> T {
     T::default()
 }
 
-/// A source that never ticks — the classic `never` node. It has no upstreams
+/// A source that never ticks — the legacy `never` node. It has no upstreams
 /// and never schedules itself, so it stays [`Tick::Quiet`] for the whole run;
 /// its unit value is never observed downstream. The idiomatic inert trigger —
 /// e.g. a [`DelayWithReset`] that never resets degrades to a plain [`Delay`].
@@ -3041,7 +3041,7 @@ impl<T: PartialEq> Default for DelayWithResetState<T> {
     }
 }
 
-/// [`Delay`] with a reset trigger — the classic `delay_with_reset` node. When
+/// [`Delay`] with a reset trigger — the legacy `delay_with_reset` node. When
 /// the trigger ticks, the output snaps to the *current* upstream value and the
 /// pending queue is cleared; otherwise it behaves exactly like [`Delay`]. The
 /// two active inputs (upstream value and the trigger's tick) arrive as input
@@ -3071,7 +3071,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
         let (value, upstream_ticked, trigger_ticked) = input;
-        // Reset wins over a same-cycle upstream tick (classic checks the
+        // Reset wins over a same-cycle upstream tick (legacy checks the
         // trigger first): snap to the live upstream value, drop the queue.
         if trigger_ticked {
             state.queue.clear();
@@ -3079,7 +3079,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
             return Ok(Tick::Value(value.clone()));
         }
         let delay = NanoTime::from(*cfg);
-        // Classic parity: a zero delay emits inline in the *same* cycle.
+        // Legacy parity: a zero delay emits inline in the *same* cycle.
         if delay == NanoTime::ZERO {
             return Ok(if upstream_ticked {
                 Tick::Value(value.clone())
@@ -3101,7 +3101,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
         while let Some(due) = state.queue.pop_if_pending(ctx.time()) {
             out = Tick::Value(due);
         }
-        // Classic parity: the first upstream value is stored into the slot
+        // Legacy parity: the first upstream value is stored into the slot
         // *without* ticking, so passive readers see it before the delay
         // elapses (identical to `Delay`'s first-value seeding).
         if matches!(out, Tick::Quiet) && seed_first {

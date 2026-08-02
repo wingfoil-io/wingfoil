@@ -13,7 +13,7 @@ use wingfoil_next::prelude::*;
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// An unreachable endpoint must abort the source's run rather than hang or panic
-/// — the parity of classic `test_connection_refused`.
+/// — the parity of legacy `test_connection_refused`.
 #[test]
 fn sub_connection_refused_aborts_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");

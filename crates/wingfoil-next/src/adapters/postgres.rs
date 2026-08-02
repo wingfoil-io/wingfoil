@@ -1,7 +1,7 @@
 //! postgres adapter — time-partitioned historical **reads** ([`postgres_read`]),
 //! a real-time `LISTEN`/`NOTIFY` live-tail **source** ([`postgres_sub`]), and a
 //! streaming **sink** ([`PostgresSinkOps::postgres_write`]) for PostgreSQL,
-//! using the async `tokio-postgres` client. It ports the classic
+//! using the async `tokio-postgres` client. It ports the legacy
 //! `wingfoil::adapters::postgres` module onto the Op model.
 //!
 //! Time is carried **on-graph** in tuples `(NanoTime, T)`, never inside the
@@ -85,9 +85,9 @@
 //! [`consume_async`](crate::async_source::consume_async); within a burst all
 //! inserts are pipelined over the single connection (~1 round trip per burst).
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (time-sliced read, live tail, streaming write, the
+//! Every legacy *capability* (time-sliced read, live tail, streaming write, the
 //! `PostgresDeserialize`/`PostgresSerialize`/`PostgresRowExt` traits, the quoting
 //! and timestamp helpers, and the password-redacting connection config) is
 //! preserved. The surface differs in four deliberate ways, mirroring the
@@ -96,7 +96,7 @@
 //! 1. **The graph owns the tokio runtime.** `postgres_read` / `postgres_sub` /
 //!    `postgres_write` no longer take a `&Handle`: the `GraphBuilder` owns one
 //!    runtime, created lazily on first async use and dropped at teardown, shared
-//!    by every async adapter — replacing classic's hidden never-dropped global
+//!    by every async adapter — replacing legacy's hidden never-dropped global
 //!    (see `docs/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    [`postgres_read`] takes a [`RunParams`] (it needs the run's `[start, end)`
@@ -107,8 +107,8 @@
 //!    its client with [`Handle::block_on`](tokio::runtime::Handle::block_on) at
 //!    teardown, so the graph must be built, run, and dropped from a **non-async
 //!    thread** (`main`, a `#[test]` fn).
-//! 2. **The reader defers its connect + queries to the run, like classic.** Both
-//!    next and classic run `postgres_read` through
+//! 2. **The reader defers its connect + queries to the run, like legacy.** Both
+//!    next and legacy run `postgres_read` through
 //!    [`produce_async`](crate::async_source::produce_async), so wiring does no
 //!    I/O and a connection or slice-query error aborts the *run*, not graph
 //!    construction (as does a decode or non-monotonic-time error). The run window
@@ -120,8 +120,8 @@
 //!    unbounded); [`postgres_source`] threads one through its
 //!    [`historical`](PostgresSourceConfig::historical) half.
 //! 3. **The sink is a trait only and pipelines per burst via `consume_async`.**
-//!    Classic exposed a free `postgres_write` fn *and* a `PostgresWriteOperators`
-//!    trait; next folds the entry point into [`PostgresSinkOps`]. Like classic,
+//!    Legacy exposed a free `postgres_write` fn *and* a `PostgresWriteOperators`
+//!    trait; next folds the entry point into [`PostgresSinkOps`]. Like legacy,
 //!    the connection is opened **lazily inside the consumer** on the first write
 //!    (so wiring opens no socket and a connect failure surfaces during the run),
 //!    and it rides the shared `consume_async` (which surfaces a write error on a
@@ -219,7 +219,7 @@ impl PostgresConnection {
     /// field is preserved. A value has no way to contain an unescaped space, so
     /// splitting on whitespace is sufficient. Used at every `connect()` error
     /// site so the DSN's `password=...` never reaches a log or an aborted-run
-    /// error (parity with classic PR #433).
+    /// error (parity with legacy PR #433).
     #[must_use]
     pub fn redacted(&self) -> String {
         self.conn_str
@@ -336,7 +336,7 @@ impl PostgresRowExt for Row {
 /// replays the decoded, in-window rows at their timestamps.
 ///
 /// `buffer_size` bounds the producer→graph backlog as back-pressure (like
-/// classic): `Some(n)` caps the replay to ~`n` timestamp-groups of look-ahead, so
+/// legacy): `Some(n)` caps the replay to ~`n` timestamp-groups of look-ahead, so
 /// a slice is fetched only as the graph drains — bounded memory, pipelined query
 /// I/O; `None` is unbounded.
 ///
@@ -392,7 +392,7 @@ where
 
     // Defer the connect + slice queries to the run via `produce_async`: nothing
     // touches the network at wiring, so a connection or query failure aborts the
-    // *run* (not graph construction) — matching classic's lazy `produce_async`
+    // *run* (not graph construction) — matching legacy's lazy `produce_async`
     // reader. The connect happens in the closure (before the stream); the
     // per-slice queries run lazily inside `read_chunk_stream` as the graph drains,
     // so a `buffer_size` bound keeps the replay bounded in memory and pipelines
@@ -432,7 +432,7 @@ where
 /// task): it runs the next query only when polled past the previous slice, so —
 /// driven by `produce_async`'s back-pressure — a slice is fetched only
 /// once the graph has room. A query, decode, or non-monotonic-time failure yields
-/// a trailing `Err` and stops (classic's per-row abort). Rows outside the slice's
+/// a trailing `Err` and stops (legacy's per-row abort). Rows outside the slice's
 /// window are dropped via [`WindowFilter`]. Timestamps are full (not time-of-day),
 /// so ordering is enforced across the whole read, not reset per slice.
 fn read_chunk_stream<T>(
@@ -845,7 +845,7 @@ pub trait PostgresSerialize {
 
 /// One burst's worth of records sharing the burst's graph timestamp — the unit
 /// [`consume_async`] drains per write, so an N-record burst is inserted as one
-/// pipelined batch (matching classic's per-burst insert).
+/// pipelined batch (matching legacy's per-burst insert).
 #[derive(Clone, Default)]
 struct WriteBatch<T> {
     time: NanoTime,
@@ -855,7 +855,7 @@ struct WriteBatch<T> {
 /// Fluent extension for writing `Burst<T>` streams to a PostgreSQL table.
 ///
 /// Enabled with `use wingfoil_next::adapters::postgres::PostgresSinkOps;`. Like
-/// classic, the sink is **burst-only** (write single records via
+/// legacy, the sink is **burst-only** (write single records via
 /// `constant(burst![record])` / a `Stream<Burst<T>>`), because time is prepended
 /// per burst.
 pub trait PostgresSinkOps<T> {
@@ -904,7 +904,7 @@ where
         // The connection is established lazily on the consumer task on the first
         // write (see below), not here — so wiring opens no socket and a connect
         // failure surfaces during the run (via `consume_async`'s error channel),
-        // matching classic's connect-at-run behaviour rather than failing at
+        // matching legacy's connect-at-run behaviour rather than failing at
         // graph construction.
         let conn_str = connection.conn_str.clone();
         let redacted = connection.redacted();

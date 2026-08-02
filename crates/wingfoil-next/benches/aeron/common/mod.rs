@@ -4,7 +4,7 @@
 //! Provides shared helpers for Aeron transport benchmarks, following the project
 //! convention to factor out common code into helper functions.
 //!
-//! Ported verbatim from classic `wingfoil/benches/aeron/common/mod.rs` — it
+//! Ported verbatim from legacy `legacy/wingfoil/benches/aeron/common/mod.rs` — it
 //! drives the `rusteron` client and media driver directly and touches no
 //! wingfoil engine type, so it is engine-agnostic.
 

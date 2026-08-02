@@ -1,4 +1,4 @@
-"""Python-defined graph nodes, in the classic `CustomStream` shape.
+"""Python-defined graph nodes, in the legacy `CustomStream` shape.
 
 The engine already accepts a Python object as a node via
 ``Graph.custom_node(upstreams, obj)``, whose protocol is ``cycle(values) ->

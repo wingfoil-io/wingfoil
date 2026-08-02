@@ -1,6 +1,6 @@
 ## Observability — the `logged` debug tap and the engine's spans
 
-Three modes, mirroring the classic wingfoil `tracing` example.
+Three modes, mirroring the legacy wingfoil `tracing` example.
 
 ### `log` — the `logged` debug tap
 
@@ -32,11 +32,11 @@ RUST_LOG=info cargo run -p wingfoil-next --example tracing --features tracing --
 ```
 
 Next's `logged` emits through the `log` crate rather than the `tracing` event
-macros (classic routes it through `tracing` because it takes `tracing` as an
+macros (legacy routes it through `tracing` because it takes `tracing` as an
 unconditional dependency; next's is optional). The records still reach the
 subscriber — `tracing_subscriber`'s `init()` installs the `tracing-log` bridge —
 and, as the `instruments` mode below shows, they arrive *inside* the engine's
-span context, exactly as classic's do.
+span context, exactly as legacy's do.
 
 ### `instruments` — the engine's own spans
 
@@ -75,8 +75,8 @@ See the crate docs ("Tracing and instrumentation") for the full feature table.
 
 ### Parity note
 
-All three classic modes are ported. Two deviations, both benign and both
+All three legacy modes are ported. Two deviations, both benign and both
 visible above: next's `logged` reaches the subscriber through the `tracing-log`
 bridge rather than the `tracing` event macros, and next has no separate `setup`
 lifecycle phase (ops are constructed at wiring time), so its `apply_nodes` spans
-cover `start` / `stop` / `teardown` where classic's cover four phases.
+cover `start` / `stop` / `teardown` where legacy's cover four phases.

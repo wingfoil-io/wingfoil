@@ -94,7 +94,7 @@ where
             // Create the cache dir up front (before the stream) so an error surfaces
             // at the start of the run; the per-slice cache checks + queries then run
             // lazily inside the stream as the graph drains. Unbounded (`None`) like
-            // classic; the source is still lazy per slice.
+            // legacy; the source is still lazy per slice.
             tokio::fs::create_dir_all(&cache_config.folder)
                 .await
                 .with_context(|| {

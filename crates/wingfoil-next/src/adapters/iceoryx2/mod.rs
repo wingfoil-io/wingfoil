@@ -1,5 +1,5 @@
 //! iceoryx2 adapter — zero-copy inter-process (and intra-process)
-//! publish/subscribe over shared memory. It ports the classic
+//! publish/subscribe over shared memory. It ports the legacy
 //! `wingfoil::adapters::iceoryx2` module onto the Op model.
 //!
 //! # Layering
@@ -18,13 +18,13 @@
 //!   enabled with
 //!   `use wingfoil_next::adapters::iceoryx2::Iceoryx2SinkOps;`.
 //!
-//! Like the classic adapter (and unlike the networked async adapters) it is
+//! Like the legacy adapter (and unlike the networked async adapters) it is
 //! synchronous and poll-based, so the `iceoryx2` feature deliberately does
 //! **not** pull in `async`/tokio.
 //!
 //! # Source semantics — three polling modes
 //!
-//! The subscriber offers the classic [`Iceoryx2Mode`] trade-off, selected per
+//! The subscriber offers the legacy [`Iceoryx2Mode`] trade-off, selected per
 //! subscriber and returning the same `Stream<Burst<T>>` either way:
 //!
 //! - [`Iceoryx2Mode::Spin`] (default) — a busy-spin
@@ -52,7 +52,7 @@
 //! payload into it, and sends it; after a non-empty burst it notifies the
 //! service's Event listener so a `Signaled` subscriber wakes. A loan/send
 //! failure aborts the run with context. Connections are refreshed every tenth
-//! cycle (`update_connections`), matching classic.
+//! cycle (`update_connections`), matching legacy.
 //!
 //! # Zero-copy requirements
 //!
@@ -73,9 +73,9 @@
 //! [`Iceoryx2ServiceContract`] / [`Iceoryx2SliceContract`] make the derived
 //! values inspectable at wiring.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (typed and slice payloads, all three polling
+//! Every legacy *capability* (typed and slice payloads, all three polling
 //! modes, the `Ipc`/`Local` service variants, the option/`_with`/`_opts`
 //! constructor family, the service contracts, `FixedBytes`, and the typed
 //! [`Iceoryx2Error`]) is preserved. The surface differs in these deliberate ways:
@@ -87,24 +87,24 @@
 //!    live shared-memory subscription has no historical timeline to replay, and
 //!    the `Threaded`/`Signaled` modes ride the channel layer, whose historical
 //!    receiver would block-collect the never-closing producer and deadlock at
-//!    `start` (register B2). Classic silently ran the poll loop against the
+//!    `start` (register B2). Legacy silently ran the poll loop against the
 //!    fast-forwarded historical clock.
-//! 2. **The sinks are extension traits.** Classic exposed free `iceoryx2_pub*`
+//! 2. **The sinks are extension traits.** Legacy exposed free `iceoryx2_pub*`
 //!    functions taking the upstream; next folds them into
 //!    [`Iceoryx2SinkOps`] / [`Iceoryx2SliceSinkOps`], per the sink-as-trait
 //!    convention shared with [`lines`](crate::adapters::lines) /
 //!    [`csv`](crate::adapters::csv) / [`kafka`](crate::adapters::kafka), and they
 //!    return the sink `Stream<()>` rather than an `Rc<dyn Node>`.
-//! 3. **The sink does *not* reject or no-op under historical replay** — classic
+//! 3. **The sink does *not* reject or no-op under historical replay** — legacy
 //!    parity, deliberately kept. Unlike [`zmq_pub`](crate::adapters::zmq) (which
-//!    errors) and the telemetry exporters (which no-op), classic's iceoryx2
+//!    errors) and the telemetry exporters (which no-op), legacy's iceoryx2
 //!    publisher publishes under either run mode, and a backtest that pipes its
 //!    output into shared memory is a legitimate use.
-//! 4. **Ports are created at graph `start()`**, as in classic, but wiring itself
+//! 4. **Ports are created at graph `start()`**, as in legacy, but wiring itself
 //!    is now pure: the service name, variant, and contract are only validated
 //!    once the run begins, so a bad service name or a contract mismatch aborts
 //!    the *run* with node context rather than graph construction (register
-//!    A1/A4). This matches classic, whose `start` did the same.
+//!    A1/A4). This matches legacy, whose `start` did the same.
 //!
 //! # Setup
 //!
@@ -444,7 +444,7 @@ impl From<iceoryx2::waitset::WaitSetRunError> for Iceoryx2Error {
 /// failure, attaching the service name, variant and contract sizes either way.
 ///
 /// iceoryx2 reports both through the same error type, so the message is
-/// inspected — the classic adapter's heuristic, ported verbatim.
+/// inspected — the legacy adapter's heuristic, ported verbatim.
 pub(crate) fn service_open_err_with_context(
     service_name: &str,
     variant: Iceoryx2ServiceVariant,

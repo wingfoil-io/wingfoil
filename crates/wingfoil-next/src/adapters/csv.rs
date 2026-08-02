@@ -1,13 +1,13 @@
 //! A CSV file adapter — a serde-typed replay **source** and a file **sink**,
 //! the parsing cousin of the dependency-free [`lines`](crate::adapters::lines)
 //! adapter (see `docs/port-plan.md`, Phase 4: "csv — replay source + sink;
-//! exercises 0.3 historical bursts"). It ports the classic
+//! exercises 0.3 historical bursts"). It ports the legacy
 //! `wingfoil::adapters::csv` module onto the Op model.
 //!
 //! Records are ordinary Rust types that implement [`serde::Serialize`] /
 //! [`serde::de::DeserializeOwned`] — a named struct, or a positional tuple such
 //! as `(NanoTime, u32)`. The `csv` crate handles field mapping exactly as it
-//! does for the classic adapter.
+//! does for the legacy adapter.
 //!
 //! # Layering
 //!
@@ -30,7 +30,7 @@
 //! `get_time(&record)`, and delivered on the graph clock. The channel receiver
 //! groups records sharing a timestamp into one atomic [`Burst`](crate::Burst)
 //! and replays them deterministically at their timestamps — lossless, in order,
-//! independent of wall-clock. This mirrors the classic `csv_read`, whose
+//! independent of wall-clock. This mirrors the legacy `csv_read`, whose
 //! `TryIteratorStream` groups same-timestamp rows into one burst (use
 //! `.collapse_accumulate()` when the source is strictly ascending and you want a
 //! flat `Vec<T>`).
@@ -43,20 +43,20 @@
 //! side-effect-free apart from the open; the file I/O itself is synchronous and
 //! occupies one runtime worker during replay.)
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
 //! - **Non-decreasing timestamps.** Records are delivered on the monotonic graph
 //!   clock, so their timestamps must be **non-decreasing** (an out-of-order
-//!   record aborts the run). Classic's `TryIteratorStream` imposes no explicit
+//!   record aborts the run). Legacy's `TryIteratorStream` imposes no explicit
 //!   ordering constraint at the source, though a backwards timestamp would fail
 //!   the monotonic engine there too.
 //! - **Eager header write.** [`csv_write`](CsvSinkOps::csv_write) opens the file
 //!   and writes the CSV header at wiring time (before `for_each_mut`), whereas
-//!   classic defers the header to the first tick via a `headers_written` flag in
-//!   `CsvWriterNode` (see `wingfoil/src/adapters/csv/write.rs`). Observable
+//!   legacy defers the header to the first tick via a `headers_written` flag in
+//!   `CsvWriterNode` (see `legacy/wingfoil/src/adapters/csv/write.rs`). Observable
 //!   difference for a named-struct record: a graph that wires `csv_write` but
 //!   produces zero rows leaves a header-only file in next, but an empty file in
-//!   classic (whose `cycle` never runs, so the header is never written). For a
+//!   legacy (whose `cycle` never runs, so the header is never written). For a
 //!   positional-tuple record no header is written in either, so there is no
 //!   difference.
 //!
@@ -65,7 +65,7 @@
 //! [`CsvSinkOps::csv_write`] opens the target file once at wiring time, writes
 //! the header up front (a leading `time` column plus the record's serde field
 //! names, via `serde_aux` introspection — a positional tuple record has no
-//! named fields, so no header is written, matching classic), and returns a
+//! named fields, so no header is written, matching legacy), and returns a
 //! `Stream<()>` sink built on
 //! [`with_time`](crate::fluent::StreamOps::with_time) then the shared
 //! [`for_each_mut`](crate::fluent::StreamOps::for_each_mut): each cycle
@@ -110,8 +110,8 @@ use crate::{Burst, burst};
 /// Returns an error at **wiring time** if the file cannot be opened. A row that
 /// fails to deserialize does not panic — it is propagated into the graph and
 /// surfaces as a run failure with a "failed to deserialize row" context (the same
-/// outcome as the classic adapter), now surfaced **mid-stream** as the reader
-/// reaches it (like classic), not up front. Record timestamps must be
+/// outcome as the legacy adapter), now surfaced **mid-stream** as the reader
+/// reaches it (like legacy), not up front. Record timestamps must be
 /// non-decreasing; an out-of-order record fails the run.
 pub fn csv_read<T, F>(
     g: &GraphBuilder,
@@ -132,7 +132,7 @@ where
     // is lazy (reads nothing until polled), so building it at wiring does no I/O
     // beyond the open above. The rows are pulled on the async producer task as the
     // graph drains, deserialized on demand and delivered at their timestamps — so
-    // a malformed row aborts the run mid-stream (classic's abort-not-panic), and a
+    // a malformed row aborts the run mid-stream (legacy's abort-not-panic), and a
     // huge file never lands in memory at once.
     let mut iter = csv::ReaderBuilder::new()
         .has_headers(has_headers)
@@ -311,7 +311,7 @@ fn write_given_header(writer: &mut csv::Writer<File>, cols: &[String]) -> Result
 
 /// Write the CSV header: a leading `time` field followed by the record's serde
 /// field names. A positional tuple record has no named fields, so nothing is
-/// written — matching the classic adapter (whose tuple output has no header).
+/// written — matching the legacy adapter (whose tuple output has no header).
 fn write_header<T: Serialize + DeserializeOwned + 'static>(
     writer: &mut csv::Writer<File>,
 ) -> Result<()> {

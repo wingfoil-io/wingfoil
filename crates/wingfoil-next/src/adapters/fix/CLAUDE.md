@@ -1,7 +1,7 @@
 # FIX Adapter (wingfoil-next)
 
 The FIX (Financial Information eXchange) protocol: a synchronous, poll-based
-session engine — initiator and acceptor, plain TCP or TLS. Ports classic
+session engine — initiator and acceptor, plain TCP or TLS. Ports legacy
 `wingfoil::adapters::fix` onto the Op model.
 
 This port is where the **busy-spin `custom_node`** shape was worked out (and
@@ -25,7 +25,7 @@ fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal", "dep:chrono"]
 fix-integration-test = ["fix"]
 ```
 
-**No `async`** — deliberately, matching classic. `rustls`/`webpki-roots` back
+**No `async`** — deliberately, matching legacy. `rustls`/`webpki-roots` back
 the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 `kanal` backs the lock-free outbound inject channel.
 
@@ -62,12 +62,12 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   has to be bound before the initiator's synchronous connect runs in its own
   start hook. `tests/fix_integration.rs` depends on this.
 - **Both modes are realtime-only, rejected at wiring** with a "real-time"
-  error. Classic checked real-time-ness at run `start()`; next rejects earlier.
+  error. Legacy checked real-time-ness at run `start()`; next rejects earlier.
   The message is the same.
 - **Data and status are multiplexed in-band** over one transport (the internal
   `FixEvent` envelope) and split before reaching the caller, so a `LoggedIn`
   transition stays ordered relative to the messages around it.
-- **Reconnect semantics (classic-exact):** a `Threaded` initiator whose
+- **Reconnect semantics (legacy-exact):** a `Threaded` initiator whose
   *established* session drops reconnects after `RECONNECT_DELAY` (so a flapping
   venue isn't hammered); acceptors loop to re-accept; **initial connect
   failures give up** and emit `FixSessionStatus::Error`; `AlwaysSpin`
@@ -88,12 +88,12 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   venue/crypto specifics.**
 - **Teardown costs up to one 200 ms read timeout.** The threaded session loop
   checks a stop flag against its read timeout (the zmq pattern) rather than
-  classic's `Arc<Mutex<Option<TcpStream>>>` shutdown handle — no lock on the
+  legacy's `Arc<Mutex<Option<TcpStream>>>` shutdown handle — no lock on the
   graph path.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `fix.rs` — three
+Canonical list: the `# Deviations from legacy` block in `fix.rs` — three
 items: source factories take a `GraphBuilder` + `RunMode` and reject historical
 at wiring; sources return `Stream`s (and `fix_send` a `Result<Stream<()>>`,
 `fix_sub` a `Stream<()>`) rather than `Rc<dyn Stream>` / `Rc<dyn Node>`; and
@@ -101,7 +101,7 @@ the no-lock threaded teardown above. Everything else — codec, session state
 machine, field/tag semantics — is a verbatim port. There is no single-value
 convenience sink impl (the element is `FixMessage`, not a `Burst`).
 
-Classic's **credentialed LMAX-demo integration tests are not ported**; the
+Legacy's **credentialed LMAX-demo integration tests are not ported**; the
 `fix-integration-test` feature covers the same-process loopback tests instead.
 
 ## Tests
@@ -118,7 +118,7 @@ start. Codec / session unit tests live inline in `fix.rs`
 `password_logon_sends_username_and_password`, the two `FixSender` queue cases).
 
 `fix_integration.rs` stands up an in-process acceptor + initiator over real
-loopback sockets — the port of classic's `fix_same_process_spin` /
+loopback sockets — the port of legacy's `fix_same_process_spin` /
 `fix_same_process_threaded`. `fix_same_process_spin` is the **guard for
 register A7**.
 

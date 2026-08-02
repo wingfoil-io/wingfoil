@@ -1,5 +1,5 @@
 //! Cross-process IPC integration tests for the iceoryx2 adapter — a parity port
-//! of the classic `wingfoil/src/adapters/iceoryx2/integration_tests.rs`.
+//! of the legacy `legacy/wingfoil/src/adapters/iceoryx2/integration_tests.rs`.
 //!
 //! These exercise the `Ipc` service variant, which uses shared memory under
 //! `/dev/shm` (Linux) and a file-backed discovery layout. They require:
@@ -50,7 +50,7 @@ fn unique_service_name(prefix: &str) -> String {
 /// iceoryx2's connection establishment is decentralized, so the out-of-graph
 /// publisher must keep refreshing its connections while the graph runs for the
 /// late subscriber to attach and read history. That refresh rides a busy-spin
-/// `custom_node` — the next twin of classic's
+/// `custom_node` — the next twin of legacy's
 /// `IpcPublisherUpdateConnectionsNode`.
 #[test]
 fn late_joiner_with_history() -> anyhow::Result<()> {

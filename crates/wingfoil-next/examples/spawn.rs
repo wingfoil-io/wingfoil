@@ -1,6 +1,6 @@
 //! Thread-offload combinators: `spawn` (a producer sub-graph on a worker thread)
 //! and `spawn_map` (map an input stream through a worker sub-graph). These are
-//! next's ergonomic twins of classic `producer()` / `mapper()` (the `graph_node`
+//! next's ergonomic twins of legacy `producer()` / `mapper()` (the `graph_node`
 //! node) — the channel + `send_at` + `close` + join plumbing the `threading`
 //! example spells out by hand, wrapped as one call each.
 //!

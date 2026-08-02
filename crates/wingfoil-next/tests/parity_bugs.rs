@@ -1,7 +1,7 @@
 //! Regression tests for the semantic-parity bugs found in the fable review
 //! (`docs/fable-review.md`). Each test pins interpreted == compiled == nested
 //! for a case that previously drifted between the three execution paths, or
-//! pins next's behaviour against classic wingfoil.
+//! pins next's behaviour against legacy wingfoil.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -89,7 +89,7 @@ fn external_source_historical_run_is_an_error_not_a_panic() {
 //
 // A `send_at` before `start_time` used to rewind the run clock (the kernel
 // schedules callbacks verbatim); out-of-order timestamps were silently sorted
-// where classic errors. Both are now rejected at the channel's `start` hook.
+// where legacy errors. Both are now rejected at the channel's `start` hook.
 // ===========================================================================
 
 #[test]
@@ -128,7 +128,7 @@ fn historical_channel_rejects_out_of_order_timestamps() {
     });
     let err = r
         .run(HISTORICAL, RunFor::Forever)
-        .expect_err("out-of-order timestamps must error (classic parity)");
+        .expect_err("out-of-order timestamps must error (legacy parity)");
     producer.join().expect("producer thread");
     assert!(
         format!("{err:#}").contains("out of order"),
@@ -392,12 +392,12 @@ fn island_with_two_inner_schedulers() {
 }
 
 // ===========================================================================
-// BUG 2: delay(0) must emit inline in the same cycle (classic parity).
+// BUG 2: delay(0) must emit inline in the same cycle (legacy parity).
 // BUG 3: delay must seed its first upstream value without ticking, so passive
 //        readers see it (not T::default()) before the delay elapses.
 //
 // The clean single-source fix would live in `Delay::cycle`/`DelayState`
-// (ops.rs). Since these are engine-owned init/timing behaviours classic keeps
+// (ops.rs). Since these are engine-owned init/timing behaviours legacy keeps
 // at the node level, they are applied at the engine level here — in interp.rs
 // and in the macro's Delay emission — kept in lockstep across all three paths.
 // ===========================================================================
@@ -413,7 +413,7 @@ wingfoil_next::nitro! {
     }
 }
 
-/// Port of classic `delay::zero_delay_works` under `RunFor::Cycles` — a zero
+/// Port of legacy `delay::zero_delay_works` under `RunFor::Cycles` — a zero
 /// delay emits inline, so Cycles(4) yields 1,2,3,4 (not 1,2).
 #[test]
 fn zero_delay_emits_inline_all_paths() {
@@ -467,12 +467,12 @@ fn delay_seeds_first_value_all_paths() {
     assert_eq!(interpreted, r.value(&island), "interpreted == nested");
 }
 
-/// Direct port of classic `delay::delay_initializes_to_first_value` (fluent):
+/// Direct port of legacy `delay::delay_initializes_to_first_value` (fluent):
 /// `bimap(Active source, Passive delayed, a - b)` reads the first value 5 while
 /// the delay is pending, so the difference starts at 0,1,2,3,4 then settles to
 /// 5,5,5,5,5 — not 5,6,7,8,9,… (the default-seeded behaviour before the fix).
 #[test]
-fn delay_initializes_to_first_value_classic_port() {
+fn delay_initializes_to_first_value_legacy_port() {
     let g = GraphBuilder::new();
     let source = g
         .ticker(Duration::from_secs(1))

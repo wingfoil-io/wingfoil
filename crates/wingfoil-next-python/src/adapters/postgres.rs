@@ -183,7 +183,7 @@ fn column_value(row: &Row, idx: usize) -> Result<PyPgValue> {
 
 impl PostgresDeserialize for PyPgRow {
     fn from_row(row: &Row) -> Result<(NanoTime, Self)> {
-        // Convention (as classic): the query selects its timestamp column first.
+        // Convention (as legacy): the query selects its timestamp column first.
         let time = row.get_nanotime(0)?;
         let columns = row
             .columns()

@@ -1,6 +1,6 @@
 //! redis Pub/Sub adapter example — publish, subscribe, transform, republish.
 //!
-//! A port of the classic `wingfoil/examples/redis` example onto the next engine.
+//! A port of the legacy `legacy/wingfoil/examples/redis` example onto the next engine.
 //! Redis Pub/Sub is fire-and-forget: a subscriber only sees messages published
 //! after its `SUBSCRIBE` completes. This example therefore wires three roles as
 //! separate graphs (each on its own thread with its own tokio runtime) and starts

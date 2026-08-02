@@ -1,5 +1,5 @@
-//! Integration tests for the kdb adapter — parity port of the classic
-//! `wingfoil/src/adapters/kdb/{integration_tests,cache_integration_tests}.rs`.
+//! Integration tests for the kdb adapter — parity port of the legacy
+//! `legacy/wingfoil/src/adapters/kdb/{integration_tests,cache_integration_tests}.rs`.
 //!
 //! KDB+ has no public, freely-licensed container image, so these tests probe an
 //! externally-provided q instance and **skip** (printing a notice) when it is
@@ -371,7 +371,7 @@ fn test_kdb_deserialization_error_aborts_run() -> Result<()> {
 }
 
 /// `kdb_read` drops rows the query returns outside the run window rather than
-/// aborting (parity with classic `test_kdb_read_drops_rows_outside_window`).
+/// aborting (parity with legacy `test_kdb_read_drops_rows_outside_window`).
 #[test]
 fn test_kdb_read_drops_rows_outside_window() -> Result<()> {
     let Some((conn, rt)) = kdb_or_skip("test_kdb_read_drops_rows_outside_window") else {
@@ -463,7 +463,7 @@ fn write_trades(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<()> {
         .replay_results(rows)
         .kdb_write(conn, WRITE_TABLE_NAME, None)?;
     let mut runner = g.build();
-    // Match the classic write test: run Forever so the whole [0, MAX] window
+    // Match the legacy write test: run Forever so the whole [0, MAX] window
     // covers the year-2000 `from_kdb_timestamp` data (a bounded Duration from
     // NanoTime::ZERO would exclude it); the finite replay closes the channel and
     // stops the graph.
@@ -592,7 +592,7 @@ impl KdbDeserialize for TestTick {
 }
 
 /// A minimal in-process tickerplant over IPC so a plain `q -p 5000` can act as
-/// one (`.u.sub` / `.u.pub` / `.u.nsub`), mirroring the classic test.
+/// one (`.u.sub` / `.u.pub` / `.u.nsub`), mirroring the legacy test.
 const TICKERPLANT_INIT: &str = "\
 sub_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$());\
 .u.w:()!();\

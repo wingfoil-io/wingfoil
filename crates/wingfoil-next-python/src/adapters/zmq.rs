@@ -33,7 +33,7 @@
 //! Payloads cross as **`bytes`**. The Rust source is generic over a
 //! `DeserializeOwned` record; the binding instantiates it at `Vec<u8>`, exactly
 //! as the legacy binding did, so a Python peer stays wire-compatible with a
-//! classic/next Rust peer that publishes the same type.
+//! legacy/next Rust peer that publishes the same type.
 //!
 //! # Deviations from the legacy `wingfoil-python` bindings
 //!

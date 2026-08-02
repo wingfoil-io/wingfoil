@@ -49,7 +49,7 @@
 //!    `stream.web_pub(server, topic)`; the handle owns the topic registry, so
 //!    `server.pub(stream, topic)` keeps every web entry point in one place —
 //!    the same free-fn/handle uniformity the other bindings follow.
-//! 3. **New capabilities**: `pub_bursts` (classic had no burst overload —
+//! 3. **New capabilities**: `pub_bursts` (legacy had no burst overload —
 //!    callers converted by hand), TLS (`cert_path` / `key_path`), `stop()`, and
 //!    the `is_historical_noop` / `is_tls` introspection.
 

@@ -1,7 +1,7 @@
 //! iceoryx2 subscriber example — subscribes to the counter published by
 //! `iceoryx2_pub` and demonstrates all three polling modes.
 //!
-//! A port of the classic `wingfoil/examples/iceoryx2/sub.rs` onto the next
+//! A port of the legacy `legacy/wingfoil/examples/iceoryx2/sub.rs` onto the next
 //! engine. Pass the mode as a CLI argument (defaults to `spin`):
 //!
 //! ```sh
@@ -48,7 +48,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let service_name = "wingfoil/examples/counter";
+    let service_name = "legacy/wingfoil/examples/counter";
     let opts = Iceoryx2SubOpts {
         mode,
         ..Default::default()

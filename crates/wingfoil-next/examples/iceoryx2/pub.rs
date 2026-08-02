@@ -1,6 +1,6 @@
 //! iceoryx2 publisher example — publishes a counter over shared memory.
 //!
-//! A port of the classic `wingfoil/examples/iceoryx2/pub.rs` onto the next
+//! A port of the legacy `legacy/wingfoil/examples/iceoryx2/pub.rs` onto the next
 //! engine. Start the subscriber first (`iceoryx2_sub`), then run this publisher.
 //!
 //! # Run
@@ -27,7 +27,7 @@ struct Counter {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let service_name = "wingfoil/examples/counter";
+    let service_name = "legacy/wingfoil/examples/counter";
     let period = Duration::from_millis(100);
 
     let g = GraphBuilder::new();

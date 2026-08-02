@@ -75,7 +75,7 @@ wingfoil_next::nitro! {
 }
 
 /// Delay — state + self-scheduling — through the macro (as one chain with
-/// anonymous intermediates), matching the classic engine's
+/// anonymous intermediates), matching the legacy engine's
 /// `long_delay_works` timing on both expansions.
 #[test]
 fn macro_handles_delay_on_both_engines() {

@@ -174,7 +174,7 @@ fn source_at_start_defers_setup_to_run_and_stops_at_teardown() {
 }
 
 /// A `setup` error aborts the run at start with node context — a deferred
-/// connection failure surfaces when the run begins (classic-consistent), not at
+/// connection failure surfaces when the run begins (legacy-consistent), not at
 /// wiring. The factory call itself still succeeds.
 #[test]
 fn source_at_start_setup_error_aborts_the_run() {

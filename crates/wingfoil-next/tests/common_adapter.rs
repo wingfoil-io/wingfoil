@@ -1,8 +1,8 @@
-//! Parity tests for the shared adapter helpers ported from classic
+//! Parity tests for the shared adapter helpers ported from legacy
 //! `wingfoil::adapters::common` — the out-of-window row [`WindowFilter`] and its
 //! [`TimeWindow`].
 //!
-//! The classic module carries no `WindowFilter` unit tests of its own (its test
+//! The legacy module carries no `WindowFilter` unit tests of its own (its test
 //! module only covers the `kdb`/`postgres`-gated `compute_time_slices`, which is
 //! not part of this port — see the module docs), so these are new coverage that
 //! pins the ported behaviour: half-open `[lo, hi)` containment, run-bound

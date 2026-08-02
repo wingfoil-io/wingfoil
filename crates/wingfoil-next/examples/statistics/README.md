@@ -2,7 +2,7 @@
 
 Rolling-window statistics and an exponentially-weighted moving average over a
 single price stream, printed as a live table. This is the fluent-API port of the
-classic `statistics` example.
+legacy `statistics` example.
 
 The numeric aggregations live in the `StatisticsOps` trait, kept *out* of the
 prelude so the core combinator vocabulary stays small — bring it in explicitly:
@@ -33,16 +33,16 @@ second, and printed:
 
 ### Scope and idiom
 
-- **Bundling** — the classic example used a `combine(columns)` op that packs an
+- **Bundling** — the legacy example used a `combine(columns)` op that packs an
   arbitrary number of columns into one `Stream<Burst<f64>>`. The next engine's
   ops are fixed-arity (join is two-input), so this port bundles the columns with
   a chain of `join`s building a `Vec<f64>` row. A variadic `combine`/`zip` op is
   a known gap.
-- **Time-weighting** — the classic example also showed a *time-weighted* mean
+- **Time-weighting** — the legacy example also showed a *time-weighted* mean
   (`Weighting::Time` / TWAP). The `StatisticsOps` trait now exposes the
   time-weighted moment family alongside the count-weighted ops —
   `{cumulative,rolling,time_windowed}_{mean,var,std}_time_weighted` (each sample
   weighted by how long it was in effect, read from the graph clock) — so a TWAP
   column is expressible; this example keeps the count-weighted columns for
-  brevity. The only classic statistic still unported is the time-weighted
+  brevity. The only legacy statistic still unported is the time-weighted
   *median*.

@@ -1,8 +1,8 @@
 //! Benchmark for iceoryx2 adapter - Burst operations
 //!
-//! Port of classic `wingfoil/benches/iceoryx2.rs`, verbatim apart from the
+//! Port of legacy `legacy/wingfoil/benches/iceoryx2.rs`, verbatim apart from the
 //! import path. `Burst<T>` is the **same type** on both trees (next re-exports
-//! classic's `tinyvec::TinyVec<[T; 1]>` rather than reimplementing it), so the
+//! legacy's `tinyvec::TinyVec<[T; 1]>` rather than reimplementing it), so the
 //! two bars measure identical code and must not diverge; the target exists so
 //! the invocation survives the cutover.
 //!

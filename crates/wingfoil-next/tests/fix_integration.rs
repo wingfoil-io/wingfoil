@@ -1,11 +1,11 @@
 //! Same-process, real-loopback-socket parity tests for the FIX adapter — a port
-//! of the classic `wingfoil/src/adapters/fix/mod.rs` unit tests that stand up an
+//! of the legacy `legacy/wingfoil/src/adapters/fix/mod.rs` unit tests that stand up an
 //! in-process acceptor + initiator (`fix_same_process_spin`,
 //! `fix_same_process_threaded`, `fix_connection_refused`,
 //! `initiator_reconnects_after_a_session_drop`). No external service or
 //! container — just loopback TCP — so they are gated behind
 //! `fix-integration-test` (they run against a live wall clock and are timing
-//! sensitive; the classic credentialed LMAX-demo tests are **not** ported, as
+//! sensitive; the legacy credentialed LMAX-demo tests are **not** ported, as
 //! they need external credentials).
 //!
 //! Because these run realtime, they assert received *values* (that both sides
@@ -38,7 +38,7 @@ fn free_port() -> u16 {
 
 /// Stand up an acceptor and an initiator in **one** graph and assert both sides
 /// reach `LoggedIn`. Parameterised over the poll mode so `AlwaysSpin` and
-/// `Threaded` share the body — the classic `fix_same_process_{spin,threaded}`
+/// `Threaded` share the body — the legacy `fix_same_process_{spin,threaded}`
 /// pair.
 ///
 /// The acceptor is wired **first** so its listener binds (at graph `start()`)
@@ -106,7 +106,7 @@ fn fix_same_process_threaded() {
 }
 
 /// An initiator connecting to a dead port surfaces an `Error` status (the
-/// `Threaded` mode's connect-failure path) rather than panicking. Ports classic's
+/// `Threaded` mode's connect-failure path) rather than panicking. Ports legacy's
 /// `fix_connection_refused`.
 #[test]
 fn fix_connection_refused() {
@@ -145,7 +145,7 @@ fn fix_connection_refused() {
 /// session used to kill the feed permanently). A mock server that accepts a
 /// connection then immediately closes it drives the initiator through connect →
 /// session → EOF → reconnect; the test asserts the server is connected to more
-/// than once in the window. Ports classic's
+/// than once in the window. Ports legacy's
 /// `initiator_reconnects_after_a_session_drop`.
 #[test]
 fn initiator_reconnects_after_a_session_drop() {

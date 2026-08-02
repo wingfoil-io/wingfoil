@@ -33,7 +33,7 @@ give single-producer / single-consumer lock-free hand-off and preserve the
 When the payload is a whole value that a background thread reads ad-hoc (not a
 stream of deltas), `arc_swap::ArcSwap<T>` gives a lock-free atomic pointer swap
 in `cycle()` that the reader can `.load()` off-thread — see
-`wingfoil/src/adapters/prometheus/exporter.rs` for the per-slot pattern.
+`legacy/wingfoil/src/adapters/prometheus/exporter.rs` for the per-slot pattern.
 
 ### Historical reads: clamp emitted rows to the run window
 
@@ -65,7 +65,7 @@ filter.finish();                          // one summary warn! if anything was d
 
 `adapters::common` is always compiled (no feature gate), so it's available to
 every adapter out of the box. Reference implementation: `kdb_read` /
-`kdb_read_cached` in `wingfoil/src/adapters/kdb/`.
+`kdb_read_cached` in `legacy/wingfoil/src/adapters/kdb/`.
 
 ### Time-partitioned reads: slice the window with the shared slicer
 
@@ -102,7 +102,7 @@ the concrete `end_time` before the call (it's `Copy`) if you also need it for th
 git checkout main && git pull origin main && git checkout -b $ARGUMENTS
 ```
 
-## 2. Feature flags — `wingfoil/Cargo.toml`
+## 2. Feature flags — `legacy/wingfoil/Cargo.toml`
 
 Add two feature flags:
 ```toml
@@ -145,7 +145,7 @@ This pattern is used by the ZMQ adapter: `zmq` works standalone for direct TCP a
 when the `etcd` feature is also enabled, `EtcdRegistry` becomes available as a `ZmqRegistry`
 backend for service discovery.
 
-## 3. Module registration — `wingfoil/src/adapters/mod.rs`
+## 3. Module registration — `legacy/wingfoil/src/adapters/mod.rs`
 
 ```rust
 #[cfg(feature = "$ARGUMENTS")]
@@ -214,7 +214,7 @@ directly in the module's `#[cfg(test)]` blocks.
 The default layout for bidirectional pub/sub adapters:
 
 ```
-wingfoil/src/adapters/$ARGUMENTS/
+legacy/wingfoil/src/adapters/$ARGUMENTS/
   mod.rs               # Connection config, public types, re-exports
   read.rs              # sub/read function (producer)
   write.rs             # pub/write function (consumer)
@@ -699,13 +699,13 @@ fn test_sub_snapshot() -> anyhow::Result<()> {
 }
 ```
 
-## 10. Example — `wingfoil/examples/$ARGUMENTS/`
+## 10. Example — `legacy/wingfoil/examples/$ARGUMENTS/`
 
 Create two files:
 
 **`main.rs`** — realistic end-to-end use: seed data → `sub` → transform → `pub` → verify.
 
-Register in `wingfoil/Cargo.toml`:
+Register in `legacy/wingfoil/Cargo.toml`:
 ```toml
 [[example]]
 name = "$ARGUMENTS"
@@ -744,17 +744,17 @@ cargo run --example $ARGUMENTS --features $ARGUMENTS
 
 The example-index tables live in **two** files, both under an **`Adapters`**
 heading (`### Adapters` in the top-level `/README.md`, `## Adapters` in
-`wingfoil/examples/README.md`):
+`legacy/wingfoil/examples/README.md`):
 
 - `/README.md` (top-level project README) — tables only, with absolute
   `https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/...`
   links so the tables render correctly on crates.io, docs.rs, etc.
-- `wingfoil/examples/README.md` — same tables with relative links, plus
+- `legacy/wingfoil/examples/README.md` — same tables with relative links, plus
   per-adapter snippet sections lower down.
 
 Every adapter goes in the adapters table — including pure-compute / analytics
 adapters that do no external I/O (e.g. `augurs`, which lives under
-`wingfoil/src/adapters/`). Do **not** move an adapter into "Core concepts"
+`legacy/wingfoil/src/adapters/`). Do **not** move an adapter into "Core concepts"
 just because it performs no I/O; that table is reserved for framework-mechanic
 examples (BFS execution, run modes, async edges, threading, dynamic graphs).
 
@@ -768,14 +768,14 @@ Three edits are required:
    ```
 
 2. **Add the same row to the `## Adapters` table in
-   `wingfoil/examples/README.md`** with a **relative** link:
+   `legacy/wingfoil/examples/README.md`** with a **relative** link:
 
    ```markdown
    | [`$ARGUMENTS`](./$ARGUMENTS/) | <one-line description>. |
    ```
 
 3. **Add a short snippet section further down in
-   `wingfoil/examples/README.md`** with the same ~15-line minimal example the
+   `legacy/wingfoil/examples/README.md`** with the same ~15-line minimal example the
    module-level doc in `mod.rs` uses, followed by a
    `[Full example.](./$ARGUMENTS/)` link. Match the format of the existing
    `### Kafka`, `### Fluvio`, `### etcd` sections.
@@ -788,13 +788,13 @@ than silently adding it there.
 ### Optional: benchmarks (low-latency adapters)
 
 For latency- or throughput-sensitive adapters, add a Criterion bench suite under
-`wingfoil/benches/$ARGUMENTS/` (e.g. publication latency, subscription throughput,
-per-cycle allocation tracking) and register each bench in `wingfoil/Cargo.toml` with
-`harness = false` and `required-features = ["$ARGUMENTS"]`. See `wingfoil/benches/aeron/`
+`legacy/wingfoil/benches/$ARGUMENTS/` (e.g. publication latency, subscription throughput,
+per-cycle allocation tracking) and register each bench in `legacy/wingfoil/Cargo.toml` with
+`harness = false` and `required-features = ["$ARGUMENTS"]`. See `legacy/wingfoil/benches/aeron/`
 for the layout. Skip this when throughput is bounded by the remote service rather than
 the adapter glue — benches only earn their keep where the adapter itself is on the hot path.
 
-## 11. CLAUDE.md — `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
+## 11. CLAUDE.md — `legacy/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`
 
 Document:
 - Module structure
@@ -818,7 +818,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil/src/adapters/$ARGUMENTS/**'
+      - 'legacy/wingfoil/src/adapters/$ARGUMENTS/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -913,7 +913,7 @@ chains together. Do **not** add directly to `release.yml`.
 
 ## 13. Python bindings — `wingfoil-python/`
 
-### a. Feature flag — `wingfoil-python/Cargo.toml`
+### a. Feature flag — `legacy/wingfoil-python/Cargo.toml`
 
 Add the adapter's feature to the wingfoil dependency:
 
@@ -921,7 +921,7 @@ Add the adapter's feature to the wingfoil dependency:
 wingfoil = { path = "../wingfoil", features = ["kdb", "zmq", "$ARGUMENTS"] }
 ```
 
-### b. Binding module — `wingfoil-python/src/py_$ARGUMENTS.rs`
+### b. Binding module — `legacy/wingfoil-python/src/py_$ARGUMENTS.rs`
 
 Create a file with two functions:
 
@@ -1005,7 +1005,7 @@ fn dict_to_entry(dict: &Bound<'_, PyDict>) -> <Name>Entry {
 
 Note: `Burst::new()` calls `TinyVec::new()` via the type alias. For collecting iterators into a `Burst`, use `.collect::<Burst<_>>()` — `TinyVec` implements `FromIterator`.
 
-### c. Register in module — `wingfoil-python/src/lib.rs`
+### c. Register in module — `legacy/wingfoil-python/src/lib.rs`
 
 ```rust
 mod py_$ARGUMENTS;
@@ -1013,7 +1013,7 @@ mod py_$ARGUMENTS;
 module.add_function(wrap_pyfunction!(py_$ARGUMENTS::py_$ARGUMENTS_sub, module)?)?;
 ```
 
-### d. Stream method for pub — `wingfoil-python/src/py_stream.rs`
+### d. Stream method for pub — `legacy/wingfoil-python/src/py_stream.rs`
 
 Add a `#[pymethods]` method to `PyStream`:
 
@@ -1027,14 +1027,14 @@ fn $ARGUMENTS_pub(&self, endpoint: String, /* adapter-specific params */) -> PyN
 }
 ```
 
-### e. Python aliases — `wingfoil-python/python/wingfoil/__init__.py`
+### e. Python aliases — `legacy/wingfoil-python/python/wingfoil/__init__.py`
 
 ```python
 # User-friendly aliases for $ARGUMENTS functions
 $ARGUMENTS_sub = _ext.py_$ARGUMENTS_sub
 ```
 
-### f. Integration tests — `wingfoil-python/tests/test_$ARGUMENTS.py`
+### f. Integration tests — `legacy/wingfoil-python/tests/test_$ARGUMENTS.py`
 
 **Never silently skip.** Integration tests are gated by a `requires_$ARGUMENTS` pytest marker
 that is deselected by default (see `wingfoil-python/pyproject.toml` under `[tool.pytest.ini_options]`).
@@ -1226,7 +1226,7 @@ is up locally or that step will fail loudly.
 Before opening a PR, do a clean-context review pass. This catches drift between
 what the skill prescribes and what actually got built — missing `CLAUDE.md`,
 forgotten Python alias, skipped CI registration, snippet not added to
-`wingfoil/examples/README.md`, etc. — that is easy to miss after spending hours
+`legacy/wingfoil/examples/README.md`, etc. — that is easy to miss after spending hours
 in the implementation.
 
 Run this as a subagent (so the parent context stays clean) with these tasks:
@@ -1238,13 +1238,13 @@ Run this as a subagent (so the parent context stays clean) with these tasks:
 
 2. **Validate every step's artifacts exist:**
    - Branch matches step 1
-   - Both feature flags in `wingfoil/Cargo.toml` (step 2)
-   - `pub mod` in `wingfoil/src/adapters/mod.rs` (step 3)
+   - Both feature flags in `legacy/wingfoil/Cargo.toml` (step 2)
+   - `pub mod` in `legacy/wingfoil/src/adapters/mod.rs` (step 3)
    - File layout matches step 5 (or a documented variation)
    - Module-level `//!` doc covers setup + producer + consumer (step 6)
    - Integration tests gated by `$ARGUMENTS-integration-test` (step 9)
    - Example + `README.md` + entries in **both** `/README.md` and
-     `wingfoil/examples/README.md` tables, plus snippet section (step 10)
+     `legacy/wingfoil/examples/README.md` tables, plus snippet section (step 10)
    - Adapter `CLAUDE.md` present (step 11)
    - Standalone CI workflow + entry in `integration-tests.yml` (step 12)
    - Python feature flag, binding module, `lib.rs` registration, `PyStream`

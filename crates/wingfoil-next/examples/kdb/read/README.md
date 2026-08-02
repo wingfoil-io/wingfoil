@@ -2,7 +2,7 @@
 
 Reads from a KDB+ table using 10-second time slices over a 100-second window.
 Each slice issues a separate time-bounded query, demonstrating the time-slicing
-feature. This is the wingfoil-next port of the classic `kdb_read` example.
+feature. This is the wingfoil-next port of the legacy `kdb_read` example.
 
 ## Setup
 

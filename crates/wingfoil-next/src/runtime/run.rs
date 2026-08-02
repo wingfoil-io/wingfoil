@@ -1,7 +1,7 @@
 //! Run mode and run bounds — how long a graph runs, and against which clock.
 //!
 //! Shared by both engines: the interpreted/compiled runners here and the
-//! classic engine in the `wingfoil` crate, which re-exports these types so
+//! legacy engine in the `wingfoil` crate, which re-exports these types so
 //! `wingfoil::RunMode` and `wingfoil_next::RunMode` are the *same* type and a
 //! run bound can be handed across the boundary unchanged.
 

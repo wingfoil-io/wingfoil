@@ -39,13 +39,13 @@
 //!   typed-parser subscription source (`aeron_sub_fragment`, spin or threaded,
 //!   with an optional lifecycle-status side-channel) and a publication sink
 //!   (`AeronSinkOps`), behind the `aeron` (rusteron) or `aeron-rs` (pure Rust)
-//!   backend features. Synchronous/poll-based, so — like classic — it does NOT
+//!   backend features. Synchronous/poll-based, so — like legacy — it does NOT
 //!   use `async`; the sources are realtime-only.
 //! - [`iceoryx2`] — zero-copy inter-process (and intra-process) publish/subscribe
 //!   over shared memory: subscriber sources in three polling modes
 //!   (`iceoryx2_sub*` — busy-spin, background thread, or event-driven WaitSet)
 //!   plus publisher sinks (`Iceoryx2SinkOps` / `Iceoryx2SliceSinkOps`), behind
-//!   the `iceoryx2` feature. Synchronous/poll-based, so — like classic — it does
+//!   the `iceoryx2` feature. Synchronous/poll-based, so — like legacy — it does
 //!   NOT use `async`; the sources are realtime-only.
 //! - [`cache`] — a file-backed, query-keyed, LRU-evicting result cache for
 //!   time-sliced historical readers, behind the `cache` feature. A pure utility
@@ -89,7 +89,7 @@
 //!   ([`FixConnection::fix_sub`](fix::FixConnection::fix_sub)), and an outbound
 //!   sender ([`FixOperators::fix_send`](fix::FixOperators::fix_send)), behind the
 //!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
-//!   layer, or a busy-spin `custom_node`), so — like classic — it does NOT use
+//!   layer, or a busy-spin `custom_node`), so — like legacy — it does NOT use
 //!   `async`; all sources are realtime-only.
 
 #[cfg(any(feature = "aeron", feature = "aeron-rs"))]

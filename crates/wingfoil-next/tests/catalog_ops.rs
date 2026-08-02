@@ -1,5 +1,5 @@
 //! Phase 2 node-catalog parity for the multi-input `try_*` combines and the
-//! `print` / `timed` pass-through diagnostics. Each test mirrors the classic
+//! `print` / `timed` pass-through diagnostics. Each test mirrors the legacy
 //! node's own unit test (`try_bimap`, `try_trimap`, `print`, `timed`) —
 //! reproducing the same values and, for the passive cases, the same tick
 //! times.
@@ -11,10 +11,10 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-// --- try_join (classic `try_bimap`) ----------------------------------------
+// --- try_join (legacy `try_bimap`) ----------------------------------------
 
 /// `try_join` combines two active streams with a fallible closure — mirrors
-/// classic `try_bimap::try_bimap_success` (a + b*10, last = 55 at cycle 5).
+/// legacy `try_bimap::try_bimap_success` (a + b*10, last = 55 at cycle 5).
 #[test]
 fn try_join_success() {
     let g = GraphBuilder::new();
@@ -27,7 +27,7 @@ fn try_join_success() {
     assert_eq!(55, r.value(&combined));
 }
 
-/// A closure error aborts the run — mirrors classic
+/// A closure error aborts the run — mirrors legacy
 /// `try_bimap::try_bimap_error`.
 #[test]
 fn try_join_error_aborts_run() {
@@ -42,7 +42,7 @@ fn try_join_error_aborts_run() {
     assert!(r.run(HISTORICAL, RunFor::Cycles(1)).is_err());
 }
 
-/// A passive `try_join` input is read but does not trigger — mirrors classic
+/// A passive `try_join` input is read but does not trigger — mirrors legacy
 /// `try_bimap::try_bimap_passive_does_not_trigger`. The combine fires only on
 /// the active (slow, 100ns) input, at t = 0, 100, 200.
 #[test]
@@ -60,10 +60,10 @@ fn try_join_passive_does_not_trigger() {
     );
 }
 
-// --- try_join3 (classic `try_trimap`) --------------------------------------
+// --- try_join3 (legacy `try_trimap`) --------------------------------------
 
 /// `try_join3` combines three active streams with a fallible closure —
-/// mirrors classic `try_trimap::try_trimap_success` (a + b*10 + c*100, last =
+/// mirrors legacy `try_trimap::try_trimap_success` (a + b*10 + c*100, last =
 /// 555 at cycle 5).
 #[test]
 fn try_join3_success() {
@@ -78,7 +78,7 @@ fn try_join3_success() {
     assert_eq!(555, r.value(&combined));
 }
 
-/// A closure error aborts the run — mirrors classic
+/// A closure error aborts the run — mirrors legacy
 /// `try_trimap::try_trimap_error`.
 #[test]
 fn try_join3_error_aborts_run() {
@@ -94,7 +94,7 @@ fn try_join3_error_aborts_run() {
     assert!(r.run(HISTORICAL, RunFor::Cycles(1)).is_err());
 }
 
-/// Passive `try_join3` inputs are read but do not trigger — mirrors classic
+/// Passive `try_join3` inputs are read but do not trigger — mirrors legacy
 /// `try_trimap::try_trimap_passive_does_not_trigger`. Fires only on the active
 /// (slow, 100ns) input, at t = 0, 100, 200.
 #[test]
@@ -104,7 +104,7 @@ fn try_join3_passive_does_not_trigger() {
     let b = g.ticker(Duration::from_nanos(50)).count(); // passive
     let c = g.ticker(Duration::from_nanos(50)).count(); // passive
     // `try_join3` makes all three active; use the builder directly to keep b
-    // and c passive, matching the classic test.
+    // and c passive, matching the legacy test.
     let times = a
         .wire(|bld, h| {
             let (bh, ch) = (b.handle(), c.handle());
@@ -131,7 +131,7 @@ fn try_join3_passive_does_not_trigger() {
 // --- print -----------------------------------------------------------------
 
 /// `print` passes values through unchanged (the per-tick stdout print is a
-/// side effect) — mirrors classic `print::print_passes_through_values`. Next
+/// side effect) — mirrors legacy `print::print_passes_through_values`. Next
 /// prints per tick rather than buffering to teardown (deviation D8), but the
 /// value stream — all that a downstream node observes — is identical.
 #[test]
@@ -147,7 +147,7 @@ fn print_passes_through_values() {
 // --- logged ----------------------------------------------------------------
 
 /// `logged` passes values through unchanged (the log emission is a side
-/// effect), preserving tick times — the classic `logged` debug tap. Classic
+/// effect), preserving tick times — the legacy `logged` debug tap. Legacy
 /// has no dedicated unit test (it is exercised across the node suites as a
 /// diagnostic wrapper); this asserts the pass-through and tick-time invariants
 /// its callers rely on.
@@ -174,7 +174,7 @@ fn logged_passes_through_values_and_times() {
 // --- timed -----------------------------------------------------------------
 
 /// `timed` passes values through unchanged (the summary is a stop side
-/// effect) — mirrors classic `timed::timed_historical`.
+/// effect) — mirrors legacy `timed::timed_historical`.
 #[test]
 fn timed_passes_through_values() {
     let g = GraphBuilder::new();

@@ -5,7 +5,7 @@
 //! subset) may be run repeatedly. Each `run` first restores every node's
 //! engine-owned state and value slot to its wiring-time initial value, so two
 //! runs of the same runner are independent and reproduce a freshly-built graph
-//! exactly — classic wingfoil's setup-per-run semantics. This is the contract
+//! exactly — legacy wingfoil's setup-per-run semantics. This is the contract
 //! the Phase 6 compat facade (and the wingfoil-python re-run) depends on; spike
 //! 0.4 deferred it to Phase 1, and here it is.
 //!
@@ -112,7 +112,7 @@ fn buffering_and_sampling_ops_reset() {
 }
 
 /// Feedback graphs re-run: the shared time-queue is cleared and the source slot
-/// reset, so the classic `1, 11, 111, ...` sequence reproduces on every run.
+/// reset, so the legacy `1, 11, 111, ...` sequence reproduces on every run.
 #[test]
 fn feedback_reruns() {
     let g = GraphBuilder::new();

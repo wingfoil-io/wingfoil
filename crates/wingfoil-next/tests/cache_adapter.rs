@@ -1,11 +1,11 @@
-//! Parity tests for the `cache` adapter, ported verbatim from classic
+//! Parity tests for the `cache` adapter, ported verbatim from legacy
 //! `wingfoil::adapters::cache` (`mod.rs` + `file_cache.rs` test modules):
 //! [`CacheKey`] stability/uniqueness, [`CacheConfig::clear`], and the
 //! [`FileCache`] async round-trip / miss / atomic-write / corrupt-file / LRU
 //! eviction behaviours.
 //!
 //! `CacheKey`/`CacheConfig`/`FileCache` are pure utilities (not graph ops), so —
-//! like the classic tests — there are no graph runs and thus no tick times to
+//! like the legacy tests — there are no graph runs and thus no tick times to
 //! assert; parity is on the returned values (keys, cached batches, on-disk
 //! eviction outcome). Temp directories are uniquely named per test (pid + an
 //! atomic counter) so parallel tests never collide.
@@ -29,7 +29,7 @@ fn unique_dir(tag: &str) -> std::path::PathBuf {
     ))
 }
 
-// ---- CacheKey (from classic cache/mod.rs) --------------------------------
+// ---- CacheKey (from legacy cache/mod.rs) --------------------------------
 
 #[test]
 fn test_key_uniqueness() {
@@ -86,7 +86,7 @@ fn test_cache_config_clear() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-// ---- FileCache (from classic cache/file_cache.rs) ------------------------
+// ---- FileCache (from legacy cache/file_cache.rs) ------------------------
 
 fn test_key(s: &str) -> CacheKey {
     CacheKey::from_parts(&["localhost", "5000", s])
@@ -272,7 +272,7 @@ async fn test_lru_eviction() {
     tokio::fs::remove_dir_all(&dir).await.unwrap();
 }
 
-/// The classic tests reach the key's inner hex string through the crate-private
+/// The legacy tests reach the key's inner hex string through the crate-private
 /// `CacheKey.0` field; from an external test crate we recover it from the
 /// `Debug` output (`CacheKey("<hex>")`).
 fn cache_key_hex(key: &CacheKey) -> String {

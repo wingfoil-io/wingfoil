@@ -23,7 +23,7 @@ use super::{
     service_open_err_with_context,
 };
 
-/// How often (in cycles) a port refreshes its connections, matching classic.
+/// How often (in cycles) a port refreshes its connections, matching legacy.
 const UPDATE_CONNECTIONS_EVERY: u64 = 10;
 
 // ---------------------------------------------------------------------------
@@ -244,11 +244,11 @@ pub trait Iceoryx2SinkOps {
     /// [`Signaled`](super::Iceoryx2Mode::Signaled) subscriber wakes. The sink
     /// ticks only when it published something.
     ///
-    /// The ports are created at graph `start()` (classic parity), so an invalid
+    /// The ports are created at graph `start()` (legacy parity), so an invalid
     /// service name or a contract mismatch aborts the *run*, not wiring; a
     /// loan/send failure aborts the run with context from the firing cycle.
     /// Unlike the telemetry sinks, this one publishes under **either** run mode
-    /// — classic parity (see the module docs).
+    /// — legacy parity (see the module docs).
     fn iceoryx2_pub_opts(&self, service_name: &str, opts: Iceoryx2PubOpts) -> Stream<()>;
 }
 
@@ -309,7 +309,7 @@ where
                 },
             );
             // Create the publisher, notifier and node at graph `start()`, as
-            // classic's `start` does — wiring stays pure, and a bad service name
+            // legacy's `start` does — wiring stays pure, and a bad service name
             // or contract mismatch aborts the run with node context.
             b.compose_spawn_at_start(sink.index(), move |_run_mode, _run_for, _start_time| {
                 {

@@ -4,7 +4,7 @@
 //! `strategy`, and `ack` stages, and aggregates per-stage delta statistics via
 //! `latency_report`. Press Ctrl-C to stop; the report is printed on shutdown.
 //!
-//! A port of the classic `wingfoil/examples/latency/sub.rs` onto the next
+//! A port of the legacy `legacy/wingfoil/examples/latency/sub.rs` onto the next
 //! engine. This is the cross-process proof for the Phase-5 latency
 //! infrastructure: the stamps written in one process are read back and
 //! differenced in another, with `Traced<Quote, QuoteLatency>` riding shared
@@ -19,13 +19,13 @@
 //! cargo run -p wingfoil-next --example latency_sub --features iceoryx2 -- 10
 //! ```
 //!
-//! # Deviation from classic: the optional run duration
+//! # Deviation from legacy: the optional run duration
 //!
-//! Classic's subscriber runs [`RunFor::Forever`] only, and its README says to
+//! Legacy's subscriber runs [`RunFor::Forever`] only, and its README says to
 //! stop with Ctrl-C to get the report — but `print_on_teardown` fires from the
 //! graph's teardown, which a `SIGINT` never reaches, so on that path the report
 //! is never printed. Passing a duration runs the graph to a clean stop, so
-//! teardown runs and the report is emitted. Omit the argument for classic's
+//! teardown runs and the report is emitted. Omit the argument for legacy's
 //! run-forever behaviour.
 
 #[path = "shared.rs"]
@@ -43,7 +43,7 @@ use shared::{Quote, QuoteLatency, SERVICE_NAME, quote_latency};
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    // An optional run duration in seconds; without it we run forever (classic
+    // An optional run duration in seconds; without it we run forever (legacy
     // parity) and the teardown-time report is only reachable via a clean stop.
     let run_for = match std::env::args().nth(1) {
         Some(secs) => {

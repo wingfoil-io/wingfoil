@@ -16,8 +16,8 @@ the next adapter surface:
    pattern the skill doesn't yet capture, per its own "Feed lessons back into
    this skill" mandate?
 4. **Unjustified legacy deviations** — every place a next adapter differs from
-   its classic twin that is **not** documented (module-doc `# Deviations from
-   classic` block **and** the register + port-plan matrix).
+   its legacy twin that is **not** documented (module-doc `# Deviations from
+   legacy` block **and** the register + port-plan matrix).
 
 The output is a written report, not commits. Only touch files if the review
 concludes the *skill* or the *deviation docs* should change **and** the user
@@ -34,7 +34,7 @@ Read the ground truth before dispatching any per-adapter work:
 - `CLAUDE.md` — the superset objective and the "skills are living
   documents" mandate.
 - `docs/deviation-register.md` — the classified list of known
-  classic↔next deviations (the parity audit cross-checks against this).
+  legacy↔next deviations (the parity audit cross-checks against this).
 - `docs/port-plan.md` — Phase 4 adapter status + the capability matrix +
   "Known parity gaps".
 - `docs/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
@@ -46,16 +46,16 @@ Then enumerate the review set:
 # next adapters (single-file modules and directory modules)
 ls crates/wingfoil-next/src/adapters/
 # which legacy adapters have a next twin, and which don't yet
-ls -d wingfoil/src/adapters/*/
+ls -d legacy/wingfoil/src/adapters/*/
 # every documented deviation block currently in the tree
-grep -rn "Deviations from classic" crates/wingfoil-next/src/adapters/
+grep -rn "Deviations from legacy" crates/wingfoil-next/src/adapters/
 ```
 
 Classify each next adapter up front — the audit differs by kind:
 
-- **Ported** (a classic twin exists under `wingfoil/src/adapters/<name>/`) →
-  full parity audit applies. Its classic module is the **parity oracle**.
-- **Next-only** (no classic twin — e.g. `lines`) → parity audit is N/A; audit
+- **Ported** (a legacy twin exists under `legacy/wingfoil/src/adapters/<name>/`) →
+  full parity audit applies. Its legacy module is the **parity oracle**.
+- **Next-only** (no legacy twin — e.g. `lines`) → parity audit is N/A; audit
   only conventions/invariants, and confirm naming/layering stay backport-ready.
 - **Shared helper** (`common.rs`, `mod.rs`) → not an adapter; check only that
   the slicer cfg-gate and the `mod.rs` doc index are correct.
@@ -69,7 +69,7 @@ as unported in `port-plan.md`, not silently dropped.
 
 For anything beyond a single small adapter, run the per-adapter audits as
 **parallel subagents** — one per adapter — so each reads its adapter, the
-adapter's classic twin, and the skill with a clean context, and returns a
+adapter's legacy twin, and the skill with a clean context, and returns a
 structured finding list. This mirrors step 15 of `new-adapter-next` ("self-review
 with a fresh context") and keeps the parent context free to synthesise.
 
@@ -125,14 +125,14 @@ finding so the report is traceable, and quote the offending code with a
 ### B. Structural requirements (skill steps 3–13)
 
 - **Feature gating (step 3).** Deps optional + feature-gated; dep versions pinned
-  to the classic adapter's (or a *documented* forward-roll for a security
+  to the legacy adapter's (or a *documented* forward-roll for a security
   advisory — the otlp opentelemetry-0.32 precedent, D5). `-integration-test`
   feature for service-backed adapters; none for file/pure-compute.
 - **Module registration (step 4).** *Both* `mod.rs` edits present: the gated
   `pub mod` (alphabetical) **and** the `//!` doc-index bullet.
 - **Module docs (step 6).** `//!` header has the Layering section, documents
   every public item, `# Errors` on fallible factories, and — if ported — a
-  `# Deviations from classic` block.
+  `# Deviations from legacy` block.
 - **Realtime-only sinks (steps 2, 8).** An exporter/server/push sink guards on
   `ctx.run_mode()` and **no-ops under historical replay**.
 - **Status streams (step 8a).** If present, a `*_with_status` tuple factory
@@ -147,18 +147,18 @@ finding so the report is traceable, and quote the offending code with a
 
 ### C. Parity (skill "parity obligation" + step 13) — ported adapters only
 
-Diff the next adapter against `wingfoil/src/adapters/<name>/`:
+Diff the next adapter against `legacy/wingfoil/src/adapters/<name>/`:
 
 - Every public capability (function, config knob, mode enum, event/entry type)
   has a next equivalent **or** an explicitly documented deviation.
-- Every classic unit test is ported as a parity test (identical values **and**
+- Every legacy unit test is ported as a parity test (identical values **and**
   tick times), or a comment names why not.
-- The classic example is ported.
-- Classic `CLAUDE.md` design decisions are carried into the module docs.
-- Error-message compatibility is kept where classic tests assert on messages.
+- The legacy example is ported.
+- Legacy `CLAUDE.md` design decisions are carried into the module docs.
+- Error-message compatibility is kept where legacy tests assert on messages.
 
 **Every gap here is a finding unless it is documented in all the places it must
-be:** the module-doc `# Deviations from classic` block, `deviation-register.md`
+be:** the module-doc `# Deviations from legacy` block, `deviation-register.md`
 (with a class 🔴/🟡/🟢/⚪/✅), and the `port-plan.md` matrix. A deviation
 documented in code but missing from the register — or vice-versa — is itself a
 finding (doc drift).

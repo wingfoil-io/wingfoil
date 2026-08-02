@@ -1,9 +1,9 @@
 //! Parity tests for the count-windowed rolling statistics catalog
 //! (`rolling_min` / `rolling_max` / `rolling_var` / `rolling_std` /
-//! `rolling_median`), ported from the classic `adapters::statistics`
+//! `rolling_median`), ported from the legacy `adapters::statistics`
 //! operators. Each test pins the emitted series **value-by-value** and, where
 //! relevant, **tick-by-tick** against a hand-computed expected series derived
-//! from the classic node semantics:
+//! from the legacy node semantics:
 //!
 //! * window clamped to `max(1)` (a zero window behaves as a window of one);
 //! * `var`/`std` use the **sample** (ddof = 1) convention — divisor `n - 1`,
@@ -97,7 +97,7 @@ fn rolling_var_std_counter() {
 
 /// A constant window has zero variance; floating-point cancellation in the
 /// incremental moments can make it a hair negative, so `std` must clamp at zero
-/// rather than emit `NaN` (mirrors classic
+/// rather than emit `NaN` (mirrors legacy
 /// `rolling_std_of_constant_window_is_zero_not_nan`).
 #[test]
 fn rolling_std_of_constant_window_is_zero_not_nan() {
@@ -169,7 +169,7 @@ fn rolling_median_non_monotonic() {
 
 // ── window clamp ─────────────────────────────────────────────────────────────
 
-/// A window of 0 clamps to `max(1)` (classic's `window.max(1)`), so every op
+/// A window of 0 clamps to `max(1)` (legacy's `window.max(1)`), so every op
 /// behaves as a window of one: each output is a function of just the latest
 /// value (min = max = median = value; var = std = 0).
 #[test]

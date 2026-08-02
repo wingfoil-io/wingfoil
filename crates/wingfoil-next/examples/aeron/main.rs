@@ -1,6 +1,6 @@
 //! Aeron round-trip example: publish `i64` values and subscribe to them.
 //!
-//! A port of the classic `wingfoil/examples/aeron/main.rs` onto the next engine.
+//! A port of the legacy `legacy/wingfoil/examples/aeron/main.rs` onto the next engine.
 //! Demonstrates both the spin (primary) and threaded (secondary) subscriber
 //! modes against a real Aeron media driver.
 //!

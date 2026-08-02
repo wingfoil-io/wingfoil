@@ -13,10 +13,10 @@
 //! and auto-expires each session after 60 s — protects the single LMAX
 //! session living in `fix_gw` and keeps a public deployment bounded.
 //!
-//! A port of the classic `wingfoil/examples/latency_e2e/ws_server.rs` onto the
+//! A port of the legacy `legacy/wingfoil/examples/latency_e2e/ws_server.rs` onto the
 //! next engine. The pipeline shape, the stamp stages, the metric names and the
 //! wire types are unchanged; only the wiring is next-idiomatic — a
-//! `GraphBuilder` plus the adapter extension traits instead of classic's free
+//! `GraphBuilder` plus the adapter extension traits instead of legacy's free
 //! functions and explicit node vector.
 //!
 //! # Run (after starting fix_gw)

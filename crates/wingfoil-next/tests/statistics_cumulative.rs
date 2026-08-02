@@ -1,10 +1,10 @@
 //! Parity tests for the cumulative (unbounded-window) statistics catalog
 //! (`cumulative_sum` / `cumulative_mean` / `cumulative_min` / `cumulative_max`
 //! / `cumulative_var` / `cumulative_std` / `cumulative_median`), ported from
-//! the classic `adapters::statistics` operators over `Window::Unbounded` with
+//! the legacy `adapters::statistics` operators over `Window::Unbounded` with
 //! `Weighting::Count`. Each test pins the emitted series **value-by-value**
 //! (and, where relevant, **tick-by-tick**) against a hand-computed expected
-//! series derived from the classic node semantics:
+//! series derived from the legacy node semantics:
 //!
 //! * mean/variance/std use incrementally maintained moments (Welford's online
 //!   algorithm), so they are numerically faithful — not a naive
@@ -16,9 +16,9 @@
 //! * a cumulative op ticks once per upstream tick (no seeding delay), so the
 //!   output series has one entry per input tick.
 //!
-//! The classic parity references are the unit tests `cumulative_sum_min_max`,
+//! The legacy parity references are the unit tests `cumulative_sum_min_max`,
 //! `cumulative_median_over_all_samples`, `mean_count_is_arithmetic_mean`, and
-//! `variance_count_is_sample_variance` in `wingfoil/src/adapters/statistics.rs`.
+//! `variance_count_is_sample_variance` in `legacy/wingfoil/src/adapters/statistics.rs`.
 
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ fn assert_series_approx(got: &[f64], expected: &[f64]) {
 
 // ── cumulative_sum / cumulative_min / cumulative_max ─────────────────────────
 
-/// Mirrors classic `cumulative_sum_min_max`. Over 1,2,3,4,5 the running sum is
+/// Mirrors legacy `cumulative_sum_min_max`. Over 1,2,3,4,5 the running sum is
 /// 1,3,6,10,15; the running min stays 1; the running max climbs 1,2,3,4,5.
 /// The min case feeds a *descending* stream (5,4,3,2,1) so the running minimum
 /// must keep falling — a constant or ascending stream would pass trivially.
@@ -100,7 +100,7 @@ fn cumulative_min_pins_first_on_ascending() {
 
 // ── cumulative_mean ──────────────────────────────────────────────────────────
 
-/// Mirrors classic `mean_count_is_arithmetic_mean` (final value 3.0), pinned as
+/// Mirrors legacy `mean_count_is_arithmetic_mean` (final value 3.0), pinned as
 /// a full series: the expanding arithmetic mean of 1,2,3,4,5 is
 /// 1, 1.5, 2, 2.5, 3.
 #[test]
@@ -114,7 +114,7 @@ fn cumulative_mean_is_expanding_arithmetic_mean() {
 
 // ── cumulative_var / cumulative_std ──────────────────────────────────────────
 
-/// Mirrors classic `variance_count_is_sample_variance` (final value 2.5 over
+/// Mirrors legacy `variance_count_is_sample_variance` (final value 2.5 over
 /// 1,2,3,4,5), pinned as a full series. Sample variance (ddof = 1) of the first
 /// `k` of 1..5:
 ///   {1}→0 (n<2), {1,2}→0.5, {1,2,3}→1, {1,2,3,4}→5/3, {1,2,3,4,5}→2.5.
@@ -193,7 +193,7 @@ fn cumulative_moments_match_direct_recompute() {
 
 /// A constant stream has zero cumulative variance; floating-point cancellation
 /// can make it a hair negative, so `std` must clamp at zero rather than emit
-/// `NaN` (mirrors the classic constant-window std guard).
+/// `NaN` (mirrors the legacy constant-window std guard).
 #[test]
 fn cumulative_std_of_constant_is_zero_not_nan() {
     let g = GraphBuilder::new();
@@ -226,7 +226,7 @@ fn cumulative_var_is_zero_with_single_sample() {
 
 // ── cumulative_median ────────────────────────────────────────────────────────
 
-/// Mirrors classic `cumulative_median_over_all_samples` (final value 3.0 over
+/// Mirrors legacy `cumulative_median_over_all_samples` (final value 3.0 over
 /// 1,2,3,4,5), pinned as a full series. The median of the first `k` of 1..5:
 /// {1}→1, {1,2}→1.5 (even), {1,2,3}→2, {1,2,3,4}→2.5 (even), {1,2,3,4,5}→3.
 #[test]

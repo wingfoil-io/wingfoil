@@ -43,7 +43,7 @@ pub trait StatisticsOps {
     fn rolling_max(&self, window: usize) -> Stream<f64>;
 
     /// Sample variance (ddof = 1) over a sliding window of the last `window`
-    /// values — the classic statistics adapter's count-weighted convention
+    /// values — the legacy statistics adapter's count-weighted convention
     /// (divisor `n - 1`, `0.0` until two samples are present).
     fn rolling_var(&self, window: usize) -> Stream<f64>;
 
@@ -71,7 +71,7 @@ pub trait StatisticsOps {
     fn cumulative_max(&self) -> Stream<f64>;
 
     /// Cumulative **sample** variance (ddof = 1) over every value seen so far —
-    /// the classic statistics adapter's count-weighted convention (divisor
+    /// the legacy statistics adapter's count-weighted convention (divisor
     /// `n - 1`, `0.0` until two values are present), maintained incrementally
     /// with Welford's online moments.
     fn cumulative_var(&self) -> Stream<f64>;
@@ -120,7 +120,7 @@ pub trait StatisticsOps {
     // The time-*weighted* twin of the moment ops above: each sample is weighted
     // by how long it was in effect (the Δt until its successor, read from engine
     // time) rather than by a unit count, so a value that persisted twice as long
-    // counts twice. Ported from the classic `MomentStream` / `RollingMomentStream`
+    // counts twice. Ported from the legacy `MomentStream` / `RollingMomentStream`
     // under `Weighting::Time`. The most recent sample only starts contributing
     // once the next tick advances the clock (left-continuous step signal), the
     // mean seeds to the current sample until any weight has accumulated, and the
@@ -171,7 +171,7 @@ pub trait StatisticsOps {
     // crosses half the total. The newest sample carries zero weight until the
     // next tick advances the clock, so it does not shift the median on arrival.
     // Recompute-per-tick (the median has no cheap incremental form), ported from
-    // the classic `WindowStream::weighted_median` under `Weighting::Time`.
+    // the legacy `WindowStream::weighted_median` under `Weighting::Time`.
 
     /// Cumulative time-weighted median over every sample seen so far (an
     /// unbounded window) — each sample weighted by how long it was in effect.

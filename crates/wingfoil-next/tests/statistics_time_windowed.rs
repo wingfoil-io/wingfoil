@@ -1,24 +1,24 @@
 //! Parity tests for the **time-windowed** rolling statistics
 //! (`time_windowed_sum` / `mean` / `min` / `max` / `var` / `std` / `median`),
-//! ported from the classic `adapters::statistics` operators over
-//! `Window::Time(_)` with `Weighting::Count` (the classic `WindowStream` /
-//! `RollingMomentStream` time-window path, `wingfoil/src/adapters/statistics.rs`).
+//! ported from the legacy `adapters::statistics` operators over
+//! `Window::Time(_)` with `Weighting::Count` (the legacy `WindowStream` /
+//! `RollingMomentStream` time-window path, `legacy/wingfoil/src/adapters/statistics.rs`).
 //!
-//! Eviction / boundary semantics reproduced (classic `Window::Time`):
+//! Eviction / boundary semantics reproduced (legacy `Window::Time`):
 //!
 //! * on each tick the current sample is pushed at `now = ctx.time()`, then every
 //!   entry whose age `now - t` is **strictly greater** than the window is
 //!   evicted — so an entry exactly `window` old is **retained** (an inclusive
 //!   trailing boundary);
 //! * the current sample has age 0, so it is always in window and the window is
-//!   **never empty** — classic has no empty-window instant, and even a
+//!   **never empty** — legacy has no empty-window instant, and even a
 //!   zero-width window keeps the current sample;
 //! * `var`/`std` use the sample (ddof = 1) convention — `0.0` until at least two
 //!   samples are in the window (`std` clamps at zero, never `NaN`);
 //! * `median` averages the two middle values for an even count.
 //!
 //! Ticks are 100ns apart, so a 250ns window retains the three most recent
-//! samples (ages 0, 100, 200) and drops the rest — mirroring the classic
+//! samples (ages 0, 100, 200) and drops the rest — mirroring the legacy
 //! `WIN = 250ns` fixtures. The counter fixture `1,2,3,4,5` therefore ends on the
 //! window `{3,4,5}`, and the tests pin the **whole** emitted series so the
 //! mid-stream evictions (the value 1 ageing out at t = 300ns, then 2 at
@@ -72,7 +72,7 @@ fn time_windowed_sum_counter() {
 // ── time_windowed_mean ───────────────────────────────────────────────────────
 
 /// Same windows: means 1, 1.5, 2, 3, 4. The final `{3,4,5}` mean is 4.0
-/// (mirrors classic `rolling_mean_over_time_window_count_and_time`, count case).
+/// (mirrors legacy `rolling_mean_over_time_window_count_and_time`, count case).
 #[test]
 fn time_windowed_mean_counter() {
     let g = GraphBuilder::new();
@@ -86,7 +86,7 @@ fn time_windowed_mean_counter() {
 
 /// Windows {1},{1,2},{1,2,3},{2,3,4},{3,4,5}: min rises 1,1,1,2,3 as the small
 /// values age out (a cumulative min would stay 1), max is 1,2,3,4,5. Final
-/// {3,4,5}: min 3, max 5 (mirrors classic `rolling_min_max_over_time_window`).
+/// {3,4,5}: min 3, max 5 (mirrors legacy `rolling_min_max_over_time_window`).
 #[test]
 fn time_windowed_min_max_counter() {
     let g = GraphBuilder::new();
@@ -141,7 +141,7 @@ fn time_windowed_min_max_non_monotonic_matches_brute_force() {
 // ── time_windowed_var / time_windowed_std ────────────────────────────────────
 
 /// Windows {1},{1,2},{1,2,3},{2,3,4},{3,4,5} sample variance (ddof = 1):
-/// 0 (n<2), 0.5, 1, 1, 1. Final `{3,4,5}` var 1.0 (mirrors classic
+/// 0 (n<2), 0.5, 1, 1, 1. Final `{3,4,5}` var 1.0 (mirrors legacy
 /// `rolling_var_over_time_window_count`). `std` is the element-wise root.
 #[test]
 fn time_windowed_var_std_counter() {
@@ -229,7 +229,7 @@ fn time_windowed_std_of_constant_is_zero_not_nan() {
 // ── time_windowed_median ─────────────────────────────────────────────────────
 
 /// Windows {1},{1,2},{1,2,3},{2,3,4},{3,4,5}: medians 1, 1.5 (even), 2, 3, 4.
-/// Final {3,4,5} median 4.0 (mirrors classic `rolling_median_over_time_window`).
+/// Final {3,4,5} median 4.0 (mirrors legacy `rolling_median_over_time_window`).
 #[test]
 fn time_windowed_median_counter() {
     let g = GraphBuilder::new();
@@ -241,11 +241,11 @@ fn time_windowed_median_counter() {
 
 // ── zero-width window (degenerate, never empty) ──────────────────────────────
 
-/// Classic never produces an empty window (the current sample has age 0 and is
+/// Legacy never produces an empty window (the current sample has age 0 and is
 /// always retained). A zero-width window is the degenerate limit: every entry
 /// except the current one (age > 0) is evicted, so each stat is a function of
 /// just the latest value — sum = mean = min = max = median = value, var = std =
-/// 0. This pins the closest-to-empty behaviour classic allows.
+/// 0. This pins the closest-to-empty behaviour legacy allows.
 #[test]
 fn time_windowed_zero_width_keeps_only_current() {
     let g = GraphBuilder::new();

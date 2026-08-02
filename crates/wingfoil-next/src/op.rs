@@ -75,7 +75,7 @@ impl Activation {
 ///
 /// `Silent` updates the node's value slot **without** propagating a tick:
 /// passive readers (sample, join's other leg) see the new value, but no
-/// downstream node is activated. Classic wingfoil's `delay` needs exactly
+/// downstream node is activated. Legacy wingfoil's `delay` needs exactly
 /// this ("store the first upstream value without ticking", so passive
 /// readers never see `T::default()` before the delay elapses) — it was
 /// previously an engine-level special case in three places; promoting it to

@@ -1,6 +1,6 @@
 //! FIX loopback — runs an acceptor and an initiator in the same process on the
-//! next engine. A self-contained port of the classic
-//! `wingfoil/examples/fix/fix_loopback`.
+//! next engine. A self-contained port of the legacy
+//! `legacy/wingfoil/examples/fix/fix_loopback`.
 //!
 //! Demonstrates:
 //!   - [`fix_accept`](wingfoil_next::adapters::fix::fix_accept) (acceptor side)
@@ -13,7 +13,7 @@
 //! The acceptor is wired **first** so its listener binds (at graph `start()`)
 //! before the spin initiator's synchronous connect runs.
 //!
-//! Of classic's five `wingfoil/examples/fix/` programs, only `fix_loopback` is
+//! Of legacy's five `legacy/wingfoil/examples/fix/` programs, only `fix_loopback` is
 //! self-contained, so it is the one ported here. The other four are
 //! peer/credential-dependent and are **not** ported: `fix_client` /
 //! `fix_echo_server` each demonstrate one half of a connection and need a

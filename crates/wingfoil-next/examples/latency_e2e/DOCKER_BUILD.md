@@ -8,9 +8,9 @@
 >
 > **Note (pre-cutover):** that workflow — and
 > `build-latency-e2e-ami.yml` / `deploy-latency-e2e.yml` — still reference the
-> **classic** copy at `wingfoil/examples/latency_e2e/`. Repointing them at this
+> **legacy** copy at `legacy/wingfoil/examples/latency_e2e/`. Repointing them at this
 > next twin is cutover-time work (cutover-plan row 5.2); until then, CI keeps
-> building the classic images and the commands below are the way to build the
+> building the legacy images and the commands below are the way to build the
 > next ones.
 
 ## Prerequisites

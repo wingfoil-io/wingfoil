@@ -35,7 +35,7 @@ interpreted engine erases exactly what an emitter needs: each node's cycle
 is a `Box<dyn FnMut(&mut Kernel) -> Result<bool>>` adapting the monomorphic
 `Op::cycle`, and value slots are `Rc<dyn Any>` (`interp.rs`).
 
-The repo has lived through the naive version once: the classic
+The repo has lived through the naive version once: the legacy
 `wingfoil::codegen` retrofit (since deleted; its walls are recorded in
 `wingfoil-next/src/lib.rs`) ran the wired graph from `build.rs` and emitted
 a runner. Types came back as name strings; closures could not be recovered
@@ -98,7 +98,7 @@ kills both blockers from §1 at once:
    and typeless state locals the macro emits today, and the measured
    1.01×-vs-hand-written result carries over unchanged.
 
-And a third property classic codegen never had: **drift between the value
+And a third property legacy codegen never had: **drift between the value
 that ran and the text that was emitted is structurally impossible**,
 because they are the same tokens by construction. The macro guarantees
 text ≡ behavior; wall #2's failure mode (a human re-stating the closure
@@ -237,7 +237,7 @@ obsoleting it:
 The genuinely new surface is modest and mostly mechanical: `func!`, the
 `OpFn` trait, `EmitLiteral`, `src`/`loc` metadata on builder nodes, and a
 walker that prints a wiring fn. The one wasted effort in this story was
-already written off — the classic `wingfoil::codegen` retrofit, deleted
+already written off — the legacy `wingfoil::codegen` retrofit, deleted
 because two-pass traversal *without* the Op pattern hits unfixable walls.
 
 ## 7. When it earns its keep

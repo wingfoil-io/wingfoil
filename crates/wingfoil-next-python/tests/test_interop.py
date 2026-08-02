@@ -116,7 +116,7 @@ def test_map_callable_exception_aborts_run():
 def test_run_can_be_bounded_by_a_duration():
     """`cycles` is not the only bound — `duration_nanos` stops on graph time.
 
-    The bound is classic's: a run ends on the cycle whose elapsed time *exceeds*
+    The bound is legacy's: a run ends on the cycle whose elapsed time *exceeds*
     it, and the check happens between cycles — so a counter gets one tick past
     `duration_nanos` before the loop notices.
     """
@@ -149,7 +149,7 @@ def test_start_nanos_offsets_the_historical_clock():
 
 def test_value_is_none_before_a_stream_has_ticked():
     """The empty element reads back as Python `None`, never a panic — before
-    the graph has run at all (classic `peek_value`'s answer), and after a run in
+    the graph has run at all (legacy `peek_value`'s answer), and after a run in
     which the stream never ticked."""
     g = wf.Graph()
     quiet = g.counter(period_nanos=100).filter_value(lambda n: False)
@@ -389,7 +389,7 @@ def test_pyop_and_pyop_fn_compose():
 
 
 def test_custom_node_python_object_as_graph_node():
-    # A Python object acting as a graph node (the classic CustomStream shape):
+    # A Python object acting as a graph node (the legacy CustomStream shape):
     # sum two upstream counters each cycle via the cycle(values)/peek protocol.
     class Adder:
         def __init__(self):
@@ -411,7 +411,7 @@ def test_custom_node_python_object_as_graph_node():
 
 
 def test_custom_node_can_stay_quiet():
-    # Returning False from cycle suppresses the tick (classic "did I tick?").
+    # Returning False from cycle suppresses the tick (legacy "did I tick?").
     class Evens:
         def __init__(self):
             self.v = 0

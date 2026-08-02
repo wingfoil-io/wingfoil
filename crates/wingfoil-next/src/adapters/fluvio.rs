@@ -1,7 +1,7 @@
 //! fluvio adapter — a streaming topic-partition consume **source**
 //! ([`fluvio_sub`]) and a topic-produce **sink**
 //! ([`FluvioSinkOps::fluvio_pub`]) for [Fluvio](https://fluvio.io) clusters. It
-//! ports the classic `wingfoil::adapters::fluvio` module onto the Op model.
+//! ports the legacy `wingfoil::adapters::fluvio` module onto the Op model.
 //!
 //! # Layering
 //!
@@ -29,14 +29,14 @@
 //! duality** — Fluvio is a pure log, so `start_offset` alone selects between
 //! "replay everything retained" and "tail from here".
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (offset-selected partition consumption, keyed and
+//! Every legacy *capability* (offset-selected partition consumption, keyed and
 //! keyless records, per-burst flush batching, the single-record convenience
 //! sink) is preserved. The surface differs in these deliberate ways, mirroring
 //! the [`kafka`](crate::adapters::kafka) port:
 //!
-//! 1. **The graph owns the tokio runtime.** Classic `fluvio_sub`/`fluvio_pub`
+//! 1. **The graph owns the tokio runtime.** Legacy `fluvio_sub`/`fluvio_pub`
 //!    hide a never-dropped global runtime inside `produce_async`/`consume_async`.
 //!    Next's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
@@ -48,22 +48,22 @@
 //!    replay.** The consumer is a live, unbounded, wall-clock-stamped stream: it
 //!    replays the partition's retained records and then blocks for new ones
 //!    forever, so the historical channel path (which block-collects the whole
-//!    stream up front) would deadlock at `start`. Classic technically permitted a
+//!    stream up front) would deadlock at `start`. Legacy technically permitted a
 //!    `HistoricalFrom` run (with wall-clock `NanoTime::now()` timestamps); next
 //!    [rejects it at wiring time](fluvio_sub#errors) with a clear error rather
 //!    than deadlocking. Run `fluvio_sub` under [`RunMode::RealTime`].
-//! 3. **The sink is a trait only.** Classic exposed both a free `fluvio_pub`
+//! 3. **The sink is a trait only.** Legacy exposed both a free `fluvio_pub`
 //!    function and a `FluvioPubOperators` trait; next folds the single public
 //!    entry point into the [`FluvioSinkOps`] trait (renamed for the
 //!    sink-as-trait convention shared with [`lines`](crate::adapters::lines) /
 //!    [`csv`](crate::adapters::csv) / [`kafka`](crate::adapters::kafka)).
-//! 4. **The sink connects lazily, on the first burst.** Classic connected once
+//! 4. **The sink connects lazily, on the first burst.** Legacy connected once
 //!    inside its `consume_async` closure before draining the stream; next's
 //!    consumer task does the same on its first burst, so wiring does no I/O and
 //!    an unreachable cluster aborts the *run* (via `consume_async_bursts`'s error
 //!    channel) rather than graph construction — in line with the defer-to-start
 //!    direction (register A1/A4).
-//! 5. **A negative `start_offset` is rejected at wiring.** Classic deferred the
+//! 5. **A negative `start_offset` is rejected at wiring.** Legacy deferred the
 //!    check into the producer future (so the error surfaced at run start); the
 //!    validation is pure, so next fails fast at wiring instead.
 //!
@@ -92,7 +92,7 @@
 //!
 //! [`FluvioSinkOps::fluvio_pub`] sends one record per [`FluvioRecord`] in each
 //! burst, then issues a single `flush()` per burst — batching within a tick for
-//! throughput while still guaranteeing delivery before the run moves on (classic
+//! throughput while still guaranteeing delivery before the run moves on (legacy
 //! parity). Records with `key: None` are sent with [`RecordKey::NULL`]. A send or
 //! flush failure aborts the run with context (on the next cycle, or via the
 //! `flush` teardown for the final burst).
@@ -264,7 +264,7 @@ pub fn fluvio_sub(
              timeline to replay; run fluvio_sub under RunMode::RealTime"
         );
     }
-    // Pure validation, so it fails fast at wiring (classic deferred it into the
+    // Pure validation, so it fails fast at wiring (legacy deferred it into the
     // producer future — see deviation 5 in the module docs).
     if let Some(n) = start_offset
         && n < 0
@@ -448,7 +448,7 @@ pub trait FluvioSinkOps {
     /// The graph owns the tokio runtime (see the module docs). Records are
     /// drained off the graph thread one burst at a time: every record in a burst
     /// is sent, then a single `flush()` guarantees delivery before the next
-    /// burst — batching within a tick for throughput (classic parity). Bursts
+    /// burst — batching within a tick for throughput (legacy parity). Bursts
     /// are written in order.
     ///
     /// - `conn` — Fluvio cluster configuration (SC endpoint).
@@ -489,7 +489,7 @@ impl FluvioSinkOps for Stream<Burst<FluvioRecord>> {
             Arc::new(tokio::sync::Mutex::new(None));
 
         // `consume_async_bursts` hands the consumer one whole burst at a time, so
-        // the per-burst flush below batches exactly the records classic batched.
+        // the per-burst flush below batches exactly the records legacy batched.
         let (sink, flush) =
             consume_async_bursts(&g, buffer_size, move |records: Vec<FluvioRecord>| {
                 let producer = Arc::clone(&producer);

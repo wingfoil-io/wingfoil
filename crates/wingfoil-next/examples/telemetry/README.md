@@ -3,7 +3,7 @@
 Wingfoil provides two adapters for exporting metrics. Both work with Grafana as a
 visualisation layer — they differ only in how data is transported.
 
-A port of the classic `wingfoil/examples/telemetry` guide onto the next engine.
+A port of the legacy `legacy/wingfoil/examples/telemetry` guide onto the next engine.
 
 ## Which should I use?
 
@@ -68,16 +68,16 @@ OTLP_ENDPOINT=http://localhost:4318 \
     cargo run -p wingfoil-next --example otlp_adapter --features otlp,prometheus
 ```
 
-## Deviations from classic
+## Deviations from legacy
 
-- **One `run.sh` instead of two.** Classic ships
+- **One `run.sh` instead of two.** Legacy ships
   `telemetry/prometheus/run.sh` and `telemetry/otlp/run.sh`, which differ only
   in the example they launch; this takes the example name as an argument.
-- **The docker stack lives with the example.** Classic's compose file sits
-  under the adapter source tree (`wingfoil/src/adapters/prometheus/docker/`)
+- **The docker stack lives with the example.** Legacy's compose file sits
+  under the adapter source tree (`legacy/wingfoil/src/adapters/prometheus/docker/`)
   because its integration tests share it; next's adapter tests need no stack,
   so it belongs here.
 - **No `grafana-init` service.** That container exists to mint a Grafana API
-  token for the classic adapter's integration tests. No example reads it, and
-  classic's `otlp/run.sh` blocked for up to 30s waiting on a token it never
+  token for the legacy adapter's integration tests. No example reads it, and
+  legacy's `otlp/run.sh` blocked for up to 30s waiting on a token it never
   used.

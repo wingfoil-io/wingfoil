@@ -2,9 +2,9 @@
 
 Bidirectional streaming between a graph and one or more browsers over
 WebSocket: an axum HTTP/WS server plus a publish sink and a browser-input
-source. Ports classic `wingfoil::adapters::web` onto the Op model.
+source. Ports legacy `wingfoil::adapters::web` onto the Op model.
 
-**The wire protocol is engine-agnostic and byte-identical to classic** — the
+**The wire protocol is engine-agnostic and byte-identical to legacy** — the
 shared `wingfoil-wire-types` crate is reused as-is, which is exactly why
 `wingfoil-wasm` and `@wingfoil/client` (`wingfoil-js/`) need no changes. Treat
 that as a hard constraint: a wire change here breaks two other packages.
@@ -82,7 +82,7 @@ removes the PEM files afterwards.
   contract.
 - **`tokio::sync::broadcast::send` takes an internal lock**, so it must not be
   touched from a cycle. The envelope is encoded and broadcast **inside the
-  `consume_async` consumer** (as classic did); the graph thread only clones the
+  `consume_async` consumer** (as legacy did); the graph thread only clones the
   `(time, value)` pair into the sink channel.
 - **`Complete` is emitted from the sink's teardown.** `web_pub` chains its own
   `finally` that flushes every queued frame, joins the consumer, and *then*
@@ -96,17 +96,17 @@ removes the PEM files afterwards.
   `location.protocol`, so the only client-side change is loading the page over
   HTTPS.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `web/mod.rs` — five
+Canonical list: the `# Deviations from legacy` block in `web/mod.rs` — five
 items: the source takes a `GraphBuilder` and returns `Result` (and is *not*
 historical-rejected); the sink is a trait only (D1); a **burst overload**
-(`web_pub_bursts`) is added — classic could only publish an atomic same-instant
+(`web_pub_bursts`) is added — legacy could only publish an atomic same-instant
 array by mapping `Burst<T>` to `Vec<T>` by hand, since `Burst`/`TinyVec` is not
 `Serialize` and so cannot be a second impl of the same trait, and the frames are
 byte-identical either way; `Complete` comes from the sink's teardown rather
 than a consumer noticing its source ended; and the envelope is encoded off the
-graph thread. Every classic capability is preserved and the **wire format is
+graph thread. Every legacy capability is preserved and the **wire format is
 byte-identical**.
 
 ## Tests
@@ -134,7 +134,7 @@ cargo test -p wingfoil-next --features web-tls-integration-test --test web_adapt
 ## Example
 
 `examples/web/main.rs` → example `web_adapter`, `required-features = ["web"]`
-(a directory with a README, port of classic's). Streams a synthetic mid price
+(a directory with a README, port of legacy's). Streams a synthetic mid price
 to the browser and logs UI events back.
 
 ## Python

@@ -38,9 +38,9 @@ fn sub_rejects_historical_mode() {
     );
 }
 
-/// The publisher checks the run mode at graph `start()` (like classic's
+/// The publisher checks the run mode at graph `start()` (like legacy's
 /// `start`), so a `HistoricalFrom` run aborts with a "real-time" error — parity
-/// of classic `zmq_pub_historical_mode_fails`.
+/// of legacy `zmq_pub_historical_mode_fails`.
 #[test]
 fn pub_rejects_historical_mode() {
     let g = GraphBuilder::new();

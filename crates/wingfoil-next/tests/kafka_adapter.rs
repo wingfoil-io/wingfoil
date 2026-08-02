@@ -51,7 +51,7 @@ fn sub_rejects_historical_mode() {
 /// An unreachable broker must not hang or panic the consumer's run — with no
 /// broker up, librdkafka retries in the background, so a bounded-duration run
 /// simply terminates (with events or an error) rather than deadlocking. This is
-/// the parity of classic `test_connection_refused`.
+/// the parity of legacy `test_connection_refused`.
 #[test]
 fn sub_connection_refused_terminates() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -79,7 +79,7 @@ fn sub_connection_refused_terminates() {
 
 /// The sink wires without error against a plausible broker string (librdkafka
 /// connects lazily, so producer creation succeeds even when the broker is down)
-/// — the parity of classic's producer-create path. The record's target topic is
+/// — the parity of legacy's producer-create path. The record's target topic is
 /// carried on each [`KafkaRecord`], so the sink can be built from a plain
 /// `Stream<KafkaRecord>` too.
 #[test]

@@ -19,7 +19,7 @@
 //! surfaces) and `gw_publish` (just before iceoryx2 publish). The four stages on
 //! the WS edge live in `ws_server`.
 //!
-//! A port of the classic `wingfoil/examples/latency_e2e/fix_gw.rs` onto the next
+//! A port of the legacy `legacy/wingfoil/examples/latency_e2e/fix_gw.rs` onto the next
 //! engine. The pipeline shape, the stamp stages and the matcher semantics are
 //! unchanged; only the wiring is next-idiomatic — a `GraphBuilder` plus the
 //! adapter extension traits, `join_passive` in place of

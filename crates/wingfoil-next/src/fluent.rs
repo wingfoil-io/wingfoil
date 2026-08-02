@@ -1,4 +1,4 @@
-//! Fluent wiring sugar: the classic wingfoil chaining style
+//! Fluent wiring sugar: the legacy wingfoil chaining style
 //! (`ticker(d).count().map(f).filter(&cond)`) over the explicit
 //! [`Builder`] core.
 //!
@@ -175,7 +175,7 @@ impl GraphBuilder {
         std::mem::take(&mut *self.inner.borrow_mut()).build()
     }
 
-    /// Combine several same-type streams into a `Stream<Burst<T>>` (the classic
+    /// Combine several same-type streams into a `Stream<Burst<T>>` (the legacy
     /// `combine`): each cycle gathers the current values of every input that
     /// ticked *this* instant into one [`Burst`], in argument order — same-instant
     /// values ride one burst, never latest-wins.
@@ -186,7 +186,7 @@ impl GraphBuilder {
     }
 
     /// Wire a **custom node** — the public extension point for a caller-driven
-    /// graph node (the next equivalent of classic `MutableNode` +
+    /// graph node (the next equivalent of legacy `MutableNode` +
     /// `StreamPeekRef`). The node is activated by its `active` upstreams' ticks,
     /// reads any upstream's `passive` value without being triggered by it, and
     /// runs `cycle` each activation to produce a [`Tick<T>`].
@@ -244,7 +244,7 @@ impl GraphBuilder {
                 Ok((value, time)) => {
                     sender.send_at(value, time);
                 }
-                // Mirror the classic adapters: forward the producer error into
+                // Mirror the legacy adapters: forward the producer error into
                 // the graph (it aborts the run with context) and stop queueing.
                 Err(error) => {
                     sender.send_error(error);
@@ -323,7 +323,7 @@ pub trait SourceOps {
     where
         T: Clone + Default + PartialEq + 'static;
 
-    /// A source that never ticks (the classic `never`). Useful as an inert
+    /// A source that never ticks (the legacy `never`). Useful as an inert
     /// trigger — e.g. a [`delay_with_reset`](StreamOps::delay_with_reset) that
     /// never resets behaves like a plain [`delay`](StreamOps::delay).
     fn never(&self) -> Stream<()>;
@@ -339,7 +339,7 @@ pub trait SourceOps {
     /// the delivered burst). The worker thread is joined at teardown; a worker
     /// error aborts this run.
     ///
-    /// next's ergonomic twin of classic `producer()` — the thread-offload half of
+    /// next's ergonomic twin of legacy `producer()` — the thread-offload half of
     /// `graph_node`. It wraps the channel + `send_at` + `close` + join plumbing
     /// the `threading` example otherwise spells out by hand.
     fn spawn<U, F>(&self, build: F) -> Stream<Burst<U>>
@@ -643,7 +643,7 @@ impl<T> Stream<T> {
     ///
     /// Capture the returned [`SlotRef`] at wiring time and `borrow()` it each
     /// cycle to read the upstream's current value — this is how a custom node
-    /// reaches its upstreams, the next analogue of a classic `MutableNode`
+    /// reaches its upstreams, the next analogue of a legacy `MutableNode`
     /// reading the `Rc<dyn Stream>`s it holds. The scheduler's single-fire,
     /// layer-ordered dispatch guarantees the upstream has already written its
     /// slot this cycle before the custom node reads it.
@@ -755,7 +755,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Combine with another stream via a *fallible* closure — the `try_`
     /// counterpart to [`join`](StreamOps::join). Both inputs active; a returned
-    /// `Err` aborts the run with context (the classic `try_bimap`).
+    /// `Err` aborts the run with context (the legacy `try_bimap`).
     fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
@@ -773,7 +773,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Combine three streams (all active) via a *fallible* closure — the
     /// `try_` counterpart to [`join3`](StreamOps::join3). A returned `Err`
-    /// aborts the run with context (the classic `try_trimap`).
+    /// aborts the run with context (the legacy `try_trimap`).
     fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
         B: 'static,
@@ -801,12 +801,12 @@ pub trait StreamOps<T>: Sized {
     /// this stream first, then `others` in slice order. `merge_all(&[])` is
     /// just this stream.
     ///
-    /// Wires a **single** n-ary [`MergeN`](crate::ops::MergeN) node — classic
+    /// Wires a **single** n-ary [`MergeN`](crate::ops::MergeN) node — legacy
     /// `merge(vec)`'s twin — not a left-associated chain of 2-ary
     /// [`merge`](StreamOps::merge)s. The two are semantically identical (2-ary
     /// merge's earliest-wins tie-break is associative), but a chain costs
     /// `n - 1` extra nodes and `n - 1` extra depth, which measured 1.86x
-    /// classic on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
+    /// legacy on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -864,7 +864,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Log each value as it ticks — `"{time} {label} {value:?}"` at `level`,
     /// through the `log` crate (target `"wingfoil"`) — passing it through
-    /// unchanged (the classic `logged` debug tap). Wire up any `log`-compatible
+    /// unchanged (the legacy `logged` debug tap). Wire up any `log`-compatible
     /// backend (e.g. `env_logger`) to see the output.
     fn logged(&self, label: &str, level: log::Level) -> Stream<T>
     where
@@ -895,7 +895,7 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + Not<Output = T> + 'static;
 
     /// Pass each value through unchanged, printing it (`{value:?}` per line) to
-    /// stdout as it ticks (the classic `print`). Unlike classic, which buffers
+    /// stdout as it ticks (the legacy `print`). Unlike legacy, which buffers
     /// and dumps at teardown, next prints per-tick — a justified deviation (see
     /// the [`Print`](crate::ops::Print) op docs).
     fn print(&self) -> Stream<T>
@@ -903,7 +903,7 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + Debug + 'static;
 
     /// Pass each value through unchanged, printing a performance summary at
-    /// the end of the run (the classic `timed`).
+    /// the end of the run (the legacy `timed`).
     fn timed(&self) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -913,7 +913,7 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + PartialEq + 'static;
 
-    /// [`delay`](StreamOps::delay) with a reset trigger (the classic
+    /// [`delay`](StreamOps::delay) with a reset trigger (the legacy
     /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
     /// current value and any pending (delayed) values are dropped. `trigger`
     /// is read for its tick only, so its value type is irrelevant.
@@ -923,7 +923,7 @@ pub trait StreamOps<T>: Sized {
         U: 'static;
 
     /// Collapse a burst/iterator value into a single tick of its **last** item
-    /// (the classic `collapse`); stays quiet when the iterator is empty. Sugar
+    /// (the legacy `collapse`); stays quiet when the iterator is empty. Sugar
     /// over [`map_filter`](StreamOps::map_filter).
     fn collapse<OUT>(&self) -> Stream<OUT>
     where
@@ -973,10 +973,10 @@ pub trait StreamOps<T>: Sized {
     /// under the *same* run mode and bound as this graph and forwards each result
     /// — timestamped — so a historical replay stays deterministic.
     ///
-    /// next's ergonomic twin of classic `mapper()` (the map half of `graph_node`).
+    /// next's ergonomic twin of legacy `mapper()` (the map half of `graph_node`).
     /// The two graphs run concurrently and touch only at the channel layer, in
     /// lock-step by graph time: each instant, this graph sends the input value and
-    /// the worker sends the corresponding result. Like classic, the sub-graph is
+    /// the worker sends the corresponding result. Like legacy, the sub-graph is
     /// expected to produce a result per input instant (a filtering/delaying
     /// sub-graph desynchronises the lock-step); bound the run by duration (not a
     /// raw cycle count) for exact historical parity — see `docs/port-plan.md`.
@@ -1257,7 +1257,7 @@ where
     A: Clone + Default + 'static,
     B: Clone + Default + 'static,
 {
-    /// Decompose a stream of pairs into its two component streams (the classic
+    /// Decompose a stream of pairs into its two component streams (the legacy
     /// `split`) — sugar over two [`map`](StreamOps::map)s. Both branches tick
     /// whenever the source does.
     pub fn split(&self) -> (Stream<A>, Stream<B>) {

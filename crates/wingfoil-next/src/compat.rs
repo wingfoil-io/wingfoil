@@ -1,7 +1,7 @@
-//! Classic-API compatibility facade (Phase 6, proof of concept).
+//! Legacy-API compatibility facade (Phase 6, proof of concept).
 //!
 //! The whole point of the port is that existing wingfoil code — and the
-//! Python bindings — keep working on the new engine. Classic code is written
+//! Python bindings — keep working on the new engine. Legacy code is written
 //! against free source functions and *runs the stream directly*:
 //!
 //! ```
@@ -18,8 +18,8 @@
 //! This module reproduces that shape over the [`Builder`](crate::interp)
 //! engine. A [`Signal<T>`] wraps the fluent [`Stream`] plus the shared graph
 //! and a slot for the [`Runner`] produced by `run`, so `run` / `peek_value`
-//! read like the classic `Stream` API even though the engine underneath is
-//! the new one. It demonstrates the facade carries the classic ergonomics;
+//! read like the legacy `Stream` API even though the engine underneath is
+//! the new one. It demonstrates the facade carries the legacy ergonomics;
 //! the full ~40-method surface is mechanical from here.
 
 use std::cell::RefCell;
@@ -34,8 +34,8 @@ use wingfoil_next::{NanoTime, RunFor, RunMode};
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;
 
-/// A stream in an implicit graph, with the classic `run` / `peek_value`
-/// ergonomics. Combinators mirror the classic `StreamOperators`.
+/// A stream in an implicit graph, with the legacy `run` / `peek_value`
+/// ergonomics. Combinators mirror the legacy `StreamOperators`.
 pub struct Signal<T> {
     stream: Stream<T>,
     graph: GraphBuilder,
@@ -54,7 +54,7 @@ impl<T> Clone for Signal<T> {
     }
 }
 
-/// A source that ticks at a fixed interval — the classic free function.
+/// A source that ticks at a fixed interval — the legacy free function.
 pub fn ticker(period: Duration) -> Signal<()> {
     let graph = GraphBuilder::new();
     let stream = graph.ticker(period);
@@ -65,7 +65,7 @@ pub fn ticker(period: Duration) -> Signal<()> {
     }
 }
 
-/// A source that ticks once with `value` — the classic free function.
+/// A source that ticks once with `value` — the legacy free function.
 pub fn constant<T: Clone + Default + 'static>(value: T) -> Signal<T> {
     let graph = GraphBuilder::new();
     let stream = graph.constant(value);
@@ -116,7 +116,7 @@ impl<T: 'static> Signal<T> {
         self.wrap(self.stream.map_filter(f))
     }
 
-    /// Map and filter with an `Option` (the classic `filter_map`): tick the
+    /// Map and filter with an `Option` (the legacy `filter_map`): tick the
     /// returned `Some`, drop `None`. Delegates to the fluent
     /// [`map_filter`](StreamOps::map_filter).
     pub fn filter_map<B, F>(&self, f: F) -> Signal<B>
@@ -130,7 +130,7 @@ impl<T: 'static> Signal<T> {
         }))
     }
 
-    /// Emit the result of `f()` on each tick, ignoring the value (the classic
+    /// Emit the result of `f()` on each tick, ignoring the value (the legacy
     /// `produce`). Sugar over [`map`](StreamOps::map).
     pub fn produce<B, F>(&self, f: F) -> Signal<B>
     where
@@ -141,7 +141,7 @@ impl<T: 'static> Signal<T> {
     }
 
     /// Run a side-effecting fallible closure on each tick — the graph's
-    /// outbound edge (the classic `for_each` / `try_for_each`). A returned
+    /// outbound edge (the legacy `for_each` / `try_for_each`). A returned
     /// `Err` aborts the run with context; emits `()` per tick.
     pub fn for_each<F>(&self, f: F) -> Signal<()>
     where
@@ -151,7 +151,7 @@ impl<T: 'static> Signal<T> {
     }
 
     /// Collapse a burst/iterator value into a single tick of its **last** item
-    /// (the classic `collapse`); stays quiet when the iterator is empty.
+    /// (the legacy `collapse`); stays quiet when the iterator is empty.
     pub fn collapse<OUT>(&self) -> Signal<OUT>
     where
         T: Clone + IntoIterator<Item = OUT>,
@@ -193,8 +193,8 @@ impl<T: 'static> Signal<T> {
     /// [`Runner`] is retained, so a second `run` reuses it —
     /// [`Runner::run`](crate::interp::Runner::run) restores every node's state
     /// and value slot to its wiring-time initial value first, giving each run
-    /// independent, reproducible results (classic's setup-per-run semantics).
-    /// This is what the wingfoil-python pytest suite — and any classic-idiom
+    /// independent, reproducible results (legacy's setup-per-run semantics).
+    /// This is what the wingfoil-python pytest suite — and any legacy-idiom
     /// code that runs a stream more than once — depends on.
     pub fn run(&self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
         let mut slot = self.runner.borrow_mut();
@@ -211,7 +211,7 @@ impl<T: 'static> Signal<T> {
     /// # Panics
     ///
     /// Panics if called before [`run`](Signal::run): there is no value to read
-    /// until the graph has run. This mirrors the classic `Stream::peek_value`,
+    /// until the graph has run. This mirrors the legacy `Stream::peek_value`,
     /// which is infallible (returns `T`, not `Result<T>`) so the facade stays
     /// drop-in compatible; the precondition is documented and enforced with an
     /// explanatory panic rather than a bare out-of-bounds one.
@@ -270,7 +270,7 @@ impl<T: Clone + Default + 'static> Signal<T> {
         self.wrap(self.stream.buffer(capacity))
     }
 
-    /// Drop values contingent on a predicate (the classic `filter_value`):
+    /// Drop values contingent on a predicate (the legacy `filter_value`):
     /// keep a value only when `predicate` returns true. Delegates to the
     /// fluent [`map_filter`](StreamOps::map_filter).
     pub fn filter_value<F>(&self, predicate: F) -> Signal<T>
@@ -281,7 +281,7 @@ impl<T: Clone + Default + 'static> Signal<T> {
     }
 
     /// Fold values into an accumulator seeded from `T::default()`, applying
-    /// `f(acc, value)` (the classic `reduce`). Delegates to the fluent
+    /// `f(acc, value)` (the legacy `reduce`). Delegates to the fluent
     /// [`fold`](StreamOps::fold).
     pub fn reduce<F>(&self, f: F) -> Signal<T>
     where
@@ -293,7 +293,7 @@ impl<T: Clone + Default + 'static> Signal<T> {
     }
 
     /// Observe each value with a side-effecting closure, passing it through
-    /// unchanged (a debug tap — the classic `inspect`).
+    /// unchanged (a debug tap — the legacy `inspect`).
     pub fn inspect<F>(&self, f: F) -> Signal<T>
     where
         F: Fn(&T) + 'static,
@@ -302,13 +302,13 @@ impl<T: Clone + Default + 'static> Signal<T> {
     }
 
     /// Pass each value through unchanged, printing a performance summary at
-    /// the end of the run (the classic `timed`).
+    /// the end of the run (the legacy `timed`).
     pub fn timed(&self) -> Signal<T> {
         self.wrap(self.stream.timed())
     }
 
     /// Run `f` once at teardown — after the run ends, even if a cycle aborted
-    /// it (the classic `finally`). Observes this signal's last value; emits
+    /// it (the legacy `finally`). Observes this signal's last value; emits
     /// nothing.
     pub fn finally<F>(&self, f: F) -> Signal<()>
     where
@@ -329,7 +329,7 @@ impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
         self.wrap(self.stream.distinct())
     }
 
-    /// [`delay`](Signal::delay) with a reset trigger (the classic
+    /// [`delay`](Signal::delay) with a reset trigger (the legacy
     /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
     /// current value and any pending (delayed) values are dropped. `trigger`
     /// is read for its tick only, so its value type is irrelevant.
@@ -340,7 +340,7 @@ impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
 
 impl<T: Clone + Default + Debug + 'static> Signal<T> {
     /// Pass each value through unchanged while buffering it, then print the
-    /// whole buffer at teardown (the classic `print`).
+    /// whole buffer at teardown (the legacy `print`).
     pub fn print(&self) -> Signal<T> {
         self.wrap(self.stream.print())
     }
@@ -351,7 +351,7 @@ where
     A: Clone + Default + 'static,
     B: Clone + Default + 'static,
 {
-    /// Decompose a signal of pairs into its two component signals (the classic
+    /// Decompose a signal of pairs into its two component signals (the legacy
     /// `split`). Both branches tick whenever the source does.
     pub fn split(&self) -> (Signal<A>, Signal<B>) {
         let (a, b) = self.stream.split();
@@ -361,7 +361,7 @@ where
 
 impl<T: Clone + Default + 'static> Signal<Option<T>> {
     /// Drop `None` values, yielding a `Signal<T>` of just the `Some` payloads
-    /// (the classic `filter_none`). Delegates to the fluent
+    /// (the legacy `filter_none`). Delegates to the fluent
     /// [`map_filter`](StreamOps::map_filter).
     pub fn filter_none(&self) -> Signal<T> {
         self.wrap(self.stream.map_filter(|opt: &Option<T>| match opt.clone() {

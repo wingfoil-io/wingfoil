@@ -1,6 +1,6 @@
 //! kafka adapter example — produce messages, consume and transform, write back.
 //!
-//! A port of the classic `wingfoil/examples/kafka` example onto the next engine.
+//! A port of the legacy `legacy/wingfoil/examples/kafka` example onto the next engine.
 //! Two independent graph roots share one [`GraphBuilder`]:
 //!
 //! - `seed`       — writes source messages once via `constant` + `kafka_pub`.

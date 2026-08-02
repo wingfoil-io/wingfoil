@@ -1,5 +1,5 @@
-//! Integration tests for the `web` adapter — a parity port of the classic
-//! `wingfoil/src/adapters/web/integration_tests.rs`.
+//! Integration tests for the `web` adapter — a parity port of the legacy
+//! `legacy/wingfoil/src/adapters/web/integration_tests.rs`.
 //!
 //! These spin up an in-process [`WebServer`] and connect a `tokio-tungstenite`
 //! client to it. No external service is required, so they run as ordinary tests

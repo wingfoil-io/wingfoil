@@ -1,6 +1,6 @@
 //! etcd adapter example — watch a key prefix, transform values, write back.
 //!
-//! A port of the classic `wingfoil/examples/etcd` example onto the next engine.
+//! A port of the legacy `legacy/wingfoil/examples/etcd` example onto the next engine.
 //! Two independent graph roots share one [`GraphBuilder`]:
 //!
 //! - `seed`       — writes source keys once via `constant` + `etcd_pub`.

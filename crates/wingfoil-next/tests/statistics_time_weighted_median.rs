@@ -1,13 +1,13 @@
 //! Parity tests for the **time-weighted median** statistics
 //! (`{cumulative,rolling,time_windowed}_median_time_weighted`), ported from the
-//! classic `adapters::statistics` `median(_, Weighting::Time)` path — the
+//! legacy `adapters::statistics` `median(_, Weighting::Time)` path — the
 //! recompute-per-tick `WindowStream::weighted_median`
-//! (`wingfoil/src/adapters/statistics.rs`).
+//! (`legacy/wingfoil/src/adapters/statistics.rs`).
 //!
 //! Unlike the time-weighted *moments* (a West's-algorithm incremental
 //! accumulator), the median has no cheap incremental form, so each tick recomputes
 //! over the retained `(value, time)` window. Time-weighting semantics reproduced
-//! (classic `Weighting::Time`):
+//! (legacy `Weighting::Time`):
 //!
 //! * each retained sample is weighted by the interval it was in effect — the gap
 //!   to its successor in the buffer, and the most recent sample by the gap to
@@ -22,10 +22,10 @@
 //! * the leading edge uses only retained samples (count/time eviction first), so
 //!   a value in effect before the window opened is not carried in.
 //!
-//! Ticks are 100ns apart. The classic parity references are the unit tests
+//! Ticks are 100ns apart. The legacy parity references are the unit tests
 //! `rolling_median_time_weighted` (final 3.0, and the count median 3.5),
 //! `rolling_median_over_time_window`, and `cumulative_median_over_all_samples`
-//! in `wingfoil/src/adapters/statistics.rs`.
+//! in `legacy/wingfoil/src/adapters/statistics.rs`.
 
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ fn assert_series_approx(got: &[f64], expected: &[f64]) {
 /// sorted by time, observed at `now_ns`: weight each by the gap to its successor
 /// (the newest by the gap to `now`), drop zero weights, then take the value at
 /// which cumulative weight crosses half the total (averaging the two straddling
-/// values on an exact boundary). An independent transcription of the classic
+/// values on an exact boundary). An independent transcription of the legacy
 /// `WindowStream::weighted_median`, used as an oracle for the recompute path.
 fn brute_time_weighted_median(samples: &[(f64, u64)], now_ns: u64) -> f64 {
     let n = samples.len();
@@ -100,7 +100,7 @@ fn brute_time_weighted_median(samples: &[(f64, u64)], now_ns: u64) -> f64 {
 /// Cumulative time-weighted median over 1..5 at 100ns ticks. Each earlier sample
 /// is credited one 100ns interval; the newest carries zero weight. Walking the
 /// weighted crossing gives 1, 1, 1.5, 2, 2.5 — the newest value never shifts the
-/// median on arrival (it has no weight yet). Mirrors the classic
+/// median on arrival (it has no weight yet). Mirrors the legacy
 /// `median(Window::Unbounded, Weighting::Time)`.
 #[test]
 fn cumulative_median_time_weighted_series() {
@@ -115,7 +115,7 @@ fn cumulative_median_time_weighted_series() {
 
 // ── count-windowed time-weighted median ───────────────────────────────────────
 
-/// Mirrors classic `rolling_median_time_weighted` (final 3.0), pinned as a full
+/// Mirrors legacy `rolling_median_time_weighted` (final 3.0), pinned as a full
 /// series. Count window 4 over 1..5: the windows are {1},{1,2},{1,2,3},{1,2,3,4},
 /// {2,3,4,5}; each retained sample except the newest is credited one 100ns
 /// interval, so the newest is dropped. At the last tick the weights are
@@ -133,7 +133,7 @@ fn rolling_median_time_weighted_series() {
 /// The time weighting must actually change the result versus the count-weighted
 /// median: over the same {2,3,4,5} count window the count median is (3+4)/2 =
 /// 3.5, whereas the time-weighted median is 3.0 (the newest sample 5 carries no
-/// weight). Mirrors the two assertions in classic `rolling_median_time_weighted`.
+/// weight). Mirrors the two assertions in legacy `rolling_median_time_weighted`.
 #[test]
 fn rolling_median_time_vs_count_weighting_differ() {
     let g = GraphBuilder::new();
@@ -192,7 +192,7 @@ fn rolling_median_time_weighted_matches_brute() {
 /// the third tick the window has two equal-weight committed values straddling the
 /// crossing, so the median averages them: 1, 1, 1.5, 2.5, 3.5 — at the last tick
 /// the window is {3@200,4@300,5@400}, weights {3:100,4:100} → (3+4)/2 = 3.5.
-/// Mirrors the classic `median(Window::Time(_), Weighting::Time)`.
+/// Mirrors the legacy `median(Window::Time(_), Weighting::Time)`.
 #[test]
 fn time_windowed_median_time_weighted_series() {
     let g = GraphBuilder::new();

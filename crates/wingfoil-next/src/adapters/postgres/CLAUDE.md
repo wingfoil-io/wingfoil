@@ -2,7 +2,7 @@
 
 Time-partitioned historical **reads**, a realtime `LISTEN`/`NOTIFY` live-tail
 **source**, and a streaming insert **sink**, over async `tokio-postgres`. Ports
-classic `wingfoil::adapters::postgres` onto the Op model.
+legacy `wingfoil::adapters::postgres` onto the Op model.
 
 Two things were invented here and are now shared: the **time slicer** in
 `adapters::common` and the **mode-agnostic `<adapter>_source`** shape (register
@@ -74,7 +74,7 @@ Supporting surface: `PostgresConnection` (+ `redacted()`),
   query (watch-before-get, as `etcd_sub`), so an insert committed during
   startup is not missed. Install the trigger with
   `postgres_notify_trigger_sql`. It is realtime-only and rejects
-  `HistoricalFrom` at wiring — **classic parity**, classic's `postgres_sub`
+  `HistoricalFrom` at wiring — **legacy parity**, legacy's `postgres_sub`
   already required `RunMode::RealTime` (register B2).
 - **Prefer `postgres_source` at new call sites.** Supply both halves and the
   graph is fully mode-agnostic — flip real-time vs historical at `run()` with
@@ -92,13 +92,13 @@ Supporting surface: `PostgresConnection` (+ `redacted()`),
 - `block_on` at teardown ⇒ build, run and drop the graph from a **non-async**
   thread (A5a).
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `postgres.rs` — four
+Canonical list: the `# Deviations from legacy` block in `postgres.rs` — four
 items: graph-owned runtime and the `RunParams`/`RunMode` params (A5); the
 reader defers connect + queries to the run and streams slices lazily (A1/B5);
 the sink is a trait only and pipelines per burst via `consume_async` (D1, A1);
-and the sink's added `buffer_size` (D3). Every classic capability (time-sliced
+and the sink's added `buffer_size` (D3). Every legacy capability (time-sliced
 read, live tail, streaming write, the three serde traits, the quoting and
 timestamp helpers, password redaction) is preserved.
 

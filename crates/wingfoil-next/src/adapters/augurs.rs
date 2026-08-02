@@ -44,17 +44,17 @@
 //! with [`throttle`](crate::fluent::StreamOps::throttle) upstream if you do not
 //! need a fresh result on every tick.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
 //! - **Config is validated inside `cycle` (fallibly), not at wiring (by panic).**
-//!   Classic's outlier detector construction panics at wiring on a bad
+//!   Legacy's outlier detector construction panics at wiring on a bad
 //!   sensitivity (`MADDetector::with_sensitivity(...).unwrap_or_else(|e|
 //!   panic!(...))`); next builds the detector inside `cycle` and returns an
 //!   `anyhow` error (`.map_err(...)` / `anyhow::bail!`) so a bad config aborts
 //!   the run with a clear message rather than panicking during graph
-//!   construction — a deliberate improvement over the classic behaviour.
+//!   construction — a deliberate improvement over the legacy behaviour.
 //! - **`augurs_cluster` floors its effective window at 2, as `augurs_dtw`
-//!   already does.** Classic's cluster node sizes its buffer for two samples but
+//!   already does.** Legacy's cluster node sizes its buffer for two samples but
 //!   still evicts against the raw `window`, so a `window` of 1 never reaches the
 //!   two-sample warm-up and the node never ticks. Next grows the effective
 //!   window to the warm-up floor for both ops — the same "grow the window to the
@@ -80,7 +80,7 @@ use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
 
 // -------------------------------------------------------------------------
-// Shared windowing helpers (ported from the classic adapter's `mod.rs`).
+// Shared windowing helpers (ported from the legacy adapter's `mod.rs`).
 // -------------------------------------------------------------------------
 
 /// Push `value` onto a sliding-window buffer, evicting the oldest samples until

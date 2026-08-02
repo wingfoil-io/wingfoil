@@ -1,6 +1,6 @@
 //! zmq pub/sub adapter example — publish a counter, subscribe, print it.
 //!
-//! A self-contained port of the classic `wingfoil/examples/zmq` (direct mode)
+//! A self-contained port of the legacy `legacy/wingfoil/examples/zmq` (direct mode)
 //! onto the next engine. Two roles run as separate graphs:
 //!
 //! - **publisher** — on a background thread, binds a `PUB` socket and publishes

@@ -2,7 +2,7 @@
 
 A realtime, **pull-based** metrics sink: a hand-rolled `GET /metrics` endpoint
 in Prometheus text format that Grafana (or any Prometheus-compatible system)
-can scrape. Ports classic `wingfoil::adapters::prometheus` onto the Op model.
+can scrape. Ports legacy `wingfoil::adapters::prometheus` onto the Op model.
 
 **Sink only** — there is no source and no `_read`/`_sub`. It is the reference
 for the *pull-based exporter* shape in `/new-adapter-next` (step 8).
@@ -48,21 +48,21 @@ on `std::net`, with no Prometheus client crate. Keep it that way.
 - **Historical replay is a no-op.** Under `RunMode::HistoricalFrom` the sink
   writes no slot, so a backtest never publishes fast-forwarded values to a live
   endpoint. The server, if `serve()` was called, still answers — with an empty
-  body. Classic detected the run mode in `setup` and short-circuited `cycle`;
+  body. Legacy detected the run mode in `setup` and short-circuited `cycle`;
   next reads `Ctx::run_mode()` in the cycle itself, so the same wiring runs
   deterministically in both modes.
 - **`serve()` binds synchronously**, so a bind error surfaces before the run —
-  classic parity, deliberately *not* deferred to `start()`.
-- Anything other than `/metrics` gets a 404 (classic parity).
+  legacy parity, deliberately *not* deferred to `start()`.
+- Anything other than `/metrics` gets a 404 (legacy parity).
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `prometheus.rs` — two
+Canonical list: the `# Deviations from legacy` block in `prometheus.rs` — two
 items: (1) the sink is an **extension trait**, `stream.prometheus_gauge(&exporter,
-name)`, rather than classic's `exporter.register(name, stream)` — the exporter
+name)`, rather than legacy's `exporter.register(name, stream)` — the exporter
 still owns the registry (register D1); (2) `serve` returns `anyhow::Result`
 instead of `Result<u16, std::io::Error>`, per the fallible-with-context
-convention (register **D2**). Every classic capability is preserved: the
+convention (register **D2**). Every legacy capability is preserved: the
 text endpoint, per-metric slots omitted until first written, the historical
 no-op, the 404, and the synchronous bind.
 
@@ -73,16 +73,16 @@ no-op, the 404, and the synchronous bind.
 | `tests/prometheus_adapter.rs` | `#![cfg(feature = "prometheus")]` | nothing |
 | `tests/prometheus_integration.rs` | `#![cfg(feature = "prometheus-integration-test")]` | the Docker stack |
 
-`prometheus_adapter.rs` ports classic's exporter unit tests **plus** its
+`prometheus_adapter.rs` ports legacy's exporter unit tests **plus** its
 self-contained `multiple_metrics` integration test — because the adapter *is*
 the server, a bind-port-0 → run → scrape-over-loopback round trip needs no
 service and belongs in the default tier.
 
 `prometheus_integration.rs` is the one that genuinely needs a live Prometheus
-scraping the exporter, and reuses the **classic** tree's compose stack:
+scraping the exporter, and reuses the **legacy** tree's compose stack:
 
 ```sh
-docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
+docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
 ```
 
 ```bash

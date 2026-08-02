@@ -1,6 +1,6 @@
 //! etcd adapter — a streaming key-prefix snapshot + live watch **source**
 //! (`etcd_sub`) and a key-value PUT **sink** (`EtcdSinkOps::etcd_pub`) for the
-//! etcd key-value store. It ports the classic `wingfoil::adapters::etcd` module
+//! etcd key-value store. It ports the legacy `wingfoil::adapters::etcd` module
 //! onto the Op model.
 //!
 //! # Layering
@@ -16,13 +16,13 @@
 //!   (and, for convenience, `Stream<EtcdEntry>`), enabled with
 //!   `use wingfoil_next::adapters::etcd::EtcdSinkOps;`.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (snapshot→watch, deletes, leases with keepalive
+//! Every legacy *capability* (snapshot→watch, deletes, leases with keepalive
 //! and revoke-on-shutdown, the `force` conditional write) is preserved. The
 //! surface differs in three deliberate ways:
 //!
-//! 1. **The graph owns the tokio runtime.** Classic `etcd_sub`/`etcd_pub` hide a
+//! 1. **The graph owns the tokio runtime.** Legacy `etcd_sub`/`etcd_pub` hide a
 //!    never-dropped global runtime inside `produce_async`/`consume_async`. Next's
 //!    `GraphBuilder` instead owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter in the graph — so
@@ -34,12 +34,12 @@
 //!    the
 //!    graph in an existing runtime, install it as an override with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime).
-//! 2. **The sink connects lazily, on the first write.** Like classic, `etcd_pub`
+//! 2. **The sink connects lazily, on the first write.** Like legacy, `etcd_pub`
 //!    connects (and grants any lease) inside the async consumer on the first
 //!    PUT, so wiring opens no socket and a connection or `lease_grant` failure
 //!    surfaces *during* the run (via `consume_async`'s error channel), not at
 //!    graph construction. If the stream is empty, nothing is connected or leased.
-//! 3. **The sink is a trait only.** Classic exposed both a free `etcd_pub`
+//! 3. **The sink is a trait only.** Legacy exposed both a free `etcd_pub`
 //!    function and an `EtcdPubOperators` trait; next folds the single public
 //!    entry point into the [`EtcdSinkOps`] trait (renamed for the sink-as-trait
 //!    convention shared with [`lines`](crate::adapters::lines) /
@@ -68,7 +68,7 @@
 //! aborts the run — surfaced on a later cycle, or, for the **final** write, by
 //! the sink's `flush` teardown (`consume_async` returns it, wired here as
 //! [`finally`](crate::fluent::StreamOps::finally)). That teardown-time surfacing
-//! is exactly how classic aborts a single-cycle (`RunFor::Cycles(1)`) run whose
+//! is exactly how legacy aborts a single-cycle (`RunFor::Cycles(1)`) run whose
 //! only write conflicts (`AsyncConsumerNode::teardown` joins the consumer and
 //! propagates its error), so the `force: false` guarantee is preserved without a
 //! per-write `block_on`.
@@ -93,7 +93,7 @@
 //! error surfaces during the run) and issues one PUT per [`EtcdEntry`] in each
 //! burst on the off-thread [`consume_async`](crate::async_source::consume_async)
 //! consumer, in order, so any failure aborts the run with context — matching the
-//! classic consumer's ordering and error-surfacing guarantees.
+//! legacy consumer's ordering and error-surfacing guarantees.
 //!
 //! - `lease_ttl: None` writes plain keys that persist until deleted.
 //! - `lease_ttl: Some(ttl)` attaches an etcd lease with a background keepalive
@@ -285,7 +285,7 @@ pub fn etcd_sub(
                 // Phase 1: emit the snapshot as a single atomic burst. Every
                 // snapshot KV shares ONE timestamp so they are grouped into one
                 // burst (never latest-wins, never split across cycles) — matching
-                // classic's single `HistoricalValue` snapshot burst. Stamping each
+                // legacy's single `HistoricalValue` snapshot burst. Stamping each
                 // event with its own `NanoTime::now()` would scatter them across
                 // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
                 // could observe only the first key — an intermittent "missing key"
@@ -407,7 +407,7 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
         // The connection (and any lease + keepalive) is established lazily on the
         // first write, on the consumer task — not here — so wiring opens no socket
         // and a connect/lease failure aborts the run, not graph construction
-        // (matching classic's connect-lazily-in-consumer). The established state
+        // (matching legacy's connect-lazily-in-consumer). The established state
         // is shared back to the teardown closure so it can revoke the lease after
         // the writes drain. If no write ever runs, nothing is connected or leased.
         let endpoints = Arc::new(conn.endpoints.clone());
@@ -417,7 +417,7 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
         // off the graph thread (single consumer, so PUTs preserve burst order). A
         // `force:false` conflict returns an error that aborts the run — on a later
         // cycle, or, for the final write, via the `flush` teardown wired below
-        // (matching classic's teardown-time surfacing).
+        // (matching legacy's teardown-time surfacing).
         let consumer_state = Arc::clone(&state);
         let (sink, flush) = consume_async(&self.graph(), None, move |entry: EtcdEntry| {
             let state = Arc::clone(&consumer_state);
@@ -525,7 +525,7 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
 
         // Teardown: drain every queued write (surfacing a final-cycle error),
         // *then* revoke any lease so the revoke fires only after the writes
-        // complete — the classic order (writes end → abort keepalive → revoke).
+        // complete — the legacy order (writes end → abort keepalive → revoke).
         // The revoke runs via `block_on` on the graph thread (an A5a footgun,
         // like every `consume_async` sink), regardless of a write error, and is
         // best-effort (a failure on an already-gone connection is not worth
@@ -543,7 +543,7 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
             }) = established
             {
                 let _ = handle.block_on(async move {
-                    // Stop keepalive fully before revoking (as classic does), so a
+                    // Stop keepalive fully before revoking (as legacy does), so a
                     // renewal can't race the revoke. Awaiting an aborted handle
                     // resolves immediately with Cancelled, ignored.
                     if let Some(ka) = keepalive {

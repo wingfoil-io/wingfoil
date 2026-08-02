@@ -2,9 +2,9 @@
 
 The Aeron IPC/UDP low-latency message transport: a typed-parser subscription
 **source** (with an optional lifecycle-status side-channel) and a publication
-**sink**. Ports classic `wingfoil::adapters::aeron` onto the Op model.
+**sink**. Ports legacy `wingfoil::adapters::aeron` onto the Op model.
 
-Synchronous and poll-based, so — like classic, and unlike the networked async
+Synchronous and poll-based, so — like legacy, and unlike the networked async
 adapters — the feature deliberately does **not** pull in `async`/tokio.
 
 ## Layout
@@ -80,10 +80,10 @@ Handles come from a backend: `AeronHandle::connect()` (rusteron) or
     back-off and feeds the `channel` layer. One channel hop, realtime only.
   `fragment_limit` caps fragments per `poll()`; `DEFAULT_FRAGMENT_LIMIT` = 256
   (unit test `default_fragment_limit_is_256`).
-- **Sources reject `RunMode::HistoricalFrom` at wiring** (register B2). Classic's
+- **Sources reject `RunMode::HistoricalFrom` at wiring** (register B2). Legacy's
   spin subscriber silently ran against the fast-forwarded historical clock; the
   threaded mode rides the channel layer and would deadlock at `start`. The
-  **publisher** keeps classic's behaviour exactly: its realtime check fires at
+  **publisher** keeps legacy's behaviour exactly: its realtime check fires at
   graph `start()` and aborts the run.
 - **Status is transition-only and derived in a fixed order** after each
   successful poll/offer: `is_closed()` → `Closed` (terminal, checked first),
@@ -102,33 +102,33 @@ Handles come from a backend: `AeronHandle::connect()` (rusteron) or
 - `ClaimBuffer` has an explicit commit-or-abort lifecycle — the zero-copy path.
   Don't let one escape without either.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `aeron/mod.rs` — five
+Canonical list: the `# Deviations from legacy` block in `aeron/mod.rs` — five
 items:
 
 1. Sources take a `GraphBuilder` + `RunMode` and return `Result` (wiring-time
-   historical rejection, register B2); the publisher keeps classic's
+   historical rejection, register B2); the publisher keeps legacy's
    `start()`-time check.
-2. **The status side-channel is a plain stream, not a node type.** Classic's
+2. **The status side-channel is a plain stream, not a node type.** Legacy's
    `AeronStatusStream` (a `MutableNode` driven through `clear()`/`record()`)
    has **no next twin**: next multiplexes status with data over one internal
    envelope and splits it out with `map_filter`, the same shape as
    [`zmq`](../zmq/CLAUDE.md). Observable behaviour is identical. This also
-   makes *spin* mode carry status in-band where classic used a shared
+   makes *spin* mode carry status in-band where legacy used a shared
    `Rc<RefCell<..>>`.
 3. The sink is an extension trait returning `Stream<()>`, not `Rc<dyn Node>`
    (register D1).
-4. **The mock backends are public.** Classic gated `MockSubscriber` /
+4. **The mock backends are public.** Legacy gated `MockSubscriber` /
    `MockPublisher` behind `#[cfg(test)]` inside the crate; next's adapter tests
    live in `tests/` and compile against the public library. They are tiny and
    dependency-free.
-5. Plain `aeron_sub_fragment` never derives status — classic held an
+5. Plain `aeron_sub_fragment` never derives status — legacy held an
    `Option<Rc<RefCell<AeronStatusStream>>>` and skipped derivation when `None`;
    next passes the same choice as a `track_status` flag. Same behaviour, no
    allocation.
 
-Classic's Criterion benches are ported, all four gated on the `aeron` feature:
+Legacy's Criterion benches are ported, all four gated on the `aeron` feature:
 `aeron_publication_latency`, `aeron_subscription_throughput`,
 `aeron_transceiver`, and `aeron_allocation_tracking` (which also wants
 `dhat-heap`), over the shared `benches/aeron/common/mod.rs`. They need a live
@@ -143,7 +143,7 @@ Aeron C build — see the repo-root `CLAUDE.md`. See `benches/README.md`.
 | `tests/aeron_adapter.rs` | `#![cfg(any(feature = "aeron", feature = "aeron-rs"))]` | nothing — mock backends |
 | `tests/aeron_integration.rs` | `#![cfg(feature = "aeron-integration-test")]` | a live media driver |
 
-`aeron_adapter.rs` is the parity port of classic's node-level unit tests
+`aeron_adapter.rs` is the parity port of legacy's node-level unit tests
 (`mod.rs`, `sub_fragment_node.rs`, `pub_node.rs`), driven by the mocks.
 `aeron-integration-test` enables **both** backends so their handle-construction
 paths are covered, and runs against a testcontainers `aeronmd` bind-mounting

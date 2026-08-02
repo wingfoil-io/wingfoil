@@ -211,13 +211,13 @@ impl Stream {
     }
 
     /// Print each value to stdout as it ticks, passing it through unchanged
-    /// (the classic `print` debug tap).
+    /// (the legacy `print` debug tap).
     fn print(&self) -> Stream {
         Stream(self.0.print())
     }
 
     /// Log each value (`"{time} {label} {value:?}"`) as it ticks, passing it
-    /// through unchanged (the classic `logged` debug tap). `level` is one of
+    /// through unchanged (the legacy `logged` debug tap). `level` is one of
     /// `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"` (case-insensitive),
     /// defaulting to `"info"`; wire up any `log` backend to see the output.
     #[pyo3(signature = (label, level = "info"))]
@@ -285,13 +285,13 @@ impl Stream {
     }
 
     /// Cumulative running mean over the numeric values (alias for `mean`, the
-    /// classic method name).
+    /// legacy method name).
     fn average(&self) -> Stream {
         Stream(self.0.mean())
     }
 
     /// Combine with `other` through `func(this_value, other_value)`, called
-    /// whenever either input ticks (the classic `bimap`). A raised exception
+    /// whenever either input ticks (the legacy `bimap`). A raised exception
     /// aborts the run.
     fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
         Stream(self.0.bimap(&other.0, func))

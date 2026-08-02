@@ -1,5 +1,5 @@
-//! Integration tests for the aeron adapter — a parity port of the classic
-//! `wingfoil/src/adapters/aeron/integration_tests.rs`.
+//! Integration tests for the aeron adapter — a parity port of the legacy
+//! `legacy/wingfoil/src/adapters/aeron/integration_tests.rs`.
 //!
 //! Requires a running Aeron media driver via Docker. Run with:
 //! ```sh
@@ -331,7 +331,7 @@ where
         .aeron_pub(publication, |v: &i64| v.to_le_bytes().to_vec());
 
     let mut runner = g.build();
-    // A transport hiccup on teardown is not the subject of these tests (classic
+    // A transport hiccup on teardown is not the subject of these tests (legacy
     // ignores it too — the assertion is on what arrived).
     let _ = runner.run(
         RunMode::RealTime,
@@ -686,7 +686,7 @@ fn channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
     // to the control address that adds the destination), so create it first and
     // only then wait for the image. Without this wait the graph starts offering
     // into an unconnected publication and the run ends before the join
-    // completes, so nothing arrives. Classic's twin
+    // completes, so nothing arrives. Legacy's twin
     // (`test_channel_uri_mdc_roundtrip`) waits here for the same reason.
     let subscription = handle.subscription(&sub_channel, stream_id, CONNECT_TIMEOUT)?;
     let publication = handle.publication(&pub_channel, stream_id, CONNECT_TIMEOUT)?;

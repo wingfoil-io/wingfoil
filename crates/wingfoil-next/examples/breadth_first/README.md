@@ -1,6 +1,6 @@
 ## Breadth-first graph execution
 
-Wingfoil-next inherits the classic engine's breadth-first scheduler, which
+Wingfoil-next inherits the legacy engine's breadth-first scheduler, which
 eliminates the O(2^N) explosion that affects depth-first frameworks (reactive
 libraries, async streams) when nodes branch and recombine.
 
@@ -30,7 +30,7 @@ println!("value {:?}", runner.value(&out));
 value 170141183460469231731687303715884105728
 ```
 
-This is the fluent-API port of the classic `breadth_first` example (which uses
-`add(&source, &source)` over the classic engine). The next engine expresses the
+This is the fluent-API port of the legacy `breadth_first` example (which uses
+`add(&source, &source)` over the legacy engine). The next engine expresses the
 self-referential diamond with `join`, whose two inputs are the same stream
 handle.

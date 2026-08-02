@@ -1,11 +1,11 @@
 //! Parity tests for the **time-weighted** moment statistics
 //! (`{cumulative,rolling,time_windowed}_{mean,var,std}_time_weighted`), ported
-//! from the classic `adapters::statistics` operators under `Weighting::Time`
-//! (the classic `MomentStream` for the unbounded window and
+//! from the legacy `adapters::statistics` operators under `Weighting::Time`
+//! (the legacy `MomentStream` for the unbounded window and
 //! `RollingMomentStream` for the count and time windows,
-//! `wingfoil/src/adapters/statistics.rs`).
+//! `legacy/wingfoil/src/adapters/statistics.rs`).
 //!
-//! Time-weighting semantics reproduced (classic `Weighting::Time`):
+//! Time-weighting semantics reproduced (legacy `Weighting::Time`):
 //!
 //! * each sample is weighted by how long it was in effect — the elapsed Δt
 //!   until its successor, read from the graph clock. On every tick the
@@ -21,12 +21,12 @@
 //!   window (count window: more than `window` samples retained; time window:
 //!   aged strictly past `window` nanoseconds).
 //!
-//! Ticks are 100ns apart. The classic parity references are the unit tests
+//! Ticks are 100ns apart. The legacy parity references are the unit tests
 //! `mean_time_weighted_lags_by_one_interval`,
 //! `variance_time_weighted_is_population_over_weight`,
 //! `rolling_mean_over_time_window_count_and_time` (time case), and
 //! `rolling_var_std_over_time_window_time_weighted` in
-//! `wingfoil/src/adapters/statistics.rs`.
+//! `legacy/wingfoil/src/adapters/statistics.rs`.
 
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ fn assert_series_approx(got: &[f64], expected: &[f64]) {
 /// Direct (from-scratch) time-weighted population mean and variance over a set
 /// of `(value, time_ns)` samples sorted by time: each sample is weighted by the
 /// gap to its successor; the last (newest) sample has no successor and so
-/// contributes zero weight — exactly the classic committed-interval semantics.
+/// contributes zero weight — exactly the legacy committed-interval semantics.
 /// Used as an independent oracle for the incremental moments.
 fn brute_time_weighted(samples: &[(f64, u64)]) -> (f64, f64) {
     let mut w_sum = 0.0;
@@ -85,7 +85,7 @@ fn brute_time_weighted(samples: &[(f64, u64)]) -> (f64, f64) {
 
 // ── cumulative time-weighted (unbounded window) ──────────────────────────────
 
-/// Mirrors classic `mean_time_weighted_lags_by_one_interval` (final value 2.5),
+/// Mirrors legacy `mean_time_weighted_lags_by_one_interval` (final value 2.5),
 /// pinned as a full series. Ticks are evenly spaced, so each of 1,2,3,4 is in
 /// effect for one 100ns interval before the next; 5 has not yet been credited.
 /// The cumulative time-weighted mean therefore lags the count mean by one
@@ -99,7 +99,7 @@ fn cumulative_mean_time_weighted_lags_by_one_interval() {
     assert_series_approx(&r.value(&mean), &[1.0, 1.0, 1.5, 2.0, 2.5]);
 }
 
-/// Mirrors classic `variance_time_weighted_is_population_over_weight` (final
+/// Mirrors legacy `variance_time_weighted_is_population_over_weight` (final
 /// value 1.25), pinned as a full series. The credited values accumulate as
 /// {1:100}, {1:100,2:100}, … so the time-weighted population variance
 /// (`m2 / w_sum`) walks 0, 0, 0.25, 2/3, 1.25; at the last tick the credited
@@ -225,7 +225,7 @@ fn wide_count_window_time_weighted_matches_cumulative() {
 
 // ── time-windowed rolling time-weighted ──────────────────────────────────────
 
-/// Mirrors classic `rolling_mean_over_time_window_count_and_time` (time case,
+/// Mirrors legacy `rolling_mean_over_time_window_count_and_time` (time case,
 /// final 3.5), pinned as a full series. With WIN = 250ns the window holds the
 /// last three samples; each is credited its 100ns interval except the newest.
 /// The series is 1, 1, 1.5, 2.5, 3.5 — at the last tick the window is
@@ -242,7 +242,7 @@ fn time_windowed_mean_time_weighted_counter() {
     assert_series_approx(&r.value(&mean), &[1.0, 1.0, 1.5, 2.5, 3.5]);
 }
 
-/// Mirrors classic `rolling_var_std_over_time_window_time_weighted` (final var
+/// Mirrors legacy `rolling_var_std_over_time_window_time_weighted` (final var
 /// 0.25, std 0.5), pinned as a full series. From the third tick on the two
 /// committed values in the window differ by one and each hold 100ns, so the
 /// time-weighted population variance is m2/w_sum = 50/200 = 0.25 and std 0.5:

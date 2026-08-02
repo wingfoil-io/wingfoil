@@ -3,7 +3,7 @@
 //! drives a run.
 //!
 //! This is the one piece of machinery both engines share. It lives here, in
-//! `wingfoil-next`, and the classic `wingfoil` crate depends on this crate and
+//! `wingfoil-next`, and the legacy `wingfoil` crate depends on this crate and
 //! re-exports it — so `wingfoil::NanoTime` and [`wingfoil_next::NanoTime`] are
 //! the *same* type, not two structurally-identical twins, and values cross the
 //! engine boundary without conversion.

@@ -2,7 +2,7 @@
 //! nodes: `never`, `delay_with_reset`, the node-level flow ops (`node_flow`'s
 //! throttle / delay / limit / filter / feedback, run here over the unit-stream
 //! path), and the `combine` / `split` / `collapse` structural ops. Each test
-//! mirrors the classic node's own unit test — reproducing the same values and
+//! mirrors the legacy node's own unit test — reproducing the same values and
 //! the same tick times.
 
 use std::cell::RefCell;
@@ -17,7 +17,7 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 // --- never -----------------------------------------------------------------
 
 /// `never` never ticks, so nothing downstream of it ever fires — mirrors
-/// classic `never::never_does_not_trigger_downstream`.
+/// legacy `never::never_does_not_trigger_downstream`.
 #[test]
 fn never_never_triggers_downstream() {
     let counter = Rc::new(RefCell::new(0u32));
@@ -34,10 +34,10 @@ fn never_never_triggers_downstream() {
     assert_eq!(0, *counter.borrow());
 }
 
-// --- delay_with_reset (classic `delay_with_reset`) -------------------------
+// --- delay_with_reset (legacy `delay_with_reset`) -------------------------
 
 /// With `never()` as the reset trigger, `delay_with_reset` degrades to a plain
-/// `delay` — mirrors classic `delay_with_reset::delay_never_reset`.
+/// `delay` — mirrors legacy `delay_with_reset::delay_never_reset`.
 #[test]
 fn delay_with_reset_never_reset_matches_delay() {
     let period = Duration::from_nanos(100);
@@ -70,7 +70,7 @@ fn assert_snaps_on_trigger(trigger_period: Duration, expected: Vec<(u64, u64, u6
 }
 
 /// The reset trigger snaps the delayed output back to the live value — mirrors
-/// classic `delay_with_reset::delay_with_reset_snaps_on_trigger` (trigger every
+/// legacy `delay_with_reset::delay_with_reset_snaps_on_trigger` (trigger every
 /// 1000ns).
 #[test]
 fn delay_with_reset_snaps_on_trigger() {
@@ -104,7 +104,7 @@ fn delay_with_reset_snaps_on_trigger() {
 }
 
 /// A second reset cadence (every 750ns), where a trigger and a delayed pop can
-/// land on the same instant — mirrors classic
+/// land on the same instant — mirrors legacy
 /// `delay_with_reset::delay_with_reset_snaps_on_trigger_2`.
 #[test]
 fn delay_with_reset_snaps_on_trigger_2() {
@@ -139,7 +139,7 @@ fn delay_with_reset_snaps_on_trigger_2() {
 }
 
 /// Zero delay passes every value through immediately, regardless of the reset
-/// trigger — mirrors classic
+/// trigger — mirrors legacy
 /// `delay_with_reset::delay_with_reset_zero_delay_passes_through_immediately`.
 #[test]
 fn delay_with_reset_zero_delay_passes_through_immediately() {
@@ -167,7 +167,7 @@ fn delay_with_reset_zero_delay_passes_through_immediately() {
 // --- node_flow (node-level flow ops over the unit-stream path) --------------
 
 /// Throttling a fast source suppresses ticks closer than the interval —
-/// mirrors classic `node_flow::node_throttle_suppresses_fast_ticks` (10ns
+/// mirrors legacy `node_flow::node_throttle_suppresses_fast_ticks` (10ns
 /// source, 25ns interval → t = 0, 30, 60).
 #[test]
 fn node_throttle_suppresses_fast_ticks() {
@@ -191,7 +191,7 @@ fn node_throttle_suppresses_fast_ticks() {
     );
 }
 
-/// A zero interval throttles nothing — mirrors classic
+/// A zero interval throttles nothing — mirrors legacy
 /// `node_flow::node_throttle_zero_interval_passes_all`.
 #[test]
 fn node_throttle_zero_interval_passes_all() {
@@ -214,7 +214,7 @@ fn node_throttle_zero_interval_passes_all() {
     );
 }
 
-/// Delaying a source shifts its ticks by the interval — mirrors classic
+/// Delaying a source shifts its ticks by the interval — mirrors legacy
 /// `node_flow::node_delay_shifts_ticks` (100ns source, 10ns delay → arrives at
 /// t = 10, 110, 210).
 #[test]
@@ -238,7 +238,7 @@ fn node_delay_shifts_ticks() {
     );
 }
 
-/// A zero delay passes ticks through immediately — mirrors classic
+/// A zero delay passes ticks through immediately — mirrors legacy
 /// `node_flow::node_delay_zero_passes_immediately`.
 #[test]
 fn node_delay_zero_passes_immediately() {
@@ -261,7 +261,7 @@ fn node_delay_zero_passes_immediately() {
     );
 }
 
-/// `limit` caps the number of ticks passed — mirrors classic
+/// `limit` caps the number of ticks passed — mirrors legacy
 /// `node_flow::node_limit_caps_ticks` (limit 3).
 #[test]
 fn node_limit_caps_ticks() {
@@ -285,7 +285,7 @@ fn node_limit_caps_ticks() {
     );
 }
 
-/// `filter` gates ticks by a condition stream — mirrors classic
+/// `filter` gates ticks by a condition stream — mirrors legacy
 /// `node_flow::node_filter_gates_ticks` (pass only even counts → t = 10, 30,
 /// 50).
 #[test]
@@ -307,7 +307,7 @@ fn node_filter_gates_ticks() {
     );
 }
 
-/// Feedback on a unit stream re-enters one cycle (`+1`) later — mirrors classic
+/// Feedback on a unit stream re-enters one cycle (`+1`) later — mirrors legacy
 /// `node_flow::node_feedback_sends_signal` (rx ticks at t = 1, 101, 201).
 #[test]
 fn node_feedback_sends_signal() {
@@ -332,7 +332,7 @@ fn node_feedback_sends_signal() {
 // --- combine / split / collapse (structural) -------------------------------
 
 /// `combine` gathers every same-instant value into one burst, in argument
-/// order — mirrors classic `combine::combine_works`.
+/// order — mirrors legacy `combine::combine_works`.
 #[test]
 fn combine_gathers_same_instant_values() {
     fn burst_of(items: &[u64]) -> Burst<u64> {
@@ -359,7 +359,7 @@ fn combine_gathers_same_instant_values() {
 }
 
 /// `split` decomposes a stream of pairs into its two components — mirrors
-/// classic `mod::split_decomposes_tuple_stream`.
+/// legacy `mod::split_decomposes_tuple_stream`.
 #[test]
 fn split_decomposes_tuple_stream() {
     let g = GraphBuilder::new();
@@ -377,7 +377,7 @@ fn split_decomposes_tuple_stream() {
 }
 
 /// `collapse` emits the last item of a non-empty iterator value and stays
-/// quiet on an empty one — mirrors classic `mod::collapse_skips_empty_iterator`.
+/// quiet on an empty one — mirrors legacy `mod::collapse_skips_empty_iterator`.
 #[test]
 fn collapse_skips_empty_iterator() {
     let g = GraphBuilder::new();

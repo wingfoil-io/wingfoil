@@ -1,12 +1,12 @@
 //! Benchmarks for iceoryx2 adapter modes (Spin vs Threaded vs Signaled)
 //!
-//! Port of classic `wingfoil/benches/iceoryx2_modes.rs`. The workload is
+//! Port of legacy `legacy/wingfoil/benches/iceoryx2_modes.rs`. The workload is
 //! unchanged: for each mode, wire a `Local`-variant subscriber whose bursts are
 //! collapsed and collected, publish a one-element burst from a 100µs ticker into
 //! the same service, and run the graph realtime for 100 cycles — graph
-//! construction included in the timed body, exactly as classic times it.
+//! construction included in the timed body, exactly as legacy times it.
 //!
-//! Deliberate deviations from the classic source, all mechanical (same node
+//! Deliberate deviations from the legacy source, all mechanical (same node
 //! count, same shape):
 //!
 //! - nodes are wired through a [`GraphBuilder`] rather than free functions over
@@ -16,7 +16,7 @@
 //!   historical subscription at wiring), so the call is `?`-propagated;
 //! - the publisher is the `Iceoryx2SinkOps::iceoryx2_pub_with` extension method
 //!   on the burst stream instead of the free `iceoryx2_pub_with(upstream, ..)`;
-//! - classic's `ticker(..).produce(closure)` is `ticker(..).map(closure)` — one
+//! - legacy's `ticker(..).produce(closure)` is `ticker(..).map(closure)` — one
 //!   node either way, producing the identical single-element burst;
 //! - `collapse().collect()` is `collapse().accumulate()` (next's name for the
 //!   same two-node accumulate).

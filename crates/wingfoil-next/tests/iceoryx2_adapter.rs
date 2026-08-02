@@ -1,6 +1,6 @@
 //! iceoryx2 adapter tests — the in-process `Local` service variant end-to-end
 //! (no shared memory, no subprocesses) plus the wiring-time guards. A parity
-//! port of the classic `wingfoil/src/adapters/iceoryx2/local_tests.rs`.
+//! port of the legacy `legacy/wingfoil/src/adapters/iceoryx2/local_tests.rs`.
 //!
 //! The cross-process `Ipc` tests live in `tests/iceoryx2_integration.rs` behind
 //! the `iceoryx2-integration-test` feature. Run these with:
@@ -87,7 +87,7 @@ fn local_spin_round_trip() {
 fn local_threaded_round_trip() {
     let name = unique_service_name("threaded");
     // Background threads + connection establishment can be slow on loaded CI
-    // runners, so this mode gets a longer window (classic parity).
+    // runners, so this mode gets a longer window (legacy parity).
     let values = local_round_trip(&name, Iceoryx2Mode::Threaded, 99, 500);
     assert!(
         !values.is_empty(),
@@ -100,7 +100,7 @@ fn local_threaded_round_trip() {
 fn local_signaled_round_trip() {
     let name = unique_service_name("signaled");
     // Signaled mode depends on the Event service and can need a few retries on
-    // startup (classic parity).
+    // startup (legacy parity).
     let values = local_round_trip(&name, Iceoryx2Mode::Signaled, 7, 500);
     assert!(
         !values.is_empty(),
@@ -112,7 +112,7 @@ fn local_signaled_round_trip() {
 /// `history_size` is part of the iceoryx2 publish/subscribe service
 /// configuration. If publisher and subscriber disagree, `open_or_create()`
 /// errors — surfacing here at run start (next defers port creation to `start()`,
-/// as classic does) with the service name, variant and contract sizes attached.
+/// as legacy does) with the service name, variant and contract sizes attached.
 #[test]
 fn local_service_config_mismatch_fails() {
     let service_name = unique_service_name("mismatch");
@@ -285,7 +285,7 @@ fn sub_rejects_historical_mode() {
     assert!(format!("{err:#}").contains("iceoryx2_sub_slice"));
 }
 
-/// An invalid service name fails fast — at run start, where next (like classic)
+/// An invalid service name fails fast — at run start, where next (like legacy)
 /// creates the ports.
 #[test]
 fn invalid_service_name_fails_at_start() {

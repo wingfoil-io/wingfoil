@@ -1,6 +1,6 @@
 ## Breadth First vs Depth First: Branch / Recombine Benchmark
 
-Port of `wingfoil/benches/bfs_vs_dfs/README.md` onto the next engine.
+Port of `legacy/wingfoil/benches/bfs_vs_dfs/README.md` onto the next engine.
 
 These benchmarks measure the cost of the branch/recombine pattern at depths 1–10:
 
@@ -12,10 +12,10 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 ### Results
 
 `latency.png` is a *reading*, not source, so it is not carried over from
-classic — regenerate it locally with `plot.py` after running the three targets
-(the script's header lists the commands). The classic-engine plot, on the same
+legacy — regenerate it locally with `plot.py` after running the three targets
+(the script's header lists the commands). The legacy-engine plot, on the same
 workload, is preserved at
-[`wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../../wingfoil/benches/bfs_vs_dfs/latency.png)
+[`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../../wingfoil/benches/bfs_vs_dfs/latency.png)
 until the Phase-7 cutover.
 
 The shape it shows: wingfoil stays flat while async streams and reactive double
@@ -43,8 +43,8 @@ completes in a single engine cycle.
 
 Only the first row changes across the port — the other two measure *other
 libraries* as comparison baselines and are engine-agnostic, so they are
-verbatim copies of the classic files. `wingfoil.rs` keeps the classic workload
-node-for-node; classic's free function `add(&a, &b)` (a `bimap` with both
+verbatim copies of the legacy files. `wingfoil.rs` keeps the legacy workload
+node-for-node; legacy's free function `add(&a, &b)` (a `bimap` with both
 upstreams active) is next's `join`, one node per level either way.
 
 ### Running

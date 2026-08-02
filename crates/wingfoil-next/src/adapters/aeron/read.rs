@@ -52,7 +52,7 @@ impl<T: Default> Default for AeronEvent<T> {
     }
 }
 
-/// Derive the lifecycle status from the backend, in classic's order: `Closed`
+/// Derive the lifecycle status from the backend, in legacy's order: `Closed`
 /// is terminal and checked first, then `Connected`, else `Disconnected`.
 fn derive_status<B: AeronSubscriberBackend>(backend: &B) -> AeronStatus {
     if backend.is_closed() {
@@ -101,7 +101,7 @@ where
 /// Build the multiplexed event source for `opts.mode`, honouring the
 /// graph-thread-poll downgrade.
 ///
-/// `track_status` mirrors classic's two constructors: the plain
+/// `track_status` mirrors legacy's two constructors: the plain
 /// `aeron_sub_fragment` never derives status at all (no `is_closed` /
 /// `is_connected` calls per poll), while the `_with_status` twin does.
 pub(crate) fn event_source<T, F, B>(
@@ -156,7 +156,7 @@ where
         backend,
         parser,
         track_status,
-        // Mirrors classic's `AeronStatusStream` default, so the first observed
+        // Mirrors legacy's `AeronStatusStream` default, so the first observed
         // state (e.g. Connected) registers as a transition.
         last_status: AeronStatus::Disconnected,
     }));
@@ -170,7 +170,7 @@ where
                 Ok(Some(v)) => out.push(AeronEvent::Data(v)),
                 Ok(None) => {}
                 // A malformed fragment is logged and skipped — it never aborts
-                // the cycle (classic's zero-stopping rule).
+                // the cycle (legacy's zero-stopping rule).
                 Err(e) => log::warn!(
                     "aeron sub: parser dropped fragment at position {}: {e}",
                     frag.position()
@@ -179,7 +179,7 @@ where
         }
         // A poll error short-circuits above (via `?`) *before* the status is
         // derived, so a transient I/O failure never registers a phantom
-        // `Disconnected` transition — classic's ordering.
+        // `Disconnected` transition — legacy's ordering.
         if st.track_status {
             let new_status = derive_status(&st.backend);
             if new_status != st.last_status {

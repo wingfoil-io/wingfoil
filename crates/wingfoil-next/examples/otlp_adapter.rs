@@ -2,7 +2,7 @@
 //! backend via OTLP, alongside a Prometheus `/metrics` endpoint for pull-based
 //! scraping.
 //!
-//! A port of the classic `wingfoil/examples/telemetry/otlp` example onto the
+//! A port of the legacy `legacy/wingfoil/examples/telemetry/otlp` example onto the
 //! next engine. Runs a Prometheus exporter (pull) and an OTLP push sink over the
 //! same counter, so metrics can be consumed by both Prometheus scrapers and any
 //! OTLP-compatible backend (Grafana Alloy, Datadog, Honeycomb, New Relic, …).

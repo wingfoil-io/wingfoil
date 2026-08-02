@@ -1,6 +1,6 @@
 //! etcd service-discovery parity tests for the zmq adapter — a port of the
-//! `etcd_tests` module from the classic
-//! `wingfoil/src/adapters/zmq/integration_tests.rs`.
+//! `etcd_tests` module from the legacy
+//! `legacy/wingfoil/src/adapters/zmq/integration_tests.rs`.
 //!
 //! These exercise the pluggable [`EtcdRegistry`] discovery backend: a publisher
 //! registers its bound address in etcd under a lease, and a subscriber resolves
@@ -203,7 +203,7 @@ fn pub_etcd_lease_revoked_on_stop() {
 fn pub_etcd_historical_mode_fails() {
     // The run-mode check runs before the registry is touched, so a historical
     // run errors with "real-time" — not an etcd connection error — even against
-    // an unreachable etcd. Parity of classic `zmq_pub_etcd_historical_mode_fails`.
+    // an unreachable etcd. Parity of legacy `zmq_pub_etcd_historical_mode_fails`.
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
     let g = GraphBuilder::new();
     let _sink = g

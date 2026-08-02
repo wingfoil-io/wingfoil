@@ -1,6 +1,6 @@
 # Aeron Adapter Examples (wingfoil-next)
 
-Ports of the classic `wingfoil/examples/aeron` examples onto the next engine.
+Ports of the legacy `legacy/wingfoil/examples/aeron` examples onto the next engine.
 
 Demonstrates a round-trip with the Aeron adapter: an `i64` publisher offers
 values over an `aeron:ipc` channel, and a subscriber receives them back —
@@ -72,7 +72,7 @@ data values pass through only while the subscriber's last observed
 cargo run -p wingfoil-next --example aeron_status_circuit_breaker --features aeron
 ```
 
-Where classic needed a hand-written `MutableNode` reading both streams, next
+Where legacy needed a hand-written `MutableNode` reading both streams, next
 expresses it with the ordinary fluent vocabulary — `fold` latches the latest
 transition, and a two-input `custom_node` gates the data on it (the status is a
 *passive* upstream, so the gate fires on data, not on status).

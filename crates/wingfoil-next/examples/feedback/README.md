@@ -5,7 +5,7 @@ have them. A feedback edge breaks the cycle in time: values sent to the sink
 arrive on the paired source *one cycle later*, so the graph stays acyclic while
 the loop still closes.
 
-This is the fluent-API port of the classic `feedback` example: a proportional
+This is the fluent-API port of the legacy `feedback` example: a proportional
 temperature controller. The room (the "plant") is heated toward a setpoint; the
 controller reads the current temperature, computes the error, and drives the
 heater proportionally. The new temperature feeds back for the next step.
@@ -40,9 +40,9 @@ temperature: 19.922
 
 ### Idiom notes
 
-- `g.feedback::<T>()` returns `(source, sink)` — the reverse of the classic
+- `g.feedback::<T>()` returns `(source, sink)` — the reverse of the legacy
   engine's `(tx, rx)` ordering.
-- The classic engine used `bimap(Dep::Active, Dep::Passive, …)`; the next engine
+- The legacy engine used `bimap(Dep::Active, Dep::Passive, …)`; the next engine
   spells the same active/passive combine as `join_passive`.
 - `stream.feedback(&sink)` is a pass-through that also forwards each value to the
   sink for delivery next cycle.

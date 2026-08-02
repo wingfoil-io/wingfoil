@@ -6,10 +6,10 @@
 //! layout — the `latency_stages!` macro guarantees this when both sides
 //! declare the same stages in the same order.
 //!
-//! A port of the classic `wingfoil/examples/latency_e2e/shared.rs` onto the
+//! A port of the legacy `legacy/wingfoil/examples/latency_e2e/shared.rs` onto the
 //! next engine. The data layer is unchanged — `Traced` and `latency_stages!`
-//! are engine-agnostic and re-exported from the classic crate by
-//! `wingfoil_next::latency` — so this file is the classic one but for the
+//! are engine-agnostic and re-exported from the legacy crate by
+//! `wingfoil_next::latency` — so this file is the legacy one but for the
 //! import paths.
 //!
 //! `#[type_name(...)]` pins the iceoryx2 type identifier to a string that is
@@ -17,7 +17,7 @@
 //! `core::any::type_name::<Self>()` embeds the binary-specific module path
 //! (`latency_e2e_fix_gw::shared::RoundTrip` vs
 //! `latency_e2e_ws_server::shared::RoundTrip`), and iceoryx2 reports
-//! `IncompatibleTypes` when the second binary opens the service. Classic
+//! `IncompatibleTypes` when the second binary opens the service. Legacy
 //! already applies it here — unlike its `examples/latency` pair, where the
 //! next port had to add it — so this is straight parity.
 
@@ -28,7 +28,7 @@
 use iceoryx2::prelude::ZeroCopySend;
 use serde::{Deserialize, Serialize};
 // `latency_stages!` expands to impls of `Latency` / `Stage`, so both traits
-// must be in scope at the expansion site (classic gets them from its
+// must be in scope at the expansion site (legacy gets them from its
 // `use wingfoil::*` prelude glob).
 use wingfoil_next::latency::{Latency, Stage, latency_stages};
 

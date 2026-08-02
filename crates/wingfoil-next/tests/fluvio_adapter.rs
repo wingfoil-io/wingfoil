@@ -46,7 +46,7 @@ fn sub_rejects_historical_mode() {
 
 /// A negative `start_offset` is invalid (`Offset::absolute` rejects it). The
 /// check is pure, so next fails at wiring rather than deferring it into the
-/// producer future the way classic did.
+/// producer future the way legacy did.
 #[test]
 fn sub_rejects_negative_offset() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -68,7 +68,7 @@ fn sub_rejects_negative_offset() {
 }
 
 /// An unreachable SC must abort the run with context rather than hang or panic —
-/// the parity of classic `test_connection_refused`.
+/// the parity of legacy `test_connection_refused`.
 #[test]
 fn sub_connection_refused_aborts_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");

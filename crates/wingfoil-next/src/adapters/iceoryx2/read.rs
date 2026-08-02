@@ -26,7 +26,7 @@ use super::{
     service_open_err_with_context,
 };
 
-/// How often (in cycles) a port refreshes its connections, matching classic.
+/// How often (in cycles) a port refreshes its connections, matching legacy.
 const UPDATE_CONNECTIONS_EVERY: u64 = 10;
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ macro_rules! run_poll_loop {
 }
 
 /// Open (or create) the `<service>.signal` Event service, retrying briefly —
-/// the publisher may not have created it yet. Ported from classic.
+/// the publisher may not have created it yet. Ported from legacy.
 macro_rules! open_event_service {
     ($node:expr, $signal_name:expr, $variant:expr) => {{
         let mut last_err: Option<String> = None;
@@ -225,7 +225,7 @@ where
 
 /// Subscribe to an iceoryx2 service with explicit options.
 ///
-/// The subscriber port is created at graph `start()` (classic parity), so an
+/// The subscriber port is created at graph `start()` (legacy parity), so an
 /// invalid service name or a contract mismatch aborts the run rather than
 /// wiring. Samples received between cycles group into one [`Burst`].
 ///

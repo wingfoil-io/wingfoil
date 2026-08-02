@@ -3,7 +3,7 @@
 //! Measures the latency of publishing messages using the `offer` method
 //! across different message sizes.
 //!
-//! Port of classic `wingfoil/benches/aeron/publication_latency.rs`. The
+//! Port of legacy `legacy/wingfoil/benches/aeron/publication_latency.rs`. The
 //! workload is unchanged — next's `RusteronPublisher` /
 //! `AeronPublisherBackend` are the ported twins with identical signatures, and
 //! the bench drives the *backend* directly (no graph), so only the crate in the

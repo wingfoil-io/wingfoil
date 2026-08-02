@@ -50,7 +50,7 @@ The shared core is `crates/wingfoil-next/src/runtime/`:
 
 `wingfoil` re-exports every one of these at its historical path
 (`wingfoil::NanoTime`, `wingfoil::codegen::Kernel`, `wingfoil::Traced`, …), so
-the classic public API is unchanged and both engines use **one** set of types
+the legacy public API is unchanged and both engines use **one** set of types
 rather than structurally-identical twins — a `Traced` payload or a `RunFor`
 crosses the engine boundary without conversion.
 
@@ -61,7 +61,7 @@ Two consequences worth knowing:
   a next → legacy edge. `wingfoil-derive` now holds only `#[node]`, which dies
   with the legacy tree (see `port-plan.md` Phase 7).
 - **The one remaining edge back to `wingfoil` is a dev-dependency**, for the
-  parity tests (`tests/engine_semantics.rs`) and the classic-vs-next comparison
+  parity tests (`tests/engine_semantics.rs`) and the legacy-vs-next comparison
   benches (`benches/tiers.rs`). Cargo permits the cycle precisely because it is
   dev-only: the *library* graph runs `wingfoil` → `wingfoil-next` and nothing
   more. That edge is the parity oracle, and it goes away with the legacy tree.
@@ -99,7 +99,7 @@ being installable under the legacy name.
 |:--:|---|---|:--:|
 | 1.2 | **Crate + module rename.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → the derive crate, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. | Cutover is a *name* takeover, not just a directory move. Touches every `use wingfoil_next::` in the tree, every doc link, every example, every workflow, and both publish jobs. **Head of the critical path**, and it conflicts with anything else in flight — land it with the tree quiet. | L |
 | 1.3 | **Delete the `wingfoil-derive` crate.** It now holds only `#[node]`. Drop the directory, the workspace member entry, and `wingfoil`'s dependency on it. | Nothing under `crates/` depends on it; removal is purely a consequence of the legacy tree going. | S |
-| 1.4 | **Retire the classic engine internals** (`MutableNode` wiring path) and rule on whether the classic facade API survives the swap. | Decides whether Rust downstreams break at the version bump. | M |
+| 1.4 | **Retire the legacy engine internals** (`MutableNode` wiring path) and rule on whether the legacy facade API survives the swap. | Decides whether Rust downstreams break at the version bump. | M |
 
 ### 2. Rulings owed — no code, but they gate the swap
 
@@ -108,14 +108,14 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 
 | # | Item | Class | Decision needed | Source |
 |:--:|---|:--:|---|---|
-| 2.1 | **`Graph::export` (GML topology dump) not ported.** The only *public* classic API next has no answer for. | ⚪ | Accept the drop and document it in the migration guide, or port `export` before the swap. Feeds 4.2. | register C6 |
-| 2.2 | **Latency ops are fluent/interpreted-only** — `stamp`/`stamp_precise`/`latency_report` have no `nitro!`/`compiled()`/`nested()` form. | ⚪ | Ratify as classic-parity (classic exposes latency only through `LatencyStreamOps`), or close the gap. | register C7 |
-| 2.3 | **zmq cross-language interop not ported** — the `bincode` envelope is next-local, not wire-compatible with a classic/Python peer. Its stated deferral was "with the Python bindings (Phase 6)", which is now done. | ⚪ | Re-rule now the deferral has expired. | register C2 |
-| 2.4 | **Live sources reject `RunMode::HistoricalFrom` at wiring.** Split ruling already agreed; the residual is that `kafka`/`fluvio` `_source` carry a live half only. | 🟡 | Confirm the bounded kafka/fluvio readers are *superset* work, not parity (classic never offered them), so they do not block. | register B2 |
-| 2.5 | **`block_on` sinks/readers panic if the graph is driven from an async context.** | 🟡 | Accept as classic-parity and inherent to `block_on`-on-the-graph-thread. | register A5a |
-| 2.6 | **`spawn_map` historical lock-step artifacts** — a filtering/delaying sub-graph desynchronises; bound runs by duration, not raw cycle count. | 🟢🟡 | Accept (classic's `graph_node` delay case fails likewise). | register B6 |
+| 2.1 | **`Graph::export` (GML topology dump) not ported.** The only *public* legacy API next has no answer for. | ⚪ | Accept the drop and document it in the migration guide, or port `export` before the swap. Feeds 4.2. | register C6 |
+| 2.2 | **Latency ops are fluent/interpreted-only** — `stamp`/`stamp_precise`/`latency_report` have no `nitro!`/`compiled()`/`nested()` form. | ⚪ | Ratify as legacy-parity (legacy exposes latency only through `LatencyStreamOps`), or close the gap. | register C7 |
+| 2.3 | **zmq cross-language interop not ported** — the `bincode` envelope is next-local, not wire-compatible with a legacy/Python peer. Its stated deferral was "with the Python bindings (Phase 6)", which is now done. | ⚪ | Re-rule now the deferral has expired. | register C2 |
+| 2.4 | **Live sources reject `RunMode::HistoricalFrom` at wiring.** Split ruling already agreed; the residual is that `kafka`/`fluvio` `_source` carry a live half only. | 🟡 | Confirm the bounded kafka/fluvio readers are *superset* work, not parity (legacy never offered them), so they do not block. | register B2 |
+| 2.5 | **`block_on` sinks/readers panic if the graph is driven from an async context.** | 🟡 | Accept as legacy-parity and inherent to `block_on`-on-the-graph-thread. | register A5a |
+| 2.6 | **`spawn_map` historical lock-step artifacts** — a filtering/delaying sub-graph desynchronises; bound runs by duration, not raw cycle count. | 🟢🟡 | Accept (legacy's `graph_node` delay case fails likewise). | register B6 |
 | 2.7 | **Three capability-matrix 🟡s**: compiled realtime is timer-driven with no external wake (🟡³); island dynamic-graph is partial (🟡¹⁰); compiled sparse gating is per-node `if` checks, not region gating (🟡¹³). | 🟡 | Three accept-by-design rulings, or work items. | port-plan.md capability matrix |
-| 2.8 | **C3 multi-output islands** and **C4 compiled-path IO ingestion** (busy-poll + bursts). | ⚪ | Confirm both stay post-v1; neither is a classic-parity gap, since classic has no compiled tier. | register C3/C4 |
+| 2.8 | **C3 multi-output islands** and **C4 compiled-path IO ingestion** (busy-poll + bursts). | ⚪ | Confirm both stay post-v1; neither is a legacy-parity gap, since legacy has no compiled tier. | register C3/C4 |
 
 ### 3. Superset gaps — Goal 1 names examples, benchmarks, bindings and docs
 
@@ -154,14 +154,16 @@ All of this is blocked on 1.2, which fixes the names everything here refers to.
 | 6.1 | `cargo fmt --all -- --check`, `cargo lint`, `cargo lint-all` green on the promoted tree. Read the exit codes directly — piping into `tail`/`head` masks them. |
 | 6.2 | `cargo test -p wingfoil-next --all-features` and the next-python pytest suite green. |
 | 6.3 | Every `*-next-integration` workflow green on the cutover branch — they gate the service-backed adapters the unit suites cannot. |
-| 6.4 | `cargo bench --bench tiers` re-read. The `next-interpreted ≥ classic-interpreted` baseline can only be checked while the classic bar exists, so this is the last chance. A manual read: wiring benches as a CI gate stays deliberately deferred, criterion wall-clock being too noisy on shared runners. |
+| 6.4 | `cargo bench --bench tiers` re-read. The `next-interpreted ≥ legacy-interpreted` baseline can only be checked while the legacy bar exists, so this is the last chance. A manual read: wiring benches as a CI gate stays deliberately deferred, criterion wall-clock being too noisy on shared runners. |
 
 ### Open issues to route
 
 Only **#602** (aeron: fragment assembly, sub ergonomics, publisher
-back-pressure) carries the `next` label. Most `classic`-labelled issues die
-with the legacy tree, but these survive the swap and want re-labelling rather
-than closing: **#367** (wheel excludes aeron/iceoryx2 — see 5.4), **#450**
+back-pressure) carries the `next` label. Most issues under the `classic`
+label — still named that on GitHub, and a candidate for renaming with the
+rest — die with the legacy tree, but these survive the swap and want
+re-labelling rather than closing: **#367** (wheel excludes aeron/iceoryx2 —
+see 5.4), **#450**
 (no manylinux/aarch64/sdist wheels, trusted publishing), **#452** (Dependabot
 alerts, wasm lockfile), **#449 / #451 / #359** (CI blind spots, workflow
 dedup, stale actions), **#461** (supply-chain hardening), **#457**

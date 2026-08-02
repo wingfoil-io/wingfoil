@@ -1,5 +1,5 @@
 //! CSV adapter (Phase 4): a serde-typed historical replay **source** and a file
-//! **sink**. These tests port the classic `wingfoil::adapters::csv` unit tests
+//! **sink**. These tests port the legacy `wingfoil::adapters::csv` unit tests
 //! as parity tests (all-rows / single-burst emission, same-timestamp grouping,
 //! missing-file and malformed-row error handling) and add an end-to-end
 //! read → transform → write round trip asserting the output contents and the
@@ -14,7 +14,7 @@ use wingfoil_next::adapters::csv::{CsvSinkOps, csv_read};
 use wingfoil_next::prelude::*;
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
-/// The classic parity record: a positional `(time, value)` tuple.
+/// The legacy parity record: a positional `(time, value)` tuple.
 type Record = (NanoTime, u32);
 
 fn get_time(r: &Record) -> NanoTime {
@@ -45,7 +45,7 @@ fn output_lines(path: &PathBuf) -> Vec<String> {
         .collect()
 }
 
-/// Classic `csv_read_emits_all_rows` + `csv_read_each_row_is_single_burst`:
+/// Legacy `csv_read_emits_all_rows` + `csv_read_each_row_is_single_burst`:
 /// six distinct-timestamp rows replay as six single-element bursts, every row
 /// (including the last) delivered.
 #[test]
@@ -77,7 +77,7 @@ fn csv_read_emits_all_rows_each_a_single_burst() {
     assert_eq!(times, (1001..=1006).map(NanoTime::new).collect::<Vec<_>>());
 }
 
-/// Classic `csv_read_groups_same_timestamp_into_one_burst`: timestamps
+/// Legacy `csv_read_groups_same_timestamp_into_one_burst`: timestamps
 /// 1001, 1002, 1003(×2), 1004 → 4 ticks, the two 1003 rows in one atomic burst.
 #[test]
 fn csv_read_groups_same_timestamp_into_one_burst() {
@@ -99,7 +99,7 @@ fn csv_read_groups_same_timestamp_into_one_burst() {
     assert_eq!(burst_1003.1.len(), 2, "both 1003 rows ride one burst");
 }
 
-/// Classic `csv_read_missing_file_returns_error_with_context`: a missing file
+/// Legacy `csv_read_missing_file_returns_error_with_context`: a missing file
 /// surfaces a contextual error at wiring time rather than panicking.
 #[test]
 fn csv_read_missing_file_returns_error_with_context() {
@@ -122,9 +122,9 @@ fn csv_read_missing_file_returns_error_with_context() {
     );
 }
 
-/// Classic `csv_read_malformed_row_surfaces_error_not_panic`: a row that fails
+/// Legacy `csv_read_malformed_row_surfaces_error_not_panic`: a row that fails
 /// to deserialize aborts the run with a contextual error rather than panicking.
-/// (Deviation from classic: surfaced through the channel at the start of the
+/// (Deviation from legacy: surfaced through the channel at the start of the
 /// replay rather than mid-stream — same observable outcome and message.)
 #[test]
 fn csv_read_malformed_row_surfaces_error_not_panic() {

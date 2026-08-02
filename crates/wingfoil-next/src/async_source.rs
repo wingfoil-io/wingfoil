@@ -1,4 +1,4 @@
-//! [`produce_async`]: the classic `produce_async` ergonomic — an async closure
+//! [`produce_async`]: the legacy `produce_async` ergonomic — an async closure
 //! that yields *timestamped* values driving a graph source — over the
 //! [`channel`](crate::fluent::SourceOps::channel) layer.
 //!
@@ -19,20 +19,20 @@
 //! Gated behind the `async` feature (it pulls in `tokio` + `futures`); the
 //! core engine stays executor-free.
 //!
-//! # Two guarantees classic gives that this layer must not drop
+//! # Two guarantees legacy gives that this layer must not drop
 //!
-//! Classic `produce_async` derives its [`RunParams`] from the graph's own run
+//! Legacy `produce_async` derives its [`RunParams`] from the graph's own run
 //! (in the node's `setup`, from the live `run_mode`/`run_for`/`start_time`) and
 //! bounds the producer→graph channel with `buffer_size`. next matches both:
 //!
 //! * **Params from the run.** The producer task spawns in `start()` (deferred via
 //!   `source_at_start` — nothing runs at wiring), and its [`RunParams`] are
 //!   derived from the *actual* run at that point (the deferred `setup` is handed
-//!   the live `run_mode`/`run_for`/`start_time`). So — like classic — there is no
+//!   the live `run_mode`/`run_for`/`start_time`). So — like legacy — there is no
 //!   caller-declared params to disagree with the run; the earlier declare-up-front
 //!   footgun (and its validating passthrough) is gone.
 //! * **Backpressure.** `buffer_size` bounds how far the producer may run ahead
-//!   of the graph, in **both** run modes (matching classic's bounded
+//!   of the graph, in **both** run modes (matching legacy's bounded
 //!   `channel_pair`): the producer takes a permit before each send and the
 //!   passthrough returns one per delivered value, so at most ~`buffer_size`
 //!   values sit undelivered — the producer waits instead of growing memory
@@ -127,7 +127,7 @@ impl GraphRuntime {
     }
 }
 
-/// The run parameters handed to a producer closure (mirrors classic
+/// The run parameters handed to a producer closure (mirrors legacy
 /// `RunParams`), so a producer can choose a historical vs live data source.
 ///
 /// These describe the run the graph is actually being driven with — a
@@ -143,7 +143,7 @@ pub struct RunParams {
 }
 
 /// Drive a graph source from an async producer of timestamped values, matching
-/// classic `produce_async`'s `(closure, buffer_size)` signature. See the module
+/// legacy `produce_async`'s `(closure, buffer_size)` signature. See the module
 /// docs. Returns the source [`Stream<Burst<T>>`].
 ///
 /// The producer closure receives the run's [`RunParams`] — derived from the
@@ -153,14 +153,14 @@ pub struct RunParams {
 /// `Err` aborts the run.
 ///
 /// `buffer_size` bounds the producer→graph backlog in **both** run modes
-/// (matching classic's bounded `channel_pair`); `None` is unbounded (a fast
+/// (matching legacy's bounded `channel_pair`); `None` is unbounded (a fast
 /// producer feeding a slower graph can accumulate an arbitrarily large backlog).
 /// What `Some(n)` counts differs by mode, mirroring how each groups values:
 ///
 /// * **Realtime** — ~`n` *values* ahead of the graph's delivery point (values
 ///   coalesce into a burst by arrival, so the bound is per value).
 /// * **Historical** — ~`n` *timestamp-groups* ahead (same-time values ride one
-///   atomic burst, exactly as classic, so an arbitrarily large same-time burst
+///   atomic burst, exactly as legacy, so an arbitrarily large same-time burst
 ///   is never split and never counts as more than one slot). This is what makes
 ///   a lazy time-sliced source stay bounded and pipelined: the receiver drains
 ///   incrementally (`pump_historical`) as the graph clock advances, freeing a
@@ -191,14 +191,14 @@ where
     // The graph owns the runtime (created lazily here on first async use, or a
     // caller override). The producer task is spawned in `start()` — not at wiring
     // — via `source_at_start`, so an adapter's I/O (connect / subscribe) is
-    // established at run start, matching classic and keeping wiring side-effect
+    // established at run start, matching legacy and keeping wiring side-effect
     // free (nothing runs until `run()`). Re-run is still a follow-on: the source
     // inherits `channel`'s single-run restriction. See
     // `docs/source-lifecycle-defer-to-start.md`.
     let handle = g.async_runtime_handle()?;
 
     // Backpressure: a permit semaphore, created when a bound is requested. Active
-    // in **both** run modes (matching classic's bounded `channel_pair`): the
+    // in **both** run modes (matching legacy's bounded `channel_pair`): the
     // producer acquires (and forgets) one permit before each unit and the
     // passthrough adds one back per delivered unit, so the producer runs at most
     // ~`buffer_size` units ahead of the graph's delivery point. In historical this
@@ -397,7 +397,7 @@ impl Drop for AbortOnDrop {
 /// after the last cycle (even after a cycle error), and the engine folds its
 /// error into the run result. This is what lets a sink abort the run
 /// deterministically on the **last** write — e.g. etcd's `force:false` conditional
-/// under `RunFor::Cycles(1)` — matching classic's `teardown()`-time surfacing
+/// under `RunFor::Cycles(1)` — matching legacy's `teardown()`-time surfacing
 /// (`AsyncConsumerNode::teardown` does `block_on(handle)??`).
 ///
 /// If `flush` is never wired, a [`Drop`] safety-net still drains every queued
@@ -450,7 +450,7 @@ where
 /// back-pressure/ordering/error-surfacing are identical (here `buffer_size`
 /// bounds bursts, not values), and the final burst's error surfaces via `flush`.
 ///
-/// This is the concurrent-within-burst shape kafka's producer wants (classic
+/// This is the concurrent-within-burst shape kafka's producer wants (legacy
 /// `kafka_pub` drained a burst's sends together via `FuturesUnordered`, one
 /// broker roundtrip per burst); the per-value [`consume_async`] would serialise
 /// them into N roundtrips.

@@ -2,7 +2,7 @@
 
 Round-trips data through PostgreSQL: generates trades, writes them with
 `postgres_write`, reads them back with the time-sliced `postgres_read`, and
-asserts the two tie out. A port of the classic `wingfoil/examples/postgres`
+asserts the two tie out. A port of the legacy `legacy/wingfoil/examples/postgres`
 example onto the next engine. Demonstrates the on-graph time model
 (`(NanoTime, T)` tuples) and the shared time-slicing logic used for historical
 replay.

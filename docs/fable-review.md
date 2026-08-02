@@ -3,18 +3,18 @@
 Date: 2026-07-20. Scope: the port plan (`port-plan.md`) and the
 `wingfoil-next` / `wingfoil-next-macros` crates as of this branch. All
 findings below were verified against the actual code paths (and, where noted,
-reproduced with probe tests); classic parity claims were checked against
-`wingfoil/src/nodes/*`, `wingfoil/src/adapters/statistics.rs`,
-`wingfoil/src/graph.rs`, and `wingfoil/src/codegen/kernel.rs`.
+reproduced with probe tests); legacy parity claims were checked against
+`legacy/wingfoil/src/nodes/*`, `legacy/wingfoil/src/adapters/statistics.rs`,
+`legacy/wingfoil/src/graph.rs`, and `legacy/wingfoil/src/codegen/kernel.rs`.
 
 **TLDR:** The plan is genuinely good — right strategy (parallel port behind a
 facade, parity-oracle testing, fallibility first), honest capability matrix,
-and its Phase 4.5 characterization of the classic engine is accurate (classic
+and its Phase 4.5 characterization of the legacy engine is accurate (legacy
 really is a layer-ordered dirty-list: `dirty_nodes_by_layer` in `graph.rs`).
 The implementation is clean and all tests/lints pass. But the review found
 **real, verified drift between the three execution paths** — exactly the
 class of bug the plan claims is impossible by construction — plus a handful
-of semantic-parity gaps vs classic, and panics where the repo's own error
+of semantic-parity gaps vs legacy, and panics where the repo's own error
 rules require `Result`. The plan's "the engines cannot drift" claim holds for
 `Op::cycle` semantics but **not for engine-owned initialization and
 evaluation timing**, which is where every confirmed divergence sits.
@@ -35,15 +35,15 @@ Aeron adapter's CMake system dep, unrelated to these changes).
    its slot with a clone of `init`, not `Default`. Test: non-default init (100)
    read via a passive edge, 3-way parity.
 2. ✅ **`delay(0)`** — emits inline in the same cycle on all three paths;
-   classic `zero_delay_works` ported (`Cycles(4)` → 1,2,3,4).
+   legacy `zero_delay_works` ported (`Cycles(4)` → 1,2,3,4).
 3. ✅ **Delay first-value seeding** — delay stores its first upstream value
    without ticking. Implemented at the engine level (interp + macro in
    lockstep) because `Op::cycle` cannot express "update value without ticking";
    the `Tick::Silent` **contract gap is documented in `op.rs`** and moved into
    Phase 1 of the plan rather than adding the enum variant unilaterally.
-   Classic `delay_initializes_to_first_value` ported.
+   Legacy `delay_initializes_to_first_value` ported.
 4. ✅ **Historical channel start** — pre-start and out-of-order timestamps are
-   now rejected (matching classic's error policy). ⚠️ The blocking whole-stream
+   now rejected (matching legacy's error policy). ⚠️ The blocking whole-stream
    collect / unbounded-memory behaviour is **documented, not changed**.
 5. ✅ **Realtime `close()`** — a shared `finished` flag ends the run even with a
    live sender clone. ⚠️ `Checkpoint` remains a documented no-op on both receive
@@ -72,11 +72,11 @@ corrected (`external` drains to a `Burst`), and `..base` dropped from every
 - ✅ Cross-graph `Handle` misuse guarded with a builder id + `debug_assert`.
 - ✅ `GraphBuilder::build` double-build / wire-after-build poisoned via a shared
    `built` flag (signature kept `&self` to avoid rippling into callers).
-- ✅ EWMA alpha `[0,1]` `debug_assert` added (mirrors classic).
+- ✅ EWMA alpha `[0,1]` `debug_assert` added (mirrors legacy).
 - ✅ `mentions_graph_ident` now names the offending identifier in its error.
 - ⏭️ **`FeedbackSink` public `send` — DEFERRED.** next's op-facing `Ctx` is
    self-scheduling-only and cannot schedule the paired *source* node like
-   classic's `GraphState::add_callback_for_node`; a real `send` needs a wider
+   legacy's `GraphState::add_callback_for_node`; a real `send` needs a wider
    `Ctx` (against the current design). Documented in code, left for a contract
    follow-up.
 - ⏭️ **`register_op0`/`register_op2` collapse — NOT DONE.** Pure cleanup that
@@ -84,7 +84,7 @@ corrected (`external` drains to a `Burst`), and `..base` dropped from every
    bugs.
 - ⏭️ **`#[op]` crate-internal doc note — NOT DONE** (minor).
 - ➖ `Window::start` anchoring at ZERO left **intentionally unchanged** — it is
-   bug-for-bug identical to classic (parity holds); per the review it is a
+   bug-for-bug identical to legacy (parity holds); per the review it is a
    shared quirk both engines should fix together, not unilaterally.
 
 **Test-suite blind spots** — added: fold non-default init, merge tie-break with
@@ -112,13 +112,13 @@ completeness test committed, `Tick::Silent` question into Phase 1).
    probe. Fix: add a value-seed field to `OpInfo` and emit a clone of the
    state for Fold; add a parity test with a non-default init.
 
-2. **`delay(0)` diverges from classic.** Classic special-cases zero delay and
-   emits inline (`wingfoil/src/nodes/delay.rs:27-30`); next always schedules
+2. **`delay(0)` diverges from legacy.** Legacy special-cases zero delay and
+   emits inline (`legacy/wingfoil/src/nodes/delay.rs:27-30`); next always schedules
    `time + 0`, which pops on the *next* cycle — so under `RunFor::Cycles(4)`
-   classic yields 1,2,3,4 and next yields 1,2 with half the budget burned on
+   legacy yields 1,2,3,4 and next yields 1,2 with half the budget burned on
    empty wakeups.
 
-3. **`Delay` loses classic's first-value seeding.** Classic stores the first
+3. **`Delay` loses legacy's first-value seeding.** Legacy stores the first
    upstream value without ticking, so passive readers never see
    `T::default()` before the delay elapses. The `Tick` contract has no way to
    say "update value, don't tick" — this is a **contract-level gap**, not
@@ -126,16 +126,16 @@ completeness test committed, `Tick::Silent` question into Phase 1).
    or document the deviation. Right now it is silent drift with no test.
 
 4. **Historical channel `start` block-collects the entire stream**
-   (`interp.rs:332-371`). Classic deliberately goes non-blocking to avoid
+   (`interp.rs:332-371`). Legacy deliberately goes non-blocking to avoid
    deadlocking a producer that depends on graph output
-   (`wingfoil/src/nodes/channel.rs:152-193`); next's version can deadlock,
+   (`legacy/wingfoil/src/nodes/channel.rs:152-193`); next's version can deadlock,
    holds the whole feed in memory, silently *sorts* out-of-order timestamps
-   where classic errors, and a `send_at` earlier than `start_time` rewinds
+   where legacy errors, and a `send_at` earlier than `start_time` rewinds
    the run clock (the kernel schedules it verbatim, so the first cycle runs
    *before* `HistoricalFrom(start)`). Clamp/reject pre-start times and
    document (or fix) the blocking collect.
 
-5. **Realtime `close()` is a no-op.** No `finished` flag (classic sets one);
+5. **Realtime `close()` is a no-op.** No `finished` flag (legacy sets one);
    the run only ends when every `ChannelSender` clone is dropped. Keep a
    clone alive, call `close()`, and the run hangs to its bound. The existing
    test passes only because the producer thread drops its sender.
@@ -166,9 +166,9 @@ completeness test committed, `Tick::Silent` question into Phase 1).
    of the macro's ~20 error paths.
 
 9. **`produce_async` takes caller-invented `RunParams`, unchecked against the
-   actual run** (`async_source.rs:52-57`). Classic derives them from the
+   actual run** (`async_source.rs:52-57`). Legacy derives them from the
    graph's own run; here nothing verifies them against `run(run_mode,
-   run_for)`, and classic's `buffer_size` bounded-channel backpressure is
+   run_for)`, and legacy's `buffer_size` bounded-channel backpressure is
    missing (the mpsc is unbounded).
 
 ## Documentation drift (cheap, fix now)
@@ -202,11 +202,11 @@ completeness test committed, `Tick::Silent` question into Phase 1).
   second `build()` silently returns an empty `Runner`; wiring from a retained
   `Stream` afterwards panics out-of-bounds deep inside `slot()`. Consume
   `self` or poison explicitly.
-- **`FeedbackSink` has no public `send`** — classic's is user-callable from
+- **`FeedbackSink` has no public `send`** — legacy's is user-callable from
   custom nodes; only the `feedback_send` pass-through wiring exists. (The
   `+1` scheduling, pop-all-keep-last, `TimeQueue` dedup, and `PartialEq`
-  bound all correctly match classic.)
-- **No EWMA alpha validation** (`ops.rs:529`, `stats.rs:43`); classic
+  bound all correctly match legacy.)
+- **No EWMA alpha validation** (`ops.rs:529`, `stats.rs:43`); legacy
   `debug_assert!`s `[0,1]`. Alpha > 1 silently diverges.
 - **~10 hand-written `Builder` adapter closures repeat the same pattern**
   (ticker/constant/throttle/window/…). `register_op1` exists; a
@@ -219,7 +219,7 @@ completeness test committed, `Tick::Silent` question into Phase 1).
   "wiring must be straight-line" error, which doesn't name the offending
   identifier.
 - **`Window::start` anchors at `ctx.time()` (= ZERO during start), not
-  `start_time`** — bug-for-bug identical to classic, so parity holds; a
+  `start_time`** — bug-for-bug identical to legacy, so parity holds; a
   shared quirk both engines should fix together, not unilaterally.
 
 ## Test-suite blind spots
@@ -231,10 +231,10 @@ real drift lives:
 - Merge tie-break never tested with both inputs ticking in one cycle — the
   compiled tick-pair ordering (`lib.rs:1613-1617`) could be swapped and tests
   stay green (`odds_evens` streams are disjoint by construction).
-- No ports of classic `zero_delay_works` (under `RunFor::Cycles`) or
+- No ports of legacy `zero_delay_works` (under `RunFor::Cycles`) or
   `delay_initializes_to_first_value` (would catch bugs 2 and 3).
 - EWMA half-life only tested on a constant stream, which passes for *any*
-  decay math — port classic's real-decay 3.125 assertion.
+  decay math — port legacy's real-decay 3.125 assertion.
 - No island with two inner scheduling ops (ticker + delay), so the private
   queue demux (`lib.rs:1526-1528`) is never stressed with multiple pending
   keys; no island containing merge/filter/constant/statistics.
@@ -248,7 +248,7 @@ real drift lives:
   clamp untested; `window` only tested from `HistoricalFrom(ZERO)`; no
   compat double-`run` or peek-before-run test (both currently panic).
 
-## Parity confirmed (checked value-by-value and tick-by-tick against classic)
+## Parity confirmed (checked value-by-value and tick-by-tick against legacy)
 
 Filter (including re-emission when only the condition ticks), Merge2
 earliest-supplied-wins, Throttle, Window cycle logic, Buffer, Distinct
@@ -258,7 +258,7 @@ the explicit `initialised` flag and `1 − 2^(−Δt/half_life)`),
 RollingSum/RollingMean (including the `max(1)` window clamp), feedback `+1`
 timing (1, 11, 111… and 1, 12, 123… reproduced), and historical channel burst
 grouping/timestamps. `Delay`'s pop-all-keep-last lossiness also matches
-classic (same behavior, so not drift).
+legacy (same behavior, so not drift).
 
 ## Plan-level improvements
 
@@ -275,7 +275,7 @@ classic (same behavior, so not drift).
    "Can land any time before Phase 6" understates the coupling.
 3. **The 0.4 single-run decision collides with Gate 6.** Re-run is deferred
    "until a use case demands it" — but the compat facade *is* the use case:
-   classic streams re-run, `compat::Signal` already breaks on it (bug 6), and
+   legacy streams re-run, `compat::Signal` already breaks on it (bug 6), and
    wingfoil-python's pytest suite is the gate. Move the reset hook into
    Phase 1 contract work rather than discovering it at the facade.
 4. **Add "engine-owned init / evaluation-timing drift" to the risk register
@@ -293,7 +293,7 @@ classic (same behavior, so not drift).
    allowlist. (The reverse direction — `nitro!`-but-not-fluent — is already
    guarded by construction, since `wire()` compiles verbatim.)
 6. **Move the `Tick::Silent` question into Phase 1.** Bug 3 shows the
-   contract can't express "update value without ticking," which classic
+   contract can't express "update value without ticking," which legacy
    uses. That is a Phase-1 contract decision, not a delay-porting detail —
    deciding it late risks retrofitting every emitter, the exact mistake the
    plan avoided with fallibility.

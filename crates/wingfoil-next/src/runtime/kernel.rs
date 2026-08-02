@@ -1,17 +1,17 @@
 //! The minimal engine kernel: engine time, the scheduled-callback queue and
 //! the run bounds, factored out so an engine can drive a graph without the
 //! `dyn Node` / `Graph` machinery — node state lives in the caller's own
-//! structures instead. The `begin_cycle` logic transcribes the classic
+//! structures instead. The `begin_cycle` logic transcribes the legacy
 //! engine's loop head (`Graph::advance` in the `wingfoil` crate), so a
-//! kernel-driven run and the classic engine cannot drift on timing or bounds.
+//! kernel-driven run and the legacy engine cannot drift on timing or bounds.
 //!
 //! This is the engine core for both trees. It reached its present shape as
 //! the residue of an ahead-of-time retrofit code generator that once lived in
-//! `wingfoil::codegen` (it walked a wired classic graph and emitted a
+//! `wingfoil::codegen` (it walked a wired legacy graph and emitted a
 //! standalone static-schedule Rust runner); that generator was removed,
 //! superseded by this crate's `nitro!` `compiled()` / islands path, and the
 //! kernel it left behind now lives here. The `wingfoil` crate re-exports it
-//! as `wingfoil::codegen` so the classic path is unchanged.
+//! as `wingfoil::codegen` so the legacy path is unchanged.
 
 use std::time::Duration;
 
@@ -154,7 +154,7 @@ impl Kernel {
     ///
     /// The same in both realtime and historical mode — always a wall-clock
     /// snap — so latency stamping and perf telemetry mean "wall-clock time
-    /// spent" regardless of run mode. Mirrors classic `GraphState::wall_time`.
+    /// spent" regardless of run mode. Mirrors legacy `GraphState::wall_time`.
     /// Never use for business logic (use [`time`](Self::time) for
     /// deterministic replay).
     pub fn wall_time(&self) -> NanoTime {

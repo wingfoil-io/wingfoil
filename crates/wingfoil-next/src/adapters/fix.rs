@@ -1,6 +1,6 @@
 //! fix adapter — the FIX (Financial Information eXchange) protocol: a
 //! synchronous, poll-based session engine (initiator + acceptor, plain TCP or
-//! TLS). It ports the classic `wingfoil::adapters::fix` module onto the Op
+//! TLS). It ports the legacy `wingfoil::adapters::fix` module onto the Op
 //! model.
 //!
 //! # Layering
@@ -25,7 +25,7 @@
 //! # Poll modes (source machinery)
 //!
 //! FIX sessions are synchronous poll-based TCP connections, so — like the
-//! classic adapter and deliberately *unlike* the async adapters (etcd, redis)
+//! legacy adapter and deliberately *unlike* the async adapters (etcd, redis)
 //! — this adapter uses no `async`/tokio runtime. Two poll modes trade latency
 //! for CPU, selected by [`FixPollMode`]:
 //!
@@ -59,14 +59,14 @@
 //! so a flapping venue isn't hammered) rather than giving up; acceptors loop to
 //! re-accept. Initial connect *failures* still give up (an
 //! [`FixSessionStatus::Error`] is emitted). `AlwaysSpin` initiators do not
-//! reconnect. This matches classic exactly.
+//! reconnect. This matches legacy exactly.
 //!
 //! # Sink
 //!
 //! [`FixOperators::fix_send`] opens its own outbound session (connect + logon at
 //! graph `start()`, realtime-only) and writes each [`FixMessage`] from the graph
 //! thread; back-pressure is the kernel TCP send buffer. A historical run aborts
-//! at `start()` with a "real-time" error (matching classic's `start` check). The
+//! at `start()` with a "real-time" error (matching legacy's `start` check). The
 //! [`FixSender`] handle (from [`FixConnection::sender`]) is the *other* outbound
 //! path — a lock-free bounded queue drained by the `Threaded` session thread,
 //! used for injecting messages (e.g. [`fix_sub`](FixConnection::fix_sub)'s
@@ -82,9 +82,9 @@
 //! `RawData`, tag 96, signed over tags 35/49/56/34/52 joined by SOH). wingfoil
 //! stays free of venue/crypto specifics — the signer lives in the caller.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* is preserved — both poll modes, initiator and
+//! Every legacy *capability* is preserved — both poll modes, initiator and
 //! acceptor, TLS, reconnect, the [`FixSender`] inject channel with its
 //! [`SendError`] policy, [`fix_sub`](FixConnection::fix_sub), and
 //! [`fix_send`](FixOperators::fix_send). The surface differs in the deliberate,
@@ -92,18 +92,18 @@
 //!
 //! 1. **The source factories take a [`GraphBuilder`] and a [`RunMode`].** Every
 //!    next source wires onto a builder, and a live source needs the run mode to
-//!    reject `HistoricalFrom` at wiring (classic checked real-time-ness at run
+//!    reject `HistoricalFrom` at wiring (legacy checked real-time-ness at run
 //!    `start()`; next rejects earlier, at wiring). The message is the same
 //!    ("real-time").
 //! 2. **The sources return [`Stream`]s, not `Rc<dyn Stream>`;
 //!    [`fix_send`](FixOperators::fix_send) returns `Result<Stream<()>>` and
 //!    [`fix_sub`](FixConnection::fix_sub) a `Stream<()>`** (not `Rc<dyn Node>`) —
 //!    the next stream/sink types. The socket connect + logon still happen at
-//!    graph `start()` (like classic's `start`), the Logout at teardown (like
+//!    graph `start()` (like legacy's `start`), the Logout at teardown (like
 //!    `stop`).
 //! 3. **No `AlwaysSpin` socket-shutdown fast-path in `Threaded` teardown.** The
 //!    background session loop checks a stop flag against its 200 ms read timeout
-//!    (the [`zmq`](crate::adapters::zmq) pattern) instead of classic's
+//!    (the [`zmq`](crate::adapters::zmq) pattern) instead of legacy's
 //!    `Arc<Mutex<Option<TcpStream>>>` shutdown handle, so there is no lock on the
 //!    graph path; teardown costs up to one read-timeout (200 ms) longer.
 //!
@@ -168,7 +168,7 @@ pub const RECONNECT_DELAY: Duration = Duration::from_millis(500);
 
 /// Read timeout on the `Threaded` session socket: bounds how long the session
 /// loop blocks in `read()` before checking the stop flag (and flushing the
-/// inject queue) — the deferred-teardown budget in place of classic's socket
+/// inject queue) — the deferred-teardown budget in place of legacy's socket
 /// shutdown handle.
 const THREADED_READ_TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -847,7 +847,7 @@ fn tls_connect(
 }
 
 /// Split a multiplexed [`FixEvent`] stream into the `(data, status)` pair — the
-/// next twin of classic's `split_events`. Each half keeps the burst grouping:
+/// next twin of legacy's `split_events`. Each half keeps the burst grouping:
 /// same-instant messages/statuses ride one burst, and the half only ticks when
 /// its projection is non-empty.
 fn split_events(
@@ -883,7 +883,7 @@ fn split_events(
 /// Reject a historical run at wiring time: a live FIX session has no historical
 /// timeline to replay (and the `Threaded` mode's channel receiver would
 /// block-collect the never-closing stream and deadlock at `start`). Matches
-/// classic's run-`start()` "real-time" check, moved earlier to wiring.
+/// legacy's run-`start()` "real-time" check, moved earlier to wiring.
 fn reject_historical(run_mode: RunMode) -> Result<()> {
     if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
@@ -918,7 +918,7 @@ struct SpinState {
     listener: Option<TcpListener>,
     parse_buf: Vec<u8>,
     /// Set by `start()` on an initiator so the first cycle emits `LoggingIn`
-    /// (classic emits it from `start`, which the next start hook cannot).
+    /// (legacy emits it from `start`, which the next start hook cannot).
     logging_in_pending: bool,
 }
 
@@ -995,7 +995,7 @@ impl SpinState {
 }
 
 /// Drops the `AlwaysSpin` session cleanly at teardown: send a best-effort Logout
-/// on the live socket (classic's `stop`).
+/// on the live socket (legacy's `stop`).
 struct SpinLogoutGuard(Rc<RefCell<SpinState>>);
 
 impl Drop for SpinLogoutGuard {
@@ -1029,7 +1029,7 @@ fn spin_source(g: &GraphBuilder, cfg: FixConfig) -> Stream<Burst<FixEvent>> {
     g.with_builder(move |b| {
         b.compose_spawn_at_start(idx, move |_run_mode, _run_for, _start_time| {
             // Connect (initiator) or bind (acceptor); a connect failure aborts the
-            // run at start with context — classic's `start` `?`.
+            // run at start with context — legacy's `start` `?`.
             {
                 let mut st = start_state.borrow_mut();
                 if st.is_acceptor {
@@ -1549,7 +1549,7 @@ impl FixSenderState {
 }
 
 /// Drops a [`fix_send`](FixOperators::fix_send) session at teardown with a
-/// best-effort Logout (classic's `stop`).
+/// best-effort Logout (legacy's `stop`).
 struct FixSenderGuard(Rc<RefCell<FixSenderState>>);
 
 impl Drop for FixSenderGuard {
@@ -1614,7 +1614,7 @@ impl FixOperators for Stream<FixMessage> {
                 },
             );
             // Connect + logon at graph start(); the run-mode check lives here too,
-            // so a historical run aborts naming the run mode (classic ordering).
+            // so a historical run aborts naming the run mode (legacy ordering).
             // The returned guard's Drop sends a best-effort Logout at teardown.
             b.compose_spawn_at_start(sink.index(), move |run_mode, _run_for, _start_time| {
                 if let RunMode::HistoricalFrom(_) = run_mode {

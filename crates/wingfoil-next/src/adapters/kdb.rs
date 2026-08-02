@@ -2,7 +2,7 @@
 //! ([`kdb_read`], and its file-cached twin [`kdb_read_cached`]), a real-time
 //! tickerplant **subscription** ([`kdb_sub`]), and a streaming insert **sink**
 //! ([`KdbSinkOps::kdb_write`]), on the async `kdbplus` IPC client (`QStream`).
-//! It ports the classic `wingfoil::adapters::kdb` module onto the Op model.
+//! It ports the legacy `wingfoil::adapters::kdb` module onto the Op model.
 //!
 //! Time is carried **on-graph** in tuples `(NanoTime, T)`, never inside the
 //! record struct: on read the [`KdbDeserialize`] impl extracts it from a
@@ -87,9 +87,9 @@
 //! representable. Serialized columns must be **scalar atoms** — vector/nested
 //! columns are read-only (see [`KdbSerialize`]).
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* — the time-sliced read, its cached twin, the
+//! Every legacy *capability* — the time-sliced read, its cached twin, the
 //! tickerplant subscription, the streaming write, the `KdbDeserialize` /
 //! `KdbSerialize` / `KdbExt` traits, [`Sym`]/[`SymbolInterner`], and the
 //! [`Row`]/[`Rows`] row access — is preserved. The surface differs in these
@@ -108,29 +108,29 @@
 //!    must be built, run, and dropped from a **non-async thread** (`main`, a
 //!    `#[test]` fn).
 //! 2. **The reader defers its connect + queries to the run, and streams them
-//!    lazily.** Both next and classic run [`kdb_read`] through
+//!    lazily.** Both next and legacy run [`kdb_read`] through
 //!    [`produce_async`](crate::async_source::produce_async), so wiring does no
 //!    I/O and a connection / query / decode / non-monotonic-time error aborts the
 //!    *run*, not graph construction. The window is still validated + sliced at
 //!    wiring. Slices are queried **lazily, one at a time** (an `async_stream`
-//!    generator, classic's `chunk_stream` shape), so with a `buffer_size` bound
+//!    generator, legacy's `chunk_stream` shape), so with a `buffer_size` bound
 //!    the replay stays bounded in memory and pipelines KDB I/O with graph
 //!    compute — legacy's model, not an up-front collection.
-//! 3. **The sink is a trait only.** Classic exposed a free `kdb_write` fn *and* a
+//! 3. **The sink is a trait only.** Legacy exposed a free `kdb_write` fn *and* a
 //!    `KdbWriteOperators` trait; next folds the entry point into [`KdbSinkOps`],
 //!    which connects lazily inside the `consume_async` consumer on the first
 //!    write (so wiring opens no socket; a connect failure surfaces during the
 //!    run).
 //! 4. **The live subscription rejects historical at wiring** (register B2,
 //!    ratified — a live, unbounded tickerplant tail with no bounded historical
-//!    twin). Classic checked the same guard inside its `produce_async` closure
+//!    twin). Legacy checked the same guard inside its `produce_async` closure
 //!    (at run start); next moves it to wiring for a clearer fail-fast.
 //! 5. **`buffer_size` on [`kdb_read`] is honoured as back-pressure** (like
-//!    classic): `Some(n)` bounds the replay to ~`n` timestamp-groups of
+//!    legacy): `Some(n)` bounds the replay to ~`n` timestamp-groups of
 //!    look-ahead — the lazy per-slice source is fetched only as the graph drains,
 //!    so memory stays bounded and I/O pipelines with compute; `None` is unbounded.
-//!    [`kdb_read_cached`] keeps classic's cache-in-place-of-`buffer_size`
-//!    signature (it rides the unbounded [`produce_async`], as classic did) while
+//!    [`kdb_read_cached`] keeps legacy's cache-in-place-of-`buffer_size`
+//!    signature (it rides the unbounded [`produce_async`], as legacy did) while
 //!    still streaming its slices lazily.
 //!
 //! # Setup

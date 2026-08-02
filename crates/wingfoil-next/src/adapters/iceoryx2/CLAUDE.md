@@ -1,9 +1,9 @@
 # iceoryx2 Adapter (wingfoil-next)
 
 Zero-copy inter-process (and intra-process) publish/subscribe over shared
-memory. Ports classic `wingfoil::adapters::iceoryx2` onto the Op model.
+memory. Ports legacy `wingfoil::adapters::iceoryx2` onto the Op model.
 
-Synchronous and poll-based, so — like classic, and unlike the networked async
+Synchronous and poll-based, so — like legacy, and unlike the networked async
 adapters — the feature deliberately does **not** pull in `async`/tokio.
 
 ## Layout
@@ -26,8 +26,8 @@ iceoryx2 = ["dep:iceoryx2", "dep:thiserror", "wingfoil/iceoryx2"]
 iceoryx2-integration-test = ["iceoryx2"]     # cross-process Ipc tests; no container
 ```
 
-`wingfoil/iceoryx2` brings in the **classic** crate's `ZeroCopySend` impl for
-`Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop — the classic
+`wingfoil/iceoryx2` brings in the **legacy** crate's `ZeroCopySend` impl for
+`Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop — the legacy
 adapter's latency round-trip test relies on the same impl, and so do the
 `latency_pub`/`latency_sub` examples.
 
@@ -40,12 +40,12 @@ adapter's latency round-trip test relies on the same impl, and so do the
 | `Iceoryx2SinkOps::iceoryx2_pub` / `_pub_with` / `_pub_opts` | sink trait on `Stream<Burst<T>>` | typed |
 | `Iceoryx2SliceSinkOps::iceoryx2_pub_slice` / `_slice_with` / `_slice_opts` | sink trait on `Stream<Burst<Vec<u8>>>` | slices |
 
-The `_with` / `_opts` family mirrors classic's constructor ladder: bare name →
+The `_with` / `_opts` family mirrors legacy's constructor ladder: bare name →
 name + `Iceoryx2ServiceVariant` → name + full options.
 
 ## What to know before changing it
 
-- **Three polling modes** (`Iceoryx2Mode`), same trade-off classic offered,
+- **Three polling modes** (`Iceoryx2Mode`), same trade-off legacy offered,
   all returning the same `Stream<Burst<T>>`:
   - `Spin` (default) — a busy-spin `custom_node` polling the subscriber port on
     the graph thread every cycle. Lowest latency (~1–5 µs), highest CPU (the
@@ -59,14 +59,14 @@ name + `Iceoryx2ServiceVariant` → name + full options.
   drains the port into a burst, for the others because the channel layer groups
   same-instant values.
 - **All three sources are realtime-only, rejected at wiring** (register B2).
-  Classic silently ran the poll loop against the fast-forwarded historical
+  Legacy silently ran the poll loop against the fast-forwarded historical
   clock.
 - **The sink does *not* reject or no-op under historical replay — deliberate
-  classic parity.** Unlike [`zmq_pub`](../zmq/CLAUDE.md) (which errors) and the
-  telemetry exporters (which no-op), classic's iceoryx2 publisher publishes
+  legacy parity.** Unlike [`zmq_pub`](../zmq/CLAUDE.md) (which errors) and the
+  telemetry exporters (which no-op), legacy's iceoryx2 publisher publishes
   under either run mode, and a backtest piping its output into shared memory is
   a legitimate use. Do not "fix" this to match the other adapters.
-- **Ports are created at graph `start()`**, as in classic, so wiring is pure: a
+- **Ports are created at graph `start()`**, as in legacy, so wiring is pure: a
   bad service name or a contract mismatch aborts the *run* with node context,
   not graph construction (register A1/A4).
 - **`history_size` and `subscriber_max_buffer_size` are service configuration —
@@ -82,24 +82,24 @@ name + `Iceoryx2ServiceVariant` → name + full options.
   through the typed API.
 - **The publisher notifies the Event listener after a non-empty burst** so a
   `Signaled` subscriber wakes; connections are refreshed every tenth cycle
-  (`update_connections`), matching classic. A loan/send failure aborts the run
+  (`update_connections`), matching legacy. A loan/send failure aborts the run
   with context.
 - `Iceoryx2ServiceVariant::Local` is in-process and heap-backed — it needs no
   shared memory at all, which is why the default test tier uses it.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `iceoryx2/mod.rs` —
+Canonical list: the `# Deviations from legacy` block in `iceoryx2/mod.rs` —
 four items: sources take a `GraphBuilder` + `RunMode` and return `Result`
 (wiring-time historical rejection, B2); the sinks are extension traits
 returning `Stream<()>` rather than free `iceoryx2_pub*` functions (D1); the
 sink deliberately does **not** reject or no-op historically (parity); and ports
-are created at `start()` with pure wiring (A1/A4). Every classic capability —
+are created at `start()` with pure wiring (A1/A4). Every legacy capability —
 typed and slice payloads, all three polling modes, `Ipc`/`Local` variants, the
 option/`_with`/`_opts` constructor family, the service contracts, `FixedBytes`,
 and the typed `Iceoryx2Error` — is preserved.
 
-Classic's Criterion benches are ported: `benches/iceoryx2.rs` and
+Legacy's Criterion benches are ported: `benches/iceoryx2.rs` and
 `benches/iceoryx2_modes.rs`, both gated on the `iceoryx2` feature and run with
 `cargo bench --bench iceoryx2[_modes]`. They need shared memory, so they are
 compiled in CI but not run; benches are deliberately not a CI gate (criterion
@@ -112,9 +112,9 @@ wall-clock is too noisy on shared runners). See `benches/README.md`.
 | `tests/iceoryx2_adapter.rs` | `#![cfg(feature = "iceoryx2")]` | nothing — in-process `Local` variant |
 | `tests/iceoryx2_integration.rs` | `#![cfg(feature = "iceoryx2-integration-test")]` | real `/dev/shm`, cross-process |
 
-`iceoryx2_adapter.rs` is the parity port of classic's `local_tests.rs` (end to
+`iceoryx2_adapter.rs` is the parity port of legacy's `local_tests.rs` (end to
 end over the `Local` variant, no shared memory, no subprocesses) plus the
-wiring-time guards. `iceoryx2_integration.rs` ports classic's
+wiring-time guards. `iceoryx2_integration.rs` ports legacy's
 `integration_tests.rs` — cross-process `Ipc` over real shared memory, **no
 container** (which is why the feature adds no `testcontainers`).
 

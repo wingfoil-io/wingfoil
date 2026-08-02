@@ -3,7 +3,7 @@
 Multi-threaded graph execution: a **producer** sub-graph runs on its own worker
 thread and feeds the **main** graph through the channel layer.
 
-This is the wingfoil-next port of the classic `threading` example. Classic
+This is the wingfoil-next port of the legacy `threading` example. Legacy
 provides `producer()` / `mapper()` combinators that run a sub-graph on a
 dedicated thread and shuttle values over channels. Next deliberately keeps those
 combinators out of the fluent vocabulary and instead exposes the primitive they

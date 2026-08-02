@@ -1,7 +1,7 @@
 //! Phase 0.2 spike: feedback edges — the one true DAG-breaker. The source
 //! stream has no upstreams (so the graph stays acyclic); the sink pushes onto
 //! a shared time-queue and schedules the source to emit one cycle later. This
-//! reproduces the classic engine's `feedback_active_works` behaviour.
+//! reproduces the legacy engine's `feedback_active_works` behaviour.
 
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 /// period) rather than on every feedback delivery — giving the digit-shift
 /// progression 1, 12, 123, 1234, 12345, 123456.
 #[test]
-fn feedback_passive_matches_classic_engine() {
+fn feedback_passive_matches_legacy_engine() {
     let period = Duration::from_nanos(100);
     let g = GraphBuilder::new();
     let (fed_back, sink) = g.feedback::<u64>();
@@ -35,7 +35,7 @@ fn feedback_passive_matches_classic_engine() {
 /// the fed-back value (`a + b*10`), the result fed back. Each cycle the
 /// previous result re-enters scaled, giving 1, 11, 111, 1111, 11111.
 #[test]
-fn feedback_active_matches_classic_engine() {
+fn feedback_active_matches_legacy_engine() {
     let g = GraphBuilder::new();
     let (fed_back, sink) = g.feedback::<u64>();
     let one = g.constant(1u64);

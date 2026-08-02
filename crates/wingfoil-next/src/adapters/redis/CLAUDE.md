@@ -1,10 +1,10 @@
 # redis Adapter (wingfoil-next)
 
 **Two transports, each with a source and a sink** — Pub/Sub
-(`SUBSCRIBE`/`PUBLISH`) and Streams (`XRANGE`/`XREAD`/`XADD`). Ports classic
+(`SUBSCRIBE`/`PUBLISH`) and Streams (`XRANGE`/`XREAD`/`XADD`). Ports legacy
 `wingfoil::adapters::redis` onto the Op model.
 
-`HSET`/key-value operations are intentionally out of scope, matching classic.
+`HSET`/key-value operations are intentionally out of scope, matching legacy.
 
 ## Layout
 
@@ -22,7 +22,7 @@ redis-integration-test = ["redis", "dep:testcontainers"]
 ```
 
 The `redis` crate is pinned with `tokio-comp`, `aio`, `streams` — mirroring
-classic.
+legacy.
 
 ## Entry points
 
@@ -54,7 +54,7 @@ Types: `RedisConnection` (+ `redacted()`), `RedisEntry`, `RedisEvent`,
   watch-before-GET with stream IDs instead of revisions. Do not reorder.
 - **The whole snapshot rides one atomic `Burst`** — every existing entry is
   stamped with a single shared `NanoTime::now()`, so it is never split across
-  cycles or latest-wins'd. Classic stamped each entry with its own
+  cycles or latest-wins'd. Legacy stamped each entry with its own
   `NanoTime::now()`; this is a deliberate burst-model change.
 - **`RedisConnection::redacted()` must be used at every error site.** A
   `redis://user:pass@host` URL embeds credentials, and `.context("connecting
@@ -71,13 +71,13 @@ Types: `RedisConnection` (+ `redacted()`), `RedisEntry`, `RedisEvent`,
 - Both sinks take a `buffer_size` for `consume_async` back-pressure
   (register D3); `None` is unbounded.
 
-## Deviations from classic
+## Deviations from legacy
 
-Canonical list: the `# Deviations from classic` block in `redis.rs` — the
+Canonical list: the `# Deviations from legacy` block in `redis.rs` — the
 graph-owned runtime (A5), lazy sink connect (A1/A4), and the sink-as-trait fold
-(D1, one trait per transport where classic had free fns *and* operator traits);
+(D1, one trait per transport where legacy had free fns *and* operator traits);
 plus the two burst-model notes above (single-burst snapshot, wiring-time
-historical rejection). Every classic capability (Pub/Sub sub+pub, Streams
+historical rejection). Every legacy capability (Pub/Sub sub+pub, Streams
 snapshot→tail read + append, all four value types) is preserved.
 
 ## Tests

@@ -1,6 +1,6 @@
 //! kafka adapter — a streaming topic-consume **source** (`kafka_sub`) and a
 //! topic-produce **sink** (`KafkaSinkOps::kafka_pub`) for Apache Kafka. It ports
-//! the classic `wingfoil::adapters::kafka` module onto the Op model.
+//! the legacy `wingfoil::adapters::kafka` module onto the Op model.
 //!
 //! # Layering
 //!
@@ -21,14 +21,14 @@
 //!   (and, for convenience, `Stream<KafkaRecord>`), enabled with
 //!   `use wingfoil_next::adapters::kafka::KafkaSinkOps;`.
 //!
-//! # Deviations from classic
+//! # Deviations from legacy
 //!
-//! Every classic *capability* (consumer-group offset tracking, the earliest
+//! Every legacy *capability* (consumer-group offset tracking, the earliest
 //! auto-offset-reset, per-record topic/key/partition, at-most-once delivery via
 //! background auto-commit, multi-topic writes from one sink) is preserved. The
 //! surface differs in these deliberate ways:
 //!
-//! 1. **The graph owns the tokio runtime.** Classic `kafka_sub`/`kafka_pub` hide
+//! 1. **The graph owns the tokio runtime.** Legacy `kafka_sub`/`kafka_pub` hide
 //!    a never-dropped global runtime inside `produce_async`/`consume_async`.
 //!    Next's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
@@ -43,11 +43,11 @@
 //!    replay.** The consumer is a live, unbounded, wall-clock-stamped stream
 //!    with no historical timeline to replay: its `recv()` loop never ends, so
 //!    the historical channel path (which block-collects the whole stream up
-//!    front) would deadlock at `start`. Classic technically permitted a
+//!    front) would deadlock at `start`. Legacy technically permitted a
 //!    `HistoricalFrom` run (with wall-clock `NanoTime::now()` timestamps); next
 //!    [rejects it at wiring time](kafka_sub#errors) with a clear error rather
 //!    than deadlocking. Run `kafka_sub` under [`RunMode::RealTime`].
-//! 3. **The sink is a trait only.** Classic exposed both a free `kafka_pub`
+//! 3. **The sink is a trait only.** Legacy exposed both a free `kafka_pub`
 //!    function and a `KafkaPubOperators` trait; next folds the single public
 //!    entry point into the [`KafkaSinkOps`] trait (renamed for the
 //!    sink-as-trait convention shared with [`lines`](crate::adapters::lines) /
@@ -59,13 +59,13 @@
 //!    the run rather than at wiring — in line with the defer-to-start direction
 //!    (register A1), no migration needed.
 //!
-//! Records are produced **concurrently per burst** — at parity with classic: the
+//! Records are produced **concurrently per burst** — at parity with legacy: the
 //! sink rides [`consume_async_bursts`](crate::async_source::consume_async_bursts)
 //! and hands a whole burst's records to the producer up front, draining their
 //! delivery futures together via `FuturesUnordered`, so per-burst latency is
 //! ~one broker roundtrip rather than N. Order is preserved *across* bursts (the
 //! single consumer awaits each burst to completion before the next). The explicit
-//! `producer.flush()` classic did at upstream end is unnecessary here: every send
+//! `producer.flush()` legacy did at upstream end is unnecessary here: every send
 //! is awaited to its delivery ack (nothing is left queued), and the consumer
 //! drains all queued bursts at teardown.
 //!
@@ -455,7 +455,7 @@ impl KafkaSinkOps for Stream<Burst<KafkaRecord>> {
                 async move {
                     // Build every record's delivery future up front and drive them
                     // together via `FuturesUnordered`, so the whole burst is in
-                    // flight at once (~one broker roundtrip, matching classic)
+                    // flight at once (~one broker roundtrip, matching legacy)
                     // rather than N sequential roundtrips. Order within a burst is
                     // not observable to downstream (the sink emits `()`), so
                     // draining out of completion order is fine.

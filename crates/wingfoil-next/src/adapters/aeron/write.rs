@@ -2,7 +2,7 @@
 //!
 //! Serialises values from an upstream burst stream and offers them to an Aeron
 //! publication on every cycle. Only [`RunMode::RealTime`] is supported (checked
-//! at graph `start()`, as in classic).
+//! at graph `start()`, as in legacy).
 //!
 //! An opt-in **status side-channel**
 //! ([`AeronSinkOps::aeron_pub_with_status`]) returns the sink paired with a
@@ -34,7 +34,7 @@ struct PubState<S, B> {
 /// One cycle of publishing: offer every item in the burst, then derive the
 /// status. Returns the status transition for this cycle, if any.
 ///
-/// Ordering matches classic exactly: `Closed` is terminal and short-circuits
+/// Ordering matches legacy exactly: `Closed` is terminal and short-circuits
 /// before any offer; a `BackPressure` error records `BackPressured` and drops
 /// the rest of the burst (latest-wins); any other offer error aborts the run;
 /// otherwise a successful offer means `Connected`, and an empty burst falls back
@@ -82,7 +82,7 @@ where
     Ok(record(st, new_status))
 }
 
-/// Reject a historical run at graph `start()`, matching classic's publisher.
+/// Reject a historical run at graph `start()`, matching legacy's publisher.
 fn realtime_only(run_mode: RunMode) -> Result<StopHandle> {
     if run_mode != RunMode::RealTime {
         anyhow::bail!("Aeron publisher only supports RealTime mode");
@@ -92,7 +92,7 @@ fn realtime_only(run_mode: RunMode) -> Result<StopHandle> {
 
 /// Extension trait letting a `Stream<Burst<T>>` publish to Aeron.
 ///
-/// Two constructors, mirroring classic's `AeronPub`:
+/// Two constructors, mirroring legacy's `AeronPub`:
 ///
 /// - [`aeron_pub`](Self::aeron_pub) — offer every burst item each cycle.
 /// - [`aeron_pub_with_status`](Self::aeron_pub_with_status) — also return a
@@ -151,7 +151,7 @@ where
                     Ok(Tick::Value(()))
                 },
             );
-            // Classic checked the run mode in the node's `start`; so do we.
+            // Legacy checked the run mode in the node's `start`; so do we.
             b.compose_spawn_at_start(sink.index(), move |run_mode, _run_for, _start_time| {
                 realtime_only(run_mode)
             });

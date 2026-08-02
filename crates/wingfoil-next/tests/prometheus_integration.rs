@@ -1,11 +1,11 @@
 //! prometheus adapter end-to-end integration test — a live Prometheus scraping
-//! the exporter. The parity port of the classic
+//! the exporter. The parity port of the legacy
 //! `prometheus::integration_tests::prometheus_exporter_scrapeable_by_prometheus`.
 //!
-//! Reuses the classic Docker stack (which scrapes `WINGFOIL_METRICS_PORT`, default
+//! Reuses the legacy Docker stack (which scrapes `WINGFOIL_METRICS_PORT`, default
 //! `9091`, on the host):
 //! ```sh
-//! docker compose -f wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
+//! docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
 //! cargo test -p wingfoil-next --features prometheus-integration-test -- --test-threads=1 --nocapture
 //! ```
 //! The test skips itself (prints and returns) if Prometheus is unreachable.

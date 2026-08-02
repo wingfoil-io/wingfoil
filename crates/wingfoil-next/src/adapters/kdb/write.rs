@@ -28,7 +28,7 @@ use wingfoil_next::NanoTime;
 /// columns are **not** writable: [`kdb_write`](KdbSinkOps::kdb_write) aborts the
 /// run with an "unsupported KDB column type" error if a row carries one. This is
 /// deliberately asymmetric with the read path, which *does* decode vector columns
-/// (`Row::get(..).as_vec()`); the sink mirrors classic wingfoil, whose insert
+/// (`Row::get(..).as_vec()`); the sink mirrors legacy wingfoil, whose insert
 /// builder is likewise atom-only.
 pub trait KdbSerialize: Sized {
     /// Serialize self into a K object representing a row.
@@ -46,7 +46,7 @@ pub trait KdbSerialize: Sized {
 
 /// One burst's worth of records sharing the burst's graph timestamp — the unit
 /// [`consume_async`] drains per write, so an N-record burst is inserted as one
-/// functional `insert` (matching classic's per-burst insert).
+/// functional `insert` (matching legacy's per-burst insert).
 #[derive(Clone, Default)]
 struct WriteBatch<T> {
     time: NanoTime,
@@ -55,7 +55,7 @@ struct WriteBatch<T> {
 
 /// Fluent extension for writing `Burst<T>` streams to a KDB+ table.
 ///
-/// Enabled with `use wingfoil_next::adapters::kdb::KdbSinkOps;`. Like classic, the
+/// Enabled with `use wingfoil_next::adapters::kdb::KdbSinkOps;`. Like legacy, the
 /// sink is **burst-only** (write single records via `constant(burst![record])` /
 /// a `Stream<Burst<T>>`), because time is prepended per burst.
 pub trait KdbSinkOps<T> {
