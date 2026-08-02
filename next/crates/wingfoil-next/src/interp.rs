@@ -55,6 +55,54 @@ use crate::ops::{Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
 use wingfoil::codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
+// ---------------------------------------------------------------------------
+// Engine span instrumentation (the `instrument-*` features)
+//
+// Ported from classic wingfoil's `graph.rs`, feature for feature. Two shapes
+// are in play: the whole-function spans (`run`, `run_dynamic`, `build`) use
+// `#[cfg_attr(feature = "…", tracing::instrument(skip_all))]` directly at the
+// definition, exactly as classic does; the spans that must scope to a *part* of
+// a function — a lifecycle loop, one cycle, one node — go through the macros
+// below, because there is no function boundary to hang an attribute on.
+//
+// Each macro expands to an RAII span guard bound to a `let`, so the span closes
+// at the end of the enclosing block. With the feature off it expands to
+// nothing at all, so an uninstrumented build carries no guard, no branch, and
+// no `tracing` dependency.
+// ---------------------------------------------------------------------------
+
+/// Span covering one lifecycle phase (`start` / `stop` / `teardown`) applied
+/// across every node — classic's `apply_nodes` span, recording the phase in the
+/// same `desc` field it does.
+macro_rules! apply_nodes_span {
+    ($desc:expr) => {
+        #[cfg(feature = "instrument-apply-nodes")]
+        let _apply_nodes_span = tracing::info_span!("apply_nodes", desc = $desc).entered();
+    };
+}
+
+/// Span covering one engine cycle — classic's `cycle` span. Entered by both
+/// dispatch strategies (sparse drain and the full-sweep oracle) so the two are
+/// indistinguishable to a subscriber.
+macro_rules! cycle_span {
+    () => {
+        #[cfg(feature = "instrument-cycle")]
+        let _cycle_span = tracing::info_span!("cycle").entered();
+    };
+}
+
+/// Span covering a single node's `cycle` — classic's `cycle_node` span.
+/// Records the node index and its label (next's equivalent of classic's
+/// `type_name`). One span per node per cycle: high frequency, hence its own
+/// opt-in feature.
+macro_rules! cycle_node_span {
+    ($index:expr, $label:expr) => {
+        #[cfg(feature = "instrument-cycle-node")]
+        let _cycle_node_span =
+            tracing::info_span!("cycle_node", index = $index, node = $label).entered();
+    };
+}
+
 /// Anything that identifies a node's typed output — a raw [`Handle`] or a
 /// fluent [`Stream`](crate::fluent::Stream).
 pub trait AsHandle<T> {
@@ -2159,6 +2207,13 @@ impl Builder {
         self.ticked.clone()
     }
 
+    // Next's counterpart of classic's `Graph::initialise` — the one-shot pass
+    // that turns wiring into the dispatch topology. Named `initialise` in the
+    // span so a subscriber (or a dashboard) reads the same across both engines.
+    #[cfg_attr(
+        feature = "instrument-initialise",
+        tracing::instrument(skip_all, name = "initialise")
+    )]
     pub fn build(self) -> Runner {
         // Sparse-dispatch topology, precomputed once so per-cycle work is
         // proportional to the nodes that fire, not the graph size `N`:
@@ -2408,6 +2463,7 @@ impl Runner {
     /// single-run — its producer channels, wakers, and island interiors are
     /// consumed by the first run — and a second `run` returns an error rather
     /// than silently producing wrong values.
+    #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
         if self.has_run {
             if self.re_runnable {
@@ -2467,10 +2523,13 @@ impl Runner {
         // run afterwards regardless, matching the classic engine.
         let mut first_err: Option<anyhow::Error> = None;
 
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.start)(&mut kernel) {
-                first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                break;
+        {
+            apply_nodes_span!("start");
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                if let Err(e) = (node.start)(&mut kernel) {
+                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
+                    break;
+                }
             }
         }
 
@@ -2486,16 +2545,22 @@ impl Runner {
 
         // Cleanup always runs; a stop/teardown error only surfaces if no
         // earlier error already won.
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.stop)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) stop", node.label));
-                first_err.get_or_insert(e);
+        {
+            apply_nodes_span!("stop");
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                if let Err(e) = (node.stop)(&mut kernel) {
+                    let e = e.context(format!("node {i} ({}) stop", node.label));
+                    first_err.get_or_insert(e);
+                }
             }
         }
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.teardown)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) teardown", node.label));
-                first_err.get_or_insert(e);
+        {
+            apply_nodes_span!("teardown");
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                if let Err(e) = (node.teardown)(&mut kernel) {
+                    let e = e.context(format!("node {i} ({}) teardown", node.label));
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
@@ -2605,6 +2670,7 @@ impl Runner {
         node_dirty: &mut [bool],
         fired: &mut Vec<usize>,
     ) -> Option<anyhow::Error> {
+        cycle_span!();
         // Seed the frontier into per-layer buckets: `always` ops fire
         // unconditionally; callback-activated ops (tickers, `delay` pops,
         // feedback source, channel replay) fire only when the kernel marked them
@@ -2659,11 +2725,16 @@ impl Runner {
             let mut current = std::mem::take(&mut buckets[l]);
             current.sort_unstable();
             for &i in &current {
-                let did = match (self.nodes[i].cycle)(kernel) {
-                    Ok(did) => did,
-                    Err(e) => {
-                        let label = self.nodes[i].label;
-                        return Some(e.context(format!("node {i} ({label}) cycle")));
+                // Braced so the per-node span (when enabled) closes on the
+                // node's own `cycle`, not on the downstream marking below.
+                let did = {
+                    cycle_node_span!(i, self.nodes[i].label);
+                    match (self.nodes[i].cycle)(kernel) {
+                        Ok(did) => did,
+                        Err(e) => {
+                            let label = self.nodes[i].label;
+                            return Some(e.context(format!("node {i} ({label}) cycle")));
+                        }
                     }
                 };
                 // `ticked[i]` must be visible to downstreams that read it
@@ -2733,32 +2804,40 @@ impl Runner {
         let n = self.nodes.len();
         let mut dirty = vec![false; n];
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                let due = node.activation.always
-                    || (node.activation.callback_activated() && dirty[i])
-                    || {
-                        let t = self.ticked.borrow();
-                        node.active_ups.iter().any(|&u| t[u])
-                    };
-                let did = if due {
-                    match (node.cycle)(kernel) {
-                        Ok(did) => did,
-                        Err(e) => {
-                            return Some(e.context(format!("node {i} ({}) cycle", node.label)));
+            // Braced so the cycle span covers exactly what the sparse path's
+            // `drain_cycle` does — the sweep and its per-cycle reset, not the
+            // kernel's `end_cycle`.
+            {
+                cycle_span!();
+                for (i, node) in self.nodes.iter_mut().enumerate() {
+                    let due = node.activation.always
+                        || (node.activation.callback_activated() && dirty[i])
+                        || {
+                            let t = self.ticked.borrow();
+                            node.active_ups.iter().any(|&u| t[u])
+                        };
+                    let did = if due {
+                        cycle_node_span!(i, node.label);
+                        match (node.cycle)(kernel) {
+                            Ok(did) => did,
+                            Err(e) => {
+                                return Some(e.context(format!("node {i} ({}) cycle", node.label)));
+                            }
                         }
-                    }
-                } else {
-                    false
-                };
-                self.ticked.borrow_mut()[i] = did;
-            }
-            // The oracle's whole cost model: every node is visited every cycle,
-            // whether or not it is due. This is the `O(N)` term the sparse loop
-            // above does not pay, and what makes `node_visits` a *sensitive*
-            // metric rather than one that reads the same for both strategies.
-            self.node_visits += n as u64;
-            for t in self.ticked.borrow_mut().iter_mut() {
-                *t = false;
+                    } else {
+                        false
+                    };
+                    self.ticked.borrow_mut()[i] = did;
+                }
+                // The oracle's whole cost model: every node is visited every
+                // cycle, whether or not it is due. This is the `O(N)` term the
+                // sparse loop above does not pay, and what makes `node_visits` a
+                // *sensitive* metric rather than one that reads the same for
+                // both strategies.
+                self.node_visits += n as u64;
+                for t in self.ticked.borrow_mut().iter_mut() {
+                    *t = false;
+                }
             }
             kernel.end_cycle(&mut dirty);
         }
@@ -2876,6 +2955,7 @@ impl Runner {
     /// and the number of cycles completed so far. Nodes appended (or edges
     /// spliced) through the scope take effect on the *next* cycle — classic
     /// wingfoil's "requested in cycle N, live in N+1" contract.
+    #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run_dynamic<F>(
         &mut self,
         run_mode: RunMode,
@@ -2919,10 +2999,13 @@ impl Runner {
         }
 
         let mut first_err: Option<anyhow::Error> = None;
-        for (i, node) in self.nodes.iter_mut().enumerate() {
-            if let Err(e) = (node.start)(&mut kernel) {
-                first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                break;
+        {
+            apply_nodes_span!("start");
+            for (i, node) in self.nodes.iter_mut().enumerate() {
+                if let Err(e) = (node.start)(&mut kernel) {
+                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
+                    break;
+                }
             }
         }
 
@@ -2997,22 +3080,28 @@ impl Runner {
         // earlier error already won. A node removed mid-run already ran its
         // `stop`/`teardown` at removal (classic parity), so the tombstone skips
         // it here — no double call.
-        for i in 0..self.nodes.len() {
-            if self.removed[i] {
-                continue;
-            }
-            if let Err(e) = (self.nodes[i].stop)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
-                first_err.get_or_insert(e);
+        {
+            apply_nodes_span!("stop");
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].stop)(&mut kernel) {
+                    let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
+                    first_err.get_or_insert(e);
+                }
             }
         }
-        for i in 0..self.nodes.len() {
-            if self.removed[i] {
-                continue;
-            }
-            if let Err(e) = (self.nodes[i].teardown)(&mut kernel) {
-                let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
-                first_err.get_or_insert(e);
+        {
+            apply_nodes_span!("teardown");
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].teardown)(&mut kernel) {
+                    let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
+                    first_err.get_or_insert(e);
+                }
             }
         }
         match first_err {

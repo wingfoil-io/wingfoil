@@ -4,6 +4,13 @@
 //! # Default log output (env_logger)
 //! RUST_LOG=info cargo run -p wingfoil-next --example tracing
 //! RUST_LOG=info cargo run -p wingfoil-next --example tracing -- log
+//!
+//! # Events via a tracing subscriber
+//! RUST_LOG=info cargo run -p wingfoil-next --example tracing --features tracing -- tracing
+//!
+//! # Events + engine lifecycle and cycle spans
+//! RUST_LOG=info cargo run -p wingfoil-next --example tracing \
+//!     --features instrument-default -- instruments
 //! ```
 
 use std::time::Duration;
@@ -28,23 +35,49 @@ fn main() -> anyhow::Result<()> {
 
     match mode.as_str() {
         "log" => env_logger::init(),
-        // The classic example also offers `tracing` (route the events through a
-        // `tracing-subscriber`) and `instruments` (engine spans around `run` and
-        // each cycle). Neither is available on wingfoil-next yet: the engine has
-        // no `tracing` / `instrument-*` features, so there are no spans to emit,
-        // and the op catalog logs through the `log` crate only. Both are tracked
-        // in `docs/port-plan.md` (Phase 6). Fall back to the `log` mode so the
-        // command still does something useful.
-        "tracing" | "instruments" => {
-            eprintln!(
-                "mode {mode:?} is not available in wingfoil-next yet — it needs the \
-                 `tracing` / `instrument-*` engine features, which have not been ported \
-                 from legacy (only the `log` mode is supported today). Running `log` instead."
-            );
-            env_logger::init();
+        // Route the graph's events through a `tracing` subscriber instead of
+        // `env_logger`. `logged` emits through the `log` crate (see its op
+        // docs), and `tracing_subscriber`'s `init()` installs the `tracing-log`
+        // bridge, so those records arrive at the subscriber as tracing events —
+        // with the engine's span context attached, which is what makes the
+        // `instruments` mode below read as a tree.
+        #[cfg(feature = "tracing")]
+        "tracing" => {
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
+        }
+        // As above, plus span open/close events so the engine's own
+        // instrumentation is visible: `run` around the whole lifecycle,
+        // `apply_nodes` per lifecycle phase, `cycle` per engine cycle (and
+        // `cycle_node` per node, under `instrument-cycle-node`).
+        #[cfg(feature = "tracing")]
+        "instruments" => {
+            use tracing_subscriber::fmt::format::FmtSpan;
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+                .init();
+            // `tracing` alone pulls in the dependency; the spans themselves are
+            // each behind their own `instrument-*` feature, so without one this
+            // mode would silently look just like `tracing`.
+            if !cfg!(feature = "instrument-run") {
+                eprintln!(
+                    "note: built with `tracing` but no `instrument-*` feature, so the engine \
+                     emits no spans — rebuild with `--features instrument-default` (or \
+                     `instrument-all` to include the per-node spans) to see them."
+                );
+            }
         }
         other => {
-            eprintln!("unknown mode: {other:?}. Use 'log'.");
+            eprintln!(
+                "unknown mode: {other:?}. Use 'log'{}.",
+                if cfg!(feature = "tracing") {
+                    ", 'tracing', or 'instruments'"
+                } else {
+                    " (build with --features tracing for 'tracing' and 'instruments' modes)"
+                }
+            );
             std::process::exit(1);
         }
     }

@@ -66,6 +66,7 @@ today's interpreted engine.
 | Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
 | Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
 | Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
+| Engine span instrumentation (`instrument-*`) | ✅ | ✅ | ❌¹⁶ | ❌¹⁶ |
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
 | Mutable per-node state | ✅⁷ | ✅⁷ | ✅⁷ | ✅⁷ |
 | Re-run (independent repeated runs) | ✅⁸ | ✅⁸ | ✅⁹ | ✅⁹ |
@@ -132,6 +133,12 @@ today's interpreted engine.
   the expected payoff (Phase 4.5, "Tier ranking on sparse graphs").
 ¹⁴ A quiet island isn't cycled — islands already give coarse region gating.
 ¹⁵ Measured on dense chains; standalone LLVM-fuses trivial chains to near-free.
+¹⁶ Classic's `tracing` + `instrument-run`/`-cycle`/`-apply-nodes`/`-initialise`/
+  `-cycle-node` features are ported one-for-one onto the interpreted engine
+  (`interp.rs`, gated identically, covered by `tests/instrumentation.rs`).
+  By design the compiled/island paths stay uninstrumented: they exist to be a
+  monomorphized loop with no engine indirection, and classic has no compiled
+  path for them to be at parity with.
 ## Phase 0 — design spikes
 
 Four contract questions, each resolved with a spike + parity test before any
@@ -1751,12 +1758,27 @@ tests covered — not "legacy pytest passes unchanged."
   token for those classic tests that no example reads (classic's `otlp/run.sh`
   blocked up to 30s waiting on a token it never used).
 
-  Remaining: the `tracing` example's other two modes — `tracing` (route events
-  through a `tracing-subscriber`) and `instruments` (engine spans around
-  `run`/cycle) — which are ⏳ *blocked* on porting next's `tracing` /
-  `instrument-*` engine features (the op catalog logs through `log` only, and
-  the engine has no span instrumentation yet). Tracked as a Phase-6 follow-up,
-  landing with the instrumentation port, not as example work.
+  The `tracing` example's other two modes — `tracing` (route events through a
+  `tracing-subscriber`) and `instruments` (engine spans around `run`/cycle) —
+  are 🟢 *landed* alongside the engine instrumentation port below, so all three
+  classic modes now work.
+- **Engine tracing / instrumentation** 🟢 *landed*: classic's `tracing` +
+  `instrument-run` / `-cycle` / `-apply-nodes` / `-initialise` / `-cycle-node` /
+  `-default` / `-all` features are ported one-for-one into
+  `wingfoil-next`, with the span sites in `interp.rs`
+  (`Runner::run` / `run_dynamic`, the lifecycle-phase loops, `drain_cycle` and
+  the full-sweep oracle's cycle body, and the per-node `cycle` call). Coverage:
+  `tests/instrumentation.rs` (span names, the `desc`/`index`/`node` fields, the
+  nesting, and sparse-vs-full-sweep equivalence). **Deviations from classic**,
+  both benign: next's `tracing` dependency is *optional* (classic takes it
+  unconditionally because its `logged` tap routes through the `tracing` event
+  macros — next's `logged` goes through `log`, and reaches a `tracing`
+  subscriber via `tracing_subscriber`'s `tracing-log` bridge); and there are
+  three `apply_nodes` phases rather than four, since next has no separate
+  `setup` phase — its ops are constructed at wiring time. The `compiled()` /
+  `nested()` emissions are **not** instrumented: their whole point is a
+  monomorphized loop with no engine indirection, and classic has no compiled
+  path to be at parity with.
 - **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
   runs a `classic` (legacy interpreted) bar beside next's
   `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`

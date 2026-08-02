@@ -68,6 +68,31 @@
 //!   `start`/`cycle`/`stop`/`teardown` error with node context and still runs
 //!   cleanup. **[`compat`]** offers a classic-style `Signal` facade over it.
 //!
+//! # Tracing and instrumentation
+//!
+//! The engine can emit `tracing` spans around its own execution, ported
+//! feature-for-feature from classic wingfoil. Every span site is behind its own
+//! feature, and the `tracing` dependency itself is optional, so a default build
+//! carries neither the dependency nor a single span:
+//!
+//! | feature | what it adds |
+//! |---|---|
+//! | `tracing` | The `tracing` dependency. On its own it emits nothing — enable one of the below. |
+//! | `instrument-run` | A span around [`Runner::run`](interp::Runner::run) (and `run_dynamic`, under `dynamic-graph`) — the whole start→cycles→stop→teardown lifecycle. |
+//! | `instrument-cycle` | A span around each engine cycle (one per dirty-node batch). |
+//! | `instrument-apply-nodes` | A span around each lifecycle phase (start / stop / teardown) applied over all nodes, recording the phase in `desc`. |
+//! | `instrument-initialise` | A span around graph initialisation ([`Builder::build`](interp::Builder::build)), named `initialise` after classic's. |
+//! | `instrument-cycle-node` | A span per node execution, recording the node index and label. High frequency — opt in deliberately. |
+//! | `instrument-default` | `instrument-run` + `instrument-cycle` + `instrument-apply-nodes` + `instrument-initialise`. |
+//! | `instrument-all` | `instrument-default` plus `instrument-cycle-node`. |
+//!
+//! All `instrument-*` features imply `tracing`. Both dispatch strategies (the
+//! sparse drain and the [`FullSweep`](interp::Dispatch::FullSweep) oracle) emit
+//! the same spans, so instrumentation cannot tell them apart — just as results
+//! cannot. See `examples/tracing` for a runnable demonstration, and
+//! [`StreamOps::logged`](fluent::StreamOps::logged) for the per-value debug tap
+//! (which emits through the `log` crate, independently of these features).
+//!
 //! Still out of scope for the prototype (documented, not forgotten):
 //! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA value
 //! store and breadth-first dirty-list scheduling for the interpreted engine

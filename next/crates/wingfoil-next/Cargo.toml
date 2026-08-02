@@ -234,6 +234,18 @@ rustls = { version = "0.23", features = ["ring"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 kanal = { version = "0.1.1", optional = true }
 
+# `tracing` feature (and the `instrument-*` roll-ups): engine span
+# instrumentation around `run`, the lifecycle phases, each cycle and — opt-in —
+# each node. Optional so a default build carries no tracing dependency at all
+# and the engine hot path is byte-identical to today's. Classic wingfoil takes
+# `tracing` unconditionally (its `logged` tap routes through the `tracing`
+# event macros); next's `logged` goes through `log` directly, so here the whole
+# dependency can hang off the feature. `attributes` (the `#[tracing::instrument]`
+# macro) is a tracing default feature, named explicitly because every use site
+# here depends on it; `log` makes spans/events fall back to `log` records when
+# no subscriber is installed, matching classic's dependency.
+tracing = { workspace = true, features = ["log", "attributes"], optional = true }
+
 [dev-dependencies]
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
@@ -244,6 +256,10 @@ serde = { version = "1.0", features = ["derive"] }
 # Subscriber for the `tracing` example's `log` mode — renders the `logged` op's
 # `log`-crate records (target "wingfoil"). Mirrors the classic tracing example.
 env_logger = { workspace = true }
+# Subscriber for the `tracing` example's `tracing` / `instruments` modes and for
+# the engine-instrumentation tests (which collect the emitted span names through
+# a small custom `Layer`). Mirrors the classic tracing example's dev-dependency.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []
@@ -389,6 +405,32 @@ fix-integration-test = ["fix"]
 # `(layer, index)` dispatch it relies on is always on (it is byte-identical to
 # the old index order on static graphs).
 dynamic-graph = []
+# Engine span instrumentation, ported one-for-one from classic wingfoil
+# (`wingfoil/Cargo.toml`). `tracing` alone pulls in the dependency without
+# emitting anything; each `instrument-*` feature switches on one span site in
+# `interp.rs`, so a build pays only for the spans it asks for and a build with
+# none is byte-identical to an uninstrumented engine.
+tracing = ["dep:tracing"]
+# A span around `Runner::run` / `run_dynamic` — the whole start→cycles→stop→
+# teardown lifecycle.
+instrument-run = ["tracing"]
+# A span around each engine cycle (one per dirty-node batch).
+instrument-cycle = ["tracing"]
+# A span around each lifecycle phase (start / stop / teardown) applied over all
+# nodes, recording the phase name.
+instrument-apply-nodes = ["tracing"]
+# A span around graph initialisation (`Builder::build`).
+instrument-initialise = ["tracing"]
+# A span per node execution, recording the node index and label. High frequency
+# — opt in deliberately.
+instrument-cycle-node = ["tracing"]
+instrument-default = [
+    "instrument-run",
+    "instrument-cycle",
+    "instrument-apply-nodes",
+    "instrument-initialise",
+]
+instrument-all = ["instrument-default", "instrument-cycle-node"]
 
 [[example]]
 name = "fluvio_admin"
