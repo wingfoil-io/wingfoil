@@ -37,7 +37,10 @@ fn forecasting() {
             let point: Vec<String> = forecast.point.iter().map(|v| format!("{v:.1}")).collect();
             println!("  {time}  next 5: [{}]", point.join(", "));
         })
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(36))
+        .graph()
+        .historical()
+        .cycles(36)
+        .run()
         .unwrap();
 }
 
@@ -58,7 +61,10 @@ fn outlier_detection() {
                 println!("  {time}  outlying series: {:?}", outliers.outlying);
             }
         })
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(36))
+        .graph()
+        .historical()
+        .cycles(36)
+        .run()
         .unwrap();
 }
 
@@ -76,7 +82,10 @@ fn seasonality() {
                 println!("  {time}  seasonal period ~= {period} samples (true 24)");
             }
         })
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(120))
+        .graph()
+        .historical()
+        .cycles(120)
+        .run()
         .unwrap();
 }
 
@@ -96,7 +105,10 @@ fn changepoints() {
                 );
             }
         })
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(50))
+        .graph()
+        .historical()
+        .cycles(50)
+        .run()
         .unwrap();
 }
 

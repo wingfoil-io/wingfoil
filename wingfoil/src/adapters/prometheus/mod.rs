@@ -14,7 +14,7 @@
 //! let counter = ticker(Duration::from_secs(1)).count();
 //! let node = exporter.register("wingfoil_counter_total", counter.clone());
 //!
-//! node.run(RunMode::RealTime, RunFor::Forever).unwrap();
+//! node.graph().real_time().forever().run().unwrap();
 //! ```
 //!
 //! For push-based metrics export see the `otlp` adapter.

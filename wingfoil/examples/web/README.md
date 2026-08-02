@@ -75,11 +75,15 @@ let price_stream = ticker(Duration::from_millis(10))
 
 // Receive UI events from any connected browser.
 let ui_events: Rc<dyn Stream<Burst<UiEvent>>> = web_sub(&server, "ui");
-let ui_log = ui_events
-    .collapse()
-    .for_each(|event, time| println!("{} ui-event: {:?}", time.pretty(), event));
 
-Graph::new(vec![price_stream, ui_log], RunMode::RealTime, RunFor::Forever).run()?;
+Graph::builder()
+    .add(price_stream)
+    .add(ui_events.collapse().for_each(|event, time| {
+        println!("{} ui-event: {:?}", time.pretty(), event)
+    }))
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 ## Expected output

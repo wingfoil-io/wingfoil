@@ -83,9 +83,14 @@ where
                 let run_mode = graph_state.run_mode();
                 let task = move || {
                     let node = func().send(sender, None);
-                    let mut graph =
-                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    if let Err(e) = graph.run() {
+                    let result = Graph::builder()
+                        .add(node)
+                        .tokio_runtime(tokio_runtime)
+                        .run_mode(run_mode)
+                        .run_for(run_for)
+                        .start_time(start_time)
+                        .run();
+                    if let Err(e) = result {
                         log::error!("graph producer worker thread terminated: {e:#}");
                     }
                 };
@@ -232,9 +237,14 @@ where
                 let task = move || {
                     let src = ChannelReceiverStream::new(receiver_in, None, tx_notif).into_stream();
                     let node = func(src.clone()).send(sender_out, Some(src.as_node()));
-                    let mut graph =
-                        Graph::new_with(vec![node], tokio_runtime, run_mode, run_for, start_time);
-                    if let Err(e) = graph.run() {
+                    let result = Graph::builder()
+                        .add(node)
+                        .tokio_runtime(tokio_runtime)
+                        .run_mode(run_mode)
+                        .run_for(run_for)
+                        .start_time(start_time)
+                        .run();
+                    if let Err(e) = result {
                         log::error!("graph map worker thread terminated: {e:#}");
                     }
                 };

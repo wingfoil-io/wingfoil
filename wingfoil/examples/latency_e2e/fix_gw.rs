@@ -333,7 +333,7 @@ fn main() -> anyhow::Result<()> {
     // applies only to the graph cycle thread (this one).
     pin_current_from_env("WINGFOIL_PIN_GRAPH");
 
-    Graph::new(nodes, RunMode::RealTime, RunFor::Forever).run()?;
+    Graph::builder().add(nodes).real_time().forever().run()?;
     Ok(())
 }
 

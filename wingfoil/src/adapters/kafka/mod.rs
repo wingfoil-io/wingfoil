@@ -35,7 +35,10 @@
 //!     .for_each(|event, _| {
 //!         println!("{}: {:?}", event.topic, event.value_str())
 //!     })
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -54,7 +57,10 @@
 //!     KafkaRecord { topic: "my-topic".into(), key: Some(b"key1".to_vec()), value: b"hello".to_vec() },
 //! ])
 //! .kafka_pub(conn)
-//! .run(RunMode::RealTime, RunFor::Cycles(1))
+//! .graph()
+//! .real_time()
+//! .cycles(1)
+//! .run()
 //! .unwrap();
 //! ```
 //!
@@ -86,7 +92,13 @@
 //!     })
 //!     .kafka_pub(conn);
 //!
-//! Graph::new(vec![seed, round_trip], RunMode::RealTime, RunFor::Cycles(3)).run().unwrap();
+//! Graph::builder()
+//!     .add(seed)
+//!     .add(round_trip)
+//!     .real_time()
+//!     .cycles(3)
+//!     .run()
+//!     .unwrap();
 //! ```
 
 mod read;

@@ -71,7 +71,11 @@ fn multiple_metrics_all_appear_in_scrape() {
     let node_a = exporter.register("multi_counter_a", counter);
     let node_b = exporter.register("multi_counter_b", doubled);
 
-    Graph::new(vec![node_a, node_b], RunMode::RealTime, RunFor::Cycles(3))
+    Graph::builder()
+        .add(node_a)
+        .add(node_b)
+        .real_time()
+        .cycles(3)
         .run()
         .unwrap();
 

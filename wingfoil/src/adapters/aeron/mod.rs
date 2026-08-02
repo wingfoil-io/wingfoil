@@ -82,7 +82,10 @@
 //! )
 //!     .map(|burst| burst.into_iter().sum::<i64>())
 //!     .print()
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -100,7 +103,10 @@
 //!     .count()
 //!     .map(|n: u64| burst![n])
 //!     .aeron_pub(pub_, |v: &u64| v.to_le_bytes().to_vec())
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 
@@ -433,7 +439,7 @@ mod tests {
         use crate::adapters::aeron::buffer::FragmentBuffer;
         use crate::adapters::aeron::error::TransportError;
         use crate::adapters::aeron::transport::MockSubscriber;
-        use crate::{NodeOperators, RunFor, RunMode, StreamOperators};
+        use crate::{NodeOperators, StreamOperators};
         use std::time::Duration;
 
         // The default MockSubscriber is never connected, so the threaded poll
@@ -455,10 +461,10 @@ mod tests {
         let collected = status_stream.collect();
         collected
             .clone()
-            .run(
-                RunMode::RealTime,
-                RunFor::Duration(Duration::from_millis(100)),
-            )
+            .graph()
+            .real_time()
+            .duration(Duration::from_millis(100))
+            .run()
             .unwrap();
         assert!(
             collected

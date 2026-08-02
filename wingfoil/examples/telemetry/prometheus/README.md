@@ -32,9 +32,13 @@ let exporter = PrometheusExporter::new("0.0.0.0:9091");
 let port = exporter.serve()?;
 
 let counter = ticker(Duration::from_secs(1)).count();
-let node = exporter.register("wingfoil_ticks_total", counter);
 
-node.run(RunMode::RealTime, RunFor::Forever)?;
+exporter
+    .register("wingfoil_ticks_total", counter)
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 ## Output

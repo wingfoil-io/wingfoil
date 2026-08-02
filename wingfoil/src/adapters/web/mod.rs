@@ -31,7 +31,10 @@
 //! ticker(Duration::from_millis(10))
 //!     .count()
 //!     .web_pub(&server, "tick")
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -43,7 +46,7 @@
 //!
 //! let server = WebServer::bind("127.0.0.1:0").start().unwrap();
 //! let clicks: std::rc::Rc<dyn Stream<Burst<u32>>> = web_sub(&server, "ui_events");
-//! clicks.collapse().print().run(RunMode::RealTime, RunFor::Forever).unwrap();
+//! clicks.collapse().print().graph().real_time().forever().run().unwrap();
 //! ```
 //!
 //! # Serving a static UI bundle

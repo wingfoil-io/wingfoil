@@ -297,10 +297,14 @@ impl FixConnection {
     /// ```ignore
     /// let fix = fix_connect_tls(host, port, sender, target, Some(&pw));
     /// let sub = fix.fix_sub(constant(vec!["4001".into(), "4002".into()]));
-    /// Graph::new(
-    ///     vec![fix.data.as_node(), fix.status.as_node(), sub],
-    ///     RunMode::RealTime, RunFor::Duration(Duration::from_secs(60)),
-    /// ).run().unwrap();
+    /// Graph::builder()
+    ///     .add(fix.data)
+    ///     .add(fix.status)
+    ///     .add(sub)
+    ///     .real_time()
+    ///     .duration(Duration::from_secs(60))
+    ///     .run()
+    ///     .unwrap();
     /// ```
     pub fn fix_sub(&self, symbols: Rc<dyn Stream<Vec<String>>>) -> Rc<dyn Node> {
         FixSubNode {
@@ -1778,12 +1782,12 @@ mod tests {
         // test load — the Error status usually arrives within tens of ms
         // but the background thread may be starved when 250+ tests run
         // concurrently.
-        let _result = Graph::new(
-            vec![data.as_node(), status_collected.clone().as_node()],
-            RunMode::RealTime,
-            RunFor::Duration(Duration::from_secs(5)),
-        )
-        .run();
+        let _result = Graph::builder()
+            .add(data)
+            .add(status_collected.clone())
+            .real_time()
+            .duration(Duration::from_secs(5))
+            .run();
         // The graph should complete without panicking. The status stream should
         // contain an Error event from the failed connection attempt.
         let statuses: Vec<FixSessionStatus> = status_collected
@@ -1837,13 +1841,13 @@ mod tests {
 
         let (data, status) = fix_connect("127.0.0.1", port, "INIT", "ACC", FixPollMode::Threaded);
         let status_collected = status.collect();
-        Graph::new(
-            vec![data.as_node(), status_collected.clone().as_node()],
-            RunMode::RealTime,
-            RunFor::Duration(Duration::from_secs(3)),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(data)
+            .add(status_collected.clone())
+            .real_time()
+            .duration(Duration::from_secs(3))
+            .run()
+            .unwrap();
 
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap();
@@ -1900,13 +1904,15 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![acc_data.as_node(), acc_node, init_data.as_node(), init_node],
-            RunMode::RealTime,
-            run_for,
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(acc_data)
+            .add(acc_node)
+            .add(init_data)
+            .add(init_node)
+            .real_time()
+            .run_for(run_for)
+            .run()
+            .unwrap();
     }
 
     #[test]
@@ -1942,13 +1948,15 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![acc_data.as_node(), acc_node, init_data.as_node(), init_node],
-            RunMode::RealTime,
-            run_for,
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(acc_data)
+            .add(acc_node)
+            .add(init_data)
+            .add(init_node)
+            .real_time()
+            .run_for(run_for)
+            .run()
+            .unwrap();
     }
 
     /// Fills the inject channel to capacity with no draining receiver and

@@ -90,7 +90,7 @@ let round_trip = etcd_sub(conn.clone(), "/source/")
     })
     .etcd_pub(conn, None, true);
 
-round_trip.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
+round_trip.graph().real_time().cycles(3).run().unwrap();
 ```
 
 [Full example.](etcd/)
@@ -115,7 +115,7 @@ let round_trip = fluvio_sub(conn.clone(), "source", 0, None)
     })
     .fluvio_pub(conn, "dest");
 
-round_trip.run(RunMode::RealTime, RunFor::Cycles(10)).unwrap();
+round_trip.graph().real_time().cycles(10).run().unwrap();
 ```
 
 [Full example.](fluvio/)
@@ -140,7 +140,7 @@ let round_trip = kafka_sub(conn.clone(), "source", "example-group")
     })
     .kafka_pub(conn);
 
-round_trip.run(RunMode::RealTime, RunFor::Cycles(10)).unwrap();
+round_trip.graph().real_time().cycles(10).run().unwrap();
 ```
 
 [Full example.](kafka/)
@@ -165,7 +165,7 @@ let processor = redis_sub(conn.clone(), "source")
     })
     .redis_pub(conn);
 
-processor.run(RunMode::RealTime, RunFor::Forever).unwrap();
+processor.graph().real_time().forever().run().unwrap();
 ```
 
 The adapter also supports Redis **Streams** for a persistent, replayable log:
@@ -229,7 +229,10 @@ ticker(Duration::from_millis(100))
     .count()
     .map(|n: u64| format!("{n}").into_bytes())
     .zmq_pub(7779, ())
-    .run(RunMode::RealTime, RunFor::Forever)?;
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 ```rust,ignore
@@ -240,7 +243,10 @@ use wingfoil::*;
 let (data, _status) = zmq_sub::<Vec<u8>>("tcp://127.0.0.1:7779")?;
 // See wingfoil-python/examples/zmq/ for a Python subscriber
 data.print()
-    .run(RunMode::RealTime, RunFor::Forever)?;
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 Service discovery via etcd is also supported — see [`zmq/etcd`](zmq/etcd/) for details.
@@ -271,12 +277,12 @@ let received = aeron_sub_fragment(
 );
 let publisher = received.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-Graph::new(
-    vec![received.print().as_node(), publisher],
-    RunMode::RealTime,
-    RunFor::Cycles(10),
-)
-.run()?;
+Graph::builder()
+    .add(received.print())
+    .add(publisher)
+    .real_time()
+    .cycles(10)
+    .run()?;
 ```
 
 Use `AeronMode::Threaded` to poll on a background thread instead. The pure-Rust
@@ -301,16 +307,14 @@ let fix = fix_connect_tls(
 // Subscribe to EUR/USD — waits for LoggedIn, then sends the request.
 let sub = fix.fix_sub(constant(vec!["4001".into()]));
 
-let data_node = fix.data.logged("fix-data", Info).as_node();
-let status_node = fix.status.logged("fix-status", Info).as_node();
-
-Graph::new(
-    vec![data_node, status_node, sub],
-    RunMode::RealTime,
-    RunFor::Duration(Duration::from_secs(60)),
-)
-.run()
-.unwrap();
+Graph::builder()
+    .add(fix.data.logged("fix-data", Info))
+    .add(fix.status.logged("fix-status", Info))
+    .add(sub)
+    .real_time()
+    .duration(Duration::from_secs(60))
+    .run()
+    .unwrap();
 ```
 
 Run the self-contained loopback example (no external FIX engine needed):
@@ -339,10 +343,13 @@ let config = OtlpConfig {
 };
 
 let counter = ticker(Duration::from_secs(1)).count();
-let prometheus_node = exporter.register("wingfoil_ticks_total", counter.clone());
-let otlp_node = counter.otlp_push("wingfoil_ticks_total", config);
 
-Graph::new(vec![prometheus_node, otlp_node], RunMode::RealTime, RunFor::Forever).run()?;
+Graph::builder()
+    .add(exporter.register("wingfoil_ticks_total", counter.clone()))
+    .add(counter.otlp_push("wingfoil_ticks_total", config))
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 [Full example.](telemetry/)
@@ -362,13 +369,19 @@ ticker(Duration::from_secs(1))
     .map(|n| n as f64 + (n as f64 * 0.5).sin())
     .augurs_forecast(AugursForecastConfig::new(48, 5).with_level(0.90))
     .for_each(|f, _| println!("next 5: {:?}", f.point))
-    .run(RunMode::RealTime, RunFor::Forever)?;
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 
 // Flag the series that diverges from the group (one Vec<f64> per tick).
 readings // Rc<dyn Stream<Vec<f64>>>
     .augurs_outlier(AugursOutlierConfig::mad(40, 0.5))
     .for_each(|o, _| println!("outlying: {:?}", o.outlying))
-    .run(RunMode::RealTime, RunFor::Forever)?;
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 
 // Detect regime changes and seasonal periods in a single series.
 prices.augurs_changepoint(AugursChangepointConfig::new(120));

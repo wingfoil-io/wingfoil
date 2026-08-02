@@ -100,15 +100,12 @@ fn main() -> anyhow::Result<()> {
 
 pub fn run(period: Duration, cycles: u32) -> anyhow::Result<()> {
     let (price_book, overflow_node) = build(period);
-    Graph::new(
-        vec![
-            price_book.logged("price book (demux)", Info).as_node(),
-            overflow_node,
-        ],
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Cycles(cycles),
-    )
-    .run()
+    Graph::builder()
+        .add(price_book.logged("price book (demux)", Info))
+        .add(overflow_node)
+        .historical()
+        .cycles(cycles)
+        .run()
 }
 
 #[cfg(test)]
@@ -163,12 +160,12 @@ mod tests {
             assert_eq!(states, expected_book_states());
             Ok(())
         });
-        Graph::new(
-            vec![assertion, overflow_node],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Cycles(20),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(assertion)
+            .add(overflow_node)
+            .historical()
+            .cycles(20)
+            .run()
+            .unwrap();
     }
 }

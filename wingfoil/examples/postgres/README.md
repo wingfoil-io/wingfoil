@@ -68,7 +68,10 @@ fn main() -> Result<()> {
     // ... create the table, then:
     generate(10)
         .postgres_write(conn.clone(), "example_trades")
-        .run(run_mode, run_for)?;
+        .graph()
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()?;
 
     let read = postgres_read::<Trade>(
         conn,

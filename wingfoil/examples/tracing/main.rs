@@ -64,8 +64,5 @@ fn main() {
         }
     }
 
-    let stream = build_graph();
-    stream
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
-        .unwrap();
+    build_graph().graph().historical().cycles(3).run().unwrap();
 }

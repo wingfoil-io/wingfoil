@@ -28,7 +28,10 @@
 //! ticker(Duration::from_millis(100))
 //!     .count()
 //!     .zmq_pub(5556, ())
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //!
 //! // Subscriber — direct address
@@ -36,7 +39,10 @@
 //! data.for_each(|burst, _| {
 //!     for msg in burst { println!("{msg:?}"); }
 //! })
-//! .run(RunMode::RealTime, RunFor::Forever)
+//! .graph()
+//! .real_time()
+//! .forever()
+//! .run()
 //! .unwrap();
 //! # Ok::<(), anyhow::Error>(())
 //! ```
@@ -53,14 +59,20 @@
 //!     ticker(Duration::from_millis(100))
 //!         .count()
 //!         .zmq_pub(5556, ("quotes", EtcdRegistry::new("http://etcd:2379")))
-//!         .run(RunMode::RealTime, RunFor::Forever)
+//!         .graph()
+//!         .real_time()
+//!         .forever()
+//!         .run()
 //!         .unwrap();
 //! });
 //!
 //! // Subscriber looks up the publisher address from etcd.
 //! let (data, _status) = zmq_sub::<u64>(("quotes", EtcdRegistry::new("http://etcd:2379")))?;
 //! data.for_each(|burst, _| println!("{burst:?}"))
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! # Ok::<(), anyhow::Error>(())
 //! ```

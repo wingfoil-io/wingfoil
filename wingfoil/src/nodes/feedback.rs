@@ -153,13 +153,13 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![fb.as_node(), res],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(period * 5),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(fb)
+            .add(res)
+            .historical()
+            .duration(period * 5)
+            .run()
+            .unwrap();
     }
 
     #[test]
@@ -183,13 +183,13 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![fb.as_node(), res],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Cycles(5),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(fb)
+            .add(res)
+            .historical()
+            .cycles(5)
+            .run()
+            .unwrap();
     }
     #[test]
     fn feedback_works() {
@@ -220,13 +220,13 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![trigger, res],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(period * 14),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(trigger)
+            .add(res)
+            .historical()
+            .duration(period * 14)
+            .run()
+            .unwrap();
     }
 
     #[test]

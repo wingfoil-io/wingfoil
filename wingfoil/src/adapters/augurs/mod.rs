@@ -47,7 +47,10 @@
 //!     .map(|n| n as f64 + (n as f64 * 0.3).sin())
 //!     .augurs_forecast(AugursForecastConfig::new(64, 5).with_level(0.95))
 //!     .for_each(|f, _| println!("next 5: {:?}", f.point))
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //!
 //! // Seasonal data: fit MSTL with a period-24 season instead of plain ETS.
@@ -67,7 +70,10 @@
 //! some_stream_of_readings // Rc<dyn Stream<Vec<f64>>>
 //!     .augurs_outlier(AugursOutlierConfig::mad(32, 0.5))
 //!     .for_each(|o, _| println!("outlying series: {:?}", o.outlying))
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 

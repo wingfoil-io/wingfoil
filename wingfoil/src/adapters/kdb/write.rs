@@ -79,7 +79,10 @@ pub trait KdbSerialize: Sized {
 /// #       panic!("example code");
 ///     // Time from graph tuples will be prepended when writing to KDB
 ///     kdb_write(conn, "trades", &trades)
-///         .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(10)))
+///         .graph()
+///         .real_time()
+///         .duration(Duration::from_secs(10))
+///         .run()
 ///         .unwrap();
 /// }
 /// ```

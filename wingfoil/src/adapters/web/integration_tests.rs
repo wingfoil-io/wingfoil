@@ -449,11 +449,12 @@ fn test_historical_web_sub_does_not_block() -> anyhow::Result<()> {
 
     // If `web_sub` blocked on its listener this would hang; a bounded
     // `RunFor` plus a wall-clock guard turns a regression into a failure.
-    let mut graph = crate::Graph::new(
-        vec![pub_node, collected.clone()],
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Cycles(20),
-    );
+    let mut graph = crate::Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .historical()
+        .cycles(20)
+        .build();
     let start = Instant::now();
     graph.run()?;
     assert!(

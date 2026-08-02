@@ -28,10 +28,13 @@ let config = OtlpConfig {
 };
 
 let counter = ticker(Duration::from_secs(1)).count();
-let metric_node = exporter.register("wingfoil_ticks_total", counter.clone());
-let otlp_node = counter.otlp_push("wingfoil_ticks_total", config);
 
-Graph::new(vec![metric_node, otlp_node], RunMode::RealTime, RunFor::Forever).run()?;
+Graph::builder()
+    .add(exporter.register("wingfoil_ticks_total", counter.clone()))
+    .add(counter.otlp_push("wingfoil_ticks_total", config))
+    .real_time()
+    .forever()
+    .run()?;
 ```
 
 ## Output

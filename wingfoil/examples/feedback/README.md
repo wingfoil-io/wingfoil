@@ -63,7 +63,10 @@ let plant = bimap(Dep::Active(heater), Dep::Passive(temp_rx), |power, temp| temp
 plant
     .feedback(temp_tx)
     .for_each(|t, _| println!("temperature: {t:.3}"))
-    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Duration(period * 7))?;
+    .graph()
+    .historical()
+    .duration(period * 7)
+    .run()?;
 ```
 
 Run it:

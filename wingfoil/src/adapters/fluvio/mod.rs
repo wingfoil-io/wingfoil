@@ -40,7 +40,10 @@
 //!     .for_each(|event, _| {
 //!         println!("offset={} value={:?}", event.offset, event.value_str())
 //!     })
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -60,7 +63,10 @@
 //!     FluvioRecord::new(b"world".to_vec()),
 //! ])
 //! .fluvio_pub(conn, "my-topic")
-//! .run(RunMode::RealTime, RunFor::Cycles(1))
+//! .graph()
+//! .real_time()
+//! .cycles(1)
+//! .run()
 //! .unwrap();
 //! ```
 //!

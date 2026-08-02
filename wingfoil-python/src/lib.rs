@@ -180,8 +180,11 @@ impl PyGraph {
                 std::mem::forget(node);
             }
 
-            let mut graph = ::wingfoil::Graph::new(roots, run_mode, run_for);
-            graph.run()
+            ::wingfoil::Graph::builder()
+                .add(roots)
+                .run_mode(run_mode)
+                .run_for(run_for)
+                .run()
         });
         result.to_pyresult()?;
         Ok(())

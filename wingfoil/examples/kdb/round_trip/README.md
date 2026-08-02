@@ -101,7 +101,10 @@ fn main() -> Result<()> {
     // Write
     generate(num_rows)
         .kdb_write(conn.clone(), table)
-        .run(run_mode, run_for)?;
+        .graph()
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()?;
     let baseline = generate(num_rows);
     // Read
     let read = kdb_read::<Trade>(
@@ -117,8 +120,11 @@ fn main() -> Result<()> {
         },
     );
     // Validate
-    let check = validate(baseline, read);
-    Graph::new(check, run_mode, run_for).run()?;
+    Graph::builder()
+        .add(validate(baseline, read))
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()?;
     println!("✓ {num_rows} written, read and validated");
     Ok(())
 }

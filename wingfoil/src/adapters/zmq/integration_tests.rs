@@ -70,14 +70,15 @@ fn zmq_same_thread() {
     let port = 5556;
     let address = format!("tcp://127.0.0.1:{port}");
     let run_for = RunFor::Duration(period * 10);
-    Graph::new(
-        vec![sender(period, port), receiver(&address)],
-        RunMode::RealTime,
-        run_for,
-    )
-    .print()
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(sender(period, port))
+        .add(receiver(&address))
+        .real_time()
+        .run_for(run_for)
+        .build()
+        .print()
+        .run()
+        .unwrap();
 }
 
 #[test]
@@ -143,13 +144,13 @@ fn zmq_first_message_not_dropped() {
         assert_eq!(values[0], 1, "first message dropped: got {}", values[0]);
         Ok(())
     });
-    Graph::new(
-        vec![sender_with_delay(period, port), recv_node],
-        RunMode::RealTime,
-        run_for,
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(sender_with_delay(period, port))
+        .add(recv_node)
+        .real_time()
+        .run_for(run_for)
+        .run()
+        .unwrap();
 }
 
 #[test]
@@ -173,13 +174,13 @@ fn zmq_first_message_not_dropped_no_delay() {
     // Uses sender() with NO delay — publisher sends immediately after bind.
     // Verifies the publisher's buffering mechanism prevents the ZMQ slow-joiner
     // problem even without an artificial startup delay.
-    Graph::new(
-        vec![sender(period, port), recv_node],
-        RunMode::RealTime,
-        run_for,
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(sender(period, port))
+        .add(recv_node)
+        .real_time()
+        .run_for(run_for)
+        .run()
+        .unwrap();
 }
 
 #[test]
@@ -203,13 +204,14 @@ fn zmq_reports_connected_status() {
         );
         Ok(())
     });
-    Graph::new(
-        vec![sender(period, port), data_node, status_node],
-        RunMode::RealTime,
-        run_for,
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(sender(period, port))
+        .add(data_node)
+        .add(status_node)
+        .real_time()
+        .run_for(run_for)
+        .run()
+        .unwrap();
 }
 
 #[test]

@@ -8,7 +8,7 @@
 //       -- lmax --nocapture --test-threads=1
 
 use super::*;
-use crate::{Graph, RunFor, RunMode, StreamOperators, constant};
+use crate::{Graph, StreamOperators, constant};
 use std::time::Duration;
 
 const LMAX_MD_HOST: &str = "fix-marketdata.london-demo.lmax.com";
@@ -48,12 +48,11 @@ fn lmax_logon() -> anyhow::Result<()> {
         Ok(())
     });
 
-    Graph::new(
-        vec![status_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(10)),
-    )
-    .run()
+    Graph::builder()
+        .add(status_node)
+        .real_time()
+        .duration(Duration::from_secs(10))
+        .run()
 }
 
 /// Verify we can subscribe to AVAX/USD market data and receive at least one snapshot
@@ -99,10 +98,11 @@ fn lmax_market_data() -> anyhow::Result<()> {
         Ok(())
     });
 
-    Graph::new(
-        vec![data_node, status_node, sub],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(20)),
-    )
-    .run()
+    Graph::builder()
+        .add(data_node)
+        .add(status_node)
+        .add(sub)
+        .real_time()
+        .duration(Duration::from_secs(20))
+        .run()
 }
