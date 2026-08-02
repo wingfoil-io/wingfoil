@@ -371,8 +371,9 @@ is small and explained by two hard constraints on proc macros:
   introspect an `Op` impl to learn its arity/cfg/input shape. Any per-op
   knowledge the macro needs must be written in the macro crate.
 - **A trait cannot be extended from scattered sites** — so `#[op]` cannot add a
-  method to `StreamOps`; the fluent method stays hand-written (a 3-line
-  one-liner), or would have to be inherent-on-`Stream`.
+  method to `StreamOps` directly. It gets there anyway, one indirection later:
+  `#[op(.., fluent)]` emits a `macro_rules!` writing the method, which the
+  trait's `impl` block invokes. The **declaration** is still hand-written.
 
 What's automated:
 
@@ -1427,9 +1428,36 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     layer now wires through. `no_builder` survives for one op, `with_time`,
     whose signature deliberately differs from its shape (see **Adding an op**).
     Per-shape tests in `tests/op_builder_shapes.rs`.
-  - Still open (deliberate): generating the **fluent** method too. Only clean
-    as inherent-on-`Stream`, which would close the open op vocabulary that the
-    extension-trait design exists to keep — deferred, not owed.
+  - **Fluent coverage ✅ landed.** `#[op(build = name, fluent)]` now emits the
+    fluent *method* as well, and 28 of `StreamOps`' 32 forwarders are generated
+    (`fluent.rs` lost ~200 lines of `self.wire(..)` boilerplate). The
+    "inherent-on-`Stream` or nothing" premise this item rested on was wrong:
+    the method is emitted as a `macro_rules!` (`__wf_fluent_<name>!`) that the
+    trait `impl` block invokes, so it lands in whatever extension trait the
+    author picks and the open vocabulary is untouched. The trait
+    **declaration** stays hand-written — it is the documented surface, and
+    rustc checking the generated body against it turns any drift from the op's
+    shape into a compile error.
+
+    Four stay hand-written by construction, not oversight: `with_time`
+    (`no_builder` — no `Builder` method to forward to), `logged` (the
+    documented `&str`-vs-`(String, Level)` ergonomic mismatch),
+    `delay_with_reset` (its signature orders `delay` *before* the trigger
+    edge, where generation follows the builder's `(edges.., init, cfg)`), and
+    `feedback` (not an `ops.rs` op at all). The other 8 `StreamOps` methods
+    were never forwarders — they have real bodies (`merge_all`, `map_n`,
+    `fan`, `not`, `collapse`, `for_each_mut`, `spawn_map`,
+    `spawn_map_bounded`) and are untouched.
+
+    Not yet covered: `SourceOps` (no `self` edge) and `StatisticsOps` (on a
+    concrete `Stream<f64>`, so there is no type parameter to become the
+    receiver). Both are mechanical extensions of the same generator.
+
+    Note the one ordering constraint this introduces: a `macro_rules!` produced
+    *by* a proc macro is reachable only through textual scope (rustc
+    [#52234](https://github.com/rust-lang/rust/issues/52234) rejects both the
+    `crate::` path and `use` forms), so `lib.rs` declares `#[macro_use] pub mod
+    ops;` **before** `pub mod fluent;`.
 
 ## Phase 6 — Python bindings, examples, benches
 

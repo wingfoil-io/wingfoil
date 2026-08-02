@@ -6,8 +6,8 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = accumulate)]
-   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
+   | #[op(build = accumulate, fluent)]
+   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
    |
 help: a constant with a similar name exists
    |
@@ -23,8 +23,8 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = accumulate)]
-   | ------------------------- similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
+   | #[op(build = accumulate, fluent)]
+   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
    |
 help: a constant with a similar name exists
    |
@@ -46,8 +46,8 @@ error[E0425]: cannot find function `__wf_op_frobnicate_cycle` in this scope
    |
   ::: src/ops.rs
    |
-   | #[op(build = accumulate)]
-   | ------------------------- similarly named function `__wf_op_accumulate_cycle` defined here
+   | #[op(build = accumulate, fluent)]
+   | --------------------------------- similarly named function `__wf_op_accumulate_cycle` defined here
    |
 help: a function with a similar name exists
    |

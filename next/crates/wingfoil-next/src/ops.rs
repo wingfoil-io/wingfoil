@@ -111,7 +111,7 @@ impl<T: Clone + 'static> Op for Const<T> {
 /// compile error in both. Per-node state belongs in [`Fold`]'s accumulator.
 pub struct Map<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = map)]
+#[op(build = map, fluent)]
 impl<A, B, F> Op for Map<A, B, F>
 where
     A: 'static,
@@ -134,7 +134,7 @@ where
 /// `Fn` for the same drift-safety reason (see [`Map`]).
 pub struct TryMap<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = try_map)]
+#[op(build = try_map, fluent)]
 impl<A, B, F> Op for TryMap<A, B, F>
 where
     A: 'static,
@@ -157,7 +157,7 @@ where
 /// the catalog. `Fn`, like [`Map`].
 pub struct MapFilter<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = map_filter)]
+#[op(build = map_filter, fluent)]
 impl<A, B, F> Op for MapFilter<A, B, F>
 where
     A: 'static,
@@ -185,7 +185,7 @@ where
 /// so a genuine first value equal to `T::default()` still ticks.
 pub struct Distinct<T>(PhantomData<T>);
 
-#[op(build = distinct)]
+#[op(build = distinct, fluent)]
 impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
     type Cfg = ();
     type State = Option<T>;
@@ -213,7 +213,7 @@ impl<T: Clone + PartialEq + 'static> Op for Distinct<T> {
 /// value (no previous to subtract).
 pub struct Difference<T>(PhantomData<T>);
 
-#[op(build = difference)]
+#[op(build = difference, fluent)]
 impl<T> Op for Difference<T>
 where
     T: Clone + Sub<Output = T> + 'static,
@@ -244,7 +244,7 @@ where
 /// limit; `State` the count emitted so far.
 pub struct Limit<T>(PhantomData<T>);
 
-#[op(build = limit)]
+#[op(build = limit, fluent)]
 impl<T: Clone + 'static> Op for Limit<T> {
     type Cfg = u32;
     type State = u32;
@@ -268,7 +268,7 @@ impl<T: Clone + 'static> Op for Limit<T> {
 /// convention; converted to engine time in `cycle`), `State` = last emit time.
 pub struct Throttle<T>(PhantomData<T>);
 
-#[op(build = throttle)]
+#[op(build = throttle, fluent)]
 impl<T: Clone + 'static> Op for Throttle<T> {
     type Cfg = Duration;
     type State = Option<NanoTime>;
@@ -302,7 +302,7 @@ impl<T: Clone + 'static> Op for Throttle<T> {
 /// infallible `Fn` (contrast [`Sink`], the fallible outbound edge).
 pub struct Inspect<A, F>(PhantomData<(A, F)>);
 
-#[op(build = inspect)]
+#[op(build = inspect, fluent)]
 impl<A, F> Op for Inspect<A, F>
 where
     A: Clone + 'static,
@@ -335,7 +335,7 @@ where
 /// same plain single-input shape as `map` / `limit`.
 pub struct Print<T>(PhantomData<T>);
 
-#[op(build = print)]
+#[op(build = print, fluent)]
 impl<T: Clone + Debug + 'static> Op for Print<T> {
     type Cfg = ();
     type State = ();
@@ -419,7 +419,7 @@ impl<T> Default for TimedState<T> {
 /// the wall-vs-engine speedup rather than branching on historical/realtime.
 pub struct Timed<T>(PhantomData<T>);
 
-#[op(build = timed)]
+#[op(build = timed, fluent)]
 impl<T: Clone + 'static> Op for Timed<T> {
     type Cfg = ();
     type State = TimedState<T>;
@@ -485,7 +485,7 @@ impl<T> Default for WindowState<T> {
     }
 }
 
-#[op(build = window)]
+#[op(build = window, fluent)]
 impl<T: Clone + 'static> Op for Window<T> {
     type Cfg = Duration;
     type State = WindowState<T>;
@@ -532,7 +532,7 @@ impl<T: Clone + 'static> Op for Window<T> {
 /// [`Window`]. `Cfg` = capacity, `State` = pending buffer.
 pub struct Buffer<T>(PhantomData<T>);
 
-#[op(build = buffer)]
+#[op(build = buffer, fluent)]
 impl<T: Clone + 'static> Op for Buffer<T> {
     type Cfg = usize;
     type State = Vec<T>;
@@ -560,7 +560,7 @@ impl<T: Clone + 'static> Op for Buffer<T> {
 /// all three values are read. `Fn`, like [`Join`].
 pub struct Join3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
-#[op(build = join3)]
+#[op(build = join3, fluent)]
 impl<A, B, C, D, F> Op for Join3<A, B, C, D, F>
 where
     A: 'static,
@@ -591,7 +591,7 @@ where
 /// [`Join3`].
 pub struct TryJoin3<A, B, C, D, F>(PhantomData<(A, B, C, D, F)>);
 
-#[op(build = try_join3)]
+#[op(build = try_join3, fluent)]
 impl<A, B, C, D, F> Op for TryJoin3<A, B, C, D, F>
 where
     A: 'static,
@@ -651,7 +651,7 @@ impl<T: Clone + 'static> Op for WithTime<T> {
 /// value is ignored). The `ticked_at` of the catalog.
 pub struct TickedAt<T>(PhantomData<T>);
 
-#[op(build = ticked_at)]
+#[op(build = ticked_at, fluent)]
 impl<T: 'static> Op for TickedAt<T> {
     type Cfg = ();
     type State = ();
@@ -672,7 +672,7 @@ impl<T: 'static> Op for TickedAt<T> {
 /// Emits elapsed engine time (`now - start`) whenever the upstream ticks.
 pub struct TickedAtElapsed<T>(PhantomData<T>);
 
-#[op(build = ticked_at_elapsed)]
+#[op(build = ticked_at_elapsed, fluent)]
 impl<T: 'static> Op for TickedAtElapsed<T> {
     type Cfg = ();
     type State = ();
@@ -2405,7 +2405,7 @@ impl Op for TimeWindowedMedianTimeWeighted {
 /// Emits its source value when the condition stream's current value is true.
 pub struct Filter<T>(PhantomData<T>);
 
-#[op(build = filter)]
+#[op(build = filter, fluent)]
 impl<T: Clone + 'static> Op for Filter<T> {
     type Cfg = ();
     type State = ();
@@ -2434,7 +2434,7 @@ impl<T: Clone + 'static> Op for Filter<T> {
 /// which the engine owns.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = fold, init_arg)]
+#[op(build = fold, fluent, init_arg)]
 impl<A, B, F> Op for Fold<A, B, F>
 where
     A: 'static,
@@ -2482,7 +2482,7 @@ impl<T: 'static> Op for Count<T> {
 /// desugar). Single-sourced for both layers, like [`Count`].
 pub struct Accumulate<T>(PhantomData<T>);
 
-#[op(build = accumulate)]
+#[op(build = accumulate, fluent)]
 impl<T: Clone + 'static> Op for Accumulate<T> {
     type Cfg = ();
     type State = Vec<T>;
@@ -2506,7 +2506,7 @@ impl<T: Clone + 'static> Op for Accumulate<T> {
 /// marks the data edge as non-activating), and its unit value is ignored.
 pub struct Sample<T>(PhantomData<T>);
 
-#[op(build = sample, passive = [0])]
+#[op(build = sample, fluent, passive = [0])]
 impl<T: Clone + 'static> Op for Sample<T> {
     type Cfg = ();
     type State = ();
@@ -2563,7 +2563,7 @@ where
 /// `Result` so an IO write failure aborts the run with context.
 pub struct Sink<A, F>(PhantomData<(A, F)>);
 
-#[op(build = for_each)]
+#[op(build = for_each, fluent)]
 impl<A, F> Op for Sink<A, F>
 where
     A: 'static,
@@ -2588,7 +2588,7 @@ where
 /// source's last value. Emits nothing during the run.
 pub struct Finally<A, F>(PhantomData<(A, F)>);
 
-#[op(build = finally)]
+#[op(build = finally, fluent)]
 impl<A, F> Op for Finally<A, F>
 where
     A: Clone + Default + 'static,
@@ -2616,7 +2616,7 @@ where
 /// upstreams: ticks when either input ticks, reading both current values.
 pub struct Join<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = join)]
+#[op(build = join, fluent)]
 impl<A, B, C, F> Op for Join<A, B, C, F>
 where
     A: 'static,
@@ -2642,7 +2642,7 @@ where
 /// like [`Join`].
 pub struct TryJoin<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = try_join)]
+#[op(build = try_join, fluent)]
 impl<A, B, C, F> Op for TryJoin<A, B, C, F>
 where
     A: 'static,
@@ -2672,7 +2672,7 @@ where
 /// so the semantics are single-sourced.
 pub struct JoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = join_passive, passive = [1])]
+#[op(build = join_passive, fluent, passive = [1])]
 impl<A, B, C, F> Op for JoinPassive<A, B, C, F>
 where
     A: 'static,
@@ -2697,7 +2697,7 @@ where
 /// needed.
 pub struct TryJoinPassive<A, B, C, F>(PhantomData<(A, B, C, F)>);
 
-#[op(build = try_join_passive, passive = [1])]
+#[op(build = try_join_passive, fluent, passive = [1])]
 impl<A, B, C, F> Op for TryJoinPassive<A, B, C, F>
 where
     A: 'static,
@@ -2739,7 +2739,7 @@ impl<T: PartialEq> Default for DelayState<T> {
     }
 }
 
-#[op(build = delay)]
+#[op(build = delay, fluent)]
 impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     type Cfg = Duration;
     type State = DelayState<T>;
@@ -2789,7 +2789,7 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
 /// wins. Tick flags arrive as input data, not via engine lookups.
 pub struct Merge2<T>(PhantomData<T>);
 
-#[op(build = merge)]
+#[op(build = merge, fluent)]
 impl<T: Clone + 'static> Op for Merge2<T> {
     type Cfg = ();
     type State = ();

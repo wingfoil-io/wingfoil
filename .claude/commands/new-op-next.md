@@ -134,7 +134,8 @@ example of both.
 The two hard constraints behind this (from `macro-extensibility-decision.md`):
 a proc macro sees **tokens, not resolved types**, so `graph!` can't introspect
 an `Op` impl; and a trait **can't be extended from scattered sites**, so the
-fluent method is always hand-written. Everything else is generated.
+fluent method's *declaration* is always hand-written (its body usually is not —
+see step 4). Everything else is generated.
 
 **Scheduling / activation.** Set `const ACTIVATION` from behaviour, not habit:
 
@@ -207,14 +208,34 @@ Rules the existing ops encode — follow them:
 - **Doc every public item.** `#[op]`-scoped ops get a `Builder::$ARGUMENTS`
   method whose docs are the witness type's docs — write them for a caller.
 
-## 4. The fluent method — hand-written, out of nothing generated
+## 4. The fluent method — declaration by hand, body usually generated
 
-The `#[op]` macro **cannot** add a method to a trait (constraint #2), so add
-the fluent combinator by hand — a one-liner over `Stream::wire` (or
-`GraphBuilder::source` for a source). Put it on the right trait:
+`#[op]` cannot add a method to a trait (constraint #2), but it can *write* one:
+`#[op(build = $ARGUMENTS, fluent)]` also emits `__wf_fluent_$ARGUMENTS!`, a
+`macro_rules!` the trait's `impl` block invokes. So the split is:
 
-- General combinator → `StreamOps` in `fluent.rs` (declare in the trait, impl in
-  the `impl<T> StreamOps<T> for Stream<T>` block):
+- **Declaration — always by hand.** It is the documented public surface, and
+  rustc checks the generated body against it, so a signature that drifts from
+  the op's shape is a compile error.
+- **Impl — `__wf_fluent_$ARGUMENTS!(T);`** in the
+  `impl<T> StreamOps<T> for Stream<T>` block, in place of the body.
+
+The generated signature is `(&self, <edges 1..>, <init>, <cfg>)` — edge 0
+becomes `&self`, later edges become `&Stream<_>` params, then an `init_arg`
+seed, then the config. **Declare it in that order** or the two will not match.
+
+Write the body by hand instead when any of these hold — all three are real,
+current cases, not hypotheticals:
+
+- the op is `no_builder` (nothing to forward to) — `with_time`;
+- the fluent signature deliberately reorders the parameters —
+  `delay_with_reset(delay, trigger)` puts the cfg before the edge;
+- edge 0 is a concrete type rather than a type parameter, so there is no
+  receiver to substitute — every `StatisticsOps` op on `Stream<f64>`;
+- the fluent signature's types differ from the op's `Cfg` — `logged` (see the
+  gotcha below).
+
+Hand-written, it is a one-liner over `Stream::wire`:
   ```rust
   fn $ARGUMENTS<B, F>(&self, /* args */) -> Stream<B>
   where B: Clone + Default + 'static, /* … */
@@ -413,7 +434,8 @@ Before opening a PR, run a clean-context review pass as a subagent:
    the `Op` impl with correct `ACTIVATION` and `Tick` variants (steps 2–3);
    closure configs are `Fn` not `FnMut`; `State: Default` (or `init_arg`); a
    `no_builder` is justified by a signature that differs from the shape, not by
-   the shape itself; a hand-written fluent method on the right trait, out of the
+   the shape itself; a fluent method on the right trait — declaration by hand,
+   body via `__wf_fluent_<name>!(T)` unless step 4 says otherwise — out of the
    prelude for a domain op (step 4); `graph!`/compiled coverage is zero-touch or
    the op is a documented fluent-only entry (step 5); catalog tests assert
    values **and** tick times and the op appears in `op_completeness.rs` (a
