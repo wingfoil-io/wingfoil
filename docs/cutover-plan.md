@@ -121,7 +121,7 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 3.7 | **The statistics Python binding stops short of legacy.** Legacy `legacy/wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. The engine already has the whole surface (`crates/wingfoil-next/src/stats.rs`, with parity tests), so this is binding work, not engine work. 37 legacy tests have nowhere to map. | M |
+| 3.7 | ✅ **The statistics Python binding — landed.** `crates/wingfoil-next-python/src/statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`variance`/`std`/`sum`/`min`/`max`/`median`/`ewma` as a **dispatcher** onto the engine's `StatisticsOps` — legacy's two orthogonal knobs resolved onto the engine's one-method-per-combination surface, matched exhaustively so a new engine combination is a compile error rather than a silent gap. No engine file touched. All 37 legacy tests ported to `crates/wingfoil-next-python/tests/test_statistics.py`. | M |
 | 3.8 | ✅ **Multi-stream `build_dataframe` in next-python — landed.** `wingfoil_next.build_dataframe({name: stream})` outer-joins several already-run streams on engine time, built in Rust beside the single-stream `dataframe()` rather than as a Python helper. Columns may be held as frames (`dataframe()`) or as `(time, value)` tuples (`collect()`, legacy's shape). All 4 legacy tests ported to `crates/wingfoil-next-python/tests/test_pandas.py`; the legacy `to_dataframe` tests have no counterpart by design (next builds the frame in the engine) — noted in `docs/migration.rst`. | S |
 
 Row **3.9** (sweep the legacy tree for drift since each phase was ticked) has
@@ -129,8 +129,8 @@ run; the findings are below, and it adds no rows.
 
 #### 3.9 — the legacy-drift sweep: ran, no new gaps
 
-**Ran 2026-08-02 against `next` @ `754514c`. Result: 3.7 is the only open
-case, so §3 gains no rows.**
+**Ran 2026-08-02 against `next` @ `754514c`. Result: 3.7 was the only open
+case, so §3 gained no rows — and 3.7 has since landed, closing the section.**
 
 **Window.** `docs/port-plan.md` was created at `6eb7940` (2026-07-19), so no ✅
 in it can predate that. The sweep therefore covers the whole life of the file:
@@ -176,7 +176,7 @@ equivalents.
 |---|---|---|---|
 | `d561c52` (#589) | 2026-07-27 | `wingfoil/src/nodes/drop_small_change.rs`, `PyStream.drop_small_change`, 3 pytest cases | **Drift** — landed 2 days after the Phase 2 catalog ✅ (`b774731`). **Already closed** by `991bfa7`: the op across all three engines, the fluent method, the Python binding and all three tests (`crates/wingfoil-next/src/ops.rs`, `src/fluent.rs`, `tests/catalog.rs`, `tests/op_completeness.rs`, `crates/wingfoil-next-python/src/graph.rs`, `tests/test_interop.py`) |
 | `f5b6915` (#590), `23fa547` (#591) | 2026-07-27 | `wingfoil-js/package.json` + `pnpm-lock.yaml` npm-audit patches | **Not a parity target** — `wingfoil-js` is now `js/` and survives the cutover |
-| `da919bb` (#611) | 2026-08-01 | `wingfoil-python/src/py_statistics.rs` (319 lines), 8 statistics methods on `PyStream`, `Window`/`Weighting`/`EwmaSpan` exports, `tests/test_statistics.py` (249 lines) | **Drift, still open** — this is row **3.7**, whose description matches the diff exactly (the `py_augurs.rs` hunk in the same commit is a pure refactor, hoisting `as_floats` into `py_stream.rs`) |
+| `da919bb` (#611) | 2026-08-01 | `wingfoil-python/src/py_statistics.rs` (319 lines), 8 statistics methods on `PyStream`, `Window`/`Weighting`/`EwmaSpan` exports, `tests/test_statistics.py` (249 lines) | **Drift** — this was row **3.7**, whose description matched the diff exactly; **since closed** (the full statistics binding, all 37 tests) (the `py_augurs.rs` hunk in the same commit is a pure refactor, hoisting `as_floats` into `py_stream.rs`) |
 
 **Everything else that touched legacy files in the window was next-originated,
 and none of it is a parity target.** `13ba842` / `6465d3d` / `bfbe24f` /
@@ -271,8 +271,9 @@ afterwards, since it repoints the names 1.2 creates.
 
 Everything else parallelises. Section 2's rulings need no code — 2.1 and 1.4
 should land early because 4.2 depends on both. Sections 3 and 4 are
-independent of each other and of 1.2. 3.9 has now run and added nothing, so
-section 3 is just 3.7 and 3.8; its standing replacement is gate 6.5.
+independent of each other and of 1.2. **Section 3 is now closed**: 3.9 ran and
+added nothing, and 3.7 and 3.8 have both landed. Its standing replacement is
+gate 6.5, which re-checks the sweep immediately before the swap.
 
 One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI

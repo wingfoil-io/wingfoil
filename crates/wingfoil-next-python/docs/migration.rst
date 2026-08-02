@@ -154,12 +154,18 @@ Legacy exposed ``mean`` / ``variance`` / ``std`` / ``sum`` / ``min`` / ``max``
 / ``median`` / ``ewma`` as :class:`~wingfoil_next.Stream` methods parameterised
 by ``Window`` / ``Weighting`` / ``EwmaSpan`` ``#[pyclass]`` objects.
 
-In next, the cumulative forms (``sum``, ``mean``) are :class:`~wingfoil_next.Stream` methods,
-and the full windowed moment surface lives in the engine's ``stats`` layer,
-reached through the :ref:`plugin seam <plugin-seam>` — a Rust ``#[pyop]``
-exposing exactly the window you want, with no ``Window``/``Weighting`` classes
-to construct. That keeps the parameterisation where it can be checked (Rust
-types) instead of in three extra Python classes.
+**Nothing to change** — ``wingfoil_next`` binds the same eight methods with the
+same signatures and the same three argument classes, including the ``int`` /
+``str`` / ``float`` shorthands and the deliberate rejection of a bare ``float``
+window. See :ref:`Statistics <statistics>` for the full surface.
+
+The one thing that moved is *underneath*: next's engine spells each combination
+out as its own statically-checked method (``rolling_mean``,
+``time_windowed_mean``, ``cumulative_mean_time_weighted``, …), and the binding
+is a dispatcher from the two Python knobs onto them. If you would rather skip
+the dispatch and name the engine op directly, the :ref:`plugin seam
+<plugin-seam>` lets a Rust ``#[pyop]`` expose exactly the window you want with
+no ``Window``/``Weighting`` objects to construct.
 
 Custom nodes
 ------------
@@ -358,13 +364,6 @@ Not everything is a rename. Next adds, over the legacy binding:
 Known gaps
 ----------
 
-* **The statistics surface is smaller than legacy's.** Legacy bound
-  ``Window`` / ``Weighting`` / ``EwmaSpan`` over
-  ``mean``/``std``/``var``/``sum``/``min``/``max``/``median``/``ewma``;
-  ``wingfoil_next`` binds the cumulative ``sum``/``mean``/``average`` bridge
-  only. The *engine* has the full surface — it is the binding that stops short,
-  so this is expected to close without any API change to what is documented
-  here.
 * **``dataframe()`` materialises on the run's last cycle.** It assembles the
   frame when :meth:`~wingfoil_next.Stream.dataframe` is cycled *and* the kernel
   says this is the final cycle — so a stream that has already gone quiet by then

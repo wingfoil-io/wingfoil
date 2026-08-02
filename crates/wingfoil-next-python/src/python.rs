@@ -21,6 +21,10 @@ use pyo3::prelude::*;
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::graph::{PyGraph, PyStream};
+use crate::statistics::{
+    Aggregate, Moment, PyEwmaSpan, PyWeighting, PyWindow, py_aggregate, py_ewma, py_median,
+    py_moment,
+};
 use crate::{Activation, Ctx, Op, PyElement, Tick, pyadapter, pygraph, pyop};
 
 /// Map an `anyhow::Error` to a Python exception, preserving the whole context
@@ -274,20 +278,111 @@ impl Stream {
         Stream(self.0.filter_none())
     }
 
-    /// Cumulative running sum over the numeric values.
-    fn sum(&self) -> Stream {
-        Stream(self.0.sum())
+    /// Sum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn sum(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<Stream> {
+        Ok(Stream(py_aggregate(&self.0, Aggregate::Sum, window)?))
     }
 
-    /// Cumulative running mean over the numeric values.
-    fn mean(&self) -> Stream {
-        Stream(self.0.mean())
+    /// Minimum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn min(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<Stream> {
+        Ok(Stream(py_aggregate(&self.0, Aggregate::Min, window)?))
     }
 
-    /// Cumulative running mean over the numeric values (alias for `mean`, the
+    /// Maximum of this stream of numbers over `window` (cumulative by default).
+    /// See `mean` for the accepted `window` forms.
+    #[pyo3(signature = (window=None))]
+    fn max(&self, window: Option<&Bound<'_, PyAny>>) -> PyResult<Stream> {
+        Ok(Stream(py_aggregate(&self.0, Aggregate::Max, window)?))
+    }
+
+    /// Mean of this stream of numbers over `window`.
+    ///
+    /// Args:
+    ///     window: `Window.count(n)`, `Window.seconds(s)`, `Window.unbounded()`,
+    ///         a plain `int` (shorthand for a count window), or `None`
+    ///         (cumulative — the default).
+    ///     weighting: `Weighting.Count` / `"count"` (default) for the ordinary
+    ///         arithmetic mean, or `Weighting.Time` / `"time"` to weight each
+    ///         sample by how long it was in effect.
+    ///
+    /// Returns:
+    ///     A Stream of floats.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn mean(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Stream> {
+        Ok(Stream(py_moment(&self.0, Moment::Mean, window, weighting)?))
+    }
+
+    /// Cumulative running mean over the numeric values (alias for `mean()`, the
     /// legacy method name).
     fn average(&self) -> Stream {
         Stream(self.0.mean())
+    }
+
+    /// Variance of this stream of numbers over `window`.
+    ///
+    /// `Weighting.Count` gives the sample variance (ddof = 1); `Weighting.Time`
+    /// gives the time-weighted population variance. Yields `0.0` until enough
+    /// data is present. See `mean` for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn variance(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Stream> {
+        Ok(Stream(py_moment(
+            &self.0,
+            Moment::Variance,
+            window,
+            weighting,
+        )?))
+    }
+
+    /// Standard deviation over `window` — the square root of `variance` under
+    /// the same weighting. See `mean` for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn std(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Stream> {
+        Ok(Stream(py_moment(&self.0, Moment::Std, window, weighting)?))
+    }
+
+    /// Median of this stream of numbers over `window`.
+    ///
+    /// `Weighting.Time` gives the time-weighted median (the value at which
+    /// cumulative in-effect time crosses one half). Over an unbounded window
+    /// this retains every sample, so memory grows with the stream. See `mean`
+    /// for the argument forms.
+    #[pyo3(signature = (window=None, weighting=None))]
+    fn median(
+        &self,
+        window: Option<&Bound<'_, PyAny>>,
+        weighting: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Stream> {
+        Ok(Stream(py_median(&self.0, window, weighting)?))
+    }
+
+    /// Exponentially weighted moving average of this stream of numbers.
+    ///
+    /// Args:
+    ///     span: `EwmaSpan.per_tick(alpha)` for a fixed smoothing factor
+    ///         applied once per tick, `EwmaSpan.half_life(seconds)` to decay by
+    ///         elapsed graph time, or a plain `float` (shorthand for
+    ///         `per_tick`). The first sample seeds the average.
+    ///
+    /// Returns:
+    ///     A Stream of floats.
+    fn ewma(&self, span: &Bound<'_, PyAny>) -> PyResult<Stream> {
+        Ok(Stream(py_ewma(&self.0, span)?))
     }
 
     /// Combine with `other` through `func(this_value, other_value)`, called
@@ -700,6 +795,11 @@ fn parse_log_level(level: &str) -> PyResult<log::Level> {
 fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
+    // The statistics argument objects: `Window` / `Weighting` / `EwmaSpan`
+    // parameterise the `Stream` moment methods above.
+    m.add_class::<PyWindow>()?;
+    m.add_class::<PyWeighting>()?;
+    m.add_class::<PyEwmaSpan>()?;
     m.add_function(wrap_pyfunction!(scale, m)?)?;
     m.add_function(wrap_pyfunction!(square, m)?)?;
     m.add_function(wrap_pyfunction!(running_total, m)?)?;

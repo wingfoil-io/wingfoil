@@ -25,7 +25,8 @@ Quick index
 -----------
 
 **Core types**: :class:`~wingfoil_next.Graph`, :class:`~wingfoil_next.Stream`,
-:class:`~wingfoil_next.CustomStream`.
+:class:`~wingfoil_next.CustomStream`; plus the statistics argument objects
+``Window``, ``Weighting`` and ``EwmaSpan``.
 
 **Sources (methods on** :class:`~wingfoil_next.Graph` **)**:
 
@@ -46,17 +47,14 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 
 *Combine* — ``merge``, ``merge_all``.
 
-*Aggregate* — ``count``, ``sum``, ``mean`` (alias ``average``), ``accumulate``,
-``buffer``, ``window``, ``collect``, ``with_time``.
+*Aggregate* — ``count``, ``accumulate``, ``buffer``, ``window``, ``collect``,
+``with_time``; plus the statistics operators below.
 
 *Observe* — ``inspect``, ``print``, ``logged``, ``dataframe``, ``value``.
 
-**Statistics**: cumulative ``sum`` / ``mean`` are on
-:class:`~wingfoil_next.Stream`. The windowed moment surface (``variance``,
-``std``, ``median``, rolling windows, ``ewma``) lives in the Rust
-``wingfoil_next::stats`` layer and reaches Python through the plugin seam
-rather than as fixed :class:`~wingfoil_next.Stream` methods — see
-`Plugin seam`_.
+**Statistics** — ``mean``, ``variance``, ``std``, ``median``,
+``sum``, ``min``, ``max``, ``ewma``, parameterised by ``Window`` /
+``Weighting`` / ``EwmaSpan``; see `Statistics`_ below.
 
 **pandas** — ``stream.dataframe()`` frames a single stream; the free function
 ``build_dataframe({name: stream, ...})`` outer-joins several already-run streams
@@ -88,6 +86,82 @@ Core types
    :no-index:
 
 .. autoclass:: wingfoil_next.Stream
+   :members:
+   :undoc-members:
+   :no-index:
+
+.. _statistics:
+
+Statistics
+----------
+
+Every statistic is a method on :class:`~wingfoil_next.Stream` taking two
+orthogonal knobs — a **window** (how much history) and, for the moment
+operators, a **weighting** (how each sample counts). Values are read as ``float``
+at the edge, so a non-numeric value aborts the run naming the operator.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Method
+     - Meaning
+   * - ``mean(window=None, weighting=None)``
+     - Arithmetic mean. ``average()`` is a no-argument alias for the
+       cumulative form (the legacy method name).
+   * - ``variance(window=None, weighting=None)``
+     - ``Weighting.Count`` gives the sample variance (ddof = 1);
+       ``Weighting.Time`` the time-weighted population variance. ``0.0`` until
+       enough data is present.
+   * - ``std(window=None, weighting=None)``
+     - The square root of ``variance`` under the same weighting.
+   * - ``median(window=None, weighting=None)``
+     - An even sample count averages the two middle values. Over an unbounded
+       window this retains every sample, so memory grows with the stream.
+   * - ``sum(window=None)`` / ``min(window=None)`` / ``max(window=None)``
+     - Unweighted aggregates — window only.
+   * - ``ewma(span)``
+     - Exponentially weighted moving average; the first sample seeds it.
+
+**Window** — ``Window.count(n)`` (the most recent ``n`` samples),
+``Window.seconds(s)`` (everything seen in the last ``s`` of graph time; a
+sample exactly that old is still in the window), or ``Window.unbounded()``
+(cumulative). A plain ``int`` is shorthand for ``Window.count(n)`` and ``None``
+(the default) for ``Window.unbounded()``. A bare ``float`` is **rejected**:
+``mean(10)`` and ``mean(10.0)`` would mean wildly different things, so a time
+window must say so with ``Window.seconds(...)``.
+
+**Weighting** — ``Weighting.Count`` (the default; every sample counts equally)
+or ``Weighting.Time`` (each sample weighted by how long it was in effect, so
+the newest sample carries no weight until the clock advances). The strings
+``"count"`` and ``"time"`` work too.
+
+**EwmaSpan** — ``EwmaSpan.per_tick(alpha)`` for a fixed smoothing factor
+applied once per tick, or ``EwmaSpan.half_life(seconds)`` to decay by elapsed
+graph time independent of tick rate. A plain ``float`` is shorthand for
+``per_tick``; an ``alpha`` outside ``[0, 1]`` raises rather than producing a
+silently diverging average.
+
+.. code-block:: python
+
+   from wingfoil_next import EwmaSpan, Weighting, Window
+
+   prices.mean()                              # cumulative, count weighted
+   prices.mean(10)                            # last 10 samples
+   prices.std(Window.seconds(5.0), "time")    # 5s of graph time, time weighted
+   prices.ewma(EwmaSpan.half_life(30.0))
+
+.. autoclass:: wingfoil_next.Window
+   :members:
+   :undoc-members:
+   :no-index:
+
+.. autoclass:: wingfoil_next.Weighting
+   :members:
+   :undoc-members:
+   :no-index:
+
+.. autoclass:: wingfoil_next.EwmaSpan
    :members:
    :undoc-members:
    :no-index:

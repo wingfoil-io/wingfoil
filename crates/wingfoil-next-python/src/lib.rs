@@ -31,6 +31,7 @@ pub mod latency;
 #[macro_use]
 mod macros;
 mod python;
+pub mod statistics;
 
 pub use element::PyElement;
 pub use graph::{PyGraph, PyStream};

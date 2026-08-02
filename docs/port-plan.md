@@ -1526,12 +1526,16 @@ tests covered — not "legacy pytest passes unchanged."
   state has no engine reset hook); next-python *regular* graphs re-run.
 - **Surface build-out** ✅ *landed*: `PyStream`/`PyGraph` cover the legacy
   combinator surface — `fold`/`sample`/`count`/`limit`/`difference`/
-  `with_time`/`collect`/`buffer`/`window`/`not_`, the `sum`/`mean` statistics
-  bridge, plus `filter_map`/`filter_value`/`filter_none`/`reduce`/`bimap`/
-  `split`/`dataframe` (all in `graph.rs`, each with a unit test), and the free
-  `build_dataframe` that outer-joins several run streams on time (legacy's
-  `pandas_helpers.build_dataframe`, likewise built in Rust). The per-adapter
-  bindings that followed are the next bullet.
+  `with_time`/`collect`/`buffer`/`window`/`not_`, plus
+  `filter_map`/`filter_value`/`filter_none`/`reduce`/`bimap`/`split`/`dataframe`
+  (all in `graph.rs`, each with a unit test), and the free `build_dataframe`
+  that outer-joins several run streams on time (legacy's
+  `pandas_helpers.build_dataframe`, likewise built in Rust). The **statistics**
+  surface — `mean`/`variance`/`std`/`sum`/`min`/`max`/`median`/`ewma`
+  parameterised by `Window`/`Weighting`/`EwmaSpan` — lives in `statistics.rs`, a
+  dispatcher onto the engine's `StatisticsOps`, with `tests/test_statistics.py`
+  as the legacy parity twin. The per-adapter bindings that followed are the next
+  bullet.
 - **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
@@ -1827,14 +1831,16 @@ tests covered — not "legacy pytest passes unchanged."
     `test_build_dataframe_skips_empty_streams`) are ported one for one. The
     remaining 7 cover `to_dataframe`, a pure-Python list-to-frame converter with
     no next counterpart by design (next builds the frame in the engine).
-  - `test_statistics.py` (37) → **not ported**. Legacy `py_statistics.rs` binds
-    the whole statistics adapter (`Window` / `Weighting` / `EwmaSpan` and their
-    int/str/float shorthands over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/
-    `ewma`); next-python binds only the cumulative `sum`/`mean`/`average` bridge
-    named in the "Surface build-out" bullet above. The engine has the full
-    surface (`stats.rs`, ported in Phase 2) — it is the *binding* that stops
-    short. Legacy grew this binding after that bullet was written, so the parity
-    target moved.
+  - `test_statistics.py` (37) → `crates/wingfoil-next-python/tests/test_statistics.py`,
+    one for one (cutover-plan row 3.7). `src/statistics.rs` binds the same
+    `Window` / `Weighting` / `EwmaSpan` classes and their int/str/float
+    shorthands over `mean`/`variance`/`std`/`sum`/`min`/`max`/`median`/`ewma`.
+    The binding is a **dispatcher**: legacy's two orthogonal knobs resolve onto
+    the engine's one-method-per-combination `StatisticsOps` surface (`stats.rs`,
+    ported in Phase 2), so no engine work was involved. Legacy grew this binding
+    after the "Surface build-out" bullet above was written, which is how the
+    parity target moved under an already-ticked bullet — the case row 3.9
+    generalises.
 
   **Gaps found and closed in the audit's own PR** (next had the capability, and
   nothing exercised it): `delay` and 2-ary `merge`; `run(duration_nanos=…)`,
@@ -1853,10 +1859,10 @@ tests covered — not "legacy pytest passes unchanged."
   only the *ran but never ticked* case. Legacy `peek_value` answers `None`
   there, so `value()` now returns the empty element in both.
 
-  **Remaining** — missing *binding surface*, not missing tests, so it belongs to
-  "Surface build-out" rather than here: the statistics adapter binding.
-  (`build_dataframe` was the other one; it landed — see the `test_pandas.py`
-  entry above.)
+  **Remaining** — nothing. The two outstanding items were both missing *binding
+  surface* rather than missing tests: the statistics adapter binding and
+  `build_dataframe`. Both have landed (cutover-plan rows 3.7 and 3.8) — see the
+  `test_statistics.py` and `test_pandas.py` entries above.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

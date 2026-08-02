@@ -443,6 +443,45 @@ A post-run helper has no `nitro!`/compiled obligation (steps 5–6 do not apply)
 but it still owes a Rust unit test beside the other `graph.rs` tests and a
 pytest.
 
+**A *family* of ops binds as one dispatcher, not one function per op.** The
+op-per-binding assumption above breaks whenever the legacy Python contract
+parameterises a whole family with argument *objects*. The statistics surface is
+the worked example (`crates/wingfoil-next-python/src/statistics.rs`): the engine
+spells out ~40 methods on `StatisticsOps` (`rolling_mean`,
+`time_windowed_mean`, `cumulative_mean_time_weighted`, …) because Rust affords a
+wide statically-checked surface; legacy Python offered eight methods times two
+orthogonal knobs (`Window`, `Weighting`). Neither `#[pyop]` nor `pyop_fn!` can
+express that — **which op to wire is runtime data**, decided after the arguments
+are resolved — so the binding is a hand-written dispatcher over
+`Stream::wire`. Rules that fell out of it:
+
+- **The binding surface is the legacy binding's, not the engine's.** Do not
+  expose one Python function per engine method just because they exist; the
+  parity target is legacy's method list and its `int`/`str`/`float` shorthands.
+  Exhaustive `match` on the resolved knobs is the guard — a new engine
+  combination becomes a compile error in the dispatcher.
+- **A `#[pyclass]` used as an *argument* needs `from_py_object`.** On pyo3 0.29,
+  `#[pyclass(eq, frozen)]` alone leaves the `FromPyObject` derive deprecated, so
+  `arg.extract::<PyWindow>()` warns (and will stop compiling). Spell it
+  `#[pyclass(name = "Window", frozen, eq, from_py_object)]`, and register the
+  class in the `#[pymodule]` next to `Graph`/`Stream`.
+- **Validate at the boundary what the op only `debug_assert!`s.** `Ewma`
+  debug-asserts `alpha ∈ [0, 1]`; a release wheel would otherwise return a
+  silently diverging average, so `EwmaSpan.per_tick` raises `ValueError`. Any
+  `debug_assert!` in an op is a Python-visible hole until the binding closes it.
+- **Give a typed-edge family one labelled conversion seam.** Ops on
+  `Stream<f64>` need `PyElement → f64 → PyElement` at both ends;
+  `PyStream::wire_float_stat(op, |s| …)` does it once and names `op` in the
+  error, so a non-numeric value reports *which* operator demanded a number
+  (legacy's `as_floats` contract). Don't repeat `try_map(f64::try_from)` per
+  method.
+- **Reject an ambiguous shorthand rather than guessing.** `mean(10)` (ten
+  samples) and `mean(10.0)` (ten seconds?) cannot both be right, so a bare
+  `float` window is a `TypeError` pointing at `Window.seconds(...)`. Note that
+  `extract::<usize>` goes through `__index__`, so a `float` falls through to
+  that error instead of being silently truncated — the ordering of the
+  `extract` attempts is load-bearing.
+
 ## 8. Roadmap bookkeeping
 
 Update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory

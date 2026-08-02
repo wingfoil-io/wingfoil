@@ -25,16 +25,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
-use wingfoil_next::stats::StatisticsOps;
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::PyElement;
+use crate::statistics::{self, Aggregate, Moment, Weighting, Window};
 
 /// The runner produced by [`PyGraph::run`], shared by the graph and every
 /// [`PyStream`] wired from it so `value()` works on whichever you kept.
@@ -617,22 +617,39 @@ impl PyStream {
         })
     }
 
+    /// Wire a statistics op onto this stream: read each value as `f64` at the
+    /// edge, hand the typed stream to `wire`, and re-box its `f64` output as a
+    /// float [`PyElement`].
+    ///
+    /// The seam every [`crate::statistics`] binding goes through — the erased
+    /// surface only ever sees `PyElement`, while the engine's
+    /// [`StatisticsOps`](wingfoil_next::stats::StatisticsOps) run natively on
+    /// `f64`. `op` names the caller in the conversion error, so a non-numeric
+    /// value reports *which* operator demanded a number rather than a bare
+    /// conversion failure (the legacy `as_floats` contract).
+    pub fn wire_float_stat<F>(&self, op: &'static str, wire: F) -> PyStream
+    where
+        F: FnOnce(&Stream<f64>) -> Stream<f64>,
+    {
+        let as_f64 = self.stream.try_map(move |e: &PyElement| {
+            f64::try_from(e).with_context(|| format!("{op}: expected a float input value"))
+        });
+        self.wrap(wire(&as_f64).map(|v: &f64| PyElement::from(*v)))
+    }
+
     /// Cumulative running **sum** over the values (the legacy `sum`,
-    /// `Window::Unbounded`). Each value is read as `f64` at the edge — a
-    /// non-numeric value aborts the run with context — and the running total is
-    /// re-boxed as a float [`PyElement`].
+    /// `Window::Unbounded`). The windowed forms go through
+    /// [`crate::statistics::aggregate`]; this is the shorthand the erased
+    /// object form exposes directly.
     pub fn sum(&self) -> PyStream {
-        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
-        self.wrap(as_f64.cumulative_sum().map(|v: &f64| PyElement::from(*v)))
+        statistics::aggregate(self, Aggregate::Sum, Window::Unbounded)
     }
 
     /// Cumulative running **mean** over the values (the legacy `mean` /
-    /// `average`, `Window::Unbounded`, count-weighted). Values are read as `f64`
-    /// at the edge (a non-numeric value aborts the run) and the running mean is
-    /// re-boxed as a float [`PyElement`].
+    /// `average`, `Window::Unbounded`, count-weighted). The windowed and
+    /// time-weighted forms go through [`crate::statistics::moment`].
     pub fn mean(&self) -> PyStream {
-        let as_f64 = self.stream.try_map(|e: &PyElement| f64::try_from(e));
-        self.wrap(as_f64.cumulative_mean().map(|v: &f64| PyElement::from(*v)))
+        statistics::moment(self, Moment::Mean, Window::Unbounded, Weighting::Count)
     }
 
     /// Combine this stream with `other` through a Python callable (the legacy
