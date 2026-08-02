@@ -1494,10 +1494,12 @@ tests covered — not "legacy pytest passes unchanged."
   a `cycle(values) -> bool` + `peek()` protocol), so a Python object can be a
   graph node (legacy's `CustomStream`). Single-run in v1 (caller-owned Python
   state has no engine reset hook); next-python *regular* graphs re-run.
-- **Surface build-out** 🟡 *in progress*: grow `PyStream`/`PyGraph` to cover
-  the legacy combinator surface (`fold`/`sample`/`count`/`limit`/`difference`/
-  `with_time`/`collect`/`buffer`/`window`/`not`, a `sum`/`mean` statistics
-  bridge), then the per-adapter Python bindings as each Rust adapter lands.
+- **Surface build-out** ✅ *landed*: `PyStream`/`PyGraph` cover the legacy
+  combinator surface — `fold`/`sample`/`count`/`limit`/`difference`/
+  `with_time`/`collect`/`buffer`/`window`/`not_`, the `sum`/`mean` statistics
+  bridge, plus `filter_map`/`filter_value`/`filter_none`/`reduce`/`bimap`/
+  `split`/`dataframe` (all in `graph.rs`, each with a unit test). The
+  per-adapter bindings that followed are the next bullet.
 - **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
@@ -1677,12 +1679,14 @@ tests covered — not "legacy pytest passes unchanged."
   become strings (legacy had two `#[pyclass]` enums). One legacy capability is
   deliberately **not** ported: the `stages` latency-tracing path, which split a
   `[u64; N]` header off each sample into `TracedBytes` / `Latency` pyclasses.
-  Those belong to legacy's `latency` module, which has no next equivalent yet;
-  they return with the tracing port, and that is recorded here rather than
-  faked. Its round-trip tier needs no service at all — the `"local"` variant
+  It is blocked on the **next-python latency surface** (see the separate
+  bullet below), not on the engine — `wingfoil-next/src/latency.rs` landed in
+  Phase 5, so the earlier wording here, that these types "belong to legacy's
+  `latency` module, which has no next equivalent yet", named the wrong
+  blocker. Its round-trip tier needs no service at all — the `"local"` variant
   talks in-process over the heap, and `"ipc"` is daemonless.
 
-  **Remaining: 0 — the Python binding surface is complete.** Legacy
+  **Remaining: 0 — the per-adapter binding surface is complete.** Legacy
   `wingfoil-python` binds 15 adapters, in four tiers, all now done:
   - *mechanical* — **done**: kafka, redis, etcd, fluvio, csv, zmq;
   - *dynamic payload* — **done**: kdb, fix;
@@ -1706,6 +1710,20 @@ tests covered — not "legacy pytest passes unchanged."
   system library at build time (aeron, iceoryx2) must not join the
   `all-adapters` roll-up that `next-python-test.yml` builds without that job
   also gaining the toolchain install.
+- **Python latency surface** ⏳ *not started* — the one legacy Python
+  capability next-python does not yet have, and the last non-adapter gap in
+  the binding. Legacy ships a whole `py_latency` module
+  (`wingfoil-python/src/py_latency.rs`): `Latency` and `TracedBytes`
+  pyclasses, a *runtime* stage list (Python cannot name a compile-time `Stage`
+  type, so stages are `Vec<String>` and stamping goes by index), and
+  `PyStampNode` / `PyLatencyReportNode`. It is what legacy's iceoryx2 `stages`
+  argument is built on — that argument splits a `[u64; N]` little-endian
+  header off each raw sample into `TracedBytes`, which is why the iceoryx2
+  binding above could not port it. The **engine** side is not the blocker:
+  `wingfoil-next/src/latency.rs` landed in Phase 5. What the binding needs is
+  the dynamic-stage twin of it, in the same shape as the other
+  dynamic-payload bindings (kdb, fix). Scoped as its own change, not folded
+  into an adapter binding.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form
@@ -1715,18 +1733,30 @@ tests covered — not "legacy pytest passes unchanged."
   keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
   breadth_first, run_mode, statistics, threading, async, feedback, and the
   runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`),
-  `tracing` (the `log` mode — the `logged` debug tap through `env_logger`), and
+  `tracing` (the `log` mode — the `logged` debug tap through `env_logger`),
   `latency` (`examples/latency/{pub,sub}.rs` — the cross-process
   `latency_stages!` + `Traced` + `.stamp::<Stage>()` + `latency_report` loop
   over an iceoryx2 hop, closing the Phase-5 infrastructure end to end; it fixes
-  two defects in the classic pair, see that example's README).
-  Remaining: `telemetry` (adapter/cross-process); and the `tracing`
-  example's other two modes — `tracing` (route events through a
-  `tracing-subscriber`) and `instruments` (engine spans around `run`/cycle) —
-  which are ⏳ *blocked* on porting next's `tracing` / `instrument-*` engine
-  features (the op catalog logs through `log` only, and the engine has no span
-  instrumentation yet). Tracked as a Phase-6 follow-up, landing with the
-  instrumentation port, not as example work.
+  two defects in the classic pair, see that example's README), and `telemetry`.
+
+  **`telemetry`** was already ported as graph code — `prometheus_adapter.rs`
+  and `otlp_adapter.rs`. What landed now is the rest of the classic example:
+  the pull-vs-push guide, a self-contained Grafana + Prometheus compose stack
+  (`examples/telemetry/docker/`), and a `run.sh` that brings it up and launches
+  either example. **Deviations**: one `run.sh` taking the example name instead
+  of classic's two near-identical scripts; the compose file lives with the
+  example rather than under the adapter source tree (classic keeps it there
+  because its integration tests share it — next's adapter tests need no
+  stack); and no `grafana-init` service, which exists to mint a Grafana API
+  token for those classic tests that no example reads (classic's `otlp/run.sh`
+  blocked up to 30s waiting on a token it never used).
+
+  Remaining: the `tracing` example's other two modes — `tracing` (route events
+  through a `tracing-subscriber`) and `instruments` (engine spans around
+  `run`/cycle) — which are ⏳ *blocked* on porting next's `tracing` /
+  `instrument-*` engine features (the op catalog logs through `log` only, and
+  the engine has no span instrumentation yet). Tracked as a Phase-6 follow-up,
+  landing with the instrumentation port, not as example work.
 - **Benchmarks**: the four-way `tiers` bench 🟢 *landed* — each workload now
   runs a `classic` (legacy interpreted) bar beside next's
   `interpreted`/`compiled`/`nested`, so `next-interpreted ≥ classic-interpreted`
