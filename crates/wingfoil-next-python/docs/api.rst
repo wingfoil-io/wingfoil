@@ -58,6 +58,11 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 rather than as fixed :class:`~wingfoil_next.Stream` methods — see
 `Plugin seam`_.
 
+**pandas** — ``stream.dataframe()`` frames a single stream; the free function
+``build_dataframe({name: stream, ...})`` outer-joins several already-run streams
+on their engine time into one frame, one column per key. Columns may be held as
+frames (``dataframe()``) or as ``(time, value)`` tuples (``collect()``).
+
 **Rust-authored demo components** (the plugin seam, proven end to end):
 ``scale``, ``square``, ``running_total``, ``weighted_add``, ``blend3``,
 ``blend4``, ``clamped_scale``, ``doubled_running_total``, ``spread_and_mid``,

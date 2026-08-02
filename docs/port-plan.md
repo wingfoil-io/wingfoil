@@ -1528,8 +1528,10 @@ tests covered — not "legacy pytest passes unchanged."
   combinator surface — `fold`/`sample`/`count`/`limit`/`difference`/
   `with_time`/`collect`/`buffer`/`window`/`not_`, the `sum`/`mean` statistics
   bridge, plus `filter_map`/`filter_value`/`filter_none`/`reduce`/`bimap`/
-  `split`/`dataframe` (all in `graph.rs`, each with a unit test). The
-  per-adapter bindings that followed are the next bullet.
+  `split`/`dataframe` (all in `graph.rs`, each with a unit test), and the free
+  `build_dataframe` that outer-joins several run streams on time (legacy's
+  `pandas_helpers.build_dataframe`, likewise built in Rust). The per-adapter
+  bindings that followed are the next bullet.
 - **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
@@ -1814,12 +1816,17 @@ tests covered — not "legacy pytest passes unchanged."
     inside `adapters/web.rs` (`bytes_marshal_as_an_array_of_ints`, the i64/u64/
     beyond-u64 ladder). Legacy's "silently becomes null" cases invert: next
     fails loudly, and `test_web.py` asserts the errors.
-  - `test_pandas.py` (12) → partially. `stream.dataframe()` builds the frame in
-    Rust (`test_interop.py::test_dataframe_from_stream`, `examples/dataframe.py`)
-    where legacy returned `(time, value)` tuples for a Python helper to assemble.
-    The **multi-stream** half — `pandas_helpers.build_dataframe`, which
-    outer-joins several streams on time (`test_dict_of_streams`,
-    `test_async_frequencies`, `test_massive_fan_out`) — has no next equivalent.
+  - `test_pandas.py` (12) → `test_pandas.py`. `stream.dataframe()` builds the
+    frame in Rust (`test_interop.py::test_dataframe_from_stream`,
+    `examples/dataframe.py`) where legacy returned `(time, value)` tuples for a
+    Python helper to assemble — legacy's tuple shape is next's `collect()`. The
+    **multi-stream** half — `pandas_helpers.build_dataframe`, which outer-joins
+    several streams on time — is now `wingfoil_next.build_dataframe`, also built
+    in Rust; its 4 legacy tests (`test_dict_of_streams`,
+    `test_async_frequencies`, `test_massive_fan_out`,
+    `test_build_dataframe_skips_empty_streams`) are ported one for one. The
+    remaining 7 cover `to_dataframe`, a pure-Python list-to-frame converter with
+    no next counterpart by design (next builds the frame in the engine).
   - `test_statistics.py` (37) → **not ported**. Legacy `py_statistics.rs` binds
     the whole statistics adapter (`Window` / `Weighting` / `EwmaSpan` and their
     int/str/float shorthands over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/
@@ -1846,9 +1853,10 @@ tests covered — not "legacy pytest passes unchanged."
   only the *ran but never ticked* case. Legacy `peek_value` answers `None`
   there, so `value()` now returns the empty element in both.
 
-  **Remaining** — both are missing *binding surface*, not missing tests, so they
-  belong to "Surface build-out" rather than here: the statistics adapter
-  binding, and a multi-stream `build_dataframe` equivalent.
+  **Remaining** — missing *binding surface*, not missing tests, so it belongs to
+  "Surface build-out" rather than here: the statistics adapter binding.
+  (`build_dataframe` was the other one; it landed — see the `test_pandas.py`
+  entry above.)
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form

@@ -127,9 +127,18 @@ Changed or added:
      - ``stream.inspect(f)`` for the pass-through tap. Legacy needed the
        ``Node``-returning terminals because ``run`` hung off a node; next runs
        the graph, so a tap that keeps flowing is the only shape needed.
-   * - ``to_dataframe`` / ``build_dataframe`` (free functions)
-     - ``stream.dataframe()`` — the same pandas frame (columns ``time`` /
-       ``value``), read back with ``.value()`` after the run
+   * - ``stream.dataframe()`` (a list of ``(time, value)`` tuples)
+     - ``stream.collect()`` — the same growing list of pairs, with the time in
+       nanoseconds as an int rather than seconds as a float. ``dataframe()`` in
+       next is the upgrade: a real ``pandas.DataFrame`` (columns ``time`` /
+       ``value``) assembled in Rust, read back with ``.value()`` after the run
+   * - ``to_dataframe`` (free function)
+     - ``stream.dataframe()`` — next builds the frame in the engine, so there is
+       no list-to-frame converter to call
+   * - ``build_dataframe({name: stream})`` (free function)
+     - ``wingfoil_next.build_dataframe({name: stream})`` — same call, same outer
+       join on time. Columns may be held either as frames (``dataframe()``) or
+       as ``(time, value)`` tuples (``collect()``, the legacy shape)
    * - *(new)*
      - ``merge``, ``merge_all``, ``throttle``, ``window``, ``accumulate``,
        ``reduce``, ``filter_map``, ``filter_value``, ``filter_none``,
@@ -356,11 +365,15 @@ Known gaps
   only. The *engine* has the full surface — it is the binding that stops short,
   so this is expected to close without any API change to what is documented
   here.
-* **No multi-stream ``build_dataframe``.** Legacy's ``pandas_helpers.build_dataframe``
-  outer-joined several streams on time. :meth:`~wingfoil_next.Stream.dataframe`
-  frames a single stream — and does it better, building a real
-  ``pandas.DataFrame`` in Rust where legacy returned ``(time, value)`` tuples
-  for a Python helper to assemble. Only the multi-stream join is missing.
+* **``dataframe()`` materialises on the run's last cycle.** It assembles the
+  frame when :meth:`~wingfoil_next.Stream.dataframe` is cycled *and* the kernel
+  says this is the final cycle — so a stream that has already gone quiet by then
+  (a slower ticker, a stream behind ``limit``) never reaches the build step and
+  its value stays ``None``. Legacy's ``dataframe()`` re-emitted its rows on every
+  tick and had no such edge; next's equivalent of that shape is
+  :meth:`~wingfoil_next.Stream.collect`, so nothing is lost — reach for
+  ``collect()`` when a stream may be silent at the end, including as a column of
+  ``build_dataframe``.
 * **ZeroMQ cross-language interop** with a *legacy* Rust/Python peer is not
   guaranteed: next's ``bincode`` envelope is its own. Two next peers
   interoperate, and so does a next Python peer with a next Rust peer publishing

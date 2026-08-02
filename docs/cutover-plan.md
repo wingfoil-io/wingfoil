@@ -122,7 +122,7 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 | # | Item | Size |
 |:--:|---|:--:|
 | 3.7 | **The statistics Python binding stops short of legacy.** Legacy `legacy/wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. The engine already has the whole surface (`crates/wingfoil-next/src/stats.rs`, with parity tests), so this is binding work, not engine work. 37 legacy tests have nowhere to map. | M |
-| 3.8 | **No multi-stream `build_dataframe` in next-python.** Legacy `pandas_helpers.build_dataframe` outer-joins several streams on time; next's `dataframe()` frames a single stream. 4 legacy tests have nowhere to map. The single-stream half is already ahead of legacy (a real `pandas.DataFrame` built in Rust), so only the multi-stream join is missing. | S |
+| 3.8 | ✅ **Multi-stream `build_dataframe` in next-python — landed.** `wingfoil_next.build_dataframe({name: stream})` outer-joins several already-run streams on engine time, built in Rust beside the single-stream `dataframe()` rather than as a Python helper. Columns may be held as frames (`dataframe()`) or as `(time, value)` tuples (`collect()`, legacy's shape). All 4 legacy tests ported to `crates/wingfoil-next-python/tests/test_pandas.py`; the legacy `to_dataframe` tests have no counterpart by design (next builds the frame in the engine) — noted in `docs/migration.rst`. | S |
 
 Row **3.9** (sweep the legacy tree for drift since each phase was ticked) has
 run; the findings are below, and it adds no rows.

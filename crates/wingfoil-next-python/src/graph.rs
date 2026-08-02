@@ -1150,6 +1150,143 @@ impl PyStream {
     }
 }
 
+/// Normalise one already-run column into a `time`-indexed single-column pandas
+/// `DataFrame`, or `None` when the stream has nothing to contribute.
+///
+/// Two input shapes are accepted, because next has two ways to hold a stream's
+/// history and both are legitimate inputs to the join:
+///
+/// - a pandas `DataFrame` with `time` / `value` columns — what
+///   [`PyStream::dataframe`] produces;
+/// - an iterable of `(time, value)` pairs — what [`PyStream::collect`] produces,
+///   and the *only* shape legacy had (legacy's `dataframe()` was next's
+///   `collect()`; see `docs/migration.rst`).
+///
+/// An empty column contributes nothing, mirroring legacy's `if not val:
+/// continue`. Emptiness is tested by length rather than truthiness because a
+/// `DataFrame` raises on `bool()`.
+fn column_frame<'py>(
+    py: Python<'py>,
+    pandas: &Bound<'py, PyAny>,
+    name: &str,
+    element: &PyElement,
+) -> Result<Option<Bound<'py, PyAny>>> {
+    if element.is_none() {
+        return Ok(None);
+    }
+    let value = element.object().bind(py);
+    let frame_type = pandas
+        .getattr("DataFrame")
+        .map_err(|err| anyhow::anyhow!("pandas.DataFrame lookup failed: {err}"))?;
+    let (times, values) = if value
+        .is_instance(&frame_type)
+        .map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?}: {err}"))?
+    {
+        let column = |key: &str| -> Result<Bound<'py, PyAny>> {
+            value
+                .get_item(key)
+                .and_then(|series| series.call_method0("tolist"))
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "build_dataframe() column {name:?}: frame has no usable {key:?} column: {err}"
+                    )
+                })
+        };
+        (column("time")?, column("value")?)
+    } else {
+        let rows = value.try_iter().map_err(|err| {
+            anyhow::anyhow!(
+                "build_dataframe() column {name:?}: expected a DataFrame or an iterable of \
+                 (time, value) pairs: {err}"
+            )
+        })?;
+        let mut times = Vec::new();
+        let mut values = Vec::new();
+        for row in rows {
+            let row =
+                row.map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?}: {err}"))?;
+            let pair = |i: usize| -> Result<Bound<'py, PyAny>> {
+                row.get_item(i).map_err(|err| {
+                    anyhow::anyhow!(
+                        "build_dataframe() column {name:?}: row is not a (time, value) pair: {err}"
+                    )
+                })
+            };
+            times.push(pair(0)?);
+            values.push(pair(1)?);
+        }
+        let to_list = |items: Vec<Bound<'py, PyAny>>| -> Result<Bound<'py, PyAny>> {
+            Ok(pyo3::types::PyList::new(py, items)
+                .map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?}: {err}"))?
+                .into_any())
+        };
+        (to_list(times)?, to_list(values)?)
+    };
+    let len = times
+        .len()
+        .map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?}: {err}"))?;
+    if len == 0 {
+        return Ok(None);
+    }
+    let columns = pyo3::types::PyDict::new(py);
+    columns
+        .set_item("time", times)
+        .and_then(|()| columns.set_item(name, values))
+        .map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?} build: {err}"))?;
+    pandas
+        .call_method1("DataFrame", (columns,))
+        .and_then(|frame| frame.call_method1("set_index", ("time",)))
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("build_dataframe() column {name:?}: {err}"))
+}
+
+/// Outer-join several already-run streams on their engine time into one pandas
+/// `DataFrame` — the legacy `pandas_helpers.build_dataframe`.
+///
+/// Each `(name, value)` pair becomes one column named `name`, indexed by the
+/// stream's tick times; the columns are concatenated with an **outer** join, so
+/// a time at which one stream ticked and another did not yields `NaN` for the
+/// quiet one. Column order follows the order the pairs are supplied in. The
+/// `time` index is restored as the leading column, so the result reads
+/// `time, <name>, <name>, …` exactly as legacy's did.
+///
+/// Streams that produced nothing are skipped (legacy's `if not val: continue`);
+/// if that leaves no columns at all the result is an empty `DataFrame`.
+///
+/// `pandas` is imported lazily here, for the same reason
+/// [`PyStream::dataframe`] does it: only a caller that actually joins frames
+/// needs it, and a missing pandas aborts with context rather than at import.
+pub fn build_dataframe(columns: &[(String, PyElement)]) -> Result<Py<PyAny>> {
+    Python::attach(|py| {
+        let pandas = py
+            .import("pandas")
+            .map_err(|err| anyhow::anyhow!("build_dataframe() needs pandas: {err}"))?;
+        let pandas = pandas.as_any();
+        let mut frames = Vec::with_capacity(columns.len());
+        for (name, element) in columns {
+            if let Some(frame) = column_frame(py, pandas, name, element)? {
+                frames.push(frame);
+            }
+        }
+        if frames.is_empty() {
+            return pandas
+                .call_method0("DataFrame")
+                .map(|frame| frame.unbind())
+                .map_err(|err| anyhow::anyhow!("pandas.DataFrame raised: {err}"));
+        }
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("axis", 1)
+            .and_then(|()| kwargs.set_item("join", "outer"))
+            .map_err(|err| anyhow::anyhow!("build_dataframe() concat arguments: {err}"))?;
+        pandas
+            .call_method("concat", (frames,), Some(&kwargs))
+            .and_then(|joined| joined.call_method0("reset_index"))
+            .map(|joined| joined.unbind())
+            .map_err(|err| anyhow::anyhow!("pandas.concat raised: {err}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1380,6 +1517,120 @@ mod tests {
         });
         assert_eq!(vec![0, 100, 200], times);
         assert_eq!(vec![1, 2, 3], values);
+    }
+
+    /// Read one column of a pandas frame as a `Vec<T>`.
+    fn frame_column<T>(frame: &Py<PyAny>, name: &str) -> Vec<T>
+    where
+        T: for<'a, 'py> pyo3::FromPyObject<'a, 'py>,
+    {
+        Python::attach(|py| {
+            frame
+                .bind(py)
+                .call_method1("__getitem__", (name,))
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap()
+        })
+    }
+
+    #[test]
+    fn build_dataframe_joins_synchronous_columns() {
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        let g = PyGraph::new();
+        let source = g.counter(Duration::from_nanos(100));
+        let a = source.map(lambda("lambda i: i - 1")).dataframe();
+        let b = source.map(lambda("lambda i: (i - 1) * 2")).dataframe();
+        run_cycles(&g, 3);
+        let joined = build_dataframe(&[
+            ("col_a".to_string(), a.value()),
+            ("col_b".to_string(), b.value()),
+        ])
+        .unwrap();
+        assert_eq!(vec![0, 100, 200], frame_column::<i64>(&joined, "time"));
+        assert_eq!(vec![0, 1, 2], frame_column::<i64>(&joined, "col_a"));
+        assert_eq!(vec![0, 2, 4], frame_column::<i64>(&joined, "col_b"));
+    }
+
+    #[test]
+    fn build_dataframe_outer_joins_asynchronous_columns() {
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        // Two independent tickers at different rates. `collect()` (legacy's
+        // `dataframe()`) is the shape that survives a stream being quiet on the
+        // last cycle, which is exactly what a slower ticker does.
+        let g = PyGraph::new();
+        let fast = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda x: x * 10"))
+            .collect();
+        let slow = g
+            .counter(Duration::from_nanos(200))
+            .map(lambda("lambda x: x * 100"))
+            .collect();
+        run_cycles(&g, 4);
+        let joined = build_dataframe(&[
+            ("fast".to_string(), fast.value()),
+            ("slow".to_string(), slow.value()),
+        ])
+        .unwrap();
+        assert_eq!(vec![0, 100, 200, 300], frame_column::<i64>(&joined, "time"));
+        assert_eq!(
+            vec![10.0, 20.0, 30.0, 40.0],
+            frame_column::<f64>(&joined, "fast")
+        );
+        // The slow ticker is silent at t=100 and t=300 — outer join fills NaN.
+        let slow_column = frame_column::<f64>(&joined, "slow");
+        assert_eq!(100.0, slow_column[0]);
+        assert!(slow_column[1].is_nan());
+        assert_eq!(200.0, slow_column[2]);
+        assert!(slow_column[3].is_nan());
+    }
+
+    #[test]
+    fn build_dataframe_skips_columns_that_produced_nothing() {
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        let never_run = PyGraph::new()
+            .counter(Duration::from_nanos(100))
+            .dataframe();
+        let g = PyGraph::new();
+        let live = g.counter(Duration::from_nanos(100)).dataframe();
+        run_cycles(&g, 3);
+        let joined = build_dataframe(&[
+            ("empty".to_string(), never_run.value()),
+            ("live".to_string(), live.value()),
+        ])
+        .unwrap();
+        let columns: Vec<String> = Python::attach(|py| {
+            joined
+                .bind(py)
+                .getattr("columns")
+                .unwrap()
+                .call_method0("tolist")
+                .unwrap()
+                .extract()
+                .unwrap()
+        });
+        assert_eq!(vec!["time".to_string(), "live".to_string()], columns);
+        assert_eq!(vec![1, 2, 3], frame_column::<i64>(&joined, "live"));
+    }
+
+    #[test]
+    fn build_dataframe_with_nothing_to_join_is_empty() {
+        if Python::attach(|py| py.import("pandas").is_err()) {
+            return;
+        }
+        let empty = build_dataframe(&[]).unwrap();
+        let is_empty: bool =
+            Python::attach(|py| empty.bind(py).getattr("empty").unwrap().extract().unwrap());
+        assert!(is_empty);
     }
 
     #[test]

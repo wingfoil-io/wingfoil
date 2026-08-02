@@ -645,6 +645,38 @@ impl BurstListSinkOps for ::wingfoil_next::prelude::Stream<::wingfoil_next::Burs
     }
 }
 
+/// Outer-join several already-run streams on engine time into a single pandas
+/// `DataFrame` — the multi-stream counterpart of [`Stream::dataframe`], and the
+/// replacement for legacy's `wingfoil.pandas_helpers.build_dataframe`.
+///
+/// `streams` maps a column name to a stream that has already been run. Each
+/// stream contributes one column named by its key, indexed by the times it
+/// ticked; times where a stream was quiet come back as `NaN`. Column order
+/// follows the dict's insertion order and the joined `time` is the leading
+/// column.
+///
+/// A stream holds its history either as a frame (`stream.dataframe()`) or as
+/// `(time, value)` tuples (`stream.collect()`) — both are accepted, so the join
+/// composes with whichever half of the pair the caller already had. Streams that
+/// produced nothing are skipped; if none produced anything the result is an
+/// empty `DataFrame`. Requires pandas at call time.
+#[pyfunction]
+fn build_dataframe(streams: &Bound<'_, pyo3::types::PyDict>) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyDictMethods;
+
+    let mut columns = Vec::with_capacity(streams.len());
+    for (key, value) in streams.iter() {
+        let name: String = key.extract()?;
+        let stream: PyRef<'_, Stream> = value.extract().map_err(|_| {
+            PyValueError::new_err(format!(
+                "build_dataframe() value for {name:?} is not a wingfoil_next Stream"
+            ))
+        })?;
+        columns.push((name, stream.0.value()));
+    }
+    crate::graph::build_dataframe(&columns).map_err(to_pyerr)
+}
+
 /// Parse a case-insensitive level name into a [`log::Level`] for
 /// [`Stream::logged`]. A ValueError names the accepted set on a bad input.
 fn parse_log_level(level: &str) -> PyResult<log::Level> {
@@ -684,6 +716,7 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pair_source, m)?)?;
     m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
     m.add_function(wrap_pyfunction!(split_source, m)?)?;
+    m.add_function(wrap_pyfunction!(build_dataframe, m)?)?;
     register_latency(m)?;
     register_adapters(m)?;
     Ok(())

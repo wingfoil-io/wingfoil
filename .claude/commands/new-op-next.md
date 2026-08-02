@@ -152,6 +152,16 @@ see step 4). Everything else is generated.
 **without** ticking (what `delay` needs so a passive reader never sees
 `T::default()`); `Tick::Quiet` emits nothing (warm-up, suppressed duplicate).
 
+**`ctx.is_last_cycle()` only fires if the op is *cycled* on that cycle.** An op
+that flushes on the final cycle (`buffer`, `window`, the Python `dataframe`
+binding) but is `Activation::NONE` is only cycled when an active input ticks —
+so a stream that has gone quiet before the run ends (a slower ticker, anything
+behind `limit`) never reaches the flush and its value stays at the default. That
+is a real, observable outcome, not a theoretical one: `dataframe()` on the slow
+half of two tickers at different rates yields Python `None`. If the flush must
+happen regardless, the op needs `Activation::ALWAYS`; if not, say so in the op
+docs and name the alternative (`collect` for `dataframe`) so callers can pick.
+
 ## 3. Implement the `Op`
 
 In `ops.rs` (or `stats.rs`), add a zero-sized witness type and its `impl Op`:
@@ -403,6 +413,35 @@ validates the callable's return. `drop_small_change` extracts a strict `bool`
 convention its neighbours in `graph.rs` use, precisely because the legacy
 binding does and has a test pinning it. Port those binding tests alongside the
 node's.
+
+**…and the legacy oracle is not only Rust.** Legacy surface also lives in the
+pure-Python package at `legacy/wingfoil-python/python/wingfoil/` (e.g.
+`pandas_helpers.build_dataframe`, re-exported from its `__init__.py`). A grep of
+`py_stream.rs` misses those entirely, so check the Python package and its
+`__all__` too when establishing what a binding must cover.
+
+**Not every Python surface is an op.** Some legacy vocabulary is a *post-run
+helper* over already-run streams rather than a node — `build_dataframe`
+outer-joins several streams' recorded histories after the run and touches no
+graph. Do not force it through `#[pyop]` / `pyop_fn!`: write it as a plain free
+`#[pyfunction]` that reads `Stream::value()` and register it in the
+`#[pymodule]` like any other. Two conventions still apply, and they are what
+makes it feel native rather than bolted on:
+
+- **Put the logic in `graph.rs` and the glue in `python.rs`,** the same split
+  the pyclass methods use — `graph.rs` owns the erased object form and the real
+  work (returning `anyhow::Result`), `python.rs` owns `#[pyclass]`/`#[pyfunction]`
+  argument extraction and the `to_pyerr` mapping.
+- **Prefer Rust over a new pure-Python module.** `python/wingfoil_next/` exists
+  only for what genuinely needs Python (subclassing, in `CustomStream`), and its
+  `__init__.py` re-export is *derived* from the extension — so a Rust
+  `#[pyfunction]` appears in `wingfoil_next.*` with nothing to keep in sync,
+  while a Python helper is a second hand-maintained surface. Even helpers that
+  are "just pandas calls" belong in Rust for that reason.
+
+A post-run helper has no `nitro!`/compiled obligation (steps 5–6 do not apply),
+but it still owes a Rust unit test beside the other `graph.rs` tests and a
+pytest.
 
 ## 8. Roadmap bookkeeping
 
