@@ -7,8 +7,8 @@ accept/fix ruling before cutover.
 
 **Sources:** (1) each ported adapter's `# Deviations from classic` module-doc
 block — regenerate with
-`git grep -n "Deviations from classic" next/crates/wingfoil-next/src/adapters`;
-(2) `next/docs/port-plan.md` (capability matrix + Phase 4.5 "Known parity gaps");
+`git grep -n "Deviations from classic" crates/wingfoil-next/src/adapters`;
+(2) `docs/port-plan.md` (capability matrix + Phase 4.5 "Known parity gaps");
 (3) a manual **lifecycle/timing audit** (Category A) — the systemic engine-model
 behaviours the per-adapter deviation lists do **not** capture (the wiring-time
 pattern below was in *no* adapter's list, which is why it needs its own audit).

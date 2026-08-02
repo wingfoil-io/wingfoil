@@ -24,7 +24,7 @@
 //! (`postgres_read`, and `kdb_read` when it ports). They are adapter-agnostic
 //! but, like classic, feature-gated so the default build does not carry unused
 //! code: gated on `postgres` today, and the kdb port adds its own feature to
-//! the gate later (`next/docs/port-plan.md`, Phase 4 items 4–5). Only the
+//! the gate later (`docs/port-plan.md`, Phase 4 items 4–5). Only the
 //! `TimeWindow`/`WindowFilter` surface above is always compiled.
 
 use wingfoil_next::NanoTime;

@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'next/crates/wingfoil-next/src/adapters/otlp**'
-      - 'next/crates/wingfoil-next/tests/otlp_integration.rs'
+      - 'crates/wingfoil-next/src/adapters/otlp**'
+      - 'crates/wingfoil-next/tests/otlp_integration.rs'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The

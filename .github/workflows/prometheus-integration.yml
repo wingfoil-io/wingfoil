@@ -5,7 +5,7 @@ on:
   workflow_call:
   push:
     paths:
-      - 'wingfoil/src/adapters/prometheus/**'
+      - 'legacy/wingfoil/src/adapters/prometheus/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -40,7 +40,7 @@ jobs:
 
       - name: Start Grafana + Prometheus stack
         run: docker compose up -d
-        working-directory: wingfoil/src/adapters/prometheus/docker
+        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
 
       - name: Wait for Prometheus to be healthy
         run: |
@@ -66,9 +66,9 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs
-        working-directory: wingfoil/src/adapters/prometheus/docker
+        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
 
       - name: Tear down stack
         if: always()
         run: docker compose down
-        working-directory: wingfoil/src/adapters/prometheus/docker
+        working-directory: legacy/wingfoil/src/adapters/prometheus/docker

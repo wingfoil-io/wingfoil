@@ -12,6 +12,6 @@ _build
 *_generated
 perf.data*
 .codex
-wingfoil-python/.python-version
+legacy/wingfoil-python/.python-version
 worktrees
 *.DS_Store

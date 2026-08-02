@@ -54,7 +54,7 @@ with `SIGKILL` (e.g., `pkill -9`), orphaned shared memory files may persist in `
 Run the cleanup script before starting:
 
 ```bash
-bash next/crates/wingfoil-next/examples/latency_e2e/cleanup_stale_shm.sh
+bash crates/wingfoil-next/examples/latency_e2e/cleanup_stale_shm.sh
 ```
 
 Then:
@@ -76,7 +76,7 @@ cargo run -p wingfoil-next --release --example latency_e2e_ws_server \
   --features "web-tls,iceoryx2,prometheus,otlp" -- --addr 0.0.0.0:8080
 
 # Terminal 3 (operator stack — Prometheus + Tempo + Grafana, auto-provisioned)
-docker compose -f next/crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d
+docker compose -f crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d
 ```
 
 Then open `http://localhost:8080` and click **start**. The page shows
@@ -145,7 +145,7 @@ for this, whereas Prometheus would OOM.
 
 The `otlp_spans` stream operator that drives this is part of the
 wingfoil-next `otlp` adapter (see
-`next/crates/wingfoil-next/src/adapters/otlp.rs`). It's generic over any
+`crates/wingfoil-next/src/adapters/otlp.rs`). It's generic over any
 `Stream<P>` where `P: HasLatency` and takes a closure for attribute
 extraction — reusable for any wingfoil pipeline, not just this demo.
 

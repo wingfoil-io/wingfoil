@@ -1,5 +1,5 @@
 Implement a new I/O adapter for **wingfoil-next** named `$ARGUMENTS`, under
-`next/crates/wingfoil-next/src/adapters/`. Follow these steps in order. Work
+`crates/wingfoil-next/src/adapters/`. Follow these steps in order. Work
 test-driven: write each test before its implementation.
 
 Adapters in next are built **strictly on the public Op-pattern API** — sources
@@ -21,7 +21,7 @@ reference implementations; read them before writing code:
 
 ## The parity obligation (read first)
 
-Wingfoil Next's governing design objective (see `next/README.md`) is to become
+Wingfoil Next's governing design objective (see `README.md`) is to become
 a **strict superset of legacy wingfoil**. If a classic adapter named
 `$ARGUMENTS` exists under `wingfoil/src/adapters/$ARGUMENTS/`, it is your
 **parity oracle**:
@@ -29,7 +29,7 @@ a **strict superset of legacy wingfoil**. If a classic adapter named
 - Read its `mod.rs` docs, its `CLAUDE.md`, its tests, and its example first.
 - Every public capability (function, config knob, mode enum, event/entry type)
   needs a next equivalent — or an explicit deviation note in the module docs
-  and, if it's a capability gap, in the matrix in `next/docs/port-plan.md`.
+  and, if it's a capability gap, in the matrix in `docs/port-plan.md`.
 - Port its unit tests as parity tests: identical values **and** tick times.
 - Keep error-message compatibility where tests assert on messages (see how
   `csv_read` reuses the classic "failed to deserialize row" context).
@@ -48,9 +48,9 @@ flag it for a follow-up skill update. This skill is meant to grow with every
 port: several rules below (credential redaction, live-source rejection, the
 slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
 after a port hit them. Record cross-cutting classic↔next differences in
-`next/docs/deviation-register.md`, and note open design items you brushed up
-against (e.g. `next/docs/source-lifecycle-defer-to-start.md`,
-`next/docs/runtime-ownership.md`).
+`docs/deviation-register.md`, and note open design items you brushed up
+against (e.g. `docs/source-lifecycle-defer-to-start.md`,
+`docs/runtime-ownership.md`).
 
 ## Invariants
 
@@ -196,7 +196,7 @@ signature, several natural call sites (see `AugursForecastConfig`'s
 ## 1. Branch
 
 **All next work cuts from and merges into `next`, never `main`** (see
-`next/CLAUDE.md`). Cut the feature branch from `next`:
+`CLAUDE.md`). Cut the feature branch from `next`:
 
 ```bash
 git checkout next && git pull origin next && git checkout -b $ARGUMENTS-next
@@ -237,7 +237,7 @@ and deterministic. A `for_each`/`register_op1` sink reads the run mode from its
 (inside an island the ctx reports `RealTime`, consistent with `is_last_cycle`).
 This mirrors classic's `state.run_mode()` guard in spin-mode adapters.
 
-## 3. Feature flags — `next/crates/wingfoil-next/Cargo.toml`
+## 3. Feature flags — `crates/wingfoil-next/Cargo.toml`
 
 Adapters with dependencies are feature-gated so the default build stays
 dependency-free (the `csv`/`augurs` precedent):
@@ -482,7 +482,7 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 > `channel`/`external` source shapes still connect/spawn at wiring. If your
 > adapter uses those, follow their sections as written; migrating them to
 > deferred establishment is tracked in
-> `next/docs/source-lifecycle-defer-to-start.md`.
+> `docs/source-lifecycle-defer-to-start.md`.
 
 ### `produce_async` (async client library — `async` feature)
 
@@ -516,7 +516,7 @@ is the unbounded default. There is a single `produce_async` — the earlier
 **Runtime ownership — the graph owns the runtime; pass no `&Handle`.** The
 `GraphBuilder` owns one tokio runtime, created lazily on first async use and
 dropped at teardown, shared by every async adapter in the graph
-(`next/docs/runtime-ownership.md`, landed). So your factory takes **no**
+(`docs/runtime-ownership.md`, landed). So your factory takes **no**
 `&tokio::runtime::Handle`: `produce_async` / `consume_async` pull the handle
 from `g` themselves and return `Result` (the
 first, owned-runtime creation is the only fallible part — propagate with `?`).
@@ -528,7 +528,7 @@ see the etcd/postgres module docs). A caller embeds their own runtime with
 `GraphBuilder::new().with_async_runtime(handle)` (the override). `RunParams` is
 still a source factory param (the producer spawns at wiring); it will fall away
 only if/when the `produce_async` family also defers to `start()`
-(`next/docs/source-lifecycle-defer-to-start.md`).
+(`docs/source-lifecycle-defer-to-start.md`).
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
@@ -748,7 +748,7 @@ the adapter is **transform ops**, the same shape as `stats`:
    aborts the run) when validation needs runtime info; validate at wiring
    when it doesn't. Never panic at wiring time for bad user config.
 5. Multi-input, passive-edge, or lifecycle-hook ops don't fit `#[op]`'s
-   single-input scope — see "Adding an op" in `next/docs/port-plan.md` for
+   single-input scope — see "Adding an op" in `docs/port-plan.md` for
    the hand-written `Builder`-method route before inventing anything.
 
 `augurs.rs` demonstrates all five, including non-`Send + Sync` error mapping
@@ -825,7 +825,7 @@ Container infrastructure — choose one:
   (the `order_book` precedent). If the classic tree has an example for this
   adapter, port it — same scenario, same output.
 - Top with a `//!` doc comment including the exact run command.
-- Register in `next/crates/wingfoil-next/Cargo.toml`:
+- Register in `crates/wingfoil-next/Cargo.toml`:
   ```toml
   [[example]]
   name = "$ARGUMENTS_adapter"          # add `path = ...` for the directory form
@@ -834,14 +834,14 @@ Container infrastructure — choose one:
 - Directory-form README follows the classic pattern: title, one paragraph,
   `## Setup` (docker one-liner, if any), `## Run` (cargo command), `## Code`,
   `## Output`.
-- If `next/README.md` or the crate docs grow an adapters index table by the
+- If `README.md` or the crate docs grow an adapters index table by the
   time you land, add a row; today the canonical index is the
   `src/adapters/mod.rs` doc list from step 4.
 
 ### Optional: benchmarks (low-latency adapters)
 
 For a latency- or throughput-sensitive adapter (a poll/spin source, an IPC
-transport), add a Criterion suite under `next/crates/wingfoil-next/benches/`
+transport), add a Criterion suite under `crates/wingfoil-next/benches/`
 and register it with `harness = false` + `required-features = ["$ARGUMENTS"]`.
 Skip it when throughput is bounded by the remote service rather than the
 adapter glue — benches only earn their keep where the adapter itself is on the
@@ -854,7 +854,7 @@ existing hub exactly as the classic adapters do:
 
 1. Create `.github/workflows/$ARGUMENTS-next-integration.yml` following the
    etcd workflow's shape (`workflow_call` + `workflow_dispatch` + `push` with
-   `paths: ['next/crates/wingfoil-next/src/adapters/$ARGUMENTS**']`), with
+   `paths: ['crates/wingfoil-next/src/adapters/$ARGUMENTS**']`), with
    the test step:
    ```yaml
    - name: Run $ARGUMENTS (next) integration tests
@@ -869,7 +869,7 @@ existing hub exactly as the classic adapters do:
 ### Exposing the adapter to Python — `#[pyadapter]`
 
 `wingfoil-next-python` is the go-forward Python binding (it **supersedes** the
-legacy `wingfoil-python`; see `next/docs/python-interop.md`). A next adapter
+legacy `wingfoil-python`; see `docs/python-interop.md`). A next adapter
 reaches Python through the `#[pyadapter]` proc macro — values erase to
 `PyElement` at the boundary while the adapter's interior stays natively typed.
 
@@ -885,7 +885,7 @@ tiers, and the CI leg.
 Bind the adapter in the **same PR** as the port where you reasonably can — the
 binding is small once the Rust adapter exists, and a port that lands without one
 just becomes a second PR someone has to remember. If you do split it, say so in
-the PR and leave the Phase 6 bullet in `next/docs/port-plan.md` unticked for
+the PR and leave the Phase 6 bullet in `docs/port-plan.md` unticked for
 `$ARGUMENTS`.
 
 ## 13. Superset audit + roadmap bookkeeping
@@ -898,7 +898,7 @@ time (skip if none exists):
 - classic example → ported example;
 - classic `CLAUDE.md` design decisions → carried into the module docs.
 
-Then update `next/docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
+Then update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
 
@@ -907,21 +907,21 @@ classic operators/modes left behind) has three extra bookkeeping steps that are
 easy to miss because the adapter already looks done:
 
 1. **Widen the dependency's sub-feature list** in
-   `next/crates/wingfoil-next/Cargo.toml` to match classic's. The first pass
+   `crates/wingfoil-next/Cargo.toml` to match classic's. The first pass
    deliberately enabled only the sub-features its subset needed (augurs shipped
    `ets, mstl, outlier`; the other four operators needed `changepoint, seasons,
    dtw, clustering`), and the comment above the dep says so — update both.
 2. **Delete the capability-gap bullet from the module's `# Deviations from
    classic` block.** A stale "only N of classic's M operators are ported" line
    is worse than none: it is the first thing a cutover audit reads.
-3. **Flip the register row** in `next/docs/deviation-register.md` from ⚪ to ✅
+3. **Flip the register row** in `docs/deviation-register.md` from ⚪ to ✅
    with a `~~strikethrough~~` of the old gap text and a "**Resolved.**" note (the
    C1/C5 rows are the template), and add the row to the "Resolved / ratified"
    paragraph at the bottom. Any *new* deviation the completion introduces gets
    its own D-row.
 
 Also sweep the prose that described the subset — the module docs' op list, the
-`src/adapters/mod.rs` bullet, `next/README.md`'s example table, and the
+`src/adapters/mod.rs` bullet, `README.md`'s example table, and the
 example's own `//!` header all tend to name the ported subset explicitly.
 
 ## 14. Pre-commit checklist

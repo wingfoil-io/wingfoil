@@ -5,9 +5,9 @@ on:
   workflow_call:
   push:
     paths:
-      - 'wingfoil/src/adapters/otlp/**'
-      - 'wingfoil-python/src/py_otlp.rs'
-      - 'wingfoil-python/tests/test_otlp.py'
+      - 'legacy/wingfoil/src/adapters/otlp/**'
+      - 'legacy/wingfoil-python/src/py_otlp.rs'
+      - 'legacy/wingfoil-python/tests/test_otlp.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -65,20 +65,20 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: wingfoil-python/pyproject.toml
+          cache-dependency-path: legacy/wingfoil-python/pyproject.toml
 
       - name: Install system dependencies
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Install maturin and build Python bindings
         run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest
-          cd wingfoil-python && .venv/bin/maturin develop
+          python -m venv legacy/wingfoil-python/.venv
+          legacy/wingfoil-python/.venv/bin/pip install maturin pytest
+          cd legacy/wingfoil-python && .venv/bin/maturin develop
 
       - name: Run Python OTLP integration tests
         run: |
-          cd wingfoil-python && .venv/bin/pytest -m requires_otel tests/test_otlp.py -v
+          cd legacy/wingfoil-python && .venv/bin/pytest -m requires_otel tests/test_otlp.py -v
         env:
           RUST_LOG: INFO
 

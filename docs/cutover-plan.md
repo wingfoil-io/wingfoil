@@ -19,24 +19,25 @@ ruled out) is a cutover blocker.
 
 ### 2. Ready to swap out the legacy tree wholesale
 
-The `next/` folder mirrors the legacy repo root — `README`, `LICENSE`,
-`CONTRIBUTING`, `docs/`, and the crates under `crates/` — so the eventual
-cutover is a directory promotion, not a re-organisation. Until then, the
-legacy crates keep shipping untouched and serve as the permanent parity oracle
-for the port.
+Wingfoil Next *is* the repo root — `README`, `LICENSE`, `CONTRIBUTING`,
+`docs/`, and the crates under `crates/` — and the legacy tree sits under
+`legacy/`. So the cutover is a deletion, not a re-organisation: `rm -rf
+legacy/` plus the crate rename in 1.2, with nothing left to move. Until then,
+the legacy crates keep shipping untouched and serve as the permanent parity
+oracle for the port.
 
 ## The dependency direction — legacy depends on next, never the reverse
 
-**Nothing under `next/` may depend on the `wingfoil` crate.** The shared
+**Nothing under `crates/` may depend on the `wingfoil` crate.** The shared
 runtime core lives in `wingfoil-next`, and the legacy crate depends on
 `wingfoil-next` and re-exports it.
 
 This is the invariant that makes goal 2 achievable. The cutover *deletes* the
-legacy crates; anything under `next/` that still pointed at them would have to
+legacy crates; anything under `crates/` that still pointed at them would have to
 be disentangled first, turning a directory promotion back into a
 re-organisation. Pointing the edge the other way means the swap is a delete.
 
-The shared core is `next/crates/wingfoil-next/src/runtime/`:
+The shared core is `crates/wingfoil-next/src/runtime/`:
 
 | Module | Contents |
 |---|---|
@@ -75,7 +76,7 @@ examples and benches.
 Phases 0–6 are complete: the node catalog, all 15 adapters, the engine
 execution model, the infrastructure, and the Python binding surface. The
 shared runtime core has moved to `wingfoil-next` and the dependency edge is
-inverted, so nothing under `next/` points at the legacy crates.
+inverted, so nothing under `crates/` points at the legacy crates.
 
 What is left is the Phase 7 cutover itself, plus the prerequisites below.
 
@@ -97,7 +98,7 @@ being installable under the legacy name.
 | # | Item | Why it blocks | Size |
 |:--:|---|---|:--:|
 | 1.2 | **Crate + module rename.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → the derive crate, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. | Cutover is a *name* takeover, not just a directory move. Touches every `use wingfoil_next::` in the tree, every doc link, every example, every workflow, and both publish jobs. **Head of the critical path**, and it conflicts with anything else in flight — land it with the tree quiet. | L |
-| 1.3 | **Delete the `wingfoil-derive` crate.** It now holds only `#[node]`. Drop the directory, the workspace member entry, and `wingfoil`'s dependency on it. | Nothing under `next/` depends on it; removal is purely a consequence of the legacy tree going. | S |
+| 1.3 | **Delete the `wingfoil-derive` crate.** It now holds only `#[node]`. Drop the directory, the workspace member entry, and `wingfoil`'s dependency on it. | Nothing under `crates/` depends on it; removal is purely a consequence of the legacy tree going. | S |
 | 1.4 | **Retire the classic engine internals** (`MutableNode` wiring path) and rule on whether the classic facade API survives the swap. | Decides whether Rust downstreams break at the version bump. | M |
 
 ### 2. Rulings owed — no code, but they gate the swap
@@ -120,7 +121,7 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 3.7 | **The statistics Python binding stops short of legacy.** Legacy `wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. The engine already has the whole surface (`wingfoil-next/src/stats.rs`, with parity tests), so this is binding work, not engine work. 37 legacy tests have nowhere to map. | M |
+| 3.7 | **The statistics Python binding stops short of legacy.** Legacy `legacy/wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. The engine already has the whole surface (`crates/wingfoil-next/src/stats.rs`, with parity tests), so this is binding work, not engine work. 37 legacy tests have nowhere to map. | M |
 | 3.8 | **No multi-stream `build_dataframe` in next-python.** Legacy `pandas_helpers.build_dataframe` outer-joins several streams on time; next's `dataframe()` frames a single stream. 4 legacy tests have nowhere to map. The single-stream half is already ahead of legacy (a real `pandas.DataFrame` built in Rust), so only the multi-stream join is missing. | S |
 | 3.9 | **Sweep the legacy tree for drift since each phase was ticked.** 3.7 exists because legacy grew `py_statistics.rs` *after* Phase 6's "Surface build-out ✅" was written — the parity target moved under a bullet already marked done, and nothing detects that. `git log wingfoil/ wingfoil-python/` since each phase's completion date will show whether 3.7 is the only case. Until this runs, every ✅ in `port-plan.md` is a claim about the tree as it was, not as it is. | M |
 
@@ -128,9 +129,9 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 4.1 | **Rewrite the crate-level docs.** `wingfoil-next/src/lib.rs` still opens *"**Design prototype**: what wingfoil's core abstractions look like if designed from scratch…"* and spends its first 40 lines on a post-mortem of the abandoned `codegen` retrofit. That becomes the crate's front page the moment it is `wingfoil`. | M |
+| 4.1 | **Rewrite the crate-level docs.** `crates/wingfoil-next/src/lib.rs` still opens *"**Design prototype**: what wingfoil's core abstractions look like if designed from scratch…"* and spends its first 40 lines on a post-mortem of the abandoned `codegen` retrofit. That becomes the crate's front page the moment it is `wingfoil`. | M |
 | 4.2 | **Migration guide `#[node]` → `Op`.** Does not exist. Must also carry the Rust facade decision (1.4) and whatever 2.1 rules on `Graph::export`. The Python half is largely written — `wingfoil-next-python/docs/migration.rst` — and can be referenced rather than duplicated. | M |
-| 4.3 | **Root `README` / `CONTRIBUTING` / `CLAUDE.md` promotion.** `next/` mirrors all three, so the swap replaces the root copies. Note the root and `next/` `CLAUDE.md` both describe a branching workflow that cutover ends. | S |
+| 4.3 | **Retire the `legacy/` copies of `README` / `CONTRIBUTING` / `CLAUDE.md`.** The promotion itself is done — next's copies *are* the root copies and the originals moved to `legacy/`. What is left for cutover is deleting them with the rest of the tree, and stripping the now-moot legacy branching section from the root `CLAUDE.md`. | S |
 | 4.4 | **Architecture / orientation doc** (`docs/wingfoil-next-architecture.md`, was #507). Deferred until the refactor settled; it has, and cutover is exactly when a new contributor needs it. | M |
 
 ### 5. Repo, CI and release plumbing — Goal 2's "directory promotion"
@@ -139,11 +140,11 @@ All of this is blocked on 1.2, which fixes the names everything here refers to.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 5.1 | **Workspace `Cargo.toml`.** Drop `wingfoil`, `wingfoil-derive`, `wingfoil-python` from members; repoint the four `next/crates/*` entries to their promoted paths. `wingfoil-wire-types` stays (next's web adapter depends on it); `wingfoil-wasm` stays excluded. | S |
-| 5.2 | **Collapse the workflow set.** 14 of 42 workflows carry `next` and lose the suffix; the legacy-side twins retire. The three `latency-e2e.*` workflows still reference `wingfoil/examples/latency_e2e/` by path and repoint to the ported copy. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
+| 5.1 | **Workspace `Cargo.toml`.** Drop the three `legacy/*` members. The four next crates are already at `crates/*`, so no repointing is left. `wingfoil-wire-types` stays (next's web adapter depends on it); `wingfoil-wasm` stays excluded. | S |
+| 5.2 | **Collapse the workflow set.** 14 of 42 workflows carry `next` and lose the suffix; the legacy-side twins retire. The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil-next/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
 | 5.3 | **`crates-publish.yml` rewrite.** It publishes by directory in dependency order with crates.io index waits between; the crate set, the order and the paths all change. | M |
 | 5.4 | **`pypi-publish.yml` repoint**, plus a ruling on the wheel's adapter roll-up: aeron is out of both roll-ups (it builds a C library) and iceoryx2 is in `all-adapters` but out of the wheel (Linux/POSIX-only). That is open issue **#367** — decide whether cutover inherits it or fixes it. | S |
-| 5.5 | **`.readthedocs.yaml` repoint.** Three keys change together: `python.install[0].path`, `python.install[1].requirements`, `sphinx.configuration` — all to `next/crates/wingfoil-next-python/`. The RTD job builds the extension from source at the full wheel feature set, so it compiles librdkafka and libzmq and needs `protobuf-compiler` (already in `apt_packages`). | S |
+| 5.5 | **`.readthedocs.yaml` repoint.** Three keys change together: `python.install[0].path`, `python.install[1].requirements`, `sphinx.configuration` — all currently on `legacy/wingfoil-python/`, all moving to `crates/wingfoil-next-python/`. The RTD job builds the extension from source at the full wheel feature set, so it compiles librdkafka and libzmq and needs `protobuf-compiler` (already in `apt_packages`). | S |
 | 5.6 | **Major version bump**, and the `rust-test` / `all-tests` / `rust-fmt` path and branch filters (currently `[main, next]`). | S |
 
 ### 6. Verification gates — run immediately before the swap

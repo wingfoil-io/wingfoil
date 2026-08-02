@@ -295,7 +295,7 @@ them. The Python surface being the odd one out was the deviation — this remove
 it. ``latency_report_if(..., enabled=False)`` likewise returns a never-ticking
 sink plus an all-zero stats handle, keeping the return *shape* constant, where
 legacy returned the upstream node and changed the type. Recorded as **D13** in
-``next/docs/deviation-register.md``.
+``docs/deviation-register.md``.
 
 Four further latency changes, all of them fixes:
 
@@ -347,8 +347,8 @@ Known gaps
 * **ZeroMQ cross-language interop** with a *legacy* Rust/Python peer is not
   guaranteed: next's ``bincode`` envelope is its own. Two next peers
   interoperate, and so does a next Python peer with a next Rust peer publishing
-  the same type. Tracked as **C2** in ``next/docs/deviation-register.md``.
+  the same type. Tracked as **C2** in ``docs/deviation-register.md``.
 
 The live register of every deliberate deviation — Python and Rust alike, each
-with a class and a ruling — is ``next/docs/deviation-register.md``. If something
+with a class and a ruling — is ``docs/deviation-register.md``. If something
 here surprises you, it is worth checking there first.

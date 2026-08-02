@@ -131,7 +131,7 @@ docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
 
 `postgres` was the **first adapter bound** and is the template
 `/bind-adapter-next` tells you to read first
-(`next/crates/wingfoil-next-python/src/adapters/postgres.rs`). Feature:
+(`crates/wingfoil-next-python/src/adapters/postgres.rs`). Feature:
 `postgres = ["wingfoil-next/postgres", "dep:chrono", "_common"]` — `chrono` is
 named directly because the row decoder mentions `NaiveDateTime`. **In
 `all-adapters` and in the wheel.**

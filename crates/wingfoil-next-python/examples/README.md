@@ -4,7 +4,7 @@ Runnable demonstrations of the `wingfoil_next` binding. Build the extension
 module first, then run any example:
 
 ```sh
-cd next/crates/wingfoil-next-python
+cd crates/wingfoil-next-python
 maturin develop            # builds + installs the `wingfoil_next` module
 python examples/quick_start.py
 ```

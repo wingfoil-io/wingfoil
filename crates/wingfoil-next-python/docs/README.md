@@ -8,7 +8,7 @@ Autodoc imports the **compiled** extension, so build it before building the
 docs:
 
 ```bash
-cd next/crates/wingfoil-next-python
+cd crates/wingfoil-next-python
 maturin develop            # or: maturin develop -F aeron,iceoryx2 for those two
 cd docs
 pip install -r requirements.txt
@@ -38,12 +38,12 @@ smaller generated table, not an error.
 The root `.readthedocs.yaml` still points at `wingfoil-python/docs/conf.py` —
 the legacy tree keeps shipping until the cutover, and repointing it early would
 break the published build. Repointing it at this directory is cutover-time work
-(prerequisite row 5.5 in `next/docs/cutover-plan.md`), and needs three changes
+(prerequisite row 5.5 in `docs/cutover-plan.md`), and needs three changes
 together:
 
-- `python.install[0].path` → `next/crates/wingfoil-next-python`
-- `python.install[1].requirements` → `next/crates/wingfoil-next-python/docs/requirements.txt`
-- `sphinx.configuration` → `next/crates/wingfoil-next-python/docs/conf.py`
+- `python.install[0].path` → `crates/wingfoil-next-python`
+- `python.install[1].requirements` → `crates/wingfoil-next-python/docs/requirements.txt`
+- `sphinx.configuration` → `crates/wingfoil-next-python/docs/conf.py`
 
 Note that the pip install builds the extension from source with the full wheel
 feature set (kafka, zmq, etcd, …), so the RTD build needs `protobuf-compiler` —

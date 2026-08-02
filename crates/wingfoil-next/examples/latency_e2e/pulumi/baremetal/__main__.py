@@ -46,7 +46,7 @@ import pulumi_aws as aws
 # Resolve everything relative to this file rather than CWD so
 # `pulumi up` works regardless of where it's invoked.
 HERE = Path(__file__).resolve().parent
-EXAMPLE_DIR = HERE.parent.parent  # next/crates/wingfoil-next/examples/latency_e2e
+EXAMPLE_DIR = HERE.parent.parent  # crates/wingfoil-next/examples/latency_e2e
 WORKSPACE_ROOT = HERE.parents[6]  # repo root
 TARGET_RELEASE = WORKSPACE_ROOT / "target" / "release" / "examples"
 

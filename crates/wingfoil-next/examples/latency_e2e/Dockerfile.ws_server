@@ -34,7 +34,7 @@ RUN apt-get -o Acquire::Retries=3 update \
 WORKDIR /app
 
 COPY --from=builder --chown=wingfoil:wingfoil /workspace/target/release/examples/latency_e2e_ws_server /app/ws_server
-COPY --chown=wingfoil:wingfoil next/crates/wingfoil-next/examples/latency_e2e/static /app/static
+COPY --chown=wingfoil:wingfoil crates/wingfoil-next/examples/latency_e2e/static /app/static
 
 # File caps so the non-root user (UID 10001) can bind privileged ports
 # like :443 in deployments that pass `--addr 0.0.0.0:443` (ec2-spot).

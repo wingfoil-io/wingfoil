@@ -1,7 +1,7 @@
 # wingfoil-next-python
 
-Python interop prototype for **wingfoil-next** (the Op-pattern engine under
-`next/`). See `next/docs/python-interop.md` for the design.
+Python interop prototype for **wingfoil-next** (the Op-pattern engine at the
+repository root). See `docs/python-interop.md` for the design.
 
 The importable module is `wingfoil_next`, exposing `Graph` and `Stream`:
 

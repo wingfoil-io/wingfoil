@@ -21,7 +21,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=$(grep -m 1 '^version' wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          VERSION=$(grep -m 1 '^version' legacy/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
 

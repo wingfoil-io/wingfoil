@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'next/crates/wingfoil-next/src/adapters/etcd**'
-      - 'next/crates/wingfoil-next/tests/etcd_integration.rs'
-      - 'next/crates/wingfoil-next-python/src/adapters/etcd.rs'
-      - 'next/crates/wingfoil-next-python/tests/test_etcd.py'
+      - 'crates/wingfoil-next/src/adapters/etcd**'
+      - 'crates/wingfoil-next/tests/etcd_integration.rs'
+      - 'crates/wingfoil-next-python/src/adapters/etcd.rs'
+      - 'crates/wingfoil-next-python/tests/test_etcd.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -90,14 +90,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: next/crates/wingfoil-next-python
+        working-directory: crates/wingfoil-next-python
         # `-F etcd` explicitly: the adapter is not in the default wheel feature
         # list (etcd-client needs protoc at build time).
         run: |
@@ -106,7 +106,7 @@ jobs:
           .venv/bin/maturin develop -F etcd
 
       - name: Run Python etcd (next) integration tests
-        working-directory: next/crates/wingfoil-next-python
+        working-directory: crates/wingfoil-next-python
         run: .venv/bin/pytest -m requires_etcd tests/test_etcd.py -v
         env:
           RUST_LOG: INFO

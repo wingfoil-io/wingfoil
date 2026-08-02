@@ -3,7 +3,7 @@
 # reclaim recovers in ~60-90s (no apt installs, no image pulls).
 #
 # Build manually:
-#   cd next/crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer
+#   cd crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer
 #   packer init wingfoil-latency.pkr.hcl
 #   packer build \
 #     -var ws_server_image=<registry>/wingfoil/ws-server:<tag> \

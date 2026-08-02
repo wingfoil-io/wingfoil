@@ -61,14 +61,14 @@ jobs:
 
       - name: Build wheel and sdist
         run: |
-          cd wingfoil-python
+          cd legacy/wingfoil-python
           maturin build --verbose --release --strip -o wheelhouse
 
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
         with:
           name: wheelhouse-${{ matrix.os }}-${{ matrix.python-version }}
-          path: wingfoil-python/wheelhouse
+          path: legacy/wingfoil-python/wheelhouse
 
   upload-pypi:
     runs-on: ubuntu-latest
@@ -107,11 +107,11 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: wingfoil-python/artifacts
+          path: legacy/wingfoil-python/artifacts
 
       - name: Prepare artifacts
         run: |
-          cd wingfoil-python
+          cd legacy/wingfoil-python
           ls -al artifacts
           mkdir wheelhouse
           find artifacts -name "*.whl" -exec cp {} wheelhouse/ \;
@@ -120,7 +120,7 @@ jobs:
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
-          packages-dir: wingfoil-python/wheelhouse
+          packages-dir: legacy/wingfoil-python/wheelhouse
           repository-url: ${{ env.REPO_URL }}
           verbose: true
           user: __token__

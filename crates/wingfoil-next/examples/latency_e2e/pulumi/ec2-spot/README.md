@@ -52,7 +52,7 @@ on cached images).
 1. **Pulumi CLI** — [Install Pulumi](https://www.pulumi.com/docs/install/)
 2. **AWS credentials** with permission to create VPC/EC2/IAM/Secrets Manager
 3. **Five service images** in ECR (or Docker Hub) — see
-   `next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.*` and
+   `crates/wingfoil-next/examples/latency_e2e/Dockerfile.*` and
    `.github/workflows/build-latency-e2e-images.yml`
 4. **A baked AMI** — built via the `Build latency_e2e AMI (ec2-spot)` GitHub
    Action or the local Packer steps below
@@ -78,7 +78,7 @@ aws ssm get-parameter \
 ### Option B — Local Packer build
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer
+cd crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer
 
 # One-time
 packer init wingfoil-latency.pkr.hcl
@@ -98,7 +98,7 @@ The AMI ID is printed at the end and recorded in `packer-manifest.json`.
 ## 2. Deploy the stack
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot
+cd crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot
 
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
@@ -181,7 +181,7 @@ INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
 # Open an SSH session via SSM (requires the AWS SSM Session Manager
 # plugin and an SSH config that proxies through `aws ssm start-session`).
 rsync -av --delete \
-  next/crates/wingfoil-next/examples/latency_e2e/static/ \
+  crates/wingfoil-next/examples/latency_e2e/static/ \
   "${INSTANCE_ID}:/opt/wingfoil/static/"
 
 aws ssm send-command \

@@ -1432,7 +1432,7 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
   at cutover rather than silent omission.
 - **`#[node]` retirement** ✅ **done in next**: replaced by `Op` impls. There
   is no `#[node]`, and no dependency on `wingfoil-derive`, anywhere under
-  `next/` — every node in the catalog, the adapters, and the tests is an `Op`
+  `crates/` — every node in the catalog, the adapters, and the tests is an `Op`
   impl (semantics as associated functions, `Cfg`/`State`/`In`/`Out`), which is
   what let one body serve all three engines. The user-facing escape hatch
   `#[node]` existed for — writing a node by hand — is
@@ -1497,7 +1497,7 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
 **Decision (2026-07): `wingfoil-next-python` supersedes the legacy
 `wingfoil-python` bindings — it is not a compatibility facade over them.** The
 go-forward Python surface is the fresh object-form binding in
-`next/crates/wingfoil-next-python` (`PyGraph`/`PyStream` over the shared
+`crates/wingfoil-next-python` (`PyGraph`/`PyStream` over the shared
 interpreted `GraphBuilder`, erased to `PyElement`, plus the
 `#[pyop]`/`pyop_fn!` plugin seams — see `docs/python-interop.md`). Legacy
 `wingfoil-python` (`import wingfoil`) is **retired at cutover**, not kept
@@ -1940,7 +1940,7 @@ tests covered — not "legacy pytest passes unchanged."
   files, and `wingfoil-codegen-build-example` are removed. `Kernel`,
   `KernelWaker`, `waker_channel` remain (they are the engine core now).
 - **Delete the `wingfoil-derive` crate** (the `#[node]` attribute macro).
-  Nothing under `next/` depends on it — the Phase-5 retirement is already
+  Nothing under `crates/` depends on it — the Phase-5 retirement is already
   complete on the next side — so its removal is purely a consequence of the
   legacy tree going away: drop the crate directory, its workspace member
   entry, and the `wingfoil-derive` dependency from `wingfoil`'s manifest.

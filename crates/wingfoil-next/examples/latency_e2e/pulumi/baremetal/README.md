@@ -38,7 +38,7 @@ intra-process hops — actually shows up.
 ## One-time setup
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e/pulumi/baremetal
+cd crates/wingfoil-next/examples/latency_e2e/pulumi/baremetal
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 pulumi stack init demo

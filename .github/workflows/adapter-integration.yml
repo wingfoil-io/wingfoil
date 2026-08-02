@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil/src/adapters/fix/**'
-      - 'wingfoil/src/adapters/fluvio/**'
-      - 'wingfoil/src/adapters/kafka/**'
-      - 'wingfoil/src/adapters/zmq/**'
+      - 'legacy/wingfoil/src/adapters/fix/**'
+      - 'legacy/wingfoil/src/adapters/fluvio/**'
+      - 'legacy/wingfoil/src/adapters/kafka/**'
+      - 'legacy/wingfoil/src/adapters/zmq/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The

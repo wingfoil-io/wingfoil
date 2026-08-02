@@ -120,7 +120,7 @@
     </div>
     <div class="links">
       <a href="https://github.com/wingfoil-io/wingfoil" target="_blank" rel="noopener">github</a>
-      <a href="https://github.com/wingfoil-io/wingfoil/tree/next/next/crates/wingfoil-next/examples/latency_e2e" target="_blank" rel="noopener">source</a>
+      <a href="https://github.com/wingfoil-io/wingfoil/tree/next/crates/wingfoil-next/examples/latency_e2e" target="_blank" rel="noopener">source</a>
       <a href="/metrics" target="_blank">prometheus</a>
     </div>
   </header>
@@ -175,7 +175,7 @@
         Aggregate p50/p99 across all sessions are in Prometheus at
         <a href="/metrics" target="_blank"><code>:9091/metrics</code></a>.
         Per-session traces are pushed to Tempo via OTLP and pre-filtered to this session above.
-        Not loading? <code>docker compose -f next/crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d</code>
+        Not loading? <code>docker compose -f crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d</code>
       </p>
     </section>
   </main>

@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil/src/adapters/postgres/**'
-      - 'wingfoil/src/adapters/time_slice.rs'
-      - 'wingfoil-python/src/py_postgres.rs'
-      - 'wingfoil-python/tests/test_postgres.py'
+      - 'legacy/wingfoil/src/adapters/postgres/**'
+      - 'legacy/wingfoil/src/adapters/time_slice.rs'
+      - 'legacy/wingfoil-python/src/py_postgres.rs'
+      - 'legacy/wingfoil-python/tests/test_postgres.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -85,17 +85,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: wingfoil-python/pyproject.toml
+          cache-dependency-path: legacy/wingfoil-python/pyproject.toml
 
       - name: Install maturin and build Python bindings
         run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest "psycopg[binary]"
-          cd wingfoil-python && .venv/bin/maturin develop
+          python -m venv legacy/wingfoil-python/.venv
+          legacy/wingfoil-python/.venv/bin/pip install maturin pytest "psycopg[binary]"
+          cd legacy/wingfoil-python && .venv/bin/maturin develop
 
       - name: Run Python postgres integration tests
         run: |
-          cd wingfoil-python && .venv/bin/pytest -m requires_postgres tests/test_postgres.py -v
+          cd legacy/wingfoil-python && .venv/bin/pytest -m requires_postgres tests/test_postgres.py -v
         env:
           RUST_LOG: INFO
 

@@ -235,7 +235,7 @@ mod channel;
 /// `wingfoil-next` macro `compiled()` / islands path. The kernel it left
 /// behind is the engine core for *both* trees, and now lives in
 /// [`wingfoil_next::runtime::kernel`] — re-exported here so this path is
-/// unchanged for classic callers. See `next/docs/cutover-plan.md` for why the
+/// unchanged for classic callers. See `docs/cutover-plan.md` for why the
 /// shared core sits on the next side of the boundary.
 pub mod codegen {
     pub use wingfoil_next::runtime::kernel::{Kernel, KernelWaker, ReadyReceiver, waker_channel};

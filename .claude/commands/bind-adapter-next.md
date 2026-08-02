@@ -1,30 +1,30 @@
 Add the **Python bindings** for the already-ported wingfoil-next I/O adapter
-named `$ARGUMENTS`, in `next/crates/wingfoil-next-python/src/adapters/`.
+named `$ARGUMENTS`, in `crates/wingfoil-next-python/src/adapters/`.
 
 This is the *binding* task, not the port. It assumes
-`next/crates/wingfoil-next/src/adapters/$ARGUMENTS*` already exists and passes
+`crates/wingfoil-next/src/adapters/$ARGUMENTS*` already exists and passes
 its own tests — if it does not, run `/new-adapter-next $ARGUMENTS` first and
 come back. (`/new-adapter-next` links here for its Python step, so a brand-new
 adapter ends up running both.)
 
 `wingfoil-next-python` is the **go-forward** Python binding: it supersedes the
 legacy `wingfoil-python`, it is not a facade over it (decision 2026-07, see
-`next/docs/python-interop.md` and Phase 6 of `next/docs/port-plan.md`). At
+`docs/python-interop.md` and Phase 6 of `docs/port-plan.md`). At
 cutover `import wingfoil` becomes `import wingfoil_next`.
 
 ## Read first
 
-- **`next/crates/wingfoil-next-python/src/adapters/postgres.rs`** — the first
+- **`crates/wingfoil-next-python/src/adapters/postgres.rs`** — the first
   real adapter bound and the template for every one after it. Read it before
   writing code; most of what follows is a generalisation of what it does.
-- `next/crates/wingfoil-next-python/src/adapters/common.rs` — the shared
+- `crates/wingfoil-next-python/src/adapters/common.rs` — the shared
   run-shape helpers.
-- `next/crates/wingfoil-next-python/src/python.rs` — `ramp_source` /
+- `crates/wingfoil-next-python/src/python.rs` — `ramp_source` /
   `list_sink` / `pair_source` / `burst_list_sink`, the four minimal
   `#[pyadapter]` demos (plain + burst, source + sink).
-- `next/crates/wingfoil-next-python/tests/plugin_seam.rs` — the same seams
+- `crates/wingfoil-next-python/tests/plugin_seam.rs` — the same seams
   exercised from an *external* crate.
-- `next/docs/python-interop.md` — why the boundary is shaped this way.
+- `docs/python-interop.md` — why the boundary is shaped this way.
 
 ## The parity obligation
 
@@ -42,7 +42,7 @@ next's Rust adapter has capability legacy never had — a unified
 `$ARGUMENTS_source`, a `buffer_size` bound — expose it too and say so in the
 docs; the superset objective runs through the bindings as well.
 
-Cross-cutting classic↔next differences go in `next/docs/deviation-register.md`.
+Cross-cutting classic↔next differences go in `docs/deviation-register.md`.
 
 ## Feed lessons back into this skill
 
@@ -54,7 +54,7 @@ ideally in the same PR.
 
 ## 1. Branch
 
-Cut from `next`, never `main` (see `next/CLAUDE.md`):
+Cut from `next`, never `main` (see `CLAUDE.md`):
 
 ```bash
 git checkout next && git pull origin next && git checkout -b bind-$ARGUMENTS-python
@@ -62,14 +62,14 @@ git checkout next && git pull origin next && git checkout -b bind-$ARGUMENTS-pyt
 
 The PR targets base `next`.
 
-## 2. Feature gate — `next/crates/wingfoil-next-python/Cargo.toml`
+## 2. Feature gate — `crates/wingfoil-next-python/Cargo.toml`
 
 **First check whether the thing you are binding is feature-gated at all.** Not
 every Python surface is an adapter: `wingfoil_next::latency` is an
 unconditional engine module, so its binding (`src/latency.rs`, *not* under
 `adapters/`) has no cargo feature, is registered in the `#[pymodule]`
 unconditionally, ships in every wheel, and needs no integration workflow. If
-`grep '^pub mod <name>' next/crates/wingfoil-next/src/lib.rs` shows no
+`grep '^pub mod <name>' crates/wingfoil-next/src/lib.rs` shows no
 `#[cfg(feature = …)]` above it, skip this whole step and step 3's `#[cfg]`s —
 gating a binding whose engine side is always compiled only creates a way to
 build a wheel that is missing it for no reason. Everything else in this file
@@ -412,7 +412,7 @@ name in `Cfg`. Two consequences worth knowing before you start:
 - The binding module's `//!` header: the entry-point table (Python name → Rust
   fn → shape), how the dynamic edge works, and a numbered **deviations from the
   legacy `wingfoil-python` bindings** section. `postgres.rs` is the model.
-- **`next/crates/wingfoil-next/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
+- **`crates/wingfoil-next/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
   `## Python` section. That is where an agent picking the adapter up cold looks
   for: the binding's cargo feature, whether it is in `all-adapters` and in the
   **wheel** (and why not, if not), the entry points it exposes and any Rust
@@ -420,11 +420,11 @@ name in `Cfg`. Two consequences worth knowing before you start:
   hand-written, the test file and its marker, and which workflow leg runs the
   marked tier. Every one of those is a fact this recipe made you decide — record
   it there rather than leaving it to be reverse-engineered from `Cargo.toml`.
-- `next/docs/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
+- `docs/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
   add `$ARGUMENTS` and keep the remaining count honest.
-- `next/docs/python-interop.md` — the "Per-adapter Python bindings" row of the
+- `docs/python-interop.md` — the "Per-adapter Python bindings" row of the
   build-list table, same.
-- `next/docs/deviation-register.md` — any cross-cutting legacy↔next difference.
+- `docs/deviation-register.md` — any cross-cutting legacy↔next difference.
 
 ## 8. Pre-commit checklist
 
@@ -437,7 +437,7 @@ cargo fmt --all
 cargo lint
 cargo lint-all
 cargo test -p wingfoil-next-python --features all-adapters
-cd next/crates/wingfoil-next-python && maturin develop -F $ARGUMENTS && pytest -q
+cd crates/wingfoil-next-python && maturin develop -F $ARGUMENTS && pytest -q
 ```
 
 Sandbox caveat (same as `/new-adapter-next`): `cargo lint-all` is a workspace

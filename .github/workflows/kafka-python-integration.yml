@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil-python/src/py_kafka.rs'
-      - 'wingfoil-python/tests/test_kafka.py'
-      - 'wingfoil/src/adapters/kafka/**'
+      - 'legacy/wingfoil-python/src/py_kafka.rs'
+      - 'legacy/wingfoil-python/tests/test_kafka.py'
+      - 'legacy/wingfoil/src/adapters/kafka/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -66,15 +66,15 @@ jobs:
 
       - name: Create virtualenv and install dependencies
         run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest
+          python -m venv legacy/wingfoil-python/.venv
+          legacy/wingfoil-python/.venv/bin/pip install maturin pytest
 
       - name: Build and install Python bindings
         run: |
-          cd wingfoil-python
+          cd legacy/wingfoil-python
           .venv/bin/maturin develop
 
       - name: Run Kafka Python integration tests
         run: |
-          cd wingfoil-python
+          cd legacy/wingfoil-python
           .venv/bin/pytest -m requires_kafka tests/test_kafka.py -v

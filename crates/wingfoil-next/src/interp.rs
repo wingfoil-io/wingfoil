@@ -9,7 +9,7 @@
 //! semantics by construction.
 //!
 //! Execution model: a sparse dirty-list, matching classic wingfoil's
-//! `dirty_nodes_by_layer` (see `next/docs/port-plan.md` "Phase 4.5"). At `build()`
+//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
 //! each node gets an *active-downstream* adjacency list. Each cycle seeds a
 //! work set from the frontier — `always` busy-poll ops and kernel-marked
 //! callback-activated ops (tickers, `delay` pops, feedback source, channel
@@ -2766,7 +2766,7 @@ impl Runner {
         // bucket. That walk made per-cycle cost `O(active + depth)`, which a deep
         // graph pays every cycle even when almost none of it fires — and back when
         // `fan` left-folded its branches into a merge chain, a wide fan-in *was*
-        // deep (see Phase 4.5 in `next/docs/port-plan.md`; `fan` now fans in
+        // deep (see Phase 4.5 in `docs/port-plan.md`; `fan` now fans in
         // through one `merge_n`, but depth is still cheap to build by hand).
         // Scanning the mask skips 64 empty layers per word test, leaving
         // `O(active + depth/64)`.

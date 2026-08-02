@@ -27,13 +27,13 @@ in. From the root of the wingfoil repo:
 
 ```bash
 # Wingfoil binaries
-docker build -f next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.ws_server -t wingfoil-ws-server:latest .
-docker build -f next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.fix_gw    -t wingfoil-fix-gw:latest    .
+docker build -f crates/wingfoil-next/examples/latency_e2e/Dockerfile.ws_server -t wingfoil-ws-server:latest .
+docker build -f crates/wingfoil-next/examples/latency_e2e/Dockerfile.fix_gw    -t wingfoil-fix-gw:latest    .
 
 # Observability — base image + COPY of the matching config dir
-docker build -f next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.prometheus -t wingfoil-prometheus:latest .
-docker build -f next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.tempo      -t wingfoil-tempo:latest      .
-docker build -f next/crates/wingfoil-next/examples/latency_e2e/Dockerfile.grafana    -t wingfoil-grafana:latest    .
+docker build -f crates/wingfoil-next/examples/latency_e2e/Dockerfile.prometheus -t wingfoil-prometheus:latest .
+docker build -f crates/wingfoil-next/examples/latency_e2e/Dockerfile.tempo      -t wingfoil-tempo:latest      .
+docker build -f crates/wingfoil-next/examples/latency_e2e/Dockerfile.grafana    -t wingfoil-grafana:latest    .
 
 # Verify images built successfully
 docker images | grep wingfoil
@@ -90,7 +90,7 @@ done
 To test the images locally before deploying to AWS:
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e
+cd crates/wingfoil-next/examples/latency_e2e
 
 # Start the original demo (for reference)
 docker-compose up
@@ -101,7 +101,7 @@ docker-compose up
 Once images are pushed, use the image URIs in the Pulumi config:
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e/pulumi/fargate
+cd crates/wingfoil-next/examples/latency_e2e/pulumi/fargate
 
 ECR=<ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com
 pulumi config set ws_server_image  "${ECR}/wingfoil/ws-server:latest"

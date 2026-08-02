@@ -90,10 +90,10 @@ scrape-examples = true
 # `Kernel` — lives in `wingfoil-next` and is re-exported from here, so both
 # engines use one set of types rather than structurally-identical twins.
 #
-# The edge points this way (legacy -> next), not the other way, because `next/`
+# The edge points this way (legacy -> next), not the other way, because next
 # is replacing this tree wholesale: at cutover the legacy crates are deleted,
-# and nothing under `next/` may depend on what is being deleted. See
-# `next/docs/cutover-plan.md`.
+# and nothing under `crates/` may depend on what is being deleted. See
+# `docs/cutover-plan.md`.
 wingfoil-next = { path = "../../crates/wingfoil-next" }
 
 # derives

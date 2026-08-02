@@ -71,7 +71,7 @@ except ImportError as exc:  # pragma: no cover - build-environment guard
     raise SystemExit(
         "cannot import `wingfoil_next` — the compiled extension is not built.\n"
         "Build it first:\n"
-        "    cd next/crates/wingfoil-next-python && maturin develop\n"
+        "    cd crates/wingfoil-next-python && maturin develop\n"
         f"(underlying error: {exc})"
     ) from exc
 

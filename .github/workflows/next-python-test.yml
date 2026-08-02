@@ -5,15 +5,15 @@ on:
   push:
     branches: [ "next", "main" ]
     paths:
-      - "next/crates/wingfoil-next-python/**"
-      - "next/crates/wingfoil-next-python-macros/**"
-      - "next/crates/wingfoil-next/**"
+      - "crates/wingfoil-next-python/**"
+      - "crates/wingfoil-next-python-macros/**"
+      - "crates/wingfoil-next/**"
   pull_request:
     branches: [ "next", "main" ]
     paths:
-      - "next/crates/wingfoil-next-python/**"
-      - "next/crates/wingfoil-next-python-macros/**"
-      - "next/crates/wingfoil-next/**"
+      - "crates/wingfoil-next-python/**"
+      - "crates/wingfoil-next-python-macros/**"
+      - "crates/wingfoil-next/**"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
@@ -75,7 +75,7 @@ jobs:
         run: cargo test -p wingfoil-next-python --features all-adapters
 
       - name: Build module and run pytest
-        working-directory: next/crates/wingfoil-next-python
+        working-directory: crates/wingfoil-next-python
         # `-F all-adapters` rather than the `[tool.maturin] features` default:
         # each adapter binding carries a service-free pytest tier (names exposed,
         # argument defaults, wiring-time rejections), and those only run if the

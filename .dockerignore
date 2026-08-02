@@ -1,5 +1,5 @@
 # Keep the build context lean and prevent secrets / dev artefacts from
-# landing in image layers via `COPY . .` in wingfoil/examples/latency_e2e/Dockerfile.*
+# landing in image layers via `COPY . .` in the latency_e2e Dockerfiles.
 
 .git/
 .gitignore
@@ -32,6 +32,6 @@ target/
 **/.env.*
 
 # Maturin / Python wheel build dirs
-wingfoil-python/target/
-wingfoil-python/dist/
-wingfoil-python/build/
+legacy/wingfoil-python/target/
+legacy/wingfoil-python/dist/
+legacy/wingfoil-python/build/

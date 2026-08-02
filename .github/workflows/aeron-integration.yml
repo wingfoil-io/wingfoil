@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'wingfoil/src/adapters/aeron/**'
+      - 'legacy/wingfoil/src/adapters/aeron/**'
       - '.github/workflows/aeron-integration.yml'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to

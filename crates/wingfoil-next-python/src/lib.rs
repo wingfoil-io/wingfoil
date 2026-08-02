@@ -1,6 +1,6 @@
 //! Python interop boundary for **wingfoil-next**.
 //!
-//! The design objective (see `next/docs/python-interop.md`) is that users can
+//! The design objective (see `docs/python-interop.md`) is that users can
 //! author IO adapters, ops, and wiring logic in Rust, then compose *and extend*
 //! them from Python alongside the built-in vocabulary. That only works if
 //! everything Python-composable rides a single **erased value type** so the

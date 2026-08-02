@@ -14,7 +14,7 @@ Criterion benchmarks for the next engine. Two groups live here:
 wall-clock thresholds are too noisy on shared runners, so nothing in
 `.github/workflows/` runs `cargo bench`; this suite is a run-on-demand
 scaffold. The deterministic perf gates are *tests* — see
-`tests/sparse_graph.rs` and `tests/merge_n.rs`, and `next/docs/port-plan.md`
+`tests/sparse_graph.rs` and `tests/merge_n.rs`, and `docs/port-plan.md`
 ("The perf gate — a test, not a benchmark").
 
 ## Targets

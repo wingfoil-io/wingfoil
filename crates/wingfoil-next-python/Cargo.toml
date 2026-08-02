@@ -129,7 +129,7 @@ wingfoil-next-python-macros = { path = "../wingfoil-next-python-macros" }
 # NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
 # types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
 # `wingfoil_next`, which owns them (`runtime::run`, `runtime::time`). See
-# `next/docs/cutover-plan.md`: nothing under `next/` may depend on the tree the
+# `docs/cutover-plan.md`: nothing under `crates/` may depend on the tree the
 # cutover deletes.
 # `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
 # matches the `log` the `wingfoil-next` fluent signature names.

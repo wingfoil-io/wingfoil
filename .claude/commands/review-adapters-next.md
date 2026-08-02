@@ -1,7 +1,7 @@
 Audit the wingfoil-next I/O adapters against the `/new-adapter-next` skill and
 the strict-superset parity obligation. Scope: `$ARGUMENTS` names a single
 adapter (e.g. `redis`) to review just that one; leave it blank to review **all**
-next adapters under `next/crates/wingfoil-next/src/adapters/`.
+next adapters under `crates/wingfoil-next/src/adapters/`.
 
 This is a **read-and-report** skill — it changes no adapter code. Its four
 deliverables map to the four things a maintainer needs to know before trusting
@@ -9,7 +9,7 @@ the next adapter surface:
 
 1. **Skill health** — is `.claude/commands/new-adapter-next.md` itself still
    correct, internally consistent, and non-contradictory with
-   `next/CLAUDE.md`, `next/docs/port-plan.md`, and the code it points at?
+   `CLAUDE.md`, `docs/port-plan.md`, and the code it points at?
 2. **Compliance** — does each adapter obey the skill's invariants and step
    requirements?
 3. **Lessons to fold back** — did recent adapter work surface a pitfall / gate /
@@ -31,24 +31,24 @@ Read the ground truth before dispatching any per-adapter work:
   to end; the audit checklist below is derived from it, but the file is the
   authority. If it has grown rules since this review skill was last touched,
   audit against the **file**, and note the drift in deliverable 1.
-- `next/CLAUDE.md` — the superset objective and the "skills are living
+- `CLAUDE.md` — the superset objective and the "skills are living
   documents" mandate.
-- `next/docs/deviation-register.md` — the classified list of known
+- `docs/deviation-register.md` — the classified list of known
   classic↔next deviations (the parity audit cross-checks against this).
-- `next/docs/port-plan.md` — Phase 4 adapter status + the capability matrix +
+- `docs/port-plan.md` — Phase 4 adapter status + the capability matrix +
   "Known parity gaps".
-- `next/docs/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
+- `docs/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
   open design items the skill references (A1–A5).
 
 Then enumerate the review set:
 
 ```bash
 # next adapters (single-file modules and directory modules)
-ls next/crates/wingfoil-next/src/adapters/
+ls crates/wingfoil-next/src/adapters/
 # which legacy adapters have a next twin, and which don't yet
 ls -d wingfoil/src/adapters/*/
 # every documented deviation block currently in the tree
-grep -rn "Deviations from classic" next/crates/wingfoil-next/src/adapters/
+grep -rn "Deviations from classic" crates/wingfoil-next/src/adapters/
 ```
 
 Classify each next adapter up front — the audit differs by kind:
@@ -186,7 +186,7 @@ Independently of the adapters, read `new-adapter-next.md` critically:
   `postgres_write` have since deferred to `start()`); where the skill's prose
   ("Not on `source_at_start` yet: …") has fallen behind the register, that is a
   **lesson to fold back** (deliverable 3), not just a note.
-- **Consistency with `next/CLAUDE.md`** — branching (cut from / merge into
+- **Consistency with `CLAUDE.md`** — branching (cut from / merge into
   `next`), pre-commit checklist, out-of-prelude rule.
 
 ## 3. Lessons-to-fold-back review (deliverable 3 — parent context)
@@ -195,7 +195,7 @@ The skill's own "Feed lessons back into this skill" section makes keeping it
 current part of "done". Hunt for lessons the tree has learned that the skill
 hasn't absorbed yet:
 
-- **Mine recent adapter PRs.** `git log --oneline next -- next/crates/wingfoil-next/src/adapters/`
+- **Mine recent adapter PRs.** `git log --oneline next -- crates/wingfoil-next/src/adapters/`
   and the deviation register's "Resolved / ratified" list. Each resolved item
   (B1 `consume_async` flush teardown, B3 `consume_async_bursts`, B2 unified
   `<adapter>_source`, A5 graph-owned runtime, the `produce_async`/`postgres_write`
@@ -243,7 +243,7 @@ findings:
   undocumented deviation from 4) are safe to apply here — edit
   `new-adapter-next.md`, `deviation-register.md`, or `port-plan.md`, then run
   nothing heavier than a re-read (these are docs). Follow the branch rules in
-  `next/CLAUDE.md` (this is next work — the branch is cut from `next`).
+  `CLAUDE.md` (this is next work — the branch is cut from `next`).
 - **Adapter code fixes** (a real compliance breach) are *not* this skill's job —
   each belongs on its own branch through `/new-adapter-next`'s pre-commit
   checklist (fmt + `cargo lint` + `cargo lint-all` + tests). Hand them back as a

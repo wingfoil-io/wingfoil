@@ -19,7 +19,7 @@ Deploy the complete latency_e2e demo (5 containers: fix_gw, ws_server, prometheu
 ### 1. Install Python dependencies
 
 ```bash
-cd next/crates/wingfoil-next/examples/latency_e2e/pulumi
+cd crates/wingfoil-next/examples/latency_e2e/pulumi
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

@@ -1,5 +1,5 @@
 Implement a new node/op for **wingfoil-next** named `$ARGUMENTS`, in the op
-catalog (`next/crates/wingfoil-next/src/ops.rs`, or `stats.rs` for a
+catalog (`crates/wingfoil-next/src/ops.rs`, or `stats.rs` for a
 statistics op). Follow these steps in order. Work test-driven: write each
 parity test before its implementation.
 
@@ -20,13 +20,13 @@ reference implementations; read them before writing code:
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
 - `crates/wingfoil-next-macros/src/lib.rs` — the `#[op]` macro and its flags.
-- `next/docs/port-plan.md` → **"Adding an op — current tooling"** — the
+- `docs/port-plan.md` → **"Adding an op — current tooling"** — the
   authoritative recipe and the touch-point table; read it first.
 
 ## The parity obligation (read first)
 
-Wingfoil Next's governing design objective (see `next/README.md` and
-`next/CLAUDE.md`) is to become a **strict superset of legacy wingfoil**. If a
+Wingfoil Next's governing design objective (see `README.md` and
+`CLAUDE.md`) is to become a **strict superset of legacy wingfoil**. If a
 classic node named `$ARGUMENTS` exists under `wingfoil/src/nodes/`, it is your
 **parity oracle**:
 
@@ -50,7 +50,7 @@ gate you didn't expect, a pattern worth codifying. **When you hit one, bake it
 into this file** (`.claude/commands/new-op-next.md`), ideally in the same PR, or
 flag it for a follow-up skill update. This skill is meant to grow with every
 op ported — the same way `/new-adapter-next` grew most of its rules. Record
-cross-cutting classic↔next differences in `next/docs/deviation-register.md`.
+cross-cutting classic↔next differences in `docs/deviation-register.md`.
 **Changing an existing op counts too:** if a change invalidates or extends a
 rule here, update the rule in the same PR. A skill that has drifted from how we
 actually add ops is a bug.
@@ -58,7 +58,7 @@ actually add ops is a bug.
 ## 1. Branch
 
 **All next work cuts from and merges into `next`, never `main`** (see
-`next/CLAUDE.md`). Cut the feature branch from `next`:
+`CLAUDE.md`). Cut the feature branch from `next`:
 
 ```bash
 git checkout next && git pull origin next && git checkout -b $ARGUMENTS-op-next
@@ -319,7 +319,7 @@ has `start`/`stop` hooks.
 ## 7. Python bindings (`wingfoil-next-python`)
 
 `wingfoil-next-python` is the **go-forward** Python binding (it supersedes
-legacy `wingfoil-python`; see `next/docs/python-interop.md`). Everything
+legacy `wingfoil-python`; see `docs/python-interop.md`). Everything
 Python-composable rides one erased edge type, `PyElement` — **only the edges
 erase**, the op interior stays natively typed. pyo3 forbids `#[pymethods]` on a
 foreign pyclass, so a user op becomes a **free `#[pyfunction]`**
@@ -406,7 +406,7 @@ node's.
 
 ## 8. Roadmap bookkeeping
 
-Update `next/docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
+Update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
 table (✅/🟡 with the test-file name), matching how the existing catalog rows
 read. If the op is interpreted-only by necessity, note it in the "engine
 coverage" paragraph as a candidate follow-up, not a silent gap.
@@ -425,7 +425,7 @@ cargo lint-all                               # all features (needs protoc)
 cargo test -p wingfoil-next                  # catalog + completeness + parity
 # if you touched Python bindings:
 cargo test -p wingfoil-next-python           # the Rust seam tests
-cd next/crates/wingfoil-next-python && maturin develop && pytest
+cd crates/wingfoil-next-python && maturin develop && pytest
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the

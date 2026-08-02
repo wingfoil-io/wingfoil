@@ -14,7 +14,7 @@ Two groups:
 Unlike redis / etcd / kafka, a Fluvio cluster cannot be started with a single
 ``docker run``: the SC must be told about the SPU *before* the SPU process
 connects, or the SC closes the connection. The workflow mirrors the sequence
-``next/crates/wingfoil-next/tests/fluvio_integration.rs`` documents, on the
+``crates/wingfoil-next/tests/fluvio_integration.rs`` documents, on the
 fixed host-network ports that harness pins (SC 9003, SPU 9010). Note the
 ``infinyon/fluvio`` image ships only ``/fluvio-run``, and CI has no route to
 install the ``fluvio`` CLI — so the workflow makes those admin calls through

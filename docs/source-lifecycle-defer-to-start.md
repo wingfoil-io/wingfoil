@@ -118,30 +118,30 @@ to do it, and the channel/waker-recreation interlock ("the hard part" below) is
 
 Grounding references (all on the `next` branch):
 
-- **`produce_async` / `produce_async_bounded`** — `next/crates/wingfoil-next/src/async_source.rs`.
+- **`produce_async` / `produce_async_bounded`** — `crates/wingfoil-next/src/async_source.rs`.
   The module doc states outright the task "is spawned at *wiring* time, before
   `Runner::run`"; the spawn is `handle.spawn(async move { … })` inside the
   factory (~`async_source.rs:205`, and ~`:330` for the bounded variant). Used by
   etcd / kafka / redis / postgres.
 - **`GraphBuilder::channel` / `external` / `poll` / `source`** —
-  `next/crates/wingfoil-next/src/fluent.rs:209–258` (+ `source` at `:59`,
+  `crates/wingfoil-next/src/fluent.rs:209–258` (+ `source` at `:59`,
   `wire` at `:325`). `channel()`/`external()` return `(Stream<Burst<T>>, Sender)`;
   the *adapter* spawns the feeder thread and owns the socket.
-- **`ChannelSender` / `Message`** — `next/crates/wingfoil-next/src/channel.rs`
+- **`ChannelSender` / `Message`** — `crates/wingfoil-next/src/channel.rs`
   (`Message` enum `:32`, `ChannelSender` `:79`, `send`/`send_at`/`send_error`
   `:110`/`:119`/`:125`).
-- **`zmq_sub`** — `next/crates/wingfoil-next/src/adapters/zmq.rs` (~`:247–258`):
+- **`zmq_sub`** — `crates/wingfoil-next/src/adapters/zmq.rs` (~`:247–258`):
   `let (events, sender) = g.channel(); std::thread::Builder::new().spawn(move ||
   run_subscriber(&address, &sender, &stop))?;` — the thread (and the socket
   connect inside `run_subscriber`) happen in the factory, at wiring. Stop *is*
   already lifecycle-bound: a `ThreadStopGuard` (a `Drop`) carried through a
   passthrough op signals the thread at teardown. Only the *spawn* is eager.
-- **The `reset` hook** — `next/crates/wingfoil-next/src/interp.rs` (`ResetFn`,
+- **The `reset` hook** — `crates/wingfoil-next/src/interp.rs` (`ResetFn`,
   `set_reset` `:643`, the `register_op1` reset closure `:727–729`). Phase 1
   landed this so the deterministic historical subset (tickers/constants/
   combinators/feedback) re-runs; it restores per-node state to its wiring-time
   initial value. I/O sources are explicitly excluded from re-run today.
-- **The single-run decision** — `next/docs/port-plan.md` §0.4 ("decided
+- **The single-run decision** — `docs/port-plan.md` §0.4 ("decided
   (single-run v1)") and the capability-matrix "Re-run" row (note ⁸). This
   proposal is a deliberate revisit of that decision for I/O sources.
 

@@ -4,7 +4,7 @@ on:
   workflow_call:
   push:
     paths:
-      - "wingfoil-python/**"
+      - "legacy/wingfoil-python/**"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
@@ -51,33 +51,33 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: wingfoil-python/pyproject.toml
+          cache-dependency-path: legacy/wingfoil-python/pyproject.toml
 
       - name: Create virtualenv and install dependencies
         run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov pytest-timeout
+          python -m venv legacy/wingfoil-python/.venv
+          legacy/wingfoil-python/.venv/bin/pip install maturin pytest pandas pyzmq pytest-cov pytest-timeout
 
       - name: Build and test Python bindings with Rust coverage
         run: |
           source <(cargo llvm-cov show-env --export-prefix)
-          cd wingfoil-python
+          cd legacy/wingfoil-python
           .venv/bin/maturin develop
           .venv/bin/pytest tests/ -v \
             --timeout=120 \
             --cov=wingfoil \
             --cov-report=lcov:lcov-python.info
           cd ..
-          cargo llvm-cov report -p wingfoil-python \
+          cargo llvm-cov report -p legacy/wingfoil-python \
             --ignore-filename-regex 'py_etcd|py_kdb|py_zmq|py_iceoryx2' \
             --lcov \
-            --output-path wingfoil-python/lcov-rust.info
+            --output-path legacy/wingfoil-python/lcov-rust.info
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@v5
         continue-on-error: true
         with:
-          files: wingfoil-python/lcov-python.info
+          files: legacy/wingfoil-python/lcov-python.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python
           fail_ci_if_error: false
@@ -86,7 +86,7 @@ jobs:
         uses: codecov/codecov-action@v5
         continue-on-error: true
         with:
-          files: wingfoil-python/lcov-rust.info
+          files: legacy/wingfoil-python/lcov-rust.info
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python-rust
           fail_ci_if_error: false

@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'next/crates/wingfoil-next/src/adapters/zmq**'
-      - 'next/crates/wingfoil-next/tests/zmq_integration.rs'
-      - 'next/crates/wingfoil-next/tests/zmq_etcd_integration.rs'
-      - 'next/crates/wingfoil-next-python/src/adapters/zmq.rs'
-      - 'next/crates/wingfoil-next-python/tests/test_zmq.py'
+      - 'crates/wingfoil-next/src/adapters/zmq**'
+      - 'crates/wingfoil-next/tests/zmq_integration.rs'
+      - 'crates/wingfoil-next/tests/zmq_etcd_integration.rs'
+      - 'crates/wingfoil-next-python/src/adapters/zmq.rs'
+      - 'crates/wingfoil-next-python/tests/test_zmq.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -98,14 +98,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: next/crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: next/crates/wingfoil-next-python
+        working-directory: crates/wingfoil-next-python
         # `-F zmq,etcd`: the `_etcd` discovery pair is compiled only when both
         # features are on, and it is the tier this job exists to cover.
         run: |
@@ -114,7 +114,7 @@ jobs:
           .venv/bin/maturin develop -F zmq,etcd
 
       - name: Run Python ZMQ (next) etcd discovery tests
-        working-directory: next/crates/wingfoil-next-python
+        working-directory: crates/wingfoil-next-python
         run: .venv/bin/pytest -m requires_etcd tests/test_zmq.py -v
         env:
           RUST_LOG: INFO

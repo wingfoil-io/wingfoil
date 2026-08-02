@@ -5,7 +5,7 @@ on:
   workflow_call:
   push:
     paths:
-      - 'wingfoil/src/adapters/web/**'
+      - 'legacy/wingfoil/src/adapters/web/**'
       - 'wingfoil-wire-types/**'
       - 'wingfoil-wasm/**'
       - 'wingfoil-js/**'

@@ -186,7 +186,7 @@ pipeline:
    them after the run. ``latency_report_if(..., enabled=False)`` returns a sink
    that never ticks plus an all-zero stats handle — legacy returned the
    *upstream* node, changing the call's return type. This is deviation **D13**
-   in ``next/docs/deviation-register.md``.
+   in ``docs/deviation-register.md``.
 
 .. autoclass:: wingfoil_next.Latency
    :members:
@@ -370,7 +370,7 @@ run time while the hot sub-graphs run as monomorphized straight-line code.
    g.run(cycles=3)
 
 The functions above are the demo components this crate ships to prove the seam
-end to end; see ``next/docs/python-interop.md`` for the design and
+end to end; see ``docs/python-interop.md`` for the design and
 ``examples/plugin_sdk.py`` for the runnable version.
 
 Generated reference

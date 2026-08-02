@@ -1,7 +1,7 @@
 # Adapters (wingfoil-next)
 
 Index and shared conventions for the I/O adapters under
-`next/crates/wingfoil-next/src/adapters/`. Each adapter also has its own
+`crates/wingfoil-next/src/adapters/`. Each adapter also has its own
 `CLAUDE.md` — see the table below.
 
 > These are **next** adapters, built on the Op pattern. The classic
@@ -73,7 +73,7 @@ does not copy the helpers.
   (`PostgresConnection`, `RedisConnection`, `KdbConnection`), pinned by a unit
   test.
 - **The `# Deviations from classic` block in each module's `//!` header is the
-  canonical deviation list**, with `next/docs/deviation-register.md` for the
+  canonical deviation list**, with `docs/deviation-register.md` for the
   cross-cutting rows. These `CLAUDE.md` files summarise; they do not replace.
 
 ## Tests, by tier
@@ -87,7 +87,7 @@ does not copy the helpers.
    Compiled but **not run** by `test-next`; each has its own
    `.github/workflows/<name>-next-integration.yml`, registered in
    `integration-tests.yml`.
-3. Python: `next/crates/wingfoil-next-python/tests/test_<name>.py`. The
+3. Python: `crates/wingfoil-next-python/tests/test_<name>.py`. The
    service-free group runs by default in `next-python-test.yml`; a
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.

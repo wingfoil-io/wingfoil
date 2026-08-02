@@ -7,7 +7,7 @@
 # push targets host.docker.internal:4318 → Tempo.
 #
 # Usage:
-#   docker compose -f next/crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d
+#   docker compose -f crates/wingfoil-next/examples/latency_e2e/docker-compose.yml up -d
 #   open http://localhost:3000  (admin/admin; dashboard is auto-loaded)
 #
 # ws_server:

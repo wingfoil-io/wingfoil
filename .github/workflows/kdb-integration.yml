@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "wingfoil/src/adapters/kdb/**"
-      - "wingfoil/src/adapters/time_slice.rs"
-      - "wingfoil-python/src/py_kdb.rs"
-      - "wingfoil-python/tests/test_kdb.py"
+      - "legacy/wingfoil/src/adapters/kdb/**"
+      - "legacy/wingfoil/src/adapters/time_slice.rs"
+      - "legacy/wingfoil-python/src/py_kdb.rs"
+      - "legacy/wingfoil-python/tests/test_kdb.py"
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -42,7 +42,7 @@ jobs:
           shared-key: integration
 
       - name: Build KDB image
-        run: docker build -t wingfoil-kdb wingfoil/src/adapters/kdb/docker/
+        run: docker build -t wingfoil-kdb legacy/wingfoil/src/adapters/kdb/docker/
 
       - name: Start KDB container
         run: |
@@ -77,16 +77,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: wingfoil-python/pyproject.toml
+          cache-dependency-path: legacy/wingfoil-python/pyproject.toml
 
       - name: Install system dependencies
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Install maturin and build Python bindings
         run: |
-          python -m venv wingfoil-python/.venv
-          wingfoil-python/.venv/bin/pip install maturin pytest
-          cd wingfoil-python && .venv/bin/maturin develop
+          python -m venv legacy/wingfoil-python/.venv
+          legacy/wingfoil-python/.venv/bin/pip install maturin pytest
+          cd legacy/wingfoil-python && .venv/bin/maturin develop
 
       - name: Run Python KDB integration tests
         env:
@@ -94,7 +94,7 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cd wingfoil-python && .venv/bin/pytest -m requires_kdb tests/test_kdb.py -v
+          cd legacy/wingfoil-python && .venv/bin/pytest -m requires_kdb tests/test_kdb.py -v
 
       - name: Dump KDB logs on failure
         if: failure()

@@ -6,7 +6,7 @@ combinators (`map`, `filter`, `distinct`, …) build streams on it; `run` drives
 it and each stream's `value()` reads back its final value.
 
 Build the module first, then run:
-    cd next/crates/wingfoil-next-python && maturin develop
+    cd crates/wingfoil-next-python && maturin develop
     python examples/quick_start.py
 """
 
