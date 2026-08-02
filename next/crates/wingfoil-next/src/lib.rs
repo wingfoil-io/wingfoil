@@ -101,6 +101,10 @@
 pub mod adapters;
 #[cfg(feature = "async")]
 pub mod async_source;
+/// The criterion harness (`add_bench`) used by the graph benchmarks — the
+/// twin of classic wingfoil's `bench`-gated `bencher` module.
+#[cfg(feature = "bench")]
+pub mod bencher;
 pub mod channel;
 pub mod compat;
 pub mod interp;

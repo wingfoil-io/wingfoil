@@ -995,8 +995,9 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    backends are public test support (next's tests live outside the lib). The
    classic Criterion benches (`aeron_publication_latency`,
    `aeron_subscription_throughput`, `aeron_transceiver`,
-   `aeron_allocation_tracking`) are **not** ported — next's bench suite is a
-   separate work item, as for every adapter so far. The canonical deviation list
+   `aeron_allocation_tracking`) are ✅ **ported** with the Phase-6 bench suite
+   (see the Benchmarks bullet): they drive the backends directly, so only the
+   import path changed. The canonical deviation list
    is the adapter's `# Deviations from classic` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
    ✅ **iceoryx2** *(done)*: zero-copy inter-process (and intra-process)
@@ -1032,8 +1033,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (which errors) and the telemetry exporters (which no-op). Ports are created at
    graph `start()` as in classic, so wiring is pure and a bad service name or
    contract mismatch aborts the run with node context (register A1/A4). The
-   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are **not** ported —
-   next's bench suite is a separate work item, as for every adapter so far. The
+   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are ✅ **ported**
+   with the Phase-6 bench suite (see the Benchmarks bullet); `iceoryx2_modes` is
+   rewired onto the next builder node-for-node, `iceoryx2` measures the shared
+   `Burst<T>` and is verbatim. The
    canonical deviation list is the adapter's `# Deviations from classic`
    module-doc block plus [`deviation-register.md`](./deviation-register.md).
 
@@ -1813,6 +1816,21 @@ tests covered — not "legacy pytest passes unchanged."
   differential suite), no regression on the other workloads. Wiring the bench as
   an automated CI gate is deferred — criterion wall-clock thresholds are too
   noisy for the shared CI runners; it stays a run-on-demand scaffold.
+
+  **The classic bench suite is now ported too** 🟢 *landed* — all eight classic
+  targets have next twins declared under the same names with the same
+  `required-features` gating (`graph`, `nanotime`, `bfs_vs_dfs_wingfoil` /
+  `_reactive` / `_async_streams`, `iceoryx2`, `iceoryx2_modes`, and the four
+  `aeron_*`), alongside classic's `bench` and `dhat-heap` features and its
+  `bencher` (`add_bench`) harness. Workloads are kept identical so a next
+  reading sits beside the classic one — the point of the ports, and something
+  that disappears at cutover when the classic bar goes away. Only three targets
+  genuinely move onto the next engine (`graph`, `bfs_vs_dfs_wingfoil`,
+  `iceoryx2_modes`), and their rewiring is node-count-preserving; the rest
+  measure other libraries or ported backend/value types and are verbatim. Per-
+  target deviations are recorded in each bench's own module doc, and the suite
+  is catalogued in `crates/wingfoil-next/benches/README.md`. Still **not** a CI
+  gate, for the reason above.
 
 ## Phase 7 — cutover
 
