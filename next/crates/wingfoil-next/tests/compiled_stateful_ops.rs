@@ -1,5 +1,5 @@
 //! Three-engine parity for the stateful / timer / fallible catalog ops that
-//! reach `graph!` purely through `#[op]` — no per-op macro table row (the old
+//! reach `nitro!` purely through `#[op]` — no per-op macro table row (the old
 //! `OpKind`/`OpInfo` table is gone; #496). Each op carries `#[op(build = ..)]`
 //! next to its `Op` impl, which emits the naming-convention forwarders
 //! (`__wf_op_<name>_*`) and the `__WF_OP_<NAME>_ACTIVATION` const the generic
@@ -56,14 +56,14 @@ macro_rules! assert_three_engines {
 
 // --- throttle: rate-limit a per-cycle counter ------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn throttle_values(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let acc = g.ticker(PERIOD).count().throttle(INTERVAL).accumulate();
         acc
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn throttle_times(g: &GraphBuilder) -> Stream<Vec<NanoTime>> {
         let acc = g
             .ticker(PERIOD)
@@ -95,14 +95,14 @@ fn throttle_times_agree_across_engines() {
 
 // --- window: fixed-time-boundary buffering ---------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn window_values(g: &GraphBuilder) -> Stream<Vec<Vec<u64>>> {
         let acc = g.ticker(PERIOD).count().window(INTERVAL).accumulate();
         acc
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn window_times(g: &GraphBuilder) -> Stream<Vec<NanoTime>> {
         let acc = g
             .ticker(PERIOD)
@@ -140,7 +140,7 @@ fn window_times_agree_across_engines() {
 
 // --- join3 / try_join / try_join3: multi-input edges -----------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn join3_sum(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let a = g.ticker(PERIOD).count();
         let b = a.map(|i| i * 2);
@@ -157,7 +157,7 @@ fn join3_agrees_across_engines() {
     assert_three_engines!(join3_sum, RunFor::Cycles(3), vec![6u64, 12, 18]);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn try_join_sum(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let a = g.ticker(PERIOD).count();
         let b = a.map(|i| i * 10);
@@ -174,7 +174,7 @@ fn try_join_agrees_across_engines() {
     assert_three_engines!(try_join_sum, RunFor::Cycles(3), vec![11u64, 22, 33]);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn try_join3_sum(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let a = g.ticker(PERIOD).count();
         let b = a.map(|i| i * 2);
@@ -194,7 +194,7 @@ fn try_join3_agrees_across_engines() {
 
 // --- fallible propagation: a returned Err aborts every engine ---------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn try_join_fails(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let a = g.ticker(PERIOD).count();
         let b = a.map(|i| i * 10);

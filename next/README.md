@@ -104,7 +104,7 @@ See the full [`order_book`](crates/wingfoil-next/examples/order_book/) and
 
 ## Execution tiers
 
-One wiring function, wrapped in `graph! { fn my_graph(g: &GraphBuilder) -> ... }`,
+One wiring function, wrapped in `nitro! { fn my_graph(g: &GraphBuilder) -> ... }`,
 expands to a module offering all three tiers:
 
 | Tier | Entry point | What it is |
@@ -133,8 +133,8 @@ Every example is runnable with `cargo run -p wingfoil-next --example <name>`
 | [`async`](crates/wingfoil-next/examples/async/) | Drive a graph from an async/Tokio producer of timestamped values at the graph edge. |
 | [`statistics`](crates/wingfoil-next/examples/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
 | [`odds_evens`](crates/wingfoil-next/examples/odds_evens.rs) | Split a counter by parity into two branches and merge back — the split-and-recombine DAG. |
-| [`dual_mode`](crates/wingfoil-next/examples/dual_mode.rs) | One `graph!` wiring expands to both an interpreted and a fully compiled runner. |
-| [`fanout_10x10`](crates/wingfoil-next/examples/fanout_10x10.rs) | A 10×10 fan-out graph expressed through `graph!`, the benchmark shape. |
+| [`dual_mode`](crates/wingfoil-next/examples/dual_mode.rs) | One `nitro!` wiring expands to both an interpreted and a fully compiled runner. |
+| [`fanout_10x10`](crates/wingfoil-next/examples/fanout_10x10.rs) | A 10×10 fan-out graph expressed through `nitro!`, the benchmark shape. |
 
 ### Adapters
 

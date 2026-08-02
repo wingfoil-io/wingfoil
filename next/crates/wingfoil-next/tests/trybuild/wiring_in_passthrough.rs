@@ -2,7 +2,7 @@
 use std::time::Duration;
 use wingfoil_next::prelude::*;
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn bad(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(Duration::from_nanos(10)).count();
         // A non-wiring statement that mentions a stream: `count` may only

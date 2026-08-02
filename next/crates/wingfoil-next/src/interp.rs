@@ -256,7 +256,7 @@ impl Builder {
 /// captures its own `SlotRef` by value, exactly as it captured an `Rc` before.
 ///
 /// `pub` + `#[doc(hidden)]` (like [`Stream::__slot`](crate::fluent::Stream::__slot)
-/// and the other codegen hooks): the `graph!` macro's `nested` expansion, which
+/// and the other codegen hooks): the `nitro!` macro's `nested` expansion, which
 /// lands in downstream crates, reads island inputs through `SlotRef::borrow`.
 #[doc(hidden)]
 pub struct SlotRef<T> {
@@ -280,7 +280,7 @@ impl<T> SlotRef<T> {
     }
 
     /// Shared read of the slot's current value. `pub` (doc-hidden) because the
-    /// `graph!` `nested` expansion calls it from downstream crates.
+    /// `nitro!` `nested` expansion calls it from downstream crates.
     #[doc(hidden)]
     pub fn borrow(&self) -> Ref<'_, T> {
         self.cell.borrow()
@@ -1994,7 +1994,7 @@ impl Builder {
     }
 
     /// Mount a *composite* node: an entire compiled sub-graph behaving as a
-    /// single node of this graph (the `graph!` macro's `nested` expansion).
+    /// single node of this graph (the `nitro!` macro's `nested` expansion).
     ///
     /// The closure owns the sub-graph's state and is called once with
     /// `is_start = true` before the first cycle (to run inner `start` hooks
@@ -2070,7 +2070,7 @@ impl Builder {
             (cell_teardown.borrow_mut())(&mut ctx, CompositePhase::Teardown)?;
             Ok(())
         });
-        // An island can read outer streams passively (a `graph!` input marked
+        // An island can read outer streams passively (a `nitro!` input marked
         // `passive`); those edges do not trigger the composite but must still
         // raise its layer above the values it reads.
         self.set_passive_ups(idx, passive_ups);

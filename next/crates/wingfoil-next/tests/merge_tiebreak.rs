@@ -17,7 +17,7 @@ use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn merge_tie(g: &GraphBuilder) -> Stream<Vec<u64>> {
         // Same period ⇒ both tick every cycle ⇒ the merge tie-break runs each
         // cycle. `a` = 1,2,3,4; `b` = 101,102,103,104.

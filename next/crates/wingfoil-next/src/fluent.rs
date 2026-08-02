@@ -129,7 +129,7 @@ impl GraphBuilder {
     }
 
     /// Mount a composite node (see [`Builder::composite`]). Used by the
-    /// `graph!` macro's `nested` expansion; not intended to be called by
+    /// `nitro!` macro's `nested` expansion; not intended to be called by
     /// hand.
     #[doc(hidden)]
     pub fn __composite<T: Clone + Default + 'static>(
@@ -148,7 +148,7 @@ impl GraphBuilder {
         self.wrap(handle)
     }
 
-    /// The shared per-cycle tick flags. Used by the `graph!` macro's
+    /// The shared per-cycle tick flags. Used by the `nitro!` macro's
     /// `nested` expansion.
     #[doc(hidden)]
     pub fn __ticked(&self) -> Rc<RefCell<Vec<bool>>> {
@@ -626,7 +626,7 @@ impl<T> Stream<T> {
         }
     }
 
-    /// The shared value slot backing this stream. Used by the `graph!`
+    /// The shared value slot backing this stream. Used by the `nitro!`
     /// macro's `nested` expansion to read composite inputs. Returns a
     /// [`SlotRef`] — the frozen access boundary — not the concrete cell, so the
     /// value store can move to an arena later without changing this hook.
@@ -813,7 +813,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Chain the same endomorphic `map` `n` times. `map_n(0, f)` is the
     /// identity (a pass-through). Bounded repetition sugar for a straight deep
-    /// chain; inside `graph!` the count must be a literal so the DAG stays
+    /// chain; inside `nitro!` the count must be a literal so the DAG stays
     /// static.
     fn map_n<F>(&self, n: usize, f: F) -> Stream<T>
     where
@@ -823,7 +823,7 @@ pub trait StreamOps<T>: Sized {
     /// Fan out into `n` parallel branches — each built by `branch` from a copy
     /// of this stream — and merge their outputs back into one stream (earliest-
     /// supplied ticked branch wins, as `merge`). `n` must be at least 1. Inside
-    /// `graph!` the count must be a literal so the DAG stays static.
+    /// `nitro!` the count must be a literal so the DAG stays static.
     ///
     /// The fan-in is one n-ary [`merge_all`](StreamOps::merge_all) node, so a
     /// 256-way fan costs 256 branch tails plus **one** merge — not the

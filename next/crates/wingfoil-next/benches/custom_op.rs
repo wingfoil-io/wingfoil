@@ -11,7 +11,7 @@
 //!   forwarders (including the conservative `__dirty` check the fallback
 //!   adds because it cannot see `ACTIVATION`).
 //!
-//! Both are fully monomorphized by the same `graph!` expansion machinery, so
+//! Both are fully monomorphized by the same `nitro!` expansion machinery, so
 //! any gap is the cost of the generic path itself.
 
 use std::time::Duration;
@@ -105,7 +105,7 @@ impl IncrOps for Stream<f64> {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn table_chain(g: &GraphBuilder) -> Stream<f64> {
         let out = g
             .ticker(PERIOD)
@@ -116,7 +116,7 @@ wingfoil_next::graph! {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn custom_chain(g: &GraphBuilder) -> Stream<f64> {
         let out = g
             .ticker(PERIOD)

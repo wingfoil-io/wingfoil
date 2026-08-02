@@ -1,4 +1,4 @@
-// Shared `graph!` wiring for the 10x10 fan-out demo/benchmark, `include!`d by
+// Shared `nitro!` wiring for the 10x10 fan-out demo/benchmark, `include!`d by
 // `examples/fanout_10x10.rs` and `benches/fanout.rs`.
 //
 // One `count` source is fanned out into 10 parallel 10-deep identity-`map`
@@ -11,7 +11,7 @@
 
 const PERIOD: std::time::Duration = std::time::Duration::from_nanos(100);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fanout(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(PERIOD).count();
         let out = src.fan(10, |s| s.map_n(10, |i| std::hint::black_box(*i)));

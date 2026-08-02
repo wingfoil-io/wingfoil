@@ -290,7 +290,7 @@ classic (same behavior, so not drift).
    `supported_ops!()` function-like macro emitting the same list the
    parse-match and error message use, diffed in a `wingfoil-next` test
    against the fluent trait surface with an explicit "not expressible"
-   allowlist. (The reverse direction — `graph!`-but-not-fluent — is already
+   allowlist. (The reverse direction — `nitro!`-but-not-fluent — is already
    guarded by construction, since `wire()` compiles verbatim.)
 6. **Move the `Tick::Silent` question into Phase 1.** Bug 3 shows the
    contract can't express "update value without ticking," which classic

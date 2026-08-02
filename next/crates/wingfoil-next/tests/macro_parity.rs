@@ -1,4 +1,4 @@
-//! The `graph!` macro closes the dual-mode loop: its input is a single
+//! The `nitro!` macro closes the dual-mode loop: its input is a single
 //! **valid fluent wiring function**, which the macro parses to derive the
 //! DAG. The same tokens expand to `wire()` (the function verbatim),
 //! `interpreted()` (built through `wire`), and `compiled()` (fully
@@ -13,7 +13,7 @@ use wingfoil_next::prelude::*;
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const PERIOD: Duration = Duration::from_millis(10);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
         let count = g.ticker(PERIOD).count();
         let is_even = count.map(|i| i.is_multiple_of(2));
@@ -63,7 +63,7 @@ fn macro_exports_the_wiring_fn_verbatim() {
     assert_eq!(3, runner.value(&extra));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn delayed_counts(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let acc = g
             .ticker(Duration::from_nanos(10))
@@ -90,7 +90,7 @@ fn macro_handles_delay_on_both_engines() {
     assert_eq!(interpreted, compiled);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn sampled(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let tick = g.ticker(Duration::from_nanos(100));
         let acc = g.constant(7u64).sample(&tick).accumulate();
@@ -110,7 +110,7 @@ fn macro_handles_sample_and_constant() {
     assert_eq!(interpreted, compiled);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn configured(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let base = Duration::from_nanos(50);
         let period = base * 2;
@@ -135,7 +135,7 @@ fn macro_allows_passthrough_statements() {
     assert_eq!(interpreted, compiled);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn staged(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(Duration::from_nanos(50)).count();
         let step: u64 = 3;
@@ -158,7 +158,7 @@ fn macro_interleaves_passthrough_with_wiring() {
     assert_eq!(interpreted, compiled);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn joined(g: &GraphBuilder) -> (Stream<Vec<u64>>, Stream<u64>) {
         let count = g.ticker(Duration::from_nanos(100)).count();
         let doubled = count.map(|i| i * 2);
@@ -182,7 +182,7 @@ fn macro_handles_join_and_multiple_outputs() {
     assert_eq!(6, compiled_doubled);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn stats(g: &GraphBuilder) -> (Stream<Vec<f64>>, Stream<Vec<f64>>) {
         let x = g.ticker(Duration::from_nanos(10)).count().map(|i| *i as f64);
         let smoothed = x.ewma_per_tick(0.5).accumulate();

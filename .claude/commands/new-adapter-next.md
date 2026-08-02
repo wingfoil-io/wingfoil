@@ -724,7 +724,7 @@ the adapter is **transform ops**, the same shape as `stats`:
    `<Name>Cfg`), `State` = the sliding window / model state (`Default`),
    `In<'a> = (&'a I,)`, `ACTIVATION = Activation::NONE`. The attribute
    generates the interpreted `Builder::name` method **and** the forwarders
-   that make the op usable inside `graph!`/`compiled()` — no macro edits.
+   that make the op usable inside `nitro!`/`compiled()` — no macro edits.
 2. Return `Tick::Quiet` during warm-up (window not full), `Tick::Value(out)`
    after; heavy refits every tick are the *caller's* choice — document
    "throttle upstream if you don't need a fresh fit per tick".

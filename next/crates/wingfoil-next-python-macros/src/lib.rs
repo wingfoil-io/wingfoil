@@ -173,7 +173,7 @@ impl Parse for PyGraphArgs {
 ///   erased independently and each chainable.
 /// - **An optional leading `&GraphBuilder`** — for wiring that creates nodes of
 ///   its own rather than only extending its inputs. The generated callable then
-///   takes the graph first. This is what makes a `graph!`-generated
+///   takes the graph first. This is what makes a `nitro!`-generated
 ///   **`nested()` compiled island** expressible: its signature is exactly
 ///   `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, so an island needs no
 ///   island-specific macro. With the builder and no stream inputs, the
@@ -218,7 +218,7 @@ fn stream_inner(ty: &Type) -> syn::Result<Type> {
 /// Is this the wiring fn's optional leading `&GraphBuilder` parameter?
 ///
 /// A sub-graph needs the builder when it creates nodes of its own rather than
-/// only extending its inputs — most importantly a `graph!`-generated
+/// only extending its inputs — most importantly a `nitro!`-generated
 /// `nested()` **compiled island**, whose signature is
 /// `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`.
 fn is_graph_builder(ty: &Type) -> bool {

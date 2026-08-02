@@ -1,7 +1,7 @@
-# Making the `graph!` op-set extensible — decision & prototype results
+# Making the `nitro!` op-set extensible — decision & prototype results
 
 **Question.** A framework user cannot add their own op and use it inside
-`graph!` / `compiled()` / `nested()` without editing the macro crate. Should
+`nitro!` / `compiled()` / `nested()` without editing the macro crate. Should
 the macro's op-table become optional — an unknown user op flowing through a
 generic, trait-driven path so it works in `compiled()` with no macro-crate
 edit — and if so, how far do we take it?
@@ -59,7 +59,7 @@ Everything below is grounded in the prototype commits on this branch:
 | closure config | `Apply<F>` (`Cfg = F`) | `_cycle_owned` by-value inference deferral (same trick as `cycle_owned_cfg`) |
 
 plus in-crate `.distinct()` — which has `#[op]` but **no table row** — showing
-the whole existing `#[op]` catalog reaches `graph!` for free. All of it runs
+the whole existing `#[op]` catalog reaches `nitro!` for free. All of it runs
 through **all three expansions** — `interpreted()`, `compiled()`, and a
 `nested()` island — with value parity.
 
@@ -94,7 +94,7 @@ full compiled/interpreted gap (~10×) for user ops.
 > **Revisited:** [`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md)
 > works out the two-phase route in full — with a `func!` quotation
 > primitive it becomes sound for a defined subset (and buys dynamic
-> topology), positioned as a second front-end that emits `graph!` input.
+> topology), positioned as a second front-end that emits `nitro!` input.
 > The "No" below stands for the *unassisted* form described here.
 
 No — not in a single compilation. A proc macro expands *before* name
@@ -257,7 +257,7 @@ with overlapping confidence intervals on a host drifting ±5% between runs
 a user transform in a hot compiled graph — behind a per-activation dyn
 boundary for no reason now that the fallback is measured at 1.01×. Option 3
 (full type-level graph) buys nothing further on performance (already 1×),
-destroys the "wiring fn is plain, valid Rust" property that makes `graph!`
+destroys the "wiring fn is plain, valid Rust" property that makes `nitro!`
 reviewable, and pays the well-known type-level costs (DAG fan-in/sharing/
 feedback as HList/index gymnastics, brutal error messages) to delete a table
 that option 2 has already reduced to a static, non-growing residue of

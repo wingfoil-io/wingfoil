@@ -110,7 +110,7 @@ a fan-in of runtime width has none. The route that works, if you need another:
   generics) unless the op overrides `start`, because `start` takes no input to
   anchor them from. Getting that wrong fails at the call site with E0282, not in
   the op.
-- On the `graph!` side, set `NodeDef::variadic` where you build the node;
+- On the `nitro!` side, set `NodeDef::variadic` where you build the node;
   `cycle_input` then emits a pair *slice* rather than a tuple, and the dispatch
   condition drops the passive mask (a variadic op is all-active, and the mask is
   a `u32` a wide fan-in would shift past).
@@ -132,7 +132,7 @@ the interpreted side through the public `register_op1`…`register_op4` (or
 example of both.
 
 The two hard constraints behind this (from `macro-extensibility-decision.md`):
-a proc macro sees **tokens, not resolved types**, so `graph!` can't introspect
+a proc macro sees **tokens, not resolved types**, so `nitro!` can't introspect
 an `Op` impl; and a trait **can't be extended from scattered sites**, so the
 fluent method's *declaration* is always hand-written (its body usually is not —
 see step 4). Everything else is generated.
@@ -250,7 +250,7 @@ Hand-written, it is a one-liner over `Stream::wire`:
 A source's fluent method goes on `SourceOps` and calls `GraphBuilder::source`
 / the generated `Builder` method.
 
-## 5. `graph!` / compiled coverage
+## 5. `nitro!` / compiled coverage
 
 For any `#[op]` op this is **zero-touch**: the attribute emits the
 forwarder functions (`__wf_op_<name>_cycle`, `__WF_OP_<NAME>_ACTIVATION`) that
@@ -267,7 +267,7 @@ equivalent forwarder, or add it to the documented fluent-only allowlist in
 `tests/op_completeness.rs` (see step 6). Never leave it silently in neither.
 
 **Gotcha — an ergonomic fluent signature that differs from the op's `Cfg`
-forces fluent-only.** `graph!`/compiled emission uses the **call-site argument
+forces fluent-only.** `nitro!`/compiled emission uses the **call-site argument
 types verbatim** as the op's `Cfg` (a plain arg → `__cfg` local, tuple in call
 order), then hands them to `__wf_op_<name>_cycle(__cfg: &mut <Cfg>)`. So a
 call-site type must *equal* the `Cfg` type. If the fluent method takes a
@@ -299,10 +299,10 @@ Mirror the classic node's own unit tests. Conventions (see `tests/catalog.rs`,
 ### Completeness / engine-parity guard — `tests/op_completeness.rs`
 
 This is a **compile-time** guard against one-sided registration: a combinator
-used inside a `graph!` block only compiles if it has **both** a fluent method
+used inside a `nitro!` block only compiles if it has **both** a fluent method
 **and** a forwarder. So:
 
-- **Dual-mode op** → add it to a `graph!` block here; each block also asserts
+- **Dual-mode op** → add it to a `nitro!` block here; each block also asserts
   `interpreted() == compiled()`, extending engine-parity across your op.
 - **Deliberately fluent-only op** (IO/cyclic source, or a not-yet-forwarded
   shape) → add it to the documented allowlist in this file with a one-line
@@ -436,10 +436,10 @@ Before opening a PR, run a clean-context review pass as a subagent:
    `no_builder` is justified by a signature that differs from the shape, not by
    the shape itself; a fluent method on the right trait — declaration by hand,
    body via `__wf_fluent_<name>!(T)` unless step 4 says otherwise — out of the
-   prelude for a domain op (step 4); `graph!`/compiled coverage is zero-touch or
+   prelude for a domain op (step 4); `nitro!`/compiled coverage is zero-touch or
    the op is a documented fluent-only entry (step 5); catalog tests assert
    values **and** tick times and the op appears in `op_completeness.rs` (a
-   `graph!` block or the allowlist) (step 6); Python binding + registration +
+   `nitro!` block or the allowlist) (step 6); Python binding + registration +
    seam test + pytest, or a stated reason there's none (step 7); port-plan
    updated (step 8).
 3. **Check parity**: diff against the classic node — every classic test has a

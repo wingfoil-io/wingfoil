@@ -21,9 +21,9 @@ legacy capability, example, or test case.
   (`src/adapters/`), channel/async sources (`channel.rs`, `async_source.rs`),
   the classic-style facade (`compat.rs`), plus `examples/`, `tests/`,
   `benches/`.
-- `crates/wingfoil-next-macros` — `graph!` (one wiring fn → `interpreted()` /
+- `crates/wingfoil-next-macros` — `nitro!` (one wiring fn → `interpreted()` /
   `compiled()` / `nested()`) and `#[op]` (generates the interpreted
-  `Builder` method and the forwarders `graph!` dispatches through).
+  `Builder` method and the forwarders `nitro!` dispatches through).
 - `docs/port-plan.md` — the phase-by-phase roadmap, the capability matrix,
   and "Adding an op". Read it before adding ops or adapters.
 
@@ -48,7 +48,7 @@ legacy capability, example, or test case.
 - **Fallibility**: every lifecycle fn returns `anyhow::Result`;
   `sender.send_error(e)` propagates a producer error into the graph and
   aborts the run with context.
-- **`graph!` has no per-op table**: `#[op(build = name)]` on an `Op` impl
+- **`nitro!` has no per-op table**: `#[op(build = name)]` on an `Op` impl
   generates both the interpreted builder method and the forwarders that
   compiled/nested emission dispatches through. Built-in and user ops take
   the identical path.
@@ -91,7 +91,7 @@ to next. **Use them for their respective tasks:**
 
 - **`/new-op-next`** (`.claude/commands/new-op-next.md`) — adding a node/op to
   the catalog (`ops.rs` / `stats.rs`): the `Op` shape, `#[op(build = …)]`, the
-  fluent extension-trait method, `graph!`/compiled coverage, the `#[pyop]` /
+  fluent extension-trait method, `nitro!`/compiled coverage, the `#[pyop]` /
   `pyop_fn!` Python bindings, and the parity + completeness tests.
 - **`/new-adapter-next`** (`.claude/commands/new-adapter-next.md`) — adding an
   I/O adapter under `src/adapters/`: source/sink shapes, feature gating, the

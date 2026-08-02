@@ -235,7 +235,7 @@ webpki-roots = { version = "0.26", optional = true }
 kanal = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
-# Compile-fail tests pinning the `graph!` macro's key error paths.
+# Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
 # The `latency_stages!` macro derives serde on the generated record, so a crate

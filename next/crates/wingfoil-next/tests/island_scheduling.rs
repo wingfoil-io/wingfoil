@@ -19,7 +19,7 @@ use wingfoil_next::stats::StatisticsOps;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // `constant` (a one-shot source), `filter` (a conditional gate), and
     // `merge` (a tie-broken join) all inside one island.
     fn merge_filter_constant(g: &GraphBuilder) -> Stream<Vec<u64>> {
@@ -64,7 +64,7 @@ fn island_merge_filter_constant_all_paths() {
     assert_eq!(r.value(&flat), r.value(&island), "nested == flat wiring");
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // A statistics op (clock-aware, stateful) inside an island.
     fn ewma_island(g: &GraphBuilder) -> Stream<f64> {
         let x = g.ticker(Duration::from_nanos(100)).count().map(|i| *i as f64);
@@ -104,7 +104,7 @@ fn island_statistics_ewma_all_paths() {
     );
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // Two independent scheduling ops in one island: the `ticker` source and a
     // `delay`. In the compiled island both live in the same private schedule
     // queue, so their due-times interleave — exercising the queue demux with

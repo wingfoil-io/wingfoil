@@ -1,8 +1,8 @@
 //! The `benches/graph.rs` "10x10" fan-out graph expressed through the
-//! `graph!` macro: one `count` source fanned out into 10 parallel 10-deep
+//! `nitro!` macro: one `count` source fanned out into 10 parallel 10-deep
 //! identity-`map` chains, merged back into one stream.
 //!
-//! Because `graph!` v1 requires straight-line wiring (the DAG must be static),
+//! Because `nitro!` v1 requires straight-line wiring (the DAG must be static),
 //! the 100 `.map()` nodes cannot be built with a `for` loop the way the
 //! classic fluent wiring does — they are spelled out literally in the shared
 //! `bench_support/fanout_10x10.rs`. From those tokens the macro derives both

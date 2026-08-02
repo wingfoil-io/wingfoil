@@ -1,4 +1,4 @@
-//! The `graph!` macro: **a fluent wiring function in, both engines out**.
+//! The `nitro!` macro: **a fluent wiring function in, both engines out**.
 //!
 //! The macro body is a single, *valid Rust* function written against the
 //! fluent API: it takes the builder as a parameter, wires streams with
@@ -22,7 +22,7 @@
 //!   the earliest forwarded to the outer kernel.
 //!
 //! ```ignore
-//! wingfoil_next::graph! {
+//! wingfoil_next::nitro! {
 //!     pub fn evens_sum(g: &GraphBuilder) -> Stream<u64> {
 //!         let count = g.ticker(PERIOD).count();
 //!         let is_even = count.map(|i| i.is_multiple_of(2));
@@ -222,7 +222,7 @@ impl NodeDef {
     }
 }
 
-struct GraphDef {
+struct NitroDef {
     /// The module name (= the wiring function's name).
     name: Ident,
     /// The wiring function, re-emitted verbatim as `wire` in the module.
@@ -318,7 +318,7 @@ fn stream_value_type(ty: &Type) -> syn::Result<Type> {
     }
     Err(syn::Error::new(
         ty.span(),
-        "graph functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
+        "nitro functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
     ))
 }
 
@@ -742,23 +742,23 @@ fn merge_all_arg_error(arg: &Expr) -> syn::Error {
     )
 }
 
-impl Parse for GraphDef {
+impl Parse for NitroDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let wire_fn: ItemFn = input.parse()?;
         if !input.is_empty() {
-            return Err(input.error("graph! takes exactly one function definition"));
+            return Err(input.error("nitro! takes exactly one function definition"));
         }
         let sig = &wire_fn.sig;
         if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
             return Err(syn::Error::new(
                 sig.generics.span(),
-                "graph functions cannot be generic",
+                "nitro functions cannot be generic",
             ));
         }
         if sig.asyncness.is_some() || sig.constness.is_some() || sig.unsafety.is_some() {
             return Err(syn::Error::new(
                 sig.span(),
-                "graph functions must be plain `fn`s",
+                "nitro functions must be plain `fn`s",
             ));
         }
 
@@ -769,7 +769,7 @@ impl Parse for GraphDef {
         let Some(syn::FnArg::Typed(builder_param)) = params.next() else {
             return Err(syn::Error::new(
                 sig.inputs.span(),
-                "graph functions take the builder as their first parameter, e.g. \
+                "nitro functions take the builder as their first parameter, e.g. \
                  `g: &GraphBuilder`",
             ));
         };
@@ -787,7 +787,7 @@ impl Parse for GraphDef {
             let syn::FnArg::Typed(param) = param else {
                 return Err(syn::Error::new(
                     param.span(),
-                    "graph functions take no self",
+                    "nitro functions take no self",
                 ));
             };
             let Pat::Ident(pat) = &*param.pat else {
@@ -810,7 +810,7 @@ impl Parse for GraphDef {
         let ReturnType::Type(_, ret_ty) = &sig.output else {
             return Err(syn::Error::new(
                 sig.span(),
-                "graph functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
+                "nitro functions must return `Stream<T>` (or a tuple of `Stream<T>`s)",
             ));
         };
         let out_types: Vec<Type> = match &**ret_ty {
@@ -883,7 +883,7 @@ impl Parse for GraphDef {
                             ident.span(),
                             format!(
                                 "`{ident}` shadows an earlier binding — shadowing is not \
-                                 supported inside graph! (compiled() inlines closures after \
+                                 supported inside nitro! (compiled() inlines closures after \
                                  all statements run, so the engines would disagree on which \
                                  binding a closure captures)"
                             ),
@@ -969,7 +969,7 @@ impl Parse for GraphDef {
             ));
         }
 
-        Ok(GraphDef {
+        Ok(NitroDef {
             name: sig.ident.clone(),
             builder_by_ref,
             inputs,
@@ -983,11 +983,11 @@ impl Parse for GraphDef {
 
 /// See the crate docs: fluent wiring in, `interpreted()` + `compiled()` out.
 #[proc_macro]
-pub fn graph(input: TokenStream) -> TokenStream {
-    let def = parse_macro_input!(input as GraphDef);
+pub fn nitro(input: TokenStream) -> TokenStream {
+    let def = parse_macro_input!(input as NitroDef);
     let out = expand(&def);
-    if std::env::var_os("GRAPH_DEBUG").is_some() {
-        eprintln!("=== graph! {} ===\n{}", def.name, out);
+    if std::env::var_os("NITRO_DEBUG").is_some() {
+        eprintln!("=== nitro! {} ===\n{}", def.name, out);
     }
     out.into()
 }
@@ -1169,7 +1169,7 @@ fn idents_of(tokens: TokenStream2) -> std::collections::HashSet<String> {
 }
 
 /// The parsed shape of an `Op::In` tuple: its stream edges, and how to build
-/// the op's `In` value from the **uniform pairs input** the `graph!` emission
+/// the op's `In` value from the **uniform pairs input** the `nitro!` emission
 /// always passes — `((&v0, t0), (&v1, t1), ...)`, one `(value, tick)` pair
 /// per edge. Element forms:
 /// - `&T` — edge, value only;
@@ -1350,9 +1350,9 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     };
     let where_tokens = quote! { where #(#preds),* };
 
-    // ---- graph! forwarders --------------------------------------------------
+    // ---- nitro! forwarders --------------------------------------------------
     //
-    // Generic functions the `graph!` emission calls by naming convention
+    // Generic functions the `nitro!` emission calls by naming convention
     // (`__wf_op_<name>_cycle` ...), so the macro never names the op type —
     // rustc\'s inference resolves it from the argument types at the expansion
     // site. The emission is uniform: every edge arrives as a `(value, tick)`
@@ -1605,7 +1605,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
 
     // `_stop` / `_teardown` — the end-of-run lifecycle hooks. Emitted for
     // *every* op and always *real* (calling `<X as Op>::stop`/`teardown`,
-    // whose trait default is a no-op that constant-folds away): the `graph!`
+    // whose trait default is a no-op that constant-folds away): the `nitro!`
     // tail can then call them for every node unconditionally without the macro
     // knowing which ops override a hook. Crucially they mirror
     // `cycle` / `cycle_owned` *exactly* — same `#pairs_ty` input parameter,
@@ -2195,7 +2195,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     })
 }
 
-fn expand(def: &GraphDef) -> TokenStream2 {
+fn expand(def: &NitroDef) -> TokenStream2 {
     // A graph with input streams cannot run standalone — it expands to
     // `wire` + `nested` only. A self-contained graph gets all four.
     let standalone = if def.inputs.is_empty() {
@@ -2239,7 +2239,7 @@ fn expand(def: &GraphDef) -> TokenStream2 {
     }
 }
 
-fn expand_interpreted(def: &GraphDef) -> TokenStream2 {
+fn expand_interpreted(def: &NitroDef) -> TokenStream2 {
     let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
     let out_names: Vec<&Ident> = def.outs.iter().map(|(n, _)| n).collect();
     let call = if def.builder_by_ref {
@@ -2327,7 +2327,7 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
 /// Passthrough statements interleaved with node declarations in source
 /// order: a config expression must see exactly the passthrough bindings
 /// that preceded its wiring statement in `wire()` (shadowing included).
-fn interleaved_setup(def: &GraphDef) -> Vec<TokenStream2> {
+fn interleaved_setup(def: &NitroDef) -> Vec<TokenStream2> {
     let mut setup: Vec<TokenStream2> = Vec::new();
     let mut passthrough = def.passthrough.iter().peekable();
     for (i, node) in def.nodes.iter().enumerate() {
@@ -2376,7 +2376,7 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
 /// the interpreted `Runner`. Closure-config nodes route through the `_owned`
 /// forwarder, threading the literal closure through by value (as `cycle_owned`
 /// does) so a `finally` closure is available to its `teardown`.
-fn node_lifecycle(def: &GraphDef, target: Target, idx: usize, hook: &str) -> TokenStream2 {
+fn node_lifecycle(def: &NitroDef, target: Target, idx: usize, hook: &str) -> TokenStream2 {
     let node = &def.nodes[idx];
     let cfg = format_ident!("__cfg_{}", node.name);
     let state = format_ident!("__state_{}", node.name);
@@ -2413,7 +2413,7 @@ fn node_lifecycle(def: &GraphDef, target: Target, idx: usize, hook: &str) -> Tok
 /// guards for busy-poll (`always`) and callback (`schedules`/`threaded`)
 /// activation — all consts, folded away after monomorphization for the ops
 /// that do not use them.
-fn node_dispatch(def: &GraphDef, target: Target, i: usize) -> TokenStream2 {
+fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     let node = &def.nodes[i];
     let name = &node.name;
     let cfg = format_ident!("__cfg_{}", name);
@@ -2490,7 +2490,7 @@ fn node_dispatch(def: &GraphDef, target: Target, i: usize) -> TokenStream2 {
     quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
 }
 
-fn expand_compiled(def: &GraphDef) -> TokenStream2 {
+fn expand_compiled(def: &NitroDef) -> TokenStream2 {
     let n = def.nodes.len();
     let setup = interleaved_setup(def);
     let mut starts = Vec::new();
@@ -2561,7 +2561,7 @@ fn expand_compiled(def: &GraphDef) -> TokenStream2 {
 /// the same monomorphized straight-line code `compiled` emits, with inner
 /// schedules demultiplexed through a private `TimeQueue` — only the
 /// earliest is forwarded to the outer kernel.
-fn expand_nested(def: &GraphDef) -> TokenStream2 {
+fn expand_nested(def: &NitroDef) -> TokenStream2 {
     let n = def.nodes.len();
     let (out_name, out_ty) = &def.outs[0];
     let out_t = format_ident!("__t_{}", out_name);
@@ -2748,7 +2748,7 @@ fn output_value_expr(o: &Ident) -> TokenStream2 {
 /// A `&`-expression for reading an upstream's current value. An input
 /// upstream's local is a borrow guard on the outer graph's slot, so it is
 /// re-borrowed rather than referenced.
-fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
+fn upstream_value_expr(def: &NitroDef, ix: usize) -> TokenStream2 {
     let up = &def.nodes[ix];
     let ident = format_ident!("__v_{}", up.name);
     if up.is_input() {
@@ -2762,7 +2762,7 @@ fn upstream_value_expr(def: &GraphDef, ix: usize) -> TokenStream2 {
 /// (`()` for sources). The op's `_cycle` forwarder adapts the pairs to its
 /// declared `In` shape — value-only, tick-flagged, or pairs-verbatim — so
 /// the macro carries no per-op input-shape knowledge at all.
-fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
+fn cycle_input(def: &NitroDef, node: &NodeDef) -> TokenStream2 {
     if node.refs.is_empty() {
         return quote! { () };
     }
@@ -2788,7 +2788,7 @@ fn cycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
 /// dispatch loop / cycle phase and are out of scope at the cleanup tail) and an
 /// input edge is read straight from its captured slot rather than the
 /// cycle-phase borrow guard.
-fn lifecycle_input(def: &GraphDef, node: &NodeDef) -> TokenStream2 {
+fn lifecycle_input(def: &NitroDef, node: &NodeDef) -> TokenStream2 {
     if node.refs.is_empty() {
         return quote! { () };
     }

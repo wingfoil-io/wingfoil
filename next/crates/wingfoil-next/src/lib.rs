@@ -28,7 +28,7 @@
 //! - A compiled runner is a plain function with state in locals that calls
 //!   **the same `Op::cycle` functions**, monomorphized — see
 //!   `tests/compiled_parity.rs` for the hand-expanded odds/evens graph. (In
-//!   the full design this expansion is produced by a `graph!` proc macro so
+//!   the full design this expansion is produced by a `nitro!` proc macro so
 //!   wiring is written once; the macro is mechanical once this shape works.)
 //!
 //! The load-bearing property demonstrated here: **both engines execute the
@@ -38,7 +38,7 @@
 //!
 //! Built out from that prototype, and what each module now holds:
 //!
-//! - **[`graph!`](macro@graph)** — one wiring function, three execution paths
+//! - **[`nitro!`](macro@nitro)** — one wiring function, three execution paths
 //!   from the same tokens: `interpreted()`, fully-monomorphized `compiled()`,
 //!   and `nested()` (a compiled island as one node of an interpreted graph).
 //! - **[`fluent`]** — the chaining API as *extension traits*
@@ -49,7 +49,7 @@
 //!   the sources), and **[`stats`]** — EWMA and rolling-window statistics as a
 //!   separate opt-in [`StatisticsOps`](stats::StatisticsOps) trait. An op is
 //!   single-sourced through **one mechanism**: `#[op(build = name)]` on its
-//!   `Op` impl generates the interpreted `Builder` method *and* the `graph!`
+//!   `Op` impl generates the interpreted `Builder` method *and* the `nitro!`
 //!   forwarder functions every compiled/nested emission dispatches through,
 //!   both derived from the op's declared shape — there is no per-op table in
 //!   the macro, so built-in and user ops take the identical path — see
@@ -115,15 +115,15 @@ pub use wingfoil::{Burst, burst};
 /// `interpreted()` (fluent wiring) and `compiled(run_mode, run_for)` (fully
 /// monomorphized runner) emitted from the same tokens. See
 /// [`wingfoil_next_macros`] for the DSL.
-pub use wingfoil_next_macros::graph;
+pub use wingfoil_next_macros::nitro;
 
-// Re-exported so `graph!`-generated code can reach the kernel and run types
+// Re-exported so `nitro!`-generated code can reach the kernel and run types
 // through `::wingfoil_next::wingfoil::...` without the caller depending on
 // the `wingfoil` crate directly.
 #[doc(hidden)]
 pub use wingfoil;
 
-// Re-exported so `graph!`-generated code (the fallible `compiled()` /
+// Re-exported so `nitro!`-generated code (the fallible `compiled()` /
 // `nested()` expansions) can name `Result` without the caller depending on
 // `anyhow` directly.
 #[doc(hidden)]

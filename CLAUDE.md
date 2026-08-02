@@ -41,7 +41,7 @@ next/               # Wingfoil Next — the Op-pattern engine being built to rep
   docs/             # port-plan.md (the port roadmap), design reviews/decisions
   crates/
     wingfoil-next/        # Dual-mode (interpreted + compiled) engine, ops, adapters
-    wingfoil-next-macros/ # graph! / #[op] proc macros
+    wingfoil-next-macros/ # nitro! / #[op] proc macros
 
 wingfoil-derive/    # Proc macros (#[node] attribute)
 wingfoil-python/    # PyO3 Python bindings (built with maturin)

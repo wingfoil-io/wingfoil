@@ -1,4 +1,4 @@
-//! Compiled islands inside interpreted graphs: the `graph!` macro's
+//! Compiled islands inside interpreted graphs: the `nitro!` macro's
 //! `nested` expansion mounts an entire compiled sub-graph as a **single
 //! node** of an interpreted graph. The outer engine pays one dyn call per
 //! activation for the whole island; inner dispatch is the same
@@ -18,7 +18,7 @@ use wingfoil_next::prelude::*;
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn scaled_sum(g: &GraphBuilder, src: &Stream<u64>) -> Stream<u64> {
         let doubled = src.map(|i| i * 2);
         let summed = doubled.fold(0u64, |acc, v| *acc += v);
@@ -47,7 +47,7 @@ fn island_with_input_matches_flat_wiring() {
     assert_eq!(flat_values, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn delayed(g: &GraphBuilder, src: &Stream<u64>) -> Stream<u64> {
         let out = src.delay(Duration::from_nanos(100));
         out
@@ -74,7 +74,7 @@ fn island_delay_schedules_through_outer_kernel() {
     assert_eq!(flat_values, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn pulse(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(Duration::from_nanos(50)).count();
         let scaled = count.map(|i| i * 10);
@@ -113,7 +113,7 @@ fn source_island_agrees_with_standalone_expansions() {
     assert_eq!(interpreted, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn gated(g: &GraphBuilder, data: &Stream<u64>, trigger: &Stream<()>) -> Stream<u64> {
         let sampled = data.sample(trigger);
         sampled

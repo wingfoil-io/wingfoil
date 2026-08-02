@@ -231,14 +231,14 @@ fn merge_all_forwards_bursts_intact() {
     );
 }
 
-// ---- graph! / compiled / nested coverage ----------------------------------
+// ---- nitro! / compiled / nested coverage ----------------------------------
 //
 // Both fan-in spellings now emit a single n-ary node on the compiled paths
 // too, so each block is also the two-sided registration guard `op_completeness`
 // describes: it only compiles if the fluent method and the `merge_n`
 // forwarders both exist.
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn merged(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let a = g.ticker(std::time::Duration::from_nanos(30)).count();
         let b = g.ticker(std::time::Duration::from_nanos(10)).count().map(|c| *c + 100);
@@ -248,7 +248,7 @@ wingfoil_next::graph! {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fanned(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let src = g.ticker(std::time::Duration::from_nanos(10)).count();
         let out = src.fan(4, |s| s.map(|c| *c + 1)).accumulate();
@@ -256,7 +256,7 @@ wingfoil_next::graph! {
     }
 }
 
-/// `merge_all` inside `graph!` — new capability: it used to be fluent-only
+/// `merge_all` inside `nitro!` — new capability: it used to be fluent-only
 /// ("sugar over a primitive — spell the primitive"), because a chain was all
 /// it was. Now it is a real op with real forwarders, so all three engines
 /// emit it and must agree.
@@ -280,7 +280,7 @@ fn graph_merge_all_agrees_across_engines() {
     assert_eq!(interpreted, r.value(&island), "interpreted == nested");
 }
 
-/// `fan` inside `graph!` emits one n-ary merge on the compiled paths, matching
+/// `fan` inside `nitro!` emits one n-ary merge on the compiled paths, matching
 /// the fluent wiring it is derived from.
 #[test]
 fn graph_fan_agrees_across_engines() {

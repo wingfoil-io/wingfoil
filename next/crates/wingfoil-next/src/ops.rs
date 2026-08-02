@@ -5,7 +5,7 @@
 //! engine, interpreted or compiled.
 //!
 //! Every op carries `#[op(build = name)]`, which generates *both* engines'
-//! wiring from the op's declared shape: the `graph!` forwarder functions
+//! wiring from the op's declared shape: the `nitro!` forwarder functions
 //! (`__wf_op_<name>_*`) that all compiled/nested emission dispatches through,
 //! and the interpreted [`Builder`](crate::interp::Builder) method, with the
 //! node label derived from `type_name`. That covers every shape in the
@@ -621,8 +621,8 @@ where
 /// `no_builder`: a hand-written [`Builder::with_time`](crate::interp::Builder::with_time)
 /// seeds the output `(NanoTime, T)` slot from the input's current value, so the
 /// interpreted path needs only `T: Clone` (never `T: Default`). The `#[op]`
-/// attribute is kept for its `graph!` forwarders, which seed the value slot
-/// with `Default::default()` — so inside `graph!`/compiled the output type must
+/// attribute is kept for its `nitro!` forwarders, which seed the value slot
+/// with `Default::default()` — so inside `nitro!`/compiled the output type must
 /// be `Default` (`(NanoTime, T): Default`, i.e. `T: Default`). That pre-first-tick
 /// seed is only ever read by a passive downstream before the first tick; the op
 /// itself ticks in lockstep with its source, so the observed values agree across
@@ -774,7 +774,7 @@ impl Op for Ewma {
 /// [`Ewma`] with a fixed per-tick smoothing factor — `Cfg` is the bare
 /// `alpha` as passed at the call site; the [`EwmaDecay`] policy is built
 /// inside `cycle` (an enum wrap, folded after monomorphization). Previously
-/// call-site sugar duplicated in the fluent layer and the `graph!` macro.
+/// call-site sugar duplicated in the fluent layer and the `nitro!` macro.
 pub struct EwmaPerTick;
 
 #[op(build = ewma_per_tick)]
@@ -2454,7 +2454,7 @@ where
 }
 
 /// Running count of upstream ticks: 1, 2, 3, … Previously desugared to
-/// [`Fold`] separately in the fluent layer *and* the `graph!` macro (two
+/// [`Fold`] separately in the fluent layer *and* the `nitro!` macro (two
 /// places that could drift); now one op both layers call.
 pub struct Count<T>(PhantomData<T>);
 
@@ -2661,7 +2661,7 @@ where
     }
 }
 
-/// The `graph!`/compiled forwarder witness for [`join_passive`] — [`Join`]'s
+/// The `nitro!`/compiled forwarder witness for [`join_passive`] — [`Join`]'s
 /// semantics with the **second** edge passive (read but not activating: the
 /// `bimap(Active, Passive)` shape a feedback input takes). This separate
 /// witness exists because a second `#[op]` cannot be attached to [`Join`] and
@@ -2691,7 +2691,7 @@ where
     }
 }
 
-/// The `graph!`/compiled forwarder witness for [`try_join_passive`] — the
+/// The `nitro!`/compiled forwarder witness for [`try_join_passive`] — the
 /// `try_` counterpart to [`JoinPassive`], delegating to [`TryJoin`] with the
 /// second edge passive. See [`JoinPassive`] for why a separate witness is
 /// needed.
@@ -2830,7 +2830,7 @@ impl<T: Clone + 'static> Op for Merge2<T> {
 /// `(value, tick)` pairs rather than a fixed-arity tuple, so `#[op]` cannot
 /// parse its shape. Its interpreted wiring
 /// ([`Builder::merge_n`](crate::interp::Builder::merge_n)) and its
-/// `graph!`/compiled forwarders (below) are hand-written instead — the same
+/// `nitro!`/compiled forwarders (below) are hand-written instead — the same
 /// concession [`Builder::combine`](crate::interp::Builder::combine) makes for
 /// the other n-ary fan-in.
 pub struct MergeN<T>(PhantomData<T>);
@@ -2875,10 +2875,10 @@ impl<T: Clone + 'static> Op for MergeN<T> {
     }
 }
 
-// ---- `merge_n` graph!/compiled forwarders (hand-written) -------------------
+// ---- `merge_n` nitro!/compiled forwarders (hand-written) -------------------
 //
 // `#[op]` generates these from an op's `In` shape; it cannot for a variadic
-// op, so they are written out here. The `graph!` emission calls them by the
+// op, so they are written out here. The `nitro!` emission calls them by the
 // same naming convention as every generated family — the only difference is
 // that a variadic node's `cycle_input` is a pair *slice* (`&[(v, t), ..]`)
 // rather than a fixed-arity tuple, which is what lets one signature serve a
@@ -2960,7 +2960,7 @@ pub fn __wf_op_merge_n_seed_value<T: Default, __P>(_cfg: &__P) -> T {
 ///
 /// Kept a plain `Op` with a hand-written `Builder::never` (no `#[op]`):
 /// nothing about the shape prevents the attribute — `#[op]` builds sources
-/// fine — but a node that never ticks has no `graph!`/compiled meaning worth
+/// fine — but a node that never ticks has no `nitro!`/compiled meaning worth
 /// forwarding, so it stays an interpreted-engine primitive.
 pub struct Never;
 
@@ -3063,7 +3063,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
     }
 }
 
-/// The `graph!`/compiled forwarder witness for [`delay_with_reset`] — a thin
+/// The `nitro!`/compiled forwarder witness for [`delay_with_reset`] — a thin
 /// adapter over [`DelayWithReset`], delegating so its scheduling/seeding
 /// semantics are single-sourced. The real op's `In = (&T, bool, bool)` (source
 /// value, source tick, reset tick — the trigger's *value* is never read) is a

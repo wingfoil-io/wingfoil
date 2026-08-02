@@ -1,7 +1,7 @@
 //! A **compiled island** exposed to Python — the one execution path that is not
 //! interpreted.
 //!
-//! `graph!` expands a single wiring into `interpreted()` / `compiled()` /
+//! `nitro!` expands a single wiring into `interpreted()` / `compiled()` /
 //! `nested()`. The island form is `nested()`: the whole sub-graph collapses to
 //! one node in the outer graph, and its interior is monomorphized straight-line
 //! code — the same code `compiled()` emits — instead of a dyn call per node.
@@ -12,7 +12,7 @@
 //! dynamically while the interior runs compiled — the "compiled interiors,
 //! dynamic wiring" shape, rather than the whole graph being one or the other.
 //!
-//! This lives in its own module because `graph!` requires the fluent `Stream`
+//! This lives in its own module because `nitro!` requires the fluent `Stream`
 //! and `GraphBuilder` unqualified, and `python.rs` shadows `Stream` with the
 //! pyclass of the same name.
 
@@ -20,7 +20,7 @@ use wingfoil_next::prelude::*;
 
 use crate::pygraph;
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn hot_interior(_g: &GraphBuilder, input: &Stream<f64>) -> Stream<f64> {
         let doubled = input.map(|x: &f64| x * 2.0);
         let shifted = doubled.map(|x: &f64| x + 1.0);
@@ -36,7 +36,7 @@ fn build_compiled_island(g: &GraphBuilder, input: &Stream<f64>) -> Stream<f64> {
 }
 
 /// The same wiring through the plain fluent layer, so a test can assert the
-/// island produces identical values and tick times. Kept beside the `graph!`
+/// island produces identical values and tick times. Kept beside the `nitro!`
 /// above rather than derived from it — if the two ever disagree, that is the
 /// island's semantics drifting, which is exactly what the parity test is for.
 #[pygraph(name = interpreted_twin)]

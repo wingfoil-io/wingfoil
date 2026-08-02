@@ -1,5 +1,5 @@
 //! **Generic-fallback proof**: ops with **no `OpKind` table row** flowing
-//! through `graph!`'s three expansions — `interpreted()`, fully-monomorphized
+//! through `nitro!`'s three expansions — `interpreted()`, fully-monomorphized
 //! `compiled()`, and `nested()` islands.
 //!
 //! The load-bearing trick under test: the macro sees only a method-name
@@ -28,7 +28,7 @@
 //!   in both input types and the closure;
 //!
 //! plus in-crate [`Distinct`](wingfoil_next::ops) — which has `#[op]` but **no
-//! table row**, proving the whole `#[op]` catalog reaches `graph!` through the
+//! table row**, proving the whole `#[op]` catalog reaches `nitro!` through the
 //! fallback with zero per-op macro edits; and, at the end of the file, the
 //! two formerly-"exotic" shapes as user ops — [`Snap`] (passive data edge,
 //! sample's shape) and [`Ratchet`] (seeded accumulator, fold's shape).
@@ -166,7 +166,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// The forwarders `graph!`'s generic fallback calls by naming convention —
+// The forwarders `nitro!`'s generic fallback calls by naming convention —
 // hand-written here as what a user-facing `#[op]` derive would generate.
 // (The in-crate `#[op]` attribute already generates exactly these for the
 // catalog ops; it isn't usable out-of-crate yet because it also emits an
@@ -303,7 +303,7 @@ pub fn __wf_op_combine_seed_value<C: Default, P>(_cfg: &P) -> C {
 // Stop / teardown forwarders: each mirrors its op's cycle forwarder (same
 // input parameter, present only to anchor generics/closures) and calls the
 // hook — the trait default no-op here, as none of these ops override
-// stop/teardown. The `graph!` tail calls one per node at the cleanup tail.
+// stop/teardown. The `nitro!` tail calls one per node at the cleanup tail.
 pub fn __wf_op_scale_stop(
     cfg: &mut <Scale as Op>::Cfg,
     state: &mut <Scale as Op>::State,
@@ -504,7 +504,7 @@ impl CustomOps for Stream<f64> {
 // The graphs: custom ops chained with built-ins, no `OpKind` rows anywhere.
 // ---------------------------------------------------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn custom_ops_graph(g: &GraphBuilder) -> (Stream<f64>, Stream<u64>) {
         let squares = g.ticker(PERIOD).count().map(|c| (c * c) as f64);
         let smoothed = squares.scale(0.5).delta().apply(|x| x + 1.0);
@@ -531,7 +531,7 @@ fn custom_ops_compiled_matches_interpreted() {
     assert_eq!(levels_i, levels_c);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn scaled_delta(g: &GraphBuilder, src: &Stream<f64>) -> Stream<f64> {
         let out = src.scale(2.0).delta();
         out
@@ -553,7 +553,7 @@ fn custom_ops_in_nested_island() {
     assert_eq!(22.0, runner.value(out));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn multi_input_graph(g: &GraphBuilder) -> (Stream<f64>, Stream<f64>) {
         let fast = g.ticker(PERIOD).count().map(|c| *c as f64);
         let slow = fast.scale(0.5);
@@ -582,7 +582,7 @@ fn multi_input_custom_ops_compiled_matches_interpreted() {
     assert_eq!(combo_i, combo_c);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn spread_island(g: &GraphBuilder, a: &Stream<f64>, b: &Stream<f64>) -> Stream<f64> {
         let out = a.spread(b);
         out
@@ -764,7 +764,7 @@ impl ShapeOps for Stream<f64> {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn shapes_graph(g: &GraphBuilder) -> (Stream<f64>, Stream<f64>) {
         let data = g.ticker(PERIOD).count().map(|c| *c as f64);
         let trig = g.ticker(Duration::from_millis(3));

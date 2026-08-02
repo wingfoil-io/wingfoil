@@ -2,7 +2,7 @@
 use std::time::Duration;
 use wingfoil_next::prelude::*;
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn bad(g: &GraphBuilder) {
         let out = g.ticker(Duration::from_nanos(10)).count();
     }

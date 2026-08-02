@@ -20,7 +20,7 @@ const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 // first tick therefore returned `init` interpreted but `0` compiled/nested.
 // ===========================================================================
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fold_seed(g: &GraphBuilder) -> Stream<Vec<i64>> {
         // A trigger that ticks from t=0, and a fold whose source is *delayed*
         // so the fold does not tick until t=25. Sampling the fold on the
@@ -203,7 +203,7 @@ fn make_scale() -> impl Fn(&u64) -> u64 {
     |v| v * 2
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn factory_graph(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let acc = g
             .ticker(Duration::from_nanos(10))
@@ -243,7 +243,7 @@ fn compiled_evaluates_closure_factory_once() {
 // interpreted but emitted `__v_*`-not-found / collision errors compiled/nested.
 // ===========================================================================
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn aliased_output(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let acc = g.ticker(Duration::from_nanos(10)).count().accumulate();
         // A bare alias used as the returned output.
@@ -270,7 +270,7 @@ fn bare_alias_output_works_in_all_paths() {
     assert_eq!(interpreted, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn bare_ticker(g: &GraphBuilder) -> Stream<()> {
         let tick = g.ticker(Duration::from_nanos(10));
         tick
@@ -295,7 +295,7 @@ fn bare_ticker_return_works_in_all_paths() {
     let _: () = r.value(&island);
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // A user stream literally named `anon1` — previously collided with the
     // macro's generated intermediate names (now reserved-prefixed).
     fn anon_collision(g: &GraphBuilder) -> Stream<Vec<u64>> {
@@ -321,7 +321,7 @@ fn user_stream_named_anon1_does_not_collide() {
 // TEST BLIND SPOTS (fable-review "Test-suite blind spots").
 // ===========================================================================
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // Both inputs tick on the *same* cycle (two tickers of equal period), so
     // the merge tie-break actually fires — the earliest-supplied input (`a`)
     // must win. The existing odds/evens merge test uses disjoint streams, so a
@@ -353,7 +353,7 @@ fn merge_tie_break_when_both_inputs_tick() {
     assert_eq!(interpreted, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     // Two inner scheduling ops (ticker + delay) inside one island, so the
     // private queue demux must juggle multiple pending keys, then merge the
     // live and delayed streams.
@@ -402,7 +402,7 @@ fn island_with_two_inner_schedulers() {
 // and in the macro's Delay emission — kept in lockstep across all three paths.
 // ===========================================================================
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn zero_delay(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let acc = g
             .ticker(Duration::from_nanos(10))
@@ -433,7 +433,7 @@ fn zero_delay_emits_inline_all_paths() {
     assert_eq!(interpreted, r.value(&island));
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn delay_seed(g: &GraphBuilder) -> Stream<Vec<i64>> {
         // Source 5,6,7,… delayed by 5s; a 1s trigger samples the delayed slot
         // at t=0,1,2,3,4 — before the delay elapses — so it observes the seeded

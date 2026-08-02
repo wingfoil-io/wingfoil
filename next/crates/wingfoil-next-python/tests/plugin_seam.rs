@@ -789,7 +789,7 @@ fn build_min_max_pair(a: &Stream<f64>, b: &Stream<f64>) -> (Stream<f64>, Stream<
 
 // A **builder-taking** `#[pygraph]`: the wiring fn creates nodes of its own
 // rather than only extending its input, so it needs `&GraphBuilder` — the same
-// shape a `graph!` island's `nested()` has. The generated fn takes the graph as
+// shape a `nitro!` island's `nested()` has. The generated fn takes the graph as
 // its first Python argument.
 #[pygraph(name = against_own_ticker)]
 fn build_against_own_ticker(

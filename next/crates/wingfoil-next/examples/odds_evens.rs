@@ -3,7 +3,7 @@
 //! textbook "split and recombine" DAG. It's the graph the parity tests use,
 //! shown here as a runnable program.
 //!
-//! Written once as a `graph!` wiring function, it expands to both engines:
+//! Written once as a `nitro!` wiring function, it expands to both engines:
 //! `interpreted()` (dynamic, shared-node) and `compiled()` (fully
 //! monomorphized straight-line code). This example runs both and checks they
 //! produce identical output — the dual-mode guarantee.
@@ -23,7 +23,7 @@ const PERIOD: Duration = Duration::from_millis(10);
 // and the interpreted engine executes it once per cycle, fanning the tick out
 // to both `filter`s. `merge` recombines the two branches — at most one fires
 // on any given tick, since a number is either odd or even.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
         let count = g.ticker(PERIOD).count();
         let is_even = count.map(|i| i.is_multiple_of(2));

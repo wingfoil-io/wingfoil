@@ -8,7 +8,7 @@ The `wingfoil-next` and `wingfoil-next-macros` crates now live on this branch
 interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
 `compiled()` expansion, compiled
 islands (`nested()`) mountable in interpreted graphs, busy-spin `poll`
-sources, and the `graph!` macro deriving all of it from one fluent wiring
+sources, and the `nitro!` macro deriving all of it from one fluent wiring
 function. This document plans the port of the entire classic codebase onto
 that pattern.
 
@@ -73,7 +73,7 @@ today's interpreted engine.
 | Sparse-graph efficiency (work ∝ *active* nodes) | ✅¹¹ | ✅¹² | 🟡¹³ | ✅¹⁴ |
 | Dense hot-path speed (measured) | 1× | ~1×¹² | 3–4×¹⁵ | interior 3–4×¹⁵ |
 
-¹ Fluent layer only (engine-level `+1` edge); not expressible inside `graph!`.
+¹ Fluent layer only (engine-level `+1` edge); not expressible inside `nitro!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
   ingestion, which the compiled path excludes anyway. Lifting this (with
   busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
@@ -143,7 +143,7 @@ Done: `Op::cycle` returns `anyhow::Result<Tick<Out>>`; `start`/`stop`/
 `teardown` are fallible lifecycle hooks (defaults `Ok(())`). The interpreted
 `Runner::run` returns `Result<()>`, reporting the first
 start/cycle/stop/teardown error with node context (`node 2 (try_map)
-cycle: boom …`) and running cleanup regardless. The `graph!` macro threads
+cycle: boom …`) and running cleanup regardless. The `nitro!` macro threads
 `?` through `compiled()`/`nested()` (both now return `Result`). New ops:
 `TryMap` (fallible map), `Sink`/`for_each` (fallible sink), `Finally`
 (teardown hook). Parity tests in `tests/fallibility.rs` cover
@@ -201,7 +201,7 @@ downstream.feed(&fb_sink);                        // close the loop later
 Sink pushes `(value, time)` into a shared `TimeQueue` (dedup preserved — see
 CLAUDE.md: dedup is a feature) and schedules the source node via the kernel,
 reproducing classic active/passive feedback timing. V1 restriction: fluent
-layer only — not expressible inside `graph!`/islands (a cycle in the island
+layer only — not expressible inside `nitro!`/islands (a cycle in the island
 DAG breaks straight-line emission). Oracle: classic `feedback_works`,
 `feedback_active_works`, `feedback_passive_works`, `feedback_sink_clone_works`.
 
@@ -367,7 +367,7 @@ Recipe per node, in this order, no exceptions:
    passed in instead of read from upstream `Rc`s);
 3. wire it up (see **Adding an op** below): `#[op(build = name)]` on the impl
    generates the interpreted `Builder` method from the op's `In` shape *and*
-   the `graph!`/compiled forwarders the emission dispatches through; add the
+   the `nitro!`/compiled forwarders the emission dispatches through; add the
    fluent method (the one piece still hand-written);
 4. port the classic node's unit tests as parity tests (values **and** tick
    times).
@@ -377,7 +377,7 @@ Recipe per node, in this order, no exceptions:
 Two mechanisms single-source most of the boilerplate; the residual per-op cost
 is small and explained by two hard constraints on proc macros:
 
-- **A proc macro sees tokens, not resolved types** — so `graph!` cannot
+- **A proc macro sees tokens, not resolved types** — so `nitro!` cannot
   introspect an `Op` impl to learn its arity/cfg/input shape. Any per-op
   knowledge the macro needs must be written in the macro crate.
 - **A trait cannot be extended from scattered sites** — so `#[op]` cannot add a
@@ -408,14 +408,14 @@ What's automated:
   public `register_op1`…`register_op4` primitives remain the wiring path for
   **out-of-crate** ops, which write their forwarders by hand (`#[op]`'s output
   names `crate::…`, so it is in-crate tooling — see `tests/custom_op.rs`).
-- **Compiled / `graph!`** — one `OpKind::info()` row per op (an `OpInfo`:
+- **Compiled / `nitro!`** — one `OpKind::info()` row per op (an `OpInfo`:
   op type, dispatch flags, and the `Inputs`/`CfgInit`/`StateInit` shapes) drives
   every emitter. Named fields make a half-filled row a compile error.
 
 So the places to touch when adding an op — **the compiled path is
 zero-touch; there is no macro table**:
 
-| Op shape | Interpreted | `graph!`/compiled |
+| Op shape | Interpreted | `nitro!`/compiled |
 |---|---|---|
 | Single-input | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
 | Multi-input, values-only, all-active (the `join` shape) | same — `ops.rs` (`impl` + attr) + fluent method | nothing — `&stream` args classify as edges |
@@ -437,12 +437,12 @@ hand-written (constraint #2, unchanged).
 
 **Completeness test ✅ (Phase 1) — realized as a compile-guard.** The original
 plan (a `supported_ops!()` list diffed against the fluent surface) assumed the
-`graph!` **op table / parse-match** that the forwarder refactor since *deleted*
-(see `macro-extensibility-decision.md`): `graph!` now dispatches through
+`nitro!` **op table / parse-match** that the forwarder refactor since *deleted*
+(see `macro-extensibility-decision.md`): `nitro!` now dispatches through
 naming-convention forwarders (`__wf_op_<name>_*`), so there is no central op
 list to diff and an unknown op simply fails to resolve a forwarder. The guard
 is instead realized at **compile time** in `tests/op_completeness.rs`: a
-combinator *used inside* a `graph!` block only compiles if it has **both** a
+combinator *used inside* a `nitro!` block only compiles if it has **both** a
 fluent method (the wiring fn is fluent code) **and** a forwarder (`#[op]`), so
 exercising every dual-mode combinator there is exactly the two-sided
 one-sided-registration guard, and each block additionally asserts
@@ -499,10 +499,10 @@ arity is a runtime slice, which the fixed-arity tuple `In` cannot express).
 `DelayWithResetFwd` witness op, which restates its two-tick-flag `In` in the
 uniform one-`(value, tick)`-pair-per-edge form `#[op]` parses.
 `split`/`collapse` are pure sugar over `map`/`map_filter`, so they reach every
-engine for free. Extending `combine` to `graph!`/compiled is a follow-up (as it
+engine for free. Extending `combine` to `nitro!`/compiled is a follow-up (as it
 is for `feedback`) — and it is now a *smaller* one than this note implies: the
 other n-ary fan-in, `merge_n`, reached all three engines by declaring
-`In<'a> = &'a [(&'a T, bool)]` and having `graph!` emit a variadic node's edges
+`In<'a> = &'a [(&'a T, bool)]` and having `nitro!` emit a variadic node's edges
 as a pair slice rather than a tuple. `combine` can follow the same route; the
 "fixed-arity tuple `In` cannot express it" obstacle applies to `#[op]`
 generation, not to the engines.
@@ -1209,7 +1209,7 @@ layer of depth, matching classic's `merge(vec)` exactly. The pieces:
   shared rule, `MergeN::winner`, so they cannot disagree about which input wins;
   the interpreted path applies it to the engine's tick flags and clones only the
   winning slot.
-- **`graph!` / compiled**: `NodeDef` gained a `variadic` flag, set by the `fan`
+- **`nitro!` / compiled**: `NodeDef` gained a `variadic` flag, set by the `fan`
   and `merge_all` arms of `apply_call`. A variadic node's `cycle_input` emits the
   uniform `(value, tick)` pairs as a *slice* instead of a tuple — which is the
   whole trick, since a tuple-shaped forwarder would cap at whatever arity the
@@ -1220,7 +1220,7 @@ layer of depth, matching classic's `merge(vec)` exactly. The pieces:
   same rules `#[op]` follows — notably a *fully erased* `_start`, since `start`
   takes no input to anchor `T` from.
 - **`merge_all` is now dual-mode**, where it used to be fluent-only ("sugar over
-  a primitive — spell the primitive"). Inside `graph!` it takes a slice literal
+  a primitive — spell the primitive"). Inside `nitro!` it takes a slice literal
   of stream references (`merge_all(&[&a, &b])`) so the merged edges stay
   statically visible, the same constraint `map_n`/`fan` put on their counts.
 
@@ -1394,7 +1394,7 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
   sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
   **Deviation**: fluent/interpreted only (matching classic, which exposes
   latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
-  *type* parameter, which does not map onto the `graph!` value-dispatch table,
+  *type* parameter, which does not map onto the `nitro!` value-dispatch table,
   so compiled/nested support is out of scope for this op family. Registered as
   **C7** in the [deviation register](./deviation-register.md).
   Cross-process proof: the `latency` example (`examples/latency/`) runs the
@@ -1419,7 +1419,7 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
   serves is removed; nothing in next blocks it — it is on the **Phase 7**
   checklist below so the retirement is not left half-done at the swap.
 - **`#[op]` tooling** ✅ **landed**: `#[op(build = name)]` generates the
-  interpreted `Builder` method *and* the `graph!`/compiled forwarders from one
+  interpreted `Builder` method *and* the `nitro!`/compiled forwarders from one
   attribute, with labels derived from `type_name`; there is no per-op table in
   the macro (see `macro-extensibility-decision.md`). See **Adding an op**
   under Phase 2. The completeness test guarding against one-sided registration
@@ -1711,7 +1711,7 @@ tests covered — not "legacy pytest passes unchanged."
   compat.rs`) — it is **not** the Python-binding path (that is the object-form
   `PyStream` above).
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
-  telemetry/tracing, per-adapter) to idiomatic next (fluent or `graph!`),
+  telemetry/tracing, per-adapter) to idiomatic next (fluent or `nitro!`),
   keeping classic versions until Phase 7. 🟢 *landed so far*: order_book,
   breadth_first, run_mode, statistics, threading, async, feedback, and the
   runtime-dynamism pair `dynamic` (`dynamic_group`) + `demux` (`demux_it`),
@@ -1807,7 +1807,7 @@ tests covered — not "legacy pytest passes unchanged."
 
 ## Explicitly out of scope (v1)
 
-- Feedback inside `graph!` / islands (fluent only).
+- Feedback inside `nitro!` / islands (fluent only).
 - Runtime graph mutation — the **Phase 4.5** dirty-list enabler has landed;
   the mutation feature itself is still to be built (open blocker-vs-deviation
   decision), not a permanent exclusion.
@@ -1859,7 +1859,7 @@ deferred by design, not dropped.
 
 ### Compiled-path IO ingestion — busy-poll sources + bursts (was #502, #503)
 
-One theme: letting the `compiled()` / `graph!` path ingest external /
+One theme: letting the `compiled()` / `nitro!` path ingest external /
 timestamped data, which it excludes today (capability-matrix rows "Busy-poll
 ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
 footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
@@ -1867,7 +1867,7 @@ footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst
 
 **Busy-poll ingest (`ALWAYS` sources — classic `poll`/`producer`).**
 - *Current state:* excluded — `compiled()` runs its own closed monomorphized
-  loop with no external wake, and `graph!` forbids IO-edge sources; `poll` lives
+  loop with no external wake, and `nitro!` forbids IO-edge sources; `poll` lives
   at the fluent/interpreted layer and feeds a compiled island through its inputs.
 - *Why it's now more tractable:* after #496, per-op activation is a monomorphic
   const (`__WF_OP__ACTIVATION`), so `ALWAYS` dispatch already folds correctly for
@@ -1886,7 +1886,7 @@ footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst
   *sources* exist in the macro vocabulary and the burst pattern is about IO
   ingestion (which compiled excludes). Works on the interpreted engine today
   (`Burst`, matching classic `Burst`/`HistoricalValue`).
-- *Scope:* a burst-source shape the `graph!` macro can express and the compiled
+- *Scope:* a burst-source shape the `nitro!` macro can express and the compiled
   path can drive, delivering same-time-grouped values in one cycle (identical to
   interpreted/classic burst semantics — same-time values ride one burst, not
   coalesced, not split by a monotonic bump).

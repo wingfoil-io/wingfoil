@@ -2,7 +2,7 @@
 //! the interpreted engine and by a hand-expanded compiled runner — both
 //! calling the *same* `Op::cycle` functions — must agree exactly.
 //!
-//! `compiled_odds_evens` is written the way a `graph!` proc macro would
+//! `compiled_odds_evens` is written the way a `nitro!` proc macro would
 //! expand it: cfg/state/values as locals, tick propagation as `bool`s, every
 //! op call monomorphized (closures included — they are `Cfg` type
 //! parameters, so LLVM sees straight through them). Note what is *absent*
@@ -37,7 +37,7 @@ fn interpreted_odds_evens(run_for: RunFor) -> Vec<String> {
     runner.value(&acc)
 }
 
-/// Compiled runner: the same graph, hand-expanded exactly as a `graph!`
+/// Compiled runner: the same graph, hand-expanded exactly as a `nitro!`
 /// macro would emit it. Same node order, same `Op` calls, state in locals.
 #[allow(clippy::useless_format)]
 fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
@@ -220,11 +220,11 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     Ok(acc_state)
 }
 
-// The *same* odds/evens graph, expanded by the `graph!` macro. Cross-asserted
+// The *same* odds/evens graph, expanded by the `nitro!` macro. Cross-asserted
 // against the hand-written `compiled_odds_evens` above so the hand expansion
 // can't silently diverge from what the macro actually emits — if the macro's
 // emission changes semantics, this test goes red.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn macro_odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
         let count = g.ticker(PERIOD).count();
         let is_even = count.map(|i| i.is_multiple_of(2));

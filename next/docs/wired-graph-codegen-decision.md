@@ -7,7 +7,7 @@ particular, on a named workload that needs it). Companion to
 this document extends — read that first for the forwarder mechanism it
 builds on.
 
-**Question.** Instead of (or alongside) the `graph!` macro wrapping the
+**Question.** Instead of (or alongside) the `nitro!` macro wrapping the
 wiring, could we generate compiled-graph code by *running* the wiring —
 traversing the wired (interpreted) graph — and emitting source that a second
 compilation pass turns into the monomorphized runner?
@@ -16,12 +16,12 @@ compilation pass turns into the monomorphized runner?
 primitive: **`func!`, user-level quotation of closures**. The subset is
 "closures are closed or carry an explicit, literal-emittable capture list;
 configs are literal-emittable data". Positioned correctly, this is not a
-replacement for `graph!` but a **second front-end into the same emission
-mechanism**, and it buys the one thing `graph!` structurally cannot do:
+replacement for `nitro!` but a **second front-end into the same emission
+mechanism**, and it buys the one thing `nitro!` structurally cannot do:
 **dynamic topology** — graphs whose shape is decided by running code
-(config files, discovered instrument lists) — at compiled speed. `graph!`
+(config files, discovered instrument lists) — at compiled speed. `nitro!`
 remains the single backend: the generator's output artifact *is* a plain
-wiring fn wrapped in `graph!`.
+wiring fn wrapped in `nitro!`.
 
 ---
 
@@ -45,7 +45,7 @@ trapped in `MutableNode` objects, the emitted runner had to *re-implement*
 node semantics as strings.
 
 Thinking past the naive version, the type problem is solvable without
-naming types — the same way `graph!` solves it. Emission can dispatch
+naming types — the same way `nitro!` solves it. Emission can dispatch
 through the naming-convention forwarders (`__wf_op_<name>_cycle`) with
 typeless `Default::default()` state locals, and rustc's inference
 monomorphizes the chain. Configs don't need to be *contained* in generated
@@ -68,7 +68,7 @@ Named for what it is: this is the multi-stage-programming problem
 (LMS/MetaOCaml — "run the program, emit a specialized program"). Those
 systems handle closures only by making user functions operate on staged
 `Rep<T>` values, i.e. by changing the surface language. Rust has no
-quote/run staging. The `graph!` macro is not an arbitrary alternative to
+quote/run staging. The `nitro!` macro is not an arbitrary alternative to
 two-pass codegen — it is the *minimal* device that keeps a token of each
 closure where emitted code can re-mention it.
 
@@ -93,7 +93,7 @@ kills both blockers from §1 at once:
 1. **Source recovery** — the traversal reads `src` off each node and
    splices it into the generated wiring fn as a closure *literal*.
 2. **Inference rooting** — the emitted text is a closure literal at the
-   *generated* call site: exactly the inference root `graph!` relies on.
+   *generated* call site: exactly the inference root `nitro!` relies on.
    Pass 2 needs no type names anywhere; it emits the same forwarder calls
    and typeless state locals the macro emits today, and the measured
    1.01×-vs-hand-written result carries over unchanged.
@@ -150,13 +150,13 @@ anyway, so ops invoke the cfg through the trait's own call method. The
 runtime the wrapper is transparent (the src is dead data post-mono, the
 call inlines).
 
-The key asymmetry: **`graph!` never needs `func!`** — the macro has the
+The key asymmetry: **`nitro!` never needs `func!`** — the macro has the
 tokens already. Quotation is only the *generator's* requirement, because it
 meets the closure after erasure. So plain closures keep everything that
 exists today: full interpreted support, full `compiled()`/`nested()`
 performance, implicit environment capture. `func!` is purely additive
 vocabulary for wiring that wants to be generator-eligible (and is harmless
-inside `graph!`, where it's just another config expression).
+inside `nitro!`, where it's just another config expression).
 
 When the generator meets an unquoted closure:
 
@@ -187,7 +187,7 @@ against the recording builder and prints the artifact:
 wingfoil_next::codegen::generate(|g| desk_graph(g, &config), "src/desk_graph.gen.rs")?;
 ```
 
-The artifact is **reviewable plain Rust: a `graph!` invocation with the
+The artifact is **reviewable plain Rust: a `nitro!` invocation with the
 topology unrolled** and captures frozen as literals (each carrying a
 `// from wiring.rs:NN` breadcrumb from the recorded `loc`). A wiring loop
 over N configured symbols becomes N unrolled pipelines — pass 1 ran the
@@ -205,21 +205,21 @@ Failures are loud pass-2 compile errors, never silent misbehavior.
 Determinism obligations of any two-pass design apply: pass-1 wiring must be
 deterministic and re-runnable in the generation environment (defer-to-start
 makes wiring side-effect-free, which is most of this), and stale-generation
-is a standing hazard — mitigated by making the artifact `graph!` input
+is a standing hazard — mitigated by making the artifact `nitro!` input
 (diffable, reviewable) rather than expanded runner code.
 
-## 6. Why `graph!` stays — and why the Op rearchitecture is the prerequisite
+## 6. Why `nitro!` stays — and why the Op rearchitecture is the prerequisite
 
-`graph!` keeps three roles under this design:
+`nitro!` keeps three roles under this design:
 
-1. **The generator's backend.** Emitting `graph!` input instead of expanded
+1. **The generator's backend.** Emitting `nitro!` input instead of expanded
    runners means exactly one place in the system knows how to turn wiring
    into a monomorphized runner. The alternative — the generator emitting
    forwarder calls, state locals, activation guards and kernel loops itself
    — is a second copy of the emission logic with its own parity burden.
 2. **The better front-end for static graphs** (most graphs): same 1.01×,
    zero annotations, implicit captures, in-place error spans, one compile.
-   The generator earns its keep only where `graph!` structurally can't go.
+   The generator earns its keep only where `nitro!` structurally can't go.
    The two partition the space; they don't compete.
 3. **`nested()` islands**, independent of how top-level graphs are built.
 
@@ -232,7 +232,7 @@ obsoleting it:
 | emission target with types recovered by inference | the forwarder mechanism + activation consts, measured at 1.01× |
 | pass 1 (the recorder) | the interpreted `Builder`; side-effect-free wiring makes re-running sound |
 | timing/bounds that cannot drift | the shared `Kernel` |
-| output format | `graph!` itself |
+| output format | `nitro!` itself |
 
 The genuinely new surface is modest and mostly mechanical: `func!`, the
 `OpFn` trait, `EmitLiteral`, `src`/`loc` metadata on builder nodes, and a
@@ -244,7 +244,7 @@ because two-pass traversal *without* the Op pattern hits unfixable walls.
 
 The generator is justified only in the intersection of three conditions:
 
-1. topology comes from data (config, DB, discovery) — `graph!` can't
+1. topology comes from data (config, DB, discovery) — `nitro!` can't
    express it;
 2. the graph is hot enough that the ~10× interpreted overhead matters;
 3. the config changes no faster than the deploy cadence — frozen captures
@@ -260,7 +260,7 @@ the generator.**
 
 1. **Now, nearly free:** validate the UX with zero code — hand-write what
    the generator would emit for one realistic config graph (it's just
-   `graph!` input) and live with the workflow.
+   `nitro!` input) and live with the workflow.
 2. **Small, independently valuable, non-breaking:** `func!` + `OpFn` +
    `src`/`loc` metadata. Useful for graph introspection/debugging even if
    the generator is never built.

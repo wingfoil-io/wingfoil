@@ -1,4 +1,4 @@
-//! The dual-mode thesis, completed by the `graph!` macro: **one** wiring
+//! The dual-mode thesis, completed by the `nitro!` macro: **one** wiring
 //! definition expands to both an interpreted runner and a fully
 //! monomorphized compiled runner. The two cannot drift — same tokens, same
 //! `Op` semantics — and the compiled one gets the compiler's full
@@ -25,7 +25,7 @@
 //! cargo run -p wingfoil-next --release --example dual_mode
 //! ```
 //!
-//! # What procedural code you can write inside `graph!`
+//! # What procedural code you can write inside `nitro!`
 //!
 //! The macro parses its body as a plain Rust `fn`, but it does not *run* that
 //! code — it reads the tokens to derive a **static DAG** at expansion time,
@@ -70,8 +70,8 @@
 //!
 //! ```rust,ignore
 //! // A helper that does wiring — the macro cannot see the nodes it builds,
-//! // so `compiled()` would be blind to them. (Compose by NESTING graph!s
-//! // instead: each graph! fn is itself reusable wiring via its `wire`.)
+//! // so `compiled()` would be blind to them. (Compose by NESTING nitro!s
+//! // instead: each nitro! fn is itself reusable wiring via its `wire`.)
 //! let x = build_subgraph(g, &count);
 //!
 //! // A loop that wires — the node count would be a runtime value, which
@@ -87,7 +87,7 @@
 //! let chained = count.map_n(n, |i| i + 1);
 //! ```
 //!
-//! The full expansion of the `graph!` block below — `wire`, `interpreted`,
+//! The full expansion of the `nitro!` block below — `wire`, `interpreted`,
 //! `compiled`, and `nested` — is reproduced (abridged) in a block comment at
 //! the end of this file, so you can see exactly what "straight-line wiring
 //! becomes a static schedule" means in emitted code.
@@ -112,7 +112,7 @@ const PERIOD: Duration = Duration::from_millis(10);
 // compiled engine emits it once and feeds every reader from the same slot.
 // `merge` is the recombine — since a number is either odd or even, at most
 // one branch fires on any tick.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
         let count = g.ticker(PERIOD).count();
         let is_even = count.map(|i| i.is_multiple_of(2));
@@ -151,7 +151,7 @@ fn main() {
 // ===========================================================================
 //
 // `cargo expand -p wingfoil-next --example dual_mode` prints the full ~1.5k
-// lines. Below is a faithful, abridged rendering of what the `graph!` block
+// lines. Below is a faithful, abridged rendering of what the `nitro!` block
 // above expands into: a module `odds_evens` with four entry points. The DAG is
 // 10 nodes, indexed in wiring order:
 //
@@ -172,7 +172,7 @@ fn main() {
 //
 //     // (a) `wire` — the wiring fn, verbatim. This is the ONLY human-written
 //     //     form; the other three are derived from these same tokens, so they
-//     //     cannot drift. A graph! fn with inputs is reusable by calling
+//     //     cannot drift. A nitro! fn with inputs is reusable by calling
 //     //     `wire(g)` from another graph (composition = nesting).
 //     pub fn wire(g: &GraphBuilder) -> Stream<Vec<String>> {
 //         let count = g.ticker(PERIOD).count();

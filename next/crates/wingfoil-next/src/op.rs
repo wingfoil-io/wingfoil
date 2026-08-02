@@ -89,7 +89,7 @@ pub enum Tick<T> {
     Quiet,
 }
 
-/// Which lifecycle phase a composite (`graph!` `nested`) node is being driven
+/// Which lifecycle phase a composite (`nitro!` `nested`) node is being driven
 /// through. A compiled sub-graph mounted as one interpreted node runs its
 /// interior through the *same* straight-line code in every phase; the outer
 /// engine selects the phase when it calls the composite's cycle/start/stop/
@@ -295,7 +295,7 @@ pub trait Op: 'static {
     }
 }
 
-/// [`Op::cycle`] with the config taken by value — for callers (the `graph!`
+/// [`Op::cycle`] with the config taken by value — for callers (the `nitro!`
 /// macro's compiled expansion) that rebuild a zero-capture closure config per
 /// call. Taking the closure as a *direct* argument lets rustc defer its
 /// signature inference until the sibling `input` argument has resolved the

@@ -2,7 +2,7 @@
 use std::time::Duration;
 use wingfoil_next::prelude::*;
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn bad(g: &GraphBuilder, src: Stream<u64>) -> Stream<u64> {
         let out = src.map(|i| i + 1);
         out

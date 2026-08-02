@@ -45,7 +45,7 @@
 //! Exposed via the **fluent (interpreted)** path only, matching classic
 //! (which offers latency solely through `LatencyStreamOps`). A stamp's stage
 //! is a compile-time *type* parameter, which does not map onto the
-//! `graph!`/compiled value-dispatch table; compiled/nested support is out of
+//! `nitro!`/compiled value-dispatch table; compiled/nested support is out of
 //! scope for this op family.
 //!
 //! # Example

@@ -1,8 +1,8 @@
-//! Phase-6 performance regression gate: benchmark the three `graph!`-derived
+//! Phase-6 performance regression gate: benchmark the three `nitro!`-derived
 //! execution tiers against one another on representative dispatch-heavy
 //! workloads.
 //!
-//! One wiring definition per workload expands (via the `graph!` macro) to all
+//! One wiring definition per workload expands (via the `nitro!` macro) to all
 //! three engines, which cannot drift because they share the same tokens and
 //! `Op` semantics:
 //! - `interpreted()` — the dynamic, shared-node engine (one dyn dispatch per
@@ -116,7 +116,7 @@ const STEP: Duration = Duration::from_nanos(100);
 // count -> 32 unrolled maps (`map_n`) -> derive an even-ness predicate -> filter
 // -> fold-sum. The straight-line chain is almost pure dispatch, so the compiled
 // tier's cross-node optimization should show the largest win here.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn dense_chain(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
         let chained = src.map_n(32, |i: &u64| std::hint::black_box(i.wrapping_add(1)));
@@ -129,7 +129,7 @@ wingfoil_next::graph! {
 
 // --- Workload 2: the classic 10x10 wide fan-out -> fan-in -------------------
 //
-// Shared `graph!` wiring, `include!`d so the bench, the example, and the classic
+// Shared `nitro!` wiring, `include!`d so the bench, the example, and the classic
 // codegen suite all measure the identical DAG shape. Defines module `fanout`
 // with a top-level `const PERIOD`.
 include!("../bench_support/fanout_10x10.rs");
@@ -143,7 +143,7 @@ include!("../bench_support/fanout_10x10.rs");
 // width is large. Compare the `interpreted` and `classic` bars within each
 // group, then read the three groups as a slope — a merge chain regression shows
 // up as a ratio that grows with width, not as any single bad number.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fan_in_16(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
         let out = src
@@ -153,7 +153,7 @@ wingfoil_next::graph! {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fan_in_64(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
         let out = src
@@ -163,7 +163,7 @@ wingfoil_next::graph! {
     }
 }
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn fan_in_256(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
         let out = src
@@ -178,7 +178,7 @@ wingfoil_next::graph! {
 // Three nodes, but run for many cycles: the per-cycle scheduler overhead — not
 // per-node dispatch — dominates. Guards against regressions in the run loop
 // itself across the tiers.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn accumulate(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(STEP).count();
         let sum = count.fold(0u64, |acc, v| *acc += v);
@@ -192,7 +192,7 @@ wingfoil_next::graph! {
 // exactly the regime the compiled tier is built for. But the interpreted
 // engine's Phase 4.5 dirty-list buys something none of them can show — per-cycle
 // work proportional to the *active* nodes rather than to `N` — and the compiled
-// tier has no counterpart to it: `graph!` emission is a straight-line walk of
+// tier has no counterpart to it: `nitro!` emission is a straight-line walk of
 // every node, each guarded by its own cheap `__dirty[i]` predicate, so a
 // compiled cycle still pays an `O(N)` term over nodes that never fire.
 //
@@ -218,7 +218,7 @@ wingfoil_next::graph! {
 // cross is the answer to "is compiled always the right tier?".
 const COLD_PERIOD: Duration = Duration::from_millis(1);
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn sparse(g: &GraphBuilder) -> Stream<u64> {
         let hot = g.ticker(STEP).count().map_n(6, |i: &u64| std::hint::black_box(i.wrapping_add(1)));
         let cold = g
@@ -233,7 +233,7 @@ wingfoil_next::graph! {
 }
 
 // The same shape with 4x the padding (~1035 nodes, still ~8 of them active).
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn sparse_wide(g: &GraphBuilder) -> Stream<u64> {
         let hot = g.ticker(STEP).count().map_n(6, |i: &u64| std::hint::black_box(i.wrapping_add(1)));
         let cold = g
@@ -335,7 +335,7 @@ fn sparse_classic_n(cold_branches: usize) -> Rc<dyn wingfoil::Stream<u64>> {
 }
 
 /// Emit the four-tier comparison for one source-island workload: the classic
-/// baseline plus the three `graph!`-derived engines (`interpreted` / `compiled`
+/// baseline plus the three `nitro!`-derived engines (`interpreted` / `compiled`
 /// / `nested`). `$module` is the macro-generated next module, `$classic` a
 /// zero-arg builder of the legacy-engine twin, `$nodes` the node count for the
 /// throughput label, and `$cycles` the fixed engine-cycle count.

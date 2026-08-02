@@ -7,7 +7,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
 // 3 branches, each 2 `+1` maps deep, merged — via the sugar.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn sugared(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(std::time::Duration::from_nanos(10)).count();
         let out = src.fan(3, |s| s.map_n(2, |i| *i + 1));
@@ -16,7 +16,7 @@ wingfoil_next::graph! {
 }
 
 // The same graph, spelled out by hand.
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn manual(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(std::time::Duration::from_nanos(10)).count();
         let a = src.map(|i| *i + 1).map(|i| *i + 1);

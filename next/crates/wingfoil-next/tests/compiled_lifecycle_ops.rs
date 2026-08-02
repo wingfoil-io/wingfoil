@@ -51,7 +51,7 @@ fn order() -> Vec<&'static str> {
 // A single `finally` — the minimal teardown probe.
 // ---------------------------------------------------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn one_finally(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(PERIOD).count();
         // Side node: observes `count`, emits nothing, fires its closure once
@@ -92,7 +92,7 @@ fn finally_teardown_fires_once_on_all_three_engines() {
 // Multiple lifecycle ops — teardown order.
 // ---------------------------------------------------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn ordered_finallys(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(PERIOD).count();
         let a = count.finally(|_v: &u64| {
@@ -133,7 +133,7 @@ fn teardown_order_matches_across_engines() {
 // `print` + `timed` — pass-through parity and clean completion.
 // ---------------------------------------------------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn print_then_timed(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(PERIOD).count();
         // `print` prints each value per tick (deviation D8 — no teardown
@@ -175,7 +175,7 @@ fn print_and_timed_pass_through_on_all_three_engines() {
 // Error-safe cleanup: a cycle abort still runs teardown, first error wins.
 // ---------------------------------------------------------------------------
 
-wingfoil_next::graph! {
+wingfoil_next::nitro! {
     fn abort_then_finally(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(PERIOD).count();
         // Aborts the run the moment `count` reaches 3.
