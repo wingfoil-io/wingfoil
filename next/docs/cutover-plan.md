@@ -62,6 +62,16 @@ survey turned up, both now fixed in place:
 Re-run the checks after any phase lands; the rows are only as current as the
 commit they were verified against.
 
+**One row's check was too shallow, and doing the work exposed it.** Row 3.6
+was verified by comparing pytest *file names* and spot-checking that the
+four twin-less legacy files looked folded into `test_interop.py` — which is
+why it was written up as a confirmation task. The actual audit (#647) mapped
+test *functions* and found 17 real gaps plus two missing binding surfaces
+(now rows 3.7 and 3.8). The lesson generalises: for a row whose claim is
+"coverage exists elsewhere", nothing short of an item-by-item mapping is
+evidence. Rows asserting a file's *absence* (3.3, 3.4) or a symbol's absence
+(2.1, 2.2) are sound as checked; rows asserting *equivalence* are not.
+
 ### 1. Hard code blockers
 
 Nothing here is optional — each is something that stops the legacy tree from
@@ -92,6 +102,21 @@ The deviation register's standing instruction is that **every remaining 🔴 and
 
 ### 3. Superset gaps — Goal 1 explicitly names examples, benchmarks and docs
 
+**Status: all six rows have a PR open.** 3.1 → #645, 3.2 → #646, 3.3 → #644,
+3.4 → #643, 3.5 → #648, 3.6 → #647. Two of them changed what this section
+says, and the changes are recorded in place rather than quietly edited away:
+
+- **3.6 was not the confirmation task this row called it.** The audit mapped
+  all 268 legacy test functions onto next's 325 and found 17 genuine test gaps
+  (closed in #647) *and* two missing **binding surfaces** that no test can
+  close. Those are now rows **3.7** and **3.8** below. The row's original
+  "coverage does appear folded in — this is a confirmation task, not a known
+  gap" was wrong.
+- **3.1 and 3.2 were correctly scoped** but both grew a dependency the row did
+  not anticipate: 3.2 had to port classic's `bench`-gated harness
+  (`src/bencher.rs` + a `criterion` optional dep) as *source*, not just bench
+  files.
+
 | # | Item | Gap | Size |
 |:--:|---|---|:--:|
 | 3.1 | **`latency_e2e` example not ported** — re-verified, it stands. It is a *separate* example from `latency`: classic ships **both** `examples/latency/` (pub/sub/shared over an iceoryx2 hop) and `examples/latency_e2e/` (a nine-stage browser→ws_server→iceoryx2→fix_gw→FIX/TLS→LMAX round trip). Next has ported `latency/` only — `examples/latency/{README,pub.rs,shared.rs,sub.rs}` matches classic `examples/latency/` file-for-file, which is what the port plan's Phase 6 "landed" list refers to. `latency_e2e` has **no** next twin and no reference anywhere under `next/`. **Scope is smaller than it looks**: only ~1,200 lines are engine-coupled (`ws_server.rs` 399, `fix_gw.rs` 448, `shared.rs` 345, all on classic `wingfoil::` imports, declared as two `[[bin]]` targets in `wingfoil/Cargo.toml:388–394`). The rest — 5 Dockerfiles, docker-compose, Prometheus/Tempo/Grafana provisioning, the `static/` browser client, and three Pulumi stacks (fargate, ec2-spot, baremetal) — is engine-agnostic and **repoints** rather than ports, as do the three workflows that reference `wingfoil/examples/latency_e2e/` by path. | classic `wingfoil/examples/{latency,latency_e2e}/` vs next `examples/latency/`; `grep -rn latency_e2e next/` → nothing | M |
@@ -99,7 +124,9 @@ The deviation register's standing instruction is that **every remaining 🔴 and
 | 3.3 | **Adapter directory `CLAUDE.md`: 15 legacy, 0 in next.** Phase 4's own rule is "Each adapter: keep its directory CLAUDE.md". | `find … -name CLAUDE.md`: 15 vs 0 | M |
 | 3.4 | **Python API docs (Sphinx/readthedocs) have no next twin.** `wingfoil-python/docs/` (`conf.py`, `api.rst`, `index.rst`, `readme.rst`, `requirements.txt`, Makefile) exists; `wingfoil-next-python/` has no `docs/` at all, and `.readthedocs.yaml` installs and builds from `wingfoil-python`. The docs build breaks at the swap. | `.readthedocs.yaml`; `ls next/crates/wingfoil-next-python/` | M |
 | 3.5 | **iceoryx2 `stages` latency path not bound in Python** — the one legacy Python capability still unported. No longer blocked: `PyLatency::create_from_bytes` is exactly the header split it needs; what remains is wiring it into the two entry points and testing the round trip (no service needed). | port-plan.md:1687 | S |
-| 3.6 | **Verify `test_interop.py` really is at parity with the legacy pytest surface.** That is the *stated Phase 6 gate*, and legacy has four test files with no same-named twin (`test_pandas`, `test_statistics`, `test_streams`, `test_web_bindings`). Coverage does appear folded into `test_interop.py`/`test_examples.py` — this is a confirmation task, not a known gap. | port-plan.md:1492 | S |
+| 3.6 | ~~**Verify `test_interop.py` really is at parity with the legacy pytest surface**~~ — **done, and it was not a formality (#647).** 268 legacy tests mapped onto next's 325 *by surface covered*, since only 6 of 268 names appear on both sides. 17 of the 21 legacy files have a same-named twin and every one is a superset. **17 genuine test gaps found and closed** — the largest being zmq, whose file docstring claimed a round trip that did not exist (every test was wiring-level) and whose `zmq_sub_etcd`/`zmq_pub_etcd` were bound but *wholly untested*; `zmq-next-integration.yml` previously ran Rust tests only and gained a Python leg. A live defect also fell out: `Stream.value()` **panicked** before the graph had run, escaping to Python as a bare `PanicException` — the earlier web-binding fix covered only the ran-but-never-ticked case, and classic `peek_value` answers `None` in both. Fixed. | PR #647; port-plan.md:1492 | — |
+| 3.7 | **The statistics Python binding stops short of legacy.** Legacy `wingfoil-python/src/py_statistics.rs` binds `Window` / `Weighting` / `EwmaSpan` over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/`ewma`; next-python binds only cumulative `sum`/`mean`/`average`. **The engine already has the whole surface** (`wingfoil-next/src/stats.rs`, ported in Phase 2 with its own parity tests) — it is only the *binding* that is short, so this is binding work, not engine work. 37 legacy tests have nowhere to map. **Why it was missed:** legacy grew this binding *after* Phase 6's "Surface build-out ✅ landed" bullet was written, so the parity target moved under a bullet already marked done — worth remembering as a failure mode, since any legacy-side change after a ✅ does the same thing. | Found by the 3.6 audit (#647); `wingfoil-python/src/py_statistics.rs` vs `wingfoil-next-python/src/graph.rs` | M |
+| 3.8 | **No multi-stream `build_dataframe` in next-python.** Legacy `pandas_helpers.build_dataframe` outer-joins several streams on time; next's `dataframe()` frames a single stream. 4 legacy tests have nowhere to map. Note the single-stream half is *better* in next (a real `pandas.DataFrame` built in Rust, where legacy returned `(time, value)` tuples for a Python helper to assemble), which is why the shape-coercion half of `test_pandas.py` is obsolete rather than missing — only the multi-stream join is a real gap. | Found by the 3.6 audit (#647) | S |
 
 ### 4. Docs the cutover itself owes
 
