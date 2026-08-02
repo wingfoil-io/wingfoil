@@ -1,137 +1,164 @@
-[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust-test.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
-[![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
-[![Crates.io Version](https://img.shields.io/crates/v/wingfoil.svg)](https://crates.io/crates/wingfoil)
-[![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
-[![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
-[![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
-[![npm](https://img.shields.io/npm/v/@wingfoil/client.svg)](https://www.npmjs.com/package/@wingfoil/client)
+# Wingfoil Next
 
-# Wingfoil
+Wingfoil Next is a blazingly fast, highly scalable stream processing engine
+designed for latency-critical use cases such as electronic trading and
+real-time AI systems.
 
-Wingfoil is a [blazingly fast](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/), highly scalable 
-stream processing framework designed for latency-critical use cases such as electronic trading 
-and real-time AI systems.
+You describe your graph of calculations once, in a single fluent wiring, and
+choose how to run it: an **interpreted** engine for a fully open, dynamic
+world; a fully monomorphized **compiled** runner for maximum throughput; or
+**nested** compiled islands mounted inside an interpreted graph. Every tier is
+derived from the same definition, so they cannot drift — there is no
+duplicated execution logic anywhere.
 
-It ships with a growing library of production-ready adapters covering tick stores, message buses, market protocols, and observability backends — so you can plug graphs into real data sources and sinks with a single line.
-
-Wingfoil simplifies receiving, processing, distributing and monitoring streaming data across your entire stack.
+Wingfoil simplifies receiving, processing, distributing and monitoring
+streaming data across your entire stack.
 
 
 ## Features
 
-- **Fast**: [Ultra low latency](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/) and high throughput with an efficient [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) based execution engine.
-- **Backtesting**: [Replay historical](https://docs.rs/wingfoil/latest/wingfoil/#historical-vs-realtime) data to backtest and optimise strategies.
-- **Simple and obvious to use**: Define your graph of calculations; Wingfoil manages its execution.
-- **Adapters**: production-ready integrations for [iceoryx2](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2), [KDB+](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/round_trip), [Kafka](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka), [Fluvio](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio), [FIX](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix), [ZeroMQ](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq), [etcd](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd), [Prometheus](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/prometheus), [OpenTelemetry](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/otlp), [CSV](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book), and more.
-- **Multi-language**: currently available as a [Rust crate](https://crates.io/crates/wingfoil/), [python package](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil-python) and a [TypeScript/JavaScript client](https://www.npmjs.com/package/@wingfoil/client).
-- **Graph dynamism**: [rewire your graph](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic) in response to incoming data.
-- **Async/Tokio**: seamless integration, allows you to [leverage async](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async) at your graph edges.
-- **Multi-threading**: [distribute graph execution](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading) across cores.
+- **Fast**: ultra low latency and high throughput from an efficient
+  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)-based execution
+  engine, with a `compiled()` tier that monomorphizes the whole graph into one
+  function for the compiler to optimise across node boundaries.
+- **Three execution tiers**: run any graph interpreted (open-world, dynamic),
+  fully compiled (static, fastest), or as compiled islands nested inside an
+  interpreted graph — all from one wiring definition.
+- **Backtesting**: replay historical data deterministically to backtest and
+  optimise strategies, then swap to realtime with the same graph wiring.
+- **Lossless**: same-instant values ride a single burst — never coalesced,
+  never latest-wins — identically in realtime and historical replay.
+- **Fallible everywhere**: every lifecycle function returns a `Result`; errors
+  abort the run with context and cleanup still runs.
+- **Simple to use**: define your graph of calculations; Wingfoil manages its
+  execution.
+- **Adapters**: integrations for CSV, etcd, the augurs time-series toolkit,
+  and line-oriented files, with async/Tokio at your graph edges.
+- **Multi-threading**: distribute graph execution across threads through the
+  channel layer.
+- **Extensible**: add sources, combinators, statistics and adapters as
+  extension traits; your own ops get interpreted *and* compiled coverage with
+  `#[op]`, with no macro table to edit.
 
 
 ## Quick Start
 
-In this example we build a simple, linear pipeline with all nodes ticking in lock-step.
+In this example we build a simple, linear pipeline with all nodes ticking in
+lock-step.
 
 ```rust
-use wingfoil::*;
 use std::time::Duration;
+use wingfoil_next::{RunFor, RunMode};
+use wingfoil_next::prelude::*;
+
 fn main() {
-    let period = Duration::from_secs(1);
-    ticker(period)
+    let g = GraphBuilder::new();
+    g.ticker(Duration::from_secs(1))
         .count()
-        .map(|i| format!("hello, world {:}", i))
-        .print()
-        .run(RunMode::RealTime, RunFor::Duration(period*3)
-    );
+        .map(|i| format!("hello, world {i}"))
+        .print();
+
+    let mut runner = g.build();
+    runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
 }
 ```
+
 This output is produced:
+
 ```pre
 hello, world 1
 hello, world 2
 hello, world 3
 ```
 
-## Order Book Example
 
-Wingfoil lets you easily wire up complex business logic, splitting and recombining streams, and modulating the frequency of data. Adapters make it easy to plug in real data sources and sinks. In this example we load a CSV of AAPL limit orders, maintain an order book using the lobster crate, derive trades and two-way prices, and export back to CSV — all in a few lines:
+## A Worked Example
+
+Wingfoil lets you wire up complex business logic, splitting and recombining
+streams and modulating the frequency of data. Here a price stream is folded
+into fast and slow EMAs, recombined into a crossover signal, and gated so it
+only fires when the signal *changes*:
 
 ```rust,ignore
-let book = RefCell::new(lobster::OrderBook::default());
-let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
-let (fills, prices) = csv_read("aapl.csv", get_time, true)
-    .map(move |chunk| process_orders(chunk, &book))
-    .split();
-let prices_export = prices
-    .filter_none()
-    .distinct()
-    .csv_write("prices.csv");
-let fills_export = fills.csv_write("fills.csv");
-Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
-    .print()
-    .run()
-    .unwrap();
+let g = GraphBuilder::new();
+let price = g.ticker(Duration::from_millis(1)).map(next_price);
+
+// Fast and slow EMAs over the same price stream, recombined into a signal.
+let fast = price.fold((0.0, false), ema(0.30)).map(|s| s.0);
+let slow = price.fold((0.0, false), ema(0.05)).map(|s| s.0);
+let signal = fast.join(&slow, |f, s| f > s);
+
+// Emit only when the crossover state changes.
+signal
+    .fold((false, false), |st, s| { st.0 = st.1; st.1 = *s; })
+    .filter(|st| st.0 != st.1)
+    .print();
+
+let mut runner = g.build();
+runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5_000)).unwrap();
 ```
 
-This output is produced:
+See the full [`order_book`](crates/wingfoil-next/examples/order_book/) and
+[`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) examples.
 
-<div align="center">
-  <img alt="diagram" src="https://raw.githubusercontent.com/wingfoil-io/wingfoil/refs/heads/main/wingfoil/diagrams/aapl.svg"/>
-</div>
 
-[Full example.](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/)
+## Execution tiers
+
+One wiring function, wrapped in `nitro! { fn my_graph(g: &GraphBuilder) -> ... }`,
+expands to a module offering all three tiers:
+
+| Tier | Entry point | What it is |
+|---|---|---|
+| Interpreted | fluent chaining directly, or `my_graph::interpreted()` | One dyn boundary per op; open world — threaded/busy-poll sources, feedback, bursts. |
+| Compiled | `my_graph::compiled(run_mode, run_for)` | The whole graph monomorphized into one function, state in locals — fastest, static DAGs. |
+| Nested (island) | `my_graph::nested(&g, inputs...)` | A compiled sub-graph mounted as one node of an interpreted graph — hot core compiled, edges stay open. |
+
 
 ## More Examples
 
-Short code snippets for each adapter live in the [examples README](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/README.md). The examples below are all runnable — see each one's `README.md` for setup and commands.
+Every example is runnable with `cargo run -p wingfoil-next --example <name>`
+(add `--features <name>` for adapter examples).
 
 ### Core concepts
 
 | Example | Description |
 |---|---|
-| [`order_book`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, export to CSV. |
-| [`breadth_first`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/breadth_first/) | Why wingfoil's BFS execution avoids the O(2^N) node explosion of naive depth-first DAGs. |
-| [`run_mode`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring for backtesting. |
-| [`async`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/async/) | Integrate Tokio async/await at graph edges (adapters) while keeping the core graph synchronous. |
-| [`threading`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/threading/) | Distribute graph execution across worker threads with `producer()` / `mapper()`. |
-| [`dynamic`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/dynamic/) | Add and remove nodes at runtime. Includes `demux`, `dynamic-group`, and `dynamic-manual` variants. |
-| [`feedback`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/feedback/) | Close a loop between two nodes with a `feedback` channel — a proportional control loop where the plant's output feeds back into the controller's input, which a plain DAG can't express. |
-| [`tracing`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/tracing/) | Instrumentation modes (log, tracing, instruments) for event and span handling. |
-| [`latency`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/latency/) | Per-hop latency stamping with `Traced<T, L>` and `LatencyReport`, transported over iceoryx2. |
+| [`hello_graph`](crates/wingfoil-next/examples/hello_graph.rs) | Smallest graph: a ticker counted and formatted, run historical (instant) then realtime. |
+| [`order_book`](crates/wingfoil-next/examples/order_book/) | Maintain a limit order book in `fold` state, derive trades and two-way prices. |
+| [`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) | Backtest-shaped: a price walk, fast/slow EMAs, and golden/death-cross signals on state change. |
+| [`breadth_first`](crates/wingfoil-next/examples/breadth_first/) | Why breadth-first execution avoids the node explosion of naive depth-first DAGs. |
+| [`run_mode`](crates/wingfoil-next/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring. |
+| [`feedback`](crates/wingfoil-next/examples/feedback/) | Close a loop between nodes with a `feedback` channel — a control loop a plain DAG can't express. |
+| [`threading`](crates/wingfoil-next/examples/threading/) | Run a producer sub-graph on its own thread, feeding the main graph over the channel layer. |
+| [`async`](crates/wingfoil-next/examples/async/) | Drive a graph from an async/Tokio producer of timestamped values at the graph edge. |
+| [`statistics`](crates/wingfoil-next/examples/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
+| [`odds_evens`](crates/wingfoil-next/examples/odds_evens.rs) | Split a counter by parity into two branches and merge back — the split-and-recombine DAG. |
+| [`dual_mode`](crates/wingfoil-next/examples/dual_mode.rs) | One `nitro!` wiring expands to both an interpreted and a fully compiled runner. |
+| [`fanout_10x10`](crates/wingfoil-next/examples/fanout_10x10.rs) | A 10×10 fan-out graph expressed through `nitro!`, the benchmark shape. |
 
 ### Adapters
 
 | Example | Description |
 |---|---|
-| [`kdb`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kdb/) | KDB+ integration: time-sliced reads, cached reads (LRU file cache), and round-trip write/read/validate. |
-| [`kafka`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/kafka/) | Kafka / Redpanda adapter — subscribe, transform, publish pipeline via `rdkafka`. |
-| [`fluvio`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fluvio/) | Fluvio distributed streaming — subscribe, transform, publish pipeline. |
-| [`fix`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/fix/) | FIX 4.4 protocol: self-contained loopback, client, echo server, and live LMAX market data over TLS. |
-| [`zmq`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/zmq/) | ZeroMQ pub/sub with direct addressing or etcd-based service discovery. |
-| [`etcd`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/etcd/) | etcd key-value store adapter for sub/pub with transformation. |
-| [`redis`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/redis/) | Redis adapter — Pub/Sub channels (subscribe, transform, republish) and persistent Streams (snapshot + tail). |
-| [`postgres`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/postgres/) | PostgreSQL adapter — time-sliced historical reads and streaming writes, round-trip write/read/validate. |
-| [`iceoryx2`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/iceoryx2/) | Zero-copy IPC over shared memory (spin, threaded, signaled polling modes). |
-| [`aeron`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe to `i64` values with spin and threaded polling modes. |
-| [`web`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/web/) | WebSocket adapter streaming synthetic prices and receiving UI events. |
-| [`telemetry`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/telemetry/) | Metrics export via Prometheus scraping (pull) and OpenTelemetry OTLP (push). |
-| [`augurs`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/augurs/) | augurs time-series toolkit — on-graph forecasting (ETS/MSTL), outlier detection (MAD/DBSCAN), changepoint, seasonality, DTW and clustering over sliding windows. |
-| [`statistics`](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples/statistics/) | Streaming statistics toolkit — EWMA (per-tick and time-decayed), cumulative and rolling mean/variance/std/min/max/median, with count- and time-weighted variants over sample- and time-based windows. |
+| [`csv_adapter`](crates/wingfoil-next/examples/csv_adapter.rs) | Replay a CSV as a deterministic historical burst stream, transform each row, write back to CSV. |
+| [`etcd_adapter`](crates/wingfoil-next/examples/etcd_adapter.rs) | Watch an etcd key prefix, transform values, and write the result back. |
+| [`augurs_adapter`](crates/wingfoil-next/examples/augurs_adapter.rs) | On-graph forecasting, outlier / changepoint / season detection, DTW and clustering over sliding windows with the augurs toolkit. |
+| [`lines_adapter`](crates/wingfoil-next/examples/lines_adapter.rs) | Dependency-free line-oriented file adapter — replay a text file, transform it, write it out. |
+| [`async_source`](crates/wingfoil-next/examples/async_source.rs) | Bridge an async producer of timestamped values into a wingfoil-next graph. |
+
 
 ## Links
-- Checkout the [examples](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/examples)
-- Download from [crates.io](https://crates.io/crates/wingfoil/)
-- Read the [documentation](https://docs.rs/wingfoil/latest/wingfoil/)
-- Review the [benchmarks](https://github.com/wingfoil-io/wingfoil/tree/main/wingfoil/benches/)
-- Download the wingfoil Python module from [pypi.org](https://pypi.org/project/wingfoil/)
-- Download the `@wingfoil/client` browser client from [npmjs.com](https://www.npmjs.com/package/@wingfoil/client)
+
+- Explore the [examples](crates/wingfoil-next/examples/)
+- Read the [benchmarks](crates/wingfoil-next/benches/)
+- See [CONTRIBUTING](CONTRIBUTING.md) to build, test and contribute
+
 
 ## Get Involved!
 
-We want to hear from you!  Especially if you:
-- are interested in [contributing](https://github.com/wingfoil-io/wingfoil/blob/main/CONTRIBUTING.md)
-- know of a project that wingfoil would be well-suited for
+We want to hear from you! Especially if you:
+- are interested in [contributing](CONTRIBUTING.md)
+- know of a project that Wingfoil would be well-suited for
 - would like to request a feature or report a bug
 - have any feedback
 
@@ -140,8 +167,3 @@ Please do get in touch:
 - email us at [hello@wingfoil.io](mailto:hello@wingfoil.io)
 - submit an [issue](https://github.com/wingfoil-io/wingfoil/issues)
 - get involved in the [discussion](https://github.com/wingfoil-io/wingfoil/discussions/)
-
-
-
-
-

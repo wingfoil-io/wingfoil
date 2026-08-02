@@ -1,87 +1,53 @@
+# Contributing to Wingfoil Next
 
-## We're looking for contributors!
+Wingfoil Next is the ground-up rebuild of [wingfoil](../CONTRIBUTING.md) on
+the Op pattern — see [`README.md`](README.md) for the design objectives and
+[`docs/port-plan.md`](docs/port-plan.md) for the roadmap. Community channels,
+licensing and general contribution etiquette are shared with the main
+project: see the [top-level CONTRIBUTING](../CONTRIBUTING.md).
 
-Hi! Thanks for your interest in contributing to **wingfoil** — we'd love to have your participation! 
+## What contributions look like here
 
-Drop a comment on any issue, open a new one, or say hi on [Discord](https://discord.gg/WfZwpQnZUA), email `hello@wingfoil.io`
+The port advances phase by phase (see the plan's ✅/🟡/⬜ markers). The most
+valuable contributions are:
 
-We're actively looking for help on the following:
+- **Porting a legacy node/operator** — follow "Adding an op" in
+  [`docs/port-plan.md`](docs/port-plan.md). Most single-input ops need only
+  an `Op` impl with `#[op(build = ...)]` plus a 3-line fluent method; the
+  compiled path is zero-touch.
+- **Porting a legacy adapter** — follow the `/new-adapter-next` skill
+  (`.claude/commands/new-adapter-next.md` from the repo root), which encodes
+  the layering rules (sources over `channel`/`poll`, sinks over `for_each`,
+  extension traits out of the prelude).
+- **Porting a legacy example or test** — every classic example and test
+  wants a next twin producing identical values and tick times. Parity gaps
+  are bugs.
 
-- 🔧 [ZMQ service discovery](https://github.com/wingfoil-io/wingfoil/issues/103) — dynamic node registration
-- 🗄 [KDB+ caching](https://github.com/wingfoil-io/wingfoil/issues/90) — faster replay and snapshot support
-- 📦 [Binary file I/O](https://github.com/wingfoil-io/wingfoil/issues/104) — Arrow, Parquet, and more
-- 🛢 [SQL I/O](https://github.com/wingfoil-io/wingfoil/issues/105) — stream to/from relational databases
-- ⚡ [Kafka I/O](https://github.com/wingfoil-io/wingfoil/issues/23) — streaming integration
-- 🐍 [wingfoil-python full parity](https://github.com/wingfoil-io/wingfoil/issues/106) — every node and adapter exposed to Python
-- 🐍 [Python showcase](https://github.com/wingfoil-io/wingfoil/issues/107) — Rust pipeline, results in pandas + scikit-learn + plotly
-- 🌐 [JS/TS browser integration](https://github.com/wingfoil-io/wingfoil/issues/110) — wingfoil in-browser via WASM
+## Ground rules
 
-We're especially keen to hear from specialists in:
+1. **Legacy is the oracle.** A port must match the classic implementation's
+   observable behaviour (values *and* tick times), or document the deviation
+   in the capability matrix. Never silently drop a capability.
+2. **One mechanism per op.** Semantics live in one `Op::cycle` — no
+   duplicated logic per engine, no per-op tables in the macro.
+3. **Burst model.** Same-instant values are delivered atomically in one
+   `Burst`; nothing is coalesced or dropped.
+4. **Fallible, with context.** No `.unwrap()` outside `#[cfg(test)]` and doc
+   examples; propagate with `?` and `anyhow::Context` at I/O boundaries.
+5. **No locks on the graph path.** Background threads talk to the graph
+   through the channel layer.
 
-- 🔌 FPGA / rusthdl
-- 🌐 WASM / JS / TS
-- 🐍 PyO3
+## Building and testing
 
-## Good First Issues
-
-New to open source or Rust? These are a great starting point:
-
-- 🧮 [Add EWMA stream](https://github.com/wingfoil-io/wingfoil/issues/111)
-- 🔍 [Python binding for inspect & throttle](https://github.com/wingfoil-io/wingfoil/issues/112)
-
-
-## Building and Testing
-
-### Prerequisites
-
-These tools are required for building, testing, and packaging the core **wingfoil** project:
-
-* **The Rust toolchain:** `rustup`, `cargo`, `rustc`, etc. We aim for compatibility with the latest stable version.
-* **`rustfmt` and `clippy`:** We use `rustfmt` for consistent code style and `clippy` for linting across the whole code base.
-* **`protoc` (Protocol Buffers compiler):** required when building with `--all-features` (used transitively by `etcd-client` and a few other adapters). The easiest way to get it (Linux/macOS) is:
-
-  ```bash
-  ./scripts/setup-dev.sh
-  ```
-
-  Or install manually — Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`; macOS: `brew install protobuf`.
-
-For prerequisites specific to the **wingfoil-python** crate and the full build process, please see the [**BUILD.md**](https://github.com/wingfoil-io/wingfoil/blob/main/wingfoil-python/build.md) documentation.
-
-#### Aeron adapter
-
-The Aeron adapter requires clang, libuuid, and a recent CMake (the version in apt is often too old):
+From the repository root (the crates are root-workspace members):
 
 ```bash
-sudo apt update
-sudo apt install clang libclang-dev uuid-dev
-
-wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
-sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
+cargo build -p wingfoil-next
+cargo test  -p wingfoil-next --all-features
+cargo bench -p wingfoil-next          # three-tier regression gate
+cargo fmt --all
+cargo lint && cargo lint-all          # workspace clippy aliases, mirror CI
 ```
 
-### Building
-
-```bash
-cargo build                    # default features
-cargo build --features full    # everything CI builds (needs protoc)
-```
-
-### Pre-PR check (matches CI)
-
-CI is configured in [`.github/workflows/rust-test.yml`](.github/workflows/rust-test.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
-
-```bash
-cargo fmt --all -- --check     # formatting
-cargo lint                     # clippy, default features
-cargo lint-all                 # clippy, all features  ← most-missed step
-cargo test -p wingfoil --features full
-```
-
-`cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2`, `kdb`, etc.) that the default build skips. Please run it before pushing.
-
-
-
-
-
-
+The default feature set is dependency-free; `--all-features` adds the
+`async` (tokio/futures), `csv` and `augurs` adapters.
