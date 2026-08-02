@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iceoryx2::prelude::ZeroCopySend;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
 use wingfoil_next::adapters::otlp::{OtlpAttributeBuffer, OtlpConfig, OtlpSpanOps};
 use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
