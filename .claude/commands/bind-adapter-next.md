@@ -402,6 +402,14 @@ name in `Cfg`. Two consequences worth knowing before you start:
 - The binding module's `//!` header: the entry-point table (Python name → Rust
   fn → shape), how the dynamic edge works, and a numbered **deviations from the
   legacy `wingfoil-python` bindings** section. `postgres.rs` is the model.
+- **`next/crates/wingfoil-next/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
+  `## Python` section. That is where an agent picking the adapter up cold looks
+  for: the binding's cargo feature, whether it is in `all-adapters` and in the
+  **wheel** (and why not, if not), the entry points it exposes and any Rust
+  entry point it deliberately does *not*, whether it is `#[pyadapter]` or
+  hand-written, the test file and its marker, and which workflow leg runs the
+  marked tier. Every one of those is a fact this recipe made you decide — record
+  it there rather than leaving it to be reverse-engineered from `Cargo.toml`.
 - `next/docs/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
   add `$ARGUMENTS` and keep the remaining count honest.
 - `next/docs/python-interop.md` — the "Per-adapter Python bindings" row of the
@@ -443,7 +451,9 @@ Before opening the PR, run a clean-context review pass as a subagent:
 3. Check the boundary rules in step 5 hold — especially the per-burst attach and
    that no `Py<PyAny>` reaches a worker thread.
 4. Confirm the three test tiers exist, that the unit tier really needs no
-   service, and that a live-tail binding has the cross-thread test.
+   service, and that a live-tail binding has the cross-thread test. Confirm the
+   adapter's `CLAUDE.md` `## Python` section matches what actually shipped
+   (feature, roll-ups, entry points, marker, workflow leg).
 5. Run the step-8 checklist and confirm every command passes.
 6. Review for quality: no speculative abstraction, no dead code, no comments
    restating the code.

@@ -326,6 +326,20 @@ Two edits, not one:
   public surface re-exported from `mod.rs`.
 - Tests live in `tests/` (step 10), not inline — inline `mod tests` is for
   pure helper functions only (`poll_line`, `transpose_window` precedents).
+- **Every adapter carries `src/adapters/$ARGUMENTS/CLAUDE.md`** — including a
+  single-file one, where the directory holds only that doc. (`kdb.rs` + `kdb/`
+  and `zmq.rs` + `zmq/` already coexist that way, and it matches the path shape
+  classic uses, so the cutover does not move doc paths.) It is the *agent-facing*
+  companion to the module `//!` docs, not a copy of them: layout, entry-point
+  table, the gotchas that bite (run-mode constraints, ordering guarantees,
+  redaction, the `block_on` footgun), a pointer to the canonical
+  `# Deviations from classic` block, **how to run each test tier and which
+  workflow runs it**, the example(s), and the Python binding's feature/wheel
+  roll-up status. Keep it short and factual — an inaccurate `CLAUDE.md` is worse
+  than a missing one. `src/adapters/CLAUDE.md` is the index; add a row there too.
+  Do **not** copy the classic `wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`: it
+  describes the `#[node]`/`MutableNode` implementation and would be actively
+  misleading.
 
 ## 6. Module docs — the `//!` header
 
@@ -963,7 +977,10 @@ parent context stays clean) with these tasks:
    tick times, temp paths unique, correct file-level `cfg` gates (step 10);
    example registered with `required-features` (step 11); CI workflow +
    hub registration for service adapters (step 12); port-plan updated
-   (step 13).
+   (step 13); **`src/adapters/$ARGUMENTS/CLAUDE.md` written and a row added to
+   `src/adapters/CLAUDE.md`** (step 5) — and every factual claim in it (test
+   commands, feature names, workflow filenames, Python roll-up status) checked
+   against the source, not assumed.
 3. **Check the invariants**: no `Mutex`/`RwLock` on the graph path (an
    ad-hoc-reader hand-off uses `ArcSwap`, not a lock); channel
    sources send non-decreasing timestamps and `close()`; a live never-closing
