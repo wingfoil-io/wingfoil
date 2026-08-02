@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: latency_e2e
+    folder: ''
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

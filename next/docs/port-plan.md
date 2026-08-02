@@ -1763,7 +1763,17 @@ tests covered — not "legacy pytest passes unchanged."
   `latency` (`examples/latency/{pub,sub}.rs` — the cross-process
   `latency_stages!` + `Traced` + `.stamp::<Stage>()` + `latency_report` loop
   over an iceoryx2 hop, closing the Phase-5 infrastructure end to end; it fixes
-  two defects in the classic pair, see that example's README), and `telemetry`.
+  two defects in the classic pair, see that example's README), `latency_e2e`
+  (`examples/latency_e2e/{ws_server,fix_gw}.rs` plus the whole engine-agnostic
+  deployment kit — the nine-stage
+  `browser --WS--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX` round trip;
+  the single largest consumer of the adapter surface, exercising `web`(+TLS),
+  `iceoryx2`, `fix`, `prometheus` and `otlp` in one graph. Wire types, stamp
+  stages, metric names and CLI/env surface are byte-parity with classic, so the
+  classic browser client and Grafana dashboard work unchanged; deviations are
+  wiring-idiom only — see that example's README. The three
+  `*-latency-e2e-*.yml` workflows still target the classic copy by path;
+  repointing them is cutover-time work), and `telemetry`.
 
   **`telemetry`** was already ported as graph code — `prometheus_adapter.rs`
   and `otlp_adapter.rs`. What landed now is the rest of the classic example:

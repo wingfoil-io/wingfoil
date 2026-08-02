@@ -260,6 +260,11 @@ env_logger = { workspace = true }
 # the engine-instrumentation tests (which collect the emitted span names through
 # a small custom `Layer`). Mirrors the classic tracing example's dev-dependency.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
+# (`sched_setaffinity`). Classic carries the same dev-dependency for the same
+# reason. `libc` is also an *optional* [dependencies] entry above, enabled by
+# `aeron-integration-test`; the two entries are independent.
+libc = "0.2"
 
 [features]
 default = []
@@ -550,6 +555,20 @@ required-features = ["iceoryx2"]
 name = "latency_sub"
 path = "examples/latency/sub.rs"
 required-features = ["iceoryx2"]
+
+# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# the nine-stage, three-process end-to-end latency demo
+# (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
+# back). `required-features` mirror the classic manifest one-for-one.
+[[example]]
+name = "latency_e2e_ws_server"
+path = "examples/latency_e2e/ws_server.rs"
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
+
+[[example]]
+name = "latency_e2e_fix_gw"
+path = "examples/latency_e2e/fix_gw.rs"
+required-features = ["fix", "iceoryx2"]
 
 # KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
 # with a README). All require a running KDB+/tickerplant instance to actually run.
