@@ -1947,7 +1947,11 @@ tests covered — not "legacy pytest passes unchanged."
   that disappears at cutover when the legacy bar goes away. Only three targets
   genuinely move onto the next engine (`graph`, `bfs_vs_dfs_wingfoil`,
   `iceoryx2_modes`), and their rewiring is node-count-preserving; the rest
-  measure other libraries or ported backend/value types and are verbatim. Per-
+  measure other libraries or ported backend/value types and are verbatim.
+  `bfs_vs_dfs_wingfoil` has since been re-expressed as `nitro!` blocks, one per
+  depth, so a single wiring definition drives both the interpreted engine and a
+  compiled island — the bar that stays comparable with legacy is still the
+  interpreted, per-tick one, under the same `depth_N` names. Per-
   target deviations are recorded in each bench's own module doc, and the suite
   is catalogued in `crates/wingfoil-next/benches/README.md`. Still **not** a CI
   gate, for the reason above.

@@ -208,3 +208,30 @@ fn macro_handles_statistics_on_both_engines() {
     assert_eq!(i_smoothed, c_smoothed);
     assert_eq!(i_windowed, c_windowed);
 }
+
+wingfoil_next::nitro! {
+    fn diamond_stack(g: &GraphBuilder) -> Stream<u128> {
+        let s0 = g.ticker(Duration::from_nanos(100)).count().map(|c| *c as u128);
+        let s1 = s0.join(&s0, |a: &u128, b: &u128| a + b);
+        let s2 = s1.join(&s1, |a: &u128, b: &u128| a + b);
+        let s3 = s2.join(&s2, |a: &u128, b: &u128| a + b);
+        s3
+    }
+}
+
+/// The branch/recombine shape `benches/topological_vs_per_path` measures:
+/// every `join` reads the *same* upstream as both of its active inputs, so a
+/// three-level stack has 2^3 source→sink paths across four nodes. Both engines
+/// must visit each node once per tick — i.e. produce `8 * count`, not fire
+/// eight times.
+#[test]
+fn macro_handles_a_node_read_twice_by_one_join() {
+    let run_for = RunFor::Cycles(3);
+    let (mut runner, out) = diamond_stack::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert_eq!(8 * 3, interpreted);
+
+    let (compiled,) = diamond_stack::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(interpreted, compiled);
+}
