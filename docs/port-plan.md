@@ -558,12 +558,12 @@ values and tick times.
   flush cannot turn an `Ok` run into `Err`), so a sink that must abort
   deterministically on its final write cannot migrate to it yet (see etcd).
 - ✅ Legacy `threading`/`async` examples re-implemented on next. `threading`
-  (`examples/threading/`) offloads a producer sub-graph to a worker thread that
+  (`examples/core/threading/`) offloads a producer sub-graph to a worker thread that
   feeds the main graph over the channel layer — the primitive under legacy
   `producer()`/`mapper()` (the `graph_node` node), which now **also** have direct
   fluent twins, `SourceOps::spawn` / `StreamOps::spawn_map` (see the Phase 2
   `graph_node` entry) — and runs in both modes (realtime bursts, deterministic
-  historical replay). `async` (`examples/async/`, gated on the
+  historical replay). `async` (`examples/core/async/`, gated on the
   `async` feature) drives the graph from a `produce_async` producer with the
   graph as consumer. Bounded-buffer back-pressure (`produce_async`'s optional
   `buffer_size`, applied in **both** run modes — register B5) and

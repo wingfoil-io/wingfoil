@@ -178,6 +178,11 @@ jobs:
       - name: Run rustfmt
         run: cargo fmt --all -- --check
 
+      # Cheap and toolchain-free, so it runs before the clippy passes: a missing
+      # example README fails in seconds rather than after a full lint build.
+      - name: Check example documentation
+        run: scripts/check-example-docs.sh
+
       - name: Run rust-clippy
         # Both passes are needed: `--all-features` is not a superset of default
         # in every crate, and the default pass is what most contributors run.

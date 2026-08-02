@@ -15,7 +15,7 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 legacy — regenerate it locally with `plot.py` after running the three targets
 (the script's header lists the commands). The legacy-engine plot, on the same
 workload, is preserved at
-[`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../../wingfoil/benches/bfs_vs_dfs/latency.png)
+[`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
 until the Phase-7 cutover.
 
 The shape it shows: wingfoil stays flat while async streams and reactive double
@@ -30,7 +30,7 @@ which again fires both arms — 2^N callbacks or awaits across N levels.
 
 **Breadth-first (wingfoil):** the graph scheduler visits each node exactly
 once per tick regardless of how many upstream paths lead to it. The entire
-depth-127 graph in the [breadth_first example](../../examples/breadth_first/)
+depth-127 graph in the [breadth_first example](../../examples/core/breadth_first/)
 completes in a single engine cycle.
 
 ### Benchmarks

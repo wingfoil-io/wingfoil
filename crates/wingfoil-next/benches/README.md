@@ -97,8 +97,8 @@ forces.** Each bench's own module doc records its deviations; in summary —
 
 `cargo bench` writes criterion's HTML report to `target/criterion/`. Legacy
 captured one such report for its `10x10` graph run under
-[`legacy/wingfoil/benches/images/`](../../../../wingfoil/benches/images/), with the
+[`legacy/wingfoil/benches/images/`](../../../legacy/wingfoil/benches/images/), with the
 statistics table and plot commentary in
-[`legacy/wingfoil/benches/README.md`](../../../../wingfoil/benches/README.md). Those are
+[`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md). Those are
 *readings* on one specific machine, not source, so they are deliberately not
 duplicated here — regenerate against your own hardware instead.

@@ -98,8 +98,8 @@ let mut runner = g.build();
 runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5_000)).unwrap();
 ```
 
-See the full [`order_book`](crates/wingfoil-next/examples/order_book/) and
-[`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) examples.
+See the full [`order_book`](crates/wingfoil-next/examples/core/order_book/) and
+[`ema_crossover`](crates/wingfoil-next/examples/core/ema_crossover/) examples.
 
 
 ## Execution tiers
@@ -114,42 +114,89 @@ expands to a module offering all three tiers:
 | Nested (island) | `my_graph::nested(&g, inputs...)` | A compiled sub-graph mounted as one node of an interpreted graph — hot core compiled, edges stay open. |
 
 
-## More Examples
+## Examples
 
-Every example is runnable with `cargo run -p wingfoil-next --example <name>`
-(add `--features <name>` for adapter examples).
+Around 40 runnable examples, each in its own directory with a README covering
+what it teaches, the wiring, and its expected output. Full index:
+[`examples/README.md`](crates/wingfoil-next/examples/README.md).
 
-### Core concepts
+```sh
+cargo run -p wingfoil-next --example <name>                      # core examples
+cargo run -p wingfoil-next --example <name> --features <feature> # anything gated
+```
+
+### Start here
+
+Three examples, in order — they cover the whole model between them.
+
+```sh
+cargo run -p wingfoil-next --example hello_graph      # wire → build → run
+cargo run -p wingfoil-next --example ema_crossover    # fold/join/map/filter at backtest scale
+cargo run -p wingfoil-next --example order_book       # real state in fold
+```
+
+Then pick a direction: [`adapters/`](crates/wingfoil-next/examples/adapters/) to
+plug in real data, [`core/dual_mode`](crates/wingfoil-next/examples/core/dual_mode/)
+for the execution tiers, or [`core/run_mode`](crates/wingfoil-next/examples/core/run_mode/)
+to backtest.
+
+### Core concepts — [index](crates/wingfoil-next/examples/core/)
 
 | Example | Description |
 |---|---|
-| [`hello_graph`](crates/wingfoil-next/examples/hello_graph.rs) | Smallest graph: a ticker counted and formatted, run historical (instant) then realtime. |
-| [`order_book`](crates/wingfoil-next/examples/order_book/) | Maintain a limit order book in `fold` state, derive trades and two-way prices. |
-| [`ema_crossover`](crates/wingfoil-next/examples/ema_crossover.rs) | Backtest-shaped: a price walk, fast/slow EMAs, and golden/death-cross signals on state change. |
-| [`breadth_first`](crates/wingfoil-next/examples/breadth_first/) | Why breadth-first execution avoids the node explosion of naive depth-first DAGs. |
-| [`run_mode`](crates/wingfoil-next/examples/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring. |
-| [`feedback`](crates/wingfoil-next/examples/feedback/) | Close a loop between nodes with a `feedback` channel — a control loop a plain DAG can't express. |
-| [`threading`](crates/wingfoil-next/examples/threading/) | Run a producer sub-graph on its own thread, feeding the main graph over the channel layer. |
-| [`async`](crates/wingfoil-next/examples/async/) | Drive a graph from an async/Tokio producer of timestamped values at the graph edge. |
-| [`statistics`](crates/wingfoil-next/examples/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
-| [`odds_evens`](crates/wingfoil-next/examples/odds_evens.rs) | Split a counter by parity into two branches and merge back — the split-and-recombine DAG. |
-| [`dual_mode`](crates/wingfoil-next/examples/dual_mode.rs) | One `nitro!` wiring expands to both an interpreted and a fully compiled runner. |
-| [`fanout_10x10`](crates/wingfoil-next/examples/fanout_10x10.rs) | A 10×10 fan-out graph expressed through `nitro!`, the benchmark shape. |
+| [`hello_graph`](crates/wingfoil-next/examples/core/hello_graph/) | Smallest graph: a ticker counted and formatted, run historical (instant) then realtime. |
+| [`ema_crossover`](crates/wingfoil-next/examples/core/ema_crossover/) | Backtest-shaped: a price walk, fast/slow EMAs, and golden/death-cross signals on state change. |
+| [`order_book`](crates/wingfoil-next/examples/core/order_book/) | Maintain a limit order book in `fold` state, derive trades and two-way prices. |
+| [`run_mode`](crates/wingfoil-next/examples/core/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring. |
+| [`breadth_first`](crates/wingfoil-next/examples/core/breadth_first/) | Why breadth-first execution avoids the node explosion of naive depth-first DAGs. |
+| [`feedback`](crates/wingfoil-next/examples/core/feedback/) | Close a loop between nodes with a `feedback` channel — a control loop a plain DAG can't express. |
+| [`statistics`](crates/wingfoil-next/examples/core/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
+| [`tracing`](crates/wingfoil-next/examples/core/tracing/) | The `logged` debug tap and the engine's spans — three instrumentation modes. |
+| [`odds_evens`](crates/wingfoil-next/examples/core/odds_evens/) | Split a counter by parity into two branches and merge back — the split-and-recombine DAG, through `nitro!`. |
+| [`dual_mode`](crates/wingfoil-next/examples/core/dual_mode/) | One `nitro!` wiring expands to both an interpreted and a fully compiled runner — and the rules governing what it accepts. |
+| [`fanout_10x10`](crates/wingfoil-next/examples/core/fanout_10x10/) | A 10×10 fan-out graph expressed through `nitro!`, the benchmark shape. |
+| [`threading`](crates/wingfoil-next/examples/core/threading/) | Run a producer sub-graph on its own thread, feeding the main graph over the channel layer. |
+| [`spawn`](crates/wingfoil-next/examples/core/spawn/) | The same offload through the `spawn` / `spawn_map` combinators. |
+| [`async`](crates/wingfoil-next/examples/core/async/) | Drive a graph from an async/Tokio producer at the graph edge. |
+| [`async_source`](crates/wingfoil-next/examples/core/async_source/) | `external` sources — a tokio task pushing into a realtime graph, burst-delivered. |
+| [`produce_async_feed`](crates/wingfoil-next/examples/core/produce_async_feed/) | `produce_async` — timestamped async values, so the same feed replays deterministically. |
+| [`dynamic`](crates/wingfoil-next/examples/core/dynamic/) | Add and remove nodes on a **running** graph, between engine cycles. |
+| [`demux`](crates/wingfoil-next/examples/core/demux/) | The statically-wired counterpart — the same price book through a fixed slot pool. |
 
-### Adapters
+### Adapters — [index](crates/wingfoil-next/examples/adapters/)
+
+| Example | Feature | Description |
+|---|---|---|
+| [`lines`](crates/wingfoil-next/examples/adapters/lines/) | `async` | Dependency-free line-oriented file adapter — the smallest complete I/O edge. |
+| [`csv`](crates/wingfoil-next/examples/adapters/csv/) | `csv` | Replay a CSV as a deterministic historical burst stream, transform each row, write back to CSV. |
+| [`augurs`](crates/wingfoil-next/examples/adapters/augurs/) | `augurs` | On-graph forecasting, outlier / changepoint / season detection, DTW and clustering over sliding windows. |
+| [`zmq`](crates/wingfoil-next/examples/adapters/zmq/) | `zmq` | Brokerless ZeroMQ pub/sub, with connection status as a stream. |
+| [`kafka`](crates/wingfoil-next/examples/adapters/kafka/) | `kafka` | Kafka / Redpanda — consume, transform, produce. |
+| [`fluvio`](crates/wingfoil-next/examples/adapters/fluvio/) | `fluvio` | Fluvio distributed streaming — subscribe, transform, publish. |
+| [`redis`](crates/wingfoil-next/examples/adapters/redis/) | `redis` | Redis Pub/Sub — subscribe, transform, republish. |
+| [`etcd`](crates/wingfoil-next/examples/adapters/etcd/) | `etcd` | Watch an etcd key prefix, transform values, and write the result back. |
+| [`iceoryx2`](crates/wingfoil-next/examples/adapters/iceoryx2/) | `iceoryx2` | Zero-copy IPC over shared memory. |
+| [`aeron`](crates/wingfoil-next/examples/adapters/aeron/) | `aeron` | Low-latency Aeron UDP/IPC, plus a status-driven circuit breaker. |
+| [`kdb`](crates/wingfoil-next/examples/adapters/kdb/) | `kdb` | KDB+ — time-sliced reads, an LRU file cache, and a write/read/validate round trip. |
+| [`postgres`](crates/wingfoil-next/examples/adapters/postgres/) | `postgres` | PostgreSQL — time-sliced historical reads and streaming writes. |
+| [`fix`](crates/wingfoil-next/examples/adapters/fix/) | `fix` | FIX 4.4 loopback — acceptor and initiator in one process, no external engine. |
+| [`web`](crates/wingfoil-next/examples/adapters/web/) | `web` | WebSocket — stream prices to a browser, receive UI events back. |
+| [`prometheus`](crates/wingfoil-next/examples/adapters/prometheus/) | `prometheus` | Serve `/metrics` for scraping (pull). |
+| [`otlp`](crates/wingfoil-next/examples/adapters/otlp/) | `otlp,prometheus` | Push over OTLP *and* serve `/metrics` (push + pull). |
+| [`telemetry`](crates/wingfoil-next/examples/adapters/telemetry/) | — | The shared Docker harness (Prometheus, Grafana, Alloy) both exporters scrape into. |
+
+### Showcase — [index](crates/wingfoil-next/examples/showcase/)
 
 | Example | Description |
 |---|---|
-| [`csv_adapter`](crates/wingfoil-next/examples/csv_adapter.rs) | Replay a CSV as a deterministic historical burst stream, transform each row, write back to CSV. |
-| [`etcd_adapter`](crates/wingfoil-next/examples/etcd_adapter.rs) | Watch an etcd key prefix, transform values, and write the result back. |
-| [`augurs_adapter`](crates/wingfoil-next/examples/augurs_adapter.rs) | On-graph forecasting, outlier / changepoint / season detection, DTW and clustering over sliding windows with the augurs toolkit. |
-| [`lines_adapter`](crates/wingfoil-next/examples/lines_adapter.rs) | Dependency-free line-oriented file adapter — replay a text file, transform it, write it out. |
-| [`async_source`](crates/wingfoil-next/examples/async_source.rs) | Bridge an async producer of timestamped values into a wingfoil-next graph. |
+| [`latency`](crates/wingfoil-next/examples/showcase/latency/) | Per-hop latency stamping with `latency_stages!` and `Traced<T, L>`, across an iceoryx2 shared-memory hop. |
+| [`latency_e2e`](crates/wingfoil-next/examples/showcase/latency_e2e/) | Nine stages, browser to venue and back — WebSocket → iceoryx2 → FIX/TLS, with Prometheus, Grafana and Tempo. |
 
 
 ## Links
 
 - Explore the [examples](crates/wingfoil-next/examples/)
+- Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil-next/benches/)
 - See [CONTRIBUTING](CONTRIBUTING.md) to build, test and contribute
 

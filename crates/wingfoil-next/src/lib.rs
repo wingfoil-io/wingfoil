@@ -89,7 +89,7 @@
 //! All `instrument-*` features imply `tracing`. Both dispatch strategies (the
 //! sparse drain and the [`FullSweep`](interp::Dispatch::FullSweep) oracle) emit
 //! the same spans, so instrumentation cannot tell them apart — just as results
-//! cannot. See `examples/tracing` for a runnable demonstration, and
+//! cannot. See `examples/core/tracing` for a runnable demonstration, and
 //! [`StreamOps::logged`](fluent::StreamOps::logged) for the per-value debug tap
 //! (which emits through the `log` crate, independently of these features).
 //!

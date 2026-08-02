@@ -1,0 +1,278 @@
+# Wingfoil Latency E2E — EC2 Spot Deployment
+
+Always-on deployment of the latency_e2e demo on a single **t3.small Spot**
+instance with a **Packer-baked AMI**. Sibling stack to `fargate/` (high-cost,
+auto-restart) and `baremetal/` (perf demo, on-demand).
+
+## Why this stack exists
+
+| Stack | Cost / mo (London) | Reclaim downtime | Best for |
+|---|---|---|---|
+| `fargate/` | ~$45 | ~5 min (ECS auto-restart) | Zero-effort always-on |
+| **`ec2-spot/` (this)** | **~$11–13** | **~60–90s** (ASG + baked AMI) | **Cheap always-on** |
+| `baremetal/` | ~$3,000+ (when running) | N/A — on-demand | Sub-µs perf showcase |
+
+The Packer-baked AMI is what gets reclaim recovery from ~5 min (vanilla AL2023
++ `dnf install docker` + image pulls) down to ~60–90 s (just `docker compose up`
+on cached images).
+
+## Architecture
+
+```
+                   ┌──────────────────────────┐
+   public IP ──── EIP ───── ASG (size=1, single AZ) ─── Spot t3.small
+                                                            │
+                                                  ┌─────────┴─────────────┐
+                                                  │  Docker Compose        │
+                                                  │  ws_server   :443 HTTPS│
+                                                  │  fix_gw     ─→ LMAX    │
+                                                  │  prometheus :9090 (lo) │
+                                                  │  tempo      :4318      │
+                                                  │  grafana    :3000 HTTPS│
+                                                  └─────────┬──────────────┘
+                                                            │
+                                                spot_watcher (host process) :9092
+                                                            │
+                                                  Prometheus scrapes :9092
+                                                            │
+                                                Grafana status strip shows countdown
+```
+
+- **EIP is reattached on every boot** by `user_data.sh` via
+  `aws ec2 associate-address`. URL stays stable across reclaims.
+- **`spot_watcher.py`** runs as a systemd unit, polling
+  `http://169.254.169.254/latest/meta-data/spot/instance-action` every 5 s and
+  exposing `wingfoil_spot_termination_seconds_remaining` on `:9092`. Prometheus
+  scrapes it; the Grafana dashboard shows a red countdown in the slim status strip.
+- **Single AZ** (default `eu-west-2a`) — keeps EIP/EBS reattach simple. London
+  region is chosen for proximity to LMAX LD4 (Slough).
+
+## Prerequisites
+
+1. **Pulumi CLI** — [Install Pulumi](https://www.pulumi.com/docs/install/)
+2. **AWS credentials** with permission to create VPC/EC2/IAM/Secrets Manager
+3. **Five service images** in ECR (or Docker Hub) — see
+   `crates/wingfoil-next/examples/showcase/latency_e2e/Dockerfile.*` and
+   `.github/workflows/build-latency-e2e-images.yml`
+4. **A baked AMI** — built via the `Build latency_e2e AMI (ec2-spot)` GitHub
+   Action or the local Packer steps below
+5. **LMAX FIX credentials** — username and password for the demo environment
+
+## 1. Build the AMI
+
+### Option A — GitHub Action (recommended)
+
+Trigger `Build latency_e2e AMI (ec2-spot)` from the Actions tab. It runs Packer
+against ECR-hosted images and writes the resulting AMI ID to SSM Parameter
+Store at `/wingfoil/latency-e2e/ec2-spot/ami_id`.
+
+Retrieve it for the Pulumi config step:
+
+```bash
+aws ssm get-parameter \
+  --name /wingfoil/latency-e2e/ec2-spot/ami_id \
+  --region eu-west-2 \
+  --query 'Parameter.Value' --output text
+```
+
+### Option B — Local Packer build
+
+```bash
+cd crates/wingfoil-next/examples/showcase/latency_e2e/pulumi/ec2-spot/packer
+
+# One-time
+packer init wingfoil-latency.pkr.hcl
+
+packer build \
+  -var "region=eu-west-2" \
+  -var "ws_server_image=<registry>/wingfoil/ws-server:latest" \
+  -var "fix_gw_image=<registry>/wingfoil/fix-gw:latest" \
+  -var "prometheus_image=<registry>/wingfoil/prometheus:latest" \
+  -var "tempo_image=<registry>/wingfoil/tempo:latest" \
+  -var "grafana_image=<registry>/wingfoil/grafana:latest" \
+  wingfoil-latency.pkr.hcl
+```
+
+The AMI ID is printed at the end and recorded in `packer-manifest.json`.
+
+## 2. Deploy the stack
+
+```bash
+cd crates/wingfoil-next/examples/showcase/latency_e2e/pulumi/ec2-spot
+
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+pulumi stack init demo
+pulumi config set aws:region eu-west-2
+pulumi config set ami_id ami-0123456789abcdef0          # from step 1
+pulumi config set --secret lmax_username <YOUR_LMAX_USERNAME>
+pulumi config set --secret lmax_password <YOUR_LMAX_PASSWORD>
+
+# Optional overrides
+# pulumi config set instance_type     t3a.small         # AMD-flavoured Spot, slightly cheaper
+# pulumi config set ingress_cidr      203.0.113.0/24    # lock to your office IP
+# pulumi config set max_spot_price    0.0228            # cap (default = on-demand price)
+
+# ── Optional: Let's Encrypt cert (no browser trust warning) ──────────────
+# Set a hostname you control and the browser will see a real cert chain.
+# Without these, the stack falls back to a self-signed cert and browsers
+# warn on first access.
+# pulumi config set dns_hostname    e2e.example.com
+# pulumi config set route53_zone_id Z0123456ABCDEF      # optional — Pulumi creates the A record for you
+#                                                       # omit if you'll manage DNS yourself
+
+pulumi up
+```
+
+After ~3–5 min the outputs print:
+
+```
+ws_server_url   https://<host>            # <host> = dns_hostname if set, else <eip>
+grafana_url     https://<host>:3000
+public_ip       <eip>
+cert_bucket     <bucket>                 # only when dns_hostname is set
+```
+
+Both endpoints are served over TLS, terminated **in-process** by ws_server
+(via the `web-tls` cargo feature, rustls + ring) and by Grafana
+(`GF_SERVER_PROTOCOL=https`).
+
+**With `dns_hostname` set** — `user_data.sh` runs certbot in `--standalone`
+mode against your hostname (registered with
+`--register-unsafely-without-email` since this stack's daily renewal
+timer makes LE's expiry-warning email a safety net we don't actually
+use), persists `/etc/letsencrypt` to the `cert_bucket` S3 bucket so a
+Spot reclaim doesn't burn a fresh issuance, and a daily systemd timer
+(`wingfoil-le-renew.timer`) renews the cert and bounces the ws_server /
+grafana containers when it actually rotates. If you didn't set
+`route53_zone_id`, you must create the `A` record yourself **before**
+the instance boots — `pulumi up` shows the EIP in its preview, so add
+the record there, then let `pulumi up` finish creating the ASG.
+
+**Without `dns_hostname`** — the cert is a **self-signed** RSA-2048
+generated on every boot by `user_data.sh`, with `subjectAltName=IP:<eip>`
+so it matches the URL the browser uses. Browsers will show a one-time
+warning until you accept the cert.
+
+The Prometheus UI (`:9090`) and the ws_server `/metrics` endpoint (`:9091`)
+are no longer publicly exposed — they remain plain HTTP and are reachable
+only via localhost on the host (which is what Prometheus uses to scrape).
+For ad-hoc operator access, use SSM Session Manager port-forwarding:
+
+```bash
+aws ssm start-session --target <instance-id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["9090"],"localPortNumber":["9090"]}'
+```
+
+## Iterating on the UI
+
+The `static/` directory is bind-mounted into the ws_server container at
+`/app/static`, so the UI can be updated without rebuilding the image or
+re-baking the AMI. Sync new files to `/opt/wingfoil/static` on the
+instance and bounce ws_server:
+
+```bash
+INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names $(pulumi stack output asg_name) \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+
+# Open an SSH session via SSM (requires the AWS SSM Session Manager
+# plugin and an SSH config that proxies through `aws ssm start-session`).
+rsync -av --delete \
+  crates/wingfoil-next/examples/showcase/latency_e2e/static/ \
+  "${INSTANCE_ID}:/opt/wingfoil/static/"
+
+aws ssm send-command \
+  --instance-ids "${INSTANCE_ID}" \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["cd /opt/wingfoil && docker compose restart ws_server"]'
+```
+
+Edits survive container restarts and Spot reclaims of the *running*
+instance — but a fresh ASG launch reverts to the AMI's baked copy, so
+once a UI change has stabilised, bake a new AMI to make it the new
+baseline.
+
+## 3. Verify
+
+```bash
+# WS server — `-k` because the cert is self-signed.
+curl -fsSk https://<eip>/
+
+# Grafana — load the dashboard. The slim Spot status strip at the top reads
+# "." when stable and switches to a red countdown (seconds remaining) on
+# reclaim. Click through the browser's "Your connection is not private"
+# warning the first time.
+open https://<eip>:3000
+```
+
+## What happens during a Spot reclaim
+
+1. **T-120s** — AWS sets the IMDS `spot/instance-action` flag.
+2. **T-115s** — `spot_watcher.py` picks it up on its next 5 s poll. The
+   Grafana status strip switches red and counts down (`wingfoil_spot_termination_seconds_remaining`).
+3. **T-0s** — instance terminates.
+4. **T+~30s** — the ASG launches a replacement in the same AZ.
+5. **T+~60–90s** — `user_data.sh` finishes: EIP reattached, secrets fetched,
+   `docker compose up -d` started against cached images. Service is back.
+6. **T+~90–120s** — fix_gw completes its FIX logon to LMAX, market data
+   resumes flowing.
+
+Expected total downtime per reclaim: **~60–90 s of public-URL outage** plus
+**~30–60 s of LMAX session re-establishment**. AWS publishes interruption
+rates per instance/region at the [Spot Instance Advisor][advisor]; t3.small in
+eu-west-2 is typically <5%/mo, i.e. 0–3 reclaims/month.
+
+[advisor]: https://aws.amazon.com/ec2/spot/instance-advisor/
+
+## Cost estimate
+
+| Component | Monthly |
+|---|---|
+| t3.small Spot (~$0.007/hr × 730) | ~$5 |
+| Elastic IP | ~$3.65 |
+| EBS gp3 20 GB | ~$1.86 |
+| Secrets Manager (2 × $0.40) | ~$0.80 |
+| Data transfer out (low traffic) | ~$0–2 |
+| **Total** | **~$11–13** |
+
+Assumes always-on, low traffic, no significant egress. Compare to
+`fargate/`'s ~$45/mo (Fargate compute + ALB + ALB LCUs).
+
+## Cleanup
+
+```bash
+pulumi destroy
+```
+
+The Packer-built AMI is **not** destroyed by Pulumi — delete it via the AWS
+console or:
+
+```bash
+aws ec2 deregister-image --image-id <ami-id> --region eu-west-2
+```
+
+## Troubleshooting
+
+**Spot capacity unavailable**: the ASG already spans all three AZs in the
+region, so a single-AZ outage no longer fails the deploy. If every AZ is
+out of t3.small capacity at once, try a different instance type
+(`pulumi config set instance_type t3a.small && pulumi up`).
+
+**EIP didn't reattach**: check the IAM policy in `__main__.py` — the
+`AssociateAddress` permission is conditioned on `Project` and `Stack` tags
+matching this stack. The launch template's `tag_specifications` must apply
+those tags at instance creation; verify with
+`aws ec2 describe-instances --filters Name=tag:Stack,Values=demo`.
+
+**Grafana status strip stays "." during a real reclaim**: check that
+`spot_watcher.service` is running (`systemctl status wingfoil-spot-watcher`)
+and that Prometheus is reaching `localhost:9092` (the
+`latency_e2e_spot_watcher` job in `prometheus.yml`). On non-EC2-Spot stacks
+the metric is unscraped — that's expected, and the strip stays at ".".
+
+**`fix_gw` can't log in**: secrets fetch happens in `user_data.sh`. Inspect
+`/var/log/cloud-init-output.log` on the instance for `aws secretsmanager`
+errors, and confirm the IAM policy lets the instance read both secrets.

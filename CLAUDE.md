@@ -81,6 +81,41 @@ The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
 `crates/wingfoil-next` already depends on wire-types. `js/` is top-level rather
 than under `crates/` because it is an npm package, not a Cargo crate.
 
+## Examples: every one is a directory with a README
+
+`crates/wingfoil-next/examples/` is grouped by what an example teaches:
+
+- `core/` — engine concepts (wiring, run modes, `nitro!` tiers, threading,
+  dynamism). No external services; runs with plain `cargo run`.
+- `adapters/` — one directory per I/O adapter, named after the *adapter*
+  (`adapters/csv/`), feature-gated.
+- `showcase/` — multi-process, end-to-end latency demonstrations.
+
+The rules, enforced by `scripts/check-example-docs.sh` in CI:
+
+1. Every example lives in its own directory with `main.rs` **and** `README.md`.
+2. Every target is declared explicitly in `Cargo.toml` with a `path`
+   (`autoexamples = false`), under the `# Examples` section.
+3. Every example is linked from its group's `README.md`, and each group is
+   linked from `examples/README.md`.
+
+Target **names** are decoupled from directory names and must not change —
+`adapters/csv/` holds the target `csv_adapter`, so `cargo run --example
+csv_adapter` keeps working. Renaming a target breaks users' muscle memory and
+every doc reference; renaming a directory is free.
+
+House style differs by group (`core/` uses `## Sentence-case title` then prose,
+snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil-next)` then
+`## Prerequisites` / `## Run` / `## Code` / `## Output`). Match the group you are
+adding to.
+
+Sample output in a README must be **real** — run the example and paste what it
+prints. Several adapter READMEs were written from invented output and had to be
+corrected against the actual `println!`s; do not repeat that.
+
+Every crate carries a `README.md`, and `crates/README.md` is the crate map —
+keep them current when a crate's role changes.
+
 ## Key concepts (how next differs from legacy)
 
 - **`Op` trait** (`op.rs`): semantics as associated *functions* —

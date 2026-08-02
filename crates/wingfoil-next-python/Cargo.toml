@@ -5,6 +5,7 @@ edition = "2024"
 rust-version.workspace = true
 publish = false
 description = "Python interop boundary for wingfoil-next: the PyElement erased value type"
+readme = "README.md"
 
 [lib]
 # cdylib: the importable Python extension module (built by maturin with the

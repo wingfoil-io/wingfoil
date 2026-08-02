@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 publish = false
+# Examples are grouped into examples/{core,adapters,showcase}/<name>/ so each can
+# carry its own README; every target is declared explicitly below.
+autoexamples = false
 description = "Design prototype: dual-mode (interpreted + compiled) stream graphs with single-sourced op semantics"
+readme = "README.md"
 
 [lints]
 workspace = true
@@ -476,32 +480,6 @@ instrument-default = [
 ]
 instrument-all = ["instrument-default", "instrument-cycle-node"]
 
-[[example]]
-name = "fluvio_admin"
-required-features = ["fluvio-integration-test"]
-
-[[example]]
-name = "async_source"
-required-features = ["async"]
-
-[[example]]
-name = "produce_async_feed"
-required-features = ["async"]
-
-# Port of the legacy `async` example: an async `produce_async` producer driving
-# the graph (the graph itself is the consumer). Needs tokio + futures.
-[[example]]
-name = "async"
-path = "examples/async/main.rs"
-required-features = ["async"]
-
-# Observability: the `logged` debug tap rendered through `env_logger`. Ports the
-# `log` mode of the legacy `tracing` example (the `tracing`-subscriber and
-# engine-span `instruments` modes await next's instrumentation-feature port).
-[[example]]
-name = "tracing"
-path = "examples/tracing/main.rs"
-
 [[bench]]
 name = "tiers"
 harness = false
@@ -579,174 +557,263 @@ path = "benches/aeron/allocation_tracking.rs"
 harness = false
 required-features = ["aeron"]
 
-# The lines replay source is behind `async` (lazy `produce_async` +
-# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
-[[example]]
-name = "lines_adapter"
-required-features = ["async"]
+# =============================================================================
+# Examples
+# =============================================================================
+# The `examples/` tree is grouped by what an example teaches:
+#
+#   examples/core/      — engine concepts (wiring, run modes, tiers, threading)
+#   examples/adapters/  — one directory per I/O adapter
+#   examples/showcase/  — multi-process, end-to-end latency demonstrations
+#
+# Every example lives in its own directory alongside a `README.md`, so the
+# paths below are explicit and `autoexamples` is off. Target *names* are
+# unchanged by the grouping — `cargo run --example <name>` is the same as it
+# always was. `examples/README.md` is the index.
+
+# --- Core concepts -----------------------------------------------------------
 
 [[example]]
-name = "csv_adapter"
-required-features = ["csv"]
-
-[[example]]
-name = "augurs_adapter"
-required-features = ["augurs"]
-
-[[example]]
-name = "etcd_adapter"
-required-features = ["etcd"]
-
-[[example]]
-name = "redis_adapter"
-required-features = ["redis"]
-
-[[example]]
-name = "postgres_adapter"
-path = "examples/postgres_adapter/main.rs"
-required-features = ["postgres"]
-
-[[example]]
-name = "kafka_adapter"
-required-features = ["kafka"]
-
-# Port of the legacy `legacy/wingfoil/examples/web` example (a directory with a
-# README). Streams a synthetic mid price to the browser and logs UI events back.
-[[example]]
-name = "web_adapter"
-path = "examples/web/main.rs"
-required-features = ["web"]
-# Port of the legacy `legacy/wingfoil/examples/fluvio` example (a directory with a
-# README). Requires a running Fluvio cluster with the two topics created.
-[[example]]
-name = "fluvio_adapter"
-path = "examples/fluvio/main.rs"
-required-features = ["fluvio"]
-
-# Ports of the legacy `legacy/wingfoil/examples/aeron/*`. Both need a live media
-# driver (see the adapter's module docs).
-[[example]]
-name = "aeron_adapter"
-path = "examples/aeron/main.rs"
-required-features = ["aeron"]
-
-[[example]]
-name = "aeron_status_circuit_breaker"
-path = "examples/aeron/status_circuit_breaker.rs"
-required-features = ["aeron"]
-# Ports of the legacy `legacy/wingfoil/examples/iceoryx2/{pub,sub}.rs` — two
-# processes talking over shared memory. Run the subscriber first.
-[[example]]
-name = "iceoryx2_pub"
-path = "examples/iceoryx2/pub.rs"
-required-features = ["iceoryx2"]
-
-[[example]]
-name = "iceoryx2_sub"
-path = "examples/iceoryx2/sub.rs"
-required-features = ["iceoryx2"]
-
-# Ports of the legacy `legacy/wingfoil/examples/latency/{pub,sub}.rs` — the
-# cross-process demonstration of the Phase-5 latency infrastructure
-# (`latency_stages!` + `Traced<T, L>` + `.stamp::<Stage>()` + `latency_report`)
-# over an iceoryx2 shared-memory hop. Run the subscriber first.
-[[example]]
-name = "latency_pub"
-path = "examples/latency/pub.rs"
-required-features = ["iceoryx2"]
-
-[[example]]
-name = "latency_sub"
-path = "examples/latency/sub.rs"
-required-features = ["iceoryx2"]
-
-# Ports of the legacy `legacy/wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
-# the nine-stage, three-process end-to-end latency demo
-# (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
-# back). `required-features` mirror the legacy manifest one-for-one.
-[[example]]
-name = "latency_e2e_ws_server"
-path = "examples/latency_e2e/ws_server.rs"
-required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
-
-[[example]]
-name = "latency_e2e_fix_gw"
-path = "examples/latency_e2e/fix_gw.rs"
-required-features = ["fix", "iceoryx2"]
-
-# KDB+ examples, ports of the legacy `legacy/wingfoil/examples/kdb/*` (each a directory
-# with a README). All require a running KDB+/tickerplant instance to actually run.
-[[example]]
-name = "kdb_read"
-path = "examples/kdb/read/main.rs"
-required-features = ["kdb"]
-
-[[example]]
-name = "kdb_read_cached"
-path = "examples/kdb/read_cached/main.rs"
-required-features = ["kdb"]
-
-[[example]]
-name = "kdb_round_trip"
-path = "examples/kdb/round_trip/main.rs"
-required-features = ["kdb"]
-
-[[example]]
-name = "prometheus_adapter"
-required-features = ["prometheus"]
-
-[[example]]
-name = "zmq_adapter"
-required-features = ["zmq"]
-
-[[example]]
-name = "otlp_adapter"
-required-features = ["otlp", "prometheus"]
-
-[[example]]
-name = "fix_adapter"
-required-features = ["fix"]
-
-# Ports of the legacy `legacy/wingfoil/examples/` onto the next engine's fluent API.
-# Each lives in its own directory with a README, mirroring the legacy layout.
-[[example]]
-name = "breadth_first"
-path = "examples/breadth_first/main.rs"
-
-[[example]]
-name = "feedback"
-path = "examples/feedback/main.rs"
-
-[[example]]
-name = "run_mode"
-path = "examples/run_mode/main.rs"
+name = "hello_graph"
+path = "examples/core/hello_graph/main.rs"
 
 [[example]]
 name = "order_book"
-path = "examples/order_book/main.rs"
+path = "examples/core/order_book/main.rs"
+
+[[example]]
+name = "ema_crossover"
+path = "examples/core/ema_crossover/main.rs"
+
+[[example]]
+name = "breadth_first"
+path = "examples/core/breadth_first/main.rs"
+
+[[example]]
+name = "run_mode"
+path = "examples/core/run_mode/main.rs"
+
+[[example]]
+name = "feedback"
+path = "examples/core/feedback/main.rs"
 
 [[example]]
 name = "statistics"
-path = "examples/statistics/main.rs"
+path = "examples/core/statistics/main.rs"
+
+# Observability: the `logged` debug tap rendered through `env_logger`. Ports the
+# `log` mode of the classic `tracing` example (the `tracing`-subscriber and
+# engine-span `instruments` modes await next's instrumentation-feature port).
+[[example]]
+name = "tracing"
+path = "examples/core/tracing/main.rs"
 
 # Multi-threaded execution: a producer sub-graph on a worker thread feeds the
-# main graph through the channel layer (next's take on legacy `producer()` /
+# main graph through the channel layer (next's take on classic `producer()` /
 # `mapper()`). Uses only default features.
 [[example]]
 name = "threading"
-path = "examples/threading/main.rs"
+path = "examples/core/threading/main.rs"
+
+# The same thread offload as `threading`, but through the `spawn` / `spawn_map`
+# combinators that wrap the channel plumbing into one call each.
+[[example]]
+name = "spawn"
+path = "examples/core/spawn/main.rs"
 
 # Runtime graph mutation: instruments added/removed on a live graph, a price
 # book kept correct across the changes via `dynamic_group`. Feature-gated on
 # `dynamic-graph`.
 [[example]]
 name = "dynamic"
-path = "examples/dynamic/main.rs"
+path = "examples/core/dynamic/main.rs"
 required-features = ["dynamic-graph"]
 
 # Statically-wired counterpart to `dynamic`: the same price book, but routed
 # through a fixed slot pool with `demux_it` instead of runtime graph mutation.
 [[example]]
 name = "demux"
-path = "examples/demux/main.rs"
+path = "examples/core/demux/main.rs"
 required-features = ["dynamic-graph"]
+
+# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled.
+[[example]]
+name = "odds_evens"
+path = "examples/core/odds_evens/main.rs"
+
+[[example]]
+name = "dual_mode"
+path = "examples/core/dual_mode/main.rs"
+
+[[example]]
+name = "fanout_10x10"
+path = "examples/core/fanout_10x10/main.rs"
+
+# Async at the graph edge. Port of the classic `async` example: an async
+# `produce_async` producer driving the graph (the graph itself is the
+# consumer). All three need tokio + futures.
+[[example]]
+name = "async"
+path = "examples/core/async/main.rs"
+required-features = ["async"]
+
+[[example]]
+name = "async_source"
+path = "examples/core/async_source/main.rs"
+required-features = ["async"]
+
+[[example]]
+name = "produce_async_feed"
+path = "examples/core/produce_async_feed/main.rs"
+required-features = ["async"]
+
+# --- Adapters ----------------------------------------------------------------
+
+[[example]]
+name = "csv_adapter"
+path = "examples/adapters/csv/main.rs"
+required-features = ["csv"]
+
+# The lines replay source is behind `async` (lazy `produce_async` +
+# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
+[[example]]
+name = "lines_adapter"
+path = "examples/adapters/lines/main.rs"
+required-features = ["async"]
+
+# KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
+# with a README). All require a running KDB+/tickerplant instance to actually run.
+[[example]]
+name = "kdb_read"
+path = "examples/adapters/kdb/read/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read_cached"
+path = "examples/adapters/kdb/read_cached/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_round_trip"
+path = "examples/adapters/kdb/round_trip/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "postgres_adapter"
+path = "examples/adapters/postgres/main.rs"
+required-features = ["postgres"]
+
+[[example]]
+name = "redis_adapter"
+path = "examples/adapters/redis/main.rs"
+required-features = ["redis"]
+
+[[example]]
+name = "etcd_adapter"
+path = "examples/adapters/etcd/main.rs"
+required-features = ["etcd"]
+
+[[example]]
+name = "kafka_adapter"
+path = "examples/adapters/kafka/main.rs"
+required-features = ["kafka"]
+
+# Port of the classic `wingfoil/examples/fluvio` example. Requires a running
+# Fluvio cluster with the two topics created — `fluvio_admin` creates them.
+[[example]]
+name = "fluvio_adapter"
+path = "examples/adapters/fluvio/main.rs"
+required-features = ["fluvio"]
+
+[[example]]
+name = "fluvio_admin"
+path = "examples/adapters/fluvio/admin.rs"
+required-features = ["fluvio-integration-test"]
+
+[[example]]
+name = "zmq_adapter"
+path = "examples/adapters/zmq/main.rs"
+required-features = ["zmq"]
+
+[[example]]
+name = "fix_adapter"
+path = "examples/adapters/fix/main.rs"
+required-features = ["fix"]
+
+# Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
+# driver (see the adapter's module docs).
+[[example]]
+name = "aeron_adapter"
+path = "examples/adapters/aeron/main.rs"
+required-features = ["aeron"]
+
+[[example]]
+name = "aeron_status_circuit_breaker"
+path = "examples/adapters/aeron/status_circuit_breaker.rs"
+required-features = ["aeron"]
+
+# Ports of the classic `wingfoil/examples/iceoryx2/{pub,sub}.rs` — two
+# processes talking over shared memory. Run the subscriber first.
+[[example]]
+name = "iceoryx2_pub"
+path = "examples/adapters/iceoryx2/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "iceoryx2_sub"
+path = "examples/adapters/iceoryx2/sub.rs"
+required-features = ["iceoryx2"]
+
+# Port of the classic `wingfoil/examples/web` example. Streams a synthetic mid
+# price to the browser and logs UI events back.
+[[example]]
+name = "web_adapter"
+path = "examples/adapters/web/main.rs"
+required-features = ["web"]
+
+# Metrics export. `examples/adapters/telemetry/` carries the shared Docker
+# harness (Prometheus + Grafana + Alloy) both of these scrape into.
+[[example]]
+name = "prometheus_adapter"
+path = "examples/adapters/prometheus/main.rs"
+required-features = ["prometheus"]
+
+[[example]]
+name = "otlp_adapter"
+path = "examples/adapters/otlp/main.rs"
+required-features = ["otlp", "prometheus"]
+
+[[example]]
+name = "augurs_adapter"
+path = "examples/adapters/augurs/main.rs"
+required-features = ["augurs"]
+
+# --- Showcase ----------------------------------------------------------------
+
+# Ports of the classic `wingfoil/examples/latency/{pub,sub}.rs` — the
+# cross-process demonstration of the Phase-5 latency infrastructure
+# (`latency_stages!` + `Traced<T, L>` + `.stamp::<Stage>()` + `latency_report`)
+# over an iceoryx2 shared-memory hop. Run the subscriber first.
+[[example]]
+name = "latency_pub"
+path = "examples/showcase/latency/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "latency_sub"
+path = "examples/showcase/latency/sub.rs"
+required-features = ["iceoryx2"]
+
+# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# the nine-stage, three-process end-to-end latency demo
+# (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
+# back). `required-features` mirror the classic manifest one-for-one.
+[[example]]
+name = "latency_e2e_ws_server"
+path = "examples/showcase/latency_e2e/ws_server.rs"
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
+
+[[example]]
+name = "latency_e2e_fix_gw"
+path = "examples/showcase/latency_e2e/fix_gw.rs"
+required-features = ["fix", "iceoryx2"]

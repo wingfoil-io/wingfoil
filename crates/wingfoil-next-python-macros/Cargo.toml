@@ -5,6 +5,7 @@ edition = "2024"
 rust-version.workspace = true
 publish = false
 description = "#[pyop] proc macro for wingfoil-next-python: derive a Python-callable function from an Op impl"
+readme = "README.md"
 
 [lib]
 proc-macro = true
