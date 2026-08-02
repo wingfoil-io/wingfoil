@@ -14,13 +14,13 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::redis::{
     RedisConnection, RedisEntry, RedisEvent, RedisSinkOps, RedisStreamEvent, RedisStreamRecord,
     RedisStreamSinkOps, redis_stream_read, redis_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const REDIS_PORT: u16 = 6379;
 const REDIS_IMAGE: &str = "redis";

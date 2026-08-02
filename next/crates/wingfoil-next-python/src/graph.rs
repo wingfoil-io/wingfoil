@@ -28,11 +28,11 @@ use std::time::Duration;
 use anyhow::Result;
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 use wingfoil_next::stats::StatisticsOps;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::PyElement;
 
@@ -1152,7 +1152,7 @@ impl PyStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wingfoil::NanoTime;
+    use wingfoil_next::NanoTime;
 
     /// Build a Python callable from a `lambda` source string.
     fn lambda(src: &str) -> Py<PyAny> {

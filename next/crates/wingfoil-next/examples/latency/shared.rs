@@ -30,7 +30,7 @@
 use iceoryx2::prelude::ZeroCopySend;
 // `latency_stages!` expands to impls of `Latency` / `Stage`, so both traits
 // must be in scope at the expansion site (classic has the same requirement —
-// it gets them from its `use wingfoil::*` prelude glob).
+// it gets them from its `use wingfoil_next::*` prelude glob).
 use wingfoil_next::latency::{Latency, Stage, latency_stages};
 
 /// The service the two processes connect on.

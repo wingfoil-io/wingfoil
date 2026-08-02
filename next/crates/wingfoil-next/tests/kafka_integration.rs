@@ -16,12 +16,12 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kafka::{
     KafkaConnection, KafkaEvent, KafkaRecord, KafkaSinkOps, kafka_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const REDPANDA_IMAGE: &str = "docker.redpanda.com/redpandadata/redpanda";
 const REDPANDA_TAG: &str = "v24.1.1";

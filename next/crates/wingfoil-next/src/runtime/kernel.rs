@@ -1,26 +1,25 @@
 //! The minimal engine kernel: engine time, the scheduled-callback queue and
 //! the run bounds, factored out so an engine can drive a graph without the
-//! `dyn Node` / [`Graph`](crate::Graph) machinery — node state lives in the
-//! caller's own structures instead. The `begin_cycle` logic transcribes the
-//! interpreted engine's loop head ([`Graph::advance`]), so a kernel-driven
-//! run and the interpreted engine cannot drift on timing or bounds.
+//! `dyn Node` / `Graph` machinery — node state lives in the caller's own
+//! structures instead. The `begin_cycle` logic transcribes the classic
+//! engine's loop head (`Graph::advance` in the `wingfoil` crate), so a
+//! kernel-driven run and the classic engine cannot drift on timing or bounds.
 //!
-//! This module keeps the historical name `codegen`: the ahead-of-time
-//! retrofit code generator that once lived here (which walked a wired classic
-//! graph and emitted a standalone static-schedule Rust runner) has been
-//! removed, superseded by the `wingfoil-next` macro `compiled()` / islands
-//! path. What remains is this shared runtime kernel, which the
-//! `wingfoil-next` engine still builds on.
-//!
-//! [`Graph::advance`]: crate::Graph
+//! This is the engine core for both trees. It reached its present shape as
+//! the residue of an ahead-of-time retrofit code generator that once lived in
+//! `wingfoil::codegen` (it walked a wired classic graph and emitted a
+//! standalone static-schedule Rust runner); that generator was removed,
+//! superseded by this crate's `nitro!` `compiled()` / islands path, and the
+//! kernel it left behind now lives here. The `wingfoil` crate re-exports it
+//! as `wingfoil::codegen` so the classic path is unchanged.
 
 use std::time::Duration;
 
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 
-use crate::queue::TimeQueue;
-use crate::time::NanoTime;
-use crate::{RunFor, RunMode};
+use crate::runtime::run::{RunFor, RunMode};
+use crate::runtime::time::NanoTime;
+use crate::runtime::time_queue::TimeQueue;
 
 /// Wakes a realtime [`Kernel`] from another thread, marking a node dirty —
 /// the kernel-level equivalent of the interpreted engine's `ReadyNotifier`.

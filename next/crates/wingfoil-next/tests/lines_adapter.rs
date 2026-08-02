@@ -12,10 +12,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::Burst;
 use wingfoil_next::adapters::lines::{LinesSinkOps, replay_lines, replay_lines_scheduled};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A unique temp path per call, so parallel tests never collide.
 fn temp_path(tag: &str) -> PathBuf {

@@ -56,7 +56,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 use wingfoil_next::adapters::kdb::{
     K, KdbConnection, KdbCredentials, KdbDeserialize, KdbError, KdbSerialize, KdbSinkOps, Row,
     SymbolInterner, kdb_read as kdb_replay, kdb_sub as kdb_tail, qtype,

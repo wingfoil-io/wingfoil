@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
 use crate::channel::ChannelSender;

@@ -48,7 +48,7 @@ lock-step.
 
 ```rust
 use std::time::Duration;
-use wingfoil::{RunFor, RunMode};
+use wingfoil_next::{RunFor, RunMode};
 use wingfoil_next::prelude::*;
 
 fn main() {

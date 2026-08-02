@@ -77,9 +77,9 @@ use anyhow::Result;
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
 
-// The pure data layer is engine-agnostic and reused verbatim from the classic
-// crate (its serde/iceoryx2 impls are already compiled there).
-pub use wingfoil::{
+// The pure data layer is engine-agnostic and lives in `runtime::latency`,
+// shared with the classic crate (which re-exports it from here).
+pub use crate::runtime::latency::{
     HasLatency, Latency, LatencyStats, Stage, StageStats, Traced, format_latency_report,
     latency_stages, record_stage_deltas,
 };

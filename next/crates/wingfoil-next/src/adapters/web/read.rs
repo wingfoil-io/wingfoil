@@ -11,7 +11,7 @@
 use anyhow::Result;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
-use wingfoil::{NanoTime, RunMode};
+use wingfoil_next::{NanoTime, RunMode};
 
 use super::server::{SUBSCRIBE_MPSC_CAPACITY, WebServer};
 use crate::Burst;
@@ -27,7 +27,7 @@ use crate::fluent::{GraphBuilder, Stream};
 /// The stream never ticks in historical mode — whether the server is a
 /// [`start_historical`](super::WebServerBuilder::start_historical) no-op *or* a
 /// live server driving a graph in
-/// [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom). Live browser
+/// [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom). Live browser
 /// input has no place in a deterministic replay, and an open listener would
 /// block the historical run waiting for frames that never come; so `web_sub`
 /// yields an empty, immediately-ending stream. A historical `web_pub` still

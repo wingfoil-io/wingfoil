@@ -79,6 +79,17 @@ scrape-examples = true
 
 [dependencies]
 
+# The shared runtime core — engine time (`NanoTime`), the run bounds
+# (`RunMode` / `RunFor`), the scheduled-callback `TimeQueue`, `Burst` and the
+# `Kernel` — lives in `wingfoil-next` and is re-exported from here, so both
+# engines use one set of types rather than structurally-identical twins.
+#
+# The edge points this way (legacy -> next), not the other way, because `next/`
+# is replacing this tree wholesale: at cutover the legacy crates are deleted,
+# and nothing under `next/` may depend on what is being deleted. See
+# `next/docs/cutover-plan.md`.
+wingfoil-next = { path = "../next/crates/wingfoil-next" }
+
 # derives
 wingfoil-derive = { path = "../wingfoil-derive", version = "8.0.0" }
 

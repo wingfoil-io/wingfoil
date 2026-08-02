@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use kdb_plus_fixed::qtype;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 /// Trait for serializing Rust types to KDB row data.
 ///

@@ -31,10 +31,10 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::redis::{RedisConnection, RedisEntry, RedisSinkOps, redis_sub};
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const URL: &str = "redis://127.0.0.1:6379";
 const SOURCE: &str = "example-source";

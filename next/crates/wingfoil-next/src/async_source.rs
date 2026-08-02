@@ -61,7 +61,7 @@ use std::sync::mpsc;
 use anyhow::Context;
 use futures::StreamExt;
 use tokio::runtime::{Handle, Runtime};
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::Burst;
 use crate::fluent::{GraphBuilder, Stream};

@@ -100,7 +100,7 @@ use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 // Legacy-engine ops for the `classic` baseline. Imported as `_` where only the
 // trait methods are needed, so the names don't collide with the next prelude.
 use wingfoil::{

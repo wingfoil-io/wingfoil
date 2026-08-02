@@ -629,7 +629,7 @@ pub fn latency_report_if(
 mod tests {
     use super::*;
     use std::time::Duration;
-    use wingfoil::{NanoTime, RunFor, RunMode};
+    use wingfoil_next::{NanoTime, RunFor, RunMode};
 
     use crate::graph::PyGraph;
 

@@ -31,9 +31,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::Dispatch;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const STEP: Duration = Duration::from_nanos(100);

@@ -17,8 +17,8 @@ use anyhow::{Result, anyhow, bail};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::time::Duration;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::async_source::RunParams;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// The [`RunParams`] a **historical** source is wired for, from the Python
 /// `start_nanos` / `duration_nanos` arguments.

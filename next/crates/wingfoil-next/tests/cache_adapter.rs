@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 use wingfoil_next::adapters::cache::{CacheConfig, CacheKey, FileCache};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);

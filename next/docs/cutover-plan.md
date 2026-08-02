@@ -25,6 +25,51 @@ cutover is a directory promotion, not a re-organisation. Until then, the
 legacy crates keep shipping untouched and serve as the permanent parity oracle
 for the port.
 
+## The dependency direction — legacy depends on next, never the reverse
+
+**Nothing under `next/` may depend on the `wingfoil` crate.** The shared
+runtime core lives in `wingfoil-next`, and the legacy crate depends on
+`wingfoil-next` and re-exports it.
+
+This is the invariant that makes goal 2 achievable. The cutover *deletes* the
+legacy crates; anything under `next/` that still pointed at them would have to
+be disentangled first, turning a directory promotion back into a
+re-organisation. Pointing the edge the other way means the swap is a delete.
+
+The shared core is `next/crates/wingfoil-next/src/runtime/`:
+
+| Module | Contents |
+|---|---|
+| `runtime::time` | `NanoTime` — engine time |
+| `runtime::run` | `RunMode`, `RunFor` — the run bounds |
+| `runtime::time_queue` | `TimeQueue` — the scheduled-callback queue |
+| `runtime::kernel` | `Kernel`, `KernelWaker`, `ReadyReceiver`, `waker_channel` |
+| `runtime::burst` | `Burst<T>` and the `burst!` macro |
+| `runtime::latency` | `Latency`, `Stage`, `HasLatency`, `Traced`, `StageStats`, `LatencyStats`, `latency_stages!` |
+
+`wingfoil` re-exports every one of these at its historical path
+(`wingfoil::NanoTime`, `wingfoil::codegen::Kernel`, `wingfoil::Traced`, …), so
+the classic public API is unchanged and both engines use **one** set of types
+rather than structurally-identical twins — a `Traced` payload or a `RunFor`
+crosses the engine boundary without conversion.
+
+Two consequences worth knowing:
+
+- **`latency_stages!` moved to `wingfoil-next-macros`.** It is part of the
+  shared latency data layer, so leaving it in `wingfoil-derive` would have kept
+  a next → legacy edge. `wingfoil-derive` now holds only `#[node]`, which dies
+  with the legacy tree (see `port-plan.md` Phase 7).
+- **The one remaining edge back to `wingfoil` is a dev-dependency**, for the
+  parity tests (`tests/engine_semantics.rs`) and the classic-vs-next comparison
+  benches (`benches/tiers.rs`). Cargo permits the cycle precisely because it is
+  dev-only: the *library* graph runs `wingfoil` → `wingfoil-next` and nothing
+  more. That edge is the parity oracle, and it goes away with the legacy tree.
+
+At cutover, then, the legacy tree does not need unpicking. The shared core is
+already on the next side; what gets deleted is the `MutableNode` wiring path,
+`wingfoil/src/nodes/`, `wingfoil-derive`, `wingfoil-python`, and the legacy
+examples and benches.
+
 ## Status
 
 Porting is in progress, phase by phase, with the legacy test suite as the
@@ -69,7 +114,7 @@ being deletable, or stops next from being installable under the legacy name.
 
 | # | Item | Why it blocks | Evidence | Size |
 |:--:|---|---|---|:--:|
-| 1.1 | **Sever `wingfoil-next`'s dependency on the legacy `wingfoil` crate.** Next imports its most load-bearing primitives *from* the tree it is meant to replace: `NanoTime`, `RunMode`, `RunFor`, `TimeQueue`, `Burst`/`burst`, `codegen::{Kernel, KernelWaker, ReadyReceiver, waker_channel}`, the whole latency payload set (`Traced`/`Latency`/`Stage`/`StageStats`/`LatencyStats`/`HasLatency`/`latency_stages!`/`format_latency_report`/`record_stage_deltas`) and `nodes::DropSmallChangeStream`. These must move into next (or a shared base crate) first. **Measured reach: 41 source files** across both next crates — the engine core (`interp.rs`, `op.rs`, `ops.rs`, `stats.rs`, `fluent.rs`, `channel.rs`, `async_source.rs`, `compat.rs`, `latency.rs`) *and every adapter*, each of which imports `NanoTime`/`RunMode` directly. Worse, `lib.rs:149` does `pub use wingfoil;` so the legacy crate is part of next's **public API**, and `nitro!` expansions name `::wingfoil_next::wingfoil::{RunMode, RunFor, codegen::Kernel}` (4 sites in the macro crate) — so every compiled graph a *user* writes also reaches through to it. | The legacy tree cannot be deleted while next compiles against it. This is **not currently on the Phase 7 checklist** — it is the largest unlisted prerequisite, and its blast radius is the whole crate, not just the kernel. | `next/crates/wingfoil-next/Cargo.toml:16`, `next/crates/wingfoil-next-python/Cargo.toml:130` (both `path = "../../../wingfoil"`); `src/lib.rs:137,149`; `src/latency.rs:82`; `wingfoil-next-macros/src/lib.rs:2521–2526` | L |
+| 1.1 | ~~**Sever `wingfoil-next`'s dependency on the legacy `wingfoil` crate.**~~ **Done.** The shared core — `NanoTime`, `RunMode`/`RunFor`, `TimeQueue`, `Burst`/`burst!`, `Kernel`/`KernelWaker`/`ReadyReceiver`/`waker_channel`, and the whole latency data layer (`Traced`/`Latency`/`Stage`/`StageStats`/`LatencyStats`/`HasLatency`/`format_latency_report`/`record_stage_deltas`) — moved into `wingfoil-next/src/runtime/`, and `latency_stages!` moved from `wingfoil-derive` to `wingfoil-next-macros`. The edge is inverted: `wingfoil` now depends on `wingfoil-next` and re-exports every item at its historical path, so the classic API is unchanged and both engines share one set of types. `pub use wingfoil;` is gone from next's public API and the `nitro!` expansions name `::wingfoil_next::{RunMode, RunFor, Kernel, TimeQueue}` directly. `wingfoil-next-python`'s dependency went too. The only remaining edge is a **dev**-dependency for the parity tests and comparison benches, which cargo permits because it is dev-only and which goes away with the legacy tree. | — | `wingfoil/Cargo.toml` (depends on `wingfoil-next`); `next/crates/wingfoil-next/src/runtime/`; verified by `cargo tree -p wingfoil-next --edges normal` | — |
 | 1.2 | **Crate + module rename.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → the derive crate, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. | Cutover is a *name* takeover, not just a directory move. Touches every `use wingfoil_next::`, every doc link, every example, every workflow, and both publish jobs. Sequenced **after** 1.1, or the rename collides with the legacy crate of the same name. | port-plan.md:1489 names the module takeover but no mechanism | L |
 | 1.3 | **Delete the `wingfoil-derive` crate** (`#[node]`). Drop the directory, the workspace member entry, and `wingfoil`'s dependency on it. | Already on the Phase 7 list; nothing under `next/` depends on it, so it is purely a consequence of the legacy tree going. | port-plan.md:1825 | S |
 | 1.4 | **Retire the classic engine internals** (`MutableNode` wiring path) and rule on whether the classic facade API survives the swap. | Phase 7's first line, and the thing that decides whether Rust downstreams break. | port-plan.md:1819 | M |
@@ -144,9 +189,11 @@ streaming is lossy — confirm whether next's web adapter already fixes it).
 
 ### Suggested order
 
-1.1 → 1.2 are the critical path and everything else can run beside them: 1.1
-is a prerequisite for 1.2 (the rename collides with the legacy crate name
-otherwise), and both are prerequisites for the directory promotion itself.
+**1.1 is done** (see the row above), so **1.2 — the crate + module rename — is
+now the head of the critical path.** 1.1 had to land first because the rename
+collides with the legacy crate name otherwise; with the shared core moved and
+the edge inverted, nothing named `wingfoil` is in next's library graph and
+1.2 is unblocked. Both were prerequisites for the directory promotion itself.
 Section 2's rulings need no code and can be settled in parallel — but 2.1
 feeds the migration guide (4.2), so it wants to land early. Section 3's
 superset gaps are independent of each other. Section 5 can only be done once

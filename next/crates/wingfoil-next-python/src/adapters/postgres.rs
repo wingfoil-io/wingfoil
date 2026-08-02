@@ -51,7 +51,7 @@ use anyhow::{Result, anyhow, bail};
 use chrono::NaiveDateTime;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
     PostgresSourceConfig, Row, ToSql, Type, postgres_notify_trigger_sql as pg_notify_trigger_sql,

@@ -13,9 +13,9 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Scrape `GET /metrics` over a raw TCP connection, returning the response body
 /// (headers stripped). Retries briefly in case the server thread has not bound

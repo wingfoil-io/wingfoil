@@ -3,12 +3,12 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kdb::{
     CacheConfig, KdbConnection, KdbDeserialize, KdbError, Row, Sym, SymbolInterner, kdb_read_cached,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 // `kdb_read_cached` requires `T: Serialize + Deserialize + Sync` in addition to
 // `KdbDeserialize`, so the cached slices can be written to / read from disk.

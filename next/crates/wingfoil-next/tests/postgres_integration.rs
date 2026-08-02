@@ -13,7 +13,6 @@ use std::time::Duration;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 use tokio::runtime::Handle;
 use tokio_postgres::NoTls;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::postgres::{
     PostgresConnection, PostgresDeserialize, PostgresRowExt, PostgresSerialize, PostgresSinkOps,
     PostgresSourceConfig, Row, ToSql, postgres_notify_trigger_sql, postgres_read, postgres_source,
@@ -21,6 +20,7 @@ use wingfoil_next::adapters::postgres::{
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const PG_PORT: u16 = 5432;
 const PG_IMAGE: &str = "postgres";
