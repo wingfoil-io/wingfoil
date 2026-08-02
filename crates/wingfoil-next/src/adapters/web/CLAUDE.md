@@ -6,7 +6,7 @@ source. Ports legacy `wingfoil::adapters::web` onto the Op model.
 
 **The wire protocol is engine-agnostic and byte-identical to legacy** — the
 shared `wingfoil-wire-types` crate is reused as-is, which is exactly why
-`wingfoil-wasm` and `@wingfoil/client` (`wingfoil-js/`) need no changes. Treat
+`wingfoil-wasm` and `@wingfoil/client` (`js/`) need no changes. Treat
 that as a hard constraint: a wire change here breaks two other packages.
 
 ## Layout

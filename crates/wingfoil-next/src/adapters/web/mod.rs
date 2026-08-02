@@ -73,7 +73,7 @@
 //!
 //! ```ignore
 //! let server = WebServer::bind("127.0.0.1:3000")
-//!     .serve_static("./wingfoil-js/dist")
+//!     .serve_static("./js/dist")
 //!     .start()?;
 //! ```
 //!

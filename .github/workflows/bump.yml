@@ -39,7 +39,7 @@ jobs:
         run: |
           BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
           CARGO_VERSION=$(grep -m 1 '^version' legacy/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
-          NPM_VERSION=$(node -p "require('./wingfoil-js/package.json').version")
+          NPM_VERSION=$(node -p "require('./js/package.json').version")
           WASM_VERSION=$(grep -m 1 '^version' crates/wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
           BASE=$(printf '%s\n%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" "$WASM_VERSION" | sort -V | tail -n 1)
           IFS='.' read -r MAJ MIN PATCH <<< "$BASE"
@@ -73,7 +73,7 @@ jobs:
           sed -i "s/^release = .*/release = '$NEW_VERSION'/" $CONF_PATH
 
       - name: Bump wingfoil-js package.json version
-        working-directory: wingfoil-js
+        working-directory: js
         run: npm version --no-git-tag-version ${{ steps.bump_cargo.outputs.new_version }}
 
       - name: Update latency_e2e importmap pin

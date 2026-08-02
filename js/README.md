@@ -188,7 +188,7 @@ need React.
 
 ## Development
 
-From `wingfoil-js/`:
+From `js/`:
 
 ```sh
 pnpm install

@@ -36,7 +36,7 @@ report() {
     echo "== caches outside the repo =="
     human "${CARGO_HOME:-$HOME/.cargo}/registry/src" \
           "${CARGO_HOME:-$HOME/.cargo}/registry/cache" \
-          "$root"/wingfoil-js/node_modules "$root"/legacy/wingfoil-python/.venv 2>/dev/null
+          "$root"/js/node_modules "$root"/legacy/wingfoil-python/.venv 2>/dev/null
 }
 
 light() {

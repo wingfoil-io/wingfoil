@@ -47,7 +47,7 @@ The `wingfoil-js` package at the repo root provides a ready-made
 TypeScript / Solid.js client:
 
 ```sh
-cd wingfoil-js
+cd js
 pnpm install
 pnpm dev    # opens http://localhost:5173 against ws://127.0.0.1:8080/ws
 ```

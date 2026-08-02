@@ -8,7 +8,7 @@ on:
       - 'legacy/wingfoil/src/adapters/web/**'
       - 'crates/wingfoil-wire-types/**'
       - 'crates/wingfoil-wasm/**'
-      - 'wingfoil-js/**'
+      - 'js/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -81,20 +81,20 @@ jobs:
         with:
           node-version: '20'
           cache: 'pnpm'
-          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+          cache-dependency-path: js/pnpm-lock.yaml
 
       - name: Install JS deps
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm install --frozen-lockfile
 
       - name: Build wasm bundle for JS
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run build:wasm
 
       - name: Type-check
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run lint
 
       - name: Build TypeScript
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run build:ts

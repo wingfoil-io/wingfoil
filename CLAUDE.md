@@ -40,7 +40,7 @@ crates/                     # every Cargo crate in the tree
 docs/                       # port-plan.md (the port roadmap), cutover-plan.md,
                             #   design reviews and decisions
 
-wingfoil-js/                # TypeScript client for the web adapter — an npm
+js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client).
                             #   Survives cutover
 
@@ -77,9 +77,9 @@ is a **dev**-dependency, for parity tests and comparison benches against the
 legacy engine. See `docs/cutover-plan.md`.
 
 The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
-`wingfoil-js` sit outside `legacy/`: all three survive the cutover, and
-`crates/wingfoil-next` already depends on wire-types. `wingfoil-js` is the one
-that stays at the repo root — it is an npm package, not a Cargo crate.
+`js` sit outside `legacy/`: all three survive the cutover, and
+`crates/wingfoil-next` already depends on wire-types. `js/` is top-level rather
+than under `crates/` because it is an npm package, not a Cargo crate.
 
 ## Key concepts (how next differs from legacy)
 
@@ -160,7 +160,7 @@ cd crates/wingfoil-next-python && maturin develop && pytest
 cd legacy/wingfoil-python && maturin develop && pytest
 
 # TypeScript client tests
-cd wingfoil-js && pnpm test
+cd js && pnpm test
 
 # Benchmarks
 cargo bench

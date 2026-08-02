@@ -51,22 +51,22 @@ jobs:
           # Node >= 22.14 is required for npm OIDC trusted publishing.
           node-version: '22'
           cache: 'pnpm'
-          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+          cache-dependency-path: js/pnpm-lock.yaml
 
       - name: Install JS deps
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm install --frozen-lockfile
 
       - name: Build wasm bundle
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run build:wasm
 
       - name: Build TypeScript
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run build:ts
 
       - name: Lint
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm run lint
 
       # Sanity check: dist/wasm/ is the only path that survives both
@@ -76,7 +76,7 @@ jobs:
       # the packlist tarball actually contains the wasm bindings before we
       # publish — a missing wasm here means a broken release on npm.
       - name: Verify wasm files are packaged
-        working-directory: wingfoil-js
+        working-directory: js
         run: |
           set -euo pipefail
           tarball=$(pnpm pack --pack-destination /tmp 2>&1 | tail -n1)
@@ -103,5 +103,5 @@ jobs:
         run: npm install -g npm@11
 
       - name: Publish to npm
-        working-directory: wingfoil-js
+        working-directory: js
         run: npm publish --access public

@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wingfoil-io/wingfoil.git",
-    "directory": "wingfoil-js"
+    "directory": "js"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -40,7 +40,7 @@
     "README.md"
   ],
   "scripts": {
-    "build:wasm": "cd ../crates/wingfoil-wasm && wasm-pack build --target web --release --out-dir ../../wingfoil-js/src/wasm && rm -f ../../wingfoil-js/src/wasm/.gitignore",
+    "build:wasm": "cd ../crates/wingfoil-wasm && wasm-pack build --target web --release --out-dir ../../js/src/wasm && rm -f ../../js/src/wasm/.gitignore",
     "build:ts": "tsc && rm -rf dist/wasm && cp -r src/wasm dist/wasm && rm -f dist/wasm/.gitignore",
     "build": "npm run build:wasm && npm run build:ts",
     "dev": "vite examples/solid-dashboard",

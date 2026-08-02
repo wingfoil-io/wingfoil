@@ -74,14 +74,14 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: wingfoil-js/pnpm-lock.yaml
+          cache-dependency-path: js/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm install --frozen-lockfile
 
       - name: Audit JS dependencies
-        working-directory: wingfoil-js
+        working-directory: js
         run: pnpm audit --audit-level moderate
 
   # PR-only: block a pull request that *introduces* a dependency with a known

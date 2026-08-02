@@ -36,11 +36,11 @@ no-op).
 
 ## Browser client
 
-The sibling [`wingfoil-js`](../../../wingfoil-js) package provides a ready-made
+The sibling [`wingfoil-js`](../../../../js) package provides a ready-made
 TypeScript / Solid.js client. From the repo root:
 
 ```sh
-cd wingfoil-js
+cd js
 pnpm install
 pnpm dev    # opens http://localhost:5173 against ws://127.0.0.1:8080/ws
 ```
