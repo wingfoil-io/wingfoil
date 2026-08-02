@@ -332,10 +332,18 @@ Not everything is a rename. Next adds, over the legacy binding:
 Known gaps
 ----------
 
-* **The iceoryx2 ``stages`` latency-tracing argument is not ported.** Legacy
-  split a ``[u64; N]`` header off each sample inside the adapter. Use the
-  general :class:`~wingfoil_next.Latency` / :class:`~wingfoil_next.TracedBytes` surface instead — it is the
-  same little-endian header, wire-compatible with a Rust peer.
+* **The statistics surface is smaller than legacy's.** Legacy bound
+  ``Window`` / ``Weighting`` / ``EwmaSpan`` over
+  ``mean``/``std``/``var``/``sum``/``min``/``max``/``median``/``ewma``;
+  ``wingfoil_next`` binds the cumulative ``sum``/``mean``/``average`` bridge
+  only. The *engine* has the full surface — it is the binding that stops short,
+  so this is expected to close without any API change to what is documented
+  here.
+* **No multi-stream ``build_dataframe``.** Legacy's ``pandas_helpers.build_dataframe``
+  outer-joined several streams on time. :meth:`~wingfoil_next.Stream.dataframe`
+  frames a single stream — and does it better, building a real
+  ``pandas.DataFrame`` in Rust where legacy returned ``(time, value)`` tuples
+  for a Python helper to assemble. Only the multi-stream join is missing.
 * **ZeroMQ cross-language interop** with a *legacy* Rust/Python peer is not
   guaranteed: next's ``bincode`` envelope is its own. Two next peers
   interoperate, and so does a next Python peer with a next Rust peer publishing

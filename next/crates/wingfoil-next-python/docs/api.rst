@@ -306,7 +306,11 @@ authored in a third-party crate looks identical to a built-in one.
      - ``iceoryx2_sub(graph, …)``, ``iceoryx2_pub(stream, …)``
      - **Not in the default wheel** — Linux/POSIX-only. Uses the slice
        (``[u8]``) API; payloads cross as ``bytes``. ``variant`` and ``mode`` are
-       strings.
+       strings. Both entry points take an optional ``stages`` list: with it a
+       sample is a ``[u64; len(stages)]`` little-endian stamp header followed by
+       the payload, and the value is a :class:`~wingfoil_next.TracedBytes`
+       rather than ``bytes`` — the same layout a Rust peer's ``latency_stages!``
+       record has, so a Python subscriber reads a Rust publisher's stamps.
 
 Two conventions run through all of them:
 
