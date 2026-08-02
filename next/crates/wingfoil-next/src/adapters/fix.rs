@@ -125,7 +125,7 @@ use anyhow::{Context, Result};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use tinyvec::TinyVec;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::Burst;
 use crate::channel::ChannelSender;
@@ -193,9 +193,9 @@ pub struct FixMessage {
     pub msg_type: String,
     /// Inbound sequence number (tag 34).
     pub seq_num: u64,
-    /// SendingTime as [`NanoTime`](wingfoil::NanoTime) (tag 52; currently set to
+    /// SendingTime as [`NanoTime`](wingfoil_next::NanoTime) (tag 52; currently set to
     /// zero — future work).
-    pub sending_time: wingfoil::NanoTime,
+    pub sending_time: wingfoil_next::NanoTime,
     /// Application-level tag/value pairs (standard header and trailer excluded).
     pub fields: Vec<(u32, String)>,
 }
@@ -575,7 +575,7 @@ fn build_message(all: Vec<(u32, String)>) -> Option<FixMessage> {
     Some(FixMessage {
         msg_type,
         seq_num,
-        sending_time: wingfoil::NanoTime::ZERO,
+        sending_time: wingfoil_next::NanoTime::ZERO,
         fields,
     })
 }
@@ -1470,7 +1470,7 @@ fn market_data_request(symbol: &str, req_id: &str) -> FixMessage {
     FixMessage {
         msg_type: "V".to_string(),
         seq_num: 0,
-        sending_time: wingfoil::NanoTime::ZERO,
+        sending_time: wingfoil_next::NanoTime::ZERO,
         fields: vec![
             (262, req_id.to_string()), // MDReqID
             (263, "1".to_string()),    // SubscriptionRequestType = Subscribe

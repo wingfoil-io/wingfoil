@@ -9,7 +9,7 @@
 //! clamping, and keep/drop accounting. `WindowFilter` is a pure helper (not a
 //! graph op), so there are no tick times to assert.
 
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 use wingfoil_next::adapters::common::{TimeWindow, WindowFilter};
 
 fn t(ns: u64) -> NanoTime {

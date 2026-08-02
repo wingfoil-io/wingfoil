@@ -10,10 +10,10 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::op::{Activation, Op};
 use wingfoil_next::ops::Poll;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 /// A producer thread feeds a channel; the graph busy-polls it with
 /// `try_recv`. Every value arrives, in order — one value per cycle (where
@@ -93,7 +93,7 @@ fn poll_rejects_historical_mode() {
     let _values = g.poll(|| None::<u64>);
     let mut r = g.build();
     r.run(
-        RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
+        RunMode::HistoricalFrom(wingfoil_next::NanoTime::ZERO),
         RunFor::Cycles(1),
     )
     .unwrap();

@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A limit order book: resting bid/ask quantity keyed by price. Kept in `fold`
 /// state and updated one synthetic message at a time.

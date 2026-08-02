@@ -2,13 +2,13 @@
 
 use anyhow::Result;
 use std::time::Duration;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kdb::{
     K, KdbConnection, KdbDeserialize, KdbError, KdbSerialize, KdbSinkOps, Row, Sym, SymbolInterner,
     kdb_read,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const SECOND_NANOS: i64 = 1_000_000_000;
 const TABLE: &str = "test_trades";

@@ -7,13 +7,13 @@
 //! ```
 #![cfg(feature = "redis")]
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::redis::{
     RedisConnection, RedisEntry, RedisSinkOps, RedisStreamRecord, RedisStreamSinkOps,
     redis_stream_read, redis_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A realtime run description (start time is ignored in realtime).
 fn realtime(cycles: u32) -> RunParams {

@@ -11,11 +11,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::Burst;
 use wingfoil_next::channel::ChannelSender;
 use wingfoil_next::interp::StopHandle;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// `replay_results` queues each `(value, time)` onto a historical source and
 /// groups same-instant rows into one atomic burst, delivering them on the graph

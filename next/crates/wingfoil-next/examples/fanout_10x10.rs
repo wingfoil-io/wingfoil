@@ -12,7 +12,7 @@
 //! cargo run -p wingfoil-next --example fanout_10x10
 //! ```
 
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 

@@ -102,7 +102,7 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use redis::AsyncCommands;
 use redis::streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply};
-use wingfoil::{NanoTime, RunMode};
+use wingfoil_next::{NanoTime, RunMode};
 
 use crate::async_source::{RunParams, consume_async, produce_async};
 use crate::fluent::{GraphBuilder, Stream, StreamOps};

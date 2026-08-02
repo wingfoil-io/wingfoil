@@ -80,7 +80,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_aux::serde_introspection::serde_introspect;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 use crate::async_source::{RunParams, produce_async};
 use crate::fluent::{GraphBuilder, Stream, StreamOps};

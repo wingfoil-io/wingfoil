@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::aeron::transport::{
     AeronPublisherBackend, AeronSubscriberBackend, MockPublisher, MockSubscriber,
 };
@@ -20,6 +19,7 @@ use wingfoil_next::adapters::aeron::{
     aeron_sub_fragment, aeron_sub_fragment_with_status,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Little-endian `i64` parser for the fragment surface.
 fn i64_parser(f: &FragmentBuffer<'_>) -> Result<Option<i64>, TransportError> {

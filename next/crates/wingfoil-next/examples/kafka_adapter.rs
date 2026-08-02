@@ -28,10 +28,10 @@
 //! cargo run -p wingfoil-next --example kafka_adapter --features kafka
 //! ```
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kafka::{KafkaEvent, KafkaRecord, KafkaSinkOps, kafka_sub};
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const BROKERS: &str = "localhost:9092";
 const SOURCE_TOPIC: &str = "example-source";

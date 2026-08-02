@@ -64,7 +64,7 @@ today's interpreted engine.
 | Historical replay | ✅ | ✅ | ✅³ | ✅ |
 | Realtime | ✅ | ✅ | 🟡³ | ✅ |
 | Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
-| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | ✅⁴ | ✅⁴ |
 | Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
 | Engine span instrumentation (`instrument-*`) | ✅ | ✅ | ❌¹⁶ | ❌¹⁶ |
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
@@ -80,9 +80,22 @@ today's interpreted engine.
   busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
-⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
-  needs them (none do yet). Classic runs the full setup/start/stop/teardown
-  lifecycle.
+⁴ **Full lifecycle, all three engines** (this footnote previously read
+  "`start` emitted; `stop`/`teardown` emitted once a macro-expressible op needs
+  them (none do yet)" — that is stale). `#[op]` emits `_stop`/`_teardown`
+  forwarders for *every* op, always real (they call `<X as Op>::stop`/
+  `teardown`, whose trait default is a no-op that constant-folds away), so the
+  `nitro!` tail calls them for every node unconditionally without the macro
+  knowing which ops override a hook. Both `Target::Compiled` and
+  `Target::Nested` emit `starts`/`stops`/`teardowns`; cleanup is error-safe —
+  the run phase is an IIFE whose `?` is captured into `__first_err` so every
+  node's `stop` then `teardown` still runs after an abort, first error wins,
+  mirroring the interpreted `Runner`. The `_owned` forwarder variant threads a
+  literal-closure config through by value so a `finally` closure reaches its
+  own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs::
+  finally_teardown_fires_once_on_all_three_engines`. The one *structural*
+  difference from classic remains: no separate `setup` phase, because next's
+  ops are constructed at wiring time (register **D14**).
 ⁵ Only the declared output tuple is returned — no runner, no peeking
   intermediate nodes; an island exposes only its single output.
 ⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
@@ -1683,15 +1696,22 @@ tests covered — not "legacy pytest passes unchanged."
   which is what legacy did too. Unlike aeron it is pure Rust, so it *is* in
   `all-adapters` and its tests run in the normal job; it stays out of the
   **wheel** for a different reason — Linux/POSIX-only. `variant` and `mode`
-  become strings (legacy had two `#[pyclass]` enums). One legacy capability is
-  still **not** ported: the `stages` latency-tracing path, which split a
-  `[u64; N]` header off each sample into `TracedBytes` / `Latency` pyclasses.
-  It is **no longer blocked**: the next-python latency surface (the bullet
-  below) landed, and its `PyLatency::create_from_bytes` is exactly the header
-  split that path needs. What remains is wiring it into the two iceoryx2 entry
-  points and testing the round trip — scoped as its own follow-up. That
-  round-trip tier needs no service at all — the `"local"` variant talks
-  in-process over the heap, and `"ipc"` is daemonless.
+  become strings (legacy had two `#[pyclass]` enums). The `stages`
+  latency-tracing path — the last unported legacy Python capability — **landed**
+  once the next-python latency surface (the bullet below) did: both entry points
+  take an optional `stages` list, splitting a `[u64; N]` little-endian stamp
+  header off each sample into a `TracedBytes` / `Latency` pair on the way in and
+  packing it back on the way out, through that module's
+  `PyLatency::create_from_bytes` / `header_bytes` / `check_stages` rather than a
+  parallel copy (they are `pub` for exactly that reuse). Three deviations, all
+  fail-loudly: a frame too short for its header, a record whose stage list
+  differs from the wired one, and a non-`TracedBytes` value each abort the run
+  naming what they got — legacy warned and handed back a corrupt payload for the
+  first and packed whatever it was given for the rest; the traced path also
+  publishes bursts, which legacy's did not. The round-trip tier needs no service
+  at all — the `"local"` variant talks in-process over the heap, and `"ipc"` is
+  daemonless — so a stamped publish → subscribe → `latency_report` loop runs in
+  `iceoryx2-next-integration.yml` beside the untraced ones.
 
   **Remaining: 0 — the per-adapter binding surface is complete.** Legacy
   `wingfoil-python` binds 15 adapters, in four tiers, all now done:
@@ -1749,7 +1769,12 @@ tests covered — not "legacy pytest passes unchanged."
   runtime value and there is no `Op` impl to hang the hook on — had no way to
   print a teardown summary.
 
-  Unblocks the iceoryx2 `stages` argument (see the iceoryx2 note above).
+  It also carries the **transport seam** the iceoryx2 `stages` argument runs
+  through (see the iceoryx2 note above): `STAMP_BYTES`,
+  `PyLatency::create_from_bytes` / `header_bytes` / `stages_ref` and
+  `check_stages` are `pub`, so an adapter binding — in this crate or a
+  third-party one — splits and packs the wire header without a parallel copy of
+  the record.
 - **Pytest parity audit** 🟡 *audited 2026-08; two surface gaps remain* — the
   gate stated at the top of this phase ("next-python's own pytest suite reaching
   parity with the surface the legacy tests covered") had never been checked, only

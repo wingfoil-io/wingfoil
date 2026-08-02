@@ -41,7 +41,13 @@ instrument-all = ["instrument-default", "instrument-cycle-node"]
 fluvio = ["dep:fluvio", "async"]
 fluvio-integration-test = ["fluvio", "dep:testcontainers", "dep:fluvio-controlplane-metadata"]
 iceoryx2-integration-test = ["iceoryx2", "dep:testcontainers"]
-iceoryx2 = ["dep:iceoryx2"]
+# Forwards to `wingfoil-next/iceoryx2`: `Traced` lives in `wingfoil-next`
+# (`runtime::latency`) and so does its `unsafe impl ZeroCopySend`, which the
+# orphan rule keeps there — both trait and type are foreign to this crate.
+# Without the forward, `Traced` is not `ZeroCopySend` when `wingfoil` is built
+# on its own and the iceoryx2 adapter's bounds fail to resolve. A `--workspace`
+# build hides this: another member enables the feature and cargo unifies it.
+iceoryx2 = ["dep:iceoryx2", "wingfoil-next/iceoryx2"]
 prometheus = ["dep:arc-swap"]
 prometheus-integration-test = ["prometheus", "dep:reqwest"]
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "async"]
@@ -78,6 +84,17 @@ workspace = true
 scrape-examples = true
 
 [dependencies]
+
+# The shared runtime core — engine time (`NanoTime`), the run bounds
+# (`RunMode` / `RunFor`), the scheduled-callback `TimeQueue`, `Burst` and the
+# `Kernel` — lives in `wingfoil-next` and is re-exported from here, so both
+# engines use one set of types rather than structurally-identical twins.
+#
+# The edge points this way (legacy -> next), not the other way, because `next/`
+# is replacing this tree wholesale: at cutover the legacy crates are deleted,
+# and nothing under `next/` may depend on what is being deleted. See
+# `next/docs/cutover-plan.md`.
+wingfoil-next = { path = "../next/crates/wingfoil-next" }
 
 # derives
 wingfoil-derive = { path = "../wingfoil-derive", version = "8.0.0" }

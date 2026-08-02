@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::anyhow::Result;
 use wingfoil_next::op::{Activation, Ctx, Op, Tick};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const PERIOD: Duration = Duration::from_millis(1);

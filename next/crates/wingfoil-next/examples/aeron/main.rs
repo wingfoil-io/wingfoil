@@ -12,12 +12,12 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::aeron::{
     AeronHandle, AeronMode, AeronSinkOps, AeronSubOptions, FragmentBuffer, TransportError,
     aeron_sub_fragment,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn i64_parser(f: &FragmentBuffer<'_>) -> Result<Option<i64>, TransportError> {
     Ok(f.as_ref().try_into().ok().map(i64::from_le_bytes))

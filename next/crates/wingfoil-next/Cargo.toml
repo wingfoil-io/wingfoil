@@ -10,19 +10,34 @@ description = "Design prototype: dual-mode (interpreted + compiled) stream graph
 workspace = true
 
 [dependencies]
-# Reuses the clock/scheduler core (`codegen::Kernel`), `NanoTime` and the
-# run-mode types. Everything else — the Op trait, ops, and engines — is
-# from-scratch.
-wingfoil = { path = "../../../wingfoil" }
+# NOTE: this crate must NOT depend on `wingfoil`. The dependency runs the other
+# way — `wingfoil` depends on this crate and re-exports `src/runtime/` (engine
+# time, run bounds, the time queue, `Burst` and the `Kernel`) — so that the
+# cutover can delete the legacy tree outright instead of disentangling it
+# first. The only edge back to `wingfoil` is a dev-dependency, for the parity
+# tests and the classic-vs-next comparison benches.
 wingfoil-next-macros = { path = "../wingfoil-next-macros" }
 anyhow = { workspace = true }
-# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the re-exported `burst!` macro
-# expands to `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for
-# that macro to resolve. Version mirrors the classic `wingfoil` crate.
+# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
+# `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro
+# to resolve.
 tinyvec = { version = "1.10.0", features = ["alloc"] }
 # Used by the always-compiled `adapters::common` module (the out-of-window row
-# filter's summary warning). Version mirrors the classic `wingfoil` crate.
+# filter's summary warning).
 log = { workspace = true }
+
+# --- the shared runtime core (`src/runtime/`), moved here from `wingfoil` ---
+# `NanoTime`: quanta for the cheap TSC-backed clock, chrono for the
+# NaiveDateTime conversions, formato for `pretty()`, serde for the wire
+# formats, derive_more/derive-new for its derives.
+quanta = "0.9.3"
+chrono = { workspace = true }
+derive_more = { workspace = true }
+derive-new = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+formato = "0.3.0"
+# `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`).
+crossbeam = "0.8.4"
 
 # `async` feature: the `produce_async` ergonomic source (async closure →
 # timestamped burst stream) over the channel. Optional so the core engine
@@ -39,7 +54,6 @@ tokio = { version = "1", features = [
 # so the default build stays dependency-free. Versions mirror the classic
 # `wingfoil` crate's csv adapter.
 csv = { version = "1.4", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
@@ -165,7 +179,6 @@ thiserror = { version = "2.0", optional = true }
 tokio-postgres = { version = "0.7", features = [
     "with-chrono-0_4",
 ], optional = true }
-chrono = { version = "0.4", optional = true }
 
 # `kdb` feature: KDB+/q connectivity — time-partitioned historical reads
 # (`kdb_read`, `kdb_read_cached`), a real-time tickerplant subscription
@@ -247,6 +260,13 @@ kanal = { version = "0.1.1", optional = true }
 tracing = { workspace = true, features = ["log", "attributes"], optional = true }
 
 [dev-dependencies]
+# The classic engine, as the port's parity oracle: `tests/engine_semantics.rs`
+# asserts next reproduces classic's values and tick times, and `benches/tiers.rs`
+# measures the tiers against it. Dev-only, so the *library* dependency still
+# runs `wingfoil` -> `wingfoil-next` and nothing under `next/` links legacy.
+# Cargo permits this cycle precisely because it is dev-only. It goes away with
+# the legacy tree at cutover.
+wingfoil = { path = "../../../wingfoil" }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
@@ -270,11 +290,11 @@ async = ["dep:tokio", "dep:futures", "tokio/sync"]
 # `async` + `async-stream` back the lazy, back-pressured `csv_read` replay
 # source (a lazy `produce_async` + `buffer_size` producer streaming rows on
 # demand, so a huge file is not read into memory up front). The sink stays synchronous.
-csv = ["dep:csv", "dep:serde", "dep:serde-aux", "async", "dep:async-stream"]
+csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors classic wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
-cache = ["dep:sha2", "dep:bincode", "dep:serde", "async", "tokio/fs"]
+cache = ["dep:sha2", "dep:bincode", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
@@ -285,7 +305,7 @@ redis-integration-test = ["redis", "dep:testcontainers"]
 # PostgreSQL adapter. Built on `async` (produce_async live tail + block_on
 # reader/sink) and `async-stream` (the sub's `stream!` macro); `chrono` for the
 # timestamp column conversions.
-postgres = ["dep:tokio-postgres", "dep:chrono", "dep:async-stream", "async"]
+postgres = ["dep:tokio-postgres", "dep:async-stream", "async"]
 postgres-integration-test = ["postgres", "dep:testcontainers"]
 # Streaming Kafka consume source + produce sink. Built on the async
 # `produce_async` / `consume_async` ergonomics; needs `async-stream` for the
@@ -298,7 +318,6 @@ kafka-integration-test = ["kafka", "dep:testcontainers"]
 # `stream!` macro). Mirrors classic wingfoil's `web` deps.
 web = [
     "async",
-    "dep:serde",
     "dep:axum",
     "dep:tower-http",
     "dep:tokio-tungstenite",
@@ -354,7 +373,7 @@ iceoryx2-integration-test = ["iceoryx2"]
 # `stream!` macros), `chrono` (the write timestamp column), and the `cache`
 # feature (the file cache behind `kdb_read_cached`, which also supplies
 # `sha2`/`bincode`/`serde`/`tokio/fs`). Mirrors classic wingfoil's `kdb` deps.
-kdb = ["dep:kdb-plus-fixed", "dep:chrono", "dep:async-stream", "cache"]
+kdb = ["dep:kdb-plus-fixed", "dep:async-stream", "cache"]
 # KDB+ cannot be run under `testcontainers` (no public, freely-licensed image),
 # so the integration tests probe an externally-provided instance (KDB_TEST_HOST
 # / KDB_TEST_PORT, default localhost:5000) and skip when unreachable — no
@@ -368,7 +387,7 @@ prometheus-integration-test = ["prometheus", "dep:reqwest"]
 # ZMQ pub/sub adapter. `bincode`/`serde` frame the wire envelope; the `zmq` crate
 # links the system `libzmq`. No `async` — the subscriber uses a background thread
 # over the `channel` layer (matching classic).
-zmq = ["dep:zmq", "dep:bincode", "dep:serde"]
+zmq = ["dep:zmq", "dep:bincode"]
 # Core pub/sub parity tests (real sockets, no external service / container).
 zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
@@ -392,7 +411,7 @@ otlp-integration-test = ["otlp", "dep:testcontainers"]
 # deliberately does NOT pull in `async`; `rustls`/`webpki-roots` back the TLS
 # initiator and `kanal` backs the lock-free outbound inject channel. Versions
 # mirror the classic `wingfoil` crate's `fix` adapter so the two trees don't drift.
-fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal", "dep:chrono"]
+fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal"]
 # The FIX adapter's cross-process parity tests spin up an in-process acceptor +
 # initiator over real loopback sockets (no external service / container), so this
 # gates the same-process integration tests. Mirrors classic wingfoil's

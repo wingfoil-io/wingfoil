@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use iceoryx2::prelude::ZeroCopySend;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::{
     Iceoryx2Error, Iceoryx2Mode, Iceoryx2PubOpts, Iceoryx2ServiceVariant, Iceoryx2SinkOps,
     Iceoryx2SliceSinkOps, Iceoryx2SubOpts, iceoryx2_sub_opts, iceoryx2_sub_slice_opts,
@@ -21,6 +20,7 @@ use wingfoil_next::adapters::iceoryx2::{
 };
 use wingfoil_next::latency::*;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend, PartialEq)]

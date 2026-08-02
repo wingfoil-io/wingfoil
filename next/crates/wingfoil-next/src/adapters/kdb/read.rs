@@ -13,7 +13,7 @@ use kdb_plus_fixed::ipc::error::Error as KdbError;
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
 use kdb_plus_fixed::qtype;
 use log::info;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Extension trait for extracting data from K objects.
 pub trait KdbExt {
