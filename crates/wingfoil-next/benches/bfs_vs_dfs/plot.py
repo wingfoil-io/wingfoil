@@ -9,9 +9,13 @@
 #   cargo bench -p wingfoil-next --features async --bench bfs_vs_dfs_async_streams
 #   python plot.py
 #
-# The values currently in place are the legacy-engine reading carried over
-# with the port (same workload, same machine class), so the shape of the plot
-# is right but the `wingfoil` series is *not* yet a next-engine measurement.
+# Read the numbers off the criterion *console output* of each run, not out of
+# `target/criterion/`: all three targets name their benchmarks `depth_1`..
+# `depth_10`, so whichever ran last owns those directories on disk.
+#
+# The values in place are a next-engine reading — all three series measured
+# back to back on the machine described in `../images/lscpu.txt` (4-core
+# 2.80 GHz Xeon VM). Point estimates, in nanoseconds.
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -19,9 +23,9 @@ import matplotlib.ticker as ticker
 
 depths = list(range(1, 11))
 
-wingfoil = [174, 212, 197, 256, 264, 267, 287, 326, 301, 352]
-async_s  = [109, 165, 274, 545, 1042, 2045, 4076, 8100, 16125, 32121]
-reactive = [66,  156, 324, 652, 1349, 2679, 5353, 10732, 22493, 43073]
+wingfoil = [610, 410, 446, 438, 539, 513, 562, 538, 575, 681]
+async_s  = [188, 309, 494, 907, 1782, 3394, 6847, 13405, 30360, 54872]
+reactive = [46,  109, 257, 517, 1140, 2147, 4333, 8452, 17437, 40286]
 
 fig, ax = plt.subplots(figsize=(8, 5))
 

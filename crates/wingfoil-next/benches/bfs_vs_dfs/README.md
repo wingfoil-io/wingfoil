@@ -11,16 +11,37 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 
 ### Results
 
-`latency.png` is a *reading*, not source, so it is not carried over from
-legacy — regenerate it locally with `plot.py` after running the three targets
-(the script's header lists the commands). The legacy-engine plot, on the same
-workload, is preserved at
+<img src="latency.png" width="640">
+
+wingfoil stays flat while async streams and reactive double every level
+(O(2^N) DFS). Point estimates, in nanoseconds:
+
+| Depth | wingfoil-next (BFS) | rxrust (DFS) | tokio async streams (DFS) |
+|---|---|---|---|
+| 1  | 610 | 46 | 188 |
+| 2  | 410 | 109 | 309 |
+| 3  | 446 | 257 | 494 |
+| 4  | 438 | 517 | 907 |
+| 5  | 539 | 1 140 | 1 782 |
+| 6  | 513 | 2 147 | 3 394 |
+| 7  | 562 | 4 333 | 6 847 |
+| 8  | 538 | 8 452 | 13 405 |
+| 9  | 575 | 17 437 | 30 360 |
+| 10 | 681 | 40 286 | 54 872 |
+
+Both DFS libraries start out *ahead* — at depth 1 there is almost no graph to
+schedule, and wingfoil is paying the bench harness's fixed handshake (~677 ns
+of it; see [`../README.md`](../README.md#graph-overhead)). They cross over by
+depth 4 and then double every level, while wingfoil is flat: **59× (rxrust)
+and 81× (async streams)** behind by depth 10. Extending the same slopes to
+depth 20 puts the gap in the millions.
+
+This is a *reading*, not source — measured on the machine described in
+[`../images/lscpu.txt`](../images/lscpu.txt). Regenerate it locally by running
+the three targets and refilling `plot.py` (the script's header lists the
+commands). The legacy-engine plot, on the same workload, is preserved at
 [`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
 until the Phase-7 cutover.
-
-The shape it shows: wingfoil stays flat while async streams and reactive double
-every level (O(2^N) DFS). At depth 10 both DFS approaches are ~120× slower than
-wingfoil; at depth 20 that gap would be ~3 million×.
 
 ### Why the difference?
 

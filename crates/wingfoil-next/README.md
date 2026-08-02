@@ -49,7 +49,7 @@ accepts and why.
 | [`src/channel.rs`](src/channel.rs), [`src/async_source.rs`](src/async_source.rs) | Thread and tokio edges. |
 | [`src/compat.rs`](src/compat.rs) | The classic-style facade. |
 | [`examples/`](examples/) | ~40 runnable examples, grouped into `core/`, `adapters/`, `showcase/`. |
-| [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison. |
+| [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison — with a [captured reading and charts](benches/README.md#results). |
 
 ## Key concepts
 

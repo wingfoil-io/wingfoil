@@ -49,7 +49,8 @@ legacy/                     # The legacy MutableNode engine — deleted at cutov
   wingfoil-derive/          #   #[node] proc macro
   wingfoil-python/          #   Legacy PyO3 bindings
 
-scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh)
+scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh,
+                            #   bench-report.sh)
 ```
 
 ## The one design objective that governs everything
