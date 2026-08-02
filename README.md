@@ -44,7 +44,7 @@ streaming data across your entire stack.
 ## Quick Start
 
 In this example we build a simple, linear pipeline with all nodes ticking in
-lock-step.
+lock-step — wired, built and run as a single chain.
 
 ```rust
 use std::time::Duration;
@@ -52,16 +52,21 @@ use wingfoil_next::{RunFor, RunMode};
 use wingfoil_next::prelude::*;
 
 fn main() {
-    let g = GraphBuilder::new();
-    g.ticker(Duration::from_secs(1))
+    GraphBuilder::new()
+        .ticker(Duration::from_secs(1))
         .count()
         .map(|i| format!("hello, world {i}"))
-        .print();
-
-    let mut runner = g.build();
-    runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
+        .print()
+        .build()
+        .run(RunMode::RealTime, RunFor::Cycles(3))
+        .unwrap();
 }
 ```
+
+`build()` is available at the end of a chain as well as on the `GraphBuilder`,
+and builds the whole graph either way. Keep the builder and the streams in
+bindings when you branch, or when you want to read values back after the run
+(`runner.value(&stream)`) — as the worked example below does.
 
 This output is produced:
 

@@ -158,6 +158,10 @@ impl GraphBuilder {
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`).
     ///
+    /// Also available at the end of a chain as [`Stream::build`], which builds
+    /// this same graph — use it when nothing needs reading back and the whole
+    /// program can be one expression.
+    ///
     /// # Precondition
     ///
     /// May be called **once**: it takes the underlying [`Builder`], leaving the
@@ -553,7 +557,8 @@ impl SourceOps for GraphBuilder {
 
 /// A typed stream in a graph under construction. Combinators live in the
 /// [`StreamOps`] extension trait (and others), so `use`ing the trait enables
-/// chaining: `g.ticker(p).count().map(|i| i * 2)`.
+/// chaining: `g.ticker(p).count().map(|i| i * 2)`. [`build`](Stream::build)
+/// closes the chain, so wiring, building and running can be one expression.
 pub struct Stream<T> {
     inner: Rc<RefCell<Builder>>,
     /// Shared with the owning [`GraphBuilder`]: set once the graph is built, so
@@ -652,6 +657,37 @@ impl<T> Stream<T> {
         T: 'static,
     {
         self.inner.borrow().slot(self.handle)
+    }
+
+    /// Consume the wired graph this stream belongs to into a [`Runner`] —
+    /// [`GraphBuilder::build`] reached from the end of a chain, so a whole
+    /// program can be one expression:
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use wingfoil_next::prelude::*;
+    /// use wingfoil_next::{RunFor, RunMode};
+    ///
+    /// GraphBuilder::new()
+    ///     .ticker(Duration::from_secs(1))
+    ///     .count()
+    ///     .map(|i| format!("hello, world {i}"))
+    ///     .print()
+    ///     .build()
+    ///     .run(RunMode::RealTime, RunFor::Cycles(3))
+    ///     .unwrap();
+    /// ```
+    ///
+    /// It builds the *graph*, not this stream: which stream you call it on
+    /// makes no difference, and every other stream wired from the same
+    /// [`GraphBuilder`] stays usable as a value handle
+    /// (`runner.value(&stream)`). Carries the same **call-once** precondition
+    /// as [`GraphBuilder::build`] — a second `build()`, from any stream or the
+    /// builder itself, panics rather than returning an empty [`Runner`]. When
+    /// you need to read values back, keep the builder and the streams in
+    /// bindings instead of chaining.
+    pub fn build(&self) -> Runner {
+        self.graph().build()
     }
 
     /// Erase this stream to an [`Upstream`] edge for

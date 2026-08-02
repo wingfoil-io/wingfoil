@@ -13,15 +13,19 @@ use std::time::Duration;
 use wingfoil_next::prelude::*;
 use wingfoil_next::{RunFor, RunMode};
 
-let g = GraphBuilder::new();
-g.ticker(Duration::from_secs(1))
+GraphBuilder::new()
+    .ticker(Duration::from_secs(1))
     .count()
     .map(|i| format!("hello, world {i}"))
-    .print();
-
-let mut runner = g.build();
-runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
+    .print()
+    .build()
+    .run(RunMode::RealTime, RunFor::Cycles(3))
+    .unwrap();
 ```
+
+`build()` sits on `Stream<T>` as well as on `GraphBuilder`, so a whole program
+can be one chain; it builds the graph either way. Hold the builder and the
+streams in bindings when you branch or want to read values back after the run.
 
 ## Execution tiers
 

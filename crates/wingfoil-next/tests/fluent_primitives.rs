@@ -4,7 +4,8 @@
 //! behind their file sinks), and `SourceOps::source_at_start` (the
 //! deferred-connection source behind live adapters like `zmq_sub`). The adapter
 //! tests cover them end-to-end through files/sockets; these exercise the
-//! primitives directly.
+//! primitives directly. Also `Stream::build` — `GraphBuilder::build` reached
+//! from the end of a chain.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -367,4 +368,58 @@ fn register_op4_reads_four_actives() {
         ],
         runner.value(&out)
     );
+}
+
+/// `Stream::build` builds the whole graph from the end of a chain, so a program
+/// is one expression: wire, build and run without ever naming the builder.
+#[test]
+fn stream_build_runs_the_whole_graph_from_the_end_of_a_chain() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+
+    GraphBuilder::new()
+        .ticker(std::time::Duration::from_nanos(100))
+        .count()
+        .map(|i: &u64| format!("hello, world {i}"))
+        .for_each(move |s: &String| {
+            sink.borrow_mut().push(s.clone());
+            Ok(())
+        })
+        .build()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    assert_eq!(
+        vec!["hello, world 1", "hello, world 2", "hello, world 3"],
+        *seen.borrow(),
+    );
+}
+
+/// It builds the *graph*, not the stream it is called on: a sibling branch wired
+/// from the same builder still runs, and every stream stays readable as a value
+/// handle afterwards.
+#[test]
+fn stream_build_builds_the_graph_not_the_stream() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let doubled = counter.map(|n: &u64| *n * 2).accumulate();
+    // Built from one branch; the sibling branch above must still be in the graph.
+    let mut runner = counter.map(|n: &u64| *n + 100).accumulate().build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    assert_eq!(vec![2, 4, 6], runner.value(&doubled));
+}
+
+/// `Stream::build` shares the builder's call-once guard: a second build — from
+/// the builder or any other stream — panics with the explanatory message rather
+/// than handing back an empty `Runner`.
+#[test]
+#[should_panic(expected = "GraphBuilder::build() called twice")]
+fn stream_build_shares_the_builders_call_once_guard() {
+    let g = GraphBuilder::new();
+    let s = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let _first = s.build();
+    let _second = g.build();
 }
