@@ -95,7 +95,7 @@
 //!
 //! Still out of scope for the prototype (documented, not forgotten):
 //! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA value
-//! store and breadth-first dirty-list scheduling for the interpreted engine
+//! store and topologically-ordered dirty-list scheduling for the interpreted engine
 //! (see `docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
 
 // Lets this crate refer to itself as `wingfoil_next`, so the paths that

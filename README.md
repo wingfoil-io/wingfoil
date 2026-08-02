@@ -169,7 +169,7 @@ to backtest.
 | [`ema_crossover`](crates/wingfoil-next/examples/core/ema_crossover/) | Backtest-shaped: a price walk, fast/slow EMAs, and golden/death-cross signals on state change. |
 | [`order_book`](crates/wingfoil-next/examples/core/order_book/) | Maintain a limit order book in `fold` state, derive trades and two-way prices. |
 | [`run_mode`](crates/wingfoil-next/examples/core/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` with the same graph wiring. |
-| [`breadth_first`](crates/wingfoil-next/examples/core/breadth_first/) | Why breadth-first execution avoids the node explosion of naive depth-first DAGs. |
+| [`topological_sort`](crates/wingfoil-next/examples/core/topological_sort/) | Why topologically sorted execution avoids the node explosion of walking a DAG one path at a time. |
 | [`feedback`](crates/wingfoil-next/examples/core/feedback/) | Close a loop between nodes with a `feedback` channel — a control loop a plain DAG can't express. |
 | [`statistics`](crates/wingfoil-next/examples/core/statistics/) | Streaming statistics toolkit — EWMA, cumulative and rolling mean/variance/std/min/max/median. |
 | [`tracing`](crates/wingfoil-next/examples/core/tracing/) | The `logged` debug tap and the engine's spans — three instrumentation modes. |

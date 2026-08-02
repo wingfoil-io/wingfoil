@@ -19,7 +19,7 @@ between them.
 | Example | Features | What it teaches |
 |---|---|---|
 | [`run_mode`](run_mode/) | — | `RunMode::RealTime` vs `HistoricalFrom` over one wiring — the backtest/deploy swap. |
-| [`breadth_first`](breadth_first/) | — | Why BFS scheduling avoids the O(2^N) blow-up depth-first frameworks hit when nodes branch and recombine. |
+| [`topological_sort`](topological_sort/) | — | Why topological-order scheduling avoids the O(2^N) blow-up that frameworks propagating one path at a time hit when nodes branch and recombine. (Target name: `breadth_first`.) |
 | [`feedback`](feedback/) | — | Closing a loop with a `feedback` channel — a control loop a plain DAG cannot express. |
 | [`statistics`](statistics/) | — | The `StatisticsOps` trait: EWMA, cumulative and rolling mean/variance/std/min/max/median. |
 | [`tracing`](tracing/) | — | The `logged` debug tap and the engine's spans — three instrumentation modes. |

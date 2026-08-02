@@ -47,6 +47,6 @@ mostly an optimizer story and a debug build flatters neither tier.
 ### Where to go next
 
 - [`dual_mode`](../dual_mode/) — the rules governing what `nitro!` accepts.
-- [`breadth_first`](../breadth_first/) — why a 100-node fan-out costs 100 node
-  visits per tick and not 2^N.
+- [`topological_sort`](../topological_sort/) — why a 100-node fan-out costs 100
+  node visits per tick and not 2^N.
 - [`benches/`](../../../benches/) — the measured comparison of the three tiers.

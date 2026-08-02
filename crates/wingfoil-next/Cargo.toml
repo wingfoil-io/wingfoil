@@ -279,8 +279,9 @@ wingfoil = { path = "../../legacy/wingfoil" }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
-# Comparison baseline for the `bfs_vs_dfs_reactive` bench — a depth-first
-# reactive framework measured against wingfoil's breadth-first scheduler.
+# Comparison baseline for the `bfs_vs_dfs_reactive` bench — a reactive
+# framework that propagates one path at a time, measured against wingfoil's
+# topologically sorted scheduler.
 # Version mirrors the legacy `wingfoil` crate's dev-dependency.
 rxrust = "1.0.0-rc.3"
 # Allocation profiling for the `aeron_allocation_tracking` bench (behind the
@@ -508,18 +509,18 @@ harness = false
 
 [[bench]]
 name = "bfs_vs_dfs_wingfoil"
-path = "benches/bfs_vs_dfs/wingfoil.rs"
+path = "benches/topological_vs_per_path/wingfoil.rs"
 harness = false
 required-features = ["bench"]
 
 [[bench]]
 name = "bfs_vs_dfs_reactive"
-path = "benches/bfs_vs_dfs/reactive.rs"
+path = "benches/topological_vs_per_path/reactive.rs"
 harness = false
 
 [[bench]]
 name = "bfs_vs_dfs_async_streams"
-path = "benches/bfs_vs_dfs/async_streams.rs"
+path = "benches/topological_vs_per_path/async_streams.rs"
 harness = false
 required-features = ["async"]
 
@@ -587,7 +588,7 @@ path = "examples/core/ema_crossover/main.rs"
 
 [[example]]
 name = "breadth_first"
-path = "examples/core/breadth_first/main.rs"
+path = "examples/core/topological_sort/main.rs"
 
 [[example]]
 name = "run_mode"

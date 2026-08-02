@@ -1,13 +1,14 @@
-// Demonstrates O(2^N) depth-first execution with async.
+// Demonstrates O(2^N) per-path propagation with async.
 //
 // Each level awaits the left branch then the right branch independently —
 // the same source value flows down both paths separately. This is the async
 // equivalent of rxrust's combine_latest(src, src): one tick produces 2^N
 // sequential awaits across N levels.
 //
-// Ported verbatim from legacy `legacy/wingfoil/benches/bfs_vs_dfs/async_streams.rs`:
-// this target measures tokio async/await, not wingfoil, so it is
-// engine-agnostic and there is nothing on the next side for it to change. It is
+// The code is ported verbatim from legacy
+// `legacy/wingfoil/benches/bfs_vs_dfs/async_streams.rs`: this target measures
+// tokio async/await, not wingfoil, so it is engine-agnostic and there is
+// nothing on the next side for it to change. It is
 // the second comparison baseline the `bfs_vs_dfs_wingfoil` bar is read against.
 
 use criterion::{Criterion, criterion_group, criterion_main};

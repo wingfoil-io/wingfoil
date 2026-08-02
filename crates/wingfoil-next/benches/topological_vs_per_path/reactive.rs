@@ -1,11 +1,12 @@
-// Demonstrates O(2^N) depth-first execution in a reactive (rxrust) framework.
+// Demonstrates O(2^N) per-path propagation in a reactive (rxrust) framework.
 //
 // Each level wires combine_latest(prev, prev): one source emission fires both
 // arms, producing 2 downstream emissions. Across N levels this becomes 2^N.
 //
-// Ported verbatim from legacy `legacy/wingfoil/benches/bfs_vs_dfs/reactive.rs`: this
-// target measures rxrust, not wingfoil, so it is engine-agnostic and there is
-// nothing on the next side for it to change. It is the comparison baseline the
+// The code is ported verbatim from legacy
+// `legacy/wingfoil/benches/bfs_vs_dfs/reactive.rs`: this target measures
+// rxrust, not wingfoil, so it is engine-agnostic and there is nothing on the
+// next side for it to change. It is the comparison baseline the
 // `bfs_vs_dfs_wingfoil` bar is read against.
 
 use criterion::{Criterion, criterion_group, criterion_main};

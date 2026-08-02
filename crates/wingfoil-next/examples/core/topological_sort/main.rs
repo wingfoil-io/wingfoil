@@ -27,8 +27,8 @@ fn main() -> anyhow::Result<()> {
     // terminates after a single tick — the whole 127-deep DAG in one cycle.
     runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 
-    // 2^127 — the correct answer a depth-first engine would need 2^127 visits
-    // to reach.
+    // 2^127 — the correct answer a path-at-a-time engine would need 2^127
+    // visits to reach.
     println!("value {:?}", runner.value(&out));
     Ok(())
 }

@@ -1,13 +1,15 @@
-## Breadth-first graph execution
+## Topologically sorted graph execution
 
-Wingfoil-next inherits the legacy engine's breadth-first scheduler, which
-eliminates the O(2^N) explosion that affects depth-first frameworks (reactive
-libraries, async streams) when nodes branch and recombine.
+Wingfoil-next inherits the legacy engine's topologically sorted scheduler,
+which eliminates the O(2^N) explosion that affects frameworks propagating one
+path at a time (reactive libraries, async streams) when nodes branch and
+recombine.
 
 Each `join(&source, &source)` branches the upstream node into two inputs and
-recombines them. Depth-first frameworks visit every path through the graph —
-2^N paths at depth N. Wingfoil's BFS scheduler visits each node exactly once
-per tick, regardless of how many upstream paths lead to it.
+recombines them. A path-at-a-time framework walks every path through the
+graph — 2^N paths at depth N. Wingfoil sorts the graph topologically and
+visits each node exactly once per tick, after everything it reads, regardless
+of how many upstream paths lead to it.
 
 ```rust
 use wingfoil_next::{NanoTime, RunFor, RunMode};
@@ -33,4 +35,5 @@ value 170141183460469231731687303715884105728
 This is the fluent-API port of the legacy `breadth_first` example (which uses
 `add(&source, &source)` over the legacy engine). The next engine expresses the
 self-referential diamond with `join`, whose two inputs are the same stream
-handle.
+handle. The target keeps its historical name, so it still runs with
+`cargo run --example breadth_first`.

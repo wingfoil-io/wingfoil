@@ -1,11 +1,11 @@
 //! Branch/recombine at depths 1–10 on the wingfoil-next engine — the
-//! breadth-first arm of the BFS-vs-DFS comparison.
+//! topological-sort arm of the comparison against per-path propagation.
 //!
 //! Port of legacy `legacy/wingfoil/benches/bfs_vs_dfs/wingfoil.rs`. The workload is
 //! unchanged: at depth N the graph has 2^N source→sink paths, and a
-//! breadth-first scheduler visits each node exactly once per tick, so the
-//! measured cost should stay flat as the depth grows (see
-//! `benches/bfs_vs_dfs/README.md`).
+//! topologically sorted scheduler visits each node exactly once per tick, so
+//! the measured cost should stay flat as the depth grows (see
+//! `benches/topological_vs_per_path/README.md`).
 //!
 //! Deliberate deviations from the legacy source, all mechanical:
 //!

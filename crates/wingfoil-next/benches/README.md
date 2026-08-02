@@ -30,8 +30,8 @@ scaffold. The deterministic perf gates are *tests* — see
 | `graph` | `bench` | `graph` | graph overhead: one engine cycle through a `width` × `depth` DAG |
 | `nanotime` | — | `nanotime` | cost of reading the graph clock |
 | `bfs_vs_dfs_wingfoil` | `bench` | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the next engine |
-| `bfs_vs_dfs_reactive` | — | `bfs_vs_dfs_reactive` | the same pattern in rxrust (DFS comparison baseline) |
-| `bfs_vs_dfs_async_streams` | `async` | `bfs_vs_dfs_async_streams` | the same pattern in tokio async/await (DFS comparison baseline) |
+| `bfs_vs_dfs_reactive` | — | `bfs_vs_dfs_reactive` | the same pattern in rxrust (per-path comparison baseline) |
+| `bfs_vs_dfs_async_streams` | `async` | `bfs_vs_dfs_async_streams` | the same pattern in tokio async/await (per-path comparison baseline) |
 | `iceoryx2` | `iceoryx2` | `iceoryx2` | `Burst<T>` push / iterate / clone |
 | `iceoryx2_modes` | `iceoryx2` | `iceoryx2_modes` | the adapter's `Spin` / `Threaded` / `Signaled` subscriber modes |
 | `aeron_publication_latency` | `aeron` | same | `offer` latency across message sizes |
@@ -56,7 +56,7 @@ cargo bench -p wingfoil-next --bench store_baseline
 cargo bench -p wingfoil-next --features bench --bench graph
 cargo bench -p wingfoil-next --bench nanotime
 
-# breadth-first vs depth-first (see bfs_vs_dfs/README.md)
+# topological sort vs per-path propagation (see topological_vs_per_path/README.md)
 cargo bench -p wingfoil-next --features bench --bench bfs_vs_dfs_wingfoil
 cargo bench -p wingfoil-next --bench bfs_vs_dfs_reactive
 cargo bench -p wingfoil-next --features async --bench bfs_vs_dfs_async_streams
@@ -290,18 +290,20 @@ The `Vec` − `Rc<Vec>` gap is what slot-aliasing could recover: **4.3×**, or
 17.2 ms of the 22.3 ms run. That is the ceiling on the zero-copy passthrough
 work, and it is large. [Violin plot](images/ops/store_forward_clone.svg).
 
-## Breadth-first vs depth-first
+## Topological sort vs per-path propagation
 
-[`bfs_vs_dfs/`](bfs_vs_dfs/) — the branch/recombine pattern at depths 1–10, where
-each level doubles the number of source→sink paths.
+[`topological_vs_per_path/`](topological_vs_per_path/) — the branch/recombine
+pattern at depths 1–10, where each level doubles the number of source→sink
+paths.
 
-<img src="bfs_vs_dfs/latency.png" width="640">
+<img src="topological_vs_per_path/latency.png" width="640">
 
 wingfoil-next stays flat (610 ns → 681 ns across ten levels, every node visited
-once per tick) while both depth-first libraries double per level. At depth 10
-that is **59× faster than rxrust** (40.286 µs) and **81× faster than tokio
+once per tick) while both path-at-a-time libraries double per level. At depth
+10 that is **59× faster than rxrust** (40.286 µs) and **81× faster than tokio
 async streams** (54.872 µs); at depth 20 the same slopes put the gap in the
-millions. Full numbers and commentary: [`bfs_vs_dfs/README.md`](bfs_vs_dfs/README.md).
+millions. Full numbers and commentary:
+[`topological_vs_per_path/README.md`](topological_vs_per_path/README.md).
 
 ## Not covered here
 
@@ -321,4 +323,5 @@ The script runs every target that needs no external service, copies criterion's
 plots into [`images/`](images/), and prints each benchmark's estimate so the
 tables above can be refilled. The two hand-drawn charts are rebuilt from data
 pasted into their scripts: [`plot_tiers.py`](plot_tiers.py) (tier summary) and
-[`bfs_vs_dfs/plot.py`](bfs_vs_dfs/plot.py) (BFS vs DFS).
+[`topological_vs_per_path/plot.py`](topological_vs_per_path/plot.py)
+(topological sort vs per-path propagation).

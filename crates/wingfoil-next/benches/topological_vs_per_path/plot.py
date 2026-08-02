@@ -1,4 +1,5 @@
-# Renders latency.png for the BFS-vs-DFS branch/recombine comparison.
+# Renders latency.png for the topological-sort vs per-path-propagation
+# branch/recombine comparison.
 #
 # The three arrays below are *readings*, not source: refill them from a local
 # run before regenerating the plot, since criterion wall-clock numbers are
@@ -29,9 +30,9 @@ reactive = [46,  109, 257, 517, 1140, 2147, 4333, 8452, 17437, 40286]
 
 fig, ax = plt.subplots(figsize=(8, 5))
 
-ax.plot(depths, wingfoil, 'o-', color='#2196F3', linewidth=2, markersize=6, label='wingfoil (BFS)')
-ax.plot(depths, async_s,  's-', color='#FF9800', linewidth=2, markersize=6, label='async streams (DFS)')
-ax.plot(depths, reactive, '^-', color='#F44336', linewidth=2, markersize=6, label='reactive / rxrust (DFS)')
+ax.plot(depths, wingfoil, 'o-', color='#2196F3', linewidth=2, markersize=6, label='wingfoil (topologically sorted)')
+ax.plot(depths, async_s,  's-', color='#FF9800', linewidth=2, markersize=6, label='async streams (per-path)')
+ax.plot(depths, reactive, '^-', color='#F44336', linewidth=2, markersize=6, label='reactive / rxrust (per-path)')
 
 plt.yscale('log')
 
@@ -51,7 +52,7 @@ ax.set_axisbelow(True)
 ax.set_xticks(depths)
 ax.set_xlabel('Branch/recombine depth', fontsize=12)
 ax.set_ylabel('Latency per tick', fontsize=12)
-ax.set_title('BFS vs DFS: branch/recombine latency', fontsize=13, fontweight='bold')
+ax.set_title('Topological sort vs per-path propagation: branch/recombine latency', fontsize=13, fontweight='bold')
 ax.legend(fontsize=11)
 
 fig.tight_layout()

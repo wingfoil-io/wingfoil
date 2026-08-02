@@ -13,7 +13,8 @@
 # inline, so paste the numbers this prints into them and re-run:
 #
 #   crates/wingfoil-next/benches/plot_tiers.py       (tier summary)
-#   crates/wingfoil-next/benches/bfs_vs_dfs/plot.py  (BFS vs DFS)
+#   crates/wingfoil-next/benches/topological_vs_per_path/plot.py  (topological
+#                                                    sort vs per-path propagation)
 #
 # Benchmarks want a quiet machine: nothing else running, and ideally not a
 # shared cloud VM. They are not a CI gate and are not meant to become one (see

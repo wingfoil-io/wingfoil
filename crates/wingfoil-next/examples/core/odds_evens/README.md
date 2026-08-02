@@ -62,4 +62,4 @@ cargo run -p wingfoil-next --example odds_evens
 - [`dual_mode`](../dual_mode/) — the same wiring, plus the rules for what you may
   write inside `nitro!` and an abridged dump of the generated code.
 - [`fanout_10x10`](../fanout_10x10/) — the same idea at 100 nodes.
-- [`breadth_first`](../breadth_first/) — why the shared apex node matters.
+- [`topological_sort`](../topological_sort/) — why the shared apex node matters.

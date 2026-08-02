@@ -4,8 +4,8 @@ An async producer of **timestamped** values driving a wingfoil-next graph — th
 legacy `produce_async` model, ported to next.
 
 Async streams are a natural fit for IO but an awkward one for business logic:
-their execution is implicit and depth-first. Wingfoil's is explicit,
-breadth-first and time-aware — with first-class historical *and* realtime
+their execution is implicit and path-at-a-time. Wingfoil's is explicit,
+topologically sorted and time-aware — with first-class historical *and* realtime
 modes, so strategies backtest and run live off the same wiring. The
 `produce_async` bridge keeps the best of both worlds: IO lives in the async
 producer, business logic lives in the graph, and the boundary between them is a
@@ -16,7 +16,7 @@ The key call is **`produce_async`**, which maps an async `futures::Stream` of
 `(NanoTime, T)` onto a graph source. The graph itself is the consumer: legacy
 hands the stream to an async `consume_async` closure, whereas on next an
 on-graph `for_each` plays that role — keeping the consumer in the
-explicitly-timed, breadth-first world. The producer runs on the graph's own tokio
+explicitly-timed, topologically sorted world. The producer runs on the graph's own tokio
 runtime (created lazily) and each yielded value wakes the kernel.
 
 `produce_async` also carries the two guarantees legacy gives for free:

@@ -133,7 +133,7 @@ today's interpreted engine.
   `tests/dynamic_graph.rs`; removed slots are tombstoned, not freed (legacy
   parity). The compiled/island interior stays fixed by design, but an island
   can be wired dynamically into the interpreted graph. See the Phase 4.5 note.
-¹¹ Legacy propagates breadth-first through a dirty-list (work ∝ active
+¹¹ Legacy propagates in topological order through a dirty-list (work ∝ active
   nodes) — though it still carries an `O(N)` per-cycle reset/scan floor the
   deferred 4.5 arena rework can also improve on. Next resets its *tick* state
   sparsely (only the nodes that fired) but shares the kernel's `O(N)` dirty-flag
@@ -1065,7 +1065,7 @@ Each adapter: keep its directory CLAUDE.md, port its tests, one PR each.
 **Gate 4:** adapter test suites green on next; legacy adapter code paths
 untouched (still shipping) until Phase 7.
 
-## Phase 4.5 — engine execution model: breadth-first dirty-list parity
+## Phase 4.5 — engine execution model: topologically sorted dirty-list parity
 
 **Scheduling: ✅ landed.** The interpreted engine now runs a sparse dirty-list
 by default (`interp.rs`, `Dispatch::Sparse`), reproducing legacy wingfoil's

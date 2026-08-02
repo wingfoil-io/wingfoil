@@ -2,8 +2,8 @@
 //! a wingfoil-next graph — the legacy `produce_async` model, ported to next.
 //!
 //! Async streams are a natural fit for IO but an awkward one for business
-//! logic: their execution is implicit and depth-first. Wingfoil's is explicit,
-//! breadth-first and time-aware (historical *and* realtime). The
+//! logic: their execution is implicit and path-at-a-time. Wingfoil's is
+//! explicit, topologically sorted and time-aware (historical *and* realtime). The
 //! [`produce_async`] bridge keeps the best of both: IO lives in the async
 //! producer, business logic lives in the graph, and the boundary between them
 //! is a single typed edge.

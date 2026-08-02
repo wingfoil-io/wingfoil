@@ -20,7 +20,7 @@ Then pick a direction:
 
 - want to plug in **real data**? → [`adapters/`](adapters/), starting with
   [`lines`](adapters/lines/) or [`csv`](adapters/csv/) (no server needed).
-- want to know **how fast**? → [`core/breadth_first`](core/breadth_first/), then
+- want to know **how fast**? → [`core/topological_sort`](core/topological_sort/), then
   [`core/dual_mode`](core/dual_mode/), then [`showcase/`](showcase/).
 - want to **backtest**? → [`core/run_mode`](core/run_mode/).
 
@@ -36,7 +36,7 @@ Then pick a direction:
 
 **Start**: [`hello_graph`](core/hello_graph/) · [`ema_crossover`](core/ema_crossover/) · [`order_book`](core/order_book/)
 
-**Execution model**: [`run_mode`](core/run_mode/) · [`breadth_first`](core/breadth_first/) · [`feedback`](core/feedback/) · [`statistics`](core/statistics/) · [`tracing`](core/tracing/)
+**Execution model**: [`run_mode`](core/run_mode/) · [`topological_sort`](core/topological_sort/) · [`feedback`](core/feedback/) · [`statistics`](core/statistics/) · [`tracing`](core/tracing/)
 
 **Tiers (`nitro!`)**: [`odds_evens`](core/odds_evens/) · [`dual_mode`](core/dual_mode/) · [`fanout_10x10`](core/fanout_10x10/)
 

@@ -27,10 +27,11 @@ let changed = signal
 let events = count.join(&signal, format_event).filter(&changed);
 ```
 
-`price` is read by both EMAs — a **shared node**. The breadth-first scheduler
-runs it once per cycle and fans the tick out to both readers, rather than once
-per downstream path; see [`breadth_first`](../breadth_first/) for why that
-matters as graphs get wider.
+`price` is read by both EMAs — a **shared node**. The topologically sorted
+scheduler runs it once per cycle and fans the tick out to both readers, rather
+than once per downstream path; see
+[`topological_sort`](../topological_sort/) for why that matters as graphs get
+wider.
 
 ### The edge-detector idiom
 
