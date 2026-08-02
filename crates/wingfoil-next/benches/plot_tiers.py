@@ -12,7 +12,7 @@
 #
 #   cargo bench -p wingfoil-next --bench tiers
 #
-# The values in place were measured on the machine in images/lscpu.txt.
+# The values in place were measured on the machine in images/lscpu-b.txt.
 import matplotlib
 
 matplotlib.use('Agg')
@@ -22,14 +22,14 @@ import numpy as np
 
 # workload -> (legacy, interpreted, compiled, nested), milliseconds
 DATA = {
-    'dense_chain':  (9.3644,  9.6772,  0.90505, 10.999),
-    'fanout':       (26.470,  24.755,  1.0067,  29.091),
-    'fan_in_16':    (5.5027,  4.8737,  0.53714, 6.3003),
-    'fan_in_64':    (16.574,  13.649,  0.69698, 19.455),
-    'fan_in_256':   (63.540,  53.694,  3.8365,  74.364),
-    'accumulate':   (2.7398,  2.4097,  1.0521,  3.4333),
-    'sparse':       (3.6242,  3.2296,  0.70178, 3.8995),
-    'sparse_wide':  (4.0356,  3.5344,  0.78385, 3.9489),
+    'dense_chain':  (7.8794,  7.8651,  0.58549, 1.0769),
+    'fanout':       (19.301,  15.295,  0.65889, 1.5474),
+    'fan_in_16':    (4.5890,  3.0364,  0.53585, 0.96756),
+    'fan_in_64':    (12.864,  8.7415,  0.57031, 1.2737),
+    'fan_in_256':   (46.369,  31.781,  2.9802,  3.4195),
+    'accumulate':   (2.3308,  2.0624,  1.0815,  1.6898),
+    'sparse':       (2.9679,  2.8349,  0.71466, 1.0861),
+    'sparse_wide':  (3.3007,  2.9229,  0.81420, 1.1513),
 }
 
 # Categorical slots 1-3 of the validated default palette, assigned in fixed

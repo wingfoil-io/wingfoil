@@ -19,31 +19,32 @@ wingfoil stays flat while async streams and reactive double every level
 | Depth | wingfoil-next interpreted | wingfoil-next compiled island | rxrust (per-path) | tokio async streams (per-path) |
 |---|---|---|---|---|
 | 1  | 567 | 512 | 24 | 159 |
-| 2  | 418 | 631 | 69 | 245 |
-| 3  | 592 | 508 | 158 | 393 |
-| 4  | 651 | 601 | 348 | 703 |
-| 5  | 489 | 678 | 722 | 1 327 |
-| 6  | 540 | 663 | 1 443 | 2 566 |
-| 7  | 515 | 641 | 3 053 | 5 001 |
-| 8  | 549 | 645 | 5 691 | 10 129 |
-| 9  | 766 | 910 | 11 428 | 20 663 |
-| 10 | 541 | 785 | 23 110 | 40 072 |
+| 2  | 418 | 401 | 69 | 245 |
+| 3  | 592 | 435 | 158 | 393 |
+| 4  | 651 | 417 | 348 | 703 |
+| 5  | 489 | 461 | 722 | 1 327 |
+| 6  | 540 | 535 | 1 443 | 2 566 |
+| 7  | 515 | 434 | 3 053 | 5 001 |
+| 8  | 549 | 327 | 5 691 | 10 129 |
+| 9  | 766 | 393 | 11 428 | 20 663 |
+| 10 | 541 | 311 | 23 110 | 40 072 |
 
 Both path-at-a-time libraries start out *ahead* — at depth 1 there is almost no
 graph to schedule, and wingfoil is paying the bench harness's fixed handshake
 (~450 ns of it; [see below](#the-graphs-own-cost-with-the-harness-divided-out),
-and [`../README.md`](../README.md#graph-overhead) for the floor on its own).
-They cross over by depth 5
-(rxrust) and depth 4 (async streams), then double every level, while both
-wingfoil tiers stay put: **43× (rxrust) and 74× (async streams)** behind by
-depth 10. Extending the same slopes to depth 20 puts the gap in the millions.
+and [`../README.md`](../README.md#graph-overhead) for the floor on its own). They
+cross over by depth 5 (rxrust) and depth 4 (async streams), then double every
+level, while both wingfoil tiers stay put: by depth 10 they are **43× (rxrust)
+and 74× (async streams)** behind the interpreted engine, **74× and 129×** behind
+the compiled island. Extending the same slopes to depth 20 puts the gap in the
+millions.
 
 The two wingfoil series are the same `nitro!` wiring on two engines — the
 interpreted graph and the same DAG mounted as a single compiled island — and
-neither trends with depth. They barely separate either, and at this resolution
-they cannot: most of each sample is the harness. The island runs ~1.2× the
-interpreted tier here, the same direction [`../tiers.rs`](../tiers.rs) measured
-on its own workloads (`nested` trailing plain `interpreted` on all eight).
+neither trends with depth. The island is the faster of the two, but read the gap
+with care at this resolution: most of each sample is the harness, and what
+separates them is only the part that is not (see the next section, where the
+same graphs are measured without it).
 
 #### The graph's own cost, with the harness divided out
 
@@ -53,16 +54,16 @@ divided by the cycle count, in nanoseconds per cycle:
 
 | Depth | Nodes | interpreted | compiled island |
 |---|---|---|---|
-| 1  | 4  | 122 | 178 |
-| 2  | 5  | 142 | 206 |
-| 3  | 6  | 166 | 251 |
-| 4  | 7  | 184 | 288 |
-| 5  | 8  | 206 | 313 |
-| 6  | 9  | 225 | 356 |
-| 7  | 10 | 249 | 373 |
-| 8  | 11 | 272 | 398 |
-| 9  | 12 | 293 | 439 |
-| 10 | 13 | 330 | 458 |
+| 1  | 4  | 122 | 84 |
+| 2  | 5  | 142 | 86 |
+| 3  | 6  | 166 | 85 |
+| 4  | 7  | 184 | 87 |
+| 5  | 8  | 206 | 86 |
+| 6  | 9  | 225 | 92 |
+| 7  | 10 | 249 | 88 |
+| 8  | 11 | 272 | 91 |
+| 9  | 12 | 293 | 90 |
+| 10 | 13 | 330 | 90 |
 
 <img src="per_cycle.png" width="640">
 
@@ -78,22 +79,29 @@ Three things this harness shows that the per-tick one cannot:
   interpreted engine at **≈ 97 ns + 22 ns × depth**: one more level is one more
   node and a fixed ~22 ns, every tick. Across the sweep the path count grows
   512-fold (2 → 1024) while the cost grows 2.7×.
-- **The island does not pay off at this size** — ≈ 153 ns + 31 ns × depth, so it
-  starts 56 ns behind and *widens*. Its interior is compiled straight-line code,
-  but the boundary costs a dyn call plus per-activation bookkeeping, and twelve
-  nodes of `u128` adds behind `black_box` fences are not enough work to earn
-  that back. Consistent with the tier suite on this class of machine; worth
-  re-checking on dedicated hardware before drawing a general conclusion, since
-  the same suite's module docs expect islands to win on dense dispatch.
+- **The island is flat outright** — 84 ns at depth 1, 90 ns at depth 10, a
+  marginal **0.7 ns per level**. That is what a compiled interior is supposed to
+  look like: the added node is straight-line code the optimizer folds into the
+  cycle, so depth stops costing anything measurable and only the island's fixed
+  boundary (a dyn call, the private queue, one outer activation) remains. It
+  overtakes the interpreter at every depth, by 1.5× at depth 1 and 3.7× at
+  depth 10, and the gap keeps widening because only one of the two lines has a
+  slope.
 
-This is a *reading*, not source — measured on a 4-core 2.10 GHz Xeon KVM guest
-([`../images/lscpu-topo.txt`](../images/lscpu-topo.txt)), which is **not** the
-machine the rest of [`../README.md`](../README.md) was captured on: this section
-alone was re-measured when the wingfoil target moved onto `nitro!`. Every series
-in it was measured on that one machine, back to back, which is what makes them
-comparable to each other — and not to the tables above. Regenerate it locally by
-running the three targets and refilling `plot.py` (the script's header lists the
-commands). The
+  This line used to read ≈ 153 ns + 31 ns × depth — *steeper* than the
+  interpreter's — because every inner node snapped its own `NanoTime::now()`
+  (~24 ns, see the [`nanotime`](../README.md#the-clock) bench) when its
+  `Ctx::nested` was built. The island now shares the outer cycle's wall snap. If
+  you are comparing against a capture from before that fix, that is the whole
+  difference.
+
+This is a *reading*, not source — measured on **machine B**, the 4-core 2.10 GHz
+Xeon KVM guest described in [`../images/lscpu-b.txt`](../images/lscpu-b.txt), as
+is the tier suite; the rest of [`../README.md`](../README.md) is still machine A.
+Every series here was measured on B back to back, which is what makes them
+comparable to each other and not to a table captured elsewhere. Regenerate
+locally by running the three targets and refilling `plot.py` (the script's header
+lists the commands). The
 legacy-engine plot, on the same workload, is preserved at
 [`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
 until the Phase-7 cutover.

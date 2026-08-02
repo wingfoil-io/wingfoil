@@ -1300,11 +1300,16 @@ walk. This also *weakens the case for compiled-path region gating* (branch-1's
 idea, noted under "Scope notes" below): the cost it would remove measures as
 small.
 
-What does invert is **`nested`, which loses to plain interpreted on sparse
-graphs** (~3.79ms vs ~2.70ms) — the mirror image of its dense win. An island
-runs its whole compiled interior on every outer activation, so a mostly-quiet
-interior is its worst case. Worth knowing before recommending islands as a
-general accelerator: they pay off in proportion to how *busy* the interior is.
+`nested` used to invert here — losing to plain interpreted on sparse graphs
+(~3.79ms vs ~2.70ms), read at the time as the mirror image of its dense win,
+since an island runs its whole compiled interior on every outer activation and a
+mostly-quiet interior is its worst case. That reading was dominated by a defect,
+not by the design: `Ctx::nested` snapped a fresh `NanoTime::now()` per *inner
+node per activation* (~24 ns each). With islands sharing the outer cycle's wall
+snap, `nested` beats interpreted on all eight tier workloads — 2.5×–2.6× even on
+the two sparse ones. The structural point still stands (an island's payoff is
+proportional to how *busy* its interior is; sparse is its weakest showing), but
+it is now a smaller win rather than a loss.
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth

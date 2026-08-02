@@ -119,19 +119,22 @@ below is 0.83, against 0.9999 on legacy's dedicated box). **Read the ratios,
 not the absolute times**: every comparison here is between bars measured back
 to back on the same machine in the same run, which is what the suite is for.
 
-Measured on:
+Measured on two machines, because two sections have been re-captured since the
+original run. Each section below says which one it came from; **numbers only
+compare within a machine.**
 
-| | |
-|---|---|
-| CPU | Intel Xeon @ 2.80 GHz, 4 cores (KVM guest) |
-| Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB |
-| Toolchain | stable rustc, `bench` profile (`opt-level=3`) |
-| Command | `cargo bench -p wingfoil-next --features bench,async` |
+| | Machine A | Machine B |
+|---|---|---|
+| CPU | Intel Xeon @ 2.80 GHz, 4 cores (KVM guest) | Intel Xeon @ 2.10 GHz, 4 cores (KVM guest) |
+| Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB | L1d 192 KiB · L2 16 MiB · L3 105 MiB |
+| `lscpu` | [`images/lscpu.txt`](images/lscpu.txt) | [`images/lscpu-b.txt`](images/lscpu-b.txt) |
+| Sections | graph overhead, the clock, user ops, store baseline | [execution tiers](#execution-tiers), [topological sort](#topological-sort-vs-per-path-propagation) |
 
-Full `lscpu` output: [`images/lscpu.txt`](images/lscpu.txt). Legacy's reading,
-for comparison, is in
+Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
+`cargo bench -p wingfoil-next --features bench,async`. Legacy's reading, for
+comparison, is in
 [`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md) — a
-3.80 GHz Xeon, so its absolute numbers run faster than these.
+3.80 GHz Xeon, so its absolute numbers run faster than either.
 
 ## Graph overhead
 
@@ -207,37 +210,44 @@ the two readings must not diverge.
 
 <img src="images/tiers/summary.png" width="760">
 
-| Workload | Nodes | legacy | interpreted | compiled | nested | interp/legacy |
-|---|---|---|---|---|---|---|
-| `dense_chain` | 37 | 9.3644 ms | 9.6772 ms | 905.05 µs | 10.999 ms | **1.03×** |
-| `fanout` | 103 | 26.470 ms | 24.755 ms | 1.0067 ms | 29.091 ms | **0.94×** |
-| `fan_in_16` | 20 | 5.5027 ms | 4.8737 ms | 537.14 µs | 6.3003 ms | **0.89×** |
-| `fan_in_64` | 68 | 16.574 ms | 13.649 ms | 696.98 µs | 19.455 ms | **0.82×** |
-| `fan_in_256` | 260 | 63.540 ms | 53.694 ms | 3.8365 ms | 74.364 ms | **0.85×** |
-| `accumulate` | 3 | 2.7398 ms | 2.4097 ms | 1.0521 ms | 3.4333 ms | **0.88×** |
-| `sparse` | 205 | 3.6242 ms | 3.2296 ms | 701.78 µs | 3.8995 ms | **0.89×** |
-| `sparse_wide` | 781 | 4.0356 ms | 3.5344 ms | 783.85 µs | 3.9489 ms | **0.88×** |
+| Workload | Nodes | legacy | interpreted | compiled | nested | interp/legacy | interp/nested |
+|---|---|---|---|---|---|---|---|
+| `dense_chain` | 37 | 7.8794 ms | 7.8651 ms | 585.49 µs | 1.0769 ms | **1.00×** | 7.3× |
+| `fanout` | 103 | 19.301 ms | 15.295 ms | 658.89 µs | 1.5474 ms | **0.79×** | 9.9× |
+| `fan_in_16` | 20 | 4.5890 ms | 3.0364 ms | 535.85 µs | 967.56 µs | **0.66×** | 3.1× |
+| `fan_in_64` | 68 | 12.864 ms | 8.7415 ms | 570.31 µs | 1.2737 ms | **0.68×** | 6.9× |
+| `fan_in_256` | 260 | 46.369 ms | 31.781 ms | 2.9802 ms | 3.4195 ms | **0.69×** | 9.3× |
+| `accumulate` | 3 | 2.3308 ms | 2.0624 ms | 1.0815 ms | 1.6898 ms | **0.88×** | 1.2× |
+| `sparse` | 205 | 2.9679 ms | 2.8349 ms | 714.66 µs | 1.0861 ms | **0.96×** | 2.6× |
+| `sparse_wide` | 781 | 3.3007 ms | 2.9229 ms | 814.20 µs | 1.1513 ms | **0.89×** | 2.5× |
 
-Three things to read off it:
+Four things to read off it:
 
-- **The Phase-6 gate holds on seven of eight workloads.** next-interpreted is
-  0.82×–0.94× of legacy — at least as fast, as the plan requires. The
-  exception is `dense_chain` at **1.03×**, ~3% behind legacy with the
-  confidence intervals only just apart ([9.2638, 9.5371] ms legacy vs [9.5382,
-  9.8624] ms interpreted). That is small enough to be this machine and large
-  enough to be worth a re-run on a quiet box.
-- **The `fan_in_*` ratios stay flat with width** — 0.89× / 0.82× / 0.85× at 16
+- **The Phase-6 gate holds on all eight workloads.** next-interpreted is
+  0.66×–1.00× of legacy — at least as fast, as the plan requires. `dense_chain`
+  is the closest at 1.00× (7.8651 ms vs 7.8794 ms, intervals overlapping); the
+  previous capture had it 3% *behind*, so it is the one to keep an eye on.
+- **The `fan_in_*` ratios stay flat with width** — 0.66× / 0.68× / 0.69× at 16
   / 64 / 256. Flatness is the actual check: the n-ary-merge regression this
   sweep was built to catch showed up as a ratio that *grew* with width.
-- **Compiled wins everywhere**, from 2.3× faster than interpreted
+- **Compiled wins everywhere**, from 1.9× faster than interpreted
   (`accumulate`, where the scheduler loop rather than dispatch dominates) up to
-  24.6× (`fanout`, dense dispatch — its home ground).
+  23.2× (`fanout`, dense dispatch — its home ground).
+- **So does nested, now** — 1.2×–9.9× faster than plain interpreted, including
+  2.5×–2.6× on the two *sparse* workloads, which are the island's documented
+  worst case (it runs its whole compiled interior on every outer activation, so
+  a mostly-quiet interior wastes most of it).
 
-One divergence from the bench's own module docs, which record the compiled
-*and* nested tiers winning on dense dispatch: **here `nested` trailed plain
-`interpreted` on all eight workloads** (1.12×–1.43×), not just the sparse ones
-where the docs already expect it to lose. Re-check that on dedicated hardware
-before treating the module-doc ranking as current.
+That last row is a reversal. The previous capture had `nested` trailing
+`interpreted` on all eight workloads (1.12×–1.43×), which contradicted the
+bench's own module docs and was written up here as something to re-check on
+dedicated hardware. It was not the hardware: `Ctx::nested` snapped a fresh
+`NanoTime::now()` every time it was built, i.e. **once per inner node per
+activation**, putting a ~24 ns TSC read (see [the clock](#the-clock), which
+prices exactly that call) on every node of every island. Islands now take the
+outer cycle's wall snap, which is both faster and more correct — an island's ops
+agree with the rest of the graph on what "this cycle" means instead of each
+reading its own instant. The ranking in the module docs is current again.
 
 Per-workload violin plots:
 [`dense_chain`](images/tiers/dense_chain.svg) ·
@@ -309,20 +319,18 @@ while both path-at-a-time libraries double per level. At depth 10 the
 interpreted engine (541 ns) is **43× faster than rxrust** (23.110 µs) and **74×
 faster than tokio async streams** (40.072 µs); at depth 20 the same slopes put
 the gap in the millions. The second wingfoil series is the same `nitro!` wiring
-as a compiled island: also flat, ~1.2× the interpreted tier, the same direction
-`nested` takes in the [tier suite](#execution-tiers) above.
+as a compiled island — faster still, at 311 ns, i.e. 74× and 129× ahead.
 
 A second harness in the same target runs those graphs for a fixed 10 000 cycles
 under a plain ticker, which divides the bench handshake out — ~450 ns of every
 per-tick sample above — and turns the flat line into the actual scaling law:
 **≈ 97 ns + 22 ns × depth** interpreted, one more node per level, while the path
-count runs to 1024.
+count runs to 1024. The island is flat in the strong sense there — **0.7 ns per
+level**, 84 ns at depth 1 and 90 ns at depth 10 — because its added node is
+straight-line code the optimizer absorbs, so only its fixed boundary remains.
 
-**This section is a reading from a different machine** — a 4-core 2.10 GHz Xeon
-VM ([`images/lscpu-topo.txt`](images/lscpu-topo.txt)), re-measured when the
-wingfoil target moved onto `nitro!`, where everything above it came from the
-2.80 GHz box. All four series in it were measured back to back on that one
-machine, so they compare to each other; they do not compare to the tables above.
+Both sections were measured on machine B (see [above](#results)); everything
+above them is machine A, and the two do not compare.
 Full numbers and commentary:
 [`topological_vs_per_path/README.md`](topological_vs_per_path/README.md).
 

@@ -150,28 +150,36 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// A context for an op nested inside a composite node: time comes from
-    /// the outer run, schedules go to the composite's private queue.
-    /// `is_last_cycle` is not propagated into islands (the composite runs its
-    /// own inner schedule), so a boundary-flush op inside an island flushes
-    /// only on window boundaries, not at the outer run's end — a documented
-    /// island limitation. For the same reason `run_mode` inside an island is
-    /// reported as [`RunMode::RealTime`]: no macro-expressible op is run-mode
-    /// gated (a run-mode-gated IO sink cannot live inside a straight-line
-    /// island), so islands never observe the distinction.
+    /// A context for an op nested inside a composite node: time and the wall
+    /// snap come from the outer run, schedules go to the composite's private
+    /// queue. `is_last_cycle` is not propagated into islands (the composite
+    /// runs its own inner schedule), so a boundary-flush op inside an island
+    /// flushes only on window boundaries, not at the outer run's end — a
+    /// documented island limitation. For the same reason `run_mode` inside an
+    /// island is reported as [`RunMode::RealTime`]: no macro-expressible op is
+    /// run-mode gated (a run-mode-gated IO sink cannot live inside a
+    /// straight-line island), so islands never observe the distinction.
+    ///
+    /// `wall_time` is the outer cycle's snap, taken once by the composite and
+    /// passed in for every inner node. It used to be a fresh [`NanoTime::now`]
+    /// per construction — i.e. **per inner node, per activation** — which put a
+    /// ~24 ns TSC read (see the `nanotime` bench) on every node of every
+    /// island. That was the island tier's entire per-node deficit against
+    /// `compiled()`. Sharing the outer snap is also the more correct
+    /// semantics: an island's ops now agree with the rest of the graph about
+    /// what "this cycle's wall time" means, instead of each reading a
+    /// different instant.
     #[doc(hidden)]
     pub fn nested(
         time: NanoTime,
+        wall_time: NanoTime,
         start_time: NanoTime,
         queue: &'a mut TimeQueue<usize>,
         node: usize,
     ) -> Self {
         Self {
             time,
-            // A composite has no per-cycle wall snap of its own; latency ops
-            // are fluent/interpreted-only and never run inside an island, so a
-            // fresh snap here is a correct (if slightly pricier) fallback.
-            wall_time: NanoTime::now(),
+            wall_time,
             start_time,
             is_last_cycle: false,
             run_mode: RunMode::RealTime,
@@ -308,4 +316,41 @@ pub fn cycle_owned_cfg<O: Op>(
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<O::Out>> {
     O::cycle(&mut cfg, state, input, ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An island's ops must see the **outer cycle's** wall snap, not one of
+    /// their own. [`Ctx::nested`] used to call [`NanoTime::now`] itself, and it
+    /// is built once per inner node per activation — so every node of every
+    /// island paid a TSC read (~24 ns; the `nanotime` bench prices exactly that
+    /// call). It was the island tier's whole per-node deficit against
+    /// `compiled()`, and it made an island's ops disagree with the rest of the
+    /// graph about when "now" was. Both are regressions worth failing a build
+    /// over, and both come back the moment this reads a clock.
+    #[test]
+    fn nested_ctx_shares_the_outer_wall_snap() {
+        let mut queue = TimeQueue::<usize>::new();
+        let wall = NanoTime::from(12_345u64);
+        let ctx = Ctx::nested(NanoTime::from(7u64), wall, NanoTime::ZERO, &mut queue, 0);
+
+        assert_eq!(wall, ctx.wall_time());
+        assert_eq!(NanoTime::from(7u64), ctx.time());
+        assert_eq!(NanoTime::ZERO, ctx.start_time());
+    }
+
+    /// Two contexts built for different nodes in the *same* activation report
+    /// the same wall time — the property a per-node `now()` cannot have.
+    #[test]
+    fn nested_ctxs_in_one_activation_agree() {
+        let mut queue = TimeQueue::<usize>::new();
+        let wall = NanoTime::from(999u64);
+        let a = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 0);
+        let a_wall = a.wall_time();
+        let b = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 7);
+
+        assert_eq!(a_wall, b.wall_time());
+    }
 }
