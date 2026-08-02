@@ -123,7 +123,7 @@ rdkafka = { version = "0.37", optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
-wingfoil-wire-types = { path = "../../../wingfoil-wire-types", version = "8.0.0", optional = true }
+wingfoil-wire-types = { path = "../../wingfoil-wire-types", version = "8.0.0", optional = true }
 # web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
 # `rustls` itself is already an optional dependency above (shared with `fix`).
 axum-server = { version = "0.7", default-features = false, features = [
@@ -272,7 +272,7 @@ criterion = { version = "0.8.1", optional = true }
 # runs `wingfoil` -> `wingfoil-next` and nothing under `next/` links legacy.
 # Cargo permits this cycle precisely because it is dev-only. It goes away with
 # the legacy tree at cutover.
-wingfoil = { path = "../../../wingfoil" }
+wingfoil = { path = "../../legacy/wingfoil" }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"

@@ -94,7 +94,7 @@ scrape-examples = true
 # is replacing this tree wholesale: at cutover the legacy crates are deleted,
 # and nothing under `next/` may depend on what is being deleted. See
 # `next/docs/cutover-plan.md`.
-wingfoil-next = { path = "../next/crates/wingfoil-next" }
+wingfoil-next = { path = "../../crates/wingfoil-next" }
 
 # derives
 wingfoil-derive = { path = "../wingfoil-derive", version = "8.0.0" }
@@ -177,7 +177,7 @@ aeron-rs = { version = "0.1", optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
-wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "8.0.0", optional = true }
+wingfoil-wire-types = { path = "../../wingfoil-wire-types", version = "8.0.0", optional = true }
 
 # web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
 # `tls-rustls-no-provider` keeps the rustls crypto provider choice in our
