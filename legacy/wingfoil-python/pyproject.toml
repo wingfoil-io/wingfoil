@@ -34,7 +34,7 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7", "pyzmq>=25"]
 [tool.maturin]
 # Keep `iceoryx2` opt-in for Python builds. Enabling it by default can
 # make wheels Linux/POSIX-only due to iceoryx2 dependencies.
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 python-source = "python"
 module-name = "wingfoil._wingfoil"
 include = ["Cargo.toml"]

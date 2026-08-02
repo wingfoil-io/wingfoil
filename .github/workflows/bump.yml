@@ -79,8 +79,12 @@ jobs:
       - name: Update latency_e2e importmap pin
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          INDEX_HTML="legacy/wingfoil/examples/latency_e2e/static/index.html"
-          sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" "$INDEX_HTML"
+          # Both trees carry a copy of the demo while legacy exists.
+          for INDEX_HTML in \
+            crates/wingfoil-next/examples/latency_e2e/static/index.html \
+            legacy/wingfoil/examples/latency_e2e/static/index.html; do
+            sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" "$INDEX_HTML"
+          done
 
       - name: Commit version bump
         run: |

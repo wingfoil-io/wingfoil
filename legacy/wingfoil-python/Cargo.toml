@@ -20,6 +20,15 @@ workspace = true
 
 [features]
 default = ["etcd"]
+# Turned on only by the maturin build (see pyproject.toml). It must NOT be on
+# by default: cargo unifies feature selections across a `--workspace` build, so
+# an unconditional `pyo3/extension-module` here switched it on for *every* pyo3
+# user in the graph — including `wingfoil-next-python`, whose test harnesses are
+# ordinary binaries and need libpython linked. That made
+# `cargo build --workspace --all-targets` fail to link, which is why the husky
+# hooks had to `--exclude wingfoil-python`. Off by default, the wheel still gets
+# it from pyproject.toml and the test binaries link normally.
+extension-module = ["pyo3/extension-module"]
 etcd = ["wingfoil/etcd"]
 iceoryx2 = ["wingfoil/iceoryx2"]
 aeron = ["wingfoil/aeron"]
@@ -38,7 +47,7 @@ log = {workspace = true}
 thiserror = {workspace = true}
 
 # local deps
-pyo3 = { version = "0.29", features = ["extension-module", "serde"] }
+pyo3 = { version = "0.29", features = ["serde"] }
 kdb-plus-fixed = { version = "0.5.0", features = ["ipc"] }
 futures = "0.3"
 serde = { workspace = true }
