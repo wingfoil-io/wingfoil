@@ -33,10 +33,10 @@ mod shared;
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::iceoryx2_sub;
 use wingfoil_next::latency::{LatencyReportOps, LatencyStreamOps, Traced};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 use shared::{Quote, QuoteLatency, SERVICE_NAME, quote_latency};
 

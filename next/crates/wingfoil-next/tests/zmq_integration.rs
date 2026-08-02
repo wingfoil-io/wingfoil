@@ -26,9 +26,9 @@
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 /// Spawn a publisher graph on its own thread: a `count()` published as UTF-8
 /// bytes every `period`, for `run_for`.

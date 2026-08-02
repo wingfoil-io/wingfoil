@@ -16,10 +16,10 @@ use std::time::Duration;
 
 use etcd_client::Client;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::etcd::EtcdConnection;
 use wingfoil_next::adapters::zmq::{EtcdRegistry, ZeroMqPub, zmq_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// Start an etcd container and return `(container_handle, connection)`. The
 /// container stops when the handle is dropped.

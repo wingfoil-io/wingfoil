@@ -65,7 +65,7 @@ use anyhow::{Context, Result};
 #[cfg(feature = "async")]
 use std::time::Duration;
 #[cfg(feature = "async")]
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 #[cfg(feature = "async")]
 use crate::async_source::{RunParams, produce_async};

@@ -5,7 +5,9 @@ Two groups:
 - Wiring / selector tests (no marker): run by default. Ports are created at
   graph `start()`, not at wiring, so every entry point wires without a service
   and the argument checks are reachable on their own.
-- ``@pytest.mark.requires_iceoryx2``: publish → subscribe round trips. These
+- ``@pytest.mark.requires_iceoryx2``: publish → subscribe round trips, plain
+  and traced (the ``stages`` latency path, which carries a stamp header on the
+  wire and hands back ``TracedBytes``). These
   need no external service either — iceoryx2's `"local"` variant communicates
   **in-process over the heap** — but they run a live clock and touch
   `/tmp/iceoryx2` for the service registry, so they are gated the same way the
@@ -82,6 +84,31 @@ def test_an_unknown_mode_raises():
     assert "expected 'spin', 'threaded' or 'signaled'" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("entry", ["sub", "pub"])
+@pytest.mark.parametrize(
+    "bad,reason",
+    [([], "stages list must not be empty"), (["a", "a"], "duplicate stage name")],
+)
+def test_an_unusable_stage_list_raises(entry, bad, reason):
+    """Empty or duplicate-carrying, by the same rule ``Latency(stages)`` applies."""
+    g = wf.Graph()
+    with pytest.raises(RuntimeError) as excinfo:
+        if entry == "sub":
+            wf.iceoryx2_sub(g, SERVICE, stages=bad)
+        else:
+            wf.iceoryx2_pub(g.constant(b"x"), SERVICE, stages=bad)
+    assert f"iceoryx2_{entry}: {reason}" in str(excinfo.value)
+
+
+def test_stages_wire_on_both_entry_points():
+    g = wf.Graph()
+    stages = ["send", "recv"]
+    assert isinstance(wf.iceoryx2_sub(g, f"{SERVICE}/wire", stages=stages), wf.Stream)
+    assert isinstance(
+        wf.iceoryx2_pub(g.constant(b"x"), f"{SERVICE}/wire", stages=stages), wf.Stream
+    )
+
+
 def test_a_zero_max_slice_len_raises():
     g = wf.Graph()
     with pytest.raises(RuntimeError) as excinfo:
@@ -141,3 +168,71 @@ def test_publishing_a_non_bytes_value_aborts_the_run():
     wf.iceoryx2_pub(g.constant(42.0), f"{SERVICE}/local/bad", variant="local")
     with pytest.raises(RuntimeError):
         g.run(realtime=True, duration_nanos=200 * MS_NANOS)
+
+
+# ---- The `stages` latency-tracing path ----
+
+STAGES = ["send", "recv"]
+
+
+@pytest.mark.requires_iceoryx2
+def test_a_traced_sample_round_trips_with_its_stamps():
+    """The stamp header rides the wire, so the hop is measurable end to end.
+
+    The publisher stamps `send` before the frame is packed; the subscriber
+    stamps `recv` on what it decoded, and the report measures the difference.
+    """
+    service = f"{SERVICE}/local/traced"
+    g = wf.Graph()
+
+    received = wf.stamp(
+        wf.iceoryx2_sub(g, service, variant="local", stages=STAGES), "recv"
+    )
+    accumulated = received.accumulate()
+    _sink, stats = wf.latency_report(received, STAGES, print_on_teardown=False)
+
+    outgoing = g.counter(period_nanos=20 * MS_NANOS).map(
+        lambda _: wf.TracedBytes(b"ping", wf.Latency(STAGES))
+    )
+    wf.iceoryx2_pub(wf.stamp(outgoing, "send"), service, variant="local", stages=STAGES)
+
+    g.run(realtime=True, duration_nanos=SECOND_NANOS)
+
+    messages = _flatten(accumulated)
+    assert messages, "no traced samples were received"
+    for message in messages:
+        assert message.payload == b"ping"
+        assert message.latency.stages == STAGES
+        assert message.latency["send"] > 0
+        assert message.latency["recv"] >= message.latency["send"]
+    assert stats["recv"]["count"] == len(messages)
+
+
+@pytest.mark.requires_iceoryx2
+def test_publishing_a_record_over_different_stages_aborts_the_run():
+    g = wf.Graph()
+    wf.iceoryx2_pub(
+        g.constant(wf.TracedBytes(b"x", wf.Latency(["send", "decode"]))),
+        f"{SERVICE}/local/traced-mismatch",
+        variant="local",
+        stages=STAGES,
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        g.run(realtime=True, duration_nanos=200 * MS_NANOS)
+    assert "the record carries" in str(excinfo.value)
+
+
+@pytest.mark.requires_iceoryx2
+def test_a_frame_too_short_for_its_header_aborts_the_run():
+    """An untraced publisher on a service a traced subscriber reads."""
+    service = f"{SERVICE}/local/traced-short"
+    g = wf.Graph()
+    wf.iceoryx2_sub(g, service, variant="local", stages=STAGES)
+    wf.iceoryx2_pub(
+        g.counter(period_nanos=20 * MS_NANOS).map(lambda _: b"tiny"),
+        service,
+        variant="local",
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        g.run(realtime=True, duration_nanos=SECOND_NANOS)
+    assert "too short for the 16-byte header" in str(excinfo.value)

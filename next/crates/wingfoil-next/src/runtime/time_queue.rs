@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
-use crate::types::NanoTime;
+use crate::runtime::time::NanoTime;
 
 /// An entry in a [`TimeQueue`], ordered by `(time, seq)` alone.
 ///
@@ -138,7 +138,7 @@ impl<T: PartialEq> TimeQueue<T> {
 mod tests {
 
     use super::TimeQueue;
-    use crate::time::NanoTime;
+    use crate::runtime::time::NanoTime;
 
     #[test]
     fn identical_pushes_are_deduplicated() {

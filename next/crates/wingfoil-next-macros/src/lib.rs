@@ -124,13 +124,15 @@
 //! fluent layer, feeding compiled islands through their inputs.
 
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Expr, Ident, ImplItem, ItemFn, ItemImpl, Pat, ReturnType, Stmt, Token, Type, parse_macro_input,
-    parse_quote,
+    Attribute, Expr, Ident, ImplItem, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Stmt, Token, Type,
+    Visibility, braced, parse_macro_input, parse_quote,
 };
 
 /// One node of the parsed DAG. There is **one emission mechanism**: every op
@@ -2518,10 +2520,10 @@ fn expand_compiled(def: &NitroDef) -> TokenStream2 {
         // locals are write-only — allowed, as in `nested`.
         #[allow(unused_mut, unused_variables, unused_assignments)]
         pub fn compiled(
-            run_mode: ::wingfoil_next::wingfoil::RunMode,
-            run_for: ::wingfoil_next::wingfoil::RunFor,
+            run_mode: ::wingfoil_next::RunMode,
+            run_for: ::wingfoil_next::RunFor,
         ) -> ::wingfoil_next::anyhow::Result<( #(#out_types,)* )> {
-            let mut __k = ::wingfoil_next::wingfoil::codegen::Kernel::new(run_mode, run_for);
+            let mut __k = ::wingfoil_next::Kernel::new(run_mode, run_for);
             #(#setup)*
             // Cleanup (stop/teardown) must run even when `start` or a cycle
             // aborts, so the run phase is an immediately-invoked closure whose
@@ -2657,7 +2659,7 @@ fn expand_nested(def: &NitroDef) -> TokenStream2 {
                 let #slot_ids = #in_names.__slot();
                 let #ix_ids = #in_names.handle().index();
             )*
-            let mut __q = ::wingfoil_next::wingfoil::TimeQueue::<usize>::new();
+            let mut __q = ::wingfoil_next::TimeQueue::<usize>::new();
             let mut __dirty = [false; #n];
             let mut __active: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
             let mut __passive: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
@@ -2807,4 +2809,198 @@ fn lifecycle_input(def: &NitroDef, node: &NodeDef) -> TokenStream2 {
         return quote! { &[ #(#pairs,)* ] };
     }
     quote! { ( #(#pairs,)* ) }
+}
+
+// ---------------------------------------------------------------------------
+// latency_stages! — the shared latency-record generator
+// ---------------------------------------------------------------------------
+//
+// Moved here from `wingfoil-derive` so that the shared latency data layer
+// (`runtime::latency`) has no dependency on the legacy tree. The classic
+// `wingfoil` crate re-exports this macro, so `wingfoil::latency_stages!` is
+// unchanged for classic callers.
+
+struct LatencyStagesInput {
+    visibility: Visibility,
+    name: Ident,
+    stages: Vec<Ident>,
+    type_name_override: Option<LitStr>,
+}
+
+impl Parse for LatencyStagesInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(Attribute::parse_outer)?;
+        let mut type_name_override: Option<LitStr> = None;
+        for attr in &attrs {
+            if attr.path().is_ident("type_name") {
+                if type_name_override.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "duplicate #[type_name(...)] attribute",
+                    ));
+                }
+                let lit: LitStr = attr.parse_args().map_err(|_| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "expected #[type_name(\"...\")] with a single string literal",
+                    )
+                })?;
+                type_name_override = Some(lit);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "unrecognized attribute on latency_stages!; only #[type_name(\"...\")] is supported",
+                ));
+            }
+        }
+
+        let visibility: Visibility = input.parse()?;
+        let name: Ident = input.parse()?;
+        let content;
+        braced!(content in input);
+        let list = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+        let stages: Vec<Ident> = list.into_iter().collect();
+        if stages.is_empty() {
+            return Err(syn::Error::new(
+                name.span(),
+                "latency_stages! requires at least one stage",
+            ));
+        }
+        Ok(LatencyStagesInput {
+            visibility,
+            name,
+            stages,
+            type_name_override,
+        })
+    }
+}
+
+/// Convert `PascalCase` to `snake_case`. Used to derive the per-struct stage module name.
+fn pascal_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Declare a fixed-size, named-field latency record suitable for embedding in
+/// a `#[repr(C)]` payload. Each field is a `u64` nanosecond timestamp.
+///
+/// The macro generates:
+/// - A `#[repr(C)]` struct with one `pub <field>: u64` per stage.
+/// - An `impl wingfoil::Latency` for the struct (gives slice access by index).
+/// - A nested module with one zero-sized marker per stage, each implementing
+///   `wingfoil::Stage<Self>` with the stage's compile-time index. Use those
+///   markers as the type parameter to `.stamp::<S>()`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use wingfoil::*;
+///
+/// latency_stages! {
+///     pub TradeLatency {
+///         ingest,
+///         decode,
+///         strategy,
+///         publish,
+///     }
+/// }
+///
+/// // Markers live in a snake_case sub-module named after the struct:
+/// use trade_latency::strategy;
+/// let stamped = upstream.stamp::<strategy>();
+/// ```
+#[proc_macro]
+pub fn latency_stages(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as LatencyStagesInput);
+    let LatencyStagesInput {
+        visibility,
+        name,
+        stages,
+        type_name_override,
+    } = input;
+
+    let n = stages.len();
+    let module_name = Ident::new(&pascal_to_snake(&name.to_string()), Span::call_site());
+    let stage_strs: Vec<String> = stages.iter().map(|i| i.to_string()).collect();
+    let stage_indices: Vec<usize> = (0..n).collect();
+    let field_names = &stages;
+    let marker_names = &stages;
+    let zero_copy_send_body = match type_name_override {
+        Some(lit) => quote! {
+            unsafe fn type_name() -> &'static str { #lit }
+        },
+        None => quote! {},
+    };
+
+    let expanded = quote! {
+        #[repr(C)]
+        #[derive(
+            ::std::clone::Clone, ::std::marker::Copy,
+            ::std::fmt::Debug, ::std::default::Default,
+            ::std::cmp::PartialEq, ::std::cmp::Eq,
+            ::std::hash::Hash,
+            ::serde::Serialize, ::serde::Deserialize,
+        )]
+        #visibility struct #name {
+            #( pub #field_names: u64, )*
+        }
+
+        impl Latency for #name {
+            const N: usize = #n;
+            fn stage_names() -> &'static [&'static str] {
+                &[ #( #stage_strs ),* ]
+            }
+            #[inline]
+            fn stamps(&self) -> &[u64] {
+                // SAFETY: `#[repr(C)]` struct of N consecutive u64 fields has
+                // the same memory layout as `[u64; N]`.
+                unsafe {
+                    ::std::slice::from_raw_parts(
+                        self as *const Self as *const u64,
+                        <Self as Latency>::N,
+                    )
+                }
+            }
+            #[inline]
+            fn stamp_mut(&mut self, idx: usize) -> &mut u64 {
+                assert!(idx < <Self as Latency>::N, "stage index out of bounds");
+                // SAFETY: see `stamps`; idx is bounds-checked above.
+                unsafe { &mut *((self as *mut Self as *mut u64).add(idx)) }
+            }
+        }
+
+        // SAFETY: `#[repr(C)]` packed `u64` fields are self-contained and
+        // have a uniform memory representation, satisfying `ZeroCopySend`'s
+        // invariants. Only emitted when the `iceoryx2` feature is on
+        // in the consuming crate.
+        #[cfg(feature = "iceoryx2")]
+        unsafe impl ::iceoryx2::prelude::ZeroCopySend for #name {
+            #zero_copy_send_body
+        }
+
+        #[allow(non_snake_case, non_camel_case_types)]
+        #visibility mod #module_name {
+            use super::*;
+            #(
+                /// Compile-time marker for a single latency stage.
+                pub struct #marker_names;
+                impl Stage<super::#name> for #marker_names {
+                    const NAME: &'static str = #stage_strs;
+                    const INDEX: usize = #stage_indices;
+                }
+            )*
+        }
+    };
+
+    expanded.into()
 }

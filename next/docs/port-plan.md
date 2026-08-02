@@ -64,7 +64,7 @@ today's interpreted engine.
 | Historical replay | ✅ | ✅ | ✅³ | ✅ |
 | Realtime | ✅ | ✅ | 🟡³ | ✅ |
 | Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
-| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | ✅⁴ | ✅⁴ |
 | Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
 | Engine span instrumentation (`instrument-*`) | ✅ | ✅ | ❌¹⁶ | ❌¹⁶ |
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
@@ -80,9 +80,22 @@ today's interpreted engine.
   busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
-⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
-  needs them (none do yet). Classic runs the full setup/start/stop/teardown
-  lifecycle.
+⁴ **Full lifecycle, all three engines** (this footnote previously read
+  "`start` emitted; `stop`/`teardown` emitted once a macro-expressible op needs
+  them (none do yet)" — that is stale). `#[op]` emits `_stop`/`_teardown`
+  forwarders for *every* op, always real (they call `<X as Op>::stop`/
+  `teardown`, whose trait default is a no-op that constant-folds away), so the
+  `nitro!` tail calls them for every node unconditionally without the macro
+  knowing which ops override a hook. Both `Target::Compiled` and
+  `Target::Nested` emit `starts`/`stops`/`teardowns`; cleanup is error-safe —
+  the run phase is an IIFE whose `?` is captured into `__first_err` so every
+  node's `stop` then `teardown` still runs after an abort, first error wins,
+  mirroring the interpreted `Runner`. The `_owned` forwarder variant threads a
+  literal-closure config through by value so a `finally` closure reaches its
+  own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs::
+  finally_teardown_fires_once_on_all_three_engines`. The one *structural*
+  difference from classic remains: no separate `setup` phase, because next's
+  ops are constructed at wiring time (register **D14**).
 ⁵ Only the declared output tuple is returned — no runner, no peeking
   intermediate nodes; an island exposes only its single output.
 ⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
@@ -995,8 +1008,9 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    backends are public test support (next's tests live outside the lib). The
    classic Criterion benches (`aeron_publication_latency`,
    `aeron_subscription_throughput`, `aeron_transceiver`,
-   `aeron_allocation_tracking`) are **not** ported — next's bench suite is a
-   separate work item, as for every adapter so far. The canonical deviation list
+   `aeron_allocation_tracking`) are ✅ **ported** with the Phase-6 bench suite
+   (see the Benchmarks bullet): they drive the backends directly, so only the
+   import path changed. The canonical deviation list
    is the adapter's `# Deviations from classic` module-doc block plus
    [`deviation-register.md`](./deviation-register.md).
    ✅ **iceoryx2** *(done)*: zero-copy inter-process (and intra-process)
@@ -1032,8 +1046,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    (which errors) and the telemetry exporters (which no-op). Ports are created at
    graph `start()` as in classic, so wiring is pure and a bad service name or
    contract mismatch aborts the run with node context (register A1/A4). The
-   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are **not** ported —
-   next's bench suite is a separate work item, as for every adapter so far. The
+   classic Criterion benches (`iceoryx2`, `iceoryx2_modes`) are ✅ **ported**
+   with the Phase-6 bench suite (see the Benchmarks bullet); `iceoryx2_modes` is
+   rewired onto the next builder node-for-node, `iceoryx2` measures the shared
+   `Burst<T>` and is verbatim. The
    canonical deviation list is the adapter's `# Deviations from classic`
    module-doc block plus [`deviation-register.md`](./deviation-register.md).
 
@@ -1683,15 +1699,22 @@ tests covered — not "legacy pytest passes unchanged."
   which is what legacy did too. Unlike aeron it is pure Rust, so it *is* in
   `all-adapters` and its tests run in the normal job; it stays out of the
   **wheel** for a different reason — Linux/POSIX-only. `variant` and `mode`
-  become strings (legacy had two `#[pyclass]` enums). One legacy capability is
-  still **not** ported: the `stages` latency-tracing path, which split a
-  `[u64; N]` header off each sample into `TracedBytes` / `Latency` pyclasses.
-  It is **no longer blocked**: the next-python latency surface (the bullet
-  below) landed, and its `PyLatency::create_from_bytes` is exactly the header
-  split that path needs. What remains is wiring it into the two iceoryx2 entry
-  points and testing the round trip — scoped as its own follow-up. That
-  round-trip tier needs no service at all — the `"local"` variant talks
-  in-process over the heap, and `"ipc"` is daemonless.
+  become strings (legacy had two `#[pyclass]` enums). The `stages`
+  latency-tracing path — the last unported legacy Python capability — **landed**
+  once the next-python latency surface (the bullet below) did: both entry points
+  take an optional `stages` list, splitting a `[u64; N]` little-endian stamp
+  header off each sample into a `TracedBytes` / `Latency` pair on the way in and
+  packing it back on the way out, through that module's
+  `PyLatency::create_from_bytes` / `header_bytes` / `check_stages` rather than a
+  parallel copy (they are `pub` for exactly that reuse). Three deviations, all
+  fail-loudly: a frame too short for its header, a record whose stage list
+  differs from the wired one, and a non-`TracedBytes` value each abort the run
+  naming what they got — legacy warned and handed back a corrupt payload for the
+  first and packed whatever it was given for the rest; the traced path also
+  publishes bursts, which legacy's did not. The round-trip tier needs no service
+  at all — the `"local"` variant talks in-process over the heap, and `"ipc"` is
+  daemonless — so a stamped publish → subscribe → `latency_report` loop runs in
+  `iceoryx2-next-integration.yml` beside the untraced ones.
 
   **Remaining: 0 — the per-adapter binding surface is complete.** Legacy
   `wingfoil-python` binds 15 adapters, in four tiers, all now done:
@@ -1749,7 +1772,76 @@ tests covered — not "legacy pytest passes unchanged."
   runtime value and there is no `Op` impl to hang the hook on — had no way to
   print a teardown summary.
 
-  Unblocks the iceoryx2 `stages` argument (see the iceoryx2 note above).
+  It also carries the **transport seam** the iceoryx2 `stages` argument runs
+  through (see the iceoryx2 note above): `STAMP_BYTES`,
+  `PyLatency::create_from_bytes` / `header_bytes` / `stages_ref` and
+  `check_stages` are `pub`, so an adapter binding — in this crate or a
+  third-party one — splits and packs the wire header without a parallel copy of
+  the record.
+- **Pytest parity audit** 🟡 *audited 2026-08; two surface gaps remain* — the
+  gate stated at the top of this phase ("next-python's own pytest suite reaching
+  parity with the surface the legacy tests covered") had never been checked, only
+  assumed. Every test function in `wingfoil-python/tests/` (268, in 21 files) was
+  mapped case by case onto its next counterpart (`wingfoil-next-python/tests/`,
+  325 in 20 files). Name-matching is useless here — next's suite was written
+  fresh, and exactly **6** of the 268 legacy names appear on the next side (all
+  in postgres); the mapping is by *surface covered*, not by name.
+
+  **Seventeen of the 21 legacy files have a same-named twin**, and every one is
+  a superset once the gaps below are closed (aeron, augurs, csv, custom_stream,
+  etcd, fix, fluvio, iceoryx2, kafka, kdb, latency, otlp, postgres, prometheus,
+  redis, web, zmq).
+  Every adapter twin adds a `test_module_exposes_the_*` surface check, wiring-time
+  argument rejections legacy never asserted, and — where legacy had one — a
+  round trip; several bind entry points legacy never had at all (`kdb_sub`,
+  `fix_send`/`fix_sub`, the aeron `_with_status` twins, `web` `pub_bursts`/TLS/
+  `stop`, `postgres_source`).
+
+  **The four twin-less legacy files** resolve as:
+  - `test_streams.py` (45) → `test_interop.py`. The combinator surface is
+    covered one for one. The `Graph([node, …])` constructor and `PyNode`-vs-
+    `PyStream` distinctions are obsolete by design (next has one `Stream` type
+    and a `Graph` builder), as are the `run()` argument-validation tests whose
+    legacy failure modes are type errors in next's typed signature.
+  - `test_web_bindings.py` (21) → `test_web.py` plus the marshaling unit tests
+    inside `adapters/web.rs` (`bytes_marshal_as_an_array_of_ints`, the i64/u64/
+    beyond-u64 ladder). Legacy's "silently becomes null" cases invert: next
+    fails loudly, and `test_web.py` asserts the errors.
+  - `test_pandas.py` (12) → partially. `stream.dataframe()` builds the frame in
+    Rust (`test_interop.py::test_dataframe_from_stream`, `examples/dataframe.py`)
+    where legacy returned `(time, value)` tuples for a Python helper to assemble.
+    The **multi-stream** half — `pandas_helpers.build_dataframe`, which
+    outer-joins several streams on time (`test_dict_of_streams`,
+    `test_async_frequencies`, `test_massive_fan_out`) — has no next equivalent.
+  - `test_statistics.py` (37) → **not ported**. Legacy `py_statistics.rs` binds
+    the whole statistics adapter (`Window` / `Weighting` / `EwmaSpan` and their
+    int/str/float shorthands over `mean`/`std`/`var`/`sum`/`min`/`max`/`median`/
+    `ewma`); next-python binds only the cumulative `sum`/`mean`/`average` bridge
+    named in the "Surface build-out" bullet above. The engine has the full
+    surface (`stats.rs`, ported in Phase 2) — it is the *binding* that stops
+    short. Legacy grew this binding after that bullet was written, so the parity
+    target moved.
+
+  **Gaps found and closed in the audit's own PR** (next had the capability, and
+  nothing exercised it): `delay` and 2-ary `merge`; `run(duration_nanos=…)`,
+  `run(start_nanos=…)` and the cycles-wins-over-duration precedence;
+  `Stream.value()` returning `None` before a tick; `filter_value`'s raised
+  exception and its truthiness edge, and `filter`'s strict bool condition; the
+  zmq `pub`→`sub` round trip and its status stream, plus the `zmq_sub_etcd` /
+  `zmq_pub_etcd` discovery pair (bound but wholly untested — the Python leg
+  added to `zmq-next-integration.yml`); prometheus's name-ordered render;
+  augurs' `min_points` gate and its out-of-range sensitivity.
+
+  Writing the `Stream.value()` test found a **defect** the audit also fixes:
+  reading a stream before the graph had run at all still panicked
+  (`expect("invariant: PyGraph::run must be called before PyStream::value")`),
+  escaping to Python as a `PanicException`. The earlier web-binding fix covered
+  only the *ran but never ticked* case. Classic `peek_value` answers `None`
+  there, so `value()` now returns the empty element in both.
+
+  **Remaining** — both are missing *binding surface*, not missing tests, so they
+  belong to "Surface build-out" rather than here: the statistics adapter
+  binding, and a multi-stream `build_dataframe` equivalent.
 - **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* classic-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   compat.rs`) — it is **not** the Python-binding path (that is the object-form
@@ -1763,7 +1855,17 @@ tests covered — not "legacy pytest passes unchanged."
   `latency` (`examples/latency/{pub,sub}.rs` — the cross-process
   `latency_stages!` + `Traced` + `.stamp::<Stage>()` + `latency_report` loop
   over an iceoryx2 hop, closing the Phase-5 infrastructure end to end; it fixes
-  two defects in the classic pair, see that example's README), and `telemetry`.
+  two defects in the classic pair, see that example's README), `latency_e2e`
+  (`examples/latency_e2e/{ws_server,fix_gw}.rs` plus the whole engine-agnostic
+  deployment kit — the nine-stage
+  `browser --WS--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX` round trip;
+  the single largest consumer of the adapter surface, exercising `web`(+TLS),
+  `iceoryx2`, `fix`, `prometheus` and `otlp` in one graph. Wire types, stamp
+  stages, metric names and CLI/env surface are byte-parity with classic, so the
+  classic browser client and Grafana dashboard work unchanged; deviations are
+  wiring-idiom only — see that example's README. The three
+  `*-latency-e2e-*.yml` workflows still target the classic copy by path;
+  repointing them is cutover-time work), and `telemetry`.
 
   **`telemetry`** was already ported as graph code — `prometheus_adapter.rs`
   and `otlp_adapter.rs`. What landed now is the rest of the classic example:
@@ -1813,6 +1915,21 @@ tests covered — not "legacy pytest passes unchanged."
   differential suite), no regression on the other workloads. Wiring the bench as
   an automated CI gate is deferred — criterion wall-clock thresholds are too
   noisy for the shared CI runners; it stays a run-on-demand scaffold.
+
+  **The classic bench suite is now ported too** 🟢 *landed* — all eight classic
+  targets have next twins declared under the same names with the same
+  `required-features` gating (`graph`, `nanotime`, `bfs_vs_dfs_wingfoil` /
+  `_reactive` / `_async_streams`, `iceoryx2`, `iceoryx2_modes`, and the four
+  `aeron_*`), alongside classic's `bench` and `dhat-heap` features and its
+  `bencher` (`add_bench`) harness. Workloads are kept identical so a next
+  reading sits beside the classic one — the point of the ports, and something
+  that disappears at cutover when the classic bar goes away. Only three targets
+  genuinely move onto the next engine (`graph`, `bfs_vs_dfs_wingfoil`,
+  `iceoryx2_modes`), and their rewiring is node-count-preserving; the rest
+  measure other libraries or ported backend/value types and are verbatim. Per-
+  target deviations are recorded in each bench's own module doc, and the suite
+  is catalogued in `crates/wingfoil-next/benches/README.md`. Still **not** a CI
+  gate, for the reason above.
 
 ## Phase 7 — cutover
 

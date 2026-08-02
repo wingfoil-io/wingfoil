@@ -14,13 +14,27 @@ must produce identical values and tick times, or document precisely why it
 deviates (capability matrix in `docs/port-plan.md`). Never silently drop a
 legacy capability, example, or test case.
 
+## Never depend on the `wingfoil` crate from `next/`
+
+The dependency runs **legacy → next**: `wingfoil` depends on `wingfoil-next`
+and re-exports the shared runtime core from it. Never add `wingfoil` as a
+(non-dev) dependency of anything under `next/`, and never reach for
+`wingfoil::` in `next/` source — the cutover *deletes* the legacy crates, so
+any such edge would have to be unpicked first.
+
+Shared machinery goes in `crates/wingfoil-next/src/runtime/` (engine time, run
+bounds, the time queue, `Burst`, the `Kernel`, the latency data layer), and
+`wingfoil` re-exports it at its historical path. The only permitted edge back
+is a **dev**-dependency, for parity tests and comparison benches against the
+classic engine. See `docs/cutover-plan.md`.
+
 ## Layout
 
 - `crates/wingfoil-next` — the engine (`op.rs`, `interp.rs`), the fluent
   layer (`fluent.rs`), the op catalog (`ops.rs`, `stats.rs`), adapters
   (`src/adapters/`), channel/async sources (`channel.rs`, `async_source.rs`),
-  the classic-style facade (`compat.rs`), plus `examples/`, `tests/`,
-  `benches/`.
+  the classic-style facade (`compat.rs`), the shared runtime core
+  (`runtime/`), plus `examples/`, `tests/`, `benches/`.
 - `crates/wingfoil-next-macros` — `nitro!` (one wiring fn → `interpreted()` /
   `compiled()` / `nested()`) and `#[op]` (generates the interpreted
   `Builder` method and the forwarders `nitro!` dispatches through).

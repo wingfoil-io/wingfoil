@@ -10,7 +10,7 @@ recombines them. Depth-first frameworks visit every path through the graph —
 per tick, regardless of how many upstream paths lead to it.
 
 ```rust
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::*;
 
 let g = GraphBuilder::new();

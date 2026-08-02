@@ -69,7 +69,7 @@
 //! `LISTEN`/`NOTIFY` re-query, the tickerplant pushes the rows themselves). It is
 //! a live, unbounded, wall-clock-stamped stream with no historical timeline to
 //! replay, so it **rejects `RunMode::HistoricalFrom` at wiring time** (use
-//! [`kdb_read`] for historical replay) and runs under [`RunMode::RealTime`](wingfoil::RunMode) only.
+//! [`kdb_read`] for historical replay) and runs under [`RunMode::RealTime`](wingfoil_next::RunMode) only.
 //! It tails from the moment of subscription — it does **not** replay the
 //! tickerplant log / RDB buffer. Non-`upd` control messages (heartbeats, the
 //! end-of-day `.u.end`) are ignored.
@@ -103,7 +103,7 @@
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    [`kdb_read`] / [`kdb_read_cached`] take a [`RunParams`](crate::async_source::RunParams) (they need the run's
 //!    `[start, end)` window to slice queries at wiring — a pure check); the live
-//!    [`kdb_sub`] takes only a [`RunMode`](wingfoil::RunMode) (to reject a historical run at wiring).
+//!    [`kdb_sub`] takes only a [`RunMode`](wingfoil_next::RunMode) (to reject a historical run at wiring).
 //!    The **sink** drives its client with `block_on` at teardown, so the graph
 //!    must be built, run, and dropped from a **non-async thread** (`main`, a
 //!    `#[test]` fn).

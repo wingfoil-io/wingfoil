@@ -6,9 +6,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::channel::Message;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A producer thread sends values through the channel; the graph receives
 /// them as bursts, losslessly and in order — nothing coalesced.

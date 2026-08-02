@@ -21,13 +21,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::aeron::{
     AeronHandle, AeronSinkOps, AeronStatus, AeronSubOptions, FragmentBuffer, TransportError,
     aeron_sub_fragment_with_status,
 };
 use wingfoil_next::op::{Activation, Tick};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();

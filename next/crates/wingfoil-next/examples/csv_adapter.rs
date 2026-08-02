@@ -8,9 +8,9 @@
 
 use std::io::Write;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::csv::{CsvSinkOps, csv_read};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 /// A named-field record — serde field names become the CSV header columns.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

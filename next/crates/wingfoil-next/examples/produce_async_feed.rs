@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::async_source::produce_async;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 fn main() {
     // The graph owns the tokio runtime (created lazily); no `&Handle` to pass.

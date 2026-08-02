@@ -23,9 +23,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::fix::{FixPollMode, FixSessionStatus, fix_accept, fix_connect};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 /// Allocate an ephemeral port by binding to :0 and immediately dropping the listener.
 fn free_port() -> u16 {

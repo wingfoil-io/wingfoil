@@ -43,7 +43,7 @@
 //! two because the channel layer groups same-instant values.
 //!
 //! All three are **live, realtime-only** sources: a
-//! [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom) run is
+//! [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom) run is
 //! rejected at wiring (see the deviations below).
 //!
 //! # Sink
@@ -81,7 +81,7 @@
 //! [`Iceoryx2Error`]) is preserved. The surface differs in these deliberate ways:
 //!
 //! 1. **The sources take a [`GraphBuilder`](crate::fluent::GraphBuilder) and a
-//!    [`RunMode`](wingfoil::RunMode), and return
+//!    [`RunMode`](wingfoil_next::RunMode), and return
 //!    [`Result`](anyhow::Result).** Every next source wires on the builder, and
 //!    the run mode is needed to **reject `RunMode::HistoricalFrom` at wiring**: a
 //!    live shared-memory subscription has no historical timeline to replay, and

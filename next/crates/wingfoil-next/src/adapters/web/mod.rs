@@ -45,7 +45,7 @@
 //!
 //! ```ignore
 //! use std::time::Duration;
-//! use wingfoil::{RunFor, RunMode};
+//! use wingfoil_next::{RunFor, RunMode};
 //! use wingfoil_next::adapters::web::{WebServer, WebSinkOps};
 //! use wingfoil_next::prelude::*;
 //!
@@ -89,7 +89,7 @@
 //! # Historical mode
 //!
 //! There are two ways to run a graph under
-//! [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom):
+//! [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom):
 //!
 //! - **Stream the replay to browsers** — use the normal
 //!   [`WebServerBuilder::start`]. `web_pub` streams a historical replay's values

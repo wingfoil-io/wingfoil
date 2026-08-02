@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use kdb_plus_fixed::ipc::{ConnectionMethod, QStream};
 use kdb_plus_fixed::qtype;
 use log::info;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 /// Live-subscribe to a KDB+ tickerplant and stream published rows in real time.
 ///
