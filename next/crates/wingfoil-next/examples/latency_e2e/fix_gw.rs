@@ -45,11 +45,11 @@ mod shared;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use wingfoil_next::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::fix::{FixMessage, FixSender, FixSessionStatus, fix_connect_tls};
 use wingfoil_next::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
 use wingfoil_next::latency::{LatencyStreamOps, Traced};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use shared::{
     RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env,

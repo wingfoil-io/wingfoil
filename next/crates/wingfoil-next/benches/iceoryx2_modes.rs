@@ -28,11 +28,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use iceoryx2::prelude::ZeroCopySend;
-use wingfoil_next::{RunFor, RunMode};
 use wingfoil_next::adapters::iceoryx2::{
     Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SinkOps, Iceoryx2SubOpts, iceoryx2_sub_opts,
 };
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend)]
