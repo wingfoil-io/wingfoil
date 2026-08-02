@@ -64,7 +64,7 @@ today's interpreted engine.
 | Historical replay | ✅ | ✅ | ✅³ | ✅ |
 | Realtime | ✅ | ✅ | 🟡³ | ✅ |
 | Fallible ops / error propagation | ✅ | ✅ | ✅ | ✅ |
-| Lifecycle start/stop/teardown | ✅ | ✅ | 🟡⁴ | 🟡⁴ |
+| Lifecycle start/stop/teardown | ✅ | ✅ | ✅⁴ | ✅⁴ |
 | Observe arbitrary intermediate streams | ✅ | ✅ | ❌⁵ | ❌⁵ |
 | Engine span instrumentation (`instrument-*`) | ✅ | ✅ | ❌¹⁶ | ❌¹⁶ |
 | Runtime-valued config (params/captures from caller) | ✅ | ✅ | ❌⁶ | ❌⁶ |
@@ -80,9 +80,22 @@ today's interpreted engine.
   busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
 ³ Compiled runs its own loop with no external wake, so realtime is
   timer-driven only; historical/timer + data-via-consts is full.
-⁴ `start` emitted; `stop`/`teardown` emitted once a macro-expressible op
-  needs them (none do yet). Classic runs the full setup/start/stop/teardown
-  lifecycle.
+⁴ **Full lifecycle, all three engines** (this footnote previously read
+  "`start` emitted; `stop`/`teardown` emitted once a macro-expressible op needs
+  them (none do yet)" — that is stale). `#[op]` emits `_stop`/`_teardown`
+  forwarders for *every* op, always real (they call `<X as Op>::stop`/
+  `teardown`, whose trait default is a no-op that constant-folds away), so the
+  `nitro!` tail calls them for every node unconditionally without the macro
+  knowing which ops override a hook. Both `Target::Compiled` and
+  `Target::Nested` emit `starts`/`stops`/`teardowns`; cleanup is error-safe —
+  the run phase is an IIFE whose `?` is captured into `__first_err` so every
+  node's `stop` then `teardown` still runs after an abort, first error wins,
+  mirroring the interpreted `Runner`. The `_owned` forwarder variant threads a
+  literal-closure config through by value so a `finally` closure reaches its
+  own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs::
+  finally_teardown_fires_once_on_all_three_engines`. The one *structural*
+  difference from classic remains: no separate `setup` phase, because next's
+  ops are constructed at wiring time (register **D14**).
 ⁵ Only the declared output tuple is returned — no runner, no peeking
   intermediate nodes; an island exposes only its single output.
 ⁶ Compiled takes only `(run_mode, run_for)`; closures see consts + passthrough
