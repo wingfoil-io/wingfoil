@@ -99,3 +99,22 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate
+          # GHSA-6w46-j5rx-g56g (pytest, vulnerable tmpdir handling) does not
+          # reach anyone through the published package. pytest is a `dev` extra,
+          # so `pip install wingfoil` never pulls it — the wheel's only runtime
+          # dependency is pandas — and `uv.lock`, where the advisory is found, is
+          # a local dev-environment lockfile that neither pip nor CI reads.
+          #
+          # It cannot be resolved by upgrading either: the advisory covers every
+          # pytest below 9.0, and pytest 9 requires Python >= 3.10, so clearing it
+          # honestly would mean dropping 3.8 *and* 3.9 support from the library to
+          # patch a tool that is not shipped.
+          #
+          # `fail-on-scopes` is not the lever it looks like — it already defaults
+          # to `runtime`, and GitHub's dependency graph scopes this entry as
+          # runtime anyway, because it parses `uv.lock` as one flat resolution and
+          # cannot see the `dev` group in pyproject.toml.
+          #
+          # Remove this once the floor reaches 3.10 and the lock resolves pytest 9
+          # everywhere on its own.
+          allow-ghsas: GHSA-6w46-j5rx-g56g
