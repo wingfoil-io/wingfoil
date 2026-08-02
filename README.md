@@ -1,3 +1,6 @@
+[![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust-test.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
+[![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
+
 # Wingfoil Next
 
 Wingfoil Next is a blazingly fast, highly scalable stream processing engine
@@ -32,8 +35,21 @@ streaming data across your entire stack.
   abort the run with context and cleanup still runs.
 - **Simple to use**: define your graph of calculations; Wingfoil manages its
   execution.
-- **Adapters**: integrations for CSV, etcd, the augurs time-series toolkit,
-  and line-oriented files, with async/Tokio at your graph edges.
+- **Adapters**: sixteen production-ready integrations — PostgreSQL, KDB+,
+  Kafka, Redis, etcd, Fluvio, ZeroMQ, FIX 4.4, iceoryx2, Aeron, WebSocket,
+  Prometheus, OpenTelemetry, CSV, augurs and line-oriented files — with
+  async/Tokio at your graph edges, plus an LRU file cache for time-sliced
+  readers. One runnable example each,
+  [indexed here](crates/wingfoil-next/examples/adapters/).
+- **Multi-language**: a Rust crate, a [Python
+  package](crates/wingfoil-next-python/) exposing the same graph model,
+  adapters and latency surface, and a [TypeScript/JavaScript client](js/) for
+  the web adapter.
+- **Latency tracing**: per-hop wall-clock stamps that survive a process hop and
+  aggregate into one report — see
+  [`showcase/`](crates/wingfoil-next/examples/showcase/).
+- **Graph dynamism**: add and remove nodes on a
+  [running graph](crates/wingfoil-next/examples/core/dynamic/), between cycles.
 - **Multi-threading**: distribute graph execution across threads through the
   channel layer.
 - **Extensible**: add sources, combinators, statistics and adapters as
@@ -198,6 +214,8 @@ to backtest.
 - Explore the [examples](crates/wingfoil-next/examples/)
 - Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil-next/benches/)
+- Use it from Python: [`wingfoil-next-python`](crates/wingfoil-next-python/)
+- Use it from the browser: [`@wingfoil/client`](js/)
 - See [CONTRIBUTING](CONTRIBUTING.md) to build, test and contribute
 
 

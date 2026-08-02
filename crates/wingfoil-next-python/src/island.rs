@@ -29,7 +29,12 @@ wingfoil_next::nitro! {
     }
 }
 
-/// The island as a Python callable: `compiled_island(graph, stream)`.
+/// A compiled sub-graph as one Python call: `compiled_island(graph, stream)`.
+///
+/// The interior (`x * 2`, `+ 1`, squared) is monomorphized straight-line code
+/// mounted as a single node of the caller's interpreted graph — "compiled
+/// interiors, dynamic wiring". `interpreted_twin` is the same wiring through
+/// the ordinary fluent layer, for comparison.
 #[pygraph(name = compiled_island)]
 fn build_compiled_island(g: &GraphBuilder, input: &Stream<f64>) -> Stream<f64> {
     hot_interior::nested(g, input)

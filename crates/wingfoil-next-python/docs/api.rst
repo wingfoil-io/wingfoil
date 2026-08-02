@@ -39,8 +39,10 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 ``difference``, ``not`` (a Python keyword — reach it with
 ``getattr(stream, "not")()``), ``split``.
 
-*Gate* — ``filter``, ``filter_value``, ``filter_none``, ``distinct``,
-``drop_small_change``, ``limit``, ``throttle``, ``sample``, ``delay``.
+*Gate* — ``filter`` (gates on another *stream*'s current value), ``filter_value``
+(gates on a *predicate* — this is legacy's ``filter``), ``filter_none``,
+``distinct``, ``drop_small_change``, ``limit``, ``throttle``, ``sample``,
+``delay``.
 
 *Combine* — ``merge``, ``merge_all``.
 

@@ -85,9 +85,23 @@ Combinators
 -----------
 
 The combinator surface is a superset of legacy's. Names that carry over
-unchanged: ``map``, ``filter``, ``distinct``, ``difference``, ``delay``,
-``limit``, ``sample``, ``count``, ``buffer``, ``collect``, ``with_time``,
-``dataframe``, ``inspect``, ``fold``.
+unchanged: ``map``, ``distinct``, ``difference``, ``delay``, ``limit``,
+``sample``, ``count``, ``buffer``, ``collect``, ``with_time``, ``dataframe``,
+``inspect``, ``fold``.
+
+.. warning::
+
+   ``filter`` is the one name that carries over with a **different meaning**,
+   and it fails loudly rather than silently: next's
+   :meth:`~wingfoil_next.Stream.filter` gates on another *stream*'s current
+   value (matching the Rust engine), so passing legacy's predicate raises
+   ``TypeError: 'function' object is not an instance of 'Stream'``. The
+   predicate form is :meth:`~wingfoil_next.Stream.filter_value`.
+
+   .. code-block:: diff
+
+      - odds = counter.filter(lambda n: n % 2 == 1)
+      + odds = counter.filter_value(lambda n: n % 2 == 1)
 
 Changed or added:
 
@@ -99,6 +113,9 @@ Changed or added:
      - ``wingfoil_next``
    * - ``stream.peek_value()``
      - ``stream.value()``
+   * - ``stream.filter(predicate)``
+     - ``stream.filter_value(predicate)`` — ``filter`` now gates on another
+       stream's value (see the warning above)
    * - ``bimap(a, b, f)`` (free function)
      - ``a.bimap(b, f)`` (method)
    * - ``stream.average()``

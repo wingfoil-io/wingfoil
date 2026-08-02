@@ -301,8 +301,11 @@ fn check_stages_py(stages: &[String]) -> PyResult<()> {
 /// follows legacy, whose only carrier was a `bytes` frame).
 #[pyclass(name = "TracedBytes")]
 pub struct PyTracedBytes {
+    /// The carried value — any Python object, not just `bytes`.
     #[pyo3(get)]
     pub payload: Py<PyAny>,
+    /// The `Latency` record travelling with the payload. Shared, so a stamp
+    /// anywhere downstream mutates this same record.
     #[pyo3(get)]
     pub latency: Py<PyLatency>,
 }

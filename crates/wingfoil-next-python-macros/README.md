@@ -69,7 +69,23 @@ All inputs are **active** — any one ticking runs the op. A passive edge needs 
 hand-written method, exactly as on the Rust side. Stream parameters are named, so
 they can be passed by keyword.
 
-`Cfg` may be `()` (no config parameter) or a single `FromPyObject` type.
+`Cfg` may be `()` (no config parameter), a single `FromPyObject` type
+(`arg = <name>`, defaulting to `cfg`), or a **tuple** destructured into one named
+parameter per element with `arg = (<p1>, <p2>, …)` — so an op with
+`Cfg = (usize, f64)` reads as `name(stream, window, alpha)`.
+
+## Doc comments carry across
+
+All three macros here — `#[pyop]`, `#[pygraph]` and `#[pyadapter]` — copy the
+annotated item's `///` docs onto the generated `#[pyfunction]`, so they become
+the callable's **Python docstring**: what `help()` prints, and what the Sphinx
+reference in [`../wingfoil-next-python/docs/`](../wingfoil-next-python/docs/)
+renders for it. There is nowhere else that prose gets written.
+
+Write it once, in Rust, for the *Python* caller: what one tick carries, what
+each argument means, what raises at wiring versus what aborts the run.
+`#[pyop]` reads the docs off the `impl` block, `#[pygraph]` off the wiring fn,
+`#[pyadapter]` off the free fn or the impl's method.
 
 ## See also
 

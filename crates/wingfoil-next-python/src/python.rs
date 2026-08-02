@@ -336,6 +336,7 @@ crate::pyop_fn! {
 // `#[pyfunction]` `pyop_fn!` writes by hand.
 struct Square;
 
+/// Square each value: `square(stream)` yields `x * x` per tick.
 #[pyop(name = square)]
 impl Op for Square {
     type Cfg = ();
@@ -359,6 +360,8 @@ impl Op for Square {
 // the proc macro handles state, not just stateless transforms.
 struct RunningTotal;
 
+/// Cumulative sum: `running_total(stream)` yields the running total of every
+/// value seen so far. The accumulator is engine-owned state, re-seeded per run.
 #[pyop(name = running_total)]
 impl Op for RunningTotal {
     type Cfg = ();
@@ -383,6 +386,7 @@ impl Op for RunningTotal {
 // emits a `module.weighted_add(stream, other)` function.
 struct WeightedAdd;
 
+/// Add two streams: `weighted_add(stream, other)` yields `a + b` per tick.
 #[pyop(name = weighted_add)]
 impl Op for WeightedAdd {
     type Cfg = ();
@@ -406,6 +410,8 @@ impl Op for WeightedAdd {
 // `module.blend3(stream, second, third)` function over the `wire_op3` seam.
 struct Blend3;
 
+/// Combine three streams: `blend3(stream, second, third)` yields
+/// `a + b * 10 + c * 100` per tick.
 #[pyop(name = blend3)]
 impl Op for Blend3 {
     type Cfg = ();
@@ -428,6 +434,8 @@ impl Op for Blend3 {
 // over `wire_op4` / `Builder::register_op4`.
 struct Blend4;
 
+/// Combine four streams: `blend4(stream, second, third, fourth)` yields
+/// `a + b * 10 + c * 100 + d * 1000` per tick.
 #[pyop(name = blend4)]
 impl Op for Blend4 {
     type Cfg = ();
@@ -453,6 +461,8 @@ impl Op for Blend4 {
 // reads `clamped_scale(stream, factor, ceiling)` rather than passing a tuple.
 struct ClampedScale;
 
+/// Scale and cap: `clamped_scale(stream, factor, ceiling)` yields
+/// `min(x * factor, ceiling)` per tick.
 #[pyop(name = clamped_scale, arg = (factor, ceiling))]
 impl Op for ClampedScale {
     type Cfg = (f64, f64);
@@ -477,6 +487,9 @@ impl Op for ClampedScale {
 // splices its nodes into the caller's graph. The interior runs at native `f64`;
 // only the edge erases. The wiring fn names the fluent `Stream` fully-qualified
 // to avoid clashing with the `Stream` pyclass in this module.
+/// A Rust-authored sub-graph as one call: `doubled_running_total(stream)`
+/// doubles each value and then cumulatively sums it, splicing both nodes into
+/// the caller's graph.
 #[pygraph(name = doubled_running_total)]
 fn build_doubled_running_total(
     input: &::wingfoil_next::prelude::Stream<f64>,
@@ -489,6 +502,8 @@ fn build_doubled_running_total(
 // `spread_and_mid` — a **multi-input, multi-output `#[pygraph]`**: two streams
 // in, two out. The tuple return erases element-wise, so Python receives a tuple
 // of streams and can wire onward from each.
+/// Two streams in, two out: `spread_and_mid(bid, ask)` returns
+/// `(spread, mid)` — `ask - bid` and `(ask + bid) / 2`.
 #[pygraph(name = spread_and_mid)]
 fn build_spread_and_mid(
     bid: &::wingfoil_next::prelude::Stream<f64>,
@@ -515,6 +530,8 @@ trait RampSourceOps {
 
 #[pyadapter(name = ramp_source, source)]
 impl RampSourceOps for ::wingfoil_next::prelude::GraphBuilder {
+    /// A synthetic ramp source: `ramp_source(graph, start, step)` ticks
+    /// `start`, `start + step`, `start + 2 * step`, … as `float`.
     fn ramp_source(&self, start: f64, step: f64) -> ::wingfoil_next::prelude::Stream<f64> {
         use ::wingfoil_next::prelude::{SourceOps, StreamOps};
         self.ticker(Duration::from_nanos(100))
@@ -534,6 +551,9 @@ trait ListSinkOps {
 
 #[pyadapter(name = list_sink)]
 impl ListSinkOps for ::wingfoil_next::prelude::Stream<f64> {
+    /// Append each value to a Python list: `list_sink(stream, target)`.
+    /// Returns a terminal stream whose value is `None`; a raised `append`
+    /// aborts the run.
     fn list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()> {
         use ::wingfoil_next::prelude::StreamOps;
         self.for_each(move |v: &f64| {
@@ -558,6 +578,8 @@ trait PairSourceOps {
 
 #[pyadapter(name = pair_source, source)]
 impl PairSourceOps for ::wingfoil_next::prelude::GraphBuilder {
+    /// A burst-shaped source: `pair_source(graph)` ticks a **list** of two
+    /// floats — `[n, n * 10]` — sharing one instant.
     fn pair_source(&self) -> ::wingfoil_next::prelude::Stream<::wingfoil_next::Burst<f64>> {
         use ::wingfoil_next::prelude::{SourceOps, StreamOps};
         let a = self
@@ -577,6 +599,9 @@ impl PairSourceOps for ::wingfoil_next::prelude::GraphBuilder {
 // Stream)`. This is the `(data, status)` shape a live source with a
 // connection-status stream has (`zmq_sub`), and the reason `#[pyadapter]`
 // accepts a tuple return at all.
+/// A tuple-returning source: `split_source(graph)` returns
+/// `(values, even)` — the tick count as a `float`, and whether it is even —
+/// the same shape a live source with a status stream has.
 #[pyadapter(name = split_source, source)]
 fn split_source_demo(
     g: &::wingfoil_next::prelude::GraphBuilder,
@@ -602,6 +627,9 @@ trait BurstListSinkOps {
 
 #[pyadapter(name = burst_list_sink)]
 impl BurstListSinkOps for ::wingfoil_next::prelude::Stream<::wingfoil_next::Burst<f64>> {
+    /// Append each **burst** to a Python list: `burst_list_sink(stream,
+    /// target)` appends one list per tick. A scalar stream arrives as
+    /// single-element bursts.
     fn burst_list_sink(&self, target: Py<PyAny>) -> ::wingfoil_next::prelude::Stream<()> {
         use ::wingfoil_next::prelude::StreamOps;
         self.for_each(move |burst: &::wingfoil_next::Burst<f64>| {

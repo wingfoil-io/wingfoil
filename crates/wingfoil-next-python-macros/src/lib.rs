@@ -50,6 +50,15 @@
 //! stateless, or e.g. `State = f64` for an accumulator — the engine re-seeds it
 //! from `Default` on each run, so re-runs start clean).
 //!
+//! **Doc comments carry across.** All three macros here (`#[pyop]`,
+//! `#[pygraph]`, `#[pyadapter]`) copy the annotated item's `///` docs onto the
+//! generated `#[pyfunction]`, so they become the callable's Python docstring —
+//! which is what `help()` prints and what the Sphinx reference in
+//! `crates/wingfoil-next-python/docs/` renders. Write the prose once, in Rust,
+//! aimed at the *Python* caller: name the Python argument shapes and say what a
+//! tick carries. `#[pyop]` reads them off the `impl` block, `#[pygraph]` off
+//! the wiring fn, `#[pyadapter]` off the free fn or the impl's method.
+//!
 //! Wider ops need a `register_op<n>`/`wire_op<n>` pair for their arity —
 //! `register_op4` mirrors `register_op3` line for line — plus the parameter
 //! name in `receiver_names`. The emitter itself is arity-generic, so nothing
@@ -372,9 +381,11 @@ fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2
         )
     };
 
+    let docs = doc_attrs(&func.attrs);
     Ok(quote! {
         #[pyo3::pyfunction]
         #[allow(clippy::too_many_arguments)]
+        #(#docs)*
         pub fn #py_name(
             #graph_param
             #(#receiver_params),*
@@ -588,7 +599,7 @@ fn expand_pyadapter_fn(args: &PyAdapterArgs, func: &ItemFn) -> syn::Result<Token
         out_ty,
         &param_decls,
         &param_names,
-        &pyo3_attrs(&func.attrs),
+        &forwarded_attrs(&func.attrs),
     )
 }
 
@@ -627,17 +638,33 @@ fn expand_pyadapter_impl(args: &PyAdapterArgs, imp: &ItemImpl) -> syn::Result<To
         out_ty,
         &param_decls,
         &param_names,
-        &pyo3_attrs(&method.attrs),
+        &forwarded_attrs(&method.attrs),
     )
 }
 
-/// The `#[pyo3(..)]` attributes written on the adapter fn — forwarded to the
-/// generated `#[pyfunction]`. That is how an adapter declares Python defaults,
-/// e.g. `#[pyo3(signature = (conn, chunk_secs = 3600, buffer_size = None))]`.
-fn pyo3_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
+/// The attributes forwarded from the annotated item to the generated
+/// `#[pyfunction]`:
+///
+/// * `#[pyo3(..)]` — how an adapter declares its Python defaults, e.g.
+///   `#[pyo3(signature = (conn, chunk_secs = 3600, buffer_size = None))]`.
+/// * `#[doc]` (i.e. `///`) — the adapter's prose *is* its Python docstring, and
+///   therefore its entry in the generated Sphinx reference. Dropping it would
+///   leave every bound adapter undocumented on the Python side while the Rust
+///   source next to it carries the full explanation.
+fn forwarded_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs
         .iter()
-        .filter(|a| a.path().is_ident("pyo3"))
+        .filter(|a| a.path().is_ident("pyo3") || a.path().is_ident("doc"))
+        .cloned()
+        .collect()
+}
+
+/// The `#[doc]` attributes of an item, for the generated functions that take no
+/// `#[pyo3(..)]` forwarding ([`pygraph`] and [`pyop`]).
+fn doc_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
+    attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
         .cloned()
         .collect()
 }
@@ -1117,8 +1144,10 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         .zip(&elems)
         .map(|(id, ty)| quote! { #id: &#ty });
 
+    let docs = doc_attrs(&imp.attrs);
     let body = quote! {
         #[pyo3::pyfunction]
+        #(#docs)*
         fn #name(
             #(#receiver_params),*
             #param

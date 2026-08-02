@@ -202,6 +202,26 @@ rejection raises a Python exception instead of aborting a later run.
 Put `#[pyo3(signature = (…))]` on the adapter fn over **your own** params; the
 macro forwards it and injects the `graph`/`stream` receiver.
 
+### The `///` on the adapter fn *is* the published Python docstring
+
+`#[pyadapter]` (and `#[pyop]` / `#[pygraph]`) copy the annotated item's doc
+comment onto the generated `#[pyfunction]`, so it becomes what `help()` prints
+**and** the function's entry in the generated Sphinx reference
+(`crates/wingfoil-next-python/docs/`, "Generated reference"). There is nowhere
+else that prose gets written — `api.rst` carries a hand-written index, not
+per-function text.
+
+So write it for the **Python** caller, not a Rust reader: what one tick
+carries (`list` of dicts? `bytes`? a `(data, status)` tuple?), what every
+argument means, which selectors are strings and what the accepted set is, and
+what raises at wiring versus what aborts the run. On the impl form of
+`#[pyadapter]` the doc goes on the **method**, not the trait or the `impl`
+block. Check it landed:
+
+```python
+import wingfoil_next as wf; help(wf.my_adapter_sub)
+```
+
 ### Run mode / run window become arguments
 
 A Python `Graph` does not know its run mode until `run()`, so a source that
