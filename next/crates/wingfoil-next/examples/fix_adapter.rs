@@ -32,9 +32,9 @@ use std::time::Duration;
 
 use log::Level::Info;
 use log::info;
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::fix::{FixPollMode, FixSessionStatus, fix_accept, fix_connect};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();

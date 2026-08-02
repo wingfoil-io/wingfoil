@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use wingfoil::{NanoTime, RunFor, RunMode};
+//! use wingfoil_next::{NanoTime, RunFor, RunMode};
 //! use wingfoil_next::compat::ticker;
 //!
 //! let counted = ticker(Duration::from_nanos(100)).count();
@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;

@@ -10,13 +10,13 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kdb::{
     K, KdbConnection, KdbDeserialize, KdbError, KdbSerialize, KdbSinkOps, Row, SymbolInterner,
     kdb_read, kdb_read_cached, kdb_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 // A trivial record: `kdb_read`/`kdb_sub` only need `KdbDeserialize`.
 #[derive(Debug, Clone, Default, PartialEq)]

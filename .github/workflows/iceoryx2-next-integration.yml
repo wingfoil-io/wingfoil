@@ -9,6 +9,9 @@ on:
       - 'next/crates/wingfoil-next/tests/iceoryx2_adapter.rs'
       - 'next/crates/wingfoil-next/tests/iceoryx2_integration.rs'
       - 'next/crates/wingfoil-next-python/src/adapters/iceoryx2.rs'
+      # The binding's `stages` path splits and packs its wire header through
+      # this module, and only the marked tier below round-trips it.
+      - 'next/crates/wingfoil-next-python/src/latency.rs'
       - 'next/crates/wingfoil-next-python/tests/test_iceoryx2.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to

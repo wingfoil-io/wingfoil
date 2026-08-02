@@ -98,7 +98,7 @@
 //! these deliberate ways:
 //!
 //! 1. **The sources take a [`GraphBuilder`](crate::fluent::GraphBuilder) and a
-//!    [`RunMode`](wingfoil::RunMode), and return [`Result`](anyhow::Result).**
+//!    [`RunMode`](wingfoil_next::RunMode), and return [`Result`](anyhow::Result).**
 //!    Every next source wires on the builder, and the run mode is needed to
 //!    **reject `RunMode::HistoricalFrom` at wiring**: a live Aeron subscription
 //!    has no historical timeline to replay, and the `Threaded` mode rides the
@@ -154,7 +154,7 @@
 //!
 //! ```ignore
 //! use std::time::Duration;
-//! use wingfoil::{RunFor, RunMode};
+//! use wingfoil_next::{RunFor, RunMode};
 //! use wingfoil_next::adapters::aeron::{
 //!     AeronHandle, AeronSubOptions, FragmentBuffer, TransportError, aeron_sub_fragment,
 //! };
@@ -182,7 +182,7 @@
 //!
 //! ```ignore
 //! use std::time::Duration;
-//! use wingfoil::{RunFor, RunMode};
+//! use wingfoil_next::{RunFor, RunMode};
 //! use wingfoil_next::adapters::aeron::{AeronHandle, AeronSinkOps};
 //! use wingfoil_next::prelude::*;
 //!
@@ -227,7 +227,7 @@ pub use rusteron_backend::AeronHandle;
 pub use aeron_rs_backend::AeronRsHandle;
 
 use anyhow::Result;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::Burst;
 use crate::fluent::{GraphBuilder, Stream};

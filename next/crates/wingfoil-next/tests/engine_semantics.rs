@@ -9,7 +9,7 @@ use wingfoil_next::op::{Activation, Op};
 use wingfoil_next::ops::{Map, Ticker};
 use wingfoil_next::prelude::*;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 

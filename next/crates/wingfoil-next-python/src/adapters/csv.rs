@@ -53,7 +53,7 @@
 use anyhow::{Result, anyhow, bail};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 use wingfoil_next::adapters::csv::{CsvSinkOps, csv_read as csv_replay};
 use wingfoil_next::prelude::{Burst, GraphBuilder, Stream, StreamOps};
 

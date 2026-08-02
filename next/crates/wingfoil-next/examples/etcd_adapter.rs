@@ -28,10 +28,10 @@
 //! cargo run -p wingfoil-next --example etcd_adapter --features etcd
 //! ```
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::etcd::{EtcdConnection, EtcdEntry, EtcdSinkOps, etcd_sub};
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const ENDPOINT: &str = "http://localhost:2379";
 const SOURCE_PREFIX: &str = "/example/source/";

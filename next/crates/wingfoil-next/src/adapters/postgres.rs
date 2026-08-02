@@ -145,7 +145,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use log::info;
 use tokio_postgres::{AsyncMessage, NoTls, Statement};
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::adapters::common::{TimeWindow, WindowFilter, compute_validated_time_slices};
 use crate::async_source::{RunParams, consume_async, produce_async};

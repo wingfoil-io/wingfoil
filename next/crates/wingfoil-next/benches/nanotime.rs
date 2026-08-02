@@ -10,7 +10,7 @@
 //! Run with: `cargo bench -p wingfoil-next --bench nanotime`
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 fn bench(crit: &mut Criterion) {
     crit.bench_function("nanotime", |bencher| bencher.iter(NanoTime::now));

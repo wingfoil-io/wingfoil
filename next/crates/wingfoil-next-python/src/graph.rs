@@ -28,11 +28,11 @@ use std::time::Duration;
 use anyhow::Result;
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil_next::op::{Activation, Ctx, Tick};
 use wingfoil_next::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 use wingfoil_next::stats::StatisticsOps;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::PyElement;
 
@@ -1135,24 +1135,25 @@ impl PyStream {
 
     /// The stream's current value after [`PyGraph::run`].
     ///
-    /// # Panics
-    ///
-    /// Panics if called before the owning graph has run — there is no value to
-    /// read yet. This mirrors the classic infallible `peek_value`; the
-    /// precondition is documented and enforced with an explanatory panic.
+    /// Before the owning graph has run there is no value slot to read, so this
+    /// hands back the **empty** element — Python `None`, the same answer a
+    /// stream that ran but never ticked gives. That mirrors the classic
+    /// infallible `peek_value`, which returns `None` before a run rather than
+    /// raising: reading a value early is a question with an answer, not a
+    /// programming error, and a panic here escapes to Python as an unhelpful
+    /// `PanicException`.
     pub fn value(&self) -> PyElement {
-        self.runner
-            .borrow()
-            .as_ref()
-            .expect("invariant: PyGraph::run must be called before PyStream::value")
-            .value(&self.stream)
+        match self.runner.borrow().as_ref() {
+            Some(runner) => runner.value(&self.stream),
+            None => PyElement::default(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wingfoil::NanoTime;
+    use wingfoil_next::NanoTime;
 
     /// Build a Python callable from a `lambda` source string.
     fn lambda(src: &str) -> Py<PyAny> {

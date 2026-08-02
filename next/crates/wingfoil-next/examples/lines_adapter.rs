@@ -11,10 +11,10 @@
 
 use std::fs;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::Burst;
 use wingfoil_next::adapters::lines::{LinesSinkOps, replay_lines};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     // A couple of temp files in the OS temp dir, uniquely named.

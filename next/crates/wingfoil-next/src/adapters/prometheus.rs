@@ -33,7 +33,7 @@
 //! # Historical / backtesting mode
 //!
 //! The exporter is a **realtime** concept. Under
-//! [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom) the sink is a
+//! [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom) the sink is a
 //! no-op — no slot is written — so a backtest never publishes fast-forwarded
 //! values to a live endpoint. The HTTP server (if [`serve`](PrometheusExporter::serve)
 //! was called) still answers, but with an empty body. This mirrors classic,
@@ -73,7 +73,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Tick};
@@ -237,7 +237,7 @@ pub trait PrometheusSinkOps<T> {
     /// Register this stream as a Prometheus **gauge** named `name` on `exporter`
     /// and return the sink `Stream<()>` that publishes the stream's stringified
     /// value on every realtime cycle. The sink is a no-op under
-    /// [`RunMode::HistoricalFrom`](wingfoil::RunMode::HistoricalFrom).
+    /// [`RunMode::HistoricalFrom`](wingfoil_next::RunMode::HistoricalFrom).
     ///
     /// `name` should follow Prometheus naming conventions, e.g.
     /// `wingfoil_counter_total`.

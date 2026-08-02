@@ -18,13 +18,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use kdb_plus_fixed::ipc::{ConnectionMethod, K, QStream};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::kdb::{
     CacheConfig, KdbConnection, KdbDeserialize, KdbError, KdbSerialize, KdbSinkOps, Row, Sym,
     SymbolInterner, kdb_read, kdb_read_cached, kdb_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const TABLE_NAME: &str = "test_trades";
 const WRITE_TABLE_NAME: &str = "test_trades_write";

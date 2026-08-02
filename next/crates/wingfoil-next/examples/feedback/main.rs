@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {
     let period = Duration::from_secs(1);

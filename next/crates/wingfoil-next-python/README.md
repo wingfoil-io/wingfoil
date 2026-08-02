@@ -100,7 +100,10 @@ print(stats["decode"]["p99_ns"], stats.report())
 `stamp_precise` reads a fresh clock per tick (intra-cycle resolution); every
 entry point has an `_if(…, enabled)` variant that wires nothing when disabled.
 `Latency.to_bytes()` / `Latency.from_bytes(data, stages)` are the little-endian
-header a Rust peer reads straight back as its `latency_stages!` record.
+header a Rust peer reads straight back as its `latency_stages!` record. An
+adapter can carry that header for you: `iceoryx2_sub` / `iceoryx2_pub` take an
+optional `stages=` list and then send `header ++ payload`, handing back
+`TracedBytes` instead of `bytes`.
 
 ## Build / test
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use wingfoil::{NanoTime, RunFor, RunMode};
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 use crate::graph::{PyGraph, PyStream};
 use crate::{Activation, Ctx, Op, PyElement, Tick, pyadapter, pygraph, pyop};

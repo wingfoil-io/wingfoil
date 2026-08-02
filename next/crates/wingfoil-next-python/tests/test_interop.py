@@ -113,6 +113,51 @@ def test_map_callable_exception_aborts_run():
         g.run(cycles=1)
 
 
+def test_run_can_be_bounded_by_a_duration():
+    """`cycles` is not the only bound — `duration_nanos` stops on graph time.
+
+    The bound is classic's: a run ends on the cycle whose elapsed time *exceeds*
+    it, and the check happens between cycles — so a counter gets one tick past
+    `duration_nanos` before the loop notices.
+    """
+
+    def tick_times(duration_nanos):
+        g = wf.Graph()
+        out = g.counter(period_nanos=100).collect()
+        g.run(duration_nanos=duration_nanos)
+        return [time for time, _ in out.value()]
+
+    assert [0] == tick_times(0)
+    assert [0, 100, 200] == tick_times(100)
+    assert [0, 100, 200, 300, 400] == tick_times(300)
+
+
+def test_cycles_wins_when_both_bounds_are_given():
+    """Legacy raised on the conflicting pair; next resolves it, cycles first."""
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).accumulate()
+    g.run(cycles=2, duration_nanos=10_000)
+    assert out.value() == [1, 2]
+
+
+def test_start_nanos_offsets_the_historical_clock():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).collect()
+    g.run(cycles=3, start_nanos=1_000)
+    assert [(1000, 1), (1100, 2), (1200, 3)] == out.value()
+
+
+def test_value_is_none_before_a_stream_has_ticked():
+    """The empty element reads back as Python `None`, never a panic — before
+    the graph has run at all (classic `peek_value`'s answer), and after a run in
+    which the stream never ticked."""
+    g = wf.Graph()
+    quiet = g.counter(period_nanos=100).filter_value(lambda n: False)
+    assert quiet.value() is None
+    g.run(cycles=3)
+    assert quiet.value() is None
+
+
 def test_graph_reruns_and_resets():
     # A re-runnable graph can be run repeatedly; the engine resets node state
     # between runs, so it reproduces the same values.
@@ -419,6 +464,25 @@ def test_difference_of_counter_is_one():
     assert out.value() == 1  # 1,2,3,4 -> deltas 1,1,1
 
 
+def test_delay_re_emits_each_value_later():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).delay(200).collect()
+    g.run(cycles=5)
+    # Ticks at 0,100,200,300,400 carrying 1..5; each re-emitted 200ns later, so
+    # only the first three land inside the run.
+    assert [(200, 1), (300, 2), (400, 3)] == out.value()
+
+
+def test_merge_lets_the_earliest_supplied_input_win():
+    g = wf.Graph()
+    fast = g.counter(period_nanos=100)  # 1,2,3 at t=0,100,200
+    slow = g.counter(period_nanos=200).map(lambda n: n * 10)  # 10,20 at t=0,200
+    out = fast.merge(slow).collect()
+    g.run(cycles=3)
+    # Both tick at 0 and 200; `fast` is the receiver, so it wins the tie.
+    assert [(0, 1), (100, 2), (200, 3)] == out.value()
+
+
 def test_not_negates_value():
     # `not` is arithmetic negation (__neg__) and is a Python keyword.
     g = wf.Graph()
@@ -567,6 +631,31 @@ def test_filter_value_keeps_on_predicate():
     out = g.counter(period_nanos=100).filter_value(lambda n: n > 2)
     g.run(cycles=5)
     assert out.value() == 5  # 3, 4, 5 pass
+
+
+def test_filter_value_predicate_exception_aborts_run():
+    g = wf.Graph()
+    g.counter(period_nanos=100).filter_value(lambda n: n.no_such_attr)
+    with pytest.raises(RuntimeError, match="Python filter_value predicate raised"):
+        g.run(cycles=1)
+
+
+def test_filter_value_uses_python_truthiness():
+    """A non-bool return is *truthiness*-tested, not rejected — the deviation
+    from legacy, whose `filter` raised on anything that was not a bool. The
+    strict edge is `filter`, which reads a condition *stream* as bool."""
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).filter_value(lambda n: "" if n % 2 else "keep")
+    g.run(cycles=4)
+    assert out.value() == 4  # the even ticks return a non-empty (truthy) str
+
+
+def test_filter_rejects_a_non_bool_condition():
+    g = wf.Graph()
+    counter = g.counter(period_nanos=100)
+    counter.filter(counter.map(lambda n: "not a bool"))
+    with pytest.raises(RuntimeError, match="not a bool"):
+        g.run(cycles=1)
 
 
 def test_filter_none_drops_python_none():

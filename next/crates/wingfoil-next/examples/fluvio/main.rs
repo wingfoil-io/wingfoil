@@ -32,9 +32,9 @@
 //! cargo run -p wingfoil-next --example fluvio_adapter --features fluvio
 //! ```
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::fluvio::{FluvioEvent, FluvioRecord, FluvioSinkOps, fluvio_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 const ENDPOINT: &str = "127.0.0.1:9003";
 const SOURCE_TOPIC: &str = "fluvio-example-source";

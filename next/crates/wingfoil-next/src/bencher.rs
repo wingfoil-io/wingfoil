@@ -46,7 +46,7 @@ use criterion::Criterion;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use wingfoil::{RunFor, RunMode};
+use crate::{RunFor, RunMode};
 
 /// Used to add a wingfoil-next bench to criterion.
 ///

@@ -22,9 +22,9 @@
 
 use std::time::Duration;
 
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::zmq::{ZeroMqPub, ZmqStatus, zmq_sub};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 const ADDRESS: &str = "tcp://127.0.0.1:5556";
 const PORT: u16 = 5556;

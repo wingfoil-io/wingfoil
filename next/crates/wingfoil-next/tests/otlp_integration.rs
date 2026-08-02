@@ -13,10 +13,10 @@
 use std::time::Duration;
 
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
-use wingfoil::{RunFor, RunMode};
 use wingfoil_next::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
 use wingfoil_next::latency::{Latency, Stage, Traced, latency_stages};
 use wingfoil_next::prelude::*;
+use wingfoil_next::{RunFor, RunMode};
 
 latency_stages! {
     pub IntegrationLatency {

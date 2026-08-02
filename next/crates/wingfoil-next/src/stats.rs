@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 use crate::fluent::Stream;
 use crate::ops::EwmaDecay;

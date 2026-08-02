@@ -12,12 +12,12 @@ use std::time::Duration;
 
 use etcd_client::Client;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
-use wingfoil::{NanoTime, RunFor, RunMode};
 use wingfoil_next::adapters::etcd::{
     EtcdConnection, EtcdEntry, EtcdEvent, EtcdEventKind, EtcdSinkOps, etcd_sub,
 };
 use wingfoil_next::async_source::RunParams;
 use wingfoil_next::prelude::*;
+use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const ETCD_PORT: u16 = 2379;
 const ETCD_IMAGE: &str = "gcr.io/etcd-development/etcd";

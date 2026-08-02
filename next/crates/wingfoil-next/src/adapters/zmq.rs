@@ -107,7 +107,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use wingfoil::RunMode;
+use wingfoil_next::RunMode;
 
 use crate::Burst;
 use crate::channel::ChannelSender;

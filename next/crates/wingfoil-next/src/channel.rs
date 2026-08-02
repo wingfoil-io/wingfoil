@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use wingfoil::NanoTime;
+use wingfoil_next::NanoTime;
 
 /// The wire envelope carried between a [`ChannelSender`] and its paired
 /// receiver source. Mirrors the classic `channel::Message`, minus the
@@ -107,7 +107,7 @@ impl<T> Tx<T> {
 /// Every method wakes the paired receiver's kernel.
 pub struct ChannelSender<T> {
     tx: Tx<T>,
-    waker: wingfoil::codegen::KernelWaker,
+    waker: wingfoil_next::KernelWaker,
     index: usize,
 }
 
@@ -122,7 +122,7 @@ impl<T> Clone for ChannelSender<T> {
 }
 
 impl<T> ChannelSender<T> {
-    pub(crate) fn new(tx: Tx<T>, waker: wingfoil::codegen::KernelWaker, index: usize) -> Self {
+    pub(crate) fn new(tx: Tx<T>, waker: wingfoil_next::KernelWaker, index: usize) -> Self {
         Self { tx, waker, index }
     }
 
