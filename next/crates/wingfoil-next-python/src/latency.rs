@@ -34,6 +34,14 @@
 //! [`PyLatency::from_bytes`] interoperate with a Rust peer's
 //! [`latency_stages!`] record over a wire hop.
 //!
+//! That wire form is also the seam a **transport** binding traces through: a
+//! `stages` argument on an adapter splits [`STAMP_BYTES`] × `len(stages)` off
+//! each frame with [`PyLatency::create_from_bytes`], pairs the remainder with
+//! the record as a [`PyTracedBytes`], and packs the two back together with
+//! [`PyLatency::header_bytes`] on the way out — validating the stage list once
+//! at wiring with [`check_stages`]. The `iceoryx2` binding is the worked
+//! example; the pieces are public so a binding in another crate can do the same.
+//!
 //! Aggregation and the printed report are **not** re-implemented here: both go
 //! through `wingfoil_next::latency`'s [`record_stage_deltas`] /
 //! [`format_latency_report`], the runtime-named entry points the typed
@@ -92,7 +100,11 @@ use crate::{Activation, Ctx, PyElement, Tick};
 /// Bytes per stamp on the wire — one little-endian `u64`, the layout a
 /// [`latency_stages!`](wingfoil_next::latency::latency_stages) record has in
 /// memory.
-const STAMP_BYTES: usize = 8;
+///
+/// Public because a **transport** binding needs it to size the header it splits
+/// off each frame (`stages.len() * STAMP_BYTES`) — which is what the `iceoryx2`
+/// binding's `stages` argument does.
+pub const STAMP_BYTES: usize = 8;
 
 // ---------------------------------------------------------------------------
 // Latency — the runtime-named record
@@ -114,7 +126,7 @@ impl PyLatency {
     /// A record over `stages`, every stamp zero (i.e. unset).
     #[new]
     fn new(stages: Vec<String>) -> PyResult<Self> {
-        check_stages(&stages)?;
+        check_stages_py(&stages)?;
         Ok(Self::create(stages))
     }
 
@@ -138,15 +150,14 @@ impl PyLatency {
 
     /// The stamps, in stage order. Zero means "not stamped".
     #[getter]
-    fn stamps(&self) -> Vec<u64> {
+    pub fn stamps(&self) -> Vec<u64> {
         self.stamps.clone()
     }
 
     /// The stamps as a little-endian `u64` header — the wire form a Rust peer
     /// reads straight back as its `latency_stages!` record.
     fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        let bytes: Vec<u8> = self.stamps.iter().flat_map(|v| v.to_le_bytes()).collect();
-        PyBytes::new(py, &bytes)
+        PyBytes::new(py, &self.header_bytes())
     }
 
     /// Read a record back off the wire: `data`'s leading `8 * len(stages)`
@@ -154,7 +165,7 @@ impl PyLatency {
     /// a larger frame). Raises if `data` is too short for `stages`.
     #[staticmethod]
     fn from_bytes(data: &[u8], stages: Vec<String>) -> PyResult<Self> {
-        check_stages(&stages)?;
+        check_stages_py(&stages)?;
         let expected = stages.len() * STAMP_BYTES;
         if data.len() < expected {
             return Err(PyValueError::new_err(format!(
@@ -222,6 +233,19 @@ impl PyLatency {
         }
     }
 
+    /// The stamps as the little-endian `u64` header a wire frame carries — the
+    /// inverse of [`create_from_bytes`](Self::create_from_bytes), and the form a
+    /// **transport** binding prepends to its payload.
+    pub fn header_bytes(&self) -> Vec<u8> {
+        self.stamps.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// The stage names this record is over, in stamp order — what a transport
+    /// binding compares against the stage list it was wired with.
+    pub fn stages_ref(&self) -> &[String] {
+        &self.stages
+    }
+
     /// The index of `stage`, or `None` if this record has no such stage.
     fn stage_index(&self, stage: &str) -> Option<usize> {
         self.index_map.get(stage).copied()
@@ -245,14 +269,24 @@ fn index_map(stages: &[String]) -> HashMap<String, usize> {
 
 /// Reject a stage list that cannot address its own stamps: empty (nothing to
 /// stamp) or carrying a duplicate name (which would shadow a slot).
-fn check_stages(stages: &[String]) -> PyResult<()> {
+///
+/// Public so a **transport** binding validates its `stages` argument by the
+/// same rule, at wiring, rather than growing its own copy.
+pub fn check_stages(stages: &[String]) -> Result<()> {
     if stages.is_empty() {
-        return Err(PyValueError::new_err("stages list must not be empty"));
+        bail!("stages list must not be empty");
     }
     if index_map(stages).len() != stages.len() {
-        return Err(PyValueError::new_err("duplicate stage name"));
+        bail!("duplicate stage name");
     }
     Ok(())
+}
+
+/// [`check_stages`] as a `ValueError` — what the Python-facing entry points in
+/// this module raise (an adapter binding's wiring error becomes a
+/// `RuntimeError` through `to_pyerr` instead).
+fn check_stages_py(stages: &[String]) -> PyResult<()> {
+    check_stages(stages).map_err(|err| PyValueError::new_err(err.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +625,7 @@ pub fn latency_report(
     stages: Vec<String>,
     print_on_teardown: bool,
 ) -> PyResult<(Stream, PyLatencyStats)> {
-    check_stages(&stages)?;
+    check_stages_py(&stages)?;
     let (sink, stats) = wire_report(stream.object(), stages, print_on_teardown);
     Ok((Stream::from(sink), PyLatencyStats(stats)))
 }
@@ -611,7 +645,7 @@ pub fn latency_report_if(
     if enabled {
         return latency_report(stream, stages, print_on_teardown);
     }
-    check_stages(&stages)?;
+    check_stages_py(&stages)?;
     let sink = stream.object().wire_op1(
         "latency_report_disabled",
         Activation::NONE,
