@@ -305,20 +305,30 @@ register A2 — the earlier "classic re-runs I/O sources" claim was incorrect.
   claim as "identical cost", and only the first of those the parity suite can
   check.
 - **Multi-output islands — re-deferred (written rationale).** An `Op`/island
-  produces a single `Out`; classic multi-output nodes (`demux`,
-  `dynamic_group`) would need projection nodes that fan a tuple output into N
-  slots. Re-deferred for v1 because: (a) nothing in the catalog *ported so far*
-  needs it — every Phase 2 op landed is single-output, and the two classic
-  multi-output nodes are in the "Structural / deferred" group that also awaits
-  the dynamic-graph decision (Phase 4.5); (b) an island already exposes its one
-  output cleanly, and a caller wanting K outputs can mount K islands over the
-  same inputs (wasteful only if the shared interior is expensive — none is
-  today); (c) the honest projection design is coupled to the Phase 4.5 arena
-  slot representation (a projection writes several slots from one cycle), so
-  building it against today's `Rc<RefCell<T>>` slots risks the exact
+  produces a single `Out`; a compiled node wanting K outputs would need
+  projection nodes that fan a tuple output into N slots. Narrowed since first
+  written: the two classic multi-output nodes this was originally scoped
+  against — `demux` and `dynamic_group` — have **landed on the interpreted
+  engine** (Phase 4.5) *without* needing any of this. They write several slots
+  from one `cycle` directly (`Builder::demux` returns `(Vec<Handle<T>>,
+  Handle<T>)`), because the interpreted engine has no single-`Out` constraint
+  to work around. So the gap is now specifically the **compiled/island
+  surface**, not the catalog. Still re-deferred for v1 because: (a) nothing in
+  the catalog *ported so far* needs it — every Phase 2 op landed is
+  single-output, and the multi-output classic nodes are served by the
+  interpreted path — classic has no compiled tier at all, so nothing is lost
+  against it; (b) an island already exposes
+  its one output cleanly, and a caller wanting K outputs can mount K islands
+  over the same inputs (wasteful only if the shared interior is expensive —
+  none is today); (c) the honest projection design is coupled to the Phase 4.5
+  arena slot representation (a projection writes several slots from one cycle),
+  so building it against today's `Rc<RefCell<T>>` slots risks the exact
   touch-it-twice rework the Phase 4.5 coupling note warns against. Decision:
-  revisit alongside `demux`/`dynamic_group` in the Phase 4.5 dynamic-graph
-  pass, not as isolated Phase 1 work.
+  revisit **alongside the arena** (whose own trigger is a measured
+  big-payload-forwarding need — see Phase 4.5, "Arena / SoA value store"), not
+  as isolated Phase 1 work. The earlier trigger, "revisit alongside
+  `demux`/`dynamic_group` in the Phase 4.5 dynamic-graph pass", is spent: that
+  pass completed and reason (c) is what survived it.
 - Debug labels on nodes (needed by 0.1 error reports; also unlocks GML
   export in Phase 5).
 - **Per-node `reset`/`setup` hook** ✅ **landed** (from spike 0.4) — the
