@@ -119,7 +119,13 @@ pub enum CompositePhase {
 /// private queue instead of the outer kernel.
 pub struct Ctx<'a> {
     time: NanoTime,
-    wall_time: NanoTime,
+    /// `Some` for an island context, whose snap is supplied by the composite;
+    /// `None` for a kernel-backed one, which defers to
+    /// [`Kernel::wall_time`] so a cycle nothing stamps in never reads the
+    /// clock. Deliberately *not* copied eagerly in [`Ctx::new`]: `Ctx` is
+    /// built once per node per cycle, so an eager copy would force the
+    /// kernel's snap on every cycle and undo the laziness.
+    wall_time: Option<NanoTime>,
     start_time: NanoTime,
     is_last_cycle: bool,
     run_mode: RunMode,
@@ -142,7 +148,8 @@ impl<'a> Ctx<'a> {
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
         Self {
             time: kernel.time(),
-            wall_time: kernel.wall_time(),
+            // Left unresolved on purpose — see the field comment.
+            wall_time: None,
             start_time: kernel.start_time(),
             is_last_cycle: kernel.is_last_cycle(),
             run_mode: kernel.run_mode(),
@@ -187,7 +194,7 @@ impl<'a> Ctx<'a> {
     ) -> Self {
         Self {
             time,
-            wall_time,
+            wall_time: Some(wall_time),
             start_time,
             is_last_cycle: false,
             run_mode: RunMode::RealTime,
@@ -208,7 +215,21 @@ impl<'a> Ctx<'a> {
     /// [`wall_time_precise`](Self::wall_time_precise) for intra-cycle
     /// resolution.
     pub fn wall_time(&self) -> NanoTime {
-        self.wall_time
+        match self.wall_time {
+            // An island: the composite resolved the snap once for the whole
+            // activation and handed it to every inner node.
+            Some(snap) => snap,
+            // A kernel-backed node: resolve through the kernel, which snaps on
+            // the first read of the cycle and caches it for the rest. A cycle
+            // in which no op calls this reads no clock at all.
+            None => match &self.sink {
+                Sink::Kernel { kernel, .. } => kernel.wall_time(),
+                Sink::Queue { .. } => unreachable!(
+                    "invariant: Ctx::nested is the only constructor of a Queue sink \
+                     and always supplies the composite's wall snap"
+                ),
+            },
+        }
     }
 
     /// Wall-clock time snapped fresh right now (a TSC read, ~5-10 ns on x86).

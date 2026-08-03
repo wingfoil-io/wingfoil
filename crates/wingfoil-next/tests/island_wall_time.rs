@@ -272,6 +272,42 @@ fn island_ops_see_the_outer_cycles_wall_snap() {
     );
 }
 
+/// The snap is cached **per cycle**, not per run. `Kernel::wall_time` resolves
+/// lazily and memoises, so the reset in `begin_cycle` is what stops every cycle
+/// of a run reporting one frozen instant — and a missing reset is invisible to
+/// the agreement tests here, which would pass just as happily on a constant.
+/// Both engines are checked: the interpreted nodes read the kernel's cache
+/// directly, the island reads whatever the composite resolved for it.
+#[test]
+fn the_wall_snap_is_re_taken_each_cycle() {
+    const LONG: u32 = 50;
+
+    let g = GraphBuilder::new();
+    let src = g.ticker(PERIOD).count();
+
+    let flat = stamp::wire(&g, &src).accumulate();
+    let island = stamp::nested(&g, &src).accumulate();
+
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(LONG)).unwrap();
+
+    for (label, stamps) in [
+        ("interpreted", runner.value(&flat)),
+        ("island", runner.value(&island)),
+    ] {
+        assert_eq!(LONG as usize, stamps.len(), "{label}: one stamp per cycle");
+        assert!(
+            stamps.windows(2).all(|w| w[0] <= w[1]),
+            "{label}: wall snaps must not go backwards: {stamps:?}",
+        );
+        assert!(
+            stamps[0] < stamps[LONG as usize - 1],
+            "{label}: the snap is frozen across the whole run — `begin_cycle` is not \
+             clearing the cache: {stamps:?}",
+        );
+    }
+}
+
 /// The island agrees with itself. Two inner nodes at different depths run in
 /// one activation, so the second's snap minus the first's is exactly zero.
 /// With a clock read per `Ctx::nested` the second read happens strictly after

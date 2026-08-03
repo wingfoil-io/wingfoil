@@ -13,6 +13,7 @@
 //! kernel it left behind now lives here. The `wingfoil` crate re-exports it
 //! as `wingfoil::codegen` so the legacy path is unchanged.
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
@@ -58,10 +59,35 @@ pub struct Kernel {
     end_time: NanoTime,
     end_cycle: u32,
     time: NanoTime,
-    /// Wall-clock snap taken once at the start of each cycle (see
-    /// [`Kernel::wall_time`]). Distinct from `time`, which is source-driven
-    /// (logical) in historical mode.
-    wall_time: NanoTime,
+    /// This cycle's wall-clock snap, taken **on first read** and shared by
+    /// every later reader in the same cycle (see [`Kernel::wall_time`]).
+    /// `None` means "not yet read this cycle". Distinct from `time`, which is
+    /// source-driven (logical) in historical mode.
+    ///
+    /// Lazy rather than snapped in `begin_cycle` because the snap is a TSC
+    /// read — ~24 ns on the `nanotime` bench — and almost no graph reads it:
+    /// the only consumer in the tree is [`latency::Stamp`](crate::latency),
+    /// which most graphs do not wire. Eagerly snapping put that read on every
+    /// cycle of every run to serve a value nothing looked at. `Cell` (rather
+    /// than a `&mut self` accessor) keeps
+    /// [`Ctx::wall_time`](crate::op::Ctx::wall_time) on `&self`, so ops are
+    /// unaffected.
+    ///
+    /// The saving is **one clock read per cycle**, which is a property of the
+    /// code rather than of any measurement: a cycle in which no op calls
+    /// `wall_time` now calls `NanoTime::now` zero times, where it used to call
+    /// it once (twice in the realtime spin path, whose second read existed
+    /// only to fill this field). Do not expect the per-cycle benches to
+    /// resolve it — against a 78–307 ns/cycle baseline on a shared 4-core VM,
+    /// criterion's own confidence intervals are ±10–25%, i.e. wider than the
+    /// effect. A paired run there showed the interpreted tier improving at
+    /// both depths (p < 0.05) with point estimates of 58 ns and 17 ns
+    /// straddling the predicted ~24, and the island tier not moving in a
+    /// consistent direction at all — which is the expected result, since an
+    /// island still takes exactly one snap per activation (the composite reads
+    /// it eagerly to share with its inner nodes, and cannot know whether any
+    /// of them will look).
+    wall_time: Cell<Option<NanoTime>>,
     first_cycle: bool,
     is_last_cycle: bool,
     cycles: u32,
@@ -107,7 +133,7 @@ impl Kernel {
             end_time,
             end_cycle,
             time: NanoTime::ZERO,
-            wall_time: NanoTime::ZERO,
+            wall_time: Cell::new(None),
             first_cycle: true,
             is_last_cycle: false,
             cycles: 0,
@@ -150,15 +176,28 @@ impl Kernel {
         self.time
     }
 
-    /// Wall-clock time snapped once at the start of the current cycle.
+    /// This cycle's wall-clock snap: taken on the **first** call in a cycle
+    /// and returned unchanged to every later caller in that same cycle, so
+    /// all readers agree on one instant (which is what separates this from
+    /// [`Ctx::wall_time_precise`](crate::op::Ctx::wall_time_precise)).
     ///
     /// The same in both realtime and historical mode — always a wall-clock
     /// snap — so latency stamping and perf telemetry mean "wall-clock time
     /// spent" regardless of run mode. Mirrors legacy `GraphState::wall_time`.
     /// Never use for business logic (use [`time`](Self::time) for
     /// deterministic replay).
+    ///
+    /// A cycle that never calls this never reads the clock at all — see the
+    /// field's comment for why that is worth the `Cell`.
     pub fn wall_time(&self) -> NanoTime {
-        self.wall_time
+        match self.wall_time.get() {
+            Some(snap) => snap,
+            None => {
+                let snap = NanoTime::now();
+                self.wall_time.set(Some(snap));
+                snap
+            }
+        }
     }
 
     /// The run mode (realtime vs historical) — lets a source op choose
@@ -236,7 +275,7 @@ impl Kernel {
                     if !progressed {
                         return false;
                     }
-                    self.wall_time = NanoTime::now();
+                    self.wall_time.set(None);
                     return true;
                 }
                 RunMode::RealTime => {
@@ -250,7 +289,7 @@ impl Kernel {
                         while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
                             dirty[ix] = true;
                         }
-                        self.wall_time = NanoTime::now();
+                        self.wall_time.set(None);
                         return true;
                     }
                     if !progressed {
@@ -326,7 +365,7 @@ impl Kernel {
                         progressed = true;
                     }
                     if progressed {
-                        self.wall_time = NanoTime::now();
+                        self.wall_time.set(None);
                         return true;
                     }
                     // Nothing due yet (e.g. woke at the end bound): re-check

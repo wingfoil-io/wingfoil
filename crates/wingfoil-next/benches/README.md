@@ -136,6 +136,18 @@ comparison, is in
 [`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md) — a
 3.80 GHz Xeon, so its absolute numbers run faster than either.
 
+**Every table below predates the lazy wall-clock snap** (`Kernel::wall_time`
+now resolves on first read in a cycle instead of being taken in `begin_cycle`).
+That removes one `NanoTime::now()` — ~24 ns, see [the clock](#the-clock) — from
+every cycle of every graph that never stamps latency, which is most of them.
+Both wingfoil-next tiers therefore sit a little below what is tabulated here,
+and `legacy` does **not**: it keeps its own eager snap in `GraphState`, on
+purpose, since it is the regression control. So the `interp/legacy` column
+below is, if anything, now pessimistic about next. The tables are left as
+captured rather than adjusted by hand — they were taken as whole groups on
+machine B, and refilling them from anywhere else is exactly what the
+two-machine split above exists to prevent.
+
 ## Graph overhead
 
 The [`graph`](graph.rs) bench wires a trivial DAG `width` × `depth`, with every
