@@ -228,6 +228,70 @@ fn sparse_work_is_independent_of_graph_size() {
     );
 }
 
+/// **The timer-population half of the perf gate.**
+/// `sparse_work_is_independent_of_graph_size` hangs all of its padding off *one*
+/// shared cold driver, so every graph it builds has two timers no matter how
+/// wide it gets. That leaves a whole axis unpinned, and the engine was losing on
+/// it: dispatch seeded each cycle by walking a list of every callback-activated
+/// node in the graph and asking each whether the kernel had marked it, which
+/// costs `O(timers)` per cycle whether or not any of them is due. A graph of
+/// per-instrument tickers, throttles or delays is exactly that shape, and it is
+/// an ordinary shape, not a pathological one. Measured: 1024 idle tickers took
+/// an 8-node hot path from 247 ns to 2.99 µs per cycle.
+///
+/// So this test gives every cold branch **its own ticker**, and pins the same
+/// property the width gate pins, by the same method: what the padding adds must
+/// be a one-off (every ticker really is due at `t = 0`), not a per-cycle tax.
+/// Dispatch now seeds from [`Kernel::due`] — the frontier the kernel already
+/// knows — so a timer that is not due costs nothing to have.
+#[test]
+fn sparse_work_is_independent_of_timer_count() {
+    const HOT: Duration = Duration::from_nanos(10);
+    /// Far beyond the simulated time these runs cover: due at `t = 0`, never again.
+    const NEVER: Duration = Duration::from_millis(1);
+    const FEW: usize = 8;
+    const MANY: usize = 512;
+    const SHORT: u32 = 200;
+    const LONG: u32 = 2_000;
+
+    /// One hot chain plus `timers` cold branches, each with its **own** ticker.
+    fn run_padded(timers: usize, cycles: u32) -> (u64, Vec<u64>) {
+        let g = GraphBuilder::new();
+
+        let mut hot = g.ticker(HOT).count();
+        for _ in 0..4 {
+            hot = hot.map(|v| v.wrapping_add(1));
+        }
+        let out = hot.accumulate();
+
+        let _padding: Vec<_> = (0..timers)
+            .map(|_| g.ticker(NEVER).count().map(|v| v.wrapping_mul(3)))
+            .collect();
+
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Cycles(cycles)).unwrap();
+        (r.node_visits(), r.value(&out))
+    }
+
+    fn padding_cost(cycles: u32) -> u64 {
+        let (few, out_few) = run_padded(FEW, cycles);
+        let (many, out_many) = run_padded(MANY, cycles);
+        assert_eq!(out_few, out_many, "cold timers changed the hot output");
+        assert!(!out_few.is_empty(), "hot chain produces a series");
+        many - few
+    }
+
+    let short = padding_cost(SHORT);
+    let long = padding_cost(LONG);
+    assert_eq!(
+        short, long,
+        "{MANY} vs {FEW} idle tickers cost {short} extra node visits over \
+         {SHORT} cycles but {long} over {LONG} — an idle timer is being charged \
+         per cycle, so per-cycle work tracks the graph's timer population rather \
+         than the set that is actually due"
+    );
+}
+
 /// **The depth half of the perf gate.** `sparse_work_is_independent_of_graph_size`
 /// pins independence from the node *count*; this pins independence from graph
 /// *depth*, which was a real cost until the drain stopped walking empty buckets.
