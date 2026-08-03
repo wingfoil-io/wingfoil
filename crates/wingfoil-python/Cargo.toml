@@ -99,10 +99,12 @@ prometheus = ["wingfoil/prometheus", "_common"]
 # payload edge marshals Python values through `serde_json::Value`.
 web = ["wingfoil/web-tls", "dep:serde_json", "_common"]
 # Aeron: the `aeron_sub` / `aeron_pub` pair and their `_with_status` twins.
-# Deliberately **not** in `all-adapters` and **not** in the wheel's default
-# feature set: `rusteron-client` builds the Aeron C library from source, needing
-# clang, libuuid and CMake >= 3.30. Its tests run in
-# `aeron-next-integration.yml`, which installs that toolchain.
+# **In** `all-adapters`, and so in the Linux wheel (cutover ruling, #367) — but
+# **not** in the wheel's default feature set, because `rusteron-client` builds
+# the Aeron C library from source, needing clang, libuuid and CMake >= 3.30.
+# `pypi-publish.yml` installs that toolchain for the Linux leg only, which is
+# why the macOS/Windows wheels fall back to the pyproject list without it. Its
+# tests run in `aeron-next-integration.yml`, which installs the same toolchain.
 aeron = ["wingfoil/aeron", "_common"]
 # iceoryx2: the `iceoryx2_sub` / `iceoryx2_pub` slice pair. Pure Rust, so it
 # *is* in `all-adapters` and its tests run in the normal job — but it stays out
