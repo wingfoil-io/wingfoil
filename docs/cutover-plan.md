@@ -268,18 +268,18 @@ mean writing the architecture prose twice.
 
 ### 5. Repo, CI and release plumbing — Goal 2's "directory promotion"
 
-5.0 lands **first, before 1.2** — it is what makes the rename possible. The
-rest is blocked on 1.2, which fixes the names it all refers to.
+5.0 landed first, and 1.2 with it; the release-facing rows followed. **Only 5.2
+is left, and it is deliberately sequenced with the deletion** — see its row.
 
 | # | Item | Size |
 |:--:|---|:--:|
 | 5.0 | **Take `legacy/` out of the workspace — do this now.** Drop the three `legacy/*` members and `exclude` the directory. All three legacy crates inherit `rust-version` / `lints` / `workspace.dependencies`, so they need a nested workspace root at `legacy/Cargo.toml` carrying those tables; an excluded package is not a member and cannot inherit. The `wingfoil` → `wingfoil` dev-dependency (`tests/engine_semantics.rs`, `benches/tiers.rs`) keeps working — a path dependency may cross a workspace boundary — so the parity oracle is unaffected. Legacy-side CI moves to `--manifest-path legacy/Cargo.toml`, and `cargo lint` / `lint-all` stop covering legacy by construction. | M |
 | 5.1 | ✅ **Workspace `Cargo.toml` — folded into 5.0.** The four next crates are already at `crates/*`, so no repointing is left. `crates/wingfoil-wire-types` stays (next's web adapter depends on it); `crates/wingfoil-wasm` stays excluded. | S |
-| 5.2 | **Collapse the workflow set.** 14 of 43 workflows carry `next` and lose the suffix; the legacy-side twins retire (at the deletion — 5.0 only repoints them at the nested manifest). The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
-| 5.3 | **`crates-publish.yml` rewrite.** It publishes by directory in dependency order with crates.io index waits between; the crate set, the order and the paths all change. | M |
-| 5.4 | **`pypi-publish.yml` repoint**, plus a ruling on the wheel's adapter roll-up: aeron is out of both roll-ups (it builds a C library) and iceoryx2 is in `all-adapters` but out of the wheel (Linux/POSIX-only). That is open issue **#367** — decide whether cutover inherits it or fixes it. | S |
-| 5.5 | **`.readthedocs.yaml` repoint.** Three keys change together: `python.install[0].path`, `python.install[1].requirements`, `sphinx.configuration` — all currently on `legacy/wingfoil-python/`, all moving to `crates/wingfoil-python/`. The RTD job builds the extension from source at the full wheel feature set, so it compiles librdkafka and libzmq and needs `protobuf-compiler` (already in `apt_packages`). | S |
-| 5.6 | **Major version bump**, and the `rust-test` / `all-tests` / `rust-fmt` path and branch filters (currently `[main, next]`). | S |
+| 5.2 | ⏸️ **Collapse the workflow set — moved to the deletion step.** The `*-next-*` workflows cannot drop their suffix while the legacy twins still own those filenames, so doing it before the deletion means renaming ~14 legacy workflows to `*-legacy-*` as an interim — files deleted days later — and churning CI check names **twice**, which breaks any required-status-check configuration twice. Nothing depends on it landing earlier. `augurs-integration.yml` still has no next twin by design (next's augurs tests run in `rust-test.yml` under `--all-features`). | M |
+| 5.3 | ✅ **`crates-publish.yml` rewritten.** Legacy's publish steps are *gone*, not disabled — both trees build a crate named `wingfoil`, so publishing both would race for one registry name. Three blockers surfaced only by running `cargo publish --dry-run`: every crate still carried `publish = false`; the intra-workspace path deps had no `version`; and there was no license/authors/homepage metadata, with `wingfoil`'s crates.io description still reading "Design prototype". | M |
+| 5.4 | ✅ **`pypi-publish.yml` repointed, and #367 ruled: the wheel ships aeron and iceoryx2.** `aeron` was missing from the `all-adapters` roll-up entirely. Because the matrix builds macOS and Windows too — where iceoryx2 (POSIX-only) and aeron (C library) would *stop the wheel building* rather than enrich it — the Linux wheel is built from `all-adapters` and the other platforms keep the portable pyproject set. | S |
+| 5.5 | ✅ **`.readthedocs.yaml` repointed** — all three keys together. | S |
+| 5.6 | ✅ **Bumped to 9.0.0** — over legacy's 8.x line, which matters now the renamed crate owns `wingfoil` on crates.io. Legacy stays at 8.0.0 (frozen; its `wingfoil-wire-types` pin still moves, or it stops resolving). `bump.yml` now reads its base from `crates/wingfoil` — left on legacy it would have pegged every future release below the shipped version. The `rust-test`/`all-tests`/`rust-fmt` branch filters stay `[main, next]` until the next→main swap. | S |
 
 ### 6. Verification gates — run immediately before the swap
 
