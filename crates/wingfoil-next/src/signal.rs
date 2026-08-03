@@ -1,13 +1,19 @@
-//! Legacy-API compatibility facade (Phase 6, proof of concept).
+//! The **builder-less facade**: free source functions and a [`Signal<T>`] you
+//! run directly, with no [`GraphBuilder`] or [`Runner`] in the caller's hands.
 //!
-//! The whole point of the port is that existing wingfoil code — and the
-//! Python bindings — keep working on the new engine. Legacy code is written
-//! against free source functions and *runs the stream directly*:
+//! This is the shape legacy wingfoil exposes (`nodes::ticker(period)`, then
+//! `stream.run(..)` / `stream.peek_value()`), which is where the module came
+//! from and why it was called `compat` until it was renamed. But the shape
+//! stands on its own: for a short script or a doctest, wiring a graph, holding
+//! a builder and threading a runner is ceremony, and this is the surface that
+//! removes it. Legacy *compatibility* proper is carried by the `legacy/wingfoil`
+//! crate over this engine, not here — see `docs/cutover-plan.md` item 1.4,
+//! which is what rules on whether that facade survives the swap.
 //!
 //! ```
 //! use std::time::Duration;
 //! use wingfoil_next::{NanoTime, RunFor, RunMode};
-//! use wingfoil_next::compat::ticker;
+//! use wingfoil_next::signal::ticker;
 //!
 //! let counted = ticker(Duration::from_nanos(100)).count();
 //! counted.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;
@@ -15,12 +21,19 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! This module reproduces that shape over the [`Builder`](crate::interp)
-//! engine. A [`Signal<T>`] wraps the fluent [`Stream`] plus the shared graph
-//! and a slot for the [`Runner`] produced by `run`, so `run` / `peek_value`
-//! read like the legacy `Stream` API even though the engine underneath is
-//! the new one. It demonstrates the facade carries the legacy ergonomics;
-//! the full ~40-method surface is mechanical from here.
+//! A [`Signal<T>`] wraps the fluent [`Stream`] plus the shared graph and a slot
+//! for the [`Runner`] produced by `run`, so every combinator is the same
+//! forward: unwrap, call the fluent method, re-wrap.
+//!
+//! **That forwarding is generated.** It was hand-written while the module was a
+//! proof of concept, and it drifted — 15 of [`StreamOps`]' 41 methods were
+//! simply missing, one per op nobody remembered to come back for. Each
+//! `#[op(build = x, fluent)]` now emits `__wf_signal_x!` alongside its fluent
+//! twin, and the `impl` blocks below invoke it, so an op cannot land in the
+//! catalog and skip this facade. What stays hand-written is what is not a plain
+//! forward: the source free functions (they *make* the graph), `run` /
+//! `peek_value` (the facade's whole point), and the few combinators whose
+//! `Signal` signature genuinely differs from the fluent one.
 
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -86,36 +99,51 @@ impl<T> Signal<T> {
     }
 }
 
+/// Every combinator that is a **plain forward** to the fluent method of the
+/// same name, generated from the op catalog by `#[op(build = x, fluent)]`.
+///
+/// They share one `impl` block because each generated method carries its own
+/// `where` clause, taken from the op — `difference` asks for `T: Sub`, `print`
+/// for `T: Debug` — so the block itself needs only `T: 'static`, exactly as
+/// `impl<T: 'static> StreamOps<T> for Stream<T>` does.
+///
+/// **Adding an op to the catalog adds it here.** Nothing in this file needs
+/// editing: `#[op(fluent)]` emits `__wf_signal_<name>!` and the only cost is
+/// the one line below. The methods the facade keeps by hand are the ones that
+/// are *not* plain forwards — see the blocks that follow.
 impl<T: 'static> Signal<T> {
-    /// Apply a closure to each value.
-    pub fn map<B, F>(&self, f: F) -> Signal<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> B + 'static,
-    {
-        self.wrap(self.stream.map(f))
-    }
+    __wf_signal_map!(T);
+    __wf_signal_try_map!(T);
+    __wf_signal_map_filter!(T);
+    __wf_signal_fold!(T);
+    __wf_signal_for_each!(T);
+    __wf_signal_ticked_at!(T);
+    __wf_signal_ticked_at_elapsed!(T);
+    __wf_signal_filter!(T);
+    __wf_signal_accumulate!(T);
+    __wf_signal_sample!(T);
+    __wf_signal_merge!(T);
+    __wf_signal_limit!(T);
+    __wf_signal_throttle!(T);
+    __wf_signal_window!(T);
+    __wf_signal_buffer!(T);
+    __wf_signal_inspect!(T);
+    __wf_signal_timed!(T);
+    __wf_signal_finally!(T);
+    __wf_signal_delay!(T);
+    __wf_signal_distinct!(T);
+    __wf_signal_drop_small_change!(T);
+    __wf_signal_print!(T);
+    __wf_signal_difference!(T);
+    __wf_signal_join!(T);
+    __wf_signal_join3!(T);
+    __wf_signal_join_passive!(T);
+    __wf_signal_try_join!(T);
+    __wf_signal_try_join3!(T);
+    __wf_signal_try_join_passive!(T);
+}
 
-    /// Apply a fallible closure to each value; a returned `Err` aborts the
-    /// run with context.
-    pub fn try_map<B, F>(&self, f: F) -> Signal<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> Result<B> + 'static,
-    {
-        self.wrap(self.stream.try_map(f))
-    }
-
-    /// Map and filter in one pass: `f` returns `(value, emit?)` — emit the
-    /// value only when the flag is true.
-    pub fn map_filter<B, F>(&self, f: F) -> Signal<B>
-    where
-        B: Clone + Default + 'static,
-        F: Fn(&T) -> (B, bool) + 'static,
-    {
-        self.wrap(self.stream.map_filter(f))
-    }
-
+impl<T: 'static> Signal<T> {
     /// Map and filter with an `Option` (the legacy `filter_map`): tick the
     /// returned `Some`, drop `None`. Delegates to the fluent
     /// [`map_filter`](StreamOps::map_filter).
@@ -140,16 +168,6 @@ impl<T: 'static> Signal<T> {
         self.wrap(self.stream.map(move |_| f()))
     }
 
-    /// Run a side-effecting fallible closure on each tick — the graph's
-    /// outbound edge (the legacy `for_each` / `try_for_each`). A returned
-    /// `Err` aborts the run with context; emits `()` per tick.
-    pub fn for_each<F>(&self, f: F) -> Signal<()>
-    where
-        F: Fn(&T) -> Result<()> + 'static,
-    {
-        self.wrap(self.stream.for_each(f))
-    }
-
     /// Collapse a burst/iterator value into a single tick of its **last** item
     /// (the legacy `collapse`); stays quiet when the iterator is empty.
     pub fn collapse<OUT>(&self) -> Signal<OUT>
@@ -160,31 +178,12 @@ impl<T: 'static> Signal<T> {
         self.wrap(self.stream.collapse())
     }
 
-    /// Fold values into an accumulator, emitting it after each fold.
-    pub fn fold<B, F>(&self, init: B, f: F) -> Signal<B>
-    where
-        B: Clone + 'static,
-        F: Fn(&mut B, &T) + 'static,
-    {
-        self.wrap(self.stream.fold(init, f))
-    }
-
     /// Pair each value with the current engine time: `(time, value)`.
     pub fn with_time(&self) -> Signal<(NanoTime, T)>
     where
         T: Clone,
     {
         self.wrap(self.stream.with_time())
-    }
-
-    /// Emit the current engine time whenever this signal ticks.
-    pub fn ticked_at(&self) -> Signal<NanoTime> {
-        self.wrap(self.stream.ticked_at())
-    }
-
-    /// Emit elapsed engine time (`now - start`) whenever this signal ticks.
-    pub fn ticked_at_elapsed(&self) -> Signal<NanoTime> {
-        self.wrap(self.stream.ticked_at_elapsed())
     }
 
     /// Run the graph to its bound, storing the runner for `peek_value`.
@@ -228,48 +227,6 @@ impl<T: 'static> Signal<T> {
 }
 
 impl<T: Clone + Default + 'static> Signal<T> {
-    /// Emit only when `condition`'s current value is true.
-    pub fn filter(&self, condition: &Signal<bool>) -> Signal<T> {
-        self.wrap(self.stream.filter(&condition.stream))
-    }
-
-    /// Collect every emitted value into a `Vec`.
-    pub fn accumulate(&self) -> Signal<Vec<T>> {
-        self.wrap(self.stream.accumulate())
-    }
-
-    /// Emit the current value whenever `trigger` ticks (passive read).
-    pub fn sample(&self, trigger: &Signal<()>) -> Signal<T> {
-        self.wrap(self.stream.sample(&trigger.stream))
-    }
-
-    /// Merge with another signal; the earliest-supplied ticked input wins.
-    pub fn merge(&self, other: &Signal<T>) -> Signal<T> {
-        self.wrap(self.stream.merge(&other.stream))
-    }
-
-    /// Pass through the first `limit` values, then stay quiet.
-    pub fn limit(&self, limit: u32) -> Signal<T> {
-        self.wrap(self.stream.limit(limit))
-    }
-
-    /// Rate-limit: emit at most once per `interval`.
-    pub fn throttle(&self, interval: Duration) -> Signal<T> {
-        self.wrap(self.stream.throttle(interval))
-    }
-
-    /// Buffer values and flush them as a `Vec` on each `interval` boundary
-    /// (and once more on the last cycle).
-    pub fn window(&self, interval: Duration) -> Signal<Vec<T>> {
-        self.wrap(self.stream.window(interval))
-    }
-
-    /// Buffer values and flush them as a `Vec` once `capacity` accumulate
-    /// (and once more on the last cycle).
-    pub fn buffer(&self, capacity: usize) -> Signal<Vec<T>> {
-        self.wrap(self.stream.buffer(capacity))
-    }
-
     /// Drop values contingent on a predicate (the legacy `filter_value`):
     /// keep a value only when `predicate` returns true. Delegates to the
     /// fluent [`map_filter`](StreamOps::map_filter).
@@ -291,58 +248,28 @@ impl<T: Clone + Default + 'static> Signal<T> {
             *acc = f(acc, val);
         }))
     }
+}
 
-    /// Observe each value with a side-effecting closure, passing it through
-    /// unchanged (a debug tap — the legacy `inspect`).
-    pub fn inspect<F>(&self, f: F) -> Signal<T>
-    where
-        F: Fn(&T) + 'static,
-    {
-        self.wrap(self.stream.inspect(f))
-    }
-
-    /// Pass each value through unchanged, printing a performance summary at
-    /// the end of the run (the legacy `timed`).
-    pub fn timed(&self) -> Signal<T> {
-        self.wrap(self.stream.timed())
-    }
-
-    /// Run `f` once at teardown — after the run ends, even if a cycle aborted
-    /// it (the legacy `finally`). Observes this signal's last value; emits
-    /// nothing.
-    pub fn finally<F>(&self, f: F) -> Signal<()>
-    where
-        F: Fn(&T) -> Result<()> + 'static,
-    {
-        self.wrap(self.stream.finally(f))
+impl<T: Clone + Default + Debug + 'static> Signal<T> {
+    /// Pass each value through unchanged, logging it at `level` under `label`
+    /// (the legacy `logged`).
+    ///
+    /// Hand-written rather than generated for the reason recorded in
+    /// `tests/op_completeness.rs`: `Logged`'s `Cfg` is `(String, log::Level)`
+    /// but the method takes a `&str` so a `format!`-built label works, and the
+    /// generator forwards the config type verbatim.
+    pub fn logged(&self, label: &str, level: log::Level) -> Signal<T> {
+        self.wrap(self.stream.logged(label, level))
     }
 }
 
 impl<T: Clone + Default + PartialEq + 'static> Signal<T> {
-    /// Re-emit each value `delay` later.
-    pub fn delay(&self, delay: Duration) -> Signal<T> {
-        self.wrap(self.stream.delay(delay))
-    }
-
-    /// Suppress consecutive duplicate values (emit on change only).
-    pub fn distinct(&self) -> Signal<T> {
-        self.wrap(self.stream.distinct())
-    }
-
     /// [`delay`](Signal::delay) with a reset trigger (the legacy
     /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
     /// current value and any pending (delayed) values are dropped. `trigger`
     /// is read for its tick only, so its value type is irrelevant.
     pub fn delay_with_reset<U: 'static>(&self, delay: Duration, trigger: &Signal<U>) -> Signal<T> {
         self.wrap(self.stream.delay_with_reset(delay, &trigger.stream))
-    }
-}
-
-impl<T: Clone + Default + Debug + 'static> Signal<T> {
-    /// Pass each value through unchanged while buffering it, then print the
-    /// whole buffer at teardown (the legacy `print`).
-    pub fn print(&self) -> Signal<T> {
-        self.wrap(self.stream.print())
     }
 }
 
@@ -368,13 +295,6 @@ impl<T: Clone + Default + 'static> Signal<Option<T>> {
             Some(v) => (v, true),
             None => (T::default(), false),
         }))
-    }
-}
-
-impl<T: Clone + Default + Sub<Output = T> + 'static> Signal<T> {
-    /// Emit the successive difference `value - previous`; quiet on the first.
-    pub fn difference(&self) -> Signal<T> {
-        self.wrap(self.stream.difference())
     }
 }
 

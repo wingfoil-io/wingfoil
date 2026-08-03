@@ -2118,13 +2118,17 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     // Edges 1.. become `&Stream<_>` parameters; their handles are taken
     // before the wiring closure so it can capture them by value.
     let edge_ids: Vec<Ident> = (1..n).map(|i| format_ident!("__e{i}")).collect();
-    let edge_params = edge_ids
+    let edge_tys: Vec<TokenStream2> = shape
+        .edge_val_tys
         .iter()
-        .zip(shape.edge_val_tys.iter().skip(1))
-        .map(|(id, ty)| {
-            let ty = sub(quote! { #ty });
-            quote! { #id: &$crate::fluent::Stream<#ty> }
-        });
+        .skip(1)
+        .map(|ty| sub(quote! { #ty }))
+        .collect();
+    let edge_params: Vec<TokenStream2> = edge_ids
+        .iter()
+        .zip(&edge_tys)
+        .map(|(id, ty)| quote! { #id: &$crate::fluent::Stream<#ty> })
+        .collect();
 
     let (state_ty, cfg_ty, raw_out) = (b.state_ty, b.cfg_ty, b.out_ty);
     let (init_param, init_arg) = if args.init_arg {
@@ -2214,6 +2218,20 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
          inside an extension-trait `impl` — `{invocation}` — to define the \
          `{name}` method {doc_tail}."
     );
+    let signal = expand_signal(SignalShape {
+        name,
+        receiver: &receiver,
+        matcher: &matcher,
+        generics: &generics,
+        edge_ids: &edge_ids,
+        edge_tys: &edge_tys,
+        init_param: &init_param,
+        init_arg: &init_arg,
+        cfg_param: &cfg_param,
+        cfg_arg: &cfg_arg,
+        out_ty: &out_ty,
+        preds: &preds,
+    });
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
@@ -2231,7 +2249,104 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 }
             };
         }
+        #signal
     })
+}
+
+/// The pieces [`expand_fluent`] has already derived that [`expand_signal`]
+/// re-uses verbatim. Everything here is computed once, against the op's shape;
+/// the `Signal` twin differs only in the types it wraps and the body it emits.
+struct SignalShape<'a> {
+    name: &'a Ident,
+    receiver: &'a FluentReceiver,
+    matcher: &'a TokenStream2,
+    generics: &'a TokenStream2,
+    edge_ids: &'a [Ident],
+    edge_tys: &'a [TokenStream2],
+    init_param: &'a TokenStream2,
+    init_arg: &'a TokenStream2,
+    cfg_param: &'a TokenStream2,
+    cfg_arg: &'a TokenStream2,
+    out_ty: &'a TokenStream2,
+    preds: &'a [TokenStream2],
+}
+
+/// Writes the op's [`Signal`](../wingfoil_next/signal/index.html) method —
+/// the implicit-graph facade's twin of the fluent one — as
+/// `__wf_signal_<name>!`.
+///
+/// `Signal<T>` is a newtype over `Stream<T>` carrying the graph and a slot for
+/// its `Runner`, so every one of its combinators is the same forward: unwrap
+/// the receiver and each edge, wire the op, re-wrap. That is mechanical enough
+/// that the facade drifted — it was missing 15 of `StreamOps`' 41 methods, one
+/// per op nobody remembered to hand-forward — so the macro writes it.
+///
+/// The body wires through `Stream::wire` and the op's generated `Builder`
+/// method — the same target the fluent method forwards to — rather than
+/// calling the fluent method itself. That keeps the `Signal` method's bounds
+/// exactly the op's: a hand-written trait declaration is free to be *stricter*
+/// than the op needs (`StreamOps::accumulate` asks for `T: Default` where the
+/// op, whose `Out` is a `Vec<T>`, does not), and routing through it would
+/// import that stricter bound into a signature the generator did not write.
+///
+/// Unlike the fluent method these are **inherent** methods, so there is no
+/// hand-written trait declaration for rustc to check the body against. The
+/// whole method is generated, docs included: they point at the op's `Builder`
+/// method, whose docs are the op witness type's, so the semantics are stated
+/// once and the facade cannot describe them differently from the engine.
+///
+/// A source gets no method — it enters the facade as a free function that
+/// makes the graph (`signal::ticker`), which is a different shape and stays
+/// hand-written.
+///
+/// The expansion names `Signal`'s private fields, so it only compiles inside
+/// the module that defines them; that is why the macro is `__`-prefixed and
+/// undocumented in the public API despite `#[macro_export]`.
+fn expand_signal(s: SignalShape<'_>) -> TokenStream2 {
+    if matches!(s.receiver, FluentReceiver::Source) {
+        return quote! {};
+    }
+    let (name, generics, matcher) = (s.name, s.generics, s.matcher);
+    let (edge_ids, init_arg, cfg_arg) = (s.edge_ids, s.init_arg, s.cfg_arg);
+    let (init_param, cfg_param, out_ty, preds) = (s.init_param, s.cfg_param, s.out_ty, s.preds);
+    let edge_params = edge_ids
+        .iter()
+        .zip(s.edge_tys)
+        .map(|(id, ty)| quote! { #id: &$crate::signal::Signal<#ty> });
+
+    let mac = format_ident!("__wf_signal_{name}");
+    let method_doc = format!(
+        "The [`Signal`](crate::signal::Signal) form of [`{name}`]\
+         (crate::interp::Builder::{name}) — see there for what it computes and \
+         when it ticks. Generated by `#[op(fluent)]`."
+    );
+    let doc = format!(
+        "`Signal` wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke \
+         it inside an `impl Signal<..>` block in the facade's own module — the \
+         expansion names `Signal`'s private fields."
+    );
+    quote! {
+        #[doc = #doc]
+        #[macro_export]
+        macro_rules! #mac {
+            #matcher => {
+                #[doc = #method_doc]
+                pub fn #name #generics (
+                    &self,
+                    #(#edge_params,)*
+                    #init_param
+                    #cfg_param
+                ) -> $crate::signal::Signal<#out_ty>
+                where #(#preds),*
+                {
+                    #(let #edge_ids = $crate::fluent::Stream::handle(&#edge_ids.stream);)*
+                    self.wrap(self.stream.wire(
+                        move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg)
+                    ))
+                }
+            };
+        }
+    }
 }
 
 /// Which of the three receiver shapes an op's [generated fluent

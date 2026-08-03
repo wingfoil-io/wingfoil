@@ -273,6 +273,36 @@ Hand-written, it is a one-liner over `Stream::wire`:
   `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters. The trait is
   yours to declare; only the body comes from the macro.
 
+## 4b. The `Signal` facade — one line, and don't skip it
+
+`#[op(build = $ARGUMENTS, fluent)]` emits a **second** macro,
+`__wf_signal_$ARGUMENTS!`, which writes the same combinator for the
+builder-less [`Signal`] facade in `src/signal.rs`. Add the one line to the
+generated `impl<T: 'static> Signal<T>` block:
+
+```rust
+__wf_signal_$ARGUMENTS!(T);      // or !(); for a concrete receiver
+```
+
+**This is a real obligation, not a nicety.** The facade's forwarding was
+hand-written until 2026-08, and it silently fell 15 methods behind the catalog
+— `logged`, the whole `join`/`try_join` family, `drop_small_change` — because
+each op author had no reason to think of it. One line now, or the same drift
+again.
+
+The macro is skipped in exactly two cases, both mirroring step 4: a **source**
+(it enters the facade as a free function that *makes* the graph — hand-write it
+next to `ticker`/`constant`), and an op whose `Signal` signature is not a plain
+forward (`logged`'s `&str` label vs its `(String, Level)` `Cfg`). Put those in
+one of the bound-grouped blocks lower in the file with a comment saying which
+case applies.
+
+Note the generated body wires through `Stream::wire` and the op's `Builder`
+method — **not** through the fluent method. A hand-written trait declaration
+may legitimately be stricter than the op needs (`StreamOps::accumulate`
+requires `T: Default` where the op, whose `Out` is `Vec<T>`, does not), and
+going through it would import that bound into a signature nobody wrote.
+
 ## 5. `nitro!` / compiled coverage
 
 For any `#[op]` op this is **zero-touch**: the attribute emits the
