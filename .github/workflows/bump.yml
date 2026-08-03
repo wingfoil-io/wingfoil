@@ -51,8 +51,26 @@ jobs:
           esac
           NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
           echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, wasm: $WASM_VERSION, base: $BASE, new: $NEW_VERSION"
+          # Legacy first, root second — order is load-bearing. `legacy/` is its
+          # own workspace now (cutover-plan 5.0) and `set-version` runs
+          # `cargo metadata`, so it has to resolve while the tree is still
+          # internally consistent. Bumping the root first would leave
+          # `wingfoil-wire-types` at NEW against legacy's `^OLD` pin and the
+          # resolve would fail — the same trap the wasm step below documents.
+          cargo set-version --manifest-path legacy/Cargo.toml "$NEW_VERSION"
           cargo set-version "$NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Re-pin legacy's cross-workspace dependency
+        run: |
+          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
+          # `set-version` re-pins dependencies on packages it bumped, and
+          # `wingfoil-wire-types` is not a legacy member — it lives in the root
+          # workspace, so legacy's pin on it is left on the old requirement.
+          # Sed it, like the wasm crate's below.
+          sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./\\.\\./crates/wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" \
+            legacy/wingfoil/Cargo.toml
+          grep -n 'wingfoil-wire-types' legacy/wingfoil/Cargo.toml
 
       - name: Bump wingfoil-wasm (excluded from workspace)
         run: |

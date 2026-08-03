@@ -196,7 +196,12 @@ libc = { version = "0.2", optional = true }
 [dev-dependencies]
 rxrust = "1.0.0-rc.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
-cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+# `cargo-husky` moved to `crates/wingfoil-next` when this tree left the root
+# workspace (cutover-plan 5.0). It resolves the project root by walking up from
+# `OUT_DIR`, i.e. from the *building workspace's* target dir — so from here it
+# would now land on `legacy/`, which holds no `.cargo-husky/hooks`, and the git
+# hooks would silently stop being installed. Owned by the root workspace, which
+# is where the hooks and `.git` are.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 # Used directly by the criterion benches in `benches/`.

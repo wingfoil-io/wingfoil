@@ -188,8 +188,6 @@ cargo build --release
 # Test
 cargo test
 cargo test -p wingfoil-next --all-features
-cargo test -p wingfoil            # legacy
-cargo test -p wingfoil-python     # legacy
 
 # Python tests
 cd crates/wingfoil-next-python && maturin develop && pytest
@@ -206,6 +204,27 @@ cargo lint        # default features
 cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2`, etc.
 cargo fmt --all -- --check
 ```
+
+**`legacy/` is a separate workspace.** It left the root one ahead of the
+cutover rename — `wingfoil-next` becomes `wingfoil`, and one workspace cannot
+hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
+touches it, and `-p wingfoil` / `-p wingfoil-python` no longer resolve from the
+root. Use the nested manifest:
+
+```bash
+cargo test   --manifest-path legacy/Cargo.toml --workspace
+cargo test   --manifest-path legacy/Cargo.toml -p wingfoil --features full
+cargo lint-legacy    # clippy, default features (alias)
+cargo test-legacy    # the whole legacy workspace (alias)
+```
+
+Two consequences to keep in mind. Legacy artifacts now build into
+**`legacy/target/`**, not the root `target/` — `scripts/disk.sh` already finds
+both. And the git hooks only run the root workspace (`cargo clippy
+--workspace`, `cargo test --workspace`), so **a change under `legacy/` is not
+covered by the pre-commit or pre-push hook** — run the two aliases above by
+hand before pushing legacy work. CI still gates it, in the `Lint legacy` and
+`Test (wingfoil) & Coverage` jobs.
 
 `protoc` is required on the build machine (a transitive dependency builds proto
 files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
@@ -245,6 +264,11 @@ Three things make the tree large, and they compound:
   `wingfoil`, and cargo unifies features across a `--workspace` build, so plain
   `cargo build --workspace` already compiles nearly the whole `full` tree.
   `cargo lint` and `cargo lint-all` differ only by aeron and iceoryx2.
+  **This is much less true since `legacy/` left the workspace** — that
+  13-feature roll-up is no longer in the root graph at all, so a root build now
+  compiles the next tree's own feature selection and nothing more. The figures
+  below predate the split and are therefore worst-case; the legacy tree still
+  costs all of it, but only when you build `legacy/Cargo.toml`.
 - **`lint-all` cannot reuse `lint`'s work.** A different feature set means a
   different metadata hash, so the two pre-commit lints build two full artifact
   sets back to back. If space is tight, `scripts/disk.sh light` between them.

@@ -1,0 +1,234 @@
+Cloning librdkafka
+Configuring librdkafka
+checking for OS or distribution... [32mok[m (ubuntu)
+checking for C compiler from CC env... [33mfailed[m
+checking for gcc (by command)... [32mok[m
+checking for C++ compiler from CXX env... [33mfailed[m
+checking for C++ compiler (g++)... [32mok[m
+checking executable ld... [32mok[m
+checking executable nm... [32mok[m
+checking executable objdump... [32mok[m
+checking executable strip... [32mok[m
+checking executable libtool... [33mfailed[m (disable)
+checking executable ranlib... [32mok[m
+checking for pkgconfig (by command)... [32mok[m
+checking for install (by command)... [32mok[m
+checking for GNU ar... [32mok[m
+checking for PIC (by compile)... [32mok[m
+checking for GNU-compatible linker options... [32mok[m
+checking for GNU linker-script ld flag... [32mok[m
+checking for __atomic_32 (by compile)... [32mok[m
+checking for __atomic_64 (by compile)... [32mok[m
+checking for socket (by compile)... [32mok[m
+parsing version '0x020c01ff'... [32mok[m (2.12.1)
+checking for librt (by pkg-config)... [33mfailed[m
+checking for librt (by compile)... [32mok[m
+checking for libpthread (by pkg-config)... [33mfailed[m
+checking for libpthread (by compile)... [32mok[m
+checking for c11threads (by pkg-config)... [33mfailed[m
+checking for c11threads (by compile)... [32mok[m
+checking for libdl (by pkg-config)... [33mfailed[m
+checking for libdl (by compile)... [32mok[m
+checking for zlib (by pkg-config)... [32mok[m
+checking for libm (by pkg-config)... [33mfailed[m
+checking for libm (by compile)... [32mok[m
+checking for syslog (by compile)... [32mok[m
+checking for rapidjson (by compile)... [33mfailed[m (disable)
+checking for crc32chw (by compile)... [32mok[m
+checking for regex (by compile)... [32mok[m
+checking for rand_r (by compile)... [32mok[m
+checking for strndup (by compile)... [32mok[m
+checking for strlcpy (by compile)... [32mok[m
+checking for strerror_r (by compile)... [32mok[m
+checking for strcasestr (by compile)... [32mok[m
+checking for pthread_setname_gnu (by compile)... [32mok[m
+checking for nm (by env NM)... [32mok[m (cached)
+checking for python3 (by command)... [32mok[m
+checking for getrusage (by compile)... [32mok[m
+Generated Makefile.config
+Generated config.h
+
+Configuration summary:
+  prefix                   /usr/local
+  MKL_DISTRO               ubuntu
+  SOLIB_EXT                .so
+  ARCH                     x86_64
+  CPU                      generic
+  GEN_PKG_CONFIG           y
+  MKL_APP_NAME             librdkafka
+  MKL_APP_DESC_ONELINE     The Apache Kafka C/C++ library
+  CC                       gcc
+  CXX                      g++
+  LD                       ld
+  NM                       nm
+  OBJDUMP                  objdump
+  STRIP                    strip
+  RANLIB                   ranlib
+  CPPFLAGS                 -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align
+  PKG_CONFIG               pkg-config
+  INSTALL                  /usr/bin/install
+  HAS_GNU_AR               y
+  LIB_LDFLAGS              -shared -Wl,-soname,$(LIBFILENAME)
+  LDFLAG_LINKERSCRIPT      -Wl,--version-script=
+  RDKAFKA_VERSION_STR      2.12.1
+  MKL_APP_VERSION          2.12.1
+  LIBS                     -lm -lz  -ldl -lpthread -lrt -lpthread -lrt
+  MKL_PKGCONFIG_LIBS_PRIVATE -lm -ldl -lpthread -lrt -lpthread -lrt
+  MKL_PKGCONFIG_REQUIRES_PRIVATE zlib
+  CFLAGS                   
+  MKL_PKGCONFIG_REQUIRES   zlib
+  CXXFLAGS                 -Wno-non-virtual-dtor
+  SYMDUMPER                $(NM) -D
+  MKL_DYNAMIC_LIBS         -lm -lz -ldl -lpthread -lrt -lpthread -lrt
+  exec_prefix              /usr/local
+  bindir                   /usr/local/bin
+  sbindir                  /usr/local/sbin
+  libexecdir               /usr/local/libexec
+  datadir                  /usr/local/share
+  sysconfdir               /usr/local/etc
+  sharedstatedir           /usr/local/com
+  localstatedir            /usr/local/var
+  runstatedir              /usr/local/var/run
+  libdir                   /usr/local/lib
+  includedir               /usr/local/include
+  infodir                  /usr/local/info
+  mandir                   /usr/local/man
+  BUILT_WITH               GCC GXX PKGCONFIG INSTALL GNULD LDS C11THREADS LIBDL PLUGINS ZLIB HDRHISTOGRAM SYSLOG SNAPPY SOCKEM CRC32C_HW
+Generated config.cache
+
+Now type 'make' to build
+Compiling librdkafka
+make[1]: Entering directory '/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/src'
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka.c -o rdkafka.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_broker.c -o rdkafka_broker.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_msg.c -o rdkafka_msg.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_topic.c -o rdkafka_topic.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_conf.c -o rdkafka_conf.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_timer.c -o rdkafka_timer.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_offset.c -o rdkafka_offset.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_transport.c -o rdkafka_transport.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_buf.c -o rdkafka_buf.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_queue.c -o rdkafka_queue.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_op.c -o rdkafka_op.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_request.c -o rdkafka_request.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_cgrp.c -o rdkafka_cgrp.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_pattern.c -o rdkafka_pattern.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_partition.c -o rdkafka_partition.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_subscription.c -o rdkafka_subscription.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_assignment.c -o rdkafka_assignment.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_assignor.c -o rdkafka_assignor.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_range_assignor.c -o rdkafka_range_assignor.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_roundrobin_assignor.c -o rdkafka_roundrobin_assignor.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_sticky_assignor.c -o rdkafka_sticky_assignor.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_feature.c -o rdkafka_feature.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdcrc32.c -o rdcrc32.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c crc32c.c -o crc32c.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdmurmur2.c -o rdmurmur2.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdfnv1a.c -o rdfnv1a.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c cJSON.c -o cJSON.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdaddr.c -o rdaddr.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdrand.c -o rdrand.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdlist.c -o rdlist.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c tinycthread.c -o tinycthread.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c tinycthread_extra.c -o tinycthread_extra.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdlog.c -o rdlog.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdstring.c -o rdstring.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_event.c -o rdkafka_event.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_metadata.c -o rdkafka_metadata.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdregex.c -o rdregex.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdports.c -o rdports.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_metadata_cache.c -o rdkafka_metadata_cache.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdavl.c -o rdavl.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_sasl.c -o rdkafka_sasl.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_sasl_plain.c -o rdkafka_sasl_plain.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_interceptor.c -o rdkafka_interceptor.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_msgset_writer.c -o rdkafka_msgset_writer.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_msgset_reader.c -o rdkafka_msgset_reader.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_header.c -o rdkafka_header.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_admin.c -o rdkafka_admin.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_aux.c -o rdkafka_aux.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_background.c -o rdkafka_background.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_idempotence.c -o rdkafka_idempotence.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_cert.c -o rdkafka_cert.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_txnmgr.c -o rdkafka_txnmgr.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_coord.c -o rdkafka_coord.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdbase64.c -o rdbase64.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdvarint.c -o rdvarint.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdbuf.c -o rdbuf.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdmap.c -o rdmap.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdunittest.c -o rdunittest.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_mock.c -o rdkafka_mock.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_mock_handlers.c -o rdkafka_mock_handlers.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_mock_cgrp.c -o rdkafka_mock_cgrp.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_error.c -o rdkafka_error.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_fetcher.c -o rdkafka_fetcher.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_telemetry.c -o rdkafka_telemetry.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_telemetry_encode.c -o rdkafka_telemetry_encode.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_telemetry_decode.c -o rdkafka_telemetry_decode.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c nanopb/pb_encode.c -o nanopb/pb_encode.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c nanopb/pb_decode.c -o nanopb/pb_decode.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c nanopb/pb_common.c -o nanopb/pb_common.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c opentelemetry/metrics.pb.c -o opentelemetry/metrics.pb.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c opentelemetry/common.pb.c -o opentelemetry/common.pb.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c opentelemetry/resource.pb.c -o opentelemetry/resource.pb.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c snappy.c -o snappy.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdgz.c -o rdgz.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdhdrhistogram.c -o rdhdrhistogram.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_lz4.c -o rdkafka_lz4.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -O3 -c rdxxhash.c -o rdxxhash.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -O3 -c lz4.c -o lz4.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -O3 -c lz4frame.c -o lz4frame.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -O3 -c lz4hc.c -o lz4hc.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rddl.c -o rddl.o
+gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -I.  -c rdkafka_plugin.c -o rdkafka_plugin.o
+[33mGenerating linker script librdkafka.lds from rdkafka.h rdkafka_mock.h[m
+[33mGenerating pkg-config file rdkafka.pc[m
+[33mCreating shared library librdkafka.so.1[m
+gcc  -shared -Wl,-soname,librdkafka.so.1 -Wl,--version-script=librdkafka.lds rdkafka.o rdkafka_broker.o rdkafka_msg.o rdkafka_topic.o rdkafka_conf.o rdkafka_timer.o rdkafka_offset.o rdkafka_transport.o rdkafka_buf.o rdkafka_queue.o rdkafka_op.o rdkafka_request.o rdkafka_cgrp.o rdkafka_pattern.o rdkafka_partition.o rdkafka_subscription.o rdkafka_assignment.o rdkafka_assignor.o rdkafka_range_assignor.o rdkafka_roundrobin_assignor.o rdkafka_sticky_assignor.o rdkafka_feature.o rdcrc32.o crc32c.o rdmurmur2.o rdfnv1a.o cJSON.o rdaddr.o rdrand.o rdlist.o tinycthread.o tinycthread_extra.o rdlog.o rdstring.o rdkafka_event.o rdkafka_metadata.o rdregex.o rdports.o rdkafka_metadata_cache.o rdavl.o rdkafka_sasl.o rdkafka_sasl_plain.o rdkafka_interceptor.o rdkafka_msgset_writer.o rdkafka_msgset_reader.o rdkafka_header.o rdkafka_admin.o rdkafka_aux.o rdkafka_background.o rdkafka_idempotence.o rdkafka_cert.o rdkafka_txnmgr.o rdkafka_coord.o rdbase64.o rdvarint.o rdbuf.o rdmap.o rdunittest.o rdkafka_mock.o rdkafka_mock_handlers.o rdkafka_mock_cgrp.o rdkafka_error.o rdkafka_fetcher.o rdkafka_telemetry.o rdkafka_telemetry_encode.o rdkafka_telemetry_decode.o nanopb/pb_encode.o nanopb/pb_decode.o nanopb/pb_common.o opentelemetry/metrics.pb.o opentelemetry/common.pb.o opentelemetry/resource.pb.o snappy.o rdgz.o rdhdrhistogram.o rdkafka_lz4.o rdxxhash.o lz4.o lz4frame.o lz4hc.o rddl.o rdkafka_plugin.o -o librdkafka.so.1 -lm -lz  -ldl -lpthread -lrt -lpthread -lrt
+[33mCreating static library librdkafka.a[m
+ar rcs librdkafka.a rdkafka.o rdkafka_broker.o rdkafka_msg.o rdkafka_topic.o rdkafka_conf.o rdkafka_timer.o rdkafka_offset.o rdkafka_transport.o rdkafka_buf.o rdkafka_queue.o rdkafka_op.o rdkafka_request.o rdkafka_cgrp.o rdkafka_pattern.o rdkafka_partition.o rdkafka_subscription.o rdkafka_assignment.o rdkafka_assignor.o rdkafka_range_assignor.o rdkafka_roundrobin_assignor.o rdkafka_sticky_assignor.o rdkafka_feature.o rdcrc32.o crc32c.o rdmurmur2.o rdfnv1a.o cJSON.o rdaddr.o rdrand.o rdlist.o tinycthread.o tinycthread_extra.o rdlog.o rdstring.o rdkafka_event.o rdkafka_metadata.o rdregex.o rdports.o rdkafka_metadata_cache.o rdavl.o rdkafka_sasl.o rdkafka_sasl_plain.o rdkafka_interceptor.o rdkafka_msgset_writer.o rdkafka_msgset_reader.o rdkafka_header.o rdkafka_admin.o rdkafka_aux.o rdkafka_background.o rdkafka_idempotence.o rdkafka_cert.o rdkafka_txnmgr.o rdkafka_coord.o rdbase64.o rdvarint.o rdbuf.o rdmap.o rdunittest.o rdkafka_mock.o rdkafka_mock_handlers.o rdkafka_mock_cgrp.o rdkafka_error.o rdkafka_fetcher.o rdkafka_telemetry.o rdkafka_telemetry_encode.o rdkafka_telemetry_decode.o nanopb/pb_encode.o nanopb/pb_decode.o nanopb/pb_common.o opentelemetry/metrics.pb.o opentelemetry/common.pb.o opentelemetry/resource.pb.o snappy.o rdgz.o rdhdrhistogram.o rdkafka_lz4.o rdxxhash.o lz4.o lz4frame.o lz4hc.o rddl.o rdkafka_plugin.o
+cp librdkafka.a librdkafka-dbg.a
+[31mWARNING:[33m librdkafka-static.a: No static libraries available/enabled for inclusion in self-contained static library librdkafka-static.a: this library will be identical to librdkafka.a[m
+[31mWARNING:[33m librdkafka-static.a: The following libraries were not available as static libraries and need to be linked dynamically: -lm -lz -ldl -lpthread -lrt -lpthread -lrt[m
+cp librdkafka.a librdkafka-static.a
+cp librdkafka.so.1 librdkafka-dbg.so.1
+[33mCreating librdkafka.so symlink[m
+rm -f "librdkafka.so" && ln -s "librdkafka.so.1" "librdkafka.so"
+cp librdkafka-dbg.a librdkafka-static-dbg.a
+cp librdkafka-static.a librdkafka-static-dbg.a
+[33mGenerating pkg-config file rdkafka-static.pc[m
+[33mChecking librdkafka integrity[m
+librdkafka.so.1                [32mOK[m
+librdkafka.a                   [32mOK[m
+Symbol visibility              [32mOK[m
+make[1]: Leaving directory '/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/src'
+make[1]: Entering directory '/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/src-cpp'
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c RdKafka.cpp -o RdKafka.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c ConfImpl.cpp -o ConfImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c HandleImpl.cpp -o HandleImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c ConsumerImpl.cpp -o ConsumerImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c ProducerImpl.cpp -o ProducerImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c KafkaConsumerImpl.cpp -o KafkaConsumerImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c TopicImpl.cpp -o TopicImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c TopicPartitionImpl.cpp -o TopicPartitionImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c MessageImpl.cpp -o MessageImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c HeadersImpl.cpp -o HeadersImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c QueueImpl.cpp -o QueueImpl.o
+g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wcast-align -Wno-non-virtual-dtor -c MetadataImpl.cpp -o MetadataImpl.o
+[33mGenerating pkg-config file rdkafka++.pc[m
+[33mGenerating pkg-config file rdkafka++-static.pc[m
+[33mCreating shared library librdkafka++.so.1[m
+g++  -shared -Wl,-soname,librdkafka++.so.1 RdKafka.o ConfImpl.o HandleImpl.o ConsumerImpl.o ProducerImpl.o KafkaConsumerImpl.o TopicImpl.o TopicPartitionImpl.o MessageImpl.o HeadersImpl.o QueueImpl.o MetadataImpl.o -o librdkafka++.so.1 -L../src -lrdkafka
+cp librdkafka++.so.1 librdkafka++-dbg.so.1
+[33mCreating static library librdkafka++.a[m
+ar rcs librdkafka++.a RdKafka.o ConfImpl.o HandleImpl.o ConsumerImpl.o ProducerImpl.o KafkaConsumerImpl.o TopicImpl.o TopicPartitionImpl.o MessageImpl.o HeadersImpl.o QueueImpl.o MetadataImpl.o
+cp librdkafka++.a librdkafka++-dbg.a
+[33mCreating librdkafka++.so symlink[m
+rm -f "librdkafka++.so" && ln -s "librdkafka++.so.1" "librdkafka++.so"
+[33mChecking librdkafka++ integrity[m
+librdkafka++.so.1              [32mOK[m
+librdkafka++.a                 [32mOK[m
+make[1]: Leaving directory '/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/src-cpp'
+cargo:rustc-link-search=native=/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/src
+cargo:rustc-link-lib=static=rdkafka
+cargo:root=/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out
