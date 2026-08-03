@@ -175,6 +175,14 @@ struct NodeDef {
     /// which also keeps the mask's `>> position` shift inside `u32` when the
     /// fan-in is wider than 32.
     variadic: bool,
+    /// The call-site turbofish, if any: `.stamp::<quote::produce>()`.
+    ///
+    /// Type arguments cannot ride the `Cfg` path the way values do — there is
+    /// no value to forward — so they are carried here and re-emitted verbatim
+    /// on the forwarder call. `#[op(explicit = ..)]` hoists the matching
+    /// parameters to the front of the forwarder signature so this prefix binds
+    /// them and lets rustc infer the rest.
+    turbofish: Option<syn::AngleBracketedGenericArguments>,
 }
 
 impl NodeDef {
@@ -193,6 +201,26 @@ impl NodeDef {
     fn forwarder(&self, kind: &str) -> Ident {
         let method = self.method();
         Ident::new(&format!("__wf_op_{method}_{kind}"), method.span())
+    }
+
+    /// The leading `PhantomData::<..>` argument carrying a call-site turbofish
+    /// into the forwarder, or nothing when the call had none.
+    ///
+    /// A type argument cannot ride the `Cfg` path the way a value does, and it
+    /// cannot be a turbofish on the forwarder either: Rust wants all of a
+    /// function's type arguments or none, and this macro never learns how many
+    /// the forwarder has — it only ever sees a method-name token. So the stage
+    /// crosses as a **value** whose type carries it, and inference resolves the
+    /// op's parameter from the argument. `#[op(explicit = ..)]` is what makes
+    /// the forwarder accept it.
+    fn stage_arg(&self) -> TokenStream2 {
+        match &self.turbofish {
+            Some(tf) => {
+                let args: Vec<&syn::GenericArgument> = tf.args.iter().collect();
+                quote! { ::core::marker::PhantomData::<(#(#args,)*)>, }
+            }
+            None => quote! {},
+        }
     }
 
     /// The `__WF_OP_<METHOD>_<kind>` const ident (ACTIVATION / PASSIVE).
@@ -356,6 +384,7 @@ impl ChainWalker {
         method: Ident,
         receiver: Option<usize>,
         args: &[&Expr],
+        turbofish: Option<&syn::AngleBracketedGenericArguments>,
     ) -> syn::Result<usize> {
         let mut refs: Vec<usize> = receiver.into_iter().collect();
         let mut plain: Vec<Expr> = Vec::new();
@@ -378,7 +407,7 @@ impl ChainWalker {
                 plain.push((*arg).clone());
             }
         }
-        Ok(self.push_node(name, Some(method), refs, plain, closure))
+        Ok(self.push_node(name, Some(method), refs, plain, closure, turbofish.cloned()))
     }
 
     fn push_node(
@@ -388,6 +417,7 @@ impl ChainWalker {
         refs: Vec<usize>,
         plain: Vec<Expr>,
         closure: Option<Expr>,
+        turbofish: Option<syn::AngleBracketedGenericArguments>,
     ) -> usize {
         let ix = self.nodes.len();
         self.nodes.push(NodeDef {
@@ -397,6 +427,7 @@ impl ChainWalker {
             plain,
             closure,
             variadic: false,
+            turbofish,
         });
         ix
     }
@@ -408,7 +439,14 @@ impl ChainWalker {
         if let [only] = tails[..] {
             return only;
         }
-        let ix = self.push_node(name, Some(Ident::new("merge_n", span)), tails, vec![], None);
+        let ix = self.push_node(
+            name,
+            Some(Ident::new("merge_n", span)),
+            tails,
+            vec![],
+            None,
+            None,
+        );
         self.nodes[ix].variadic = true;
         ix
     }
@@ -463,12 +501,16 @@ impl ChainWalker {
         builder: &Ident,
     ) -> syn::Result<()> {
         // Collect the chain: innermost receiver first.
-        let mut calls: Vec<(&Ident, Vec<&Expr>)> = Vec::new();
+        let mut calls: Vec<(
+            &Ident,
+            Vec<&Expr>,
+            Option<&syn::AngleBracketedGenericArguments>,
+        )> = Vec::new();
         let mut cur = expr;
         loop {
             match cur {
                 Expr::MethodCall(mc) => {
-                    calls.push((&mc.method, mc.args.iter().collect()));
+                    calls.push((&mc.method, mc.args.iter().collect(), mc.turbofish.as_ref()));
                     cur = &mc.receiver;
                 }
                 Expr::Path(p) => {
@@ -496,7 +538,11 @@ impl ChainWalker {
         bound_name: &Ident,
         root: &Ident,
         builder: &Ident,
-        calls: &[(&Ident, Vec<&Expr>)],
+        calls: &[(
+            &Ident,
+            Vec<&Expr>,
+            Option<&syn::AngleBracketedGenericArguments>,
+        )],
         span: proc_macro2::Span,
     ) -> syn::Result<()> {
         let mut calls = calls.iter().peekable();
@@ -504,7 +550,7 @@ impl ChainWalker {
         // Resolve the chain's starting node: either a source call on the
         // builder, or a previously bound stream.
         let mut cur: usize = if root == builder {
-            let Some((method, args)) = calls.next() else {
+            let Some((method, args, turbofish)) = calls.next() else {
                 return Err(syn::Error::new(
                     span,
                     "the builder must be followed by a source call",
@@ -520,7 +566,7 @@ impl ChainWalker {
             // `#[op]`-generated forwarders. No receiver, so no edges (a
             // `&stream` argument still classifies as an edge, which a
             // source's forwarder arity will reject).
-            self.push_op(name, (*method).clone(), None, args)?
+            self.push_op(name, (*method).clone(), None, args, *turbofish)?
         } else {
             self.lookup(root)?
         };
@@ -529,13 +575,13 @@ impl ChainWalker {
         // combinators push a single node; `map_n` / `fan` expand to several
         // (bounded compile-time repetition — the DAG stays static).
         while let Some(call) = calls.next() {
-            let (method, args) = (call.0, &call.1);
+            let (method, args, turbofish) = (call.0, &call.1, call.2);
             let name = if calls.peek().is_none() {
                 bound_name.clone()
             } else {
                 self.anon_name(method.span())
             };
-            cur = self.apply_call(cur, method, args, name)?;
+            cur = self.apply_call(cur, method, args, name, turbofish)?;
         }
 
         if bound_name.to_string().starts_with(RESERVED_PREFIX) {
@@ -569,6 +615,7 @@ impl ChainWalker {
         method: &Ident,
         args: &[&Expr],
         name: Ident,
+        turbofish: Option<&syn::AngleBracketedGenericArguments>,
     ) -> syn::Result<usize> {
         Ok(match method.to_string().as_str() {
             // Bounded repetition sugar. `map_n(N, f)` unrolls to N chained
@@ -587,7 +634,7 @@ impl ChainWalker {
                     } else {
                         self.anon_name(method.span())
                     };
-                    tail = self.push_op(node_name, map.clone(), Some(tail), &[f])?;
+                    tail = self.push_op(node_name, map.clone(), Some(tail), &[f], None)?;
                 }
                 tail
             }
@@ -654,7 +701,7 @@ impl ChainWalker {
             // naming-convention forwarders. A typo (or an op with no
             // forwarders in scope) fails as an unresolved
             // `__wf_op_<name>_cycle`, spanned at this method.
-            _ => self.push_op(name, method.clone(), Some(cur), args)?,
+            _ => self.push_op(name, method.clone(), Some(cur), args, turbofish)?,
         })
     }
 
@@ -663,12 +710,16 @@ impl ChainWalker {
     /// Returns the tail node index without binding a user name — every node is
     /// anonymous, since the branch tails are consumed by the merge.
     fn walk_template(&mut self, param: &Ident, root: usize, body: &Expr) -> syn::Result<usize> {
-        let mut calls: Vec<(&Ident, Vec<&Expr>)> = Vec::new();
+        let mut calls: Vec<(
+            &Ident,
+            Vec<&Expr>,
+            Option<&syn::AngleBracketedGenericArguments>,
+        )> = Vec::new();
         let mut cur_expr = body;
         let root_ident = loop {
             match cur_expr {
                 Expr::MethodCall(mc) => {
-                    calls.push((&mc.method, mc.args.iter().collect()));
+                    calls.push((&mc.method, mc.args.iter().collect(), mc.turbofish.as_ref()));
                     cur_expr = &mc.receiver;
                 }
                 Expr::Path(p) => {
@@ -697,9 +748,9 @@ impl ChainWalker {
         calls.reverse();
         let mut cur = root;
         for call in &calls {
-            let (method, args) = (call.0, &call.1);
+            let (method, args, turbofish) = (call.0, &call.1, call.2);
             let anon = self.anon_name(method.span());
-            cur = self.apply_call(cur, method, args, anon)?;
+            cur = self.apply_call(cur, method, args, anon, turbofish)?;
         }
         Ok(cur)
     }
@@ -835,7 +886,7 @@ impl Parse for NitroDef {
         // Input streams are pseudo-nodes: chains may root at them, and the
         // `nested` expansion reads their value/tick from the outer graph.
         for (name, _) in &inputs {
-            let ix = walker.push_node(name.clone(), None, vec![], vec![], None);
+            let ix = walker.push_node(name.clone(), None, vec![], vec![], None, None);
             walker.index_of.insert(name.to_string(), ix);
         }
         let mut passthrough: Vec<(usize, Stmt)> = Vec::new();
@@ -1039,6 +1090,22 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `no_builder` — skip the interpreted `Builder` method, for the few ops
 ///   whose hand-written wiring has a deliberately different signature
 ///   (`bimap`/`trimap`, `with_time`);
+/// - `explicit = S` (or `explicit = [S, T]`) — type parameters the **call
+///   site** supplies by turbofish, because nothing in `Cfg` / `In` / `Out`
+///   mentions them so inference cannot reach them. The latency stamps are the
+///   motivating case: `Stamp<P, S>` names its stage only in a `PhantomData`,
+///   and `.stamp::<quote::produce>()` carries it as a *type* while `nitro!`'s
+///   dispatch forwards *values*.
+///
+///   Each forwarder gains a **leading `PhantomData<(S, ..)>` parameter** and
+///   the emission passes `PhantomData::<the_args>`, so the type crosses as a
+///   value and inference resolves the parameter from an argument like any
+///   other. It is deliberately *not* a turbofish on the forwarder: Rust wants
+///   all of a function's type arguments or none, and this macro never learns
+///   a forwarder's arity — it only ever sees a method-name token, which is the
+///   whole point of the naming-convention design. An op declared `explicit`
+///   must always be called with a turbofish; omitting it is a compile error at
+///   the call site, which is the intent;
 /// - `passive = [i, ...]` — the listed edge positions are **passive** (read
 ///   but not activating; sample's data edge is `passive = [0]`). Becomes the
 ///   `__WF_OP_<NAME>_PASSIVE` bitmask const the emission folds into dispatch
@@ -1055,6 +1122,19 @@ struct OpArgs {
     init_arg: bool,
     fluent: bool,
     passive: u32,
+    /// Impl type parameters the **call site** supplies by turbofish, because
+    /// nothing in the op's `Cfg` / `In` / `Out` mentions them and inference
+    /// therefore cannot reach them.
+    ///
+    /// The latency stamps are the motivating case: `Stamp<P, S>` names its
+    /// stage `S` only in a `PhantomData`, so `.stamp::<quote::produce>()`
+    /// carries it as a *type*, and the `nitro!` value-dispatch table has no
+    /// value to forward. Listing `S` here hoists it to the **front** of every
+    /// generated forwarder's parameter list, so the emission can prefix the
+    /// call-site turbofish and let rustc infer the rest positionally.
+    ///
+    /// Order matters and is the declaration order given here.
+    explicit: Vec<Ident>,
 }
 
 impl Parse for OpArgs {
@@ -1072,6 +1152,7 @@ impl Parse for OpArgs {
         let mut init_arg = false;
         let mut fluent = false;
         let mut passive: u32 = 0;
+        let mut explicit: Vec<Ident> = Vec::new();
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let flag: Ident = input.parse()?;
@@ -1079,6 +1160,20 @@ impl Parse for OpArgs {
                 "no_builder" => no_builder = true,
                 "init_arg" => init_arg = true,
                 "fluent" => fluent = true,
+                // `explicit = S` / `explicit = [S, T]` — impl type params the
+                // call site supplies by turbofish. See `OpArgs::explicit`.
+                "explicit" => {
+                    input.parse::<Token![=]>()?;
+                    if input.peek(syn::token::Bracket) {
+                        let content;
+                        syn::bracketed!(content in input);
+                        for id in content.parse_terminated(Ident::parse, Token![,])? {
+                            explicit.push(id);
+                        }
+                    } else {
+                        explicit.push(input.parse()?);
+                    }
+                }
                 "passive" => {
                     input.parse::<Token![=]>()?;
                     let content;
@@ -1099,7 +1194,8 @@ impl Parse for OpArgs {
                         flag.span(),
                         format!(
                             "unknown #[op] flag `{other}`; expected `no_builder`, \
-                             `init_arg`, `fluent`, or `passive = [..]`"
+                             `init_arg`, `fluent`, `explicit = [..]`, or \
+                             `passive = [..]`"
                         ),
                     ));
                 }
@@ -1111,6 +1207,7 @@ impl Parse for OpArgs {
             init_arg,
             fluent,
             passive,
+            explicit,
         })
     }
 }
@@ -1349,6 +1446,51 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     // `Default` — `fold` over a non-`Default` type stays legal fluently).
     let base_preds = preds.clone();
     preds.push(quote! { #out_ty: ::core::default::Default });
+
+    // `explicit = [..]`: type parameters nothing in `Cfg`/`In`/`Out` mentions,
+    // so inference cannot reach them. They are NOT passed as a turbofish on the
+    // forwarder — Rust requires all of a function's type arguments or none, and
+    // the `nitro!` emission cannot know how many the forwarder has (it only
+    // ever sees a method-name token; never naming the op type is the whole
+    // design). Instead the stage crosses as a **value**: each forwarder takes a
+    // leading `PhantomData<S>` and the emission passes
+    // `PhantomData::<the_stage>`, so inference resolves `S` from an argument
+    // like every other parameter. Same deferral trick as `cycle_owned_cfg`
+    // passing a literal closure by value.
+    //
+    // Validated against the impl's own params: a typo would otherwise surface
+    // as a baffling inference failure at every call site.
+    for e in &args.explicit {
+        if !param_names.contains(&e.to_string()) {
+            return Err(syn::Error::new(
+                e.span(),
+                format!(
+                    "`explicit = {e}` names no type parameter of this impl (found: {})",
+                    param_names.join(", ")
+                ),
+            ));
+        }
+    }
+    // Prepended to every generated forwarder's parameter list.
+    let stage_param: TokenStream2 = if args.explicit.is_empty() {
+        quote! {}
+    } else {
+        let tys = &args.explicit;
+        quote! { _stage: ::core::marker::PhantomData<(#(#tys,)*)>, }
+    };
+    // The erased no-op forwarders are generic over everything, so they take the
+    // stage as an opaque param rather than naming it.
+    let stage_param_erased: TokenStream2 = if args.explicit.is_empty() {
+        quote! {}
+    } else {
+        quote! { _stage: __Stage, }
+    };
+    let stage_generic_erased: TokenStream2 = if args.explicit.is_empty() {
+        quote! {}
+    } else {
+        quote! { __Stage, }
+    };
+
     let generics = if bare_params.is_empty() {
         quote! {}
     } else {
@@ -1520,7 +1662,8 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         quote! {
             #[doc(hidden)]
             #[inline(always)]
-            pub fn #start_owned_fn <__Plain, __State> (
+            pub fn #start_owned_fn <#stage_generic_erased __Plain, __State> (
+                #stage_param_erased
                 _plain: &mut __Plain,
                 _state: &mut __State,
                 _ctx: &mut crate::op::Ctx<'_>,
@@ -1541,6 +1684,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             #[inline(always)]
             pub fn #start_fn #generics (
+                #stage_param
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __ctx: &mut crate::op::Ctx<'_>,
@@ -1554,7 +1698,8 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         quote! {
             #[doc(hidden)]
             #[inline(always)]
-            pub fn #start_fn <__Cfg, __State> (
+            pub fn #start_fn <#stage_generic_erased __Cfg, __State> (
+                #stage_param_erased
                 _cfg: &mut __Cfg,
                 _state: &mut __State,
                 _ctx: &mut crate::op::Ctx<'_>,
@@ -1579,6 +1724,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         #[doc(hidden)]
         #[inline(always)]
         pub fn #cycle_owned_fn #generics (
+            #stage_param
             mut __cfg: #cfg_ty,
             __plain: &mut #owned_plain_ty,
             __state: &mut #state_ty,
@@ -1597,6 +1743,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             #[inline(always)]
             pub fn #cycle_fn #generics (
+                #stage_param
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
@@ -1627,6 +1774,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             #[inline(always)]
             pub fn #plain_fn #generics (
+                #stage_param
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
@@ -1641,6 +1789,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             #[inline(always)]
             pub fn #owned_fn #generics (
+                #stage_param
                 mut __cfg: #cfg_ty,
                 __plain: &mut #owned_plain_ty,
                 __state: &mut #state_ty,
@@ -2585,6 +2734,7 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     } else {
         quote! { &mut () }
     };
+    let stage = node.stage_arg();
     let fwd = if node.closure.is_some() {
         node.forwarder("start_owned")
     } else {
@@ -2593,7 +2743,7 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     quote! {
         {
             let mut __ctx = #ctx;
-            #fwd(#cfg_arg, &mut #state, &mut __ctx)?;
+            #fwd(#stage #cfg_arg, &mut #state, &mut __ctx)?;
         }
     }
 }
@@ -2616,14 +2766,15 @@ fn node_lifecycle(def: &NitroDef, target: Target, idx: usize, hook: &str) -> Tok
     } else {
         quote! { &mut () }
     };
+    let stage = node.stage_arg();
     let call = match &node.closure {
         Some(f) => {
             let fwd = node.forwarder(&format!("{hook}_owned"));
-            quote! { #fwd(#f, #cfg_arg, &mut #state, #input, &mut __ctx) }
+            quote! { #fwd(#stage #f, #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
         None => {
             let fwd = node.forwarder(hook);
-            quote! { #fwd(#cfg_arg, &mut #state, #input, &mut __ctx) }
+            quote! { #fwd(#stage #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
     };
     quote! {
@@ -2684,14 +2835,15 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     // types (behind `&mut` that deferral does not apply); it is a zero-cost
     // ZST rebuilt each cycle. Non-closure configs were hoisted once into
     // `__cfg_<name>` by `node_decl`.
+    let stage = node.stage_arg();
     let cycle_call = match &node.closure {
         Some(f) => {
             let fwd = node.forwarder("cycle_owned");
-            quote! { #fwd(#f, #cfg_arg, &mut #state, #input, &mut __ctx) }
+            quote! { #fwd(#stage #f, #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
         None => {
             let fwd = node.forwarder("cycle");
-            quote! { #fwd(#cfg_arg, &mut #state, #input, &mut __ctx) }
+            quote! { #fwd(#stage #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
     };
     let ctx = ctx_expr(target, idx);

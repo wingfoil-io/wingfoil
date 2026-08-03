@@ -43,13 +43,36 @@
 //! Each method has an `_if` variant taking a bool and returning the upstream
 //! unchanged when disabled — no node inserted, zero runtime cost.
 //!
+//! # Tiers
+//!
+//! [`stamp`](LatencyStreamOps::stamp) and
+//! [`stamp_precise`](LatencyStreamOps::stamp_precise) work in **all three**
+//! `nitro!` expansions — `interpreted()`, `compiled()` and `nested()`.
+//!
+//! Getting there needed a macro feature. A stamp's stage is a compile-time
+//! *type* (`stamp::<trade_latency::ingest>()`), and `nitro!`'s dispatch
+//! forwards *values* — there is no value to forward. It also cannot be a
+//! turbofish on the generated forwarder: Rust wants all of a function's type
+//! arguments or none, and the macro never learns the forwarder's arity, since
+//! never naming the op type is the whole point of the naming-convention
+//! design. So the stage crosses as a **value whose type carries it**:
+//! `#[op(explicit = S)]` gives each forwarder a leading `PhantomData<S>`, and
+//! the emission passes `PhantomData::<the_stage>` so inference resolves the
+//! parameter from an argument like any other. Same deferral trick as passing a
+//! literal closure by value for `cycle_owned_cfg`.
+//!
+//! [`latency_report`](LatencyReportOps::latency_report) stays
+//! **interpreted-only**, and that one is structural rather than a macro gap:
+//! the sink's whole value is the `Rc<RefCell<LatencyStats>>` handle it hands
+//! back, and `compiled()` is outputs-only by design — a closed box that
+//! returns its declared output values and nothing else. There is no way for
+//! the handle to escape it, so a compiled `latency_report` could only ever
+//! print at teardown, never be read. Deviation register **C7**.
+//!
 //! # Deviation from legacy
 //!
-//! Exposed via the **fluent (interpreted)** path only, matching legacy
-//! (which offers latency solely through `LatencyStreamOps`). A stamp's stage
-//! is a compile-time *type* parameter, which does not map onto the
-//! `nitro!`/compiled value-dispatch table; compiled/nested support is out of
-//! scope for this op family.
+//! None for the tier surface: legacy offers latency solely through
+//! `LatencyStreamOps`, so next is a superset here.
 //!
 //! # Example
 //!
@@ -76,6 +99,7 @@ use anyhow::Result;
 
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
+use wingfoil_next_macros::op;
 
 // The pure data layer is engine-agnostic and lives in `runtime::latency`,
 // shared with the legacy crate (which re-exports it from here).
@@ -94,6 +118,17 @@ pub use crate::runtime::latency::{
 /// per tick, no allocation. The next twin of legacy `StampStream`.
 pub struct Stamp<P, S>(PhantomData<fn() -> (P, S)>);
 
+// `no_builder`: the fluent surface is the hand-written `LatencyStreamOps`
+// trait below, which already carries the `::<S>` turbofish and the
+// `HasLatency` bound. What `#[op]` is here for is the *forwarders* — the
+// `__wf_op_stamp_*` family the `nitro!` compiled and nested emissions dispatch
+// through, which is the whole of gap C7.
+//
+// `explicit = S`: the stage is a compile-time type and appears in no argument,
+// so inference cannot reach it; hoisting it to the front of the forwarder
+// signatures lets the emission prefix the call-site turbofish. This is the
+// mechanism the deviation register said `nitro!` lacked.
+#[op(build = stamp, no_builder, explicit = S)]
 impl<P, S> Op for Stamp<P, S>
 where
     P: Clone + Default + HasLatency + 'static,
@@ -118,6 +153,7 @@ where
 /// distinct timestamps. The next twin of legacy `StampPreciseStream`.
 pub struct StampPrecise<P, S>(PhantomData<fn() -> (P, S)>);
 
+#[op(build = stamp_precise, no_builder, explicit = S)]
 impl<P, S> Op for StampPrecise<P, S>
 where
     P: Clone + Default + HasLatency + 'static,

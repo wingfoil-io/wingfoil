@@ -86,7 +86,25 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Seeded accumulator** | `(&'a I,)` + init | `#[op(build = name, init_arg)]` | `name(src, init, cfg)` — seeds state *and* slot | `Fold` |
 | **Source** (no input) | `()` | `#[op(build = name)]` + `start` that `schedule`s | `name(cfg)` | `Ticker`, `Const` |
 | **Signature ≠ shape** | any | `#[op(build = name, no_builder)]` + hand `Builder` method | — | `WithTime` |
+| **Phantom type parameter** (a stage, a unit, a marker) | any | `#[op(build = name, explicit = S)]` | `.name::<S>()` — the type crosses as a `PhantomData` argument | `Stamp`, `StampPrecise` |
 | **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
+
+**`explicit = S` is for a type parameter nothing else mentions.** If an op is
+generic over something that appears only in a `PhantomData` — a latency stage,
+a unit, a marker — inference cannot reach it from `Cfg`/`In`/`Out`, so the call
+site must name it: `.stamp::<quote::produce>()`. Listing it in `explicit` gives
+every generated forwarder a leading `PhantomData<S>` parameter, and the `nitro!`
+emission passes `PhantomData::<the_arg>` so the type crosses as a **value** and
+inference resolves it from an argument.
+
+Do not reach for a turbofish on the forwarder instead — it cannot work. Rust
+wants all of a function's type arguments or none, and the macro never learns a
+forwarder's arity: it only ever sees a method-name token, which is the whole
+point of the naming-convention design. Passing the type as a value is the same
+deferral trick `cycle_owned_cfg` uses for a literal closure.
+
+An op declared `explicit` must always be called with a turbofish — omitting one
+is a compile error at the call site, which is the intent.
 
 `no_builder` is the last resort, not the default: reach for it only when the
 interpreted method must have a *different signature* from the op's shape —

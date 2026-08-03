@@ -241,3 +241,115 @@ fn latency_report_if_disabled_stays_empty() {
         assert_eq!(s.stages[i].count, 0, "stage {i} should be unobserved");
     }
 }
+
+// ── Tier parity: stamps through `nitro!`'s compiled and nested expansions ───
+//
+// Closes deviation-register C7 (cutover-plan row 2.2). The stamps were
+// fluent/interpreted-only because a stage is a compile-time *type*
+// (`stamp::<trade_latency::ingest>()`) and `nitro!`'s dispatch forwards
+// *values* — a type argument has no value to forward. `#[op(explicit = S)]`
+// hoists the stage parameter to the front of the generated forwarder
+// signatures, and the macro now carries the call-site turbofish onto the
+// forwarder call, so the compiled and nested emissions reach the same
+// `Stamp::cycle` the interpreted tier does.
+//
+// The assertion is deliberately on *ordering relations* rather than absolute
+// nanoseconds: stamps read the wall clock, so exact values are not
+// reproducible, but the invariants that make a stamp meaningful are.
+
+wingfoil_next::nitro! {
+    fn stamped_graph(g: &GraphBuilder) -> Stream<Traced<u64, TradeLatency>> {
+        let src = g
+            .ticker(PERIOD)
+            .count()
+            .map(|n: &u64| Traced::<u64, TradeLatency>::new(*n));
+        let out = src
+            .stamp::<trade_latency::ingest>()
+            .stamp::<trade_latency::decode>()
+            .stamp_precise::<trade_latency::strategy>();
+        out
+    }
+}
+
+const PERIOD: Duration = Duration::from_millis(1);
+const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
+
+/// Every stage a chain stamps is set, and stamps advance monotonically along
+/// it — the property that makes a latency record readable at all.
+fn assert_stamped(value: &Traced<u64, TradeLatency>, label: &str) {
+    let l = &value.latency;
+    assert!(l.ingest > 0, "{label}: ingest unstamped");
+    assert!(l.decode > 0, "{label}: decode unstamped");
+    assert!(l.strategy > 0, "{label}: strategy unstamped");
+    assert!(l.publish == 0, "{label}: publish should be untouched");
+    // `stamp` reads the cycle-start snap, so two plain stamps in one cycle
+    // share a timestamp; `stamp_precise` takes a fresh reading and can only
+    // be at or after it. Both are `>=`, never `>`: a clock with coarse
+    // resolution may return the same value twice, and asserting strict
+    // inequality is how this test would go flaky on a slow CI box.
+    assert_eq!(l.ingest, l.decode, "{label}: cycle-start snap is shared");
+    assert!(
+        l.strategy >= l.decode,
+        "{label}: precise stamp went backwards ({} < {})",
+        l.strategy,
+        l.decode
+    );
+}
+
+/// The gap that C7 named: `compiled()` over a graph containing stamps. Before
+/// `explicit`/turbofish support this did not compile at all.
+#[test]
+fn stamps_reach_the_compiled_tier() {
+    let run_for = RunFor::Cycles(6);
+
+    let (mut runner, out) = stamped_graph::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert_stamped(&interpreted, "interpreted");
+
+    let (compiled,) = stamped_graph::compiled(HISTORICAL, run_for).unwrap();
+    assert_stamped(&compiled, "compiled");
+
+    // The payload is the deterministic half — the tick count — and it must
+    // agree exactly across tiers even though the stamps cannot.
+    assert_eq!(
+        interpreted.payload, compiled.payload,
+        "payload diverged between the interpreted and compiled tiers"
+    );
+}
+
+wingfoil_next::nitro! {
+    fn stamp_island(
+        g: &GraphBuilder,
+        src: &Stream<Traced<u64, TradeLatency>>,
+    ) -> Stream<Traced<u64, TradeLatency>> {
+        let out = src
+            .stamp::<trade_latency::ingest>()
+            .stamp_precise::<trade_latency::strategy>();
+        out
+    }
+}
+
+/// The same ops inside a compiled **island** mounted in an interpreted graph —
+/// the third expansion, and the one where the turbofish has to survive being
+/// re-emitted inside the composite closure.
+#[test]
+fn stamps_reach_a_nested_island() {
+    let g = GraphBuilder::new();
+    let src = g
+        .ticker(PERIOD)
+        .count()
+        .map(|n: &u64| Traced::<u64, TradeLatency>::new(*n));
+    let island = stamp_island::nested(&g, &src);
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    let out = runner.value(island);
+    let l = &out.latency;
+    assert!(l.ingest > 0, "island: ingest unstamped");
+    assert!(
+        l.strategy >= l.ingest,
+        "island: precise stamp went backwards"
+    );
+    assert_eq!(l.decode, 0, "island: decode should be untouched");
+}
