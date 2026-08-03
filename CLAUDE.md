@@ -37,8 +37,10 @@ crates/                     # every Cargo crate in the tree
   wingfoil-wasm/            # Browser-side WASM codec (excluded from the default
                             #   workspace) — survives cutover
 
-docs/                       # port-plan.md (the port roadmap), cutover-plan.md,
-                            #   design reviews and decisions
+docs/                       # wingfoil-next-architecture.md (read this first),
+                            #   migration.md (#[node] -> Op), port-plan.md
+                            #   (the port roadmap), cutover-plan.md,
+                            #   deviation-register.md, design decisions
 
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client).
@@ -52,6 +54,14 @@ legacy/                     # The legacy MutableNode engine — deleted at cutov
 scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh,
                             #   bench-report.sh)
 ```
+
+## Start here
+
+New to the engine? Read
+[`docs/wingfoil-next-architecture.md`](docs/wingfoil-next-architecture.md)
+before your first non-trivial change — the shape of the thing, the one
+decision everything else follows from, and the rules that bite. Porting code
+off the legacy engine is [`docs/migration.md`](docs/migration.md).
 
 ## The one design objective that governs everything
 

@@ -1,42 +1,52 @@
-//! **Design prototype**: what wingfoil's core abstractions look like if
-//! designed from scratch to support dual execution — interpreted *and*
-//! compiled — from one definition of node semantics.
+//! A Rust stream-processing library: build a directed acyclic graph of data
+//! transformations once, then run it against live data or replay it over
+//! history with identical semantics.
 //!
-//! The retrofit on the main crate (`wingfoil::codegen`) hit three walls, all
-//! caused by `MutableNode` fusing three concerns into one object:
+//! ```
+//! use std::time::Duration;
+//! use wingfoil_next::prelude::*;
+//! use wingfoil_next::{NanoTime, RunFor, RunMode};
 //!
-//! 1. **Semantics trapped in objects** — `cycle(&mut self, &mut GraphState)`
-//!    couples the computation to its storage (fields behind `RefCell`) and
-//!    its feeding (peeking upstream `Rc<dyn Stream>`s), so compiled runners
-//!    had to *re-implement* node semantics as emitted source.
-//! 2. **Types and closures erased at wiring time** — codegen had to
-//!    reverse-engineer types from name strings and could never recover
-//!    closures (hence the `Inputs` re-supply and its drift risk).
-//! 3. **Activation invisible** — nothing declared "this node schedules
-//!    callbacks", forcing name-based allowlists.
+//! let g = GraphBuilder::new();
+//! let count = g.ticker(Duration::from_millis(10)).count();
+//! let is_even = count.map(|n: &u64| n.is_multiple_of(2));
+//! let total = count.filter(&is_even).fold(0u64, |acc, v| *acc += v);
 //!
-//! This crate inverts all three:
+//! let mut runner = g.build();
+//! runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10)).unwrap();
+//! assert_eq!(runner.value(&total), 2 + 4 + 6 + 8 + 10);
+//! ```
 //!
-//! - [`Op`](op::Op) defines node semantics as a pure, monomorphizable
-//!   associated function over **external** state and **typed inputs passed
-//!   in** by the engine, with a `const ACTIVATION` declaration.
-//! - [`interp::Builder`] is the interpreted engine: it owns the value slots
-//!   and the state, adapts each `Op` behind one dyn boundary, and drives the
-//!   shared [`Kernel`](runtime::kernel::Kernel). [`fluent`] layers the
-//!   legacy chaining style (`ticker(d).count().map(f)`) on top — wiring
-//!   sugar only, identical execution.
-//! - A compiled runner is a plain function with state in locals that calls
-//!   **the same `Op::cycle` functions**, monomorphized — see
-//!   `tests/compiled_parity.rs` for the hand-expanded odds/evens graph. (In
-//!   the full design this expansion is produced by a `nitro!` proc macro so
-//!   wiring is written once; the macro is mechanical once this shape works.)
+//! Swap `RunMode::HistoricalFrom` for `RunMode::RealTime` and the same graph
+//! runs against the wall clock — that is the point of the two run modes.
 //!
-//! The load-bearing property demonstrated here: **both engines execute the
-//! identical semantics code**. There is no duplicated cycle logic anywhere —
-//! not per-kind emitter strings, not `cycle_inline` twins — so the engines
-//! cannot drift.
+//! # The idea: node semantics as a function, not an object
 //!
-//! Built out from that prototype, and what each module now holds:
+//! An [`Op`](op::Op) defines what a node *does* as a pure associated
+//! function — `cycle(cfg, state, input, ctx)` — over engine-owned state and
+//! typed inputs the engine passes in, with a `const ACTIVATION` declaring how
+//! it is scheduled. Nothing about a node's computation is tied to how its
+//! storage is allocated or how its inputs are fetched.
+//!
+//! That separation is what lets **one** definition drive several execution
+//! strategies, and it is the property the whole design is arranged around:
+//!
+//! - the **interpreted** engine ([`interp::Builder`]) owns the value slots and
+//!   the state, adapts each `Op` behind a single dyn boundary, and drives the
+//!   [`Kernel`];
+//! - a **compiled** runner is a plain function with node state in local
+//!   variables, calling the same `Op::cycle` functions monomorphized, with
+//!   tick propagation as `bool`s the optimiser can see through;
+//! - a **nested island** packs a whole sub-graph into one node of an
+//!   interpreted graph, running that same compiled code inside it.
+//!
+//! Every one of those executes the *identical* semantics code. There is no
+//! duplicated cycle logic anywhere — no per-kind emitter strings, no
+//! `cycle_inline` twins — so the strategies cannot drift from each other.
+//! [`nitro!`](macro@nitro) is the front door: one wiring function in, all
+//! three out.
+//!
+//! # The tour
 //!
 //! - **[`nitro!`](macro@nitro)** — one wiring function, three execution paths
 //!   from the same tokens: `interpreted()`, fully-monomorphized `compiled()`,
@@ -52,14 +62,19 @@
 //!   `Op` impl generates the interpreted `Builder` method *and* the `nitro!`
 //!   forwarder functions every compiled/nested emission dispatches through,
 //!   both derived from the op's declared shape — there is no per-op table in
-//!   the macro, so built-in and user ops take the identical path — see
-//!   `docs/port-plan.md` "Adding an op".
+//!   the macro, so built-in and user ops take the identical path.
 //! - **Sources in every activation mode**: `Activation::THREADED`
 //!   [`external`](fluent::SourceOps::external), busy-spin `Activation::ALWAYS`
 //!   [`poll`](fluent::SourceOps::poll), the both-modes
 //!   [`channel`](fluent::SourceOps::channel), and
 //!   [`feedback`](fluent::SourceOps::feedback) edges. All
 //!   non-coalescing: same-instant values ride one [`Burst`], never latest-wins.
+//! - **[`adapters`]** — the I/O surface (CSV, Kafka, ZeroMQ, KDB+, Redis,
+//!   Postgres, etcd, FIX, web, Aeron, iceoryx2, Fluvio, augurs, Prometheus,
+//!   OTLP), each behind its own feature and kept out of the prelude — opt in
+//!   with `use wingfoil_next::adapters::<name>::…`.
+//! - **[`latency`]** — stamp wall-clock timestamps onto messages as they hop
+//!   through ops and across processes, then aggregate per-stage deltas.
 //! - **[`channel`]** — the `Message` envelope and senders; **`async_source`**
 //!   (the `async` feature) wraps it as `produce_async`, an async producer of
 //!   timestamped values that replays deterministically in historical mode.
@@ -69,12 +84,15 @@
 //!   cleanup. **[`signal`]** offers a builder-less [`Signal`](signal::Signal)
 //!   facade over it.
 //!
+//! For how the pieces fit together, and why, see
+//! `docs/wingfoil-next-architecture.md`.
+//!
 //! # Tracing and instrumentation
 //!
-//! The engine can emit `tracing` spans around its own execution, ported
-//! feature-for-feature from legacy wingfoil. Every span site is behind its own
-//! feature, and the `tracing` dependency itself is optional, so a default build
-//! carries neither the dependency nor a single span:
+//! The engine can emit `tracing` spans around its own execution. Every span
+//! site is behind its own feature, and the `tracing` dependency itself is
+//! optional, so a default build carries neither the dependency nor a single
+//! span:
 //!
 //! | feature | what it adds |
 //! |---|---|
@@ -82,7 +100,7 @@
 //! | `instrument-run` | A span around [`Runner::run`](interp::Runner::run) (and `run_dynamic`, under `dynamic-graph`) — the whole start→cycles→stop→teardown lifecycle. |
 //! | `instrument-cycle` | A span around each engine cycle (one per dirty-node batch). |
 //! | `instrument-apply-nodes` | A span around each lifecycle phase (start / stop / teardown) applied over all nodes, recording the phase in `desc`. |
-//! | `instrument-initialise` | A span around graph initialisation ([`Builder::build`](interp::Builder::build)), named `initialise` after legacy's. |
+//! | `instrument-initialise` | A span around graph initialisation ([`Builder::build`](interp::Builder::build)). |
 //! | `instrument-cycle-node` | A span per node execution, recording the node index and label. High frequency — opt in deliberately. |
 //! | `instrument-default` | `instrument-run` + `instrument-cycle` + `instrument-apply-nodes` + `instrument-initialise`. |
 //! | `instrument-all` | `instrument-default` plus `instrument-cycle-node`. |
@@ -94,10 +112,14 @@
 //! [`StreamOps::logged`](fluent::StreamOps::logged) for the per-value debug tap
 //! (which emits through the `log` crate, independently of these features).
 //!
-//! Still out of scope for the prototype (documented, not forgotten):
-//! variadic-input ops (merge/join are fixed at two inputs), an arena/SoA value
-//! store and topologically-ordered dirty-list scheduling for the interpreted engine
-//! (see `docs/port-plan.md` "Phase 4.5"), and dynamic (runtime-mutated) graphs.
+//! # Known limits
+//!
+//! Documented, not forgotten: `merge`/`join` are fixed at two inputs on the
+//! compiled path (the interpreted side has variadic `merge_n`); the
+//! interpreted value store is per-node slots rather than an arena/SoA, and its
+//! dirty list is drained rather than topologically ordered; and `compiled()`
+//! is a closed box — static topology, outputs only, no I/O or live inputs, by
+//! design. See `docs/port-plan.md` "Deferred / post-v1 work".
 
 // Lets this crate refer to itself as `wingfoil_next`, so the paths that
 // `nitro!`-generated code emits (`::wingfoil_next::...`) resolve when the
