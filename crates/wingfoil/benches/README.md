@@ -152,6 +152,18 @@ Those sections are left as captured rather than adjusted by hand; they need a
 run on machine A. The two machine-B sections have been re-captured since the
 change and do not carry this caveat.
 
+**Every section here also predates the scheduler-cost fix** — dedup in
+`TimeQueue::push` scoped to one instant instead of scanning the whole pending
+set, dispatch seeding from `Kernel::due()` instead of walking every
+callback-activated node, and `end_cycle` clearing only the flags it set (see
+`docs/port-plan.md`, "The `O(timers)` seed term"). What it moves is any graph
+holding **more than a handful of timers**, which in this suite means
+[`sparse_dispatch`](#store-baseline) above all: each of its 256 cold branches
+has its own ticker. Sections whose graphs have one or two timers — the tiers,
+the topological sweep — are affected only by the `end_cycle` term and move
+little. Paired figures are in the port-plan section above; the tables below are
+the pre-fix capture and want a re-run.
+
 ## Graph overhead
 
 The [`graph`](graph.rs) bench wires a trivial DAG `width` × `depth`, with every
@@ -330,6 +342,14 @@ size.
 | `FullSweep` (the `O(N)` oracle) | 121.08 ms | 6.05 µs |
 
 **6.2× apart** — the dirty list is doing its job.
+
+Both bars predate the scheduler-cost fix ([above](#results)), and this is the
+bench it moves most: the padding is 256 cold branches with **256 separate
+tickers**, so the `Sparse` bar was mostly paying for timers that never fired
+rather than for the ~8 nodes that did. A paired re-run on the same machine puts
+it at **19.4 ms → 5.88 ms**, i.e. ~294 ns per cycle rather than ~984, which
+widens the sparse-vs-oracle gap from 6.2× to ~19×. The table above is left as
+captured, matching how the other superseded readings here are handled.
 [Violin plot](images/ops/store_sparse_dispatch.svg).
 
 **Payload clone tax** (a large payload forwarded through a chain of `filter`

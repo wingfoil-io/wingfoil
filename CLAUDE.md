@@ -227,6 +227,18 @@ Because dedup only needs equality (not hashing), the bound is `T: PartialEq`,
 payloads, which implement `PartialEq` but neither `Hash` nor `Eq`) flow
 through `delay` and `feedback`. Keep the bound at `PartialEq`.
 
+Dedup is **scoped to the instant being pushed to**, and must stay that way.
+Entries live in a `BTreeMap` keyed by time, so a push compares only against
+that time's bucket. A flat scan of every pending entry — which is what this
+queue used to do — is `O(pending)` per schedule, and *pending* here is not
+small: the scheduler holds one entry per timer at all times, because a ticker
+re-arms itself the moment it fires. That put every timer in the graph on the
+cost of every other timer's tick (22 ns per schedule at one pending entry,
+686 ns at 1024), and `delay` paid the same shape with every value still in
+flight. The earliest instant is additionally held *out* of the map and
+refilled lazily, so a single-timer graph — and a fast timer among slow ones —
+never touches the map at all.
+
 ## Branching: next work merges into `next`, not `main`
 
 Everything at the root is built up on the long-lived **`next` branch** to

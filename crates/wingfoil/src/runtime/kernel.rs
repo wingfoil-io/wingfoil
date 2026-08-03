@@ -92,6 +92,20 @@ pub struct Kernel {
     is_last_cycle: bool,
     cycles: u32,
     scheduled: TimeQueue<usize>,
+    /// Indices this kernel marked dirty in the current cycle, in the order it
+    /// marked them. Two jobs, both of which take an `O(N)` term off the
+    /// per-cycle cost of a graph that is mostly quiet:
+    ///
+    /// * [`end_cycle`](Kernel::end_cycle) clears exactly these flags instead of
+    ///   memsetting the whole `dirty` array — the array is as long as the graph,
+    ///   so the clear used to scale with graph size on every cycle;
+    /// * [`due`](Kernel::due) hands an engine the frontier directly, so it can
+    ///   seed its work set from the nodes that actually came due rather than
+    ///   scanning every callback-activated node in the graph to ask.
+    ///
+    /// Entries are unique: a marker only records an index whose flag it
+    /// actually flipped.
+    due: Vec<usize>,
     /// External wake-ups from [`KernelWaker`]s, realtime mode only. Mirrors
     /// the interpreted engine's ready-callback channel.
     ready: Option<Receiver<usize>>,
@@ -138,8 +152,30 @@ impl Kernel {
             is_last_cycle: false,
             cycles: 0,
             scheduled: TimeQueue::new(),
+            due: Vec::new(),
             ready,
             spin: false,
+        }
+    }
+
+    /// Mark `index` dirty, recording it in [`due`](Self::due) if this is the
+    /// call that flipped the flag. Out-of-range indices (a misbehaving waker)
+    /// are ignored.
+    ///
+    /// Returns whether `index` was **in range** — deliberately not whether the
+    /// flag changed. It is the caller's `progressed` signal, and a node marked
+    /// twice in one cycle (woken twice, or scheduled at two times that both
+    /// come due) is still progress: the cycle must run.
+    fn mark(&mut self, index: usize, dirty: &mut [bool]) -> bool {
+        match dirty.get_mut(index) {
+            Some(d) => {
+                if !*d {
+                    *d = true;
+                    self.due.push(index);
+                }
+                true
+            }
+            None => false,
         }
     }
 
@@ -153,15 +189,14 @@ impl Kernel {
     /// Drain pending external wake-ups into `dirty`. Out-of-range indices
     /// (a misbehaving waker) are ignored.
     fn drain_ready(&mut self, dirty: &mut [bool]) -> bool {
-        let Some(rx) = &self.ready else {
+        if self.ready.is_none() {
             return false;
-        };
+        }
         let mut any = false;
-        while let Ok(ix) = rx.try_recv() {
-            if let Some(d) = dirty.get_mut(ix) {
-                *d = true;
-                any = true;
-            }
+        // Collected first so `mark` can take `&mut self` while the receiver
+        // borrow is released.
+        while let Some(ix) = self.ready.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            any |= self.mark(ix, dirty);
         }
         any
     }
@@ -269,8 +304,7 @@ impl Kernel {
                     };
                     let mut progressed = false;
                     while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
-                        dirty[ix] = true;
-                        progressed = true;
+                        progressed |= self.mark(ix, dirty);
                     }
                     if !progressed {
                         return false;
@@ -287,7 +321,7 @@ impl Kernel {
                         // always-active ops need it even with nothing due.
                         self.time = NanoTime::now().max(self.time + 1);
                         while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
-                            dirty[ix] = true;
+                            self.mark(ix, dirty);
                         }
                         self.wall_time.set(None);
                         return true;
@@ -301,18 +335,19 @@ impl Kernel {
                                 let now = NanoTime::now();
                                 if target > now {
                                     let timeout = Duration::from_nanos(u64::from(target - now));
-                                    match &self.ready {
+                                    let woken = match &self.ready {
                                         Some(rx) => match rx.recv_timeout(timeout) {
-                                            Ok(ix) => {
-                                                if let Some(d) = dirty.get_mut(ix) {
-                                                    *d = true;
-                                                    progressed = true;
-                                                }
-                                            }
+                                            Ok(ix) => Some(ix),
                                             Err(RecvTimeoutError::Timeout)
-                                            | Err(RecvTimeoutError::Disconnected) => {}
+                                            | Err(RecvTimeoutError::Disconnected) => None,
                                         },
-                                        None => std::thread::sleep(timeout),
+                                        None => {
+                                            std::thread::sleep(timeout);
+                                            None
+                                        }
+                                    };
+                                    if let Some(ix) = woken {
+                                        progressed |= self.mark(ix, dirty);
                                     }
                                 }
                             }
@@ -346,10 +381,7 @@ impl Kernel {
                                 };
                                 match woken {
                                     Some(ix) => {
-                                        if let Some(d) = dirty.get_mut(ix) {
-                                            *d = true;
-                                            progressed = true;
-                                        }
+                                        progressed |= self.mark(ix, dirty);
                                     }
                                     // All wakers dropped (recv Err) or the
                                     // end bound passed with nothing queued.
@@ -361,8 +393,7 @@ impl Kernel {
                     }
                     self.time = NanoTime::now().max(self.time + 1);
                     while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
-                        dirty[ix] = true;
-                        progressed = true;
+                        progressed |= self.mark(ix, dirty);
                     }
                     if progressed {
                         self.wall_time.set(None);
@@ -375,11 +406,36 @@ impl Kernel {
         }
     }
 
+    /// The nodes this kernel marked dirty in the cycle
+    /// [`begin_cycle`](Self::begin_cycle) just opened — the activation frontier,
+    /// in the order it was marked, with no duplicates.
+    ///
+    /// This is the same information as the `true` entries of the `dirty` slice,
+    /// handed over as a list so an engine need not go looking for them. The
+    /// interpreted engine seeds its work set from here; the alternative is to
+    /// walk every callback-activated node in the graph asking "were you marked?",
+    /// which costs a cycle in proportion to how many timers the graph *has*
+    /// rather than how many just fired.
+    ///
+    /// Valid until the matching [`end_cycle`](Self::end_cycle), which clears it.
+    pub fn due(&self) -> &[usize] {
+        &self.due
+    }
+
     /// Finish the current cycle: clear the dirty flags.
+    ///
+    /// Clears exactly the flags this kernel set (see [`due`](Self::due)) rather
+    /// than sweeping the whole slice, so a quiet graph does not pay a memset of
+    /// its own size on every cycle. `dirty` must therefore be the same slice
+    /// `begin_cycle` marked — which it is for every engine in the tree, all of
+    /// which keep one long-lived array per run.
     pub fn end_cycle(&mut self, dirty: &mut [bool]) {
-        for d in dirty.iter_mut() {
-            *d = false;
+        for &ix in &self.due {
+            if let Some(d) = dirty.get_mut(ix) {
+                *d = false;
+            }
         }
+        self.due.clear();
         self.cycles += 1;
     }
 }

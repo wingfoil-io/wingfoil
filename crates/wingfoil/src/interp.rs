@@ -2238,9 +2238,9 @@ impl Builder {
         // Honour the `always` activation the same way [`poll`](Self::poll) does:
         // a busy-poll custom node must keep the realtime kernel from parking
         // between cycles, else its `cycle` only fires on unrelated wakeups (a
-        // socket-polling `ALWAYS` node would never advance). `seed_nodes` already
-        // includes it via `push_node`; this flips the engine into the busy-spin
-        // loop so it is actually driven every cycle.
+        // socket-polling `ALWAYS` node would never advance). `build` already puts it
+        // in `always_nodes` from its activation; this flips the engine into the
+        // busy-spin loop so it is actually driven every cycle.
         if activation.always {
             self.has_always = true;
         }
@@ -2287,10 +2287,13 @@ impl Builder {
         //     ticking `u` marks dirty. Dispatch propagates the tick frontier
         //     forward through these edges (passive edges are absent — read but
         //     not triggering).
-        //   * `seed_nodes` — the frontier dispatch seeds each cycle: `always`
-        //     (busy-poll) and callback-activated nodes (tickers, feedback
-        //     source, channel/external, `delay`'s scheduled pop, …).
-        //     Precomputed so seeding is O(#sources), not O(N).
+        //   * `always_nodes` / `is_seed` — the frontier dispatch may seed each
+        //     cycle: `always` (busy-poll) nodes, which fire unconditionally and
+        //     so are kept as a list, and callback-activated ones (tickers,
+        //     feedback source, channel/external, `delay`'s scheduled pop, …),
+        //     which fire only when the kernel marks them and so are kept as a
+        //     membership bitmap tested against `Kernel::due`. Seeding is
+        //     therefore O(#fired), not O(#sources) and not O(N).
         //
         // Dispatch orders the per-cycle work set by ascending node **index**
         // (see `Runner::run`). Wiring order is a valid topological order over
@@ -2314,7 +2317,8 @@ impl Builder {
         let n = self.nodes.len();
         let mut active_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut passive_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut seed_nodes: Vec<usize> = Vec::new();
+        let mut always_nodes: Vec<usize> = Vec::new();
+        let mut is_seed: Vec<bool> = vec![false; n];
         let mut layer: Vec<usize> = vec![0; n];
         for i in 0..n {
             let mut lyr = 0usize;
@@ -2334,9 +2338,10 @@ impl Builder {
             }
             layer[i] = lyr;
             let act = self.nodes[i].activation;
-            if act.always || act.callback_activated() {
-                seed_nodes.push(i);
+            if act.always {
+                always_nodes.push(i);
             }
+            is_seed[i] = act.always || act.callback_activated();
         }
         Runner {
             nodes: self.nodes,
@@ -2354,7 +2359,8 @@ impl Builder {
             pending: self.pending,
             marks: self.marks,
             has_marks: self.has_marks,
-            seed_nodes,
+            always_nodes,
+            is_seed,
             layer,
             dispatch: Dispatch::default(),
             re_runnable: self.re_runnable,
@@ -2427,8 +2433,8 @@ pub enum Dispatch {
 /// Executes a wired graph. Dispatch is a sparse dirty-list — legacy wingfoil's
 /// `dirty_nodes_by_layer` model — so per-cycle work is proportional to the
 /// nodes that actually fire, not the graph size `N`. Each cycle seeds a work
-/// set from the frontier ([`seed_nodes`](Runner::seed_nodes): `always`
-/// busy-poll ops and kernel-marked callback-activated ops), then propagates the
+/// set from the frontier ([`always_nodes`](Runner::always_nodes) busy-poll ops
+/// plus the kernel's [`due`](Kernel::due) list), then propagates the
 /// tick frontier forward: a node that ticks marks its active downstream
 /// neighbours ([`active_downs`](Runner::active_downs)) dirty. The work set is
 /// drained in ascending **`(layer, index)`** order ([`layer`](Runner::layer) =
@@ -2458,8 +2464,8 @@ pub struct Runner {
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     passive_downs: Vec<Vec<usize>>,
     /// `removed[i]` — a tombstone set when a node is deleted at runtime
-    /// (`Extension::remove`). Its edges are unlinked and it is dropped from
-    /// `seed_nodes` so it never cycles again; the flag additionally stops the
+    /// (`Extension::remove`). Its edges are unlinked and its `is_seed` flag is
+    /// cleared so it never cycles again; the flag additionally stops the
     /// end-of-run cleanup from calling its `stop`/`teardown` a second time
     /// (they already ran at removal — legacy parity, `graph.rs:1015-1028`).
     /// Slots are tombstoned, never freed, so a `Handle` stays valid. Always
@@ -2477,9 +2483,23 @@ pub struct Runner {
     marks: Rc<RefCell<Vec<usize>>>,
     /// Whether any routing node exists; gates the `marks` drain off the hot path.
     has_marks: bool,
-    /// Frontier sources seeded each cycle: `always` ops and callback-activated
-    /// ops (the latter only fire when the kernel marks them dirty).
-    seed_nodes: Vec<usize>,
+    /// Busy-poll (`always`) ops, seeded unconditionally every cycle. Empty for
+    /// every historical graph and for most realtime ones — an `always` op is a
+    /// socket/ring-buffer poller.
+    ///
+    /// Its callback-activated counterpart is **not** a list to walk: those ops
+    /// fire only when the kernel marks them, and the kernel already knows which
+    /// ones it marked ([`Kernel::due`]), so dispatch reads the frontier from
+    /// there and checks membership through [`is_seed`](Self::is_seed). Walking
+    /// a list of every callback-activated node instead made a cycle cost
+    /// `O(timers in the graph)`: 1024 idle tickers took the per-cycle cost of an
+    /// 8-node hot path from 247 ns to 2.99 µs, none of it work the graph asked
+    /// for.
+    always_nodes: Vec<usize>,
+    /// `is_seed[i]` — whether `i` may be seeded from the kernel's frontier
+    /// (`always` or callback-activated). A dynamically removed node's flag is
+    /// cleared, so a stale schedule left in the kernel cannot resurrect it.
+    is_seed: Vec<bool>,
     /// `layer[i]` = longest path to `i` over all upstream edges (active and
     /// passive); the primary sparse-dispatch sort key. `(layer, index)` is a
     /// valid topological order that survives dynamic edge splices (which index
@@ -2704,7 +2724,6 @@ impl Runner {
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
             if let Some(e) = self.drain_cycle(
                 kernel,
-                &dirty,
                 &mut buckets,
                 &mut occupied,
                 &mut node_dirty,
@@ -2729,7 +2748,6 @@ impl Runner {
     fn drain_cycle(
         &mut self,
         kernel: &mut Kernel,
-        dirty: &[bool],
         buckets: &mut [Vec<usize>],
         occupied: &mut [u64],
         node_dirty: &mut [bool],
@@ -2739,12 +2757,23 @@ impl Runner {
         // Seed the frontier into per-layer buckets: `always` ops fire
         // unconditionally; callback-activated ops (tickers, `delay` pops,
         // feedback source, channel replay) fire only when the kernel marked them
-        // dirty this cycle. Everything else reaches a bucket by downstream
+        // dirty this cycle — and the kernel hands those over directly, so this
+        // costs the size of the frontier rather than a walk of every node that
+        // *could* be on it. Everything else reaches a bucket by downstream
         // propagation below. `max_layer` tracks the deepest active layer so the
         // drain scans only `0..=max_layer`, not all `N` buckets.
         let mut max_layer = 0usize;
-        for &i in &self.seed_nodes {
-            if (self.nodes[i].activation.always || dirty[i]) && !node_dirty[i] {
+        // `is_seed` is the membership test the old walk got for free from its
+        // seed list: it rejects a node the kernel marked but that dispatch must
+        // not seed — a dynamically removed node whose stale schedule is still
+        // queued.
+        let frontier = self
+            .always_nodes
+            .iter()
+            .copied()
+            .chain(kernel.due().iter().copied().filter(|&i| self.is_seed[i]));
+        for i in frontier {
+            if !node_dirty[i] {
                 node_dirty[i] = true;
                 let l = self.layer[i];
                 buckets[l].push(i);
@@ -2844,7 +2873,7 @@ impl Runner {
         // nodes actually drained. Both terms are the sparse engine's real
         // per-cycle cost drivers — neither mentions `N`, which is exactly the
         // property `sparse_work_is_independent_of_graph_size` pins.
-        self.node_visits += (self.seed_nodes.len() + fired.len()) as u64;
+        self.node_visits += (self.always_nodes.len() + kernel.due().len() + fired.len()) as u64;
         self.layer_visits += scan_steps;
         // Reset only the nodes we touched (all buckets are empty again),
         // keeping the per-cycle reset sparse.
@@ -3082,11 +3111,19 @@ impl Runner {
             let mut occupied: Vec<u64> = Vec::new();
             let mut node_dirty: Vec<bool> = Vec::new();
             let mut fired: Vec<usize> = Vec::new();
+            // The kernel's dirty flags. Grown (never reallocated per cycle) as
+            // nodes are appended, and left all-false by every `end_cycle`, so a
+            // long dynamic run does not allocate and zero a graph-sized array on
+            // every one of its cycles.
+            let mut dirty: Vec<bool> = Vec::new();
             let mut cycles: u32 = 0;
             loop {
                 let n = self.nodes.len();
                 if node_dirty.len() < n {
                     node_dirty.resize(n, false);
+                }
+                if dirty.len() < n {
+                    dirty.resize(n, false);
                 }
                 // `layer[i] < n`, so `n` buckets always suffice; regrow as nodes
                 // are appended (splices only add layers at the top).
@@ -3098,13 +3135,11 @@ impl Runner {
                 if occupied.len() < n.div_ceil(64) {
                     occupied.resize(n.div_ceil(64), 0);
                 }
-                let mut dirty = vec![false; n];
                 if self.finished.get() || !kernel.begin_cycle(&mut dirty) {
                     break;
                 }
                 if let Some(e) = self.drain_cycle(
                     &mut kernel,
-                    &dirty,
                     &mut buckets,
                     &mut occupied,
                     &mut node_dirty,
@@ -3207,7 +3242,7 @@ impl Runner {
 
     /// Append a node to the *live* graph, growing every parallel structure the
     /// sparse engine keeps (`nodes`, `ticked`, `active_downs`, `passive_downs`,
-    /// `layer`, and `seed_nodes` if the node self-activates) and wiring its
+    /// `layer`, `is_seed`, and `always_nodes` if it busy-polls) and wiring its
     /// reverse edges + layer. `active_ups`/`passive_ups` reference existing
     /// (lower-index) nodes, so no existing node's order changes — pure append.
     fn rt_append_node(
@@ -3248,9 +3283,11 @@ impl Runner {
         self.passive_downs.push(Vec::new());
         self.removed.push(false);
         self.layer.push(lyr);
-        if activation.always || activation.callback_activated() {
-            self.seed_nodes.push(idx);
+        if activation.always {
+            self.always_nodes.push(idx);
         }
+        self.is_seed
+            .push(activation.always || activation.callback_activated());
         idx
     }
 
@@ -3304,7 +3341,7 @@ impl Runner {
 
     /// Unlink node `idx` from the live graph and run its lifecycle teardown.
     /// Removes it from every upstream's down-list and every downstream's
-    /// up-list (both active and passive), drops it from `seed_nodes`, runs
+    /// up-list (both active and passive), drops it from the dispatch frontier, runs
     /// `stop` then `teardown` once, and tombstones it (`removed[idx] = true`).
     /// Because it no longer appears in any frontier or reverse-edge list it can
     /// never be enqueued again. Port of legacy's `process_pending_removals`
@@ -3331,8 +3368,10 @@ impl Runner {
         for &d in &passive_downs {
             self.nodes[d].passive_ups.retain(|&x| x != idx);
         }
-        // Drop from the dispatch frontier so it is never seeded again.
-        self.seed_nodes.retain(|&x| x != idx);
+        // Drop from the dispatch frontier so it is never seeded again — including
+        // via a schedule the kernel is still holding for it.
+        self.always_nodes.retain(|&x| x != idx);
+        self.is_seed[idx] = false;
         self.removed[idx] = true;
         // Lifecycle teardown, once, with node context — stop then teardown.
         let label = self.nodes[idx].label;
@@ -3348,8 +3387,8 @@ impl Runner {
     /// Walks `new`'s upstream cone, bounded to nodes in `appended` (this
     /// boundary's new nodes); a node is an *attachment point* if it reads a
     /// pre-existing (non-`appended`) upstream or is a source. Each attachment
-    /// point is scheduled and, if not already a dispatch seed, added to
-    /// `seed_nodes` so the scheduled dirty flag actually fires it (a plain
+    /// point is scheduled and marked in `is_seed` so the scheduled dirty flag
+    /// actually fires it (a plain
     /// `map`/`fold` is otherwise reached only by upstream propagation).
     /// Downstream appended nodes then fire by normal tick propagation, so the
     /// region evaluates in order and reads real values, not `Default`. Mirrors
@@ -3371,9 +3410,7 @@ impl Runner {
                 self.nodes[ix].active_ups.is_empty() && self.nodes[ix].passive_ups.is_empty();
             if has_preexisting || is_source {
                 kernel.schedule(ix, time);
-                if !self.seed_nodes.contains(&ix) {
-                    self.seed_nodes.push(ix);
-                }
+                self.is_seed[ix] = true;
             }
             for &u in self.nodes[ix]
                 .active_ups
