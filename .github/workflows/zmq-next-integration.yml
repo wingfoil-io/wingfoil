@@ -8,6 +8,13 @@ on:
       - 'crates/wingfoil-next/src/adapters/zmq**'
       - 'crates/wingfoil-next/tests/zmq_integration.rs'
       - 'crates/wingfoil-next/tests/zmq_etcd_integration.rs'
+      - 'crates/wingfoil-next/tests/zmq_cross_engine_integration.rs'
+      - 'crates/wingfoil-next/tests/zmq_cross_lang_integration.rs'
+      # The wire contract has two sides: a change to legacy's `channel::Message`
+      # breaks cross-engine compatibility just as surely as a change to next's
+      # `WireMessage`, and nothing else in CI would catch it.
+      - 'legacy/wingfoil/src/channel/message.rs'
+      - 'legacy/wingfoil/src/adapters/zmq/**'
       - 'crates/wingfoil-next-python/src/adapters/zmq.rs'
       - 'crates/wingfoil-next-python/tests/test_zmq.py'
 
@@ -73,6 +80,16 @@ jobs:
         env:
           RUST_LOG: INFO
 
+      - name: Run ZMQ cross-engine wire-compatibility tests
+        # A legacy publisher feeding a next subscriber and back. The unit test
+        # pins next's own encoding; only this proves legacy agrees. Retires with
+        # the legacy tree.
+        run: |
+          cargo test --features zmq-cross-engine-test -p wingfoil-next \
+            --test zmq_cross_engine_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
       # --- Python bindings (wingfoil-next-python) ---
       # The binding's `requires_etcd` tier covers `zmq_sub_etcd` / `zmq_pub_etcd`,
       # which only exist when the module carries *both* features. The Rust tests
@@ -116,6 +133,24 @@ jobs:
       - name: Run Python ZMQ (next) etcd discovery tests
         working-directory: crates/wingfoil-next-python
         run: .venv/bin/pytest -m requires_etcd tests/test_zmq.py -v
+        env:
+          RUST_LOG: INFO
+
+      - name: Run ZMQ cross-language tests (next-Rust ↔ next-Python)
+        # The Rust side shells out to `python3`, so the venv holding the freshly
+        # built bindings has to come first on PATH — otherwise the tests find
+        # the system interpreter, `import wingfoil_next` fails, and they abort
+        # (by design: these fail rather than skip).
+        #
+        # Both feature sets in one invocation: `zmq-cross-lang-etcd-test`
+        # enables `zmq-cross-lang-test`, and its etcd cases bring up their own
+        # container through testcontainers.
+        run: |
+          export PATH="$GITHUB_WORKSPACE/crates/wingfoil-next-python/.venv/bin:$PATH"
+          python3 -c 'import wingfoil_next' \
+            || (echo "bindings not importable from the venv on PATH" && exit 1)
+          cargo test --features zmq-cross-lang-etcd-test -p wingfoil-next \
+            --test zmq_cross_lang_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
