@@ -1,6 +1,6 @@
 [package]
 name = "wingfoil-wire-types"
-version = "8.0.0"
+version = "9.0.0"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
 rust-version.workspace = true

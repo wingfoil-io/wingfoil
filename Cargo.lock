@@ -7549,7 +7549,45 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wingfoil"
-version = "0.1.0"
+version = "8.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "bincode",
+ "by_address",
+ "chrono",
+ "crossbeam",
+ "derive-new",
+ "derive_more 2.1.1",
+ "env_logger 0.11.10",
+ "formato",
+ "futures",
+ "futures-util",
+ "iceoryx2",
+ "itertools 0.14.0",
+ "kanal",
+ "log",
+ "num-traits",
+ "ordered-float 4.6.0",
+ "quanta",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "thiserror 2.0.18",
+ "tinyvec",
+ "tokio",
+ "tracing",
+ "tynm",
+ "wingfoil 9.0.0",
+ "wingfoil-derive",
+ "zmq",
+]
+
+[[package]]
+name = "wingfoil"
+version = "9.0.0"
 dependencies = [
  "aeron-rs",
  "anyhow",
@@ -7613,44 +7651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingfoil"
-version = "8.0.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "bincode",
- "by_address",
- "chrono",
- "crossbeam",
- "derive-new",
- "derive_more 2.1.1",
- "env_logger 0.11.10",
- "formato",
- "futures",
- "futures-util",
- "iceoryx2",
- "itertools 0.14.0",
- "kanal",
- "log",
- "num-traits",
- "ordered-float 4.6.0",
- "quanta",
- "serde",
- "serde-aux",
- "serde_json",
- "strum",
- "strum_macros",
- "thiserror 2.0.18",
- "tinyvec",
- "tokio",
- "tracing",
- "tynm",
- "wingfoil 0.1.0",
- "wingfoil-derive",
- "zmq",
-]
-
-[[package]]
 name = "wingfoil-derive"
 version = "8.0.0"
 dependencies = [
@@ -7661,7 +7661,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-macros"
-version = "0.1.0"
+version = "9.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7670,7 +7670,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-python"
-version = "0.1.0"
+version = "9.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7678,13 +7678,13 @@ dependencies = [
  "log",
  "pyo3",
  "serde_json",
- "wingfoil 0.1.0",
+ "wingfoil 9.0.0",
  "wingfoil-python-macros",
 ]
 
 [[package]]
 name = "wingfoil-python-macros"
-version = "0.1.0"
+version = "9.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7693,7 +7693,7 @@ dependencies = [
 
 [[package]]
 name = "wingfoil-wire-types"
-version = "8.0.0"
+version = "9.0.0"
 dependencies = [
  "anyhow",
  "bincode",

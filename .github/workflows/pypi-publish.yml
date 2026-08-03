@@ -59,16 +59,35 @@ jobs:
       - name: Install maturin
         run: pip install maturin
 
-      - name: Build wheel and sdist
-        run: |
-          cd legacy/wingfoil-python
-          maturin build --verbose --release --strip -o wheelhouse
+      # The Linux wheel carries EVERY adapter, aeron and iceoryx2 included
+      # (cutover ruling, #367). Both need a C toolchain and are POSIX-only, so
+      # they are installed and enabled here and only here.
+      - name: Install Linux-only adapter build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev uuid-dev libbsd-dev
+
+      - name: Build wheel and sdist (Linux — all adapters)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: crates/wingfoil-python
+        # `--features` REPLACES the pyproject list rather than adding to it, so
+        # `extension-module` has to be named again here. `all-adapters` is the
+        # single source of truth for the full set — see Cargo.toml.
+        run: maturin build --verbose --release --strip -o wheelhouse --features extension-module,all-adapters
+
+      - name: Build wheel and sdist (macOS / Windows — portable set)
+        if: matrix.os != 'ubuntu-latest'
+        working-directory: crates/wingfoil-python
+        # Uses the pyproject feature list, which excludes aeron and iceoryx2 —
+        # not a policy choice so much as a fact: iceoryx2 is Linux/POSIX-only
+        # and aeron builds a C library, so enabling them here would stop these
+        # wheels building rather than enrich them.
+        run: maturin build --verbose --release --strip -o wheelhouse
 
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
         with:
           name: wheelhouse-${{ matrix.os }}-${{ matrix.python-version }}
-          path: legacy/wingfoil-python/wheelhouse
+          path: crates/wingfoil-python/wheelhouse
 
   upload-pypi:
     runs-on: ubuntu-latest
@@ -107,11 +126,11 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: legacy/wingfoil-python/artifacts
+          path: crates/wingfoil-python/artifacts
 
       - name: Prepare artifacts
         run: |
-          cd legacy/wingfoil-python
+          cd crates/wingfoil-python
           ls -al artifacts
           mkdir wheelhouse
           find artifacts -name "*.whl" -exec cp {} wheelhouse/ \;
@@ -120,7 +139,7 @@ jobs:
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
-          packages-dir: legacy/wingfoil-python/wheelhouse
+          packages-dir: crates/wingfoil-python/wheelhouse
           repository-url: ${{ env.REPO_URL }}
           verbose: true
           user: __token__

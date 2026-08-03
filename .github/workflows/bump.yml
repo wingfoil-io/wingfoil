@@ -38,7 +38,10 @@ jobs:
         id: bump_cargo
         run: |
           BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
-          CARGO_VERSION=$(grep -m 1 '^version' legacy/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          # Source of truth is the surviving crate. It used to be legacy's, but
+          # legacy is frozen at 8.0.0 and no longer bumps (cutover-plan 5.6), so
+          # reading it would peg every future release below the shipped version.
+          CARGO_VERSION=$(grep -m 1 '^version' crates/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           NPM_VERSION=$(node -p "require('./js/package.json').version")
           WASM_VERSION=$(grep -m 1 '^version' crates/wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
           BASE=$(printf '%s\n%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" "$WASM_VERSION" | sort -V | tail -n 1)
@@ -51,23 +54,19 @@ jobs:
           esac
           NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
           echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, wasm: $WASM_VERSION, base: $BASE, new: $NEW_VERSION"
-          # Legacy first, root second — order is load-bearing. `legacy/` is its
-          # own workspace now (cutover-plan 5.0) and `set-version` runs
-          # `cargo metadata`, so it has to resolve while the tree is still
-          # internally consistent. Bumping the root first would leave
-          # `wingfoil-wire-types` at NEW against legacy's `^OLD` pin and the
-          # resolve would fail — the same trap the wasm step below documents.
-          cargo set-version --manifest-path legacy/Cargo.toml "$NEW_VERSION"
+          # Legacy is deliberately NOT bumped: it is frozen at its final release
+          # and dies at the deletion. It still has to keep *resolving* though,
+          # which the re-pin step below handles.
           cargo set-version "$NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Re-pin legacy's cross-workspace dependency
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          # `set-version` re-pins dependencies on packages it bumped, and
-          # `wingfoil-wire-types` is not a legacy member — it lives in the root
-          # workspace, so legacy's pin on it is left on the old requirement.
-          # Sed it, like the wasm crate's below.
+          # Legacy is frozen, but it depends on `wingfoil-wire-types`, which is
+          # not a legacy member and *does* bump. Without this its requirement
+          # would be left behind and the legacy workspace would stop resolving.
+          # Sed rather than `set-version`, like the wasm crate's below.
           sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./\\.\\./crates/wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" \
             legacy/wingfoil/Cargo.toml
           grep -n 'wingfoil-wire-types' legacy/wingfoil/Cargo.toml
@@ -87,7 +86,7 @@ jobs:
       - name: Update conf.py with new version
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          CONF_PATH="legacy/wingfoil-python/docs/conf.py"
+          CONF_PATH="crates/wingfoil-python/docs/conf.py"
           sed -i "s/^release = .*/release = '$NEW_VERSION'/" $CONF_PATH
 
       - name: Bump wingfoil-js package.json version

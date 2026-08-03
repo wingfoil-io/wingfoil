@@ -1,13 +1,21 @@
 [package]
 name = "wingfoil"
-version = "0.1.0"
+version = "9.0.0"
 edition = "2024"
+authors = ["wingfoil@wingfoil.io"]
+license = "Apache-2.0"
+homepage = "https://github.com/wingfoil-io/wingfoil/"
+documentation = "https://docs.rs/wingfoil"
+keywords = ["graph", "stream", "dag", "hft", "trading"]
 rust-version.workspace = true
-publish = false
+# Publishable from the cutover on (was `false` while these crates were
+# prototypes under the `-next` names). Same registry list as the legacy
+# crates it replaces.
+publish = ["wingfoil", "crates-io"]
 # Examples are grouped into examples/{core,adapters,showcase}/<name>/ so each can
 # carry its own README; every target is declared explicitly below.
 autoexamples = false
-description = "Design prototype: dual-mode (interpreted + compiled) stream graphs with single-sourced op semantics"
+description = "Graph based stream processing framework: build a DAG once, run it live or replay it over history"
 readme = "README.md"
 
 [lints]
@@ -20,7 +28,7 @@ workspace = true
 # cutover can delete the legacy tree outright instead of disentangling it
 # first. The only edge back to `wingfoil` is a dev-dependency, for the parity
 # tests and the legacy-vs-next comparison benches.
-wingfoil-macros = { path = "../wingfoil-macros" }
+wingfoil-macros = { path = "../wingfoil-macros", version = "9.0.0" }
 anyhow = { workspace = true }
 # `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
 # `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro
@@ -127,7 +135,7 @@ rdkafka = { version = "0.37", optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
-wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "8.0.0", optional = true }
+wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "9.0.0", optional = true }
 # web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
 # `rustls` itself is already an optional dependency above (shared with `fix`).
 axum-server = { version = "0.7", default-features = false, features = [
