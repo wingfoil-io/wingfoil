@@ -64,7 +64,14 @@ jobs:
       # they are installed and enabled here and only here.
       - name: Install Linux-only adapter build dependencies
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev uuid-dev libbsd-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
+          # aeron needs cmake >= 3.30 and Ubuntu 24.04 ships 3.28, so the apt
+          # package is not enough — same recipe as aeron-next-integration.yml.
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
+
 
       - name: Build wheel and sdist (Linux — all adapters)
         if: matrix.os == 'ubuntu-latest'
