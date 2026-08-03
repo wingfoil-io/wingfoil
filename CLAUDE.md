@@ -143,6 +143,66 @@ keep them current when a crate's role changes.
   compiled/nested emission dispatches through. Built-in and user ops take
   the identical path.
 
+### Two clocks: engine time and the wall snap — and who owns each
+
+`Kernel` keeps them as separate fields, and conflating them is the mistake to
+avoid:
+
+- **`time`** (`Ctx::time()`) — **engine time**, source-driven. Under
+  `HistoricalFrom` it is pure logic: `begin_cycle` pops the earliest scheduled
+  callback and sets `time = next.max(time + 1)`, consulting no clock at all.
+  Under `RealTime` it is `NanoTime::now().max(time + 1)`. **This is the only one
+  business logic may use** — it is what makes replay deterministic.
+- **`wall_time`** (`Ctx::wall_time()`) — this cycle's **wall-clock snap**, for
+  latency stamping and telemetry. A real clock read in *both* run modes, so
+  "time spent" means the same in a backtest as live. Never branch business
+  logic on it.
+
+**The kernel owns the snap and takes it lazily, on first read.**
+`Kernel::wall_time()` snaps `NanoTime::now()` only if this cycle hasn't yet,
+caches it in a `Cell`, and returns the same instant to every later reader in
+that cycle. `begin_cycle` does not snap — it only *invalidates*
+(`wall_time.set(None)`) on each of its paths. So **a cycle in which no op stamps
+reads the clock zero times**, which matters because the read is ~24 ns (see the
+`nanotime` bench) and almost nothing wires `latency::Stamp`.
+
+Three invariants follow, all easy to break by accident:
+
+1. **Don't snap eagerly in `begin_cycle`** — that is what the `Cell` exists to
+   avoid. A constant restored there lands entirely in the per-cycle intercept.
+2. **`Ctx::new` must not copy the snap.** `Ctx` is built once per node per
+   cycle, so an eager copy forces the kernel's snap every cycle and undoes the
+   laziness. It leaves `wall_time: None` and defers through `Sink::Kernel`.
+3. **Keep `Ctx::wall_time()` on `&self`** — the `Cell` (rather than a
+   `&mut self` accessor) is what allows this.
+
+**The three tiers differ only in who holds the kernel:**
+
+- **`compiled()`** owns one outright — `let mut __k = Kernel::new(..)` as a
+  stack local, driving its own `while __k.begin_cycle(..)` loop. Nodes get
+  `Ctx::new(&mut __k, i)`, i.e. the identical lazy path. Nothing about time is
+  special-cased for this tier.
+- **interpreted** — the `Runner` holds the kernel; same `Ctx::new`, same
+  laziness.
+- **`nested()` (island)** borrows the outer kernel's values once per activation
+  (`__ctx.time()` / `__ctx.wall_time()` / `__ctx.start_time()`) and hands every
+  inner node a `Ctx::nested(..)` carrying `wall_time: Some(snap)`, with the sink
+  swapped to the composite's private `TimeQueue` — only `next_time()` is
+  forwarded outward. Time stays globally consistent because the island reads the
+  *outer* engine's clock rather than keeping its own.
+
+  **The island is the one place laziness is given up**, necessarily: the
+  composite must resolve the snap before running its interior and cannot know
+  whether any inner node will look, so it takes exactly one snap per activation
+  either way. Don't "fix" that by making it lazy per inner node — the previous
+  design called `NanoTime::now()` per inner node per activation (~24 ns each),
+  which was the island tier's entire per-node deficit against `compiled()`.
+
+Two documented island consequences, deliberate: an op's `start` observes
+`NanoTime::ZERO` for the wall snap (true of flat graphs too — `start` runs
+before the first cycle), and `is_last_cycle` / `run_mode` are not propagated
+into an island.
+
 ### `TimeQueue` deduplicates by design — don't "fix" it
 
 `runtime::time_queue::TimeQueue<T>` (backs the graph scheduler, `feedback`,
