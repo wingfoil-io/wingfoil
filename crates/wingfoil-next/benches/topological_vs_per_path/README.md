@@ -15,9 +15,13 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 
 wingfoil stays flat while async streams and reactive double every level
 (O(2^N) per-path propagation). The linear axis is what makes the doubling look
-like doubling; it also flattens every wingfoil series onto the floor, so
-[the same chart on a log axis](latency_log.png) is the one to read crossovers
-and tier separation off. Point estimates, in nanoseconds per tick:
+like doubling — but it also flattens every wingfoil series onto the floor and
+compresses the first four depths into nothing, so here is the same data on a
+log axis, where the low end is legible and the crossovers are visible:
+
+<img src="latency_log.png" width="640">
+
+Point estimates, in nanoseconds per tick:
 
 | Depth | wingfoil-next interpreted | wingfoil-next compiled island | rxrust (per-path, 2 emissions/sample) | tokio async (per-path) |
 |---|---|---|---|---|
@@ -180,9 +184,13 @@ self-contained; compare within a table, not across to an older one.
 
 <img src="cross_library.png" width="640">
 
-Again linear for the shape and [log for the detail](cross_library_log.png) —
-on a linear axis all three wingfoil tiers are one line on the floor, which is
-the point being made and also why the log version exists.
+Again linear for the shape, and log for the detail — on a linear axis all three
+wingfoil tiers are one line on the floor, which is the point being made and
+also why the second chart exists. The log axis is the only place the ~55 ns
+between `compiled` and the island is visible at all, and the only place you can
+see rxrust starting *ahead* at depths 1–2:
+
+<img src="cross_library_log.png" width="640">
 
 The table at the top is the measurement the three targets actually make, and it
 is the only one where every series is timed identically. It is also conservative:

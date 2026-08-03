@@ -353,10 +353,12 @@ paths.
 
 <img src="topological_vs_per_path/latency.png" width="640">
 
-(Linear axis, which is what makes the doubling read as doubling; it also pins
-both wingfoil series to the floor, so
-[the log version](topological_vs_per_path/latency_log.png) is where the
-crossovers and the tier separation are legible.)
+Linear axis, which is what makes the doubling read as doubling — and which pins
+both wingfoil series to the floor and compresses the first four depths to
+nothing. The same data on a log axis, where the low end and the crossovers are
+legible:
+
+<img src="topological_vs_per_path/latency_log.png" width="640">
 
 wingfoil-next stays flat across ten levels — every node visited once per tick —
 while both path-at-a-time libraries double per level (2.01× and 1.94× measured).
