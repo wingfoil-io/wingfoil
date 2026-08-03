@@ -36,8 +36,9 @@
 //! That rule is only as good as its coverage, and it had a hole: the whole of
 //! `StatisticsOps` — 36 methods — was in neither, because the guard was
 //! written against `StreamOps` and nobody extended it when the statistics
-//! surface landed. All 36 are now classified: 25 dual-mode, exercised in the
-//! `surface_stats_*` blocks, and 11 in category 2b below.
+//! surface landed. All 36 are now classified, and since the time-windowed
+//! family closed **every one of them is dual-mode**, exercised across the four
+//! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel`, `poll` — IO / threaded / busy-poll sources; the
@@ -80,18 +81,17 @@
 //!     fluent method wires through; it just isn't spelled in a `nitro!` block.
 //!     A debug/logging tap has no place in a self-driving compiled kernel
 //!     anyway, so this costs nothing real.
-//!   * The **11 `time_windowed_*` statistics methods** — `time_windowed_sum`
-//!     / `_mean` / `_min` / `_max` / `_var` / `_std` / `_median`, and the
-//!     `_mean_time_weighted` / `_var_time_weighted` / `_std_time_weighted` /
-//!     `_median_time_weighted` four. Identical mechanism to `logged`: the ops'
-//!     `Cfg` is `NanoTime`, the fluent methods take a `Duration` and convert,
-//!     and `nitro!` cannot satisfy both with one set of call-site tokens.
-//!     Unlike `logged` this *is* a real gap — a time-windowed statistic is
-//!     exactly the kind of thing a compiled kernel should carry — and it
-//!     closes by moving the conversion into the op (take `Duration` as `Cfg`
-//!     and convert in `start`, as `Ticker` does), not by touching the macro.
-//!     The other 25 statistics ops are dual-mode and exercised in the three
-//!     `surface_stats_*` blocks below.
+//!     The **11 `time_windowed_*` statistics methods** used to sit here for the
+//!     same reason and have since **closed** — they are dual-mode now, in
+//!     `surface_stats_time_windowed` below. They were the one entry in this
+//!     category that was a *real* gap rather than a shrug: a compiled kernel
+//!     should carry a time-windowed statistic. The fix was the one this note
+//!     predicted — the ops take `Duration` as their `Cfg` and convert once in
+//!     `start` (into the `TimeWindowed<S>` state wrapper), as `Ticker` does —
+//!     so the macro was never involved. `logged` stays because its mismatch is
+//!     `&str` against `String`, which no `Cfg` change fixes without taking the
+//!     `format!`-able label away from callers, and because a debug tap has no
+//!     place in a self-driving compiled kernel anyway.
 //!
 //! **3. Currently interpreted-only — candidate follow-up, not by design:**
 //!   * *(empty — all four former members are now dual-mode.)* `join_passive`,
@@ -134,6 +134,9 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const P: Duration = Duration::from_millis(10);
 const RUN: RunFor = RunFor::Cycles(12);
+/// The time-windowed family's window: three ticker periods, so samples age out
+/// part-way through a `RUN`-length run rather than never.
+const W: Duration = Duration::from_millis(30);
 
 // The stateless / single-input `u64` surface: `count`, `map`, `map_filter`,
 // `distinct`, `drop_small_change`, `difference`, `limit`, `inspect`, `filter`
@@ -287,9 +290,9 @@ wingfoil::nitro! {
 //
 // `StatisticsOps` was absent from this guard entirely — not in a `nitro!`
 // block, not in a fluent-only list — i.e. exactly the "silently in neither"
-// state the module doc forbids, for a third of the op catalog. The three
-// blocks below put all 25 of its dual-mode ops under the two-sided guard; the
-// 11 that are not dual-mode are listed under category 2b in the module doc.
+// state the module doc forbids, for a third of the op catalog. The four
+// blocks below put **all 36 of them** under the two-sided guard — every one
+// dual-mode, since the time-windowed family closed.
 //
 // Every value here is `f64`, and the two engines run the same `cycle` code
 // over the same inputs in the same order, so the parity assertion is exact
@@ -331,6 +334,39 @@ wingfoil::nitro! {
         let median = x.cumulative_median();
         let out = sum
             .merge_all(&[&mean, &min, &max, &var, &std, &median])
+            .accumulate();
+        out
+    }
+}
+
+// The time-windowed family — all 11, count-weighted and time-weighted. These
+// were interpreted-only until their `Cfg` became the `Duration` their fluent
+// methods already took, so this block is the thing that could not be written
+// before: a `nitro!` graph naming a window as a call-site argument, which the
+// compiled emission then uses verbatim as the op's config.
+//
+// The window (30ms) is three ticker periods, chosen so eviction actually
+// happens inside a 12-cycle run — a window wider than the run would leave the
+// eviction path untested and the block would still compile, which is the way
+// this test could pass while proving less than it looks.
+wingfoil::nitro! {
+    fn surface_stats_time_windowed(g: &GraphBuilder) -> Stream<Vec<f64>> {
+        let x = g.ticker(P).count().map(|i| *i as f64);
+        let sum = x.time_windowed_sum(W);
+        let mean = x.time_windowed_mean(W);
+        let min = x.time_windowed_min(W);
+        let max = x.time_windowed_max(W);
+        let var = x.time_windowed_var(W);
+        let std = x.time_windowed_std(W);
+        let median = x.time_windowed_median(W);
+        let tw_mean = x.time_windowed_mean_time_weighted(W);
+        let tw_var = x.time_windowed_var_time_weighted(W);
+        let tw_std = x.time_windowed_std_time_weighted(W);
+        let tw_median = x.time_windowed_median_time_weighted(W);
+        let out = sum
+            .merge_all(&[
+                &mean, &min, &max, &var, &std, &median, &tw_mean, &tw_var, &tw_std, &tw_median,
+            ])
             .accumulate();
         out
     }
@@ -477,4 +513,36 @@ fn stats_cumulative_surface_three_engine_parity() {
 #[test]
 fn stats_time_weighted_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_stats_time_weighted);
+}
+
+#[test]
+fn stats_time_windowed_surface_three_engine_parity() {
+    assert_interp_eq_compiled!(surface_stats_time_windowed);
+}
+
+/// The time-windowed family across all three expansions, not just two.
+///
+/// Worth doing here rather than leaning on the block above: these ops evict by
+/// *engine time*, and an island reads the outer engine's clock rather than
+/// keeping its own, so `nested` is the expansion where a window could plausibly
+/// disagree. It does not.
+#[test]
+fn stats_time_windowed_reaches_a_nested_island() {
+    let (mut runner, out) = surface_stats_time_windowed::interpreted();
+    runner.run(HISTORICAL, RUN).unwrap();
+    let interp = runner.value(out);
+    assert!(
+        !interp.is_empty(),
+        "surface_stats_time_windowed had no values"
+    );
+
+    let g = GraphBuilder::new();
+    let island = surface_stats_time_windowed::nested(&g);
+    let mut r = g.build();
+    r.run(HISTORICAL, RUN).unwrap();
+    assert_eq!(
+        interp,
+        r.value(&island),
+        "interpreted vs nested drift in surface_stats_time_windowed"
+    );
 }

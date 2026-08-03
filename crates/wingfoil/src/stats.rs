@@ -9,8 +9,6 @@
 
 use std::time::Duration;
 
-use wingfoil::NanoTime;
-
 use crate::fluent::Stream;
 use crate::ops::EwmaDecay;
 
@@ -228,40 +226,19 @@ impl StatisticsOps for Stream<f64> {
 
     __wf_fluent_cumulative_median!();
 
-    fn time_windowed_sum(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_sum(h, window))
-    }
+    __wf_fluent_time_windowed_sum!();
 
-    fn time_windowed_mean(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_mean(h, window))
-    }
+    __wf_fluent_time_windowed_mean!();
 
-    fn time_windowed_min(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_min(h, window))
-    }
+    __wf_fluent_time_windowed_min!();
 
-    fn time_windowed_max(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_max(h, window))
-    }
+    __wf_fluent_time_windowed_max!();
 
-    fn time_windowed_var(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_var(h, window))
-    }
+    __wf_fluent_time_windowed_var!();
 
-    fn time_windowed_std(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_std(h, window))
-    }
+    __wf_fluent_time_windowed_std!();
 
-    fn time_windowed_median(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_median(h, window))
-    }
+    __wf_fluent_time_windowed_median!();
 
     __wf_fluent_cumulative_mean_time_weighted!();
 
@@ -275,27 +252,15 @@ impl StatisticsOps for Stream<f64> {
 
     __wf_fluent_rolling_std_time_weighted!();
 
-    fn time_windowed_mean_time_weighted(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_mean_time_weighted(h, window))
-    }
+    __wf_fluent_time_windowed_mean_time_weighted!();
 
-    fn time_windowed_var_time_weighted(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_var_time_weighted(h, window))
-    }
+    __wf_fluent_time_windowed_var_time_weighted!();
 
-    fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_std_time_weighted(h, window))
-    }
+    __wf_fluent_time_windowed_std_time_weighted!();
 
     __wf_fluent_cumulative_median_time_weighted!();
 
     __wf_fluent_rolling_median_time_weighted!();
 
-    fn time_windowed_median_time_weighted(&self, window: Duration) -> Stream<f64> {
-        let window = NanoTime::from(window);
-        self.wire(move |b, h| b.time_windowed_median_time_weighted(h, window))
-    }
+    __wf_fluent_time_windowed_median_time_weighted!();
 }

@@ -1591,12 +1591,16 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     `tests/op_fluent_shapes.rs`, each invoked from a trait declared *outside*
     the crate, which is the property the behavioural suites cannot see.
 
-    What is left in `StatisticsOps` is not a generator gap but the same
-    `Cfg`-mismatch category as `logged`: the 11 `time_windowed_*` methods take
-    a `Duration` their body converts to the op's `NanoTime` `Cfg`, and
-    `ewma_per_tick` `debug_assert!`s its alpha before wiring. Closing those
-    means changing the ops' `Cfg` (convert in `start`, as `Ticker` does), not
-    the macro.
+    **35 of `StatisticsOps`' 36 methods are now generated.** The 11
+    `time_windowed_*` methods used to be hand-written for the same
+    `Cfg`-mismatch reason as `logged` — the method took a `Duration`, the op's
+    `Cfg` was `NanoTime` — and that closed exactly as this paragraph said it
+    would: by changing the ops rather than the macro. `Cfg` is now the
+    `Duration`, converted once in `start` into a `TimeWindowed<S>` state
+    wrapper (the accumulators are shared with the count-windowed family, which
+    has no window to hold, so the horizon lives in the wrapper rather than in
+    them). The last hand-written method is `ewma_per_tick`, whose body
+    `debug_assert!`s its alpha before wiring.
 
   - **`Signal` coverage ✅ landed** (and the module renamed `compat` →
     `signal`). `#[op(fluent)]` emits a second macro, `__wf_signal_<name>!`,
@@ -1649,11 +1653,15 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     were in neither a `nitro!` block nor an allowlist — the "silently in
     neither" state `op_completeness.rs` exists to prevent, for a third of the
     catalog, because the file was written against `StreamOps` and never
-    widened. 25 are dual-mode and exercised in three new `surface_stats_*`
-    blocks with interpreted-vs-compiled parity; the 11 `time_windowed_*` are
-    recorded in category 2b, and unlike `logged` they are a **real** gap: a
-    compiled kernel should carry a time-windowed statistic, and closing it
-    means taking `Duration` as the op's `Cfg` and converting in `start`.
+    widened. **All 36 are dual-mode**, exercised across four `surface_stats_*`
+    blocks with interpreted-vs-compiled parity. It landed as 25 plus an
+    11-strong category-2b entry — the `time_windowed_*` family, the one 2b
+    member that was a **real** gap rather than an ergonomic shrug, since a
+    compiled kernel should carry a time-windowed statistic. That gap is now
+    closed (`Duration` as the ops' `Cfg`, converted in `start`), and the family
+    is covered by `surface_stats_time_windowed` plus a nested-island parity
+    test — an island reads the outer engine's clock, which is where an
+    age-evicting op could plausibly disagree.
 
 ## Phase 6 — Python bindings, examples, benches
 

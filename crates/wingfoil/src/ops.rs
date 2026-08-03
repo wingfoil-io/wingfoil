@@ -1494,6 +1494,44 @@ fn aged_out(now: NanoTime, t: NanoTime, window: u64) -> bool {
     u64::from(now) - u64::from(t) > window
 }
 
+/// State wrapper for the time-windowed family: the window converted to engine
+/// nanoseconds **once** in `start`, beside whichever accumulator the statistic
+/// keeps.
+///
+/// It exists to let these ops take a `Duration` as their [`Op::Cfg`] — the same
+/// type their fluent methods take — which is what puts them in `nitro!` and
+/// `compiled()` alongside every other statistic. The compiled path uses the
+/// call-site argument tokens verbatim as the config, so an op whose `Cfg` was
+/// [`NanoTime`] while its fluent method took a `Duration` could not be spelled
+/// in a `nitro!` block at all; that mismatch is why this family was
+/// interpreted-only.
+///
+/// The conversion lands in `start` rather than `cycle` for the reason
+/// [`Ticker`] gives: per-cycle it is measurable on dense graphs, and here it
+/// would sit on the hot path of every windowed statistic in the graph.
+///
+/// The window is held *here* rather than as a field on the accumulators
+/// because three of the four — [`WindowedTimeWeightedMomentState`],
+/// [`TimeWeightedMedianState`] and the moment state — are shared with the
+/// **count**-windowed ops, which evict by index and have no window duration to
+/// hold. Wrapping keeps that boundary honest: the accumulator stays a pure
+/// accumulator, and only the ops that evict by age carry an eviction horizon.
+#[derive(Default)]
+pub struct TimeWindowed<S> {
+    /// The eviction horizon in engine nanoseconds; set by `arm` in `start`.
+    window: u64,
+    /// The statistic's own accumulator.
+    inner: S,
+}
+
+impl<S> TimeWindowed<S> {
+    /// Convert the configured window to engine nanoseconds. Called from each
+    /// op's `start`, so `cycle` reads a `u64` and never converts.
+    fn arm(&mut self, window: Duration) {
+        self.window = u64::from(NanoTime::from(window));
+    }
+}
+
 /// Ring-buffer state for the time-windowed sum: the `(time, value)` samples
 /// currently inside the window and their running total, maintained
 /// incrementally (add on push, subtract on evict) rather than rescanned.
@@ -1521,26 +1559,35 @@ impl TimeWindowSumState {
     }
 }
 
-/// Sum over a bounded time window of the last `window` (a [`NanoTime`] duration)
-/// of graph time — O(1) per tick. Mirrors the legacy `sum(Window::Time(_))`.
+/// Sum over a bounded time window of the last `window` (a [`Duration`], converted
+/// to engine time in `start`) of graph time — O(1) per tick. Mirrors the legacy `sum(Window::Time(_))`.
 pub struct TimeWindowedSum;
 
-#[op(build = time_windowed_sum)]
+#[op(build = time_windowed_sum, fluent)]
 impl Op for TimeWindowedSum {
-    type Cfg = NanoTime;
-    type State = TimeWindowSumState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowSumState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowSumState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowSumState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        let out = state.push(ctx.time(), *input.0, u64::from(*cfg));
+        let out = state.inner.push(ctx.time(), *input.0, state.window);
         Ok(Tick::Value(out))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowSumState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1615,24 +1662,33 @@ impl TimeWindowMomentState {
 /// Mirrors the legacy `mean(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedMean;
 
-#[op(build = time_windowed_mean)]
+#[op(build = time_windowed_mean, fluent)]
 impl Op for TimeWindowedMean {
-    type Cfg = NanoTime;
-    type State = TimeWindowMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        state.push(ctx.time(), *input.0, u64::from(*cfg));
+        state.inner.push(ctx.time(), *input.0, state.window);
         // The current sample is always in window, so `count >= 1` and `mean`
         // holds the window mean (equal to the sample on the first tick).
-        Ok(Tick::Value(state.mean))
+        Ok(Tick::Value(state.inner.mean))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1640,22 +1696,31 @@ impl Op for TimeWindowedMean {
 /// per tick. Mirrors the legacy `variance(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedVar;
 
-#[op(build = time_windowed_var)]
+#[op(build = time_windowed_var, fluent)]
 impl Op for TimeWindowedVar {
-    type Cfg = NanoTime;
-    type State = TimeWindowMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        state.push(ctx.time(), *input.0, u64::from(*cfg));
-        Ok(Tick::Value(state.variance()))
+        state.inner.push(ctx.time(), *input.0, state.window);
+        Ok(Tick::Value(state.inner.variance()))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1665,22 +1730,31 @@ impl Op for TimeWindowedVar {
 /// Weighting::Count)`.
 pub struct TimeWindowedStd;
 
-#[op(build = time_windowed_std)]
+#[op(build = time_windowed_std, fluent)]
 impl Op for TimeWindowedStd {
-    type Cfg = NanoTime;
-    type State = TimeWindowMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        state.push(ctx.time(), *input.0, u64::from(*cfg));
-        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+        state.inner.push(ctx.time(), *input.0, state.window);
+        Ok(Tick::Value(state.inner.variance().max(0.0).sqrt()))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1736,22 +1810,31 @@ impl TimeWindowExtremeState {
 /// per tick. Mirrors the legacy `min(Window::Time(_))`.
 pub struct TimeWindowedMin;
 
-#[op(build = time_windowed_min)]
+#[op(build = time_windowed_min, fluent)]
 impl Op for TimeWindowedMin {
-    type Cfg = NanoTime;
-    type State = TimeWindowExtremeState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowExtremeState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowExtremeState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowExtremeState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        let out = state.push(ctx.time(), *input.0, u64::from(*cfg), true);
+        let out = state.inner.push(ctx.time(), *input.0, state.window, true);
         Ok(Tick::Value(out))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowExtremeState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1759,22 +1842,31 @@ impl Op for TimeWindowedMin {
 /// per tick. Mirrors the legacy `max(Window::Time(_))`.
 pub struct TimeWindowedMax;
 
-#[op(build = time_windowed_max)]
+#[op(build = time_windowed_max, fluent)]
 impl Op for TimeWindowedMax {
-    type Cfg = NanoTime;
-    type State = TimeWindowExtremeState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowExtremeState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowExtremeState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowExtremeState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        let out = state.push(ctx.time(), *input.0, u64::from(*cfg), false);
+        let out = state.inner.push(ctx.time(), *input.0, state.window, false);
         Ok(Tick::Value(out))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowExtremeState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -1817,22 +1909,31 @@ impl TimeWindowMedianState {
 /// `median(Window::Time(_), Weighting::Count)`.
 pub struct TimeWindowedMedian;
 
-#[op(build = time_windowed_median)]
+#[op(build = time_windowed_median, fluent)]
 impl Op for TimeWindowedMedian {
-    type Cfg = NanoTime;
-    type State = TimeWindowMedianState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWindowMedianState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWindowMedianState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMedianState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        let out = state.push(ctx.time(), *input.0, u64::from(*cfg));
+        let out = state.inner.push(ctx.time(), *input.0, state.window);
         Ok(Tick::Value(out))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWindowMedianState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -2191,27 +2292,36 @@ impl Op for RollingStdTimeWeighted {
 }
 
 /// Time-weighted mean over a bounded time window of the last `window` (a
-/// [`NanoTime`] duration) of graph time. Mirrors the legacy
+/// [`Duration`], converted to engine time in `start`) of graph time. Mirrors the legacy
 /// `mean(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedMeanTimeWeighted;
 
-#[op(build = time_windowed_mean_time_weighted)]
+#[op(build = time_windowed_mean_time_weighted, fluent)]
 impl Op for TimeWindowedMeanTimeWeighted {
-    type Cfg = NanoTime;
-    type State = WindowedTimeWeightedMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<WindowedTimeWeightedMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut WindowedTimeWeightedMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
         let sample = *input.0;
-        state.push_time(ctx.time(), sample, u64::from(*cfg));
-        Ok(Tick::Value(state.mean(sample)))
+        state.inner.push_time(ctx.time(), sample, state.window);
+        Ok(Tick::Value(state.inner.mean(sample)))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -2219,22 +2329,31 @@ impl Op for TimeWindowedMeanTimeWeighted {
 /// legacy `variance(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedVarTimeWeighted;
 
-#[op(build = time_windowed_var_time_weighted)]
+#[op(build = time_windowed_var_time_weighted, fluent)]
 impl Op for TimeWindowedVarTimeWeighted {
-    type Cfg = NanoTime;
-    type State = WindowedTimeWeightedMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<WindowedTimeWeightedMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut WindowedTimeWeightedMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        state.push_time(ctx.time(), *input.0, u64::from(*cfg));
-        Ok(Tick::Value(state.variance()))
+        state.inner.push_time(ctx.time(), *input.0, state.window);
+        Ok(Tick::Value(state.inner.variance()))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -2243,22 +2362,31 @@ impl Op for TimeWindowedVarTimeWeighted {
 /// `std(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedStdTimeWeighted;
 
-#[op(build = time_windowed_std_time_weighted)]
+#[op(build = time_windowed_std_time_weighted, fluent)]
 impl Op for TimeWindowedStdTimeWeighted {
-    type Cfg = NanoTime;
-    type State = WindowedTimeWeightedMomentState;
+    type Cfg = Duration;
+    type State = TimeWindowed<WindowedTimeWeightedMomentState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut WindowedTimeWeightedMomentState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        state.push_time(ctx.time(), *input.0, u64::from(*cfg));
-        Ok(Tick::Value(state.variance().max(0.0).sqrt()))
+        state.inner.push_time(ctx.time(), *input.0, state.window);
+        Ok(Tick::Value(state.inner.variance().max(0.0).sqrt()))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<WindowedTimeWeightedMomentState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
@@ -2429,25 +2557,34 @@ impl Op for RollingMedianTimeWeighted {
 /// `median(Window::Time(_), Weighting::Time)`.
 pub struct TimeWindowedMedianTimeWeighted;
 
-#[op(build = time_windowed_median_time_weighted)]
+#[op(build = time_windowed_median_time_weighted, fluent)]
 impl Op for TimeWindowedMedianTimeWeighted {
-    type Cfg = NanoTime;
-    type State = TimeWeightedMedianState;
+    type Cfg = Duration;
+    type State = TimeWindowed<TimeWeightedMedianState>;
     type In<'a> = (&'a f64,);
     type Out = f64;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
-        cfg: &mut NanoTime,
-        state: &mut TimeWeightedMedianState,
+        _cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWeightedMedianState>,
         input: (&f64,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<f64>> {
-        Ok(Tick::Value(state.push_time(
+        Ok(Tick::Value(state.inner.push_time(
             ctx.time(),
             *input.0,
-            u64::from(*cfg),
+            state.window,
         )))
+    }
+
+    fn start(
+        cfg: &mut Duration,
+        state: &mut TimeWindowed<TimeWeightedMedianState>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.arm(*cfg);
+        Ok(())
     }
 }
 
