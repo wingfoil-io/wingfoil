@@ -2284,7 +2284,11 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
     match target {
         Target::Compiled => quote! { ::wingfoil_next::op::Ctx::new(&mut __k, #idx) },
         Target::Nested => {
-            quote! { ::wingfoil_next::op::Ctx::nested(__now, __start_time, &mut __q, #idx) }
+            quote! {
+                ::wingfoil_next::op::Ctx::nested(
+                    __now, __wall_time, __start_time, &mut __q, #idx,
+                )
+            }
         }
     }
 }
@@ -2672,6 +2676,10 @@ fn expand_nested(def: &NitroDef) -> TokenStream2 {
             )*
             __g.__composite(__active, __passive, #callback_activated, move |__ctx, __phase| {
                 let __now = __ctx.time();
+                // The outer cycle's wall snap, taken once and shared by every
+                // inner node's `Ctx`. Per-node `NanoTime::now()` reads used to
+                // cost the island ~24 ns per node per activation.
+                let __wall_time = __ctx.wall_time();
                 let __start_time = __ctx.start_time();
                 match __phase {
                     ::wingfoil_next::op::CompositePhase::Start => {

@@ -1287,7 +1287,7 @@ rather than a single number. The `sparse` groups' node counts fell out of this
 too (267 → 205, 1035 → 781, since `fan(64)`/`fan(256)` no longer contribute 63
 and 255 merge nodes), and now match their legacy twins exactly.
 
-### Tier ranking on sparse graphs: no crossover, but `nested` inverts
+### Tier ranking on sparse graphs: no crossover, and `nested` no longer inverts
 
 The Phase 6 tier claim — compiled and nested beat the interpreters — was
 established only on *dense* workloads, where every node fires every cycle. The
@@ -1300,11 +1300,21 @@ walk. This also *weakens the case for compiled-path region gating* (branch-1's
 idea, noted under "Scope notes" below): the cost it would remove measures as
 small.
 
-What does invert is **`nested`, which loses to plain interpreted on sparse
-graphs** (~3.79ms vs ~2.70ms) — the mirror image of its dense win. An island
-runs its whole compiled interior on every outer activation, so a mostly-quiet
-interior is its worst case. Worth knowing before recommending islands as a
-general accelerator: they pay off in proportion to how *busy* the interior is.
+`nested` used to invert here — losing to plain interpreted on sparse graphs
+(~3.79ms vs ~2.70ms), read at the time as the mirror image of its dense win,
+since an island runs its whole compiled interior on every outer activation and a
+mostly-quiet interior is its worst case. That reading was dominated by a defect,
+not by the design: `Ctx::nested` snapped a fresh `NanoTime::now()` per *inner
+node per activation* (~24 ns each). With islands sharing the outer cycle's wall
+snap, `nested` beats interpreted on seven of the eight tier workloads — 2.2×–2.8×
+even on the two sparse ones, and level (1.0×) on the three-node `accumulate`. The structural point still stands (an island's payoff is
+proportional to how *busy* its interior is; sparse is its weakest showing), but
+it is now a smaller win rather than a loss.
+
+(The absolute figures in this section are the capture that motivated the
+finding; the node counts and times have since moved with the workload and the
+machine. Current, internally-comparable numbers live in
+[`crates/wingfoil-next/benches/README.md`](../crates/wingfoil-next/benches/README.md#execution-tiers).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth

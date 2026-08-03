@@ -21,7 +21,7 @@
 # time divided by 10 000 goes in the second pair of arrays.
 #
 # The values in place are a next-engine reading — every series measured back to
-# back on the machine described in `../images/lscpu-topo.txt` (4-core 2.10 GHz
+# back on the machine described in `../images/lscpu-b.txt` (4-core 2.10 GHz
 # Xeon VM). Point estimates, in nanoseconds.
 import matplotlib
 matplotlib.use('Agg')
@@ -31,14 +31,14 @@ import matplotlib.ticker as ticker
 depths = list(range(1, 11))
 
 # Per tick, through the bench harness handshake.
-wingfoil = [567, 418, 592, 651, 489, 540, 515, 549, 766, 541]
-nested   = [512, 631, 508, 601, 678, 663, 641, 645, 910, 785]
-async_s  = [159, 245, 393, 703, 1327, 2566, 5001, 10129, 20663, 40072]
-reactive = [24, 69, 158, 348, 722, 1443, 3053, 5691, 11428, 23110]
+wingfoil = [323, 567, 507, 509, 446, 441, 454, 683, 533, 591]
+nested   = [570, 330, 437, 469, 269, 377, 383, 333, 436, 353]
+async_s  = [142, 184, 385, 659, 1117, 2439, 4640, 10185, 17658, 33750]
+reactive = [21, 69, 153, 298, 692, 1326, 2748, 5620, 10490, 23705]
 
 # Per cycle, harness divided out (whole-run time / 10 000 cycles).
-cyc_interp = [122, 142, 166, 184, 206, 225, 249, 272, 293, 330]
-cyc_nested = [178, 206, 251, 288, 313, 356, 373, 398, 439, 458]
+cyc_interp = [87, 91, 116, 156, 144, 185, 210, 221, 269, 267]
+cyc_nested = [83, 86, 83, 88, 86, 85, 83, 75, 86, 95]
 
 INTERP_COLOR = '#2196F3'
 ISLAND_COLOR = '#0D47A1'
@@ -86,7 +86,8 @@ fig.savefig('latency.png', dpi=150, bbox_inches='tight')
 # The same graphs with the harness handshake divided out, on a linear axis: this
 # is the O(N) claim itself — one more level is one more node, a fixed step up,
 # not a doubling. (Compare the log axis above, where the per-path libraries need
-# four decades.)
+# four decades.) The island line is flatter still: its added node is compiled
+# straight-line code, so it costs ~0.3 ns rather than the interpreter's ~22.
 fig2, ax2 = plt.subplots(figsize=(8, 5))
 
 ax2.plot(depths, cyc_interp, 'o-', color=INTERP_COLOR, linewidth=2, markersize=6,
