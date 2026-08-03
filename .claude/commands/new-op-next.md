@@ -282,8 +282,10 @@ current cases, not hypotheticals:
 - the fluent signature deliberately reorders the parameters —
   `delay_with_reset(delay, trigger)` puts the cfg before the edge;
 - the fluent signature's types differ from the op's `Cfg` — `logged` (see the
-  gotcha below), and every `time_windowed_*` statistic, whose method takes a
-  `Duration` the body converts to the op's `NanoTime` `Cfg`;
+  gotcha below). **Prefer changing the `Cfg` to fixing it here:** the
+  `time_windowed_*` family used to be the other example in this bullet, and
+  closing it (taking `Duration` as the `Cfg`, converting once in `start`) both
+  deleted 11 hand-written methods and put the family in `nitro!`;
 - the body does more than forward — `ewma_per_tick` `debug_assert!`s its alpha
   is in `[0, 1]` before wiring.
 
@@ -402,10 +404,15 @@ categories.
 If your op lands in **2b** (fluent signature ≠ the op's `Cfg`), say which of
 the two it is: a deliberate ergonomic split that costs nothing compiled
 (`logged` — a debug tap has no place in a compiled kernel), or a real gap
-worth closing later (the `time_windowed_*` family — a compiled kernel *should*
-carry a time-windowed statistic). The fix for the second kind is to take the
-ergonomic type as `Cfg` and convert in `start`, the way `Ticker` does — not to
-touch the macro.
+worth closing (a compiled kernel *should* carry the op). **Default to closing
+it.** The fix is to take the ergonomic type as `Cfg` and convert in `start`,
+the way `Ticker` does — never to touch the macro. The `time_windowed_*` family
+was 2b's worked example of the second kind and is now the worked example of
+the fix: `Cfg` became the `Duration` the fluent methods already took, the
+converted window moved into a `TimeWindowed<S>` state wrapper (the accumulators
+are shared with the count-windowed ops, which have no window to hold), and all
+11 methods became generated. If the state you would convert into is shared with
+another family, wrap it — do not add a field only one family reads.
 
 Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,
