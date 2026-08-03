@@ -56,6 +56,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-test-coverage
+          # This job builds the legacy workspace, whose target dir is
+          # `legacy/target` (cutover-plan 5.0) — the cache action needs telling,
+          # or it saves and restores an empty root `target/`.
+          workspaces: legacy
           # Only main/next write the cache. Otherwise every PR branch races to
           # save a multi-GB entry, and the repo's 10GB cache budget evicts the
           # warm entries everything else restores from.
@@ -80,7 +84,13 @@ jobs:
         # `--no-capture` forces `--test-threads=1` in nextest, so these 500+ tests
         # run serially. That is deliberate: they take 30s either way, and several
         # bind loopback sockets, so the parallelism is not worth the flake risk.
-        run: cargo llvm-cov nextest -p wingfoil --features full --lib --tests --no-capture --lcov --output-path lcov.info
+        #
+        # `--manifest-path legacy/Cargo.toml`: the legacy tree is its own
+        # workspace (cutover-plan 5.0), so `-p wingfoil` no longer resolves
+        # from the root. Coverage lands in `legacy/target/llvm-cov-target`;
+        # `lcov.info` is still written relative to the working directory, so
+        # the upload step below is unchanged.
+        run: cargo llvm-cov nextest --manifest-path legacy/Cargo.toml -p wingfoil --features full --lib --tests --no-capture --lcov --output-path lcov.info
         env:
           RUST_LOG: INFO
 
@@ -207,3 +217,42 @@ jobs:
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true
+
+  lint-legacy:
+    name: Lint legacy (fmt & clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # `legacy/` left the root workspace ahead of the cutover rename
+    # (cutover-plan 5.0), so the `lint` job above no longer reaches it. Same
+    # two clippy passes it used to get there, just against the nested manifest
+    # and on their own runner — which is a wall-clock win, since the legacy
+    # feature set no longer has to build before the next-side lint can report.
+    # This whole job retires with the tree. No SARIF upload: code scanning
+    # tracks the surviving engine.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-lint-legacy
+          workspaces: legacy
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
+
+      - name: Run rustfmt
+        run: cargo fmt --manifest-path legacy/Cargo.toml --all -- --check
+
+      - name: Run rust-clippy
+        run: |
+          set -o pipefail
+          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets --all-features -- -D warnings

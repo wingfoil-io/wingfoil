@@ -1,0 +1,15 @@
+/home/user/wingfoil/legacy/target/debug/deps/tempfile-b24f25af7dd5cf8c.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/spooled.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/util.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/env.rs
+
+/home/user/wingfoil/legacy/target/debug/deps/libtempfile-b24f25af7dd5cf8c.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/spooled.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/util.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/env.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/dir/imp/unix.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/error.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/file/imp/unix.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/spooled.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/util.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/env.rs:

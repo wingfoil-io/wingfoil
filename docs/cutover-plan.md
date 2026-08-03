@@ -80,6 +80,38 @@ inverted, so nothing under `crates/` points at the legacy crates.
 
 What is left is the Phase 7 cutover itself, plus the prerequisites below.
 
+## The swap is sequenced in two steps, not one
+
+**Decided 2026-08-03.** The rename and the deletion are separated: rename next
+to `wingfoil` first, with the legacy tree still on disk but **out of the cargo
+workspace**, and delete `legacy/` in a later, purely subtractive step.
+
+That splits the risk. The rename (1.2) is the wide, conflict-prone change and
+it now lands on its own; the deletion is then a `git rm` plus workflow and
+publish cleanup, with no source edits attached. It also means the legacy tree
+survives as a runnable parity oracle *past* the rename, rather than
+disappearing in the same commit that makes every `use wingfoil_next::` stale.
+
+Two consequences follow, and both are load-bearing:
+
+- **Legacy leaves the workspace now** (§5.0). This is the enabler, not just a
+  build-time saving: two workspace members cannot both be named `wingfoil`, so
+  1.2 cannot land while `legacy/wingfoil` is a member. Excluding legacy also
+  drops `legacy/wingfoil-python`'s 13-feature roll-up out of the root feature
+  unification, which is what makes a plain `cargo build --workspace` compile
+  most of the `full` tree today.
+- **The parity dev-dependency needs a rename alias at 1.2.** Once
+  `wingfoil-next` *is* `wingfoil`, its dev-dependency on the legacy crate
+  collides with its own package name and must be aliased —
+  `legacy_wingfoil = { package = "wingfoil", path = "../../legacy/wingfoil" }`
+  — with `tests/engine_semantics.rs` and `benches/tiers.rs` updated to the
+  alias. The alias dies with the legacy tree.
+
+Publishing is unaffected in between: the legacy crates stay on crates.io at
+their current version, and the renamed crate publishes over the same name at
+the 5.6 major bump. What must not happen is the legacy publish jobs running
+after 1.2 — they retire with the rename, not with the deletion (§5.3).
+
 ## Prerequisite work before cutover starts
 
 Everything still outstanding before the directory promotion can begin,
@@ -98,7 +130,7 @@ being installable under the legacy name.
 | # | Item | Why it blocks | Size |
 |:--:|---|---|:--:|
 | 1.2 | **Crate + module rename.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → the derive crate, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. | Cutover is a *name* takeover, not just a directory move. Touches every `use wingfoil_next::` in the tree, every doc link, every example, every workflow, and both publish jobs. **Head of the critical path**, and it conflicts with anything else in flight — land it with the tree quiet. | L |
-| 1.3 | **Delete the `wingfoil-derive` crate.** It now holds only `#[node]`. Drop the directory, the workspace member entry, and `wingfoil`'s dependency on it. | Nothing under `crates/` depends on it; removal is purely a consequence of the legacy tree going. | S |
+| 1.3 | ⏸️ **Delete the `wingfoil-derive` crate — deferred to the legacy deletion.** It now holds only `#[node]`, it already sits under `legacy/`, and §5.0 takes it out of the workspace, so it stops mattering to the rename. It goes with `rm -rf legacy/` in the second step, not before. | Not a blocker for 1.2. Nothing under `crates/` depends on it. | S |
 | 1.4 | **Retire the legacy engine internals** (`MutableNode` wiring path) and rule on whether the legacy facade API survives the swap. | Decides whether Rust downstreams break at the version bump. | M |
 
 ### 2. Rulings owed — no code, but they gate the swap
@@ -108,9 +140,9 @@ needs an explicit accept/fix ruling at cutover.** These are the open ones.
 
 | # | Item | Class | Decision needed | Source |
 |:--:|---|:--:|---|---|
-| 2.1 | **`Graph::export` (GML topology dump) not ported.** The only *public* legacy API next has no answer for. | ⚪ | Accept the drop and document it in the migration guide, or port `export` before the swap. Feeds 4.2. | register C6 |
-| 2.2 | **Latency ops are fluent/interpreted-only** — `stamp`/`stamp_precise`/`latency_report` have no `nitro!`/`compiled()`/`nested()` form. | ⚪ | Ratify as legacy-parity (legacy exposes latency only through `LatencyStreamOps`), or close the gap. | register C7 |
-| 2.3 | **zmq cross-language interop not ported** — the `bincode` envelope is next-local, not wire-compatible with a legacy/Python peer. Its stated deferral was "with the Python bindings (Phase 6)", which is now done. | ⚪ | Re-rule now the deferral has expired. | register C2 |
+| 2.1 | ✅ **`Graph::export` (GML topology dump) — ruled 2026-08-03: accept the drop.** Next ships no `export`; a better introspection/visualisation story is scoped separately, and nothing in the engine blocks reintroducing one (`Builder` holds the full topology plus debug labels). | ⚪ | **Ruled.** Residual work is one line in the migration guide (4.2) naming it as the single removed public API. | register C6 |
+| 2.2 | **Latency ops are fluent/interpreted-only** — `stamp`/`stamp_precise`/`latency_report` have no `nitro!`/`compiled()`/`nested()` form. | ⚪ | **Ruled 2026-08-03: close the gap, don't ratify.** Needs per-op type-argument syntax in `nitro!` — a stamp's stage is a compile-time *type* parameter (`stamp::<quote_latency::produce>()`) and the macro forwards values, which is the whole difficulty. **Own PR.** | register C7 |
+| 2.3 | **zmq cross-language interop not ported** — the `bincode` envelope is next-local, not wire-compatible with a legacy/Python peer. Its stated deferral was "with the Python bindings (Phase 6)", which is now done. | ⚪ | **Ruled 2026-08-03: close the gap.** The deferral has expired and this is a legacy-parity capability, not superset work. **Own PR.** | register C2 |
 | 2.4 | **Live sources reject `RunMode::HistoricalFrom` at wiring.** Split ruling already agreed; the residual is that `kafka`/`fluvio` `_source` carry a live half only. | 🟡 | Confirm the bounded kafka/fluvio readers are *superset* work, not parity (legacy never offered them), so they do not block. | register B2 |
 | 2.5 | **`block_on` sinks/readers panic if the graph is driven from an async context.** | 🟡 | Accept as legacy-parity and inherent to `block_on`-on-the-graph-thread. | register A5a |
 | 2.6 | **`spawn_map` historical lock-step artifacts** — a filtering/delaying sub-graph desynchronises; bound runs by duration, not raw cycle count. | 🟢🟡 | Accept (legacy's `graph_node` delay case fails likewise). | register B6 |
@@ -218,21 +250,27 @@ gate **6.5**, run immediately before the swap.
 
 ### 4. Docs the cutover owes
 
+**All four land in one PR** (decided 2026-08-03) — they are one editorial pass
+over the same story, and 4.2 and 4.4 overlap enough that splitting them would
+mean writing the architecture prose twice.
+
 | # | Item | Size |
 |:--:|---|:--:|
 | 4.1 | **Rewrite the crate-level docs.** `crates/wingfoil-next/src/lib.rs` still opens *"**Design prototype**: what wingfoil's core abstractions look like if designed from scratch…"* and spends its first 40 lines on a post-mortem of the abandoned `codegen` retrofit. That becomes the crate's front page the moment it is `wingfoil`. | M |
-| 4.2 | **Migration guide `#[node]` → `Op`.** Does not exist. Must also carry the Rust facade decision (1.4) and whatever 2.1 rules on `Graph::export`. The Python half is largely written — `wingfoil-next-python/docs/migration.rst` — and can be referenced rather than duplicated. | M |
-| 4.3 | **Retire the `legacy/` copies of `README` / `CONTRIBUTING` / `CLAUDE.md`.** The promotion itself is done — next's copies *are* the root copies and the originals moved to `legacy/`. What is left for cutover is deleting them with the rest of the tree, and stripping the now-moot legacy branching section from the root `CLAUDE.md`. | S |
+| 4.2 | **Migration guide `#[node]` → `Op`.** Does not exist. Carries the Rust facade decision (1.4) and 2.1's ruling — `Graph::export` is the one removed public API. The Python half is largely written — `wingfoil-next-python/docs/migration.rst` — and can be referenced rather than duplicated. | M |
+| 4.3 | **Retire the `legacy/` copies of `README` / `CONTRIBUTING` / `CLAUDE.md`.** The promotion itself is done — next's copies *are* the root copies and the originals moved to `legacy/`. Deleting them rides with the legacy deletion, so what this PR owes is the root `CLAUDE.md` edits: the legacy branching section survives (legacy is still on disk and still cut from `main`) but must now say legacy is out of the workspace and how to build it. The strip happens at deletion. | S |
 | 4.4 | **Architecture / orientation doc** (`docs/wingfoil-next-architecture.md`, was #507). Deferred until the refactor settled; it has, and cutover is exactly when a new contributor needs it. | M |
 
 ### 5. Repo, CI and release plumbing — Goal 2's "directory promotion"
 
-All of this is blocked on 1.2, which fixes the names everything here refers to.
+5.0 lands **first, before 1.2** — it is what makes the rename possible. The
+rest is blocked on 1.2, which fixes the names it all refers to.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 5.1 | **Workspace `Cargo.toml`.** Drop the three `legacy/*` members. The four next crates are already at `crates/*`, so no repointing is left. `crates/wingfoil-wire-types` stays (next's web adapter depends on it); `crates/wingfoil-wasm` stays excluded. | S |
-| 5.2 | **Collapse the workflow set.** 14 of 42 workflows carry `next` and lose the suffix; the legacy-side twins retire. The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil-next/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
+| 5.0 | **Take `legacy/` out of the workspace — do this now.** Drop the three `legacy/*` members and `exclude` the directory. All three legacy crates inherit `rust-version` / `lints` / `workspace.dependencies`, so they need a nested workspace root at `legacy/Cargo.toml` carrying those tables; an excluded package is not a member and cannot inherit. The `wingfoil-next` → `wingfoil` dev-dependency (`tests/engine_semantics.rs`, `benches/tiers.rs`) keeps working — a path dependency may cross a workspace boundary — so the parity oracle is unaffected. Legacy-side CI moves to `--manifest-path legacy/Cargo.toml`, and `cargo lint` / `lint-all` stop covering legacy by construction. | M |
+| 5.1 | ✅ **Workspace `Cargo.toml` — folded into 5.0.** The four next crates are already at `crates/*`, so no repointing is left. `crates/wingfoil-wire-types` stays (next's web adapter depends on it); `crates/wingfoil-wasm` stays excluded. | S |
+| 5.2 | **Collapse the workflow set.** 14 of 43 workflows carry `next` and lose the suffix; the legacy-side twins retire (at the deletion — 5.0 only repoints them at the nested manifest). The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil-next/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
 | 5.3 | **`crates-publish.yml` rewrite.** It publishes by directory in dependency order with crates.io index waits between; the crate set, the order and the paths all change. | M |
 | 5.4 | **`pypi-publish.yml` repoint**, plus a ruling on the wheel's adapter roll-up: aeron is out of both roll-ups (it builds a C library) and iceoryx2 is in `all-adapters` but out of the wheel (Linux/POSIX-only). That is open issue **#367** — decide whether cutover inherits it or fixes it. | S |
 | 5.5 | **`.readthedocs.yaml` repoint.** Three keys change together: `python.install[0].path`, `python.install[1].requirements`, `sphinx.configuration` — all currently on `legacy/wingfoil-python/`, all moving to `crates/wingfoil-next-python/`. The RTD job builds the extension from source at the full wheel feature set, so it compiles librdkafka and libzmq and needs `protobuf-compiler` (already in `apt_packages`). | S |
@@ -264,16 +302,29 @@ whether next's web adapter already fixes it).
 
 ### Order
 
-**1.2, the crate + module rename, is the head of the critical path.** It
-touches every `use wingfoil_next::` in the tree, so anything open across it
-conflicts; land it with nothing else in flight. Section 5 can only start
-afterwards, since it repoints the names 1.2 creates.
+Five PRs, in this order (agreed 2026-08-03):
 
-Everything else parallelises. Section 2's rulings need no code — 2.1 and 1.4
-should land early because 4.2 depends on both. Sections 3 and 4 are
-independent of each other and of 1.2. **Section 3 is now closed**: 3.9 ran and
-added nothing, and 3.7 and 3.8 have both landed. Its standing replacement is
-gate 6.5, which re-checks the sweep immediately before the swap.
+| | PR | Depends on |
+|:--:|---|---|
+| 1 | **5.0** — legacy out of the workspace | — |
+| 2 | **2.3** — zmq cross-language interop | — |
+| 3 | **2.2** — latency ops in `nitro!` / `compiled()` / `nested()` | — |
+| 4 | **§4** — all four docs rows, one PR | 2.1 (ruled), 1.4 |
+| 5 | **1.2** — the crate + module rename | 5.0 |
+
+2, 3 and 4 are mutually independent and independent of 1; they only need to be
+in before 1.2, because **1.2 touches every `use wingfoil_next::` in the tree**
+and conflicts with anything open across it. Land it with the tree quiet. The
+rest of section 5 follows it, and `rm -rf legacy/` (with 1.3, the 4.3
+deletions and the legacy workflow/publish retirement) is the separate second
+step.
+
+**Section 3 is closed**: 3.9 ran and added nothing, and 3.7 and 3.8 have both
+landed. Its standing replacement is gate 6.5, which re-checks the sweep
+immediately before the swap.
+
+1.4 is the one ruling still owed that anything else waits on — 4.2 cannot be
+written without knowing whether the legacy facade API survives.
 
 One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI

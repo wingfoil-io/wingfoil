@@ -276,6 +276,12 @@ criterion = { version = "0.8.1", optional = true }
 # Cargo permits this cycle precisely because it is dev-only. It goes away with
 # the legacy tree at cutover.
 wingfoil = { path = "../../legacy/wingfoil" }
+# Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
+# clippy; pre-push: build + test). Moved here from `legacy/wingfoil` when the
+# legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
+# project root by walking up from `OUT_DIR`, so it must be a dev-dependency of
+# a member of the workspace whose target dir sits beside `.git`.
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"
@@ -423,6 +429,20 @@ zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
 # the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
+# Cross-*engine* wire-compatibility tests: a legacy publisher feeding a next
+# subscriber and vice versa, over real sockets. This is the behavioural half of
+# the `WireMessage` wire contract — the golden-bytes unit test pins next's own
+# encoding, and this proves legacy actually agrees. Enables the zmq adapter of
+# the legacy crate, which is already a dev-dependency (the parity oracle), so
+# both engines are in one test binary. Retires with the legacy tree.
+zmq-cross-engine-test = ["zmq", "wingfoil/zmq"]
+# Cross-*language* parity tests: next-Rust against the next-Python bindings over
+# a socket. Port of legacy's `zmq-cross-lang-test`. Needs `maturin develop` in
+# `crates/wingfoil-next-python` first — the tests assert that up front rather
+# than skipping, so a missing module fails loudly.
+zmq-cross-lang-test = ["zmq"]
+# The etcd-discovery half of the cross-language tests (needs Docker).
+zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "etcd", "dep:testcontainers"]
 # Realtime push-based OpenTelemetry (OTLP) metrics sink. Reuses `async` for the
 # tokio runtime `consume_async` needs. Mirrors legacy wingfoil's `otlp`.
 otlp = [

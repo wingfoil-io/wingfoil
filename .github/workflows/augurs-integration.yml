@@ -45,17 +45,20 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: integration
+          shared-key: integration-legacy
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       - name: Run augurs unit tests
         run: |
-          cargo test --features augurs -p wingfoil \
+          cargo test --manifest-path legacy/Cargo.toml --features augurs -p wingfoil \
             -- --nocapture adapters::augurs
         env:
           RUST_LOG: INFO
 
       - name: Run augurs example
-        run: cargo run -p wingfoil --example augurs --features augurs
+        run: cargo run --manifest-path legacy/Cargo.toml -p wingfoil --example augurs --features augurs
 
       # --- Python bindings ---
       - name: Install protoc

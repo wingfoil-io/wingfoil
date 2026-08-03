@@ -28,7 +28,7 @@ arranged so that cutover is a deletion, not a re-organisation.
 crates/                     # every Cargo crate in the tree
   wingfoil-next/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
-                            #   compat.rs, runtime/, examples/, tests/, benches/
+                            #   signal.rs, runtime/, examples/, tests/, benches/
   wingfoil-next-macros/     # nitro! / #[op] proc macros
   wingfoil-next-python/     # PyO3 Python bindings (built with maturin)
   wingfoil-next-python-macros/
@@ -143,6 +143,66 @@ keep them current when a crate's role changes.
   compiled/nested emission dispatches through. Built-in and user ops take
   the identical path.
 
+### Two clocks: engine time and the wall snap — and who owns each
+
+`Kernel` keeps them as separate fields, and conflating them is the mistake to
+avoid:
+
+- **`time`** (`Ctx::time()`) — **engine time**, source-driven. Under
+  `HistoricalFrom` it is pure logic: `begin_cycle` pops the earliest scheduled
+  callback and sets `time = next.max(time + 1)`, consulting no clock at all.
+  Under `RealTime` it is `NanoTime::now().max(time + 1)`. **This is the only one
+  business logic may use** — it is what makes replay deterministic.
+- **`wall_time`** (`Ctx::wall_time()`) — this cycle's **wall-clock snap**, for
+  latency stamping and telemetry. A real clock read in *both* run modes, so
+  "time spent" means the same in a backtest as live. Never branch business
+  logic on it.
+
+**The kernel owns the snap and takes it lazily, on first read.**
+`Kernel::wall_time()` snaps `NanoTime::now()` only if this cycle hasn't yet,
+caches it in a `Cell`, and returns the same instant to every later reader in
+that cycle. `begin_cycle` does not snap — it only *invalidates*
+(`wall_time.set(None)`) on each of its paths. So **a cycle in which no op stamps
+reads the clock zero times**, which matters because the read is ~24 ns (see the
+`nanotime` bench) and almost nothing wires `latency::Stamp`.
+
+Three invariants follow, all easy to break by accident:
+
+1. **Don't snap eagerly in `begin_cycle`** — that is what the `Cell` exists to
+   avoid. A constant restored there lands entirely in the per-cycle intercept.
+2. **`Ctx::new` must not copy the snap.** `Ctx` is built once per node per
+   cycle, so an eager copy forces the kernel's snap every cycle and undoes the
+   laziness. It leaves `wall_time: None` and defers through `Sink::Kernel`.
+3. **Keep `Ctx::wall_time()` on `&self`** — the `Cell` (rather than a
+   `&mut self` accessor) is what allows this.
+
+**The three tiers differ only in who holds the kernel:**
+
+- **`compiled()`** owns one outright — `let mut __k = Kernel::new(..)` as a
+  stack local, driving its own `while __k.begin_cycle(..)` loop. Nodes get
+  `Ctx::new(&mut __k, i)`, i.e. the identical lazy path. Nothing about time is
+  special-cased for this tier.
+- **interpreted** — the `Runner` holds the kernel; same `Ctx::new`, same
+  laziness.
+- **`nested()` (island)** borrows the outer kernel's values once per activation
+  (`__ctx.time()` / `__ctx.wall_time()` / `__ctx.start_time()`) and hands every
+  inner node a `Ctx::nested(..)` carrying `wall_time: Some(snap)`, with the sink
+  swapped to the composite's private `TimeQueue` — only `next_time()` is
+  forwarded outward. Time stays globally consistent because the island reads the
+  *outer* engine's clock rather than keeping its own.
+
+  **The island is the one place laziness is given up**, necessarily: the
+  composite must resolve the snap before running its interior and cannot know
+  whether any inner node will look, so it takes exactly one snap per activation
+  either way. Don't "fix" that by making it lazy per inner node — the previous
+  design called `NanoTime::now()` per inner node per activation (~24 ns each),
+  which was the island tier's entire per-node deficit against `compiled()`.
+
+Two documented island consequences, deliberate: an op's `start` observes
+`NanoTime::ZERO` for the wall snap (true of flat graphs too — `start` runs
+before the first cycle), and `is_last_cycle` / `run_mode` are not propagated
+into an island.
+
 ### `TimeQueue` deduplicates by design — don't "fix" it
 
 `runtime::time_queue::TimeQueue<T>` (backs the graph scheduler, `feedback`,
@@ -188,8 +248,6 @@ cargo build --release
 # Test
 cargo test
 cargo test -p wingfoil-next --all-features
-cargo test -p wingfoil            # legacy
-cargo test -p wingfoil-python     # legacy
 
 # Python tests
 cd crates/wingfoil-next-python && maturin develop && pytest
@@ -206,6 +264,27 @@ cargo lint        # default features
 cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2`, etc.
 cargo fmt --all -- --check
 ```
+
+**`legacy/` is a separate workspace.** It left the root one ahead of the
+cutover rename — `wingfoil-next` becomes `wingfoil`, and one workspace cannot
+hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
+touches it, and `-p wingfoil` / `-p wingfoil-python` no longer resolve from the
+root. Use the nested manifest:
+
+```bash
+cargo test   --manifest-path legacy/Cargo.toml --workspace
+cargo test   --manifest-path legacy/Cargo.toml -p wingfoil --features full
+cargo lint-legacy    # clippy, default features (alias)
+cargo test-legacy    # the whole legacy workspace (alias)
+```
+
+Two consequences to keep in mind. Legacy artifacts now build into
+**`legacy/target/`**, not the root `target/` — `scripts/disk.sh` already finds
+both. And the git hooks only run the root workspace (`cargo clippy
+--workspace`, `cargo test --workspace`), so **a change under `legacy/` is not
+covered by the pre-commit or pre-push hook** — run the two aliases above by
+hand before pushing legacy work. CI still gates it, in the `Lint legacy` and
+`Test (wingfoil) & Coverage` jobs.
 
 `protoc` is required on the build machine (a transitive dependency builds proto
 files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
@@ -245,6 +324,11 @@ Three things make the tree large, and they compound:
   `wingfoil`, and cargo unifies features across a `--workspace` build, so plain
   `cargo build --workspace` already compiles nearly the whole `full` tree.
   `cargo lint` and `cargo lint-all` differ only by aeron and iceoryx2.
+  **This is much less true since `legacy/` left the workspace** — that
+  13-feature roll-up is no longer in the root graph at all, so a root build now
+  compiles the next tree's own feature selection and nothing more. The figures
+  below predate the split and are therefore worst-case; the legacy tree still
+  costs all of it, but only when you build `legacy/Cargo.toml`.
 - **`lint-all` cannot reuse `lint`'s work.** A different feature set means a
   different metadata hash, so the two pre-commit lints build two full artifact
   sets back to back. If space is tight, `scripts/disk.sh light` between them.

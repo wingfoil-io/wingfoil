@@ -51,7 +51,7 @@ accepts and why.
 | [`src/adapters/`](src/adapters/) | The I/O adapters, one directory each, all feature-gated. |
 | [`src/runtime/`](src/runtime/) | The shared runtime core — engine time, run bounds, the time queue, `Burst`, the `Kernel`, the latency data layer. Re-exported by the legacy `wingfoil` crate. |
 | [`src/channel.rs`](src/channel.rs), [`src/async_source.rs`](src/async_source.rs) | Thread and tokio edges. |
-| [`src/compat.rs`](src/compat.rs) | The classic-style facade. |
+| [`src/signal.rs`](src/signal.rs) | The builder-less `Signal` facade. |
 | [`examples/`](examples/) | ~40 runnable examples, grouped into `core/`, `adapters/`, `showcase/`. |
 | [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison — with a [captured reading and charts](benches/README.md#results). |
 

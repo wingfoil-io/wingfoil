@@ -119,7 +119,13 @@ pub enum CompositePhase {
 /// private queue instead of the outer kernel.
 pub struct Ctx<'a> {
     time: NanoTime,
-    wall_time: NanoTime,
+    /// `Some` for an island context, whose snap is supplied by the composite;
+    /// `None` for a kernel-backed one, which defers to
+    /// [`Kernel::wall_time`] so a cycle nothing stamps in never reads the
+    /// clock. Deliberately *not* copied eagerly in [`Ctx::new`]: `Ctx` is
+    /// built once per node per cycle, so an eager copy would force the
+    /// kernel's snap on every cycle and undo the laziness.
+    wall_time: Option<NanoTime>,
     start_time: NanoTime,
     is_last_cycle: bool,
     run_mode: RunMode,
@@ -142,7 +148,8 @@ impl<'a> Ctx<'a> {
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
         Self {
             time: kernel.time(),
-            wall_time: kernel.wall_time(),
+            // Left unresolved on purpose — see the field comment.
+            wall_time: None,
             start_time: kernel.start_time(),
             is_last_cycle: kernel.is_last_cycle(),
             run_mode: kernel.run_mode(),
@@ -150,28 +157,44 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// A context for an op nested inside a composite node: time comes from
-    /// the outer run, schedules go to the composite's private queue.
-    /// `is_last_cycle` is not propagated into islands (the composite runs its
-    /// own inner schedule), so a boundary-flush op inside an island flushes
-    /// only on window boundaries, not at the outer run's end — a documented
-    /// island limitation. For the same reason `run_mode` inside an island is
-    /// reported as [`RunMode::RealTime`]: no macro-expressible op is run-mode
-    /// gated (a run-mode-gated IO sink cannot live inside a straight-line
-    /// island), so islands never observe the distinction.
+    /// A context for an op nested inside a composite node: time and the wall
+    /// snap come from the outer run, schedules go to the composite's private
+    /// queue. `is_last_cycle` is not propagated into islands (the composite
+    /// runs its own inner schedule), so a boundary-flush op inside an island
+    /// flushes only on window boundaries, not at the outer run's end — a
+    /// documented island limitation. For the same reason `run_mode` inside an
+    /// island is reported as [`RunMode::RealTime`]: no macro-expressible op is
+    /// run-mode gated (a run-mode-gated IO sink cannot live inside a
+    /// straight-line island), so islands never observe the distinction.
+    ///
+    /// `wall_time` is the outer cycle's snap, taken once by the composite and
+    /// passed in for every inner node. It used to be a fresh [`NanoTime::now`]
+    /// per construction — i.e. **per inner node, per activation** — which put a
+    /// ~24 ns TSC read (see the `nanotime` bench) on every node of every
+    /// island. That was the island tier's entire per-node deficit against
+    /// `compiled()`. Sharing the outer snap is also the more correct
+    /// semantics: an island's ops now agree with the rest of the graph about
+    /// what "this cycle's wall time" means, instead of each reading a
+    /// different instant.
+    ///
+    /// One consequence worth naming: [`Kernel`] fills its snap in
+    /// `begin_cycle`, and node `start` hooks run *before* the first cycle, so
+    /// an op's `start` observes [`NanoTime::ZERO`](NanoTime::ZERO) here. That
+    /// is not new behaviour peculiar to islands — the interpreted engine's
+    /// `Ctx::new` has always read the same unfilled field during `start`. The
+    /// per-node `now()` was the odd one out, and removing it makes an island's
+    /// `start` agree with a flat graph's rather than diverge from it.
     #[doc(hidden)]
     pub fn nested(
         time: NanoTime,
+        wall_time: NanoTime,
         start_time: NanoTime,
         queue: &'a mut TimeQueue<usize>,
         node: usize,
     ) -> Self {
         Self {
             time,
-            // A composite has no per-cycle wall snap of its own; latency ops
-            // are fluent/interpreted-only and never run inside an island, so a
-            // fresh snap here is a correct (if slightly pricier) fallback.
-            wall_time: NanoTime::now(),
+            wall_time: Some(wall_time),
             start_time,
             is_last_cycle: false,
             run_mode: RunMode::RealTime,
@@ -192,7 +215,21 @@ impl<'a> Ctx<'a> {
     /// [`wall_time_precise`](Self::wall_time_precise) for intra-cycle
     /// resolution.
     pub fn wall_time(&self) -> NanoTime {
-        self.wall_time
+        match self.wall_time {
+            // An island: the composite resolved the snap once for the whole
+            // activation and handed it to every inner node.
+            Some(snap) => snap,
+            // A kernel-backed node: resolve through the kernel, which snaps on
+            // the first read of the cycle and caches it for the rest. A cycle
+            // in which no op calls this reads no clock at all.
+            None => match &self.sink {
+                Sink::Kernel { kernel, .. } => kernel.wall_time(),
+                Sink::Queue { .. } => unreachable!(
+                    "invariant: Ctx::nested is the only constructor of a Queue sink \
+                     and always supplies the composite's wall snap"
+                ),
+            },
+        }
     }
 
     /// Wall-clock time snapped fresh right now (a TSC read, ~5-10 ns on x86).
@@ -308,4 +345,50 @@ pub fn cycle_owned_cfg<O: Op>(
     ctx: &mut Ctx<'_>,
 ) -> Result<Tick<O::Out>> {
     O::cycle(&mut cfg, state, input, ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`Ctx::nested`] forwards the caller's snaps rather than sourcing any of
+    /// them itself. `wall_time` is the one that matters: it used to be a fresh
+    /// [`NanoTime::now`] here, and because the `nitro!` nested expansion builds
+    /// one `Ctx` per inner node per activation, every node of every island paid
+    /// a TSC read (~24 ns; the `nanotime` bench prices exactly that call) and
+    /// stamped a different instant from the rest of the graph.
+    ///
+    /// **This test cannot catch that regression on its own** — it pins the
+    /// constructor, and the defect was in what the *macro passed*. An expansion
+    /// emitting `Ctx::nested(__now, NanoTime::now(), ..)` per node would still
+    /// satisfy every assertion below. `tests/island_wall_time.rs` is the guard
+    /// that closes that gap, by going through `nitro!` itself; keep the two
+    /// together.
+    #[test]
+    fn nested_ctx_forwards_the_snaps_it_is_given() {
+        let mut queue = TimeQueue::<usize>::new();
+        let wall = NanoTime::from(12_345u64);
+        let ctx = Ctx::nested(NanoTime::from(7u64), wall, NanoTime::ZERO, &mut queue, 0);
+
+        assert_eq!(wall, ctx.wall_time());
+        assert_eq!(NanoTime::from(7u64), ctx.time());
+        assert_eq!(NanoTime::ZERO, ctx.start_time());
+    }
+
+    /// `wall_time` is plain forwarded state, so it survives whatever else the
+    /// constructor is handed — here a different inner node index, which is the
+    /// only thing that varies between two `Ctx`s in one island activation.
+    /// (That the *macro* hands both nodes the same value is
+    /// `tests/island_wall_time.rs`'s job, not this one's.)
+    #[test]
+    fn nested_ctx_wall_snap_is_independent_of_the_node_index() {
+        let mut queue = TimeQueue::<usize>::new();
+        let wall = NanoTime::from(999u64);
+        let a = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 0);
+        let a_wall = a.wall_time();
+        let b = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 7);
+
+        assert_eq!(wall, a_wall);
+        assert_eq!(wall, b.wall_time());
+    }
 }

@@ -1,0 +1,13 @@
+/home/user/wingfoil/legacy/target/debug/deps/fluvio_future-de6fdbaae13868d8.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/file_slice.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/task.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/timer.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/retry.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/tcp_stream.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/rust_tls.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/future.rs
+
+/home/user/wingfoil/legacy/target/debug/deps/libfluvio_future-de6fdbaae13868d8.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/file_slice.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/task.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/timer.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/retry.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/tcp_stream.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/rust_tls.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/future.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/file_slice.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/task.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/timer.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/retry.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/net/tcp_stream.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/rust_tls.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fluvio-future-0.8.3/src/future.rs:

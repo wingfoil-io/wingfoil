@@ -72,7 +72,7 @@
 //!
 //! Every legacy *capability* (sub with a status stream, pub with slow-joiner
 //! buffering, the `ZmqRegistry`/`EtcdRegistry` discovery backend, `zmq_pub_on`
-//! for routable binds) is preserved. The surface differs in three deliberate
+//! for routable binds) is preserved. The surface differs in two deliberate
 //! ways:
 //!
 //! 1. **[`zmq_sub`] takes a [`GraphBuilder`] and a [`RunMode`].** It wires a
@@ -87,11 +87,12 @@
 //!    subscription filter during the startup window instead of racing the first
 //!    publish. A historical run aborts at `start()` naming the run mode, *before*
 //!    touching the registry.
-//! 3. **The wire envelope is next-local.** Messages are `bincode`-framed with an
-//!    internal envelope, so a next publisher interoperates with a next
-//!    subscriber but is **not** wire-compatible with a legacy/Python
-//!    `wingfoil` peer — cross-language interop lands with the Python bindings
-//!    (port-plan Phase 6).
+//!
+//! The wire envelope is **not** a deviation: [`WireMessage`] is byte-compatible
+//! with legacy's `channel::Message<T>`, so a next publisher is read by a legacy
+//! or legacy-Python subscriber and vice versa. See that type's docs for the
+//! three conditions that keep it so, and treat its variant order as a wire
+//! contract.
 //!
 //! Two smaller surface reductions: the internal `ZmqEvent<T>` data/status
 //! multiplexing envelope is **private** here (legacy exposed it as `pub`, but it
@@ -110,6 +111,7 @@ use serde::{Deserialize, Serialize};
 use wingfoil_next::RunMode;
 
 use crate::Burst;
+use crate::NanoTime;
 use crate::channel::ChannelSender;
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::StopHandle;
@@ -163,20 +165,51 @@ impl<T: Default> Default for ZmqEvent<T> {
     }
 }
 
-/// The `bincode`-framed wire envelope. Realtime-only, so a publisher only ever
-/// sends [`WireMessage::Value`] and [`WireMessage::EndOfStream`]. Mirrors the
-/// variants of legacy wingfoil's `channel::Message` (including its `Error`
-/// case) but is **not** byte-compatible with it (see the module-level
-/// deviations).
+/// The `bincode`-framed wire envelope.
+///
+/// **This type is byte-compatible with legacy wingfoil's `channel::Message<T>`,
+/// and that is a wire contract, not a coincidence.** A next publisher is read
+/// by a legacy or legacy-Python subscriber and vice versa, which is what makes
+/// the two engines interoperable during the cutover and lets a Python peer talk
+/// to either.
+///
+/// Three things have to hold for that, all of them silent if broken:
+///
+/// 1. **Variant order is the wire format.** `bincode` encodes an enum as a
+///    u32 index into the declaration order, so reordering these variants — or
+///    inserting one anywhere but the end — silently reinterprets every
+///    message. The order below is legacy's `channel::Message`, and the
+///    `wire_format_matches_legacy_message` test pins the resulting bytes.
+/// 2. **`NanoTime` is the same type in both trees.** It lives in
+///    `runtime::time` here and `wingfoil` re-exports it, so its representation
+///    cannot drift between the engines.
+/// 3. **Both sides call `bincode::serialize`** (bincode 1.x: fixed-width
+///    little-endian integers, no varint), on the same major version.
+///
+/// A next publisher only ever sends [`WireMessage::Value`] and
+/// [`WireMessage::EndOfStream`] — this adapter is realtime-only. The other
+/// three variants exist to *decode* what a legacy peer may send.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum WireMessage<T> {
-    /// A published value.
-    Value(T),
+    /// Legacy's `CheckPoint(NanoTime)`: a historical-mode clock advance
+    /// carrying no value. Decoded and ignored — next's realtime subscriber has
+    /// no clock to advance.
+    CheckPoint(NanoTime),
     /// The publisher is shutting down cleanly.
     EndOfStream,
-    /// An error, carried in the envelope for symmetry with legacy. Not sent by
-    /// this publisher; the subscriber synthesizes it locally on a decode failure
-    /// (see [`run_subscriber`]) to route the error through the same match arm.
+    /// Legacy's `HistoricalValue`: a burst of values sharing one timestamp.
+    /// Serialized as the `(NanoTime, Vec<T>)` pair legacy's
+    /// `burst_value_at_serde` writes — the values are delivered in order and
+    /// the timestamp dropped, since a realtime subscriber stamps arrivals with
+    /// its own clock.
+    HistoricalValue((NanoTime, Vec<T>)),
+    /// A published value — legacy's `RealtimeValue`. The only value-bearing
+    /// variant this publisher emits.
+    Value(T),
+    /// An error propagated through the envelope. Not sent by this publisher;
+    /// the subscriber synthesizes it locally on a decode failure (see
+    /// [`run_subscriber`]) to route the error through the same match arm, and
+    /// a legacy peer may send it.
     Error(String),
 }
 
@@ -380,6 +413,20 @@ where
                         return Ok(());
                     }
                 }
+                // A legacy publisher running historically sends its same-time
+                // values as one burst. Deliver them individually and in order:
+                // this subscriber is realtime, so it stamps each arrival with
+                // its own clock and the sender's timestamp has no meaning here.
+                WireMessage::HistoricalValue((_time, values)) => {
+                    for v in values {
+                        if !sender.send(ZmqEvent::Data(v)) {
+                            return Ok(());
+                        }
+                    }
+                }
+                // Carries no value and exists only to advance a historical
+                // receiver's clock. Nothing to deliver.
+                WireMessage::CheckPoint(_) => {}
                 WireMessage::EndOfStream => {
                     // Publisher is gone: report a final disconnect, then close.
                     let _ = sender.send(ZmqEvent::Status(ZmqStatus::Disconnected));
@@ -668,5 +715,79 @@ mod tests {
         let bytes = end_of_stream_bytes().unwrap();
         let decoded: WireMessage<u64> = bincode::deserialize(&bytes).unwrap();
         assert!(matches!(decoded, WireMessage::EndOfStream));
+    }
+
+    /// Pins the wire contract with legacy's `channel::Message<T>` at the byte
+    /// level.
+    ///
+    /// The expected bytes are written out longhand rather than compared against
+    /// legacy's encoder, because legacy's `Message` is `pub(crate)` and cannot
+    /// be reached from here — and because a golden encoding catches a drift on
+    /// *either* side, where a cross-check against the neighbouring crate would
+    /// silently follow it if both moved together. The behavioural half of this
+    /// (a real legacy socket at the other end) is
+    /// `tests/zmq_cross_engine_integration.rs`.
+    ///
+    /// bincode 1.x encodes an enum as a little-endian u32 variant index
+    /// followed by the payload, so these indices *are* legacy's declaration
+    /// order: CheckPoint, EndOfStream, HistoricalValue, RealtimeValue, Error.
+    #[test]
+    fn wire_format_matches_legacy_message() {
+        // RealtimeValue(7u64) — index 3, then the u64 little-endian.
+        let value = bincode::serialize(&WireMessage::Value(7u64)).unwrap();
+        assert_eq!(value, vec![3, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]);
+
+        // EndOfStream — index 1, no payload.
+        assert_eq!(end_of_stream_bytes().unwrap(), vec![1, 0, 0, 0]);
+
+        // CheckPoint(NanoTime(42)) — index 0, then the u64 nanos.
+        let checkpoint =
+            bincode::serialize(&WireMessage::<u64>::CheckPoint(NanoTime::new(42))).unwrap();
+        assert_eq!(checkpoint, vec![0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0]);
+
+        // HistoricalValue — index 2, then NanoTime, then a length-prefixed Vec.
+        // Legacy writes the burst through `burst_value_at_serde` as exactly this
+        // `(NanoTime, Vec<T>)` pair; the length prefix is a u64.
+        let historical = bincode::serialize(&WireMessage::HistoricalValue((
+            NanoTime::new(1),
+            vec![9u64],
+        )))
+        .unwrap();
+        assert_eq!(
+            historical,
+            vec![
+                2, 0, 0, 0, // variant index
+                1, 0, 0, 0, 0, 0, 0, 0, // NanoTime(1)
+                1, 0, 0, 0, 0, 0, 0, 0, // Vec len 1
+                9, 0, 0, 0, 0, 0, 0, 0, // values[0]
+            ]
+        );
+
+        // Error(String) — index 4, then a length-prefixed UTF-8 string.
+        let error = bincode::serialize(&WireMessage::<u64>::Error("bad".into())).unwrap();
+        assert_eq!(
+            error,
+            vec![4, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, b'b', b'a', b'd']
+        );
+    }
+
+    /// A legacy publisher running historically sends same-time values as one
+    /// burst; the realtime subscriber has to fan them back out in order rather
+    /// than drop all but one.
+    #[test]
+    fn historical_burst_decodes_to_every_value() {
+        let bytes = bincode::serialize(&WireMessage::HistoricalValue((
+            NanoTime::new(5),
+            vec![1u64, 2, 3],
+        )))
+        .unwrap();
+        let decoded: WireMessage<u64> = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            WireMessage::HistoricalValue((time, values)) => {
+                assert_eq!(time, NanoTime::new(5));
+                assert_eq!(values, vec![1, 2, 3]);
+            }
+            other => panic!("expected HistoricalValue, got {other:?}"),
+        }
     }
 }
