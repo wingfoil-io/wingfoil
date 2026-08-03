@@ -1,10 +1,14 @@
 # Porting wingfoil to the Op pattern
 
-Status: **porting in progress** — the Phase 0 contract spikes have landed and
-several later phases are underway (see the ✅/🟡 markers throughout the body).
-The `wingfoil` and `wingfoil-derive` crates now live on this branch
-(with tests and lints passing) and implement the target pattern: `Op` trait
-(pure semantics, engine-owned state), a sparse dirty-list
+Status: **the port is complete; only the cutover is left.** Phases 0–6 have all
+landed — contract spikes, the node catalog, all 15 adapters, the engine
+execution model, the infrastructure and the Python binding surface (see the ✅
+markers throughout the body). What remains is Phase 7, and within it only the
+deletion of `legacy/`: the rename to `wingfoil` has already happened, and
+[`cutover-plan.md`](cutover-plan.md) + [`cutover-runbook.md`](cutover-runbook.md)
+carry the remaining sequence.
+The `wingfoil` and `wingfoil-derive` crates implement the target pattern:
+`Op` trait (pure semantics, engine-owned state), a sparse dirty-list
 interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
 `compiled()` expansion, compiled
 islands (`nested()`) mountable in interpreted graphs, busy-spin `poll`
@@ -1471,12 +1475,14 @@ dynamism is an interpreted-engine capability, matching legacy. See the Phase
 
 ## Phase 5 — infrastructure
 
-**Status: ✅ complete, with two ratified non-goals.** Every item below is
+**Status: ✅ complete, with one ratified non-goal.** Every item below is
 either landed or explicitly ruled out — there is no open engineering work in
-this phase. The two things next will *not* do (graph export; latency on the
-compiled path) are now carried as **C6** and **C7** in the
-[deviation register](./deviation-register.md), so they get a cutover ruling
-instead of reading as unfinished port work. The one downstream consequence —
+this phase. The one thing next will *not* do is graph export, carried as **C6**
+in the [deviation register](./deviation-register.md) so it gets a cutover ruling
+instead of reading as unfinished port work (it did: accept the drop). **C7 —
+latency on the compiled path — was the second such non-goal and is no longer
+one:** it was ruled *close it, don't ratify* at cutover and the stamps now reach
+all three engines (see the latency bullet). The one downstream consequence —
 deleting the `wingfoil-derive` crate once the legacy tree goes — is on the
 Phase 7 checklist. The remaining `#[op]` item (generating the *fluent* method
 too) is a deliberate deferral, not owed: see the sub-bullet below.
@@ -1489,11 +1495,20 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
   `wall_time_precise()` (fresh TSC read); the node layer is re-implemented as
   ops — `stamp`/`stamp_precise` (over `register_op1`) and the `latency_report`
   sink — exposed via the `LatencyStreamOps`/`LatencyReportOps` fluent traits.
-  **Deviation**: fluent/interpreted only (matching legacy, which exposes
-  latency solely through `LatencyStreamOps`); a stamp's stage is a compile-time
-  *type* parameter, which does not map onto the `nitro!` value-dispatch table,
-  so compiled/nested support is out of scope for this op family. Registered as
-  **C7** in the [deviation register](./deviation-register.md).
+  **Three-engine coverage ✅ landed** (cutover row 2.2, register **C7**). This
+  bullet used to record the op family as fluent/interpreted-only, on the
+  grounds that a stamp's stage is a compile-time *type* parameter and `nitro!`
+  forwards values. That obstacle was real but the shape of the fix was not what
+  was written: the stage now crosses **as a value whose type carries it** —
+  `#[op(explicit = S)]` gives each forwarder a leading `PhantomData<S>` and the
+  emission passes `PhantomData::<the_stage>`, so inference resolves it like any
+  other argument. `stamp` / `stamp_precise` work in all three expansions
+  (`stamps_reach_the_compiled_tier`, `stamps_reach_a_nested_island` in
+  `tests/latency.rs`), and the mechanism generalises to any op with a phantom
+  type parameter. **`latency_report` stays interpreted-only by structure, not
+  omission**: the sink's whole value is the `Rc<RefCell<LatencyStats>>` it hands
+  back, and `compiled()` is outputs-only by design, so the handle could never
+  escape.
   Cross-process proof: the `latency` example (`examples/latency/`) runs the
   full stamp → publish → subscribe → report loop over iceoryx2, and
   `tests/iceoryx2_adapter.rs` pins the `Traced` round trip.
@@ -1668,7 +1683,7 @@ tests covered — not "legacy pytest passes unchanged."
   dispatcher onto the engine's `StatisticsOps`, with `tests/test_statistics.py`
   as the legacy parity twin. The per-adapter bindings that followed are the next
   bullet.
-- **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
+- **Per-adapter Python bindings** ✅ *all four tiers landed — 15 of 15*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
   `wingfoil-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
@@ -1923,7 +1938,7 @@ tests covered — not "legacy pytest passes unchanged."
   `check_stages` are `pub`, so an adapter binding — in this crate or a
   third-party one — splits and packs the wire header without a parallel copy of
   the record.
-- **Pytest parity audit** 🟡 *audited 2026-08; two surface gaps remain* — the
+- **Pytest parity audit** ✅ *audited 2026-08; both surface gaps since closed* — the
   gate stated at the top of this phase ("next-python's own pytest suite reaching
   parity with the surface the legacy tests covered") had never been checked, only
   assumed. Every test function in `legacy/wingfoil-python/tests/` (268, in 21 files) was
@@ -2090,24 +2105,39 @@ tests covered — not "legacy pytest passes unchanged."
 
 ## Phase 7 — cutover
 
-- Deprecate legacy engine internals (`MutableNode` wiring path), keep the
-  facade API.
-- Branch-1 codegen has been retired: `wingfoil::codegen::{generate,
+**In progress — the only unfinished phase.** The sequencing, the rulings and
+the audit trail live in [`cutover-plan.md`](cutover-plan.md); the step-by-step
+for what is left is [`cutover-runbook.md`](cutover-runbook.md). Status of each
+item this plan originally listed:
+
+- ✅ **Ruled 2026-08-03 (cutover row 1.4): no compatibility facade.** This
+  bullet used to read "deprecate legacy engine internals, keep the facade API".
+  There is no facade — the `MutableNode` wiring path retires with the legacy
+  tree and nothing re-exports it under the new name. Rust downstreams break at
+  the major bump, deliberately, and [`migration.md`](migration.md) is the
+  answer (the same call the Python binding made).
+- ✅ Branch-1 codegen has been retired: `wingfoil::codegen::{generate,
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
   files, and `wingfoil-codegen-build-example` are removed. `Kernel`,
   `KernelWaker`, `waker_channel` remain (they are the engine core now).
-- **Delete the `wingfoil-derive` crate** (the `#[node]` attribute macro).
-  Nothing under `crates/` depends on it — the Phase-5 retirement is already
-  complete on the next side — so its removal is purely a consequence of the
-  legacy tree going away: drop the crate directory, its workspace member
-  entry, and the `wingfoil-derive` dependency from `wingfoil`'s manifest.
-- **Rule on the deviation register's open ⚪/🟡 items** — in particular **C6**
-  (`Graph::export` / GML, a public legacy API next deliberately does not
-  provide) and **C7** (latency ops are interpreted-only). Every remaining 🔴
-  and 🟡 needs an explicit accept/fix decision before the swap.
-- Docs: rewrite crate docs + CLAUDE.md for the op pattern; migration guide
-  from `#[node]` to `Op`.
-- Version: next merges into `wingfoil` as a major bump.
+- ⏸️ **Delete the `wingfoil-derive` crate** (the `#[node]` attribute macro —
+  now `legacy/wingfoil-derive`; the *next* crate of that name holds `nitro!`,
+  `#[op]` and `latency_stages!`). Nothing under `crates/` depends on it, and
+  legacy has since left the workspace, so it goes with `rm -rf legacy/` rather
+  than separately — cutover row 1.3, runbook step 1.
+- ✅ **The deviation register's open ⚪/🟡 items are all ruled** (2026-08-03,
+  cutover §2). **C6** (`Graph::export` / GML) — accept the drop, named in the
+  migration guide as the one removed public API. **C7** (latency ops
+  interpreted-only) — ruled *close it*, and the stamps now reach all three
+  engines. Nothing is left needing an accept/fix decision before the swap.
+- ✅ **Docs** — crate docs rewritten, root `CLAUDE.md` updated for the op
+  pattern, and the `#[node]` → `Op` migration guide written
+  ([`migration.md`](migration.md)), alongside
+  [`wingfoil-architecture.md`](wingfoil-architecture.md). Cutover §4, all four
+  rows.
+- 🟢 **Version** — the renamed crate is at **9.0.0**, over legacy's 8.x line
+  (cutover 5.6). What is still owed is the `next` → `main` merge itself, which
+  is the swap (runbook step 7).
 
 ## Testing strategy
 
@@ -2153,9 +2183,12 @@ tests covered — not "legacy pytest passes unchanged."
 ## Explicitly out of scope (v1)
 
 - Feedback inside `nitro!` / islands (fluent only).
-- Runtime graph mutation — the **Phase 4.5** dirty-list enabler has landed;
-  the mutation feature itself is still to be built (open blocker-vs-deviation
-  decision), not a permanent exclusion.
+- ~~Runtime graph mutation~~ — **no longer out of scope: it landed** in Phase
+  4.5 behind the `dynamic-graph` feature (`Runner::run_dynamic` + `Extension`,
+  `Builder::dynamic_group` with a pluggable `StreamStore`, and
+  `Builder::demux` / `demux_map` / `demux_it`). The blocker-vs-deviation
+  decision this bullet left open was settled by building it. The compiled and
+  island interiors stay static by design, matching legacy.
 - Arena value store for the interpreted engine — a deferred **Phase 4.5** perf
   follow-on with the slot boundary frozen so it stays internal; no longer
   indefinitely deferred and no longer a sequencing risk.
@@ -2242,24 +2275,21 @@ decision for both: does compiled gain a wake channel, or stay busy-spin +
 realtime-timer only? The busy-spin answer fits the compiled-perf story. Tracked
 as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
 
-### Engine architecture / orientation doc (was #507)
+### Engine architecture / orientation doc (was #507) — ✅ written
 
-An evidence-backed `docs/wingfoil-architecture.md` orienting a new
-contributor/agent to the Op-pattern engine, citing source at `file:line`.
-Deliberately a *current-state snapshot*, not a migration guide — so it is
-deferred until after the incoming refactor settles (a snapshot written now would
-go stale through it). Sections to regenerate against the post-refactor code:
-- The `Op` trait + engine-owned state; `Tick::{Value,Silent,Quiet}`; lifecycle
-  hooks.
-- The three execution tiers: interpreted sparse dirty-list (`Dispatch::Sparse`,
-  default) + full-sweep oracle; fully-monomorphized `compiled()`; `nested()`
-  islands.
-- Fluent API + `signal::Signal` facade.
-- Sources/edges (ticker/constant/poll/external/channel/feedback), bursts, the
-  shared `Kernel`.
-- Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,
-  no macro op-table).
-- Testing strategy: parity-oracle vs legacy + three-engine agreement.
+Landed as [`wingfoil-architecture.md`](wingfoil-architecture.md) with the
+cutover docs pass (cutover row 4.4). It was deferred here until the refactor
+settled — a snapshot written earlier would have gone stale through it — and
+covers what this entry scoped: the `Op` trait + engine-owned state,
+`Tick::{Value,Silent,Quiet}` and the lifecycle hooks; the three execution tiers
+(interpreted sparse dirty-list + full-sweep oracle, monomorphized `compiled()`,
+`nested()` islands); the fluent API and the `signal::Signal` facade; sources,
+bursts and the shared `Kernel`; the adapters and the "adding an op" recipe; and
+the parity-oracle + three-engine testing strategy.
+
+It is a **current-state snapshot**, so it needs one revision at the deletion:
+the `legacy/` row and the parity-oracle framing go with the tree (runbook step
+5). CLAUDE.md points at it as the first thing to read.
 
 ## Sequencing and parallelism
 
