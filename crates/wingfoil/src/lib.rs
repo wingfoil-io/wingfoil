@@ -187,8 +187,8 @@ pub use crate::runtime::time_queue::TimeQueue;
 /// One wiring definition, two engines: expands to a module with
 /// `interpreted()` (fluent wiring) and `compiled(run_mode, run_for)` (fully
 /// monomorphized runner) emitted from the same tokens. See
-/// [`wingfoil_macros`] for the DSL.
-pub use wingfoil_macros::nitro;
+/// [`wingfoil_derive`] for the DSL.
+pub use wingfoil_derive::nitro;
 
 // Re-exported so `nitro!`-generated code (the fallible `compiled()` /
 // `nested()` expansions) can name `Result` without the caller depending on

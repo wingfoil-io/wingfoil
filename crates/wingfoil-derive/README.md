@@ -1,4 +1,4 @@
-# wingfoil-macros
+# wingfoil-derive
 
 The proc macros behind [`wingfoil`](../wingfoil/): **`nitro!`** and
 **`#[op]`**.

@@ -7581,7 +7581,7 @@ dependencies = [
  "tracing",
  "tynm",
  "wingfoil 9.0.0",
- "wingfoil-derive",
+ "wingfoil-derive 8.0.0",
  "zmq",
 ]
 
@@ -7645,7 +7645,7 @@ dependencies = [
  "trybuild",
  "webpki-roots 0.26.11",
  "wingfoil 8.0.0",
- "wingfoil-macros",
+ "wingfoil-derive 9.0.0",
  "wingfoil-wire-types",
  "zmq",
 ]
@@ -7660,7 +7660,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingfoil-macros"
+name = "wingfoil-derive"
 version = "9.0.0"
 dependencies = [
  "proc-macro2",

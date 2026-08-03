@@ -5,15 +5,21 @@ name: publish.crates
 # Rewritten at the cutover rename (cutover-plan 5.3). It used to publish the
 # legacy tree — `legacy/wingfoil`, `legacy/wingfoil-derive`,
 # `legacy/wingfoil-python`. Those steps are **gone, not disabled**: the renamed
-# crate now owns the `wingfoil` name on crates.io, so publishing both trees
-# would mean two different codebases racing for one name. The legacy tree is
-# frozen at 8.0.0, which is its final release.
+# crates now own BOTH published names — `wingfoil` and `wingfoil-derive` — so
+# publishing either tree's twin would mean two codebases racing for one name.
+# The legacy tree is frozen at 8.0.0, which is its final release.
+#
+# Taking `wingfoil-derive` over rather than abandoning it is deliberate: it
+# means the cutover orphans nothing on crates.io, all four published crates
+# continuing at 9.0.0. Its contents change completely — `#[node]` dies with the
+# legacy engine and this crate carries `nitro!` / `#[op]` / `latency_stages!`
+# instead — which is exactly what the major bump is for.
 #
 # Order is a hard requirement, not a preference: cargo resolves a crate's
 # dependencies against the *index* at publish time, so each crate has to be
 # indexed before anything that depends on it is published. Hence the waits.
 #
-#   wingfoil-macros ─┐
+#   wingfoil-derive ─┐
 #   wingfoil-wire-types ─┴─> wingfoil ─┐
 #   wingfoil-python-macros ────────────┴─> wingfoil-python
 #
@@ -43,8 +49,8 @@ jobs:
 
       # --- tier 1: no intra-workspace dependencies ---------------------------
 
-      - name: Publish wingfoil-macros
-        working-directory: crates/wingfoil-macros
+      - name: Publish wingfoil-derive
+        working-directory: crates/wingfoil-derive
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io

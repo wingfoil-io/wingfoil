@@ -2,7 +2,7 @@
 
 **`#[pyop]`** — derive a Python-callable function from an `Op` impl.
 
-This is the Python-side counterpart to [`#[op]`](../wingfoil-macros/): where
+This is the Python-side counterpart to [`#[op]`](../wingfoil-derive/): where
 `#[op]` gives an op its interpreted builder method and compiled forwarders,
 `#[pyop]` gives it a Python binding. Together they mean adding an op does not also
 mean hand-writing glue for each surface it has to appear on.
@@ -91,6 +91,6 @@ each argument means, what raises at wiring versus what aborts the run.
 
 - [`../README.md`](../README.md) — the crate map for `next/`
 - [`../wingfoil-python/`](../wingfoil-python/) — the extension module this feeds
-- [`../wingfoil-macros/`](../wingfoil-macros/) — `nitro!` and `#[op]`
+- [`../wingfoil-derive/`](../wingfoil-derive/) — `nitro!` and `#[op]`
 - [`../../docs/python-interop.md`](../../docs/python-interop.md) — the interop design
 - The `/new-op-next` and `/bind-adapter-next` skills — the step-by-step recipes

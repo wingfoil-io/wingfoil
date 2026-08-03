@@ -91,7 +91,7 @@ runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
 compat.rs     A legacy-style Signal facade over the fallible lifecycle
 ```
 
-Plus `wingfoil-macros` (`nitro!` and `#[op]`), `wingfoil-python`
+Plus `wingfoil-derive` (`nitro!` and `#[op]`), `wingfoil-python`
 (PyO3 bindings), `wingfoil-wire-types` + `wingfoil-wasm` + `js/` (the browser
 side of the web adapter).
 

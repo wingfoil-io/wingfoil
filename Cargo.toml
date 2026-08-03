@@ -2,7 +2,7 @@
 [workspace]
 members = [
     "crates/wingfoil",
-    "crates/wingfoil-macros",
+    "crates/wingfoil-derive",
     "crates/wingfoil-python",
     "crates/wingfoil-python-macros",
     "crates/wingfoil-wire-types",

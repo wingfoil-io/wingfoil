@@ -28,7 +28,7 @@ workspace = true
 # cutover can delete the legacy tree outright instead of disentangling it
 # first. The only edge back to `wingfoil` is a dev-dependency, for the parity
 # tests and the legacy-vs-next comparison benches.
-wingfoil-macros = { path = "../wingfoil-macros", version = "9.0.0" }
+wingfoil-derive = { path = "../wingfoil-derive", version = "9.0.0" }
 anyhow = { workspace = true }
 # `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
 # `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro

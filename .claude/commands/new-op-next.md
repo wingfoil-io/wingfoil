@@ -19,7 +19,7 @@ reference implementations; read them before writing code:
   `ACTIVATION`, and `Tick<T>` (`Value` / `Silent` / `Quiet`).
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
-- `crates/wingfoil-macros/src/lib.rs` — the `#[op]` macro and its flags.
+- `crates/wingfoil-derive/src/lib.rs` — the `#[op]` macro and its flags.
 - `docs/port-plan.md` → **"Adding an op — current tooling"** — the
   authoritative recipe and the touch-point table; read it first.
 

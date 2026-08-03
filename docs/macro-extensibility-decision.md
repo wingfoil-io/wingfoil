@@ -23,7 +23,7 @@ drift risk: their desugars were previously written twice, once in the
 fluent layer and once in the macro; both layers now call the same op.
 
 Everything below is grounded in the prototype commits on this branch:
-`wingfoil-macros/src/lib.rs` (the fallback), `wingfoil/tests/custom_op.rs`
+`wingfoil-derive/src/lib.rs` (the fallback), `wingfoil/tests/custom_op.rs`
 (the proof), `wingfoil/benches/custom_op.rs` (the measurement).
 
 ---
@@ -179,7 +179,7 @@ would naturally write.
 
 | File | Change |
 |---|---|
-| `wingfoil-macros/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
+| `wingfoil-derive/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
 | `wingfoil/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
 | `tests/custom_op.rs`, `benches/custom_op.rs` | new (proof + measurement) |
 | `tests/trybuild/unknown_combinator.*` | error changed: first error is now the friendly `E0599: no method named `frobnicate` found for Stream<u64>` at the call site |

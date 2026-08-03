@@ -2,7 +2,7 @@
 
 Status: **porting in progress** — the Phase 0 contract spikes have landed and
 several later phases are underway (see the ✅/🟡 markers throughout the body).
-The `wingfoil` and `wingfoil-macros` crates now live on this branch
+The `wingfoil` and `wingfoil-derive` crates now live on this branch
 (with tests and lints passing) and implement the target pattern: `Op` trait
 (pure semantics, engine-owned state), a sparse dirty-list
 interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
