@@ -522,21 +522,30 @@ not thread-offload. islands already cover *static* subgraphs composed procedural
 (append / active-passive splice / remove / recycle), `Builder::dynamic_group`,
 and `Builder::demux` on the interpreted engine.
 
-**Engine coverage note:** `never` and `combine` land as interpreted-engine
-(fluent) ports — like `feedback` — since a source that never ticks and an
-n-ary fan-in have no `Op` witness for `#[op]` to hang forwarders on (`combine`'s
-arity is a runtime slice, which the fixed-arity tuple `In` cannot express).
-`delay_with_reset` since reached all three engines through its
-`DelayWithResetFwd` witness op, which restates its two-tick-flag `In` in the
-uniform one-`(value, tick)`-pair-per-edge form `#[op]` parses.
+**Engine coverage note:** `never` lands as an interpreted-engine (fluent) port
+— like `feedback` — since a source that never ticks has no `Op` witness for
+`#[op]` to hang forwarders on. `delay_with_reset` reached all three engines
+through its `DelayWithResetFwd` witness op, which restates its two-tick-flag
+`In` in the uniform one-`(value, tick)`-pair-per-edge form `#[op]` parses.
 `split`/`collapse` are pure sugar over `map`/`map_filter`, so they reach every
-engine for free. Extending `combine` to `nitro!`/compiled is a follow-up (as it
-is for `feedback`) — and it is now a *smaller* one than this note implies: the
-other n-ary fan-in, `merge_n`, reached all three engines by declaring
-`In<'a> = &'a [(&'a T, bool)]` and having `nitro!` emit a variadic node's edges
-as a pair slice rather than a tuple. `combine` can follow the same route; the
-"fixed-arity tuple `In` cannot express it" obstacle applies to `#[op]`
-generation, not to the engines.
+engine for free.
+
+**`combine` ✅ reaches all three engines**, closing what this note used to
+carry as a follow-up. It took the route the note predicted, the one `merge_n`
+proved: a `CombineN` witness op declaring `In<'a> = &'a [(&'a T, bool)]` with
+hand-written forwarders, and a `nitro!` arm emitting the node's edges as a pair
+slice. The obstacle was never the engines — a runtime-width fan-in defeats
+`#[op]`'s *generation*, not the emission.
+
+Two things fell out of doing it. The macro gained its **first builder-rooted
+call that is not a source**: `combine` lives on `GraphBuilder` rather than on a
+stream (no input is privileged), so `nitro!` had to accept edges in root
+position — worth it to keep one spelling, `g.combine(&[a, b])`, across fluent
+and macro. And the interpreted path deliberately does **not** call
+`CombineN::cycle`: materialising the `&[(&T, bool)]` slice means holding a
+borrow guard per upstream, a per-cycle allocation on a wide fan-in, so it walks
+the tick flags and routes only the empty-vs-not decision through the shared
+`CombineN::emit`. Tests: `tests/combine_n.rs`.
 
 **Gate 2:** every legacy node test has a next twin producing identical
 values and tick times.

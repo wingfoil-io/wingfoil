@@ -55,12 +55,21 @@
 //!     `surface_sugar` below and in `merge_n.rs`.)
 //!
 //!     `merge_all` was in this list while it *was* sugar (a chain of 2-ary
-//!     `merge`s). It is now a real op — `MergeN`, the catalog's only variadic
-//!     one — because the chain cost `n - 1` extra nodes and lost to legacy's
-//!     single `merge(vec)` on a wide fan-in. Its forwarders are hand-written
-//!     (a slice `In` is unparseable by `#[op]`), so the two-sided guard this
-//!     file provides matters more for it than for a generated op, not less:
-//!     the `nitro!` blocks in `merge_n.rs` are what pin them.
+//!     `merge`s). It is now a real op — `MergeN`, one of the catalog's two
+//!     variadic ops — because the chain cost `n - 1` extra nodes and lost to
+//!     legacy's single `merge(vec)` on a wide fan-in. Its forwarders are
+//!     hand-written (a slice `In` is unparseable by `#[op]`), so the two-sided
+//!     guard this file provides matters more for it than for a generated op,
+//!     not less: the `nitro!` blocks in `merge_n.rs` are what pin them.
+//!
+//!     **`combine`** — the other variadic op (`CombineN`), and the other
+//!     fan-in — is pinned the same way, by `combine_n.rs`. Worth naming here
+//!     because until it reached the compiled tiers it was in *neither* a
+//!     `nitro!` block nor any list below: the "silently in neither" state this
+//!     file exists to prevent, hiding in the one op whose spelling
+//!     (`g.combine(&[..])`, on the builder rather than on a stream) put it
+//!     outside the `StreamOps` surface the guard was written against — the
+//!     same blind spot that swallowed all 36 of `StatisticsOps`.
 //!
 //! **2b. Ergonomic fluent signature ≠ the op's `Cfg` — fluent-only:**
 //!   * `logged` — the `Logged` op's `Cfg` is `(String, log::Level)`, but the

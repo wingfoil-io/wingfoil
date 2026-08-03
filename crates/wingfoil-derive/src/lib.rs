@@ -168,8 +168,9 @@ struct NodeDef {
     closure: Option<Expr>,
     /// The op takes its edges as a **pair slice** (`&[(value, tick), ..]`)
     /// rather than a fixed-arity tuple, so it accepts a fan-in of any width
-    /// from one signature. Set only by the fan-in arms of `apply_call`
-    /// (`fan` / `merge_all`, both of which emit the variadic `merge_n`); every
+    /// from one signature. Set by the fan-in arms of `apply_call` (`fan` /
+    /// `merge_all`, both of which emit the variadic `merge_n`) and by
+    /// `push_combine` (`g.combine(&[..])`, which emits `CombineN`); every
     /// other node keeps the uniform tuple input. A variadic op is all-active
     /// by construction, so its dispatch condition skips the passive mask —
     /// which also keeps the mask's `>> position` shift inside `u32` when the
@@ -432,6 +433,47 @@ impl ChainWalker {
         ix
     }
 
+    /// Push the single variadic `combine` node behind `g.combine(&[a, b])`:
+    /// every listed stream becomes an edge, and the node emits one `Burst` per
+    /// instant carrying the value of each edge that ticked.
+    ///
+    /// Like `merge_all`'s, the argument must be a slice **literal** — the
+    /// merged edges have to be visible to the macro, since a `Vec` built at
+    /// runtime has no static shape for a compiled graph to emit. Unlike
+    /// `merge_all` there is no receiver to prepend: `combine` treats all its
+    /// inputs alike, which is exactly why it lives on the builder.
+    fn push_combine(&mut self, name: Ident, method: &Ident, args: &[&Expr]) -> syn::Result<usize> {
+        expect_arity(method, args, 1)?;
+        let elems = match args[0] {
+            Expr::Reference(r) => match &*r.expr {
+                Expr::Array(a) => &a.elems,
+                _ => return Err(combine_arg_error(args[0])),
+            },
+            Expr::Array(a) => &a.elems,
+            _ => return Err(combine_arg_error(args[0])),
+        };
+        if elems.is_empty() {
+            return Err(syn::Error::new(
+                args[0].span(),
+                "`combine(&[])` has no inputs to gather — it would be a source that never ticks",
+            ));
+        }
+        let mut edges = Vec::with_capacity(elems.len());
+        for elem in elems {
+            edges.push(self.stream_ref_arg(elem)?);
+        }
+        let ix = self.push_node(
+            name,
+            Some(Ident::new("combine", method.span())),
+            edges,
+            vec![],
+            None,
+            None,
+        );
+        self.nodes[ix].variadic = true;
+        Ok(ix)
+    }
+
     /// Push the single n-ary `merge_n` node that fans `tails` back in, in
     /// supplied order (so the tie-break stays "earliest supplied that ticked
     /// wins"). One tail needs no merge at all — it *is* the result.
@@ -561,12 +603,23 @@ impl ChainWalker {
             } else {
                 self.anon_name(method.span())
             };
-            // Sources go through the same forwarder mechanism as combinators
-            // — `.ticker(..)`, `.constant(..)`, or any user source with
-            // `#[op]`-generated forwarders. No receiver, so no edges (a
-            // `&stream` argument still classifies as an edge, which a
-            // source's forwarder arity will reject).
-            self.push_op(name, (*method).clone(), None, args, *turbofish)?
+            if *method == "combine" {
+                // The one builder-rooted call that is *not* a source:
+                // `g.combine(&[a, b])` fans several already-bound streams into
+                // one burst, so it has edges but no receiver. Spelled here
+                // exactly as it is fluently — `combine` lives on the builder
+                // rather than on a stream because no input is privileged, and
+                // making `nitro!` spell it differently would be a second name
+                // for one op.
+                self.push_combine(name, method, args)?
+            } else {
+                // Sources go through the same forwarder mechanism as
+                // combinators — `.ticker(..)`, `.constant(..)`, or any user
+                // source with `#[op]`-generated forwarders. No receiver, so no
+                // edges (a `&stream` argument still classifies as an edge,
+                // which a source's forwarder arity will reject).
+                self.push_op(name, (*method).clone(), None, args, *turbofish)?
+            }
         } else {
             self.lookup(root)?
         };
@@ -788,6 +841,14 @@ fn expect_arity(method: &Ident, args: &[&Expr], want: usize) -> syn::Result<()> 
 /// literal of stream references so the macro can see the individual edges; a
 /// runtime-built slice would make the DAG non-static, like a non-literal
 /// `map_n` count.
+fn combine_arg_error(arg: &Expr) -> syn::Error {
+    syn::Error::new(
+        arg.span(),
+        "`combine(..)` takes a slice literal of stream references — \
+         `g.combine(&[a, b])` — so the gathered edges are visible statically",
+    )
+}
+
 fn merge_all_arg_error(arg: &Expr) -> syn::Error {
     syn::Error::new(
         arg.span(),
