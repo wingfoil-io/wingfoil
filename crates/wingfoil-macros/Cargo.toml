@@ -1,0 +1,19 @@
+[package]
+name = "wingfoil-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "nitro! proc macro for wingfoil: one wiring definition, interpreted and compiled execution"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

@@ -848,7 +848,7 @@ jobs:
 
       - name: Run $ARGUMENTS integration tests
         run: |
-          cargo test --features $ARGUMENTS-integration-test -p wingfoil \
+          cargo test --features $ARGUMENTS-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -1208,7 +1208,7 @@ and every rejected invalid value.
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
-cargo test --features $ARGUMENTS-integration-test -p wingfoil -- --test-threads=1
+cargo test --features $ARGUMENTS-integration-test --manifest-path crates/wingfoil/Cargo.toml -- --test-threads=1
 cd wingfoil-python && maturin develop
 # Unit-level coverage tests (no marker; default run):
 wingfoil-python$ pytest tests/test_$ARGUMENTS.py

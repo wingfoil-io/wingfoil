@@ -23,8 +23,8 @@ drift risk: their desugars were previously written twice, once in the
 fluent layer and once in the macro; both layers now call the same op.
 
 Everything below is grounded in the prototype commits on this branch:
-`wingfoil-next-macros/src/lib.rs` (the fallback), `wingfoil-next/tests/custom_op.rs`
-(the proof), `wingfoil-next/benches/custom_op.rs` (the measurement).
+`wingfoil-macros/src/lib.rs` (the fallback), `wingfoil/tests/custom_op.rs`
+(the proof), `wingfoil/benches/custom_op.rs` (the measurement).
 
 ---
 
@@ -106,7 +106,7 @@ expression". The two approximations both exist in this repo's history:
    interpreted builder, which records metadata, then generates runner source.
    It genuinely interrogates the built graph — but only at the fidelity a
    running program can report: **types come back as strings, closures cannot
-   be recovered at all**. Those are walls #1–2 in `wingfoil-next/src/lib.rs`
+   be recovered at all**. Those are walls #1–2 in `wingfoil/src/lib.rs`
    that this crate exists to escape; re-adopting them for extensibility would
    reintroduce exactly the drift the Op-pattern eliminated.
 2. **Let the compiler be the interrogator** — the fallback above. The macro
@@ -179,8 +179,8 @@ would naturally write.
 
 | File | Change |
 |---|---|
-| `wingfoil-next-macros/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
-| `wingfoil-next/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
+| `wingfoil-macros/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
+| `wingfoil/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
 | `tests/custom_op.rs`, `benches/custom_op.rs` | new (proof + measurement) |
 | `tests/trybuild/unknown_combinator.*` | error changed: first error is now the friendly `E0599: no method named `frobnicate` found for Stream<u64>` at the call site |
 
@@ -190,8 +190,8 @@ Zero table rows edited; zero engine-semantics changes; full suite + clippy
 ### Remaining work to productize (not blocking the decision)
 
 1. **`#[op]` out-of-crate**: the attribute still emits `impl crate::interp::Builder`
-   (in-crate only). Fix: `extern crate self as wingfoil_next;`, emit
-   `::wingfoil_next::` paths, and generate the interpreted wiring as an
+   (in-crate only). Fix: `extern crate self as wingfoil;`, emit
+   `::wingfoil::` paths, and generate the interpreted wiring as an
    extension trait instead of an inherent impl. Until then a user hand-writes
    the four forwarders + const + fluent method (~40 mechanical lines — see the
    test); after it, a user op is `impl Op` + `#[op(build = name)]` + a 3-line

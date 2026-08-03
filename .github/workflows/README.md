@@ -3,7 +3,7 @@
 ## CI (run on push / PR)
 
 * `rust-test.yml` — three parallel jobs: `Test (wingfoil) & Coverage`,
-  `Test (wingfoil-next)`, and `Lint (fmt & clippy)`. They were one serial job
+  `Test (wingfoil)`, and `Lint (fmt & clippy)`. They were one serial job
   until they were split; the legs share no build artifacts (coverage builds
   into `target/llvm-cov-target` under `-C instrument-coverage`, the next-engine
   tests build a third feature set), so serialising them bought nothing.

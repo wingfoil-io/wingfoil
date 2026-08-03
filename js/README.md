@@ -82,7 +82,7 @@ live feed:
 Streaming clients are lossy and never back-pressure the graph, so a
 loss-free replay depends on the graph not outrunning the client (a
 genuinely compute-bound historical run is the natural fit). See
-`crates/wingfoil-next/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
+`crates/wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
 
 ## Latency tracing
 
@@ -118,7 +118,7 @@ The default field names match the wingfoil convention (`session`,
 `client_seq`, `t_client_send`, `t_client_recv`, `stamps`) and can be
 overridden via `LatencyTrackerOptions.fields` (the same map applies to
 both outbound publishes and inbound parsing). The end-to-end latency
-demo at `crates/wingfoil-next/examples/latency_e2e/static/app.js` is the canonical
+demo at `crates/wingfoil/examples/latency_e2e/static/app.js` is the canonical
 example.
 
 Requires the server to use `CodecKind::Json`: the tracker sends

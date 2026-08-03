@@ -86,7 +86,7 @@ jobs:
         # bind loopback sockets, so the parallelism is not worth the flake risk.
         #
         # `--manifest-path legacy/Cargo.toml`: the legacy tree is its own
-        # workspace (cutover-plan 5.0), so `-p wingfoil` no longer resolves
+        # workspace (cutover-plan 5.0), so `--manifest-path crates/wingfoil/Cargo.toml` no longer resolves
         # from the root. Coverage lands in `legacy/target/llvm-cov-target`;
         # `lcov.info` is still written relative to the working directory, so
         # the upload step below is unchanged.
@@ -103,7 +103,7 @@ jobs:
           fail_ci_if_error: false
 
   test-next:
-    name: Test (wingfoil-next)
+    name: Test (wingfoil)
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -125,8 +125,8 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
-      - name: Run wingfoil-next tests
-        # The coverage job is scoped to `-p wingfoil`, so the next-engine crate's
+      - name: Run wingfoil tests
+        # The coverage job is scoped to `--manifest-path crates/wingfoil/Cargo.toml`, so the next-engine crate's
         # tests — the adapter parity suites (lines/csv/augurs) and the trybuild
         # cases — would otherwise never execute in CI. Run them here with all
         # features so the feature-gated csv/augurs adapters are exercised.
@@ -134,7 +134,7 @@ jobs:
         # the workspace clippy job).
         #
         # nextest, not `cargo test`: `cargo test` runs one test *binary* at a
-        # time, and wingfoil-next has ~70 of them.
+        # time, and wingfoil has ~70 of them.
         #
         # The `*_integration` binaries are compiled (so they stay type- and
         # link-checked) but not run here. Each has a dedicated workflow that
@@ -144,7 +144,7 @@ jobs:
         # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
         # through timeouts.
         run: |
-          cargo nextest run -p wingfoil-next --all-features --lib --tests \
+          cargo nextest run --manifest-path crates/wingfoil/Cargo.toml --all-features --lib --tests \
             -E 'not binary(/_integration$/)'
         env:
           RUST_LOG: INFO

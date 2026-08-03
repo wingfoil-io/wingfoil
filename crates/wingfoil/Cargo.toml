@@ -1,0 +1,843 @@
+[package]
+name = "wingfoil"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+# Examples are grouped into examples/{core,adapters,showcase}/<name>/ so each can
+# carry its own README; every target is declared explicitly below.
+autoexamples = false
+description = "Design prototype: dual-mode (interpreted + compiled) stream graphs with single-sourced op semantics"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# NOTE: this crate must NOT depend on `wingfoil`. The dependency runs the other
+# way — `wingfoil` depends on this crate and re-exports `src/runtime/` (engine
+# time, run bounds, the time queue, `Burst` and the `Kernel`) — so that the
+# cutover can delete the legacy tree outright instead of disentangling it
+# first. The only edge back to `wingfoil` is a dev-dependency, for the parity
+# tests and the legacy-vs-next comparison benches.
+wingfoil-macros = { path = "../wingfoil-macros" }
+anyhow = { workspace = true }
+# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
+# `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro
+# to resolve.
+tinyvec = { version = "1.10.0", features = ["alloc"] }
+# Used by the always-compiled `adapters::common` module (the out-of-window row
+# filter's summary warning).
+log = { workspace = true }
+
+# --- the shared runtime core (`src/runtime/`), moved here from `wingfoil` ---
+# `NanoTime`: quanta for the cheap TSC-backed clock, chrono for the
+# NaiveDateTime conversions, formato for `pretty()`, serde for the wire
+# formats, derive_more/derive-new for its derives.
+quanta = "0.9.3"
+chrono = { workspace = true }
+derive_more = { workspace = true }
+derive-new = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+formato = "0.3.0"
+# `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`).
+crossbeam = "0.8.4"
+
+# `async` feature: the `produce_async` ergonomic source (async closure →
+# timestamped burst stream) over the channel. Optional so the core engine
+# stays executor-free.
+futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "macros",
+], optional = true }
+
+# `csv` feature: the serde-typed CSV replay source + file sink adapter. Optional
+# so the default build stays dependency-free. Versions mirror the legacy
+# `wingfoil` crate's csv adapter.
+csv = { version = "1.4", optional = true }
+serde-aux = { version = "4.7.0", optional = true }
+
+# `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
+# time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
+# (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
+# Versions mirror the legacy `wingfoil` crate's kdb/cache deps.
+sha2 = { version = "0.10", optional = true }
+bincode = { version = "1.3.3", optional = true }
+
+# `augurs` feature: on-graph time-series analysis — forecasting, outlier /
+# changepoint / season detection, DTW and clustering. A pure-Rust compute
+# library (no external service), so — like the legacy `wingfoil` augurs
+# adapter — coverage lives behind `--features augurs` with no integration-test
+# split. Pinned, default-features-off, and with the same sub-feature set as the
+# legacy crate, one per ported op (Prophet is deliberately excluded — it needs
+# a bundled Stan toolchain).
+augurs = { version = "0.10.2", default-features = false, features = [
+    "ets",
+    "mstl",
+    "outlier",
+    "changepoint",
+    "seasons",
+    "dtw",
+    "clustering",
+], optional = true }
+
+# `etcd` feature: streaming key-prefix snapshot + watch source and a key-value
+# PUT sink for the etcd key-value store. Built on the `async` `produce_async`
+# ergonomic (`etcd-client` is a tokio client). Versions mirror the legacy
+# `wingfoil` crate's etcd adapter so the two trees don't drift. `testcontainers`
+# (used only by the integration tests) is an optional [dependencies] entry
+# because feature flags cannot gate dev-dependencies.
+etcd-client = { version = "0.18", optional = true }
+async-stream = { version = "0.3.6", optional = true }
+testcontainers = { version = "0.27", features = [
+    "blocking",
+], optional = true }
+
+# `redis` feature: Pub/Sub (`SUBSCRIBE`/`PUBLISH`) and Streams
+# (`XRANGE`/`XREAD`/`XADD`) transports. Built on the `async` `produce_async`
+# source and `consume_async` sink ergonomics (`redis` is a tokio client).
+# Version + features mirror the legacy `wingfoil` crate's redis adapter so the
+# two trees don't drift. Reuses the optional `async-stream` and `testcontainers`
+# entries above (testcontainers is only used by the gated integration tests).
+redis = { version = "0.27", features = [
+    "tokio-comp",
+    "aio",
+    "streams",
+], optional = true }
+# `kafka` feature: a streaming topic-consume source and a topic-produce sink for
+# Apache Kafka, built on the async `produce_async` / `consume_async` ergonomics
+# (`rdkafka` is a tokio client). Version mirrors the legacy `wingfoil` crate's
+# kafka adapter so the two trees don't drift. As legacy does, the bundled
+# `librdkafka` uses rdkafka's default build path (`./configure` + `make`); the
+# `cmake-build` feature is deliberately not enabled (its curl.h dependency breaks
+# CI). `testcontainers` (used only by the integration tests) is already an
+# optional [dependencies] entry above, shared with the etcd adapter.
+rdkafka = { version = "0.37", optional = true }
+
+# `web` feature: bidirectional WebSocket streaming between the graph and one or
+# more browsers — an axum HTTP/WS server on its own runtime, plus the graph-side
+# publish sink and subscribe source. The wire types live in the shared
+# `wingfoil-wire-types` crate so the server, `wingfoil-wasm` and `@wingfoil/client`
+# cannot drift; the protocol is engine-agnostic and reused as-is by this port.
+# Versions mirror the legacy `wingfoil` crate's web adapter so the two trees
+# don't drift.
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "8.0.0", optional = true }
+# web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
+# `rustls` itself is already an optional dependency above (shared with `fix`).
+axum-server = { version = "0.7", default-features = false, features = [
+    "tls-rustls-no-provider",
+], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+
+# Used only by the web-tls integration test: `rcgen` generates a fresh
+# self-signed cert at test time (cheaper and more deterministic than shipping a
+# static fixture that would need rotating), `scopeguard` removes the PEM files
+# afterwards. Optional [dependencies] entries because feature flags cannot gate
+# dev-dependencies. Versions mirror the legacy `wingfoil` crate.
+rcgen = { version = "0.13", optional = true }
+scopeguard = { version = "1.2.0", optional = true }
+# `fluvio` feature: a streaming topic-partition consume source and a
+# topic-produce sink for Fluvio clusters, built on the async `produce_async` /
+# `consume_async_bursts` ergonomics (`fluvio` is a tokio client). Versions mirror
+# the legacy `wingfoil` crate's fluvio adapter so the two trees don't drift.
+# `fluvio-controlplane-metadata` is only used by the integration tests (to
+# register the SPU with the SC before starting it); `testcontainers` is already
+# an optional [dependencies] entry above, shared with the etcd adapter.
+fluvio = { version = "0.50.1", optional = true }
+fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
+# `aeron` feature: the Aeron IPC/UDP low-latency message transport. Like legacy
+# (and unlike the networked async adapters) it is synchronous/poll-based, so it
+# does NOT pull in `async`. Two pluggable backends behind their own features:
+# `rusteron-client` (C++ FFI, production — needs cmake >= 3.30, clang, uuid-dev,
+# libbsd-dev) and `aeron-rs` (pure Rust, experimental — see the module docs'
+# lock warning). Versions mirror the legacy `wingfoil` crate's aeron adapter so
+# the two trees don't drift.
+rusteron-client = { version = "0.1", optional = true }
+rusteron-media-driver = { version = "0.1", optional = true }
+aeron-rs = { version = "0.1", optional = true }
+# Used only by the aeron integration tests, to run the media-driver container as
+# the current uid/gid so the CNC file stays writable by the test process.
+libc = { version = "0.2", optional = true }
+# `iceoryx2` feature: zero-copy inter-process (and intra-process) publish/
+# subscribe over shared memory. Pure Rust — no native toolchain — and, like the
+# legacy `wingfoil` iceoryx2 adapter, synchronous/poll-based, so it does NOT
+# pull in `async`. Version mirrors the legacy `wingfoil` crate's iceoryx2
+# adapter so the two trees don't drift. `thiserror` backs the adapter's typed
+# error enum (ported from legacy).
+iceoryx2 = { version = "0.8", optional = true }
+thiserror = { version = "2.0", optional = true }
+
+# `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
+# live-tail source, and a streaming insert sink, on the async `tokio-postgres`
+# client. Built on `async` (the `Handle::block_on` reader/sink and the
+# `produce_async` live tail) and `async-stream` (the sub's `stream!` macro).
+# Versions mirror the legacy `wingfoil` crate's postgres adapter (tokio-postgres
+# 0.7 with `with-chrono-0_4`, chrono 0.4) so the two trees don't drift. Reuses the
+# optional `testcontainers` entry (used only by the gated integration tests).
+tokio-postgres = { version = "0.7", features = [
+    "with-chrono-0_4",
+], optional = true }
+
+# `kdb` feature: KDB+/q connectivity — time-partitioned historical reads
+# (`kdb_read`, `kdb_read_cached`), a real-time tickerplant subscription
+# (`kdb_sub`), and a streaming insert sink (`kdb_write`), on the async `kdbplus`
+# IPC client (`QStream`). Built on `async` (the `produce_async` reader/sub +
+# `consume_async` sink), `async-stream` (the reader/sub `stream!` macros),
+# `chrono` (the write timestamp column), and the `cache` feature (the file cache
+# behind `kdb_read_cached`). Version mirrors the legacy `wingfoil` crate's kdb
+# adapter so the two trees don't drift; `ipc` is the KDB IPC protocol feature.
+kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
+
+# `prometheus` feature: a realtime, pull-based metrics sink serving a hand-rolled
+# `GET /metrics` endpoint (no Prometheus client crate — just `std::net` + a
+# lock-free `arc-swap` slot per metric). `reqwest` (used only by the end-to-end
+# scrape integration test) is an optional [dependencies] entry because feature
+# flags cannot gate dev-dependencies. Versions mirror the legacy `wingfoil`
+# crate's prometheus adapter so the two trees don't drift.
+arc-swap = { version = "1.7", optional = true }
+reqwest = { version = "0.12", features = [
+    "json",
+    "blocking",
+], optional = true }
+
+# `zmq` feature: real-time pub/sub over ØMQ sockets (`zmq_sub` source +
+# `ZeroMqPub` sink), with optional etcd-based service discovery. Synchronous and
+# poll-based, so — like the legacy `wingfoil` zmq adapter — it uses a background
+# thread over the `channel` layer and deliberately does NOT pull in `async`.
+# Messages are `bincode`-framed (reuses the optional `bincode`/`serde` entries
+# above). Version mirrors the legacy `wingfoil` crate's zmq adapter so the two
+# trees don't drift; the `zmq` crate links the system `libzmq` (Debian/Ubuntu:
+# `libzmq3-dev`).
+zmq = { version = "0.10.0", optional = true }
+# `otlp` feature: a realtime, push-based OpenTelemetry metrics sink. Exports
+# stream values as OTLP gauge metrics over HTTP/protobuf to any OTLP-compatible
+# backend (Grafana Alloy, Datadog, Honeycomb, New Relic, …). Built on the async
+# `consume_async` ergonomic so exports run off the graph thread (the OTel SDK's
+# `rt-tokio` PeriodicReader needs a tokio runtime). Both the `metrics` and
+# `trace` features are enabled: the metrics gauge sink (`otlp_push`) and the
+# trace/span exporter (`otlp_spans`, over the ported `Traced`/`HasLatency`
+# latency infrastructure) — see `src/adapters/otlp.rs`.
+#
+# 0.32 rather than the 0.28 legacy originally shipped, to clear
+# GHSA-w9wp-h8wv-79jx (opentelemetry_sdk < 0.29: unbounded allocation in W3C
+# Baggage propagation). This started as a deliberate divergence; legacy has since
+# been bumped to match, so the two trees are back in lockstep and the advisory is
+# fixed on both sides.
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", features = [
+    "metrics",
+    "trace",
+    "rt-tokio",
+], optional = true }
+opentelemetry-otlp = { version = "0.32", features = [
+    "http-proto",
+    "reqwest-blocking-client",
+    "metrics",
+    "trace",
+], optional = true }
+
+# `fix` feature: TLS for the FIX initiator (`rustls` with the `ring` provider +
+# the Mozilla root bundle via `webpki-roots`) and a lock-free bounded MPSC
+# (`kanal`) for the outbound inject channel. Versions mirror the legacy
+# `wingfoil` crate's `fix` adapter so the two trees don't drift.
+rustls = { version = "0.23", features = ["ring"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
+kanal = { version = "0.1.1", optional = true }
+
+# `tracing` feature (and the `instrument-*` roll-ups): engine span
+# instrumentation around `run`, the lifecycle phases, each cycle and — opt-in —
+# each node. Optional so a default build carries no tracing dependency at all
+# and the engine hot path is byte-identical to today's. Legacy wingfoil takes
+# `tracing` unconditionally (its `logged` tap routes through the `tracing`
+# event macros); next's `logged` goes through `log` directly, so here the whole
+# dependency can hang off the feature. `attributes` (the `#[tracing::instrument]`
+# macro) is a tracing default feature, named explicitly because every use site
+# here depends on it; `log` makes spans/events fall back to `log` records when
+# no subscriber is installed, matching legacy's dependency.
+tracing = { workspace = true, features = ["log", "attributes"], optional = true }
+
+# `bench` feature: `criterion` is needed by the `bencher` helper module (the
+# `add_bench` harness the graph benches drive), which is part of the *library*
+# rather than the bench targets, so it cannot come from dev-dependencies.
+# Mirrors legacy wingfoil's optional `criterion` + `bench` feature exactly.
+criterion = { version = "0.8.1", optional = true }
+
+[dev-dependencies]
+# The legacy engine, as the port's parity oracle: `tests/engine_semantics.rs`
+# asserts next reproduces legacy's values and tick times, and `benches/tiers.rs`
+# measures the tiers against it. Dev-only, so the *library* dependency still
+# runs `wingfoil` -> `wingfoil` and nothing under `next/` links legacy.
+# Cargo permits this cycle precisely because it is dev-only. It goes away with
+# the legacy tree at cutover.
+# Aliased because this crate is now itself named `wingfoil` (cutover-plan
+# 1.2): a dependency cannot share the depending package's name. The alias
+# goes away with the legacy tree.
+legacy_wingfoil = { package = "wingfoil", path = "../../legacy/wingfoil" }
+# Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
+# clippy; pre-push: build + test). Moved here from `legacy/wingfoil` when the
+# legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
+# project root by walking up from `OUT_DIR`, so it must be a dev-dependency of
+# a member of the workspace whose target dir sits beside `.git`.
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+# Compile-fail tests pinning the `nitro!` macro's key error paths.
+trybuild = "1"
+criterion = "0.8.1"
+# Comparison baseline for the `bfs_vs_dfs_reactive` bench — a reactive
+# framework that propagates one path at a time, measured against wingfoil's
+# topologically sorted scheduler.
+# Version mirrors the legacy `wingfoil` crate's dev-dependency.
+rxrust = "1.0.0-rc.3"
+# Allocation profiling for the `aeron_allocation_tracking` bench (behind the
+# `dhat-heap` feature). Mirrors the legacy `wingfoil` crate.
+dhat = "0.3"
+# The `latency_stages!` macro derives serde on the generated record, so a crate
+# invoking it (here, the latency tests) needs serde in scope.
+serde = { version = "1.0", features = ["derive"] }
+# Subscriber for the `tracing` example's `log` mode — renders the `logged` op's
+# `log`-crate records (target "wingfoil"). Mirrors the legacy tracing example.
+env_logger = { workspace = true }
+# Subscriber for the `tracing` example's `tracing` / `instruments` modes and for
+# the engine-instrumentation tests (which collect the emitted span names through
+# a small custom `Layer`). Mirrors the legacy tracing example's dev-dependency.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
+# (`sched_setaffinity`). Legacy carries the same dev-dependency for the same
+# reason. `libc` is also an *optional* [dependencies] entry above, enabled by
+# `aeron-integration-test`; the two entries are independent.
+libc = "0.2"
+
+[features]
+default = []
+# Exposes the `bencher` helper (`add_bench`, used by the criterion benches).
+# Off by default so consumers don't pull in criterion's dependency tree.
+# Mirrors legacy wingfoil's `bench` feature.
+bench = ["dep:criterion"]
+# Turns on the `dhat` global allocator in the aeron allocation-tracking bench,
+# so its `offer` / `try_claim` / `poll` hot paths are profiled for allocations.
+# Mirrors legacy wingfoil's `dhat-heap` feature.
+dhat-heap = []
+# `tokio/sync` backs `consume_async`'s bounded/unbounded sink channels; it is
+# part of the async module, so the feature enables it directly rather than
+# relying on a companion adapter (etcd-client) to pull it in transitively.
+async = ["dep:tokio", "dep:futures", "tokio/sync"]
+# `async` + `async-stream` back the lazy, back-pressured `csv_read` replay
+# source (a lazy `produce_async` + `buffer_size` producer streaming rows on
+# demand, so a huge file is not read into memory up front). The sink stays synchronous.
+csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
+# File-backed result cache. Reuses `async` for the tokio runtime and adds
+# tokio's `fs` for the async file IO. Mirrors legacy wingfoil's `kdb` deps
+# (`sha2`, `bincode`, `async`, `tokio/fs`).
+cache = ["dep:sha2", "dep:bincode", "async", "tokio/fs"]
+augurs = ["dep:augurs"]
+etcd = ["dep:etcd-client", "dep:async-stream", "async"]
+etcd-integration-test = ["etcd", "dep:testcontainers"]
+# Redis Pub/Sub + Streams adapter. Built on `async` (produce_async source +
+# consume_async sink) and `async-stream` (the snapshot→tail stream! macro).
+redis = ["dep:redis", "dep:async-stream", "async"]
+redis-integration-test = ["redis", "dep:testcontainers"]
+# PostgreSQL adapter. Built on `async` (produce_async live tail + block_on
+# reader/sink) and `async-stream` (the sub's `stream!` macro); `chrono` for the
+# timestamp column conversions.
+postgres = ["dep:tokio-postgres", "dep:async-stream", "async"]
+postgres-integration-test = ["postgres", "dep:testcontainers"]
+# Streaming Kafka consume source + produce sink. Built on the async
+# `produce_async` / `consume_async` ergonomics; needs `async-stream` for the
+# consumer's `recv()` loop. Mirrors legacy wingfoil's `kafka` deps.
+kafka = ["dep:rdkafka", "dep:async-stream", "async"]
+kafka-integration-test = ["kafka", "dep:testcontainers"]
+# Bidirectional WebSocket streaming to browsers: an axum HTTP/WS server plus
+# the `web_pub` sink and `web_sub` source. Built on `async` (the `produce_async`
+# source and `consume_async` sink ergonomics) and `async-stream` (the sub's
+# `stream!` macro). Mirrors legacy wingfoil's `web` deps.
+web = [
+    "async",
+    "dep:axum",
+    "dep:tower-http",
+    "dep:tokio-tungstenite",
+    "dep:wingfoil-wire-types",
+    "dep:bincode",
+    "dep:async-stream",
+    "tokio/net",
+    "tokio/sync",
+]
+web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
+# Pulls in `tokio-tungstenite/rustls-tls-webpki-roots` so the test client can
+# speak `wss://`, plus `rcgen`/`scopeguard` for the self-signed cert fixture.
+web-tls-integration-test = [
+    "web-tls",
+    "tokio-tungstenite/rustls-tls-webpki-roots",
+    "dep:rcgen",
+    "dep:scopeguard",
+]
+# Streaming Fluvio consume source + produce sink. Built on the async
+# `produce_async` / `consume_async_bursts` ergonomics; needs `async-stream` for
+# the consumer's record loop. Mirrors legacy wingfoil's `fluvio` deps.
+fluvio = ["dep:fluvio", "dep:async-stream", "async"]
+fluvio-integration-test = [
+    "fluvio",
+    "dep:testcontainers",
+    "dep:fluvio-controlplane-metadata",
+]
+# Aeron IPC/UDP transport. Enable exactly one backend: `aeron` (rusteron-client,
+# production) or `aeron-rs` (pure Rust, experimental). `aeron-driver` embeds a
+# media driver in-process and implies `aeron`. Synchronous/poll-based — no
+# `async`. Mirrors legacy wingfoil's `aeron` features.
+aeron = ["dep:rusteron-client"]
+aeron-rs = ["dep:aeron-rs"]
+aeron-driver = ["aeron", "dep:rusteron-media-driver"]
+# Live-media-driver tests (a testcontainers `aeronmd` bind-mounting /dev/shm).
+# Enables both backends so their handle-construction paths are covered.
+aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
+# Zero-copy IPC publish/subscribe over shared memory. Synchronous and
+# poll-based (a busy-spin `custom_node`, a background thread over the `channel`
+# layer, or an event-driven WaitSet), so — like legacy — it does NOT pull in
+# `async`. Mirrors legacy wingfoil's `iceoryx2` deps.
+# `wingfoil/iceoryx2` brings in the legacy crate's `ZeroCopySend` impl for
+# `Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop (the legacy
+# adapter's latency round-trip test relies on the same impl).
+iceoryx2 = ["dep:iceoryx2", "dep:thiserror", "legacy_wingfoil/iceoryx2"]
+# Cross-process `Ipc`-variant tests (real shared memory under /dev/shm, no
+# container). The in-process `Local`-variant tests need only `iceoryx2`.
+iceoryx2-integration-test = ["iceoryx2"]
+# KDB+/q adapter: time-partitioned historical reads (`kdb_read`,
+# `kdb_read_cached`), a real-time tickerplant subscription (`kdb_sub`), and a
+# streaming insert sink (`kdb_write`). Built on `async` (the `produce_async` /
+# `consume_async` ergonomics, via `cache`), `async-stream` (the reader/sub
+# `stream!` macros), `chrono` (the write timestamp column), and the `cache`
+# feature (the file cache behind `kdb_read_cached`, which also supplies
+# `sha2`/`bincode`/`serde`/`tokio/fs`). Mirrors legacy wingfoil's `kdb` deps.
+kdb = ["dep:kdb-plus-fixed", "dep:async-stream", "cache"]
+# KDB+ cannot be run under `testcontainers` (no public, freely-licensed image),
+# so the integration tests probe an externally-provided instance (KDB_TEST_HOST
+# / KDB_TEST_PORT, default localhost:5000) and skip when unreachable — no
+# container dependency, matching the legacy adapter's `q -p 5000` setup.
+kdb-integration-test = ["kdb"]
+# Realtime pull-based Prometheus metrics sink (hand-rolled HTTP + `arc-swap`).
+prometheus = ["dep:arc-swap"]
+# Adds the end-to-end scrape test (a live Prometheus scraping the exporter);
+# `reqwest` (blocking) queries Prometheus. Mirrors legacy wingfoil.
+prometheus-integration-test = ["prometheus", "dep:reqwest"]
+# ZMQ pub/sub adapter. `bincode`/`serde` frame the wire envelope; the `zmq` crate
+# links the system `libzmq`. No `async` — the subscriber uses a background thread
+# over the `channel` layer (matching legacy).
+zmq = ["dep:zmq", "dep:bincode"]
+# Core pub/sub parity tests (real sockets, no external service / container).
+zmq-integration-test = ["zmq"]
+# etcd service-discovery parity tests (needs Docker via testcontainers). Enables
+# the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
+zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
+# Cross-*engine* wire-compatibility tests: a legacy publisher feeding a next
+# subscriber and vice versa, over real sockets. This is the behavioural half of
+# the `WireMessage` wire contract — the golden-bytes unit test pins next's own
+# encoding, and this proves legacy actually agrees. Enables the zmq adapter of
+# the legacy crate, which is already a dev-dependency (the parity oracle), so
+# both engines are in one test binary. Retires with the legacy tree.
+zmq-cross-engine-test = ["zmq", "legacy_wingfoil/zmq"]
+# Cross-*language* parity tests: next-Rust against the next-Python bindings over
+# a socket. Port of legacy's `zmq-cross-lang-test`. Needs `maturin develop` in
+# `crates/wingfoil-python` first — the tests assert that up front rather
+# than skipping, so a missing module fails loudly.
+zmq-cross-lang-test = ["zmq"]
+# The etcd-discovery half of the cross-language tests (needs Docker).
+zmq-cross-lang-etcd-test = ["zmq-cross-lang-test", "etcd", "dep:testcontainers"]
+# Realtime push-based OpenTelemetry (OTLP) metrics sink. Reuses `async` for the
+# tokio runtime `consume_async` needs. Mirrors legacy wingfoil's `otlp`.
+otlp = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "async",
+]
+# Adds the self-contained OTLP integration test (a testcontainers OTel collector
+# the sink exports to). Mirrors legacy wingfoil.
+otlp-integration-test = ["otlp", "dep:testcontainers"]
+# FIX (Financial Information eXchange) protocol adapter: a synchronous, poll-based
+# session engine (initiator + acceptor, plain TCP or TLS) exposing inbound
+# messages + session status as streams, a market-data subscription helper, and an
+# outbound sender. Like legacy wingfoil's `fix`, it is synchronous/poll-based and
+# deliberately does NOT pull in `async`; `rustls`/`webpki-roots` back the TLS
+# initiator and `kanal` backs the lock-free outbound inject channel. Versions
+# mirror the legacy `wingfoil` crate's `fix` adapter so the two trees don't drift.
+fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal"]
+# The FIX adapter's cross-process parity tests spin up an in-process acceptor +
+# initiator over real loopback sockets (no external service / container), so this
+# gates the same-process integration tests. Mirrors legacy wingfoil's
+# `fix-integration-test` (which additionally reaches the LMAX demo when
+# credentialed; those credentialed tests are not ported — see the module docs).
+fix-integration-test = ["fix"]
+# Runtime graph dynamism: append nodes and splice edges into a live graph
+# mid-run (`Runner::run_dynamic` + `Extension`). Mirrors legacy wingfoil's
+# `dynamic-graph` feature; off the default hot path until wired in. The layered
+# `(layer, index)` dispatch it relies on is always on (it is byte-identical to
+# the old index order on static graphs).
+dynamic-graph = []
+# Engine span instrumentation, ported one-for-one from legacy wingfoil
+# (`legacy/wingfoil/Cargo.toml`). `tracing` alone pulls in the dependency without
+# emitting anything; each `instrument-*` feature switches on one span site in
+# `interp.rs`, so a build pays only for the spans it asks for and a build with
+# none is byte-identical to an uninstrumented engine.
+tracing = ["dep:tracing"]
+# A span around `Runner::run` / `run_dynamic` — the whole start→cycles→stop→
+# teardown lifecycle.
+instrument-run = ["tracing"]
+# A span around each engine cycle (one per dirty-node batch).
+instrument-cycle = ["tracing"]
+# A span around each lifecycle phase (start / stop / teardown) applied over all
+# nodes, recording the phase name.
+instrument-apply-nodes = ["tracing"]
+# A span around graph initialisation (`Builder::build`).
+instrument-initialise = ["tracing"]
+# A span per node execution, recording the node index and label. High frequency
+# — opt in deliberately.
+instrument-cycle-node = ["tracing"]
+instrument-default = [
+    "instrument-run",
+    "instrument-cycle",
+    "instrument-apply-nodes",
+    "instrument-initialise",
+]
+instrument-all = ["instrument-default", "instrument-cycle-node"]
+
+[[bench]]
+name = "tiers"
+harness = false
+
+[[bench]]
+name = "custom_op"
+harness = false
+
+[[bench]]
+name = "store_baseline"
+harness = false
+
+# --- Ports of the legacy `legacy/wingfoil/benches/*` suite --------------------------
+# Target names, paths and `required-features` gating mirror the legacy
+# declarations one-for-one so `cargo bench --bench <name>` is the same
+# invocation on either tree. See `benches/README.md`.
+
+[[bench]]
+name = "graph"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "nanotime"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_wingfoil"
+path = "benches/topological_vs_per_path/wingfoil.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "bfs_vs_dfs_reactive"
+path = "benches/topological_vs_per_path/reactive.rs"
+harness = false
+
+[[bench]]
+name = "bfs_vs_dfs_async_streams"
+path = "benches/topological_vs_per_path/async_streams.rs"
+harness = false
+required-features = ["async"]
+
+[[bench]]
+name = "iceoryx2"
+harness = false
+required-features = ["iceoryx2"]
+
+[[bench]]
+name = "iceoryx2_modes"
+harness = false
+required-features = ["iceoryx2"]
+
+[[bench]]
+name = "aeron_publication_latency"
+path = "benches/aeron/publication_latency.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_subscription_throughput"
+path = "benches/aeron/subscription_throughput.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_transceiver"
+path = "benches/aeron/transceiver.rs"
+harness = false
+required-features = ["aeron"]
+
+[[bench]]
+name = "aeron_allocation_tracking"
+path = "benches/aeron/allocation_tracking.rs"
+harness = false
+required-features = ["aeron"]
+
+# =============================================================================
+# Examples
+# =============================================================================
+# The `examples/` tree is grouped by what an example teaches:
+#
+#   examples/core/      — engine concepts (wiring, run modes, tiers, threading)
+#   examples/adapters/  — one directory per I/O adapter
+#   examples/showcase/  — multi-process, end-to-end latency demonstrations
+#
+# Every example lives in its own directory alongside a `README.md`, so the
+# paths below are explicit and `autoexamples` is off. Target *names* are
+# unchanged by the grouping — `cargo run --example <name>` is the same as it
+# always was. `examples/README.md` is the index.
+
+# --- Core concepts -----------------------------------------------------------
+
+[[example]]
+name = "hello_graph"
+path = "examples/core/hello_graph/main.rs"
+
+[[example]]
+name = "order_book"
+path = "examples/core/order_book/main.rs"
+
+[[example]]
+name = "ema_crossover"
+path = "examples/core/ema_crossover/main.rs"
+
+[[example]]
+name = "breadth_first"
+path = "examples/core/topological_sort/main.rs"
+
+[[example]]
+name = "run_mode"
+path = "examples/core/run_mode/main.rs"
+
+[[example]]
+name = "feedback"
+path = "examples/core/feedback/main.rs"
+
+[[example]]
+name = "statistics"
+path = "examples/core/statistics/main.rs"
+
+# Observability: the `logged` debug tap rendered through `env_logger`. Ports the
+# `log` mode of the classic `tracing` example (the `tracing`-subscriber and
+# engine-span `instruments` modes await next's instrumentation-feature port).
+[[example]]
+name = "tracing"
+path = "examples/core/tracing/main.rs"
+
+# Multi-threaded execution: a producer sub-graph on a worker thread feeds the
+# main graph through the channel layer (next's take on classic `producer()` /
+# `mapper()`). Uses only default features.
+[[example]]
+name = "threading"
+path = "examples/core/threading/main.rs"
+
+# The same thread offload as `threading`, but through the `spawn` / `spawn_map`
+# combinators that wrap the channel plumbing into one call each.
+[[example]]
+name = "spawn"
+path = "examples/core/spawn/main.rs"
+
+# Runtime graph mutation: instruments added/removed on a live graph, a price
+# book kept correct across the changes via `dynamic_group`. Feature-gated on
+# `dynamic-graph`.
+[[example]]
+name = "dynamic"
+path = "examples/core/dynamic/main.rs"
+required-features = ["dynamic-graph"]
+
+# Statically-wired counterpart to `dynamic`: the same price book, but routed
+# through a fixed slot pool with `demux_it` instead of runtime graph mutation.
+[[example]]
+name = "demux"
+path = "examples/core/demux/main.rs"
+required-features = ["dynamic-graph"]
+
+# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled.
+[[example]]
+name = "odds_evens"
+path = "examples/core/odds_evens/main.rs"
+
+[[example]]
+name = "dual_mode"
+path = "examples/core/dual_mode/main.rs"
+
+[[example]]
+name = "fanout_10x10"
+path = "examples/core/fanout_10x10/main.rs"
+
+# Async at the graph edge. Port of the classic `async` example: an async
+# `produce_async` producer driving the graph (the graph itself is the
+# consumer). All three need tokio + futures.
+[[example]]
+name = "async"
+path = "examples/core/async/main.rs"
+required-features = ["async"]
+
+[[example]]
+name = "async_source"
+path = "examples/core/async_source/main.rs"
+required-features = ["async"]
+
+[[example]]
+name = "produce_async_feed"
+path = "examples/core/produce_async_feed/main.rs"
+required-features = ["async"]
+
+# --- Adapters ----------------------------------------------------------------
+
+[[example]]
+name = "csv_adapter"
+path = "examples/adapters/csv/main.rs"
+required-features = ["csv"]
+
+# The lines replay source is behind `async` (lazy `produce_async` +
+# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
+[[example]]
+name = "lines_adapter"
+path = "examples/adapters/lines/main.rs"
+required-features = ["async"]
+
+# KDB+ examples, ports of the classic `wingfoil/examples/kdb/*` (each a directory
+# with a README). All require a running KDB+/tickerplant instance to actually run.
+[[example]]
+name = "kdb_read"
+path = "examples/adapters/kdb/read/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_read_cached"
+path = "examples/adapters/kdb/read_cached/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "kdb_round_trip"
+path = "examples/adapters/kdb/round_trip/main.rs"
+required-features = ["kdb"]
+
+[[example]]
+name = "postgres_adapter"
+path = "examples/adapters/postgres/main.rs"
+required-features = ["postgres"]
+
+[[example]]
+name = "redis_adapter"
+path = "examples/adapters/redis/main.rs"
+required-features = ["redis"]
+
+[[example]]
+name = "etcd_adapter"
+path = "examples/adapters/etcd/main.rs"
+required-features = ["etcd"]
+
+[[example]]
+name = "kafka_adapter"
+path = "examples/adapters/kafka/main.rs"
+required-features = ["kafka"]
+
+# Port of the classic `wingfoil/examples/fluvio` example. Requires a running
+# Fluvio cluster with the two topics created — `fluvio_admin` creates them.
+[[example]]
+name = "fluvio_adapter"
+path = "examples/adapters/fluvio/main.rs"
+required-features = ["fluvio"]
+
+[[example]]
+name = "fluvio_admin"
+path = "examples/adapters/fluvio/admin.rs"
+required-features = ["fluvio-integration-test"]
+
+[[example]]
+name = "zmq_adapter"
+path = "examples/adapters/zmq/main.rs"
+required-features = ["zmq"]
+
+[[example]]
+name = "fix_adapter"
+path = "examples/adapters/fix/main.rs"
+required-features = ["fix"]
+
+# Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
+# driver (see the adapter's module docs).
+[[example]]
+name = "aeron_adapter"
+path = "examples/adapters/aeron/main.rs"
+required-features = ["aeron"]
+
+[[example]]
+name = "aeron_status_circuit_breaker"
+path = "examples/adapters/aeron/status_circuit_breaker.rs"
+required-features = ["aeron"]
+
+# Ports of the classic `wingfoil/examples/iceoryx2/{pub,sub}.rs` — two
+# processes talking over shared memory. Run the subscriber first.
+[[example]]
+name = "iceoryx2_pub"
+path = "examples/adapters/iceoryx2/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "iceoryx2_sub"
+path = "examples/adapters/iceoryx2/sub.rs"
+required-features = ["iceoryx2"]
+
+# Port of the classic `wingfoil/examples/web` example. Streams a synthetic mid
+# price to the browser and logs UI events back.
+[[example]]
+name = "web_adapter"
+path = "examples/adapters/web/main.rs"
+required-features = ["web"]
+
+# Metrics export. `examples/adapters/telemetry/` carries the shared Docker
+# harness (Prometheus + Grafana + Alloy) both of these scrape into.
+[[example]]
+name = "prometheus_adapter"
+path = "examples/adapters/prometheus/main.rs"
+required-features = ["prometheus"]
+
+[[example]]
+name = "otlp_adapter"
+path = "examples/adapters/otlp/main.rs"
+required-features = ["otlp", "prometheus"]
+
+[[example]]
+name = "augurs_adapter"
+path = "examples/adapters/augurs/main.rs"
+required-features = ["augurs"]
+
+# --- Showcase ----------------------------------------------------------------
+
+# Ports of the classic `wingfoil/examples/latency/{pub,sub}.rs` — the
+# cross-process demonstration of the Phase-5 latency infrastructure
+# (`latency_stages!` + `Traced<T, L>` + `.stamp::<Stage>()` + `latency_report`)
+# over an iceoryx2 shared-memory hop. Run the subscriber first.
+[[example]]
+name = "latency_pub"
+path = "examples/showcase/latency/pub.rs"
+required-features = ["iceoryx2"]
+
+[[example]]
+name = "latency_sub"
+path = "examples/showcase/latency/sub.rs"
+required-features = ["iceoryx2"]
+
+# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# the nine-stage, three-process end-to-end latency demo
+# (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
+# back). `required-features` mirror the classic manifest one-for-one.
+[[example]]
+name = "latency_e2e_ws_server"
+path = "examples/showcase/latency_e2e/ws_server.rs"
+required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
+
+[[example]]
+name = "latency_e2e_fix_gw"
+path = "examples/showcase/latency_e2e/fix_gw.rs"
+required-features = ["fix", "iceoryx2"]

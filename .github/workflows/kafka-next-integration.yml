@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/kafka**'
-      - 'crates/wingfoil-next/tests/kafka_integration.rs'
-      - 'crates/wingfoil-next-python/src/adapters/kafka.rs'
-      - 'crates/wingfoil-next-python/tests/test_kafka.py'
+      - 'crates/wingfoil/src/adapters/kafka**'
+      - 'crates/wingfoil/tests/kafka_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/kafka.rs'
+      - 'crates/wingfoil-python/tests/test_kafka.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -58,12 +58,12 @@ jobs:
 
       - name: Run kafka (next) integration tests
         run: |
-          cargo test --features kafka-integration-test -p wingfoil-next \
+          cargo test --features kafka-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # The Rust tests above use testcontainers (per-test container); the Python
       # tests expect a fixed localhost:9092, so start one explicitly.
       - name: Start Redpanda container for Python tests
@@ -87,14 +87,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         # `-F kafka` explicitly: the adapter is not in the default wheel feature
         # list (librdkafka builds from source and costs minutes).
         run: |
@@ -103,7 +103,7 @@ jobs:
           .venv/bin/maturin develop -F kafka
 
       - name: Run Python kafka (next) integration tests
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_kafka tests/test_kafka.py -v
         env:
           RUST_LOG: INFO

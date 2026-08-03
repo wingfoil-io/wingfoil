@@ -1,0 +1,82 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "wingfoil-python"
+dynamic = ["version"]
+description = "Python interop prototype for wingfoil (the Op-pattern engine)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+dev = ["maturin>=1.4,<2.0", "pytest>=7"]
+
+[tool.maturin]
+# `extension-module` resolves Python symbols at load time (no libpython link in
+# the wheel). Importing `wingfoil` gives the Graph / Stream classes.
+#
+# **Every adapter binding ships**, because a published wheel is the only copy a
+# user gets: an adapter left out is simply absent from the module, and their
+# only recourse is a from-source build with a Rust toolchain. Build time is the
+# wrong criterion here — it is paid once, in the release job, never by a user —
+# so kafka and zmq (which build librdkafka / libzmq from source) and etcd (which
+# needs protoc, installed by `pypi-publish.yml`) are all in.
+#
+# The criterion that *does* justify leaving one out is **portability**: an
+# adapter needing a system library that cannot be vendored, or one that would
+# make the wheel platform-specific. Legacy `wingfoil-python` draws the line in
+# exactly the same place, shipping everything except aeron and iceoryx2 ("can
+# make wheels Linux/POSIX-only"). Those two are the expected exclusions when
+# they are bound; keep this list explicit rather than pointing it at
+# `all-adapters` so adding one stays a decision.
+features = [
+    "extension-module",
+    "postgres",
+    "kafka",
+    "redis",
+    "etcd",
+    "fluvio",
+    "csv",
+    "zmq",
+    "otlp",
+    "augurs",
+    "kdb",
+    "fix",
+    "prometheus",
+    "web",
+]
+# Mixed layout: the compiled extension is the *private* `wingfoil._wingfoil`
+# and the importable `wingfoil` is the Python package under `python/`, which
+# re-exports it wholesale and adds the pure-Python surface (`CustomStream`).
+# `import wingfoil as wf` is unchanged for callers.
+python-source = "python"
+module-name = "wingfoil._wingfoil"
+include = ["Cargo.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests are deselected by default so the regular `pytest` run is
+# never silently green against a service that is not actually up. Each
+# integration workflow opts in explicitly, e.g. `pytest -m requires_postgres`.
+# Running a marker selection without the backing service fails loudly with a
+# real ConnectionRefused/import error — not a skip.
+markers = [
+    "requires_postgres: needs PostgreSQL on localhost:5432",
+    "requires_kafka: needs a Kafka broker on localhost:9092",
+    "requires_redis: needs Redis on localhost:6379",
+    "requires_etcd: needs etcd on localhost:2379",
+    "requires_fluvio: needs a Fluvio cluster on localhost:9003",
+    "requires_kdb: needs a q process on localhost:5000",
+    "requires_fix: loopback FIX sessions on a live clock (no external service)",
+    "requires_web: WebSocket round trips — needs the `websockets` package",
+    "requires_aeron: needs a running Aeron media driver (AERON_DIR)",
+    "requires_iceoryx2: iceoryx2 round trips on a live clock (no external service)",
+]
+addopts = "-m 'not requires_postgres and not requires_kafka and not requires_redis and not requires_etcd and not requires_fluvio and not requires_kdb and not requires_fix and not requires_web and not requires_aeron and not requires_iceoryx2'"

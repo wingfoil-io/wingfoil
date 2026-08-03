@@ -7549,53 +7549,6 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wingfoil"
-version = "8.0.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "bincode",
- "by_address",
- "chrono",
- "crossbeam",
- "derive-new",
- "derive_more 2.1.1",
- "env_logger 0.11.10",
- "formato",
- "futures",
- "futures-util",
- "iceoryx2",
- "itertools 0.14.0",
- "kanal",
- "log",
- "num-traits",
- "ordered-float 4.6.0",
- "quanta",
- "serde",
- "serde-aux",
- "serde_json",
- "strum",
- "strum_macros",
- "thiserror 2.0.18",
- "tinyvec",
- "tokio",
- "tracing",
- "tynm",
- "wingfoil-derive",
- "wingfoil-next",
- "zmq",
-]
-
-[[package]]
-name = "wingfoil-derive"
-version = "8.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "wingfoil-next"
 version = "0.1.0"
 dependencies = [
  "aeron-rs",
@@ -7653,14 +7606,61 @@ dependencies = [
  "tracing-subscriber",
  "trybuild",
  "webpki-roots 0.26.11",
- "wingfoil",
- "wingfoil-next-macros",
+ "wingfoil 8.0.0",
+ "wingfoil-macros",
  "wingfoil-wire-types",
  "zmq",
 ]
 
 [[package]]
-name = "wingfoil-next-macros"
+name = "wingfoil"
+version = "8.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "bincode",
+ "by_address",
+ "chrono",
+ "crossbeam",
+ "derive-new",
+ "derive_more 2.1.1",
+ "env_logger 0.11.10",
+ "formato",
+ "futures",
+ "futures-util",
+ "iceoryx2",
+ "itertools 0.14.0",
+ "kanal",
+ "log",
+ "num-traits",
+ "ordered-float 4.6.0",
+ "quanta",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "thiserror 2.0.18",
+ "tinyvec",
+ "tokio",
+ "tracing",
+ "tynm",
+ "wingfoil 0.1.0",
+ "wingfoil-derive",
+ "zmq",
+]
+
+[[package]]
+name = "wingfoil-derive"
+version = "8.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "wingfoil-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -7669,7 +7669,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingfoil-next-python"
+name = "wingfoil-python"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -7678,12 +7678,12 @@ dependencies = [
  "log",
  "pyo3",
  "serde_json",
- "wingfoil-next",
- "wingfoil-next-python-macros",
+ "wingfoil 0.1.0",
+ "wingfoil-python-macros",
 ]
 
 [[package]]
-name = "wingfoil-next-python-macros"
+name = "wingfoil-python-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

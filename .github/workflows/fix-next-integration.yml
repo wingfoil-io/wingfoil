@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/fix**'
-      - 'crates/wingfoil-next/tests/fix_integration.rs'
-      - 'crates/wingfoil-next-python/src/adapters/fix.rs'
-      - 'crates/wingfoil-next-python/tests/test_fix.py'
+      - 'crates/wingfoil/src/adapters/fix**'
+      - 'crates/wingfoil/tests/fix_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/fix.rs'
+      - 'crates/wingfoil-python/tests/test_fix.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -45,19 +45,19 @@ jobs:
         # Loopback TCP only — no external service or container. Serialized
         # (`--test-threads=1`) because the tests run against a live wall clock.
         run: |
-          cargo test --features fix-integration-test -p wingfoil-next \
+          cargo test --features fix-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             --test fix_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # Same shape as the Rust leg: loopback TCP only, no service to start.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux; protoc is for
@@ -65,14 +65,14 @@ jobs:
         run: sudo apt-get install -y patchelf protobuf-compiler
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: |
           python -m venv .venv
           .venv/bin/pip install maturin pytest
           .venv/bin/maturin develop
 
       - name: Run Python FIX (next) loopback tests
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_fix tests/test_fix.py -v
         env:
           RUST_LOG: INFO

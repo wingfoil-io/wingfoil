@@ -31,15 +31,15 @@ jobs:
       matrix:
         include:
           - name: ws-server
-            dockerfile: crates/wingfoil-next/examples/latency_e2e/Dockerfile.ws_server
+            dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.ws_server
           - name: fix-gw
-            dockerfile: crates/wingfoil-next/examples/latency_e2e/Dockerfile.fix_gw
+            dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.fix_gw
           - name: prometheus
-            dockerfile: crates/wingfoil-next/examples/latency_e2e/Dockerfile.prometheus
+            dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.prometheus
           - name: tempo
-            dockerfile: crates/wingfoil-next/examples/latency_e2e/Dockerfile.tempo
+            dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.tempo
           - name: grafana
-            dockerfile: crates/wingfoil-next/examples/latency_e2e/Dockerfile.grafana
+            dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.grafana
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

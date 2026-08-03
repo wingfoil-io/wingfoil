@@ -6,7 +6,7 @@ Status: **implemented** (decision record). Tracks deviation **A5** in
 ## The question
 
 Legacy wingfoil **owns** a tokio runtime (with an override to inject your own).
-Early wingfoil-next instead made every async adapter take a caller-supplied
+Early wingfoil instead made every async adapter take a caller-supplied
 `&tokio::runtime::Handle`. Which is right?
 
 ## The decision

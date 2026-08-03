@@ -94,7 +94,12 @@ scrape-examples = true
 # is replacing this tree wholesale: at cutover the legacy crates are deleted,
 # and nothing under `crates/` may depend on what is being deleted. See
 # `docs/cutover-plan.md`.
-wingfoil-next = { path = "../../crates/wingfoil-next" }
+# Renamed at cutover (cutover-plan 1.2): the package is now `wingfoil`.
+# The dependency KEY stays `wingfoil-next` deliberately — it is what every
+# `use wingfoil_next::` in this tree resolves through, and what the
+# `wingfoil-next/iceoryx2` feature forward above names, so the whole legacy
+# source tree needs no edit. This alias dies with the tree.
+wingfoil-next = { package = "wingfoil", path = "../../crates/wingfoil" }
 
 # derives
 wingfoil-derive = { path = "../wingfoil-derive", version = "8.0.0" }

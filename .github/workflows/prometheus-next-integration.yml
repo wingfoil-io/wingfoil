@@ -5,8 +5,8 @@ on:
   workflow_call:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/prometheus**'
-      - 'crates/wingfoil-next/tests/prometheus_integration.rs'
+      - 'crates/wingfoil/src/adapters/prometheus**'
+      - 'crates/wingfoil/tests/prometheus_integration.rs'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -60,7 +60,7 @@ jobs:
 
       - name: Run Prometheus (next) integration tests
         run: |
-          cargo test --features prometheus-integration-test -p wingfoil-next \
+          cargo test --features prometheus-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

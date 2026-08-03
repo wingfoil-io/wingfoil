@@ -1,7 +1,7 @@
 # Build the baked AMI used by the wingfoil latency_e2e ec2-spot Pulumi stack.
 #
 # The Packer template at
-# `crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer/wingfoil-latency.pkr.hcl`
+# `crates/wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer/wingfoil-latency.pkr.hcl`
 # bakes Docker, the demo's docker-compose.yml, and pre-pulled copies of the
 # five service images into an Amazon Linux 2023 AMI. Result: a Spot reclaim
 # recovers in ~60-90s instead of ~5min (no apt install, no image pulls).
@@ -62,7 +62,7 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer
+        working-directory: crates/wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -145,7 +145,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packer-manifest
-          path: crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot/packer/packer-manifest.json
+          path: crates/wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer/packer-manifest.json
 
       - name: Summary
         run: |
@@ -160,7 +160,7 @@ jobs:
             echo "Wire it into the Pulumi stack:"
             echo ""
             echo "\`\`\`bash"
-            echo "cd crates/wingfoil-next/examples/latency_e2e/pulumi/ec2-spot"
+            echo "cd crates/wingfoil/examples/latency_e2e/pulumi/ec2-spot"
             echo "pulumi config set ami_id ${{ steps.ami.outputs.ami_id }}"
             echo "pulumi up"
             echo "\`\`\`"

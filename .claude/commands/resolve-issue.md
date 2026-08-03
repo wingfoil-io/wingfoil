@@ -51,7 +51,7 @@ Run, in order, and fix anything that fails before committing:
 cargo fmt --all
 cargo lint          # default features
 cargo lint-all      # all features — catches feature-gated code
-cargo test -p wingfoil    # plus any feature flags your change touches
+cargo test --manifest-path crates/wingfoil/Cargo.toml    # plus any feature flags your change touches
 ```
 
 Actually exercise the new behaviour (run the relevant test or example and read the output) — a passing typecheck is not verification. If the change is feature-gated, test with that feature enabled.

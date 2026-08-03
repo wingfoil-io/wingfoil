@@ -1,7 +1,7 @@
-# Review: `port-plan.md` + the `wingfoil-next` implementation
+# Review: `port-plan.md` + the `wingfoil` implementation
 
 Date: 2026-07-20. Scope: the port plan (`port-plan.md`) and the
-`wingfoil-next` / `wingfoil-next-macros` crates as of this branch. All
+`wingfoil` / `wingfoil-macros` crates as of this branch. All
 findings below were verified against the actual code paths (and, where noted,
 reproduced with probe tests); legacy parity claims were checked against
 `legacy/wingfoil/src/nodes/*`, `legacy/wingfoil/src/adapters/statistics.rs`,
@@ -23,10 +23,10 @@ evaluation timing**, which is where every confirmed divergence sits.
 
 The findings below were worked on branch `claude/fable-review-issues-przi5i`
 (PR #469). Every semantic fix keeps interpreted == compiled == nested and is
-guarded by a parity test in `wingfoil-next/tests/parity_bugs.rs` unless noted.
+guarded by a parity test in `wingfoil/tests/parity_bugs.rs` unless noted.
 `cargo build`/`test` (default + `async`), `cargo fmt --check`, and
-`cargo lint` pass; all-features clippy is clean for `wingfoil-next` /
-`wingfoil-next-macros` (the full-workspace `lint-all` is blocked only by the
+`cargo lint` pass; all-features clippy is clean for `wingfoil` /
+`wingfoil-macros` (the full-workspace `lint-all` is blocked only by the
 Aeron adapter's CMake system dep, unrelated to these changes).
 
 **Highest-priority bugs** — all fixed:
@@ -104,9 +104,9 @@ completeness test committed, `Tick::Silent` question into Phase 1).
 ## Highest-priority implementation bugs
 
 1. **Fold value-slot seeding drifts between engines.** Interpreted seeds the
-   output slot with `init.clone()` (`wingfoil-next/src/interp.rs:753`); the
+   output slot with `init.clone()` (`wingfoil/src/interp.rs:753`); the
    macro's compiled/nested emission seeds every slot with
-   `Default::default()` (`wingfoil-next-macros/src/lib.rs:1247`). A fold with
+   `Default::default()` (`wingfoil-macros/src/lib.rs:1247`). A fold with
    `init != Default` read before its first tick (via `sample`/`join`/passive
    edge) returns `init` interpreted but `0` compiled — reproduced with a
    probe. Fix: add a value-seed field to `OpInfo` and emit a clone of the
@@ -288,7 +288,7 @@ legacy (same behavior, so not drift).
 5. **Stop planning the completeness test — add it.** It is acknowledged as
    "recommended, not yet added" in two places. Cheapest shape: a
    `supported_ops!()` function-like macro emitting the same list the
-   parse-match and error message use, diffed in a `wingfoil-next` test
+   parse-match and error message use, diffed in a `wingfoil` test
    against the fluent trait surface with an explicit "not expressible"
    allowlist. (The reverse direction — `nitro!`-but-not-fluent — is already
    guarded by construction, since `wire()` compiles verbatim.)

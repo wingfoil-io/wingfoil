@@ -26,18 +26,18 @@ arranged so that cutover is a deletion, not a re-organisation.
 
 ```
 crates/                     # every Cargo crate in the tree
-  wingfoil-next/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
+  wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
                             #   signal.rs, runtime/, examples/, tests/, benches/
-  wingfoil-next-macros/     # nitro! / #[op] proc macros
-  wingfoil-next-python/     # PyO3 Python bindings (built with maturin)
-  wingfoil-next-python-macros/
+  wingfoil-macros/     # nitro! / #[op] proc macros
+  wingfoil-python/     # PyO3 Python bindings (built with maturin)
+  wingfoil-python-macros/
   wingfoil-wire-types/      # Wire-format types shared by the web adapter and
                             #   wingfoil-wasm — survives cutover
   wingfoil-wasm/            # Browser-side WASM codec (excluded from the default
                             #   workspace) — survives cutover
 
-docs/                       # wingfoil-next-architecture.md (read this first),
+docs/                       # wingfoil-architecture.md (read this first),
                             #   migration.md (#[node] -> Op), port-plan.md
                             #   (the port roadmap), cutover-plan.md,
                             #   deviation-register.md, design decisions
@@ -58,7 +58,7 @@ scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh,
 ## Start here
 
 New to the engine? Read
-[`docs/wingfoil-next-architecture.md`](docs/wingfoil-next-architecture.md)
+[`docs/wingfoil-architecture.md`](docs/wingfoil-architecture.md)
 before your first non-trivial change — the shape of the thing, the one
 decision everything else follows from, and the rules that bite. Porting code
 off the legacy engine is [`docs/migration.md`](docs/migration.md).
@@ -75,13 +75,13 @@ example, or test case.
 
 ## Never depend on the `wingfoil` crate from `crates/`
 
-The dependency runs **legacy → next**: `wingfoil` depends on `wingfoil-next`
+The dependency runs **legacy → next**: `wingfoil` depends on `wingfoil`
 and re-exports the shared runtime core from it. Never add `wingfoil` as a
 (non-dev) dependency of anything under `crates/`, and never reach for
 `wingfoil::` in its source — the cutover *deletes* the legacy crates, so any
 such edge would have to be unpicked first.
 
-Shared machinery goes in `crates/wingfoil-next/src/runtime/` (engine time, run
+Shared machinery goes in `crates/wingfoil/src/runtime/` (engine time, run
 bounds, the time queue, `Burst`, the `Kernel`, the latency data layer), and
 `wingfoil` re-exports it at its historical path. The only permitted edge back
 is a **dev**-dependency, for parity tests and comparison benches against the
@@ -89,12 +89,12 @@ legacy engine. See `docs/cutover-plan.md`.
 
 The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
 `js` sit outside `legacy/`: all three survive the cutover, and
-`crates/wingfoil-next` already depends on wire-types. `js/` is top-level rather
+`crates/wingfoil` already depends on wire-types. `js/` is top-level rather
 than under `crates/` because it is an npm package, not a Cargo crate.
 
 ## Examples: every one is a directory with a README
 
-`crates/wingfoil-next/examples/` is grouped by what an example teaches:
+`crates/wingfoil/examples/` is grouped by what an example teaches:
 
 - `core/` — engine concepts (wiring, run modes, `nitro!` tiers, threading,
   dynamism). No external services; runs with plain `cargo run`.
@@ -116,7 +116,7 @@ csv_adapter` keeps working. Renaming a target breaks users' muscle memory and
 every doc reference; renaming a directory is free.
 
 House style differs by group (`core/` uses `## Sentence-case title` then prose,
-snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil-next)` then
+snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil)` then
 `## Prerequisites` / `## Run` / `## Code` / `## Output`). Match the group you are
 adding to.
 
@@ -257,10 +257,10 @@ cargo build --release
 
 # Test
 cargo test
-cargo test -p wingfoil-next --all-features
+cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features
 
 # Python tests
-cd crates/wingfoil-next-python && maturin develop && pytest
+cd crates/wingfoil-python && maturin develop && pytest
 cd legacy/wingfoil-python && maturin develop && pytest
 
 # TypeScript client tests
@@ -276,9 +276,9 @@ cargo fmt --all -- --check
 ```
 
 **`legacy/` is a separate workspace.** It left the root one ahead of the
-cutover rename — `wingfoil-next` becomes `wingfoil`, and one workspace cannot
+cutover rename — `wingfoil` becomes `wingfoil`, and one workspace cannot
 hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
-touches it, and `-p wingfoil` / `-p wingfoil-python` no longer resolve from the
+touches it, and `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil/Cargo.toml-python` no longer resolve from the
 root. Use the nested manifest:
 
 ```bash
@@ -397,10 +397,10 @@ thread panicked while holding it, and we propagate that panic deliberately.
 - Tests use `RunMode::HistoricalFrom(NanoTime::ZERO)` for determinism, and
   assert exact values *and* tick times (`with_time()` + `accumulate()`).
 - Temp files in tests get unique names (pid + counter) so parallel tests
-  never collide; see `crates/wingfoil-next/tests/lines_adapter.rs`.
+  never collide; see `crates/wingfoil/tests/lines_adapter.rs`.
 - Feature-gated tests start with `#![cfg(feature = "...")]` at file level.
 - Adapter and stats ops stay **out of the prelude** — users opt in with
-  `use wingfoil_next::adapters::<name>::...;`.
+  `use wingfoil::adapters::<name>::...;`.
 - No locks on the graph execution path (`cycle` / `start` etc.); use the
   channel layer to talk to background threads.
 
@@ -441,7 +441,7 @@ Before committing any changes, ALWAYS run:
 cargo fmt --all
 cargo lint        # default features
 cargo lint-all    # all features — CI runs this and feature-gated code is easy to miss
-cargo test -p wingfoil-next --all-features
+cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features
 ```
 
 All must pass without errors before creating a commit.

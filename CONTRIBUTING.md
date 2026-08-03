@@ -42,15 +42,15 @@ valuable contributions are:
 From the repository root (the crates are root-workspace members):
 
 ```bash
-cargo build -p wingfoil-next
-cargo test  -p wingfoil-next --all-features
-cargo bench -p wingfoil-next          # three-tier regression gate
+cargo build --manifest-path crates/wingfoil/Cargo.toml
+cargo test  --manifest-path crates/wingfoil/Cargo.toml --all-features
+cargo bench --manifest-path crates/wingfoil/Cargo.toml          # three-tier regression gate
 cargo fmt --all
 cargo lint && cargo lint-all          # workspace clippy aliases, mirror CI
 ```
 
 `legacy/` is **not** in this workspace — it is its own, so none of the above
-reaches it and `-p wingfoil` does not resolve here. See
+reaches it and `--manifest-path crates/wingfoil/Cargo.toml` does not resolve here. See
 [`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md#pre-pr-check-matches-ci) if
 you are changing that tree.
 

@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/web/**'
-      - 'crates/wingfoil-next/tests/web_adapter.rs'
-      - 'crates/wingfoil-next-python/src/adapters/web.rs'
-      - 'crates/wingfoil-next-python/tests/test_web.py'
+      - 'crates/wingfoil/src/adapters/web/**'
+      - 'crates/wingfoil/tests/web_adapter.rs'
+      - 'crates/wingfoil-python/src/adapters/web.rs'
+      - 'crates/wingfoil-python/tests/test_web.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -49,12 +49,12 @@ jobs:
       # wss:// round trip against an rcgen-generated self-signed cert.
       - name: Run web (next) integration tests (plain + TLS)
         run: |
-          cargo test --features web-tls-integration-test -p wingfoil-next \
+          cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             --test web_adapter -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # The server is in-process here too; `websockets` is the only extra, and
       # is what the `requires_web` marker gates.
       - name: Set up Python
@@ -62,21 +62,21 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: |
           python -m venv .venv
           .venv/bin/pip install maturin pytest websockets
           .venv/bin/maturin develop
 
       - name: Run Python web (next) WebSocket round trips
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_web tests/test_web.py -v
         env:
           RUST_LOG: INFO

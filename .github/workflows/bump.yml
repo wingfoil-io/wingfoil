@@ -99,7 +99,7 @@ jobs:
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
           # Both trees carry a copy of the demo while legacy exists.
           for INDEX_HTML in \
-            crates/wingfoil-next/examples/latency_e2e/static/index.html \
+            crates/wingfoil/examples/latency_e2e/static/index.html \
             legacy/wingfoil/examples/latency_e2e/static/index.html; do
             sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" "$INDEX_HTML"
           done

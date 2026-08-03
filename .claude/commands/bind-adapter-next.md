@@ -1,28 +1,28 @@
-Add the **Python bindings** for the already-ported wingfoil-next I/O adapter
-named `$ARGUMENTS`, in `crates/wingfoil-next-python/src/adapters/`.
+Add the **Python bindings** for the already-ported wingfoil I/O adapter
+named `$ARGUMENTS`, in `crates/wingfoil-python/src/adapters/`.
 
 This is the *binding* task, not the port. It assumes
-`crates/wingfoil-next/src/adapters/$ARGUMENTS*` already exists and passes
+`crates/wingfoil/src/adapters/$ARGUMENTS*` already exists and passes
 its own tests — if it does not, run `/new-adapter-next $ARGUMENTS` first and
 come back. (`/new-adapter-next` links here for its Python step, so a brand-new
 adapter ends up running both.)
 
-`wingfoil-next-python` is the **go-forward** Python binding: it supersedes the
+`wingfoil-python` is the **go-forward** Python binding: it supersedes the
 legacy `wingfoil-python`, it is not a facade over it (decision 2026-07, see
 `docs/python-interop.md` and Phase 6 of `docs/port-plan.md`). At
-cutover `import wingfoil` becomes `import wingfoil_next`.
+cutover `import wingfoil` becomes `import wingfoil`.
 
 ## Read first
 
-- **`crates/wingfoil-next-python/src/adapters/postgres.rs`** — the first
+- **`crates/wingfoil-python/src/adapters/postgres.rs`** — the first
   real adapter bound and the template for every one after it. Read it before
   writing code; most of what follows is a generalisation of what it does.
-- `crates/wingfoil-next-python/src/adapters/common.rs` — the shared
+- `crates/wingfoil-python/src/adapters/common.rs` — the shared
   run-shape helpers.
-- `crates/wingfoil-next-python/src/python.rs` — `ramp_source` /
+- `crates/wingfoil-python/src/python.rs` — `ramp_source` /
   `list_sink` / `pair_source` / `burst_list_sink`, the four minimal
   `#[pyadapter]` demos (plain + burst, source + sink).
-- `crates/wingfoil-next-python/tests/plugin_seam.rs` — the same seams
+- `crates/wingfoil-python/tests/plugin_seam.rs` — the same seams
   exercised from an *external* crate.
 - `docs/python-interop.md` — why the boundary is shaped this way.
 
@@ -62,33 +62,33 @@ git checkout next && git pull origin next && git checkout -b bind-$ARGUMENTS-pyt
 
 The PR targets base `next`.
 
-## 2. Feature gate — `crates/wingfoil-next-python/Cargo.toml`
+## 2. Feature gate — `crates/wingfoil-python/Cargo.toml`
 
 **First check whether the thing you are binding is feature-gated at all.** Not
-every Python surface is an adapter: `wingfoil_next::latency` is an
+every Python surface is an adapter: `wingfoil::latency` is an
 unconditional engine module, so its binding (`src/latency.rs`, *not* under
 `adapters/`) has no cargo feature, is registered in the `#[pymodule]`
 unconditionally, ships in every wheel, and needs no integration workflow. If
-`grep '^pub mod <name>' crates/wingfoil-next/src/lib.rs` shows no
+`grep '^pub mod <name>' crates/wingfoil/src/lib.rs` shows no
 `#[cfg(feature = …)]` above it, skip this whole step and step 3's `#[cfg]`s —
 gating a binding whose engine side is always compiled only creates a way to
 build a wheel that is missing it for no reason. Everything else in this file
 still applies.
 
-Each *adapter* binding lives behind a `wingfoil-next-python` cargo feature of
+Each *adapter* binding lives behind a `wingfoil-python` cargo feature of
 the **same name** as the adapter, which turns on the matching engine feature:
 
 ```toml
-$ARGUMENTS = ["wingfoil-next/$ARGUMENTS", "_common"]  # + any dep: it names directly
+$ARGUMENTS = ["wingfoil/$ARGUMENTS", "_common"]  # + any dep: it names directly
 all-adapters = ["postgres", "$ARGUMENTS", ...]
 ```
 
 `_common` is internal: `adapters::common` is compiled for *any* adapter and
 names `async_source::RunParams`, so every adapter feature must reach
-`wingfoil-next/async` through it. Leaving it off still builds under
+`wingfoil/async` through it. Leaving it off still builds under
 `all-adapters` — some other adapter supplies `async` — and fails only for
 someone building yours alone. Verify with
-`cargo check -p wingfoil-next-python --features $ARGUMENTS`.
+`cargo check --manifest-path crates/wingfoil/Cargo.toml-python --features $ARGUMENTS`.
 
 Add a comment saying what the feature exposes, as the `postgres` entry does.
 
@@ -99,7 +99,7 @@ Transitive availability through the engine feature is not enough.
 Two roll-ups to keep straight:
 
 - **`all-adapters`** is what `next-python-test.yml` builds
-  (`cargo test -p wingfoil-next-python --features all-adapters`), and that job
+  (`cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters`), and that job
   installs only `protobuf-compiler` and `patchelf`. An adapter needing a system
   library at build time (clang, CMake, a vendored C lib) **must not** join
   `all-adapters` without also adding the install step to that workflow. Say
@@ -121,10 +121,10 @@ and tested only in its own workflow. Two consequences to plan for:
 - **`maturin develop -F x` REPLACES the `pyproject.toml` feature list, it does
   not add to it.** So an opt-in leg must spell out `-F extension-module,x`, and
   the feature must be **self-sufficient on its own**. Check it:
-  `cargo check -p wingfoil-next-python --features <name>` — the `all-adapters`
+  `cargo check --manifest-path crates/wingfoil/Cargo.toml-python --features <name>` — the `all-adapters`
   roll-up hides a missing implication, because some other adapter supplies it.
   `adapters::common` names `async_source::RunParams`, so every adapter feature
-  has to reach `wingfoil-next/async` — that is what the internal `_common`
+  has to reach `wingfoil/async` — that is what the internal `_common`
   feature is for, and your new feature must list it;
 - a dynamically-linked native library (aeron's `libaeron.so`) lives in the
   cargo build directory and is not on the loader path, so the pytest step needs
@@ -171,11 +171,11 @@ path (`crate::adapters::foo::bar`) does **not** resolve. Import by name.
 ```rust
 #[pyadapter(name = $ARGUMENTS_read, source)]
 fn read(g: &GraphBuilder, addr: String) -> Result<Stream<Burst<Record>>> { … }
-//  => wingfoil_next.$ARGUMENTS_read(graph, addr) -> Stream
+//  => wingfoil.$ARGUMENTS_read(graph, addr) -> Stream
 
 #[pyadapter(name = $ARGUMENTS_write)]
 fn write(stream: &Stream<Burst<Record>>, addr: String) -> Result<Stream<()>> { … }
-//  => wingfoil_next.$ARGUMENTS_write(stream, addr)
+//  => wingfoil.$ARGUMENTS_write(stream, addr)
 ```
 
 - `source` marker → receiver is `&GraphBuilder`; no marker → receiver is
@@ -207,7 +207,7 @@ macro forwards it and injects the `graph`/`stream` receiver.
 `#[pyadapter]` (and `#[pyop]` / `#[pygraph]`) copy the annotated item's doc
 comment onto the generated `#[pyfunction]`, so it becomes what `help()` prints
 **and** the function's entry in the generated Sphinx reference
-(`crates/wingfoil-next-python/docs/`, "Generated reference"). There is nowhere
+(`crates/wingfoil-python/docs/`, "Generated reference"). There is nowhere
 else that prose gets written — `api.rst` carries a hand-written index, not
 per-function text.
 
@@ -219,7 +219,7 @@ what raises at wiring versus what aborts the run. On the impl form of
 block. Check it landed:
 
 ```python
-import wingfoil_next as wf; help(wf.my_adapter_sub)
+import wingfoil as wf; help(wf.my_adapter_sub)
 ```
 
 ### Run mode / run window become arguments
@@ -387,7 +387,7 @@ name in `Cfg`. Two consequences worth knowing before you start:
 1. **Rust `#[cfg(test)]` marshaling tests** in the binding module: record →
    `dict`, `dict` → typed params, every error path, any query/frame
    construction. These run in `next-python-test.yml` via
-   `cargo test -p wingfoil-next-python --features all-adapters`.
+   `cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters`.
 2. **`tests/test_$ARGUMENTS.py`**, in two groups:
    - unit-level, **no service**, run by default: the module exposes the
      expected names, wiring constructs a `Stream`, optional args have defaults,
@@ -432,7 +432,7 @@ name in `Cfg`. Two consequences worth knowing before you start:
 - The binding module's `//!` header: the entry-point table (Python name → Rust
   fn → shape), how the dynamic edge works, and a numbered **deviations from the
   legacy `wingfoil-python` bindings** section. `postgres.rs` is the model.
-- **`crates/wingfoil-next/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
+- **`crates/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`** — its
   `## Python` section. That is where an agent picking the adapter up cold looks
   for: the binding's cargo feature, whether it is in `all-adapters` and in the
   **wheel** (and why not, if not), the entry points it exposes and any Rust
@@ -456,8 +456,8 @@ with nothing committed.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test -p wingfoil-next-python --features all-adapters
-cd crates/wingfoil-next-python && maturin develop -F $ARGUMENTS && pytest -q
+cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters
+cd crates/wingfoil-python && maturin develop -F $ARGUMENTS && pytest -q
 ```
 
 Sandbox caveat (same as `/new-adapter-next`): `cargo lint-all` is a workspace
@@ -466,7 +466,7 @@ fails without the native toolchain. When that blocks you, substitute the scoped
 equivalent and say so in the PR:
 
 ```bash
-cargo clippy -p wingfoil-next-python --features all-adapters --all-targets -- -D warnings
+cargo clippy --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters --all-targets -- -D warnings
 ```
 
 ## 9. Self-review with a fresh context

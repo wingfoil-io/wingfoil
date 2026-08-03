@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/redis**'
-      - 'crates/wingfoil-next/tests/redis_integration.rs'
-      - 'crates/wingfoil-next-python/src/adapters/redis.rs'
-      - 'crates/wingfoil-next-python/tests/test_redis.py'
+      - 'crates/wingfoil/src/adapters/redis**'
+      - 'crates/wingfoil/tests/redis_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/redis.rs'
+      - 'crates/wingfoil-python/tests/test_redis.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -58,12 +58,12 @@ jobs:
 
       - name: Run redis (next) integration tests
         run: |
-          cargo test --features redis-integration-test -p wingfoil-next \
+          cargo test --features redis-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # The Rust tests above use testcontainers (per-test container); the Python
       # tests expect a fixed localhost:6379, so start one explicitly.
       - name: Start redis container for Python tests
@@ -81,21 +81,21 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: |
           python -m venv .venv
           .venv/bin/pip install maturin pytest
           .venv/bin/maturin develop
 
       - name: Run Python redis (next) integration tests
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_redis tests/test_redis.py -v
         env:
           RUST_LOG: INFO

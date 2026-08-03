@@ -1,0 +1,154 @@
+[package]
+name = "wingfoil-python"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+publish = false
+description = "Python interop boundary for wingfoil: the PyElement erased value type"
+readme = "README.md"
+
+[lib]
+# cdylib: the importable Python extension module (built by maturin with the
+# `extension-module` feature). rlib: so the object form stays usable as a normal
+# Rust dependency (tests here, and the future `#[pyop]` macro crate).
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+# Turned on only by the maturin build (see pyproject.toml). Off by default so
+# the rlib and `cargo test` link libpython normally and the embedded-interpreter
+# dev tests run; the shipped wheel sets it so the module resolves Python symbols
+# at load time instead.
+extension-module = ["pyo3/extension-module"]
+
+# Per-adapter Python bindings, each gated on the matching `wingfoil`
+# adapter feature so a wheel only carries the adapters it was built with.
+# `all-adapters` is the convenience roll-up the maturin build and CI use.
+#
+# Internal, not for callers: what `adapters::common` needs. That module is
+# compiled whenever *any* adapter is on and it names
+# `async_source::RunParams`, so every adapter feature below enables this —
+# otherwise a lone `-F <adapter>` build compiles only when some *other*
+# adapter happens to supply `async`, which is exactly the trap the
+# `all-adapters` roll-up hides. `maturin develop -F x` replaces the
+# pyproject feature list rather than adding to it, so lone builds are real.
+_common = ["wingfoil/async"]
+
+# PostgreSQL: `postgres_read` / `postgres_sub` / `postgres_source` sources, the
+# `postgres_write` sink, and the `postgres_notify_trigger_sql` helper. `chrono`
+# is needed here (not just transitively) because the row decoder names
+# `NaiveDateTime` to read `timestamp` / `timestamptz` columns.
+postgres = ["wingfoil/postgres", "dep:chrono", "_common"]
+# Kafka: the `kafka_sub` consumer source and the `kafka_pub` producer sink.
+# `rdkafka` builds librdkafka from source (`./configure` + `make`) rather than
+# linking a system library — it needs a C toolchain, which every CI image
+# already has.
+kafka = ["wingfoil/kafka", "_common"]
+# Redis: the `redis_sub` / `redis_stream_read` sources and the `redis_pub` /
+# `redis_stream_write` sinks. Pure Rust (the `redis` crate).
+redis = ["wingfoil/redis", "_common"]
+# etcd: the `etcd_sub` watch source and the `etcd_pub` PUT sink. Pure Rust
+# (etcd-client over tonic); needs `protoc` at build time to compile the etcd
+# protos, which `pypi-publish.yml` installs.
+etcd = ["wingfoil/etcd", "_common"]
+# Fluvio: the `fluvio_sub` consumer source and the `fluvio_pub` producer sink.
+# Pure Rust; the client pulls a large dependency tree, but nothing platform-specific.
+fluvio = ["wingfoil/fluvio", "_common"]
+# CSV: the `csv_read` replay source and the `csv_write` file sink. Pure Rust and
+# dependency-light. `dep:csv` is named here
+# (not just transitively) because the reader opens the file at wiring to learn
+# its header (the engine pins the same 1.4).
+csv = ["wingfoil/csv", "dep:csv", "_common"]
+# ZeroMQ: the `zmq_sub` subscriber (a `(data, status)` tuple) and the `zmq_pub`
+# sink, plus their etcd-discovery twins when the `etcd` feature is also on.
+# `zmq-sys` builds libzmq from source rather than linking a system one, so a C
+# toolchain is all it needs.
+zmq = ["wingfoil/zmq", "_common"]
+# OTLP: the `otlp_push` gauge sink. Pure Rust (the OTel SDK over reqwest).
+otlp = ["wingfoil/otlp", "_common"]
+# augurs: the six time-series analytics ops (forecast, changepoint, seasons,
+# outlier, DTW, cluster). Pure Rust compute, no I/O.
+augurs = ["wingfoil/augurs", "_common"]
+# KDB+: the `kdb_read` / `kdb_sub` sources and the `kdb_write` sink. Pure Rust
+# (kdb-plus-fixed over TCP); the binding names `K` / `qtype` through the
+# engine's re-exports rather than depending on that crate directly.
+kdb = ["wingfoil/kdb", "_common"]
+# FIX: the `fix_connect` / `fix_accept` sources, the `fix_send` sink, and the
+# hand-written `fix_connect_tls` + `FixConnection` handle class. Pure Rust
+# (rustls for the TLS initiator).
+fix = ["wingfoil/fix", "_common"]
+# Prometheus: the `PrometheusExporter` handle class (`serve` + `gauge`). Pure
+# Rust — a hand-rolled HTTP endpoint plus `arc-swap`.
+prometheus = ["wingfoil/prometheus", "_common"]
+# web: the `WebServer` handle class (`sub` / `pub` / `pub_bursts` / `stop`).
+# Turns on the engine's `web-tls` (which implies `web`) so the constructor's
+# `cert_path` / `key_path` always exist rather than appearing and disappearing
+# with a feature — rustls is pure Rust, so it costs the wheel nothing but build
+# time. `dep:serde_json` is named here (not just transitively) because the
+# payload edge marshals Python values through `serde_json::Value`.
+web = ["wingfoil/web-tls", "dep:serde_json", "_common"]
+# Aeron: the `aeron_sub` / `aeron_pub` pair and their `_with_status` twins.
+# Deliberately **not** in `all-adapters` and **not** in the wheel's default
+# feature set: `rusteron-client` builds the Aeron C library from source, needing
+# clang, libuuid and CMake >= 3.30. Its tests run in
+# `aeron-next-integration.yml`, which installs that toolchain.
+aeron = ["wingfoil/aeron", "_common"]
+# iceoryx2: the `iceoryx2_sub` / `iceoryx2_pub` slice pair. Pure Rust, so it
+# *is* in `all-adapters` and its tests run in the normal job — but it stays out
+# of the **wheel**'s default features because it is Linux/POSIX-only, and a
+# wheel carrying it cannot be built for the platforms that would otherwise work.
+iceoryx2 = ["wingfoil/iceoryx2", "_common"]
+all-adapters = [
+    "postgres",
+    "kafka",
+    "redis",
+    "etcd",
+    "fluvio",
+    "csv",
+    "zmq",
+    "otlp",
+    "augurs",
+    "kdb",
+    "fix",
+    "prometheus",
+    "web",
+    "iceoryx2",
+]
+
+[dependencies]
+# The erased boundary value. pyo3 stays without `extension-module` here so the
+# rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
+# `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
+pyo3 = "0.29"
+anyhow = { workspace = true }
+# The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
+wingfoil = { path = "../wingfoil" }
+# The #[pyop] proc macro, re-exported so users depend only on this crate.
+wingfoil-python-macros = { path = "../wingfoil-python-macros" }
+# NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
+# types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
+# `wingfoil`, which owns them (`runtime::run`, `runtime::time`). See
+# `docs/cutover-plan.md`: nothing under `crates/` may depend on the tree the
+# cutover deletes.
+# `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
+# matches the `log` the `wingfoil` fluent signature names.
+log = { workspace = true }
+# `NaiveDateTime` / `DateTime<Utc>` — the types the postgres row decoder reads
+# `timestamp` / `timestamptz` columns as. Workspace-pinned so it matches the
+# `with-chrono-0_4` tokio-postgres the engine's postgres adapter builds against.
+chrono = { workspace = true, optional = true }
+# The csv binding reads the file's header row at wiring so a replayed row can be
+# zipped back into a named dict. Workspace-pinned to match the engine's.
+csv = { version = "1.4", optional = true }
+# The web binding's payload edge: Python values marshal through
+# `serde_json::Value`, which the adapter's codec serialises. Workspace-pinned to
+# match the engine's.
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+# `auto-initialize` starts an embedded interpreter so the boundary type and the
+# object form can be exercised under plain `cargo test`. It is dev-only: the
+# shipped rlib never embeds an interpreter.
+pyo3 = { version = "0.29", features = ["auto-initialize"] }
