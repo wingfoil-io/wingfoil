@@ -1,5 +1,31 @@
 name: publish.crates
 
+# Publishes the wingfoil crate set to crates.io, in dependency order.
+#
+# Rewritten at the cutover rename (cutover-plan 5.3). It used to publish the
+# legacy tree — `legacy/wingfoil`, `legacy/wingfoil-derive`,
+# `legacy/wingfoil-python`. Those steps are **gone, not disabled**: the renamed
+# crates now own BOTH published names — `wingfoil` and `wingfoil-derive` — so
+# publishing either tree's twin would mean two codebases racing for one name.
+# The legacy tree is frozen at 8.0.0, which is its final release.
+#
+# Taking `wingfoil-derive` over rather than abandoning it is deliberate: it
+# means the cutover orphans nothing on crates.io, all four published crates
+# continuing at 9.0.0. Its contents change completely — `#[node]` dies with the
+# legacy engine and this crate carries `nitro!` / `#[op]` / `latency_stages!`
+# instead — which is exactly what the major bump is for.
+#
+# Order is a hard requirement, not a preference: cargo resolves a crate's
+# dependencies against the *index* at publish time, so each crate has to be
+# indexed before anything that depends on it is published. Hence the waits.
+#
+#   wingfoil-derive ─┐
+#   wingfoil-wire-types ─┴─> wingfoil ─┐
+#   wingfoil-python-derive ────────────┴─> wingfoil-python
+#
+# `--registry crates-io` on every step: these crates list two registries in
+# `package.publish`, and cargo refuses to guess between them.
+
 on:
   workflow_dispatch:
   workflow_call:
@@ -7,7 +33,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -16,60 +42,56 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
+      - name: Install system dependencies
+        # `protoc` is needed by a transitive build dependency; the rest are for
+        # the feature-gated adapters cargo verifies while packaging.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
-      # Build to generate Cargo.lock
-      - name: Build wingfoil
-        working-directory: legacy/wingfoil
-        run: cargo build
+      # --- tier 1: no intra-workspace dependencies ---------------------------
 
-      # Publish wingfoil-derive first — wingfoil depends on it
       - name: Publish wingfoil-derive
-        working-directory: legacy/wingfoil-derive
+        working-directory: crates/wingfoil-derive
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io
 
-      # Wait for crates.io to index wingfoil-derive
-      - name: Wait for wingfoil-derive index
-        run: sleep 15
+      - name: Publish wingfoil-python-derive
+        working-directory: crates/wingfoil-python-derive
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
 
-      # Publish wingfoil-wire-types next — wingfoil has an optional
-      # dependency on it (the `web` feature), and cargo resolves all
-      # dependencies during publish regardless of feature gating.
       - name: Publish wingfoil-wire-types
         working-directory: crates/wingfoil-wire-types
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io
 
-      # Wait for crates.io to index wingfoil-wire-types
-      - name: Wait for wingfoil-wire-types index
-        run: sleep 15
+      - name: Wait for the tier-1 crates to index
+        run: sleep 30
 
-      # Publish wingfoil
+      # --- tier 2: the engine ------------------------------------------------
+
       - name: Publish wingfoil
-        working-directory: legacy/wingfoil
+        working-directory: crates/wingfoil
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        # The dev-dependency on the legacy crate (the parity oracle) carries no
+        # version, so cargo strips it when packaging — the published crate does
+        # not reference the legacy tree at all.
         run: cargo publish --registry crates-io
 
-      # Wait for crates.io to index wingfoil
-      - name: Wait for wingfoil index
-        run: sleep 15
+      - name: Wait for wingfoil to index
+        run: sleep 30
 
-      # Set wingfoil version in wingfoil-python
-      - name: Set wingfoil version in wingfoil-python
-        working-directory: legacy/wingfoil-python
-        run: |
-          WINGFOIL_VERSION=$(grep '^version' ../wingfoil/Cargo.toml | head -n1 | sed 's/version = "\(.*\)"/\1/')
-          echo "Replacing path dependency with version $WINGFOIL_VERSION"
-          sed -i "s|path = \"../wingfoil\"|version = \"$WINGFOIL_VERSION\"|" Cargo.toml
+      # --- tier 3: the Python binding ----------------------------------------
 
-      # Publish wingfoil-python
       - name: Publish wingfoil-python
-        working-directory: legacy/wingfoil-python
+        working-directory: crates/wingfoil-python
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-        run: cargo publish --registry crates-io --allow-dirty
+        # No `--allow-dirty` and no sed rewriting a path into a version, which
+        # is what the legacy job needed: the intra-workspace dependencies now
+        # carry both `path` and `version`, so cargo uses the path locally and
+        # the version when published.
+        run: cargo publish --registry crates-io

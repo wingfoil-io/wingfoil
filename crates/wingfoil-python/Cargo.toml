@@ -1,9 +1,16 @@
 [package]
 name = "wingfoil-python"
-version = "0.1.0"
+version = "9.0.0"
 edition = "2024"
+authors = ["wingfoil@wingfoil.io"]
+license = "Apache-2.0"
+homepage = "https://github.com/wingfoil-io/wingfoil/"
+documentation = "https://docs.rs/wingfoil-python"
 rust-version.workspace = true
-publish = false
+# Publishable from the cutover on (was `false` while these crates were
+# prototypes under the `-next` names). Same registry list as the legacy
+# crates it replaces.
+publish = ["wingfoil", "crates-io"]
 description = "Python interop boundary for wingfoil: the PyElement erased value type"
 readme = "README.md"
 
@@ -25,7 +32,9 @@ extension-module = ["pyo3/extension-module"]
 
 # Per-adapter Python bindings, each gated on the matching `wingfoil`
 # adapter feature so a wheel only carries the adapters it was built with.
-# `all-adapters` is the convenience roll-up the maturin build and CI use.
+# `all-adapters` is the convenience roll-up the maturin build and CI use. It is
+# genuinely *all* of them, aeron and iceoryx2 included (cutover ruling, #367) —
+# it is what the Linux wheel is built from.
 #
 # Internal, not for callers: what `adapters::common` needs. That module is
 # compiled whenever *any* adapter is on and it names
@@ -101,6 +110,7 @@ aeron = ["wingfoil/aeron", "_common"]
 # wheel carrying it cannot be built for the platforms that would otherwise work.
 iceoryx2 = ["wingfoil/iceoryx2", "_common"]
 all-adapters = [
+    "aeron",
     "postgres",
     "kafka",
     "redis",
@@ -124,9 +134,9 @@ all-adapters = [
 pyo3 = "0.29"
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
-wingfoil = { path = "../wingfoil" }
+wingfoil = { path = "../wingfoil", version = "9.0.0" }
 # The #[pyop] proc macro, re-exported so users depend only on this crate.
-wingfoil-python-macros = { path = "../wingfoil-python-macros" }
+wingfoil-python-derive = { path = "../wingfoil-python-derive", version = "9.0.0" }
 # NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
 # types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
 # `wingfoil`, which owns them (`runtime::run`, `runtime::time`). See

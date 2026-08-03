@@ -14,12 +14,12 @@ build:
 python:
   install:
     - method: pip
-      path: legacy/wingfoil-python
-    - requirements: legacy/wingfoil-python/docs/requirements.txt
+      path: crates/wingfoil-python
+    - requirements: crates/wingfoil-python/docs/requirements.txt
 
 # Sphinx configuration
 sphinx:
-  configuration: legacy/wingfoil-python/docs/conf.py
+  configuration: crates/wingfoil-python/docs/conf.py
 
 # Optionally specify the docs folder and branch
 formats:

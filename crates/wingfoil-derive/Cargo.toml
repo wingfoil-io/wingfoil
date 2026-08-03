@@ -1,0 +1,26 @@
+[package]
+name = "wingfoil-derive"
+version = "9.0.0"
+edition = "2024"
+authors = ["wingfoil@wingfoil.io"]
+license = "Apache-2.0"
+homepage = "https://github.com/wingfoil-io/wingfoil/"
+documentation = "https://docs.rs/wingfoil-derive"
+rust-version.workspace = true
+# Publishable from the cutover on (was `false` while these crates were
+# prototypes under the `-next` names). Same registry list as the legacy
+# crates it replaces.
+publish = ["wingfoil", "crates-io"]
+description = "nitro! proc macro for wingfoil: one wiring definition, interpreted and compiled execution"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

@@ -29,9 +29,9 @@ crates/                     # every Cargo crate in the tree
   wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
                             #   signal.rs, runtime/, examples/, tests/, benches/
-  wingfoil-macros/     # nitro! / #[op] proc macros
+  wingfoil-derive/     # nitro! / #[op] proc macros
   wingfoil-python/     # PyO3 Python bindings (built with maturin)
-  wingfoil-python-macros/
+  wingfoil-python-derive/
   wingfoil-wire-types/      # Wire-format types shared by the web adapter and
                             #   wingfoil-wasm — survives cutover
   wingfoil-wasm/            # Browser-side WASM codec (excluded from the default

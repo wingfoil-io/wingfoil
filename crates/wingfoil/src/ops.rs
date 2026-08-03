@@ -31,7 +31,7 @@ use anyhow::Result;
 
 use crate::op::{Activation, Ctx, Op, Tick};
 use wingfoil::{NanoTime, TimeQueue};
-use wingfoil_macros::op;
+use wingfoil_derive::op;
 
 /// Ticks at a fixed interval, anchored to its first activation to avoid
 /// drift. `Cfg` = interval, `State` = the converted period plus the last

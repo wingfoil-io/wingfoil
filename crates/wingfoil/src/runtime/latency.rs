@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 
 /// Declarative macro that generates a `#[repr(C)]` named-field latency record
 /// plus per-stage marker types. See the [module docs](self) for usage.
-pub use wingfoil_macros::latency_stages;
+pub use wingfoil_derive::latency_stages;
 
 // ---------------------------------------------------------------------------
 // Core traits

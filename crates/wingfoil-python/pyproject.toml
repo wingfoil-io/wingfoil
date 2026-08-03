@@ -29,13 +29,19 @@ dev = ["maturin>=1.4,<2.0", "pytest>=7"]
 # so kafka and zmq (which build librdkafka / libzmq from source) and etcd (which
 # needs protoc, installed by `pypi-publish.yml`) are all in.
 #
-# The criterion that *does* justify leaving one out is **portability**: an
-# adapter needing a system library that cannot be vendored, or one that would
-# make the wheel platform-specific. Legacy `wingfoil-python` draws the line in
-# exactly the same place, shipping everything except aeron and iceoryx2 ("can
-# make wheels Linux/POSIX-only"). Those two are the expected exclusions when
-# they are bound; keep this list explicit rather than pointing it at
-# `all-adapters` so adding one stays a decision.
+# This list is the **portable** feature set — what the macOS and Windows wheels
+# are built from. aeron and iceoryx2 are deliberately absent here: iceoryx2 is
+# Linux/POSIX-only and aeron builds a C library, so including them would not
+# make those wheels richer, it would stop them building at all.
+#
+# They ARE shipped, on Linux (cutover ruling, #367): `pypi-publish.yml` builds
+# the Linux wheel from the `all-adapters` roll-up in Cargo.toml, which includes
+# both. So a Linux user gets every adapter, and macOS/Windows users keep a
+# working wheel with the portable set — rather than everyone losing out to the
+# lowest common denominator.
+#
+# Keep this list explicit rather than pointing it at `all-adapters`, so adding
+# one stays a decision.
 features = [
     "extension-module",
     "postgres",

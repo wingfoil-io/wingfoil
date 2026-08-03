@@ -6,13 +6,13 @@ on:
     branches: [ "next", "main" ]
     paths:
       - "crates/wingfoil-python/**"
-      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
   pull_request:
     branches: [ "next", "main" ]
     paths:
       - "crates/wingfoil-python/**"
-      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
   workflow_dispatch:
 
@@ -55,7 +55,18 @@ jobs:
       - name: Install system dependencies
         # protobuf-compiler: a transitive dep of the engine's feature graph.
         # patchelf: maturin uses it to build the extension module on Linux.
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler patchelf
+        # cmake/clang/uuid/bsd are for the **aeron** adapter, which joined
+        # `all-adapters` when the wheel gained it (#367). Both steps below build
+        # that roll-up, and aeron links a C library — without libbsd the link
+        # fails with `unable to find library -lbsd`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler patchelf clang libclang-dev uuid-dev libbsd-dev
+          # aeron needs cmake >= 3.30 and Ubuntu 24.04 ships 3.28, so the apt
+          # package is not enough — same recipe as aeron-next-integration.yml.
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
+
 
       - name: Setup Python
         uses: actions/setup-python@v5

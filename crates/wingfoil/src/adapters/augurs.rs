@@ -74,7 +74,7 @@ use augurs::mstl::MSTLModel;
 use augurs::outlier::{DbscanDetector, MADDetector, OutlierDetector, OutlierOutput};
 use augurs::seasons::{Detector as SeasonsDetector, PeriodogramDetector};
 use augurs::{Fit, Predict};
-use wingfoil_macros::op;
+use wingfoil_derive::op;
 
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};

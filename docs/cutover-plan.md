@@ -56,7 +56,7 @@ crosses the engine boundary without conversion.
 
 Two consequences worth knowing:
 
-- **`latency_stages!` moved to `wingfoil-macros`.** It is part of the
+- **`latency_stages!` moved to `wingfoil-derive`.** It is part of the
   shared latency data layer, so leaving it in `wingfoil-derive` would have kept
   a next → legacy edge. `wingfoil-derive` now holds only `#[node]`, which dies
   with the legacy tree (see `port-plan.md` Phase 7).
@@ -129,7 +129,7 @@ being installable under the legacy name.
 
 | # | Item | Why it blocks | Size |
 |:--:|---|---|:--:|
-| 1.2 | ✅ **Crate + module rename — landed.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → **`wingfoil-macros`** (named for its contents — `nitro!`, `#[op]`, `latency_stages!` — only one of which is a derive, and a fresh crates.io name rather than reusing the `wingfoil-derive` being deleted), `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. Directories renamed to match. **Two consequences that only appear once both trees carry the name:** each cross-workspace edge needs a `package =` alias (legacy keeps the key `wingfoil-next` so its whole source tree is untouched; next's dev-dep on legacy becomes `legacy_wingfoil`), and **`-p wingfoil` is now ambiguous** while legacy is on disk — every next-side invocation moved to `--manifest-path crates/wingfoil/Cargo.toml`, which is stable across version bumps where `-p wingfoil@0.1.0` would not be. | Done. | L |
+| 1.2 | ✅ **Crate + module rename — landed.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → **`wingfoil-derive`**, taking over legacy's published name (decided 2026-08-03) so the cutover **orphans nothing on crates.io**. Of the four published crates — `wingfoil`, `wingfoil-python`, `wingfoil-wire-types`, `wingfoil-derive` — all four now continue at 9.0.0 rather than three continuing and one stopping dead at 8.0.0. The trade accepted knowingly: `wingfoil-derive` 9.0.0 shares no API with 8.0.0, since its only macro was `#[node]`, which dies with the legacy engine; the major bump is what signals that. It holds `nitro!`, `#[op]` and `latency_stages!` — the last of which genuinely used to live in `wingfoil-derive`, so there is real lineage, not just a reused label, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. Directories renamed to match. **Two consequences that only appear once both trees carry the name:** each cross-workspace edge needs a `package =` alias (legacy keeps the key `wingfoil-next` so its whole source tree is untouched; next's dev-dep on legacy becomes `legacy_wingfoil`), and **`-p wingfoil` is now ambiguous** while legacy is on disk — every next-side invocation moved to `--manifest-path crates/wingfoil/Cargo.toml`, which is stable across version bumps where `-p wingfoil@0.1.0` would not be. | Done. | L |
 | 1.3 | ⏸️ **Delete the `wingfoil-derive` crate — deferred to the legacy deletion.** It now holds only `#[node]`, it already sits under `legacy/`, and §5.0 takes it out of the workspace, so it stops mattering to the rename. It goes with `rm -rf legacy/` in the second step, not before. | Not a blocker for 1.2. Nothing under `crates/` depends on it. | S |
 | 1.4 | ✅ **Ruled 2026-08-03: no compatibility facade.** The `MutableNode` wiring path retires with the legacy tree at the deletion step; nothing re-exports it under the new name. Rust downstreams break at the major version bump, and [`migration.md`](migration.md) is the answer — the same call the Python binding already made ("a replacement engine with its own binding, not a compatibility facade over the old one"), and keeping the two languages consistent matters more than softening one of them. A facade would also have to be *maintained* across the very refactors the cutover exists to enable. | Was: decides whether Rust downstreams break at the version bump. They do, deliberately. | M |
 
@@ -268,18 +268,18 @@ mean writing the architecture prose twice.
 
 ### 5. Repo, CI and release plumbing — Goal 2's "directory promotion"
 
-5.0 lands **first, before 1.2** — it is what makes the rename possible. The
-rest is blocked on 1.2, which fixes the names it all refers to.
+5.0 landed first, and 1.2 with it; the release-facing rows followed. **Only 5.2
+is left, and it is deliberately sequenced with the deletion** — see its row.
 
 | # | Item | Size |
 |:--:|---|:--:|
 | 5.0 | **Take `legacy/` out of the workspace — do this now.** Drop the three `legacy/*` members and `exclude` the directory. All three legacy crates inherit `rust-version` / `lints` / `workspace.dependencies`, so they need a nested workspace root at `legacy/Cargo.toml` carrying those tables; an excluded package is not a member and cannot inherit. The `wingfoil` → `wingfoil` dev-dependency (`tests/engine_semantics.rs`, `benches/tiers.rs`) keeps working — a path dependency may cross a workspace boundary — so the parity oracle is unaffected. Legacy-side CI moves to `--manifest-path legacy/Cargo.toml`, and `cargo lint` / `lint-all` stop covering legacy by construction. | M |
 | 5.1 | ✅ **Workspace `Cargo.toml` — folded into 5.0.** The four next crates are already at `crates/*`, so no repointing is left. `crates/wingfoil-wire-types` stays (next's web adapter depends on it); `crates/wingfoil-wasm` stays excluded. | S |
-| 5.2 | **Collapse the workflow set.** 14 of 43 workflows carry `next` and lose the suffix; the legacy-side twins retire (at the deletion — 5.0 only repoints them at the nested manifest). The three `latency-e2e.*` workflows are already repointed at `crates/wingfoil/examples/latency_e2e/`, so they need nothing at cutover. Note `augurs-integration.yml` has no next twin **by design** — next's augurs tests run in `rust-test.yml`'s `test-next` job under `--all-features`. | M |
-| 5.3 | **`crates-publish.yml` rewrite.** It publishes by directory in dependency order with crates.io index waits between; the crate set, the order and the paths all change. | M |
-| 5.4 | **`pypi-publish.yml` repoint**, plus a ruling on the wheel's adapter roll-up: aeron is out of both roll-ups (it builds a C library) and iceoryx2 is in `all-adapters` but out of the wheel (Linux/POSIX-only). That is open issue **#367** — decide whether cutover inherits it or fixes it. | S |
-| 5.5 | **`.readthedocs.yaml` repoint.** Three keys change together: `python.install[0].path`, `python.install[1].requirements`, `sphinx.configuration` — all currently on `legacy/wingfoil-python/`, all moving to `crates/wingfoil-python/`. The RTD job builds the extension from source at the full wheel feature set, so it compiles librdkafka and libzmq and needs `protobuf-compiler` (already in `apt_packages`). | S |
-| 5.6 | **Major version bump**, and the `rust-test` / `all-tests` / `rust-fmt` path and branch filters (currently `[main, next]`). | S |
+| 5.2 | ⏸️ **Collapse the workflow set — moved to the deletion step.** The `*-next-*` workflows cannot drop their suffix while the legacy twins still own those filenames, so doing it before the deletion means renaming ~14 legacy workflows to `*-legacy-*` as an interim — files deleted days later — and churning CI check names **twice**, which breaks any required-status-check configuration twice. Nothing depends on it landing earlier. `augurs-integration.yml` still has no next twin by design (next's augurs tests run in `rust-test.yml` under `--all-features`). | M |
+| 5.3 | ✅ **`crates-publish.yml` rewritten.** Legacy's publish steps are *gone*, not disabled — both trees build a crate named `wingfoil`, so publishing both would race for one registry name. Three blockers surfaced only by running `cargo publish --dry-run`: every crate still carried `publish = false`; the intra-workspace path deps had no `version`; and there was no license/authors/homepage metadata, with `wingfoil`'s crates.io description still reading "Design prototype". | M |
+| 5.4 | ✅ **`pypi-publish.yml` repointed, and #367 ruled: the wheel ships aeron and iceoryx2.** `aeron` was missing from the `all-adapters` roll-up entirely. Because the matrix builds macOS and Windows too — where iceoryx2 (POSIX-only) and aeron (C library) would *stop the wheel building* rather than enrich it — the Linux wheel is built from `all-adapters` and the other platforms keep the portable pyproject set. | S |
+| 5.5 | ✅ **`.readthedocs.yaml` repointed** — all three keys together. | S |
+| 5.6 | ✅ **Bumped to 9.0.0** — over legacy's 8.x line, which matters now the renamed crate owns `wingfoil` on crates.io. Legacy stays at 8.0.0 (frozen; its `wingfoil-wire-types` pin still moves, or it stops resolving). `bump.yml` now reads its base from `crates/wingfoil` — left on legacy it would have pegged every future release below the shipped version. The `rust-test`/`all-tests`/`rust-fmt` branch filters stay `[main, next]` until the next→main swap. | S |
 
 ### 6. Verification gates — run immediately before the swap
 
@@ -288,7 +288,7 @@ rest is blocked on 1.2, which fixes the names it all refers to.
 | 6.1 | `cargo fmt --all -- --check`, `cargo lint`, `cargo lint-all` green on the promoted tree. Read the exit codes directly — piping into `tail`/`head` masks them. |
 | 6.2 | `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` and the next-python pytest suite green. |
 | 6.3 | Every `*-next-integration` workflow green on the cutover branch — they gate the service-backed adapters the unit suites cannot. |
-| 6.4 | `cargo bench --bench tiers` re-read. The `next-interpreted ≥ legacy-interpreted` baseline can only be checked while the legacy bar exists, so this is the last chance. A manual read: wiring benches as a CI gate stays deliberately deferred, criterion wall-clock being too noisy on shared runners. |
+| 6.4 | ✅ **Read 2026-08-03 — the gate passes.** Captured here because it cannot be re-run later: the legacy bar disappears with the tree, so this is the only record that will survive. See the table below. |
 | 6.5 | Re-run the legacy-drift sweep: `git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/`. Empty output means every ✅ in `port-plan.md` still describes the legacy tree as it *is*, not as it was; anything it returns is a parity target that landed after the [3.9 sweep](#39--the-legacy-drift-sweep-ran-no-new-gaps) and needs a row in §3 before the swap. Seconds to run, and the sweep it replaces cost an afternoon. |
 
 ### Open issues to route
@@ -335,3 +335,27 @@ One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI
 on a stale base will not catch it. Rebase onto `next` before merging anything
 that has been open across a structural change.
+
+### Gate 6.4 — the legacy-vs-next reading, captured before deletion
+
+Run 2026-08-03 on the merged tree, `cargo bench --bench tiers`. Median times.
+
+| group | legacy | next interpreted | gain | next compiled | vs legacy |
+|---|---:|---:|---:|---:|---:|
+| dense_chain | 8.74 ms | 8.43 ms | 3.6% | 302 µs | 28.9× |
+| fanout | 20.36 ms | 15.78 ms | 22.5% | 439 µs | 46.3× |
+| fan_in_16 | 4.91 ms | 2.99 ms | 39.0% | 283 µs | 17.4× |
+| fan_in_64 | 14.08 ms | 8.97 ms | 36.3% | 380 µs | 37.1× |
+| fan_in_256 | 50.18 ms | 36.14 ms | 28.0% | 3.03 ms | 16.6× |
+| accumulate | 2.51 ms | 1.57 ms | 37.6% | 486 µs | 5.2× |
+| sparse | 3.18 ms | 2.49 ms | 21.9% | 426 µs | 7.5× |
+| sparse_wide | 3.54 ms | 2.69 ms | 24.0% | 547 µs | 6.5× |
+
+**The gate — `next-interpreted ≥ legacy-interpreted` — passes in all eight
+groups**, by 3.6% to 39%. Compiled is 5–46× faster than legacy throughout.
+
+Read these as a **pass/fail on the gate, not as publication figures**: they come
+from a shared sandbox with criterion's measurement window shortened to 3s. Every
+margin except `dense_chain`'s 3.6% is far outside that noise; `dense_chain` is
+the one to re-read on a quiet machine if the exact number matters. What the gate
+asks — that the port cost nothing against the engine it replaces — is answered.

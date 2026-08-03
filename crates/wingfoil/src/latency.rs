@@ -99,7 +99,7 @@ use anyhow::Result;
 
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
-use wingfoil_macros::op;
+use wingfoil_derive::op;
 
 // The pure data layer is engine-agnostic and lives in `runtime::latency`,
 // shared with the legacy crate (which re-exports it from here).

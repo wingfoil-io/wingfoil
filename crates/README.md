@@ -5,18 +5,18 @@ that generate the boilerplate each of those would otherwise need.
 
 ```
 wingfoil                 the engine — ops, fluent wiring, adapters, runtime core
-  └── wingfoil-macros    nitro! and #[op]
+  └── wingfoil-derive    nitro! and #[op]
 
 wingfoil-python          the Python extension module (`import wingfoil`)
-  └── wingfoil-python-macros   #[pyop]
+  └── wingfoil-python-derive   #[pyop]
 ```
 
 | Crate | What it is |
 |---|---|
 | [**`wingfoil`**](wingfoil/) | The dual-mode stream-processing engine: the `Op` trait and interpreter, the fluent wiring layer, the op catalog, the I/O adapters, and the shared runtime core. |
-| [**`wingfoil-macros`**](wingfoil-macros/) | `nitro!` — one wiring function expands to interpreted, compiled and nested runners. `#[op]` — an `Op` impl gains its fluent builder method and the forwarders `nitro!` dispatches through. |
+| [**`wingfoil-derive`**](wingfoil-derive/) | `nitro!` — one wiring function expands to interpreted, compiled and nested runners. `#[op]` — an `Op` impl gains its fluent builder method and the forwarders `nitro!` dispatches through. |
 | [**`wingfoil-python`**](wingfoil-python/) | The PyO3 bindings, built with maturin. Importable as `wingfoil`. |
-| [**`wingfoil-python-macros`**](wingfoil-python-macros/) | `#[pyop]` — derives a Python-callable function from an `Op` impl, so a new op reaches Python without hand-written glue. |
+| [**`wingfoil-python-derive`**](wingfoil-python-derive/) | `#[pyop]` — derives a Python-callable function from an `Op` impl, so a new op reaches Python without hand-written glue. |
 
 ## Why the macro crates are separate
 

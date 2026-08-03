@@ -1,7 +1,7 @@
 # Review: `port-plan.md` + the `wingfoil` implementation
 
 Date: 2026-07-20. Scope: the port plan (`port-plan.md`) and the
-`wingfoil` / `wingfoil-macros` crates as of this branch. All
+`wingfoil` / `wingfoil-derive` crates as of this branch. All
 findings below were verified against the actual code paths (and, where noted,
 reproduced with probe tests); legacy parity claims were checked against
 `legacy/wingfoil/src/nodes/*`, `legacy/wingfoil/src/adapters/statistics.rs`,
@@ -26,7 +26,7 @@ The findings below were worked on branch `claude/fable-review-issues-przi5i`
 guarded by a parity test in `wingfoil/tests/parity_bugs.rs` unless noted.
 `cargo build`/`test` (default + `async`), `cargo fmt --check`, and
 `cargo lint` pass; all-features clippy is clean for `wingfoil` /
-`wingfoil-macros` (the full-workspace `lint-all` is blocked only by the
+`wingfoil-derive` (the full-workspace `lint-all` is blocked only by the
 Aeron adapter's CMake system dep, unrelated to these changes).
 
 **Highest-priority bugs** — all fixed:
@@ -106,7 +106,7 @@ completeness test committed, `Tick::Silent` question into Phase 1).
 1. **Fold value-slot seeding drifts between engines.** Interpreted seeds the
    output slot with `init.clone()` (`wingfoil/src/interp.rs:753`); the
    macro's compiled/nested emission seeds every slot with
-   `Default::default()` (`wingfoil-macros/src/lib.rs:1247`). A fold with
+   `Default::default()` (`wingfoil-derive/src/lib.rs:1247`). A fold with
    `init != Default` read before its first tick (via `sample`/`join`/passive
    edge) returns `init` interpreted but `0` compiled — reproduced with a
    probe. Fix: add a value-seed field to `OpInfo` and emit a clone of the
