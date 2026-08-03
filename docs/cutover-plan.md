@@ -288,7 +288,7 @@ is left, and it is deliberately sequenced with the deletion** — see its row.
 | 6.1 | `cargo fmt --all -- --check`, `cargo lint`, `cargo lint-all` green on the promoted tree. Read the exit codes directly — piping into `tail`/`head` masks them. |
 | 6.2 | `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` and the next-python pytest suite green. |
 | 6.3 | Every `*-next-integration` workflow green on the cutover branch — they gate the service-backed adapters the unit suites cannot. |
-| 6.4 | `cargo bench --bench tiers` re-read. The `next-interpreted ≥ legacy-interpreted` baseline can only be checked while the legacy bar exists, so this is the last chance. A manual read: wiring benches as a CI gate stays deliberately deferred, criterion wall-clock being too noisy on shared runners. |
+| 6.4 | ✅ **Read 2026-08-03 — the gate passes.** Captured here because it cannot be re-run later: the legacy bar disappears with the tree, so this is the only record that will survive. See the table below. |
 | 6.5 | Re-run the legacy-drift sweep: `git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/`. Empty output means every ✅ in `port-plan.md` still describes the legacy tree as it *is*, not as it was; anything it returns is a parity target that landed after the [3.9 sweep](#39--the-legacy-drift-sweep-ran-no-new-gaps) and needs a row in §3 before the swap. Seconds to run, and the sweep it replaces cost an afternoon. |
 
 ### Open issues to route
@@ -335,3 +335,27 @@ One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI
 on a stale base will not catch it. Rebase onto `next` before merging anything
 that has been open across a structural change.
+
+### Gate 6.4 — the legacy-vs-next reading, captured before deletion
+
+Run 2026-08-03 on the merged tree, `cargo bench --bench tiers`. Median times.
+
+| group | legacy | next interpreted | gain | next compiled | vs legacy |
+|---|---:|---:|---:|---:|---:|
+| dense_chain | 8.74 ms | 8.43 ms | 3.6% | 302 µs | 28.9× |
+| fanout | 20.36 ms | 15.78 ms | 22.5% | 439 µs | 46.3× |
+| fan_in_16 | 4.91 ms | 2.99 ms | 39.0% | 283 µs | 17.4× |
+| fan_in_64 | 14.08 ms | 8.97 ms | 36.3% | 380 µs | 37.1× |
+| fan_in_256 | 50.18 ms | 36.14 ms | 28.0% | 3.03 ms | 16.6× |
+| accumulate | 2.51 ms | 1.57 ms | 37.6% | 486 µs | 5.2× |
+| sparse | 3.18 ms | 2.49 ms | 21.9% | 426 µs | 7.5× |
+| sparse_wide | 3.54 ms | 2.69 ms | 24.0% | 547 µs | 6.5× |
+
+**The gate — `next-interpreted ≥ legacy-interpreted` — passes in all eight
+groups**, by 3.6% to 39%. Compiled is 5–46× faster than legacy throughout.
+
+Read these as a **pass/fail on the gate, not as publication figures**: they come
+from a shared sandbox with criterion's measurement window shortened to 3s. Every
+margin except `dense_chain`'s 3.6% is far outside that noise; `dense_chain` is
+the one to re-read on a quiet machine if the exact number matters. What the gate
+asks — that the port cost nothing against the engine it replaces — is answered.
