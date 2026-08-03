@@ -112,6 +112,13 @@ their current version, and the renamed crate publishes over the same name at
 the 5.6 major bump. What must not happen is the legacy publish jobs running
 after 1.2 — they retire with the rename, not with the deletion (§5.3).
 
+## The deletion itself has a runbook
+
+Everything below is done bar the deletion. The step-by-step for that —
+what goes, in what order, what is and is not recoverable, and the two
+consequences that reach outside the repo — is
+[`cutover-runbook.md`](cutover-runbook.md).
+
 ## Prerequisite work before cutover starts
 
 Everything still outstanding before the directory promotion can begin,
