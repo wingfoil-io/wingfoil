@@ -78,7 +78,15 @@ execution model, the infrastructure, and the Python binding surface. The
 shared runtime core has moved to `wingfoil` and the dependency edge is
 inverted, so nothing under `crates/` points at the legacy crates.
 
-What is left is the Phase 7 cutover itself, plus the prerequisites below.
+**Every prerequisite below has now landed**, including the two rulings that
+were owed code (2.2, 2.3), all four docs rows (§4), the release plumbing (§5.3–
+5.6) and the first of the two swap steps — the crate and module rename (1.2),
+which went in over a workspace that legacy had already left (5.0).
+
+What is left is the second swap step: deleting `legacy/` and the scaffolding
+that existed only to let the two engines coexist (1.3, 5.2, the 4.3 deletions),
+then the verification gates (§6) and the `next` → `main` merge. That sequence
+is [`cutover-runbook.md`](cutover-runbook.md).
 
 ## The swap is sequenced in two steps, not one
 
@@ -121,9 +129,13 @@ consequences that reach outside the repo — is
 
 ## Prerequisite work before cutover starts
 
-Everything still outstanding before the directory promotion can begin,
-grouped by kind. "Blocking" means the swap cannot ship without it; "gating"
-means it needs an explicit decision, which may be to accept a deviation.
+What had to be true before the swap could begin, grouped by kind. "Blocking"
+meant the swap cannot ship without it; "gating" meant it needs an explicit
+decision, which may be to accept a deviation.
+
+**This section is now a record rather than a queue** — every row is either ✅
+landed/ruled or ⏸️ deliberately sequenced with the deletion (1.3, 5.2, the 4.3
+deletions), which is [`cutover-runbook.md`](cutover-runbook.md)'s subject.
 
 Completed rows are removed as they land. **Row IDs are stable** — they are
 referenced from commits, PRs and `port-plan.md` — so gaps in the numbering
@@ -262,16 +274,16 @@ gate **6.5**, run immediately before the swap.
 
 ### 4. Docs the cutover owes
 
-**All four land in one PR** (decided 2026-08-03) — they are one editorial pass
-over the same story, and 4.2 and 4.4 overlap enough that splitting them would
-mean writing the architecture prose twice.
+**All four landed in one PR** (#675, as decided 2026-08-03) — they were one
+editorial pass over the same story, and 4.2 and 4.4 overlapped enough that
+splitting them would have meant writing the architecture prose twice.
 
 | # | Item | Size |
 |:--:|---|:--:|
-| 4.1 | **Rewrite the crate-level docs.** `crates/wingfoil/src/lib.rs` still opens *"**Design prototype**: what wingfoil's core abstractions look like if designed from scratch…"* and spends its first 40 lines on a post-mortem of the abandoned `codegen` retrofit. That becomes the crate's front page the moment it is `wingfoil`. | M |
-| 4.2 | **Migration guide `#[node]` → `Op`.** Does not exist. Carries the Rust facade decision (1.4) and 2.1's ruling — `Graph::export` is the one removed public API. The Python half is largely written — `wingfoil-python/docs/migration.rst` — and can be referenced rather than duplicated. | M |
-| 4.3 | **Retire the `legacy/` copies of `README` / `CONTRIBUTING` / `CLAUDE.md`.** The promotion itself is done — next's copies *are* the root copies and the originals moved to `legacy/`. Deleting them rides with the legacy deletion, so what this PR owes is the root `CLAUDE.md` edits: the legacy branching section survives (legacy is still on disk and still cut from `main`) but must now say legacy is out of the workspace and how to build it. The strip happens at deletion. | S |
-| 4.4 | **Architecture / orientation doc** (`docs/wingfoil-architecture.md`, was #507). Deferred until the refactor settled; it has, and cutover is exactly when a new contributor needs it. | M |
+| 4.1 | ✅ **Crate-level docs rewritten.** `crates/wingfoil/src/lib.rs` used to open *"**Design prototype**: what wingfoil's core abstractions look like if designed from scratch…"* and spend its first 40 lines on a post-mortem of the abandoned `codegen` retrofit. It now opens on what the library *is*, with a runnable graph in the first screenful. | M |
+| 4.2 | ✅ **Migration guide `#[node]` → `Op` — written** ([`migration.md`](migration.md)). Carries the Rust facade decision (1.4 — there is no facade) and 2.1's ruling: `Graph::export` is named as the one removed public API. The Python half stays where it was and is referenced, not duplicated — `crates/wingfoil-python/docs/migration.rst`. | M |
+| 4.3 | 🟢 **Root `CLAUDE.md` edits done; the `legacy/` copies retire at deletion.** The promotion itself was already done — next's copies *are* the root copies and the originals moved to `legacy/`. What this PR owed was the root `CLAUDE.md`: the legacy branching section survives (legacy is still on disk and still cut from `main`) and now says legacy is out of the workspace and how to build it. Deleting `legacy/README` / `CONTRIBUTING` / `CLAUDE.md` and stripping that section rides with the deletion — runbook step 1 and step 5. | S |
+| 4.4 | ✅ **Architecture / orientation doc written** — [`wingfoil-architecture.md`](wingfoil-architecture.md) (was #507). Deferred until the refactor settled; it had, and this is what a new contributor reads first. | M |
 
 ### 5. Repo, CI and release plumbing — Goal 2's "directory promotion"
 
@@ -300,43 +312,45 @@ is left, and it is deliberately sequenced with the deletion** — see its row.
 
 ### Open issues to route
 
-Only **#602** (aeron: fragment assembly, sub ergonomics, publisher
-back-pressure) carries the `next` label. Most issues under the `classic`
-label — still named that on GitHub, and a candidate for renaming with the
-rest — die with the legacy tree, but these survive the swap and want
-re-labelling rather than closing: **#367** (wheel excludes aeron/iceoryx2 —
-see 5.4), **#450**
-(no manylinux/aarch64/sdist wheels, trusted publishing), **#452** (Dependabot
-alerts, wasm lockfile), **#449 / #451 / #359** (CI blind spots, workflow
-dedup, stale actions), **#461** (supply-chain hardening), **#457**
-(wingfoil-js), and **#437** (web historical streaming is lossy — confirm
-whether next's web adapter already fixes it).
+**The re-labelling has happened.** When this section was written only **#602**
+(aeron: fragment assembly, sub ergonomics, publisher back-pressure) carried the
+`next` label and the survivors were still under `classic`. All **26** open
+issues now carry `next`, so the routing question is closed and what is left is
+per-issue triage, not a sweep. Named here because the runbook's step 8 acts on
+them: **#367** (wheel excludes aeron/iceoryx2) is **resolved by 5.4** and should
+be closed rather than kept; **#450** (no manylinux/aarch64/sdist wheels, trusted
+publishing), **#452** (Dependabot alerts, wasm lockfile), **#449 / #451 / #359**
+(CI blind spots, workflow dedup, stale actions), **#461** (supply-chain
+hardening), **#457** (wingfoil-js) and **#437** (web historical streaming is
+lossy — confirm whether next's web adapter already fixes it) all survive the
+swap and stay open.
 
 ### Order
 
-Five PRs, in this order (agreed 2026-08-03):
+Five PRs, in this order (agreed 2026-08-03). **All five have landed:**
 
-| | PR | Depends on |
-|:--:|---|---|
-| 1 | **5.0** — legacy out of the workspace | — |
-| 2 | **2.3** — zmq cross-language interop | — |
-| 3 | **2.2** — latency ops in `nitro!` / `compiled()` / `nested()` | — |
-| 4 | **§4** — all four docs rows, one PR | 2.1 (ruled), 1.4 |
-| 5 | **1.2** — the crate + module rename | 5.0 |
+| | PR | Depends on | Landed |
+|:--:|---|---|---|
+| 1 | **5.0** — legacy out of the workspace | — | ✅ #671 |
+| 2 | **2.3** — zmq cross-language interop | — | ✅ #672 |
+| 3 | **2.2** — latency ops in `nitro!` / `compiled()` / `nested()` | — | ✅ #674 |
+| 4 | **§4** — all four docs rows, one PR | 2.1 (ruled), 1.4 (ruled) | ✅ #675 |
+| 5 | **1.2** — the crate + module rename | 5.0 | ✅ #679 |
 
-2, 3 and 4 are mutually independent and independent of 1; they only need to be
+2, 3 and 4 were mutually independent and independent of 1; they only had to be
 in before 1.2, because **1.2 touches every `use wingfoil::` in the tree**
-and conflicts with anything open across it. Land it with the tree quiet. The
-rest of section 5 follows it, and `rm -rf legacy/` (with 1.3, the 4.3
-deletions and the legacy workflow/publish retirement) is the separate second
-step.
+and conflicts with anything open across it. It was landed with the tree quiet.
+The rest of section 5 followed it (§5.3–5.6, #680), leaving `rm -rf legacy/` —
+with 1.3, the 4.3 deletions and the legacy workflow/publish retirement — as the
+separate second step, now written up as [`cutover-runbook.md`](cutover-runbook.md).
 
 **Section 3 is closed**: 3.9 ran and added nothing, and 3.7 and 3.8 have both
 landed. Its standing replacement is gate 6.5, which re-checks the sweep
 immediately before the swap.
 
-1.4 is the one ruling still owed that anything else waits on — 4.2 cannot be
-written without knowing whether the legacy facade API survives.
+**Every ruling owed by §2 has been given** (2026-08-03) — 1.4 was the last one
+anything waited on, since 4.2 could not be written without knowing whether the
+legacy facade API survived. It does not.
 
 One sequencing hazard, learned the hard way: a branch cut before an
 invariant lands will happily reintroduce what that invariant removed, and CI

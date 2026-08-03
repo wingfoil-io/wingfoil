@@ -39,7 +39,8 @@ crates/                     # every Cargo crate in the tree
 
 docs/                       # wingfoil-architecture.md (read this first),
                             #   migration.md (#[node] -> Op), port-plan.md
-                            #   (the port roadmap), cutover-plan.md,
+                            #   (the port roadmap), cutover-plan.md +
+                            #   cutover-runbook.md (the remaining swap),
                             #   deviation-register.md, design decisions
 
 js/                         # TypeScript client for the web adapter — an npm

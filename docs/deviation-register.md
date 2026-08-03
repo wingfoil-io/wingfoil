@@ -1,9 +1,11 @@
 # wingfoil → legacy: deviation register
 
-Status: **living checklist** for the eventual Phase-7 cutover audit. Every place
-wingfoil's behaviour or surface deviates from the legacy `wingfoil` tree,
-collected in one place and classified so each can be given an explicit
-accept/fix ruling before cutover.
+Status: **the cutover audit has run — every 🔴 and 🟡 was ruled on 2026-08-03**
+(reasoning in [`cutover-plan.md`](./cutover-plan.md) §2). This stays a living
+checklist: every place wingfoil's behaviour or surface deviates from the legacy
+`wingfoil` tree, collected in one place and classified, so a *new* deviation
+arriving after that audit is still caught and still gets an explicit accept/fix
+ruling.
 
 **Sources:** (1) each ported adapter's `# Deviations from legacy` module-doc
 block — regenerate with
@@ -178,18 +180,34 @@ motivated the reject only ever required two *mechanisms*, not two public
 
 ---
 
-## Recommended priorities
+## Where this stands — nothing open
 
-1. **B4** — decide whether the csv whole-file memory deviation matters for the
-   "strict superset" claim, or is an acceptable documented trade-off.
-1. **C6** — `Graph::export` is a *public legacy API* we have chosen not to
-   port. That choice needs ratifying against the superset objective (accept
-   the drop and document it in the migration guide, or port `export` before
-   the swap); it is the only legacy public function next has no answer for.
-2. **A6 is closed** (pinned to A3); **A2 is closed** (parity — legacy is
-   single-run for I/O sources too, verified against legacy source). The
-   defer-to-start plan (A1) is complete. What's left is the non-code rulings
-   (B4, and the cutover-audit sweep of any remaining 🟡).
+This section used to list what to do next. Every entry on it has since been
+closed, and it is kept as the record of how:
+
+1. **B4** — *was* "decide whether the csv whole-file memory deviation is
+   acceptable". Not a ruling in the end: it was **fixed**. `csv_read` (and
+   `lines`) moved off `replay_results` to a lazy `produce_async` producer with
+   a `buffer_size` bound, so rows deserialize on demand and a malformed row
+   aborts mid-stream, closer to legacy than the up-front read ever was.
+2. **C6** — `Graph::export` is a *public legacy API* next chose not to port,
+   and the ruling that needed making was made: **accept the drop**
+   (2026-08-03, cutover row 2.1). The migration guide names it as the one
+   removed public API, and `Builder` still holds the topology and the debug
+   labels, so a designed introspection surface can reintroduce the capability
+   later.
+3. **C7** — the other ⚪ carried into the cutover audit, ruled the other way:
+   **close it**. `stamp` / `stamp_precise` reach all three engines; only
+   `latency_report` stays interpreted-only, and that is structural (a
+   `compiled()` graph is outputs-only, so the stats handle could never escape).
+4. **A1–A7 are all closed**: the defer-to-start migration is complete for every
+   I/O adapter, A2 turned out to be **parity** rather than a gap (legacy is
+   single-run for I/O sources too, verified against its source), and A6 was
+   pinned to A3 and fixed with it. **A5a** is the one residual, ruled
+   *accept — legacy-parity* (cutover 2.5).
+
+The standing obligation is the one in "Keeping this current" below: re-run the
+greps after each adapter/engine PR. There is no open ruling.
 
 **Resolved / ratified since this register was written:** **A5** (graph-owned
 runtime, #548); **A1/A4 for `zmq_sub`** (deferred to `start()` via

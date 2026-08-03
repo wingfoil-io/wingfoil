@@ -88,7 +88,7 @@ adapters/     I/O: csv, kafka, zmq, kdb, redis, postgres, etcd, fix, web,
               aeron, iceoryx2, fluvio, augurs, prometheus, otlp, lines
 runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
               Burst, the latency data layer
-compat.rs     A legacy-style Signal facade over the fallible lifecycle
+signal.rs     A builder-less Signal facade over the fallible lifecycle
 ```
 
 Plus `wingfoil-derive` (`nitro!` and `#[op]`), `wingfoil-python`

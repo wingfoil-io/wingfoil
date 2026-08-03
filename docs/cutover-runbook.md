@@ -194,13 +194,20 @@ on `next`. `main` still carries the pre-cutover world.
 
 ## Step 8 — issues
 
-Re-label the survivors from `classic` (itself a name worth retiring): **#450**
-wheels, **#452** dependabot, **#449 / #451 / #359** CI, **#461** supply chain,
-**#457** wingfoil-js, **#437** web historical streaming. **#367 is resolved** by
-the wheel change — close it.
+**The re-labelling is already done** — all 26 open issues carry `next`, and
+nothing is left under `classic`. What this step still owes:
 
-Everything else under `classic` describes the deleted engine and can be closed
-with a note pointing at this runbook.
+- **Close #367** (iceoryx2/aeron missing from the wheel) — resolved by the
+  5.4 wheel change.
+- Re-check the survivors against the deleted tree: **#450** wheels, **#452**
+  dependabot, **#449 / #451 / #359** CI, **#461** supply chain, **#457**
+  wingfoil-js, **#437** web historical streaming. All describe the surviving
+  engine or its packaging, so they stay open — but **#437** in particular
+  should be confirmed against next's web adapter rather than assumed to carry
+  over, and the CI issues (#449 / #451) are partly answered by step 4's
+  workflow collapse.
+- Anything that still describes the *deleted* engine can be closed with a note
+  pointing at this runbook.
 
 ## Order
 
