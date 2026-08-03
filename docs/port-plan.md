@@ -1306,8 +1306,8 @@ since an island runs its whole compiled interior on every outer activation and a
 mostly-quiet interior is its worst case. That reading was dominated by a defect,
 not by the design: `Ctx::nested` snapped a fresh `NanoTime::now()` per *inner
 node per activation* (~24 ns each). With islands sharing the outer cycle's wall
-snap, `nested` beats interpreted on all eight tier workloads — 2.5×–2.6× even on
-the two sparse ones. The structural point still stands (an island's payoff is
+snap, `nested` beats interpreted on seven of the eight tier workloads — 2.2×–2.8×
+even on the two sparse ones, and level (1.0×) on the three-node `accumulate`. The structural point still stands (an island's payoff is
 proportional to how *busy* its interior is; sparse is its weakest showing), but
 it is now a smaller win rather than a loss.
 

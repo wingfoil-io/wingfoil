@@ -136,17 +136,19 @@ comparison, is in
 [`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md) — a
 3.80 GHz Xeon, so its absolute numbers run faster than either.
 
-**Every table below predates the lazy wall-clock snap** (`Kernel::wall_time`
+**The machine-A sections predate the lazy wall-clock snap** (`Kernel::wall_time`
 now resolves on first read in a cycle instead of being taken in `begin_cycle`).
 That removes one `NanoTime::now()` — ~24 ns, see [the clock](#the-clock) — from
-every cycle of every graph that never stamps latency, which is most of them.
-Both wingfoil-next tiers therefore sit a little below what is tabulated here,
-and `legacy` does **not**: it keeps its own eager snap in `GraphState`, on
-purpose, since it is the regression control. So the `interp/legacy` column
-below is, if anything, now pessimistic about next. The tables are left as
-captured rather than adjusted by hand — they were taken as whole groups on
-machine B, and refilling them from anywhere else is exactly what the
-two-machine split above exists to prevent.
+every cycle of every graph that never stamps latency, which is most of them, and
+it bites hardest where the per-cycle cost is smallest. **`custom_op`'s two
+compiled bars are the ones to distrust**: at ~60 ns per cycle they are the same
+order as the read being removed. `legacy` is unaffected — it keeps its own eager
+snap in `GraphState`, deliberately, since it is the regression control — and so
+is [the clock](#the-clock), which times `NanoTime::now()` directly.
+
+Those sections are left as captured rather than adjusted by hand; they need a
+run on machine A. The two machine-B sections have been re-captured since the
+change and do not carry this caveat.
 
 ## Graph overhead
 
@@ -224,42 +226,65 @@ the two readings must not diverge.
 
 | Workload | Nodes | legacy | interpreted | compiled | nested | interp/legacy | interp/nested |
 |---|---|---|---|---|---|---|---|
-| `dense_chain` | 37 | 7.8794 ms | 7.8651 ms | 585.49 µs | 1.0769 ms | **1.00×** | 7.3× |
-| `fanout` | 103 | 19.301 ms | 15.295 ms | 658.89 µs | 1.5474 ms | **0.79×** | 9.9× |
-| `fan_in_16` | 20 | 4.5890 ms | 3.0364 ms | 535.85 µs | 967.56 µs | **0.66×** | 3.1× |
-| `fan_in_64` | 68 | 12.864 ms | 8.7415 ms | 570.31 µs | 1.2737 ms | **0.68×** | 6.9× |
-| `fan_in_256` | 260 | 46.369 ms | 31.781 ms | 2.9802 ms | 3.4195 ms | **0.69×** | 9.3× |
-| `accumulate` | 3 | 2.3308 ms | 2.0624 ms | 1.0815 ms | 1.6898 ms | **0.88×** | 1.2× |
-| `sparse` | 205 | 2.9679 ms | 2.8349 ms | 714.66 µs | 1.0861 ms | **0.96×** | 2.6× |
-| `sparse_wide` | 781 | 3.3007 ms | 2.9229 ms | 814.20 µs | 1.1513 ms | **0.89×** | 2.5× |
+| `dense_chain` | 37 | 7.9491 ms | 6.6387 ms | 187.08 µs | 930.81 µs | **0.84×** | 7.1× |
+| `fanout` | 103 | 17.052 ms | 11.993 ms | 324.26 µs | 1.4309 ms | **0.70×** | 8.4× |
+| `fan_in_16` | 20 | 4.7610 ms | 2.6683 ms | 174.44 µs | 854.77 µs | **0.56×** | 3.1× |
+| `fan_in_64` | 68 | 10.722 ms | 6.4710 ms | 258.57 µs | 938.48 µs | **0.60×** | 6.9× |
+| `fan_in_256` | 260 | 38.079 ms | 31.599 ms | 2.5496 ms | 3.0954 ms | **0.83×** | 10.2× |
+| `accumulate` | 3 | 2.0837 ms | 1.4268 ms | 326.31 µs | 1.4033 ms | **0.68×** | 1.0× |
+| `sparse` | 205 | 2.5036 ms | 2.1139 ms | 310.63 µs | 751.34 µs | **0.84×** | 2.8× |
+| `sparse_wide` | 781 | 3.0716 ms | 2.0145 ms | 355.15 µs | 895.66 µs | **0.66×** | 2.2× |
 
 Four things to read off it:
 
 - **The Phase-6 gate holds on all eight workloads.** next-interpreted is
-  0.66×–1.00× of legacy — at least as fast, as the plan requires. `dense_chain`
-  is the closest at 1.00× (7.8651 ms vs 7.8794 ms, intervals overlapping); the
-  previous capture had it 3% *behind*, so it is the one to keep an eye on.
-- **The `fan_in_*` ratios stay flat with width** — 0.66× / 0.68× / 0.69× at 16
-  / 64 / 256. Flatness is the actual check: the n-ary-merge regression this
-  sweep was built to catch showed up as a ratio that *grew* with width.
-- **Compiled wins everywhere**, from 1.9× faster than interpreted
+  0.56×–0.84× of legacy — at least as fast, as the plan requires, and by a
+  wider margin than the previous capture (0.66×–1.00×).
+- **Compiled wins everywhere**, from 4.4× faster than interpreted
   (`accumulate`, where the scheduler loop rather than dispatch dominates) up to
-  23.2× (`fanout`, dense dispatch — its home ground).
-- **So does nested, now** — 1.2×–9.9× faster than plain interpreted, including
-  2.5×–2.6× on the two *sparse* workloads, which are the island's documented
-  worst case (it runs its whole compiled interior on every outer activation, so
-  a mostly-quiet interior wastes most of it).
+  37× (`fanout`, dense dispatch — its home ground).
+- **So does nested**, by 2.2×–10.2× — except on `accumulate`, where at 1.0× it
+  is now a wash. A three-node graph gives an island almost nothing to amortise
+  its boundary against.
+- **`fan_in_*` is no longer flat with width** — 0.56× / 0.60× / 0.83× at 16 /
+  64 / 256, where the previous capture read 0.66× / 0.68× / 0.69×. Flatness is
+  the actual check here, because the n-ary-merge regression this sweep was
+  built to catch showed up as a ratio that *grew* with width. **Do not read
+  this as that regression returning**: next-interpreted's own `fan_in_256` bar
+  barely moved between captures (−0.6%), while *legacy's* fell 17.9% — the
+  largest single move in the control column below. The ratio rose because the
+  denominator moved. It is still worth a confirming re-run.
 
-That last row is a reversal. The previous capture had `nested` trailing
-`interpreted` on all eight workloads (1.12×–1.43×), which contradicted the
-bench's own module docs and was written up here as something to re-check on
-dedicated hardware. It was not the hardware: `Ctx::nested` snapped a fresh
-`NanoTime::now()` every time it was built, i.e. **once per inner node per
-activation**, putting a ~24 ns TSC read (see [the clock](#the-clock), which
-prices exactly that call) on every node of every island. Islands now take the
-outer cycle's wall snap, which is both faster and more correct — an island's ops
-agree with the rest of the graph on what "this cycle" means instead of each
-reading its own instant. The ranking in the module docs is current again.
+### What moved since the previous capture, and why
+
+This capture is **not** a controlled before/after against the one it replaces:
+"machine B" names a *spec*, and this is a different VM instance of it (same
+model, caches and BogoMIPS as
+[`images/lscpu-b.txt`](images/lscpu-b.txt), different host neighbours). The
+`legacy` column is the useful control — no code in this repo changed under it —
+so its movement measures instance-to-instance variation directly:
+
+| Tier | Movement vs the previous capture | Code changed? |
+|---|---|---|
+| `legacy` | +3.7% … −17.9% | no — the control |
+| `nested` | −7.5% … −30.8% | no (islands share one snap per activation either way) |
+| `interpreted` | −0.6% … −31.1% | one clock read per cycle removed |
+| `compiled` | −14.4% … −69.8% | one clock read per cycle removed |
+
+Only **compiled** moves clearly outside the control's band, on seven of the
+eight workloads — which is what you would expect from making the per-cycle wall
+snap lazy: a ~24 ns clock read came off a bar that was running at ~55 ns per
+cycle. The interpreted and nested columns overlap the control band, so their
+movement is not attributable here, and this page does not attribute it.
+
+An earlier capture had `nested` trailing `interpreted` on all eight workloads
+(1.12×–1.43×), contradicting the bench's own module docs. That was a defect
+rather than hardware: `Ctx::nested` snapped a fresh `NanoTime::now()` every
+time it was built, i.e. **once per inner node per activation**, putting a ~24 ns
+TSC read (see [the clock](#the-clock), which prices exactly that call) on every
+node of every island. Islands now take the outer cycle's wall snap, which is
+both faster and more correct — an island's ops agree with the rest of the graph
+on what "this cycle" means instead of each reading its own instant.
 
 Per-workload violin plots:
 [`dense_chain`](images/tiers/dense_chain.svg) ·
@@ -328,8 +353,8 @@ paths.
 
 wingfoil-next stays flat across ten levels — every node visited once per tick —
 while both path-at-a-time libraries double per level. At depth 10 the
-interpreted engine (541 ns) is **~43× faster than rxrust** (23.110 µs) and
-**~74× faster than tokio async streams** (40.072 µs); at depth 20 the same
+interpreted engine (591 ns) is **~40× faster than rxrust** (23.705 µs) and
+**~57× faster than tokio async streams** (33.750 µs); at depth 20 the same
 slopes put the gap in the millions. The second wingfoil series is the same
 `nitro!` wiring as a compiled island, also flat.
 
@@ -338,23 +363,26 @@ Two caveats on those multipliers, both of which cut *against* wingfoil:
 - **The rxrust iteration is two source emissions** (`root.next` twice — the
   second is what produces the doubling), where `add_bench`'s `step()` and
   tokio's `block_on` are one each. Per source event the rxrust ratio is
-  therefore about half the figure above, ~21× rather than 43×. The slopes,
+  therefore about half the figure above, ~20× rather than 40×. The slopes,
   which are the actual claim, are unaffected.
-- **Per-tick samples are mostly harness.** Do not read a single point off the
-  island series: at this resolution it carries roughly ±150 ns of noise (the
-  interpreted series, whose true cost varies by ~200 ns across the sweep,
-  wanders between 418 and 766 ns), so the depth-10 sample is not a measurement
-  of the island. The per-cycle table below is where the island result lives.
+- **Per-tick samples are mostly harness.** Do not read a single point off
+  either wingfoil series: both are non-monotonic in depth (the island reads
+  570 ns at depth 1 and 269 ns at depth 5, which added nodes cannot cause), and
+  the interpreted series wanders between 323 and 683 ns across a sweep whose
+  true cost moves by ~180 ns. The per-cycle table below is where the wingfoil
+  result lives.
 
 A second harness in the same target runs those graphs for a fixed 10 000 cycles
 under a plain ticker, which divides the bench handshake out — several hundred ns
 of every per-tick sample above — and turns the flat line into the actual scaling
-law: **≈ 97 ns + 22 ns × depth** interpreted, one more node per level, while the
-path count runs to 1024. The island is flat in the strong sense there — **under
-1 ns per level**, 84 ns at depth 1 and 90 ns at depth 10 — because its added
-node is a `u128` add and a `__dirty[i]` predicate of straight-line monomorphized
-code, against the interpreter's ~22 ns of dyn dispatch, `RefCell` borrow and
-slot clone. (The adds themselves are not optimized away: every level's sum
+law: **≈ 55 ns + 21.8 ns × depth** interpreted, one more node per level, while
+the path count runs to 1024. The island is flat in the strong sense there —
+**well under 1 ns per level**, 83 ns at depth 1 and 95 ns at depth 10 — because
+its added node is a `u128` add and a `__dirty[i]` predicate of straight-line
+monomorphized code, against the interpreter's ~22 ns of dyn dispatch, `RefCell`
+borrow and slot clone. The interpreted slope is unchanged from the previous
+capture (22 ns/level); its *fixed* term fell 97 → 55 ns, which is the per-cycle
+wall-clock snap going lazy. (The adds themselves are not optimized away: every level's sum
 passes through `black_box`, precisely so the compiled tier cannot collapse the
 chain — see [`wingfoil.rs`](topological_vs_per_path/wingfoil.rs)'s module doc.)
 
