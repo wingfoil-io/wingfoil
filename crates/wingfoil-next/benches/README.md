@@ -353,6 +353,11 @@ paths.
 
 <img src="topological_vs_per_path/latency.png" width="640">
 
+(Linear axis, which is what makes the doubling read as doubling; it also pins
+both wingfoil series to the floor, so
+[the log version](topological_vs_per_path/latency_log.png) is where the
+crossovers and the tier separation are legible.)
+
 wingfoil-next stays flat across ten levels — every node visited once per tick —
 while both path-at-a-time libraries double per level (2.01× and 1.94× measured).
 At depth 10 the interpreted engine (582 ns) is **~39× faster than rxrust**
@@ -425,5 +430,7 @@ plots into [`images/`](images/), and prints each benchmark's estimate so the
 tables above can be refilled. The hand-drawn charts are rebuilt from data pasted
 into their scripts: [`plot_tiers.py`](plot_tiers.py) (tier summary) and
 [`topological_vs_per_path/plot.py`](topological_vs_per_path/plot.py), which
-renders three — `latency.png`, `per_cycle.png` and `cross_library.png` — for
-topological sort vs per-path propagation.
+renders five for topological sort vs per-path propagation: `latency.png` and
+`cross_library.png` on a linear axis, `latency_log.png` and
+`cross_library_log.png` on a log one (same data, drawn twice — linear for the
+shape, log to read the low end), plus `per_cycle.png`.

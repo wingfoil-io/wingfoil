@@ -1,5 +1,7 @@
-# Renders latency.png, per_cycle.png and cross_library.png for the
-# topological-sort vs per-path-propagation branch/recombine comparison.
+# Renders the charts for the topological-sort vs per-path-propagation
+# branch/recombine comparison: latency.png and cross_library.png on a linear
+# axis, latency_log.png and cross_library_log.png on a log one (same data drawn
+# twice — linear for the shape, log to read the low end), plus per_cycle.png.
 #
 # The arrays below are *readings*, not source: refill them from a local run
 # before regenerating the plots, since criterion wall-clock numbers are
@@ -66,33 +68,56 @@ def fmt_time(y, _):
 
 
 def log_axis(ax):
-    plt.yscale('log')
+    ax.set_yscale('log')
     ax.yaxis.set_major_locator(ticker.LogLocator(base=10))
     ax.yaxis.set_minor_locator(ticker.LogLocator(base=10, subs=[2, 3, 4, 5, 6, 7, 8, 9]))
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(fmt_time))
     ax.yaxis.set_minor_formatter(ticker.NullFormatter())
 
 
-# --- Chart 1: the cross-library comparison, per tick, log scale -------------
+def linear_axis(ax):
+    ax.set_ylim(bottom=0)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(fmt_time))
+
+
+def render(series, ylabel, title, stem, legend_size):
+    """Draw the same series twice — linear for impact, log to read the low end.
+
+    A linear axis is what makes the doubling visible as doubling: the per-path
+    baselines go near-vertical while every wingfoil line flattens onto the
+    floor. It is also unreadable below ~1 µs, which is where the crossovers and
+    the whole separation between the wingfoil tiers live — hence both, with the
+    README leading on the linear one and linking the log one for detail.
+    """
+    for suffix, axis in (('', linear_axis), ('_log', log_axis)):
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for ys, marker, color, label in series:
+            ax.plot(depths, ys, marker, color=color, linewidth=2,
+                    markersize=5 if '--' in marker else 6, label=label)
+        axis(ax)
+        style(ax, ylabel, title, legend_size)
+        fig.tight_layout()
+        fig.savefig(f'{stem}{suffix}.png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+
+# --- Chart 1: the cross-library comparison, per tick ------------------------
 #
 # All four series are one tick through their own harness. The wingfoil pair is
 # the only one paying a cross-thread handshake, which is why they sit a few
 # hundred ns up and read as flat well before the graph is: see the README.
-fig, ax = plt.subplots(figsize=(8, 5))
-
-ax.plot(depths, wingfoil, 'o-', color=INTERP_COLOR, linewidth=2, markersize=6,
-        label='wingfoil interpreted (topologically sorted)')
-ax.plot(depths, nested, 'D--', color=ISLAND_COLOR, linewidth=2, markersize=5,
-        label='wingfoil compiled island (topologically sorted)')
-ax.plot(depths, async_s, 's-', color=ASYNC_COLOR, linewidth=2, markersize=6,
-        label='async streams (per-path)')
-ax.plot(depths, reactive, '^-', color=RX_COLOR, linewidth=2, markersize=6,
-        label='reactive / rxrust (per-path)')
-
-log_axis(ax)
-style(ax, 'Latency per tick', 'Topological sort vs per-path propagation: branch/recombine latency', 10)
-fig.tight_layout()
-fig.savefig('latency.png', dpi=150, bbox_inches='tight')
+render(
+    [
+        (wingfoil, 'o-', INTERP_COLOR, 'wingfoil interpreted (topologically sorted)'),
+        (nested, 'D--', ISLAND_COLOR, 'wingfoil compiled island (topologically sorted)'),
+        (async_s, 's-', ASYNC_COLOR, 'async streams (per-path)'),
+        (reactive, '^-', RX_COLOR, 'reactive / rxrust (per-path)'),
+    ],
+    'Latency per tick',
+    'Topological sort vs per-path propagation: branch/recombine latency',
+    'latency',
+    10,
+)
 
 # --- Chart 2: the three wingfoil tiers, per cycle, linear scale -------------
 #
@@ -127,23 +152,18 @@ fig2.savefig('per_cycle.png', dpi=150, bbox_inches='tight')
 # closest like-for-like available — the baselines have no handshake to remove,
 # and wingfoil's has been divided out. Mixed harnesses, so read the *slopes*;
 # the ratios are quoted in the README with that caveat attached.
-fig3, ax3 = plt.subplots(figsize=(8, 5))
-
-ax3.plot(depths, cyc_interp, 'o-', color=INTERP_COLOR, linewidth=2, markersize=6,
-         label='wingfoil interpreted (per cycle)')
-ax3.plot(depths, cyc_nested, 'D--', color=ISLAND_COLOR, linewidth=2, markersize=5,
-         label='wingfoil compiled island (per cycle)')
-ax3.plot(depths, cyc_compiled, 'v-', color=COMPILED_COLOR, linewidth=2, markersize=6,
-         label='wingfoil compiled (per cycle)')
-ax3.plot(depths, async_s, 's-', color=ASYNC_COLOR, linewidth=2, markersize=6,
-         label='async streams (per tick)')
-ax3.plot(depths, reactive, '^-', color=RX_COLOR, linewidth=2, markersize=6,
-         label='reactive / rxrust (per tick)')
-
-log_axis(ax3)
-style(ax3, 'Cost per tick / cycle',
-      'Topological sort vs per-path propagation, wingfoil harness removed', 9)
-fig3.tight_layout()
-fig3.savefig('cross_library.png', dpi=150, bbox_inches='tight')
+render(
+    [
+        (cyc_interp, 'o-', INTERP_COLOR, 'wingfoil interpreted (per cycle)'),
+        (cyc_nested, 'D--', ISLAND_COLOR, 'wingfoil compiled island (per cycle)'),
+        (cyc_compiled, 'v-', COMPILED_COLOR, 'wingfoil compiled (per cycle)'),
+        (async_s, 's-', ASYNC_COLOR, 'async streams (per tick)'),
+        (reactive, '^-', RX_COLOR, 'reactive / rxrust (per tick)'),
+    ],
+    'Cost per tick / cycle',
+    'Topological sort vs per-path propagation, wingfoil harness removed',
+    'cross_library',
+    9,
+)
 
 print("saved")

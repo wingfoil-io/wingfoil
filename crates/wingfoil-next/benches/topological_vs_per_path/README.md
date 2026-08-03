@@ -14,7 +14,10 @@ determines whether a framework pays O(N) or O(2^N) per tick.
 <img src="latency.png" width="640">
 
 wingfoil stays flat while async streams and reactive double every level
-(O(2^N) per-path propagation). Point estimates, in nanoseconds per tick:
+(O(2^N) per-path propagation). The linear axis is what makes the doubling look
+like doubling; it also flattens every wingfoil series onto the floor, so
+[the same chart on a log axis](latency_log.png) is the one to read crossovers
+and tier separation off. Point estimates, in nanoseconds per tick:
 
 | Depth | wingfoil-next interpreted | wingfoil-next compiled island | rxrust (per-path, 2 emissions/sample) | tokio async (per-path) |
 |---|---|---|---|---|
@@ -176,6 +179,10 @@ self-contained; compare within a table, not across to an older one.
 #### The same comparison, with the wingfoil handshake removed
 
 <img src="cross_library.png" width="640">
+
+Again linear for the shape and [log for the detail](cross_library_log.png) —
+on a linear axis all three wingfoil tiers are one line on the floor, which is
+the point being made and also why the log version exists.
 
 The table at the top is the measurement the three targets actually make, and it
 is the only one where every series is timed identically. It is also conservative:
