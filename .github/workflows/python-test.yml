@@ -5,6 +5,11 @@ on:
   push:
     paths:
       - "legacy/wingfoil-python/**"
+      # Self-reference, as augurs-integration.yml already does: a change to
+      # this file must re-run the job it defines. Without it the coverage
+      # break below went unnoticed from b52c3f15 until the next commit that
+      # happened to touch the binding tree.
+      - ".github/workflows/python-test.yml"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
