@@ -140,3 +140,33 @@ fn passive_input_does_not_activate_the_island() {
     assert_eq!(vec![1, 11, 21, 31], flat_values);
     assert_eq!(flat_values, r.value(&island));
 }
+
+wingfoil_next::nitro! {
+    fn diamonds(g: &GraphBuilder, trig: &Stream<()>) -> Stream<u128> {
+        let s0 = trig.count().map(|c| *c as u128);
+        let s1 = s0.join(&s0, |a: &u128, b: &u128| a + b);
+        let s2 = s1.join(&s1, |a: &u128, b: &u128| a + b);
+        s2
+    }
+}
+
+/// The island shape `benches/topological_vs_per_path` measures: an
+/// input-driven stack of diamonds, each `join` reading the same upstream
+/// twice. The compiled interior must recombine (4 * count) rather than
+/// propagate per path, matching the flat wiring fed by the same trigger.
+#[test]
+fn island_recombines_a_doubly_read_edge() {
+    let g = GraphBuilder::new();
+    let trig = g.ticker(Duration::from_nanos(100));
+
+    let island = diamonds::nested(&g, &trig).accumulate();
+    let s0 = trig.count().map(|c| *c as u128);
+    let s1 = s0.join(&s0, |a: &u128, b: &u128| a + b);
+    let flat = s1.join(&s1, |a: &u128, b: &u128| a + b).accumulate();
+
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    let flat_values = r.value(&flat);
+    assert_eq!(vec![4, 8, 12], flat_values);
+    assert_eq!(flat_values, r.value(&island));
+}

@@ -1,0 +1,4 @@
+Building and linking librdkafka statically
+Running command: "cp -a librdkafka/. /home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out" in dir: .
+Running command: "/home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out/configure --disable-ssl --disable-gssapi --disable-curl --disable-zstd --disable-lz4-ext" in dir: /home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out
+Running command: "make libs" in dir: /home/user/wingfoil/legacy/target/debug/build/rdkafka-sys-686158922a35833a/out

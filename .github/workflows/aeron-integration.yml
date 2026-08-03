@@ -37,7 +37,10 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: integration
+          shared-key: integration-legacy
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       # The Aeron FFI backends (rusteron-client / aeron-rs) build native code
       # via bindgen + CMake. Docker (for the testcontainers media driver) is
@@ -58,7 +61,7 @@ jobs:
       # CNC file via /dev/shm, so it must run single-threaded.
       - name: Run Aeron integration tests
         run: |
-          cargo test --features aeron-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/Cargo.toml --features aeron-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture aeron::integration_tests
         env:
           RUST_LOG: INFO

@@ -18,8 +18,10 @@ mode="${1:-report}"
 human() { du -sh "$@" 2>/dev/null | sort -hr; }
 avail() { df -h "$root" | awk 'NR==2 {print $4}'; }
 
-# target/ dirs anywhere in the tree: the workspace root, plus wingfoil-wasm,
-# which is excluded from the workspace and so builds into its own.
+# target/ dirs anywhere in the tree: the workspace root, plus the two trees
+# excluded from that workspace and so building into their own — wingfoil-wasm
+# (different target triple) and legacy (its own workspace since cutover-plan
+# 5.0, and by far the larger of the two).
 targets() { find "$root" -type d -name target -prune 2>/dev/null; }
 
 report() {

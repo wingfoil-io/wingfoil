@@ -47,7 +47,7 @@ pub struct TickerState {
     next: Option<NanoTime>,
 }
 
-#[op(build = ticker)]
+#[op(build = ticker, fluent)]
 impl Op for Ticker {
     /// The interval as passed at the call site (`Duration`, per the uniform
     /// arg-is-the-config convention); converted to engine time in `start`.
@@ -82,7 +82,7 @@ impl Op for Ticker {
 /// Ticks once with a fixed value, on the first cycle.
 pub struct Const<T>(PhantomData<T>);
 
-#[op(build = constant)]
+#[op(build = constant, fluent)]
 impl<T: Clone + 'static> Op for Const<T> {
     type Cfg = T;
     type State = ();
@@ -773,7 +773,7 @@ impl Default for EwmaState {
 /// that legitimately reaches `0.0` does not re-seed).
 pub struct Ewma;
 
-#[op(build = ewma)]
+#[op(build = ewma, fluent)]
 impl Op for Ewma {
     type Cfg = EwmaDecay;
     type State = EwmaState;
@@ -849,7 +849,7 @@ impl Op for EwmaPerTick {
 /// noise next to the `exp()` in the decay itself.
 pub struct EwmaHalfLife;
 
-#[op(build = ewma_half_life)]
+#[op(build = ewma_half_life, fluent)]
 impl Op for EwmaHalfLife {
     type Cfg = Duration;
     type State = EwmaState;
@@ -905,7 +905,7 @@ impl RollingWindowState {
 /// Rolling sum over the most recent `window` `f64` samples. `Cfg` = window.
 pub struct RollingSum;
 
-#[op(build = rolling_sum)]
+#[op(build = rolling_sum, fluent)]
 impl Op for RollingSum {
     type Cfg = usize;
     type State = RollingWindowState;
@@ -927,7 +927,7 @@ impl Op for RollingSum {
 /// Rolling arithmetic mean over the most recent `window` `f64` samples.
 pub struct RollingMean;
 
-#[op(build = rolling_mean)]
+#[op(build = rolling_mean, fluent)]
 impl Op for RollingMean {
     type Cfg = usize;
     type State = RollingWindowState;
@@ -1029,7 +1029,7 @@ impl RollingMomentState {
 /// two samples are in the window. `Cfg` = window.
 pub struct RollingVar;
 
-#[op(build = rolling_var)]
+#[op(build = rolling_var, fluent)]
 impl Op for RollingVar {
     type Cfg = usize;
     type State = RollingMomentState;
@@ -1055,7 +1055,7 @@ impl Op for RollingVar {
 /// `NaN`. `Cfg` = window.
 pub struct RollingStd;
 
-#[op(build = rolling_std)]
+#[op(build = rolling_std, fluent)]
 impl Op for RollingStd {
     type Cfg = usize;
     type State = RollingMomentState;
@@ -1130,7 +1130,7 @@ impl RollingExtremeState {
 /// deque — O(1) amortised per tick. `Cfg` = window.
 pub struct RollingMin;
 
-#[op(build = rolling_min)]
+#[op(build = rolling_min, fluent)]
 impl Op for RollingMin {
     type Cfg = usize;
     type State = RollingExtremeState;
@@ -1152,7 +1152,7 @@ impl Op for RollingMin {
 /// deque — O(1) amortised per tick. `Cfg` = window.
 pub struct RollingMax;
 
-#[op(build = rolling_max)]
+#[op(build = rolling_max, fluent)]
 impl Op for RollingMax {
     type Cfg = usize;
     type State = RollingExtremeState;
@@ -1205,7 +1205,7 @@ impl RollingMedianState {
 /// the legacy statistics adapter's count-weighted median. `Cfg` = window.
 pub struct RollingMedian;
 
-#[op(build = rolling_median)]
+#[op(build = rolling_median, fluent)]
 impl Op for RollingMedian {
     type Cfg = usize;
     type State = RollingMedianState;
@@ -1260,7 +1260,7 @@ impl CumulativeMomentState {
 /// `mean(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeMean;
 
-#[op(build = cumulative_mean)]
+#[op(build = cumulative_mean, fluent)]
 impl Op for CumulativeMean {
     type Cfg = ();
     type State = CumulativeMomentState;
@@ -1285,7 +1285,7 @@ impl Op for CumulativeMean {
 /// Mirrors the legacy `variance(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeVar;
 
-#[op(build = cumulative_var)]
+#[op(build = cumulative_var, fluent)]
 impl Op for CumulativeVar {
     type Cfg = ();
     type State = CumulativeMomentState;
@@ -1310,7 +1310,7 @@ impl Op for CumulativeVar {
 /// incremental variance can drift a hair negative) yields `0.0`, not `NaN`.
 pub struct CumulativeStd;
 
-#[op(build = cumulative_std)]
+#[op(build = cumulative_std, fluent)]
 impl Op for CumulativeStd {
     type Cfg = ();
     type State = CumulativeMomentState;
@@ -1334,7 +1334,7 @@ impl Op for CumulativeStd {
 /// `CumulativeStat::Sum`).
 pub struct CumulativeSum;
 
-#[op(build = cumulative_sum)]
+#[op(build = cumulative_sum, fluent)]
 impl Op for CumulativeSum {
     type Cfg = ();
     /// The running total (starts at `0.0`, so the first sample seeds it).
@@ -1360,7 +1360,7 @@ impl Op for CumulativeSum {
 /// Mirrors the legacy `min(Window::Unbounded)`.
 pub struct CumulativeMin;
 
-#[op(build = cumulative_min)]
+#[op(build = cumulative_min, fluent)]
 impl Op for CumulativeMin {
     type Cfg = ();
     /// The running minimum; `None` until the first sample seeds it.
@@ -1390,7 +1390,7 @@ impl Op for CumulativeMin {
 /// Mirrors the legacy `max(Window::Unbounded)`.
 pub struct CumulativeMax;
 
-#[op(build = cumulative_max)]
+#[op(build = cumulative_max, fluent)]
 impl Op for CumulativeMax {
     type Cfg = ();
     /// The running maximum; `None` until the first sample seeds it.
@@ -1447,7 +1447,7 @@ impl CumulativeMedianState {
 /// the stream. Mirrors the legacy `median(Window::Unbounded, Weighting::Count)`.
 pub struct CumulativeMedian;
 
-#[op(build = cumulative_median)]
+#[op(build = cumulative_median, fluent)]
 impl Op for CumulativeMedian {
     type Cfg = ();
     type State = CumulativeMedianState;
@@ -1972,7 +1972,7 @@ impl CumulativeTimeWeightedMomentState {
 /// clock. Mirrors the legacy `mean(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeMeanTimeWeighted;
 
-#[op(build = cumulative_mean_time_weighted)]
+#[op(build = cumulative_mean_time_weighted, fluent)]
 impl Op for CumulativeMeanTimeWeighted {
     type Cfg = ();
     type State = CumulativeTimeWeightedMomentState;
@@ -1997,7 +1997,7 @@ impl Op for CumulativeMeanTimeWeighted {
 /// Mirrors the legacy `variance(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeVarTimeWeighted;
 
-#[op(build = cumulative_var_time_weighted)]
+#[op(build = cumulative_var_time_weighted, fluent)]
 impl Op for CumulativeVarTimeWeighted {
     type Cfg = ();
     type State = CumulativeTimeWeightedMomentState;
@@ -2022,7 +2022,7 @@ impl Op for CumulativeVarTimeWeighted {
 /// `std(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeStdTimeWeighted;
 
-#[op(build = cumulative_std_time_weighted)]
+#[op(build = cumulative_std_time_weighted, fluent)]
 impl Op for CumulativeStdTimeWeighted {
     type Cfg = ();
     type State = CumulativeTimeWeightedMomentState;
@@ -2121,7 +2121,7 @@ impl WindowedTimeWeightedMomentState {
 /// Mirrors the legacy `mean(Window::Count(_), Weighting::Time)`.
 pub struct RollingMeanTimeWeighted;
 
-#[op(build = rolling_mean_time_weighted)]
+#[op(build = rolling_mean_time_weighted, fluent)]
 impl Op for RollingMeanTimeWeighted {
     type Cfg = usize;
     type State = WindowedTimeWeightedMomentState;
@@ -2146,7 +2146,7 @@ impl Op for RollingMeanTimeWeighted {
 /// Weighting::Time)`.
 pub struct RollingVarTimeWeighted;
 
-#[op(build = rolling_var_time_weighted)]
+#[op(build = rolling_var_time_weighted, fluent)]
 impl Op for RollingVarTimeWeighted {
     type Cfg = usize;
     type State = WindowedTimeWeightedMomentState;
@@ -2170,7 +2170,7 @@ impl Op for RollingVarTimeWeighted {
 /// zero. Mirrors the legacy `std(Window::Count(_), Weighting::Time)`.
 pub struct RollingStdTimeWeighted;
 
-#[op(build = rolling_std_time_weighted)]
+#[op(build = rolling_std_time_weighted, fluent)]
 impl Op for RollingStdTimeWeighted {
     type Cfg = usize;
     type State = WindowedTimeWeightedMomentState;
@@ -2381,7 +2381,7 @@ impl TimeWeightedMedianState {
 /// stream. Mirrors the legacy `median(Window::Unbounded, Weighting::Time)`.
 pub struct CumulativeMedianTimeWeighted;
 
-#[op(build = cumulative_median_time_weighted)]
+#[op(build = cumulative_median_time_weighted, fluent)]
 impl Op for CumulativeMedianTimeWeighted {
     type Cfg = ();
     type State = TimeWeightedMedianState;
@@ -2404,7 +2404,7 @@ impl Op for CumulativeMedianTimeWeighted {
 /// Mirrors the legacy `median(Window::Count(_), Weighting::Time)`.
 pub struct RollingMedianTimeWeighted;
 
-#[op(build = rolling_median_time_weighted)]
+#[op(build = rolling_median_time_weighted, fluent)]
 impl Op for RollingMedianTimeWeighted {
     type Cfg = usize;
     type State = TimeWeightedMedianState;

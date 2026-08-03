@@ -46,22 +46,37 @@
 //! hardware): next-interpreted **meets or beats** legacy on all three
 //! workloads — the dispatch-bound `dense_chain`, the loop-bound `accumulate`,
 //! and the wide `fanout` (every node fires every cycle). The compiled/nested
-//! tiers win decisively across the board — the compiled fan-out runs ~25x faster
-//! than either interpreter. (An earlier `fanout` gap where next-interpreted
-//! trailed legacy ~40% was the sparse dispatch's per-node `BinaryHeap`
-//! push/pop; replacing it with legacy's layer-bucketed drain closed it. This
-//! bench is the scaffold that keeps the relationship honest.)
+//! tiers win decisively across the board — the compiled fan-out runs ~37x faster
+//! than next-interpreted (~53x vs legacy), the island ~8x. (An earlier `fanout` gap where
+//! next-interpreted trailed legacy ~40% was the sparse dispatch's per-node
+//! `BinaryHeap` push/pop; replacing it with legacy's layer-bucketed drain closed
+//! it. A later capture had `nested` behind *interpreted* on all eight workloads,
+//! which was `Ctx::nested` snapping a fresh `NanoTime::now()` per inner node per
+//! activation — ~24 ns a node. This bench is the scaffold that keeps the
+//! relationship honest, and it caught both.)
 //!
 //! **On the sparse workloads the ranking holds, but two things surface that the
-//! dense groups hide.** Compiled still wins outright — ~774us vs interpreted's
-//! ~2.94ms at 267 nodes, ~734us vs ~3.18ms at 1035 — so there is no crossover
-//! where the dirty-list overtakes straight-line emission, even at ~97% quiet:
-//! compiled's per-node `__dirty[i]` predicate is cheap enough that walking 1035
-//! of them costs less than dispatching 8 dynamically. What does invert is
-//! `nested`, which *loses to plain interpreted* here (~3.66ms vs ~2.94ms) — the
-//! island runs its whole compiled interior on every outer activation, so a
-//! mostly-quiet interior is exactly its worst case, the mirror image of the
-//! dense wins.
+//! dense groups hide.** Compiled still wins outright — the capture that first
+//! established this read ~774us vs interpreted's ~2.94ms at 267 nodes, ~734us
+//! vs ~3.18ms at 1035 — so there is no crossover where the dirty-list overtakes
+//! straight-line emission, even at ~97% quiet: compiled's per-node `__dirty[i]`
+//! predicate is cheap enough that walking a thousand of them costs less than
+//! dispatching 8 dynamically. Sparse is also where `nested` is weakest, and for
+//! the structural reason: the island runs its whole compiled interior on every
+//! outer activation, so a mostly-quiet interior wastes most of it. It still
+//! wins there (2.2x-2.8x) — where it used to *lose*, which turned out to be a
+//! per-node `NanoTime::now()` in `Ctx::nested` rather than the design. The
+//! island's genuinely thinnest margin is now `accumulate` at 1.0x: three nodes
+//! give a composite almost nothing to amortise its boundary against.
+//!
+//! **The absolute figures in this module doc are the captures that motivated
+//! each finding, not the current reading**, and they come from several runs on
+//! different machines and different workload shapes (the node counts moved when
+//! `fan` stopped left-folding into a merge chain). Read them as the evidence
+//! for the *shape* of each claim; for numbers that are current and internally
+//! comparable, see the table in
+//! [`benches/README.md`](README.md#execution-tiers), which is refilled as a
+//! whole group from one run.
 //!
 //! The second finding was the interpreted growth itself, and it led to two
 //! fixes. 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work

@@ -1,0 +1,2 @@
+cargo:rustc-cfg=branches_stable
+cargo:rustc-cfg=rustc_ge_1_81_0

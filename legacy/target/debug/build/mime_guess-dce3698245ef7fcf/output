@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/user/wingfoil/legacy/target/debug/build/mime_guess-dce3698245ef7fcf/out/mime_types_generated.rs

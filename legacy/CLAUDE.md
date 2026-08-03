@@ -60,17 +60,39 @@ legacy/
   root `CLAUDE.md`. Only the eventual next→main cutover/sync PRs cross between
   them.
 
-### Build and test
+### Build and test — this tree is its own workspace
+
+`legacy/` was taken out of the root cargo workspace ahead of the cutover
+rename: `wingfoil-next` becomes `wingfoil`, and one workspace cannot hold two
+packages of that name (`docs/cutover-plan.md` 5.0). `legacy/Cargo.toml` is the
+workspace root, and **`-p wingfoil` no longer resolves from the repo root** —
+every command needs the manifest path (run from the repo root):
 
 ```bash
-cargo test -p wingfoil
-cargo test -p wingfoil-python
+cargo test --manifest-path legacy/Cargo.toml -p wingfoil
+cargo test --manifest-path legacy/Cargo.toml -p wingfoil-python
+cargo lint-legacy   # clippy, default features (alias in .cargo/config.toml)
+cargo test-legacy   # the whole legacy workspace (alias)
 cd legacy/wingfoil-python && maturin develop && pytest
 ```
 
-The pre-commit checklist, the `cargo lint` / `cargo lint-all` aliases, the
-`protoc` and Aeron system dependencies, and the disk-space notes are all in
-the root `CLAUDE.md` and apply here unchanged.
+Two things that follow, and both bite silently:
+
+- **The git hooks do not cover this tree.** `pre-commit` and `pre-push` run
+  `--workspace` against the *root* workspace, which no longer includes
+  `legacy/`. Run `cargo lint-legacy` and `cargo test-legacy` by hand before
+  pushing legacy work; CI gates it in the `Lint legacy` and
+  `Test (wingfoil) & Coverage` jobs.
+- **Artifacts build into `legacy/target/`,** a second multi-GB target dir.
+  `scripts/disk.sh` finds every `target/` in the tree, so it reports and
+  reclaims both.
+
+`legacy/Cargo.toml` copies the root workspace's `rust-version`, `lints` and
+shared dependency versions, because an excluded package cannot inherit them.
+Keep them identical to the root's — this file is deleted with the tree.
+
+The pre-commit checklist, the `protoc` and Aeron system dependencies, and the
+disk-space notes are all in the root `CLAUDE.md` and apply here unchanged.
 
 ## Key Architecture Concepts
 

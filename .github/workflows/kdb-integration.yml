@@ -39,7 +39,10 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: integration
+          shared-key: integration-legacy
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       - name: Build KDB image
         run: docker build -t wingfoil-kdb legacy/wingfoil/src/adapters/kdb/docker/
@@ -69,7 +72,7 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cargo test --features kdb-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/Cargo.toml --features kdb-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture kdb::integration_tests kdb::cache_integration_tests
 
       - name: Set up Python

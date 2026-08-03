@@ -72,10 +72,25 @@ cargo build --features full    # everything CI builds (needs protoc)
 CI is configured in [`.github/workflows/rust-test.yml`](.github/workflows/rust-test.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
 
 ```bash
-cargo fmt --all -- --check     # formatting
-cargo lint                     # clippy, default features
-cargo lint-all                 # clippy, all features  ← most-missed step
-cargo test -p wingfoil --features full
+cargo fmt --manifest-path legacy/Cargo.toml --all -- --check   # formatting
+cargo lint-legacy              # clippy, default features
+cargo test-legacy              # the whole legacy workspace
+cargo test --manifest-path legacy/Cargo.toml -p wingfoil --features full
+```
+
+**Every command needs the manifest path.** This tree is its own cargo
+workspace — it left the root one ahead of the cutover rename, since
+`wingfoil-next` becomes `wingfoil` and one workspace cannot hold two packages
+of that name (`docs/cutover-plan.md` 5.0). Plain `cargo lint` / `cargo test
+-p wingfoil` from the repo root no longer sees this tree, and **the git hooks
+do not cover it either** — they run `--workspace` against the root. Run the
+above by hand before pushing; CI gates it in `Lint legacy` and
+`Test (wingfoil) & Coverage`.
+
+For the all-features clippy pass:
+
+```bash
+cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 ```
 
 `cargo lint-all` is the step that most often surfaces issues that pass locally but fail in CI — it exercises code behind feature flags (`fix`, `csv`, `iceoryx2`, `kdb`, etc.) that the default build skips. Please run it before pushing.

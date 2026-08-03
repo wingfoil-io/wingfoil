@@ -33,6 +33,12 @@
 //! means consciously placing it in a `nitro!` block or in one of these lists —
 //! never silently in neither.
 //!
+//! That rule is only as good as its coverage, and it had a hole: the whole of
+//! `StatisticsOps` — 36 methods — was in neither, because the guard was
+//! written against `StreamOps` and nobody extended it when the statistics
+//! surface landed. All 36 are now classified: 25 dual-mode, exercised in the
+//! `surface_stats_*` blocks, and 11 in category 2b below.
+//!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel`, `poll` — IO / threaded / busy-poll sources; the
 //!     compiled path runs its own loop with no external wake.
@@ -65,6 +71,18 @@
 //!     fluent method wires through; it just isn't spelled in a `nitro!` block.
 //!     A debug/logging tap has no place in a self-driving compiled kernel
 //!     anyway, so this costs nothing real.
+//!   * The **11 `time_windowed_*` statistics methods** — `time_windowed_sum`
+//!     / `_mean` / `_min` / `_max` / `_var` / `_std` / `_median`, and the
+//!     `_mean_time_weighted` / `_var_time_weighted` / `_std_time_weighted` /
+//!     `_median_time_weighted` four. Identical mechanism to `logged`: the ops'
+//!     `Cfg` is `NanoTime`, the fluent methods take a `Duration` and convert,
+//!     and `nitro!` cannot satisfy both with one set of call-site tokens.
+//!     Unlike `logged` this *is* a real gap — a time-windowed statistic is
+//!     exactly the kind of thing a compiled kernel should carry — and it
+//!     closes by moving the conversion into the op (take `Duration` as `Cfg`
+//!     and convert in `start`, as `Ticker` does), not by touching the macro.
+//!     The other 25 statistics ops are dual-mode and exercised in the three
+//!     `surface_stats_*` blocks below.
 //!
 //! **3. Currently interpreted-only — candidate follow-up, not by design:**
 //!   * *(empty — all four former members are now dual-mode.)* `join_passive`,
@@ -99,7 +117,9 @@
 
 use std::time::Duration;
 
+use wingfoil_next::ops::EwmaDecay;
 use wingfoil_next::prelude::*;
+use wingfoil_next::stats::StatisticsOps;
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -254,6 +274,88 @@ wingfoil_next::nitro! {
     }
 }
 
+// --- The statistics surface -------------------------------------------------
+//
+// `StatisticsOps` was absent from this guard entirely — not in a `nitro!`
+// block, not in a fluent-only list — i.e. exactly the "silently in neither"
+// state the module doc forbids, for a third of the op catalog. The three
+// blocks below put all 25 of its dual-mode ops under the two-sided guard; the
+// 11 that are not dual-mode are listed under category 2b in the module doc.
+//
+// Every value here is `f64`, and the two engines run the same `cycle` code
+// over the same inputs in the same order, so the parity assertion is exact
+// equality — no epsilon. A drift big enough to need one would be the bug.
+
+// EWMA and the fixed-count rolling window family.
+wingfoil_next::nitro! {
+    fn surface_stats_rolling(g: &GraphBuilder) -> Stream<Vec<f64>> {
+        let x = g.ticker(P).count().map(|i| *i as f64);
+        let ewma = x.ewma(EwmaDecay::PerTick(0.5));
+        let per_tick = x.ewma_per_tick(0.5);
+        let half_life = x.ewma_half_life(Duration::from_millis(50));
+        let sum = x.rolling_sum(3);
+        let mean = x.rolling_mean(3);
+        let min = x.rolling_min(3);
+        let max = x.rolling_max(3);
+        let var = x.rolling_var(3);
+        let std = x.rolling_std(3);
+        let median = x.rolling_median(3);
+        let out = ewma
+            .merge_all(&[
+                &per_tick, &half_life, &sum, &mean, &min, &max, &var, &std, &median,
+            ])
+            .accumulate();
+        out
+    }
+}
+
+// The cumulative (unbounded-window) family.
+wingfoil_next::nitro! {
+    fn surface_stats_cumulative(g: &GraphBuilder) -> Stream<Vec<f64>> {
+        let x = g.ticker(P).count().map(|i| *i as f64);
+        let sum = x.cumulative_sum();
+        let mean = x.cumulative_mean();
+        let min = x.cumulative_min();
+        let max = x.cumulative_max();
+        let var = x.cumulative_var();
+        let std = x.cumulative_std();
+        let median = x.cumulative_median();
+        let out = sum
+            .merge_all(&[&mean, &min, &max, &var, &std, &median])
+            .accumulate();
+        out
+    }
+}
+
+// The time-weighted family: each weights a sample by how long it stood, so
+// these read the engine clock as well as the value. Historical mode makes that
+// deterministic, which is what lets the two engines be compared exactly.
+wingfoil_next::nitro! {
+    fn surface_stats_time_weighted(g: &GraphBuilder) -> Stream<Vec<f64>> {
+        let x = g.ticker(P).count().map(|i| *i as f64);
+        let cum_mean = x.cumulative_mean_time_weighted();
+        let cum_var = x.cumulative_var_time_weighted();
+        let cum_std = x.cumulative_std_time_weighted();
+        let cum_median = x.cumulative_median_time_weighted();
+        let roll_mean = x.rolling_mean_time_weighted(3);
+        let roll_var = x.rolling_var_time_weighted(3);
+        let roll_std = x.rolling_std_time_weighted(3);
+        let roll_median = x.rolling_median_time_weighted(3);
+        let out = cum_mean
+            .merge_all(&[
+                &cum_var,
+                &cum_std,
+                &cum_median,
+                &roll_mean,
+                &roll_var,
+                &roll_std,
+                &roll_median,
+            ])
+            .accumulate();
+        out
+    }
+}
+
 // --- Three-engine agreement across the surface ------------------------------
 //
 // Each block above compiled (proving fluent + forwarder both exist for every op
@@ -351,4 +453,19 @@ fn passive_delay_surface_three_engine_parity() {
         r.value(&island),
         "interpreted vs nested drift in surface_passive_delay"
     );
+}
+
+#[test]
+fn stats_rolling_surface_three_engine_parity() {
+    assert_interp_eq_compiled!(surface_stats_rolling);
+}
+
+#[test]
+fn stats_cumulative_surface_three_engine_parity() {
+    assert_interp_eq_compiled!(surface_stats_cumulative);
+}
+
+#[test]
+fn stats_time_weighted_surface_three_engine_parity() {
+    assert_interp_eq_compiled!(surface_stats_time_weighted);
 }

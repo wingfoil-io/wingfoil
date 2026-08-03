@@ -276,6 +276,12 @@ criterion = { version = "0.8.1", optional = true }
 # Cargo permits this cycle precisely because it is dev-only. It goes away with
 # the legacy tree at cutover.
 wingfoil = { path = "../../legacy/wingfoil" }
+# Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
+# clippy; pre-push: build + test). Moved here from `legacy/wingfoil` when the
+# legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
+# project root by walking up from `OUT_DIR`, so it must be a dev-dependency of
+# a member of the workspace whose target dir sits beside `.git`.
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
 trybuild = "1"
 criterion = "0.8.1"

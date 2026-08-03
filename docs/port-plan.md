@@ -286,7 +286,7 @@ including re-seeding schedules.
 
 **The compat facade is the use case, so the reset hook is Phase-1 contract
 work — not deferred.** Legacy streams re-run, and the Phase 6 facade is
-exactly what surfaces that: `compat::Signal` already breaks on a second
+exactly what surfaces that: `signal::Signal` already breaks on a second
 `run()` (it silently runs a 0-node graph then panics out-of-bounds on
 `peek_value`), and wingfoil-python's pytest suite — the facade gate — depends
 on re-run working. Rather than discovering this at the facade, the per-node
@@ -297,7 +297,7 @@ last Phase-0 spike by decision.
 **Update — delivered in Phase 1.** The `reset` hook has since landed (see the
 Phase 1 bullet): the interpreted `Runner` re-runs the deterministic historical
 subset, restoring per-node state + slots to their wiring-time values, and
-`compat::Signal::run` is re-runnable. Single-run graphs (external/poll/channel/
+`signal::Signal::run` is re-runnable. Single-run graphs (external/poll/channel/
 island) error on a second `run` rather than misbehaving.
 
 **Single-run I/O is legacy parity (verified 2026).** The single-run restriction
@@ -371,10 +371,10 @@ register A2 — the earlier "legacy re-runs I/O sources" claim was incorrect.
   sources or `composite` islands are single-run by construction (their producer
   channels, wakers, and island interiors are consumed by the first run) and a
   second `run` errors clearly. This unblocks the Phase 6 compat facade:
-  `compat::Signal::run` is now re-runnable, the wingfoil-python re-run gate.
+  `signal::Signal::run` is now re-runnable, the wingfoil-python re-run gate.
   Covered by `tests/rerun.rs` (re-run == fresh graph; fold restarts not
   continues; buffering/sampling ops reset; feedback re-runs; explicit reset;
-  single-run guard) and the rewritten `tests/compat.rs::
+  single-run guard) and the rewritten `tests/signal.rs::
   second_run_matches_the_first`.
 - **`Tick::Silent` (update-value-without-ticking) contract decision** — the
   `Tick` contract today cannot express "store a new value but don't tick,"
@@ -1287,7 +1287,7 @@ rather than a single number. The `sparse` groups' node counts fell out of this
 too (267 → 205, 1035 → 781, since `fan(64)`/`fan(256)` no longer contribute 63
 and 255 merge nodes), and now match their legacy twins exactly.
 
-### Tier ranking on sparse graphs: no crossover, but `nested` inverts
+### Tier ranking on sparse graphs: no crossover, and `nested` no longer inverts
 
 The Phase 6 tier claim — compiled and nested beat the interpreters — was
 established only on *dense* workloads, where every node fires every cycle. The
@@ -1300,11 +1300,21 @@ walk. This also *weakens the case for compiled-path region gating* (branch-1's
 idea, noted under "Scope notes" below): the cost it would remove measures as
 small.
 
-What does invert is **`nested`, which loses to plain interpreted on sparse
-graphs** (~3.79ms vs ~2.70ms) — the mirror image of its dense win. An island
-runs its whole compiled interior on every outer activation, so a mostly-quiet
-interior is its worst case. Worth knowing before recommending islands as a
-general accelerator: they pay off in proportion to how *busy* the interior is.
+`nested` used to invert here — losing to plain interpreted on sparse graphs
+(~3.79ms vs ~2.70ms), read at the time as the mirror image of its dense win,
+since an island runs its whole compiled interior on every outer activation and a
+mostly-quiet interior is its worst case. That reading was dominated by a defect,
+not by the design: `Ctx::nested` snapped a fresh `NanoTime::now()` per *inner
+node per activation* (~24 ns each). With islands sharing the outer cycle's wall
+snap, `nested` beats interpreted on seven of the eight tier workloads — 2.2×–2.8×
+even on the two sparse ones, and level (1.0×) on the three-node `accumulate`. The structural point still stands (an island's payoff is
+proportional to how *busy* its interior is; sparse is its weakest showing), but
+it is now a smaller win rather than a loss.
+
+(The absolute figures in this section are the capture that motivated the
+finding; the node counts and times have since moved with the workload and the
+machine. Current, internally-comparable numbers live in
+[`crates/wingfoil-next/benches/README.md`](../crates/wingfoil-next/benches/README.md#execution-tiers).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth
@@ -1489,15 +1499,80 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     `fan`, `not`, `collapse`, `for_each_mut`, `spawn_map`,
     `spawn_map_bounded`) and are untouched.
 
-    Not yet covered: `SourceOps` (no `self` edge) and `StatisticsOps` (on a
-    concrete `Stream<f64>`, so there is no type parameter to become the
-    receiver). Both are mechanical extensions of the same generator.
+    **All three receiver shapes ✅ covered.** The generator was once scoped to
+    a receiver that is one of the op's *type parameters*, which left the other
+    two traits entirely hand-written. It now derives the receiver from the op's
+    `In` — a bare type parameter (`Stream<T>`, macro takes `$t`), a concrete
+    edge-0 type (`Stream<f64>`, macro takes nothing), or no edges at all (the
+    `GraphBuilder`, body through `GraphBuilder::source` instead of
+    `Stream::wire`) — so `SourceOps::{ticker, constant}` and 24 of
+    `StatisticsOps`' 36 methods are generated too. Shape tests in
+    `tests/op_fluent_shapes.rs`, each invoked from a trait declared *outside*
+    the crate, which is the property the behavioural suites cannot see.
+
+    What is left in `StatisticsOps` is not a generator gap but the same
+    `Cfg`-mismatch category as `logged`: the 11 `time_windowed_*` methods take
+    a `Duration` their body converts to the op's `NanoTime` `Cfg`, and
+    `ewma_per_tick` `debug_assert!`s its alpha before wiring. Closing those
+    means changing the ops' `Cfg` (convert in `start`, as `Ticker` does), not
+    the macro.
+
+  - **`Signal` coverage ✅ landed** (and the module renamed `compat` →
+    `signal`). `#[op(fluent)]` emits a second macro, `__wf_signal_<name>!`,
+    writing the same combinator for the builder-less facade. This was not a
+    tidy-up: the facade's forwarding was hand-written, and it had fallen **15
+    of `StreamOps`' 41 methods** behind the catalog — `logged`,
+    `drop_small_change`, and the entire `join` / `join3` / `join_passive` /
+    `try_join*` family — because an op author had no reason to think of it.
+    All 15 are now present, and adding an op costs one line in `signal.rs`.
+
+    Two details worth keeping: the generated body wires through `Stream::wire`
+    and the op's `Builder` method rather than the fluent method, because a
+    hand-written trait declaration may be *stricter* than the op needs
+    (`StreamOps::accumulate` asks for `T: Default`; the op, whose `Out` is
+    `Vec<T>`, does not) and routing through it would import that bound into a
+    generated signature. And these are **inherent** methods, so there is no
+    hand-written declaration to check the body against — the whole method is
+    generated, docs included, pointing at the op's `Builder` method whose docs
+    are the witness type's.
+
+    The rename is the honest name: legacy *compatibility* is carried by the
+    `legacy/wingfoil` crate over this engine, and what this module actually
+    offers — free source functions and a stream you run directly, with no
+    builder or runner in the caller's hands — stands on its own regardless of
+    how cutover item 1.4 rules on the legacy facade. Sources stay hand-written
+    (they *make* the graph), as does `logged` (the `Cfg` mismatch above).
 
     Note the one ordering constraint this introduces: a `macro_rules!` produced
     *by* a proc macro is reachable only through textual scope (rustc
     [#52234](https://github.com/rust-lang/rust/issues/52234) rejects both the
     `crate::` path and `use` forms), so `lib.rs` declares `#[macro_use] pub mod
     ops;` **before** `pub mod fluent;`.
+
+    The generated body goes through `Signal::as_stream` / `Signal::wrap`, a
+    documented `pub(crate)` pair, rather than the facade's private fields —
+    the same arrangement as the `#[op]` wiring seam on `Builder`. Without it
+    the macro crate would hold knowledge of one module's representation, and
+    `signal.rs` could not change its fields without breaking a generator two
+    crates away.
+
+  - **Receiver classification is closed, not open.** `Concrete` is not the
+    fallback for everything that is not a bare type parameter: an edge 0 that
+    *mentions* a parameter without being one (`Burst<T>`) is rejected with a
+    message naming the two shapes it can take. Treating it as concrete emitted
+    a macro taking no `$t` whose body still said `T`, so the author met an
+    unresolved-name error at the invocation site with nothing pointing back at
+    the op. Unit-tested in the macro crate (`mentions_any`).
+
+  - **`StatisticsOps` is now under the completeness guard.** All 36 methods
+    were in neither a `nitro!` block nor an allowlist — the "silently in
+    neither" state `op_completeness.rs` exists to prevent, for a third of the
+    catalog, because the file was written against `StreamOps` and never
+    widened. 25 are dual-mode and exercised in three new `surface_stats_*`
+    blocks with interpreted-vs-compiled parity; the 11 `time_windowed_*` are
+    recorded in category 2b, and unlike `logged` they are a **real** gap: a
+    compiled kernel should carry a time-windowed statistic, and closing it
+    means taking `Duration` as the op's `Cfg` and converting in `start`.
 
 ## Phase 6 — Python bindings, examples, benches
 
@@ -1863,9 +1938,9 @@ tests covered — not "legacy pytest passes unchanged."
   surface* rather than missing tests: the statistics adapter binding and
   `build_dataframe`. Both have landed (cutover-plan rows 3.7 and 3.8) — see the
   `test_statistics.py` and `test_pandas.py` entries above.
-- **`wingfoil_next::compat` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
+- **`wingfoil_next::signal` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
-  compat.rs`) — it is **not** the Python-binding path (that is the object-form
+  signal.rs`) — it is **not** the Python-binding path (that is the object-form
   `PyStream` above).
 - **Examples**: port all (order_book, breadth_first, run_mode, latency,
   telemetry/tracing, per-adapter) to idiomatic next (fluent or `nitro!`),
@@ -1947,7 +2022,11 @@ tests covered — not "legacy pytest passes unchanged."
   that disappears at cutover when the legacy bar goes away. Only three targets
   genuinely move onto the next engine (`graph`, `bfs_vs_dfs_wingfoil`,
   `iceoryx2_modes`), and their rewiring is node-count-preserving; the rest
-  measure other libraries or ported backend/value types and are verbatim. Per-
+  measure other libraries or ported backend/value types and are verbatim.
+  `bfs_vs_dfs_wingfoil` has since been re-expressed as `nitro!` blocks, one per
+  depth, so a single wiring definition drives both the interpreted engine and a
+  compiled island — the bar that stays comparable with legacy is still the
+  interpreted, per-tick one, under the same `depth_N` names. Per-
   target deviations are recorded in each bench's own module doc, and the suite
   is catalogued in `crates/wingfoil-next/benches/README.md`. Still **not** a CI
   gate, for the reason above.
@@ -2118,7 +2197,7 @@ go stale through it). Sections to regenerate against the post-refactor code:
 - The three execution tiers: interpreted sparse dirty-list (`Dispatch::Sparse`,
   default) + full-sweep oracle; fully-monomorphized `compiled()`; `nested()`
   islands.
-- Fluent API + `compat::Signal` facade.
+- Fluent API + `signal::Signal` facade.
 - Sources/edges (ticker/constant/poll/external/channel/feedback), bursts, the
   shared `Kernel`.
 - Adapters + the "adding an op" recipe (post-#496 `#[op]` forwarder mechanism,

@@ -67,7 +67,14 @@ cp "$crit/dense_chain_20/report/violin.svg" "$img/ops/custom_op_dense_chain_20.s
 cp "$crit/sparse_dispatch/report/violin.svg" "$img/ops/store_sparse_dispatch.svg"
 cp "$crit/forward_clone/report/violin.svg" "$img/ops/store_forward_clone.svg"
 
-command -v lscpu >/dev/null && lscpu > "$img/lscpu.txt"
+# The report is captured across two machines (see benches/README.md, "Results"):
+# lscpu.txt is machine A, lscpu-b.txt machine B. Overwriting either from
+# whichever box happens to run this would pair one machine's CPU description
+# with the other's numbers, so write to a neutral file and let a human decide
+# which record — if any — this run replaces.
+command -v lscpu >/dev/null && lscpu > "$img/lscpu-thisrun.txt"
+echo "    wrote ${img#"$root"/}/lscpu-thisrun.txt — rename over lscpu.txt or"
+echo "    lscpu-b.txt only alongside the sections you actually refilled."
 
 echo
 echo "==> estimates"

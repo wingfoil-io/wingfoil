@@ -38,7 +38,10 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: integration
+          shared-key: integration-legacy
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       - name: Pre-pull redis image
         # testcontainers pulls the image lazily on first use, which is
@@ -54,7 +57,7 @@ jobs:
 
       - name: Run redis integration tests
         run: |
-          cargo test --features redis-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/Cargo.toml --features redis-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture redis::integration_tests
         env:
           RUST_LOG: INFO

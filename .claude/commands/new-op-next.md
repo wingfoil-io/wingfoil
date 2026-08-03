@@ -227,12 +227,35 @@ Rules the existing ops encode — follow them:
 - **Declaration — always by hand.** It is the documented public surface, and
   rustc checks the generated body against it, so a signature that drifts from
   the op's shape is a compile error.
-- **Impl — `__wf_fluent_$ARGUMENTS!(T);`** in the
-  `impl<T> StreamOps<T> for Stream<T>` block, in place of the body.
+- **Impl — the macro invocation** in the trait's `impl` block, in place of the
+  body.
 
 The generated signature is `(&self, <edges 1..>, <init>, <cfg>)` — edge 0
 becomes `&self`, later edges become `&Stream<_>` params, then an `init_arg`
 seed, then the config. **Declare it in that order** or the two will not match.
+
+**The op's `In` decides the receiver, and the receiver decides how you invoke
+the macro** — you do not choose. There are three shapes, all generated
+(`tests/op_fluent_shapes.rs` pins each from a trait defined outside the crate):
+
+| Edge 0 of `In` | Receiver | Invocation | Trait it lands on |
+|---|---|---|---|
+| a bare type parameter | `Stream<T>` | `__wf_fluent_$ARGUMENTS!(T);` | `StreamOps`, an adapter trait generic in its payload |
+| a concrete type (`&f64`) | that fixed stream | `__wf_fluent_$ARGUMENTS!();` | `StatisticsOps` and other domain traits |
+| no edges at all (a source) | `GraphBuilder` | `__wf_fluent_$ARGUMENTS!();` | `SourceOps` |
+
+A source's body wires through `GraphBuilder::source` rather than
+`Stream::wire`; nothing else differs. Its own type parameters (`constant`'s
+payload) stay method generics.
+
+There is a **fourth shape, and it is rejected**: an edge 0 that *mentions* a
+type parameter without being one — `Burst<T>`, `Vec<T>`. It is not generic
+(no single ident for the invoking impl to bind) and not concrete (the impl
+still has to supply something), so `#[op(fluent)]` errors on the type telling
+you to make it one or the other, or drop `fluent`. Do not read that error as a
+gap to widen the macro through: a receiver of `Stream<Burst<T>>` almost always
+means the *payload* is the parameter, so the fix is usually the op's `In`, not
+the generator.
 
 Write the body by hand instead when any of these hold — all three are real,
 current cases, not hypotheticals:
@@ -240,10 +263,11 @@ current cases, not hypotheticals:
 - the op is `no_builder` (nothing to forward to) — `with_time`;
 - the fluent signature deliberately reorders the parameters —
   `delay_with_reset(delay, trigger)` puts the cfg before the edge;
-- edge 0 is a concrete type rather than a type parameter, so there is no
-  receiver to substitute — every `StatisticsOps` op on `Stream<f64>`;
 - the fluent signature's types differ from the op's `Cfg` — `logged` (see the
-  gotcha below).
+  gotcha below), and every `time_windowed_*` statistic, whose method takes a
+  `Duration` the body converts to the op's `NanoTime` `Cfg`;
+- the body does more than forward — `ewma_per_tick` `debug_assert!`s its alpha
+  is in `[0, 1]` before wiring.
 
 Hand-written, it is a one-liner over `Stream::wire`:
   ```rust
@@ -255,10 +279,38 @@ Hand-written, it is a one-liner over `Stream::wire`:
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
   (`StatisticsOps` in `stats.rs`); users opt in with
-  `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters.
+  `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters. The trait is
+  yours to declare; only the body comes from the macro.
 
-A source's fluent method goes on `SourceOps` and calls `GraphBuilder::source`
-/ the generated `Builder` method.
+## 4b. The `Signal` facade — one line, and don't skip it
+
+`#[op(build = $ARGUMENTS, fluent)]` emits a **second** macro,
+`__wf_signal_$ARGUMENTS!`, which writes the same combinator for the
+builder-less [`Signal`] facade in `src/signal.rs`. Add the one line to the
+generated `impl<T: 'static> Signal<T>` block:
+
+```rust
+__wf_signal_$ARGUMENTS!(T);      // or !(); for a concrete receiver
+```
+
+**This is a real obligation, not a nicety.** The facade's forwarding was
+hand-written until 2026-08, and it silently fell 15 methods behind the catalog
+— `logged`, the whole `join`/`try_join` family, `drop_small_change` — because
+each op author had no reason to think of it. One line now, or the same drift
+again.
+
+The macro is skipped in exactly two cases, both mirroring step 4: a **source**
+(it enters the facade as a free function that *makes* the graph — hand-write it
+next to `ticker`/`constant`), and an op whose `Signal` signature is not a plain
+forward (`logged`'s `&str` label vs its `(String, Level)` `Cfg`). Put those in
+one of the bound-grouped blocks lower in the file with a comment saying which
+case applies.
+
+Note the generated body wires through `Stream::wire` and the op's `Builder`
+method — **not** through the fluent method. A hand-written trait declaration
+may legitimately be stricter than the op needs (`StreamOps::accumulate`
+requires `T: Default` where the op, whose `Out` is `Vec<T>`, does not), and
+going through it would import that bound into a signature nobody wrote.
 
 ## 5. `nitro!` / compiled coverage
 
@@ -318,6 +370,24 @@ used inside a `nitro!` block only compiles if it has **both** a fluent method
   shape) → add it to the documented allowlist in this file with a one-line
   reason. Adding an op means consciously choosing one of these — never
   silently neither.
+
+**Check the guard actually covers your op's trait.** The rule above is only
+worth what its coverage is, and it has been wrong at trait granularity: the
+whole of `StatisticsOps` — 36 methods — sat in neither list for its entire
+life, because the file was written against `StreamOps` and nobody widened it
+when the statistics surface landed. If you are adding the *first* op to a new
+fluent trait, the block exercising it does not exist yet; write it, or the
+next 35 methods inherit the hole. A cheap check: every `#[op]` in the catalog
+should be reachable from a `nitro!` block in this file or named in one of its
+categories.
+
+If your op lands in **2b** (fluent signature ≠ the op's `Cfg`), say which of
+the two it is: a deliberate ergonomic split that costs nothing compiled
+(`logged` — a debug tap has no place in a compiled kernel), or a real gap
+worth closing later (the `time_windowed_*` family — a compiled kernel *should*
+carry a time-windowed statistic). The fix for the second kind is to take the
+ergonomic type as `Cfg` and convert in `start`, the way `Ticker` does — not to
+touch the macro.
 
 Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,

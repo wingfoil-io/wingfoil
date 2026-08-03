@@ -1,0 +1,15 @@
+/home/user/wingfoil/legacy/target/debug/deps/stlrs-c25666c4c8917726.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_params.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_result.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_params.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_result.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/../README.md
+
+/home/user/wingfoil/legacy/target/debug/deps/libstlrs-c25666c4c8917726.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_params.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_result.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_params.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_result.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/../README.md
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/error.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_impl.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_params.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/mstl_result.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_impl.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_params.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/stl_result.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stlrs-0.3.1/src/../README.md:

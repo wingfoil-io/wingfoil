@@ -126,7 +126,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use proc_macro2::TokenTree;
+use quote::{ToTokens, format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -1030,8 +1031,11 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `build = <name>` — the fluent/graph method name (required, first);
 /// - `fluent` — also emit `__wf_fluent_<name>!`, a `macro_rules!` that writes
 ///   this op's fluent extension-trait *method* (see [`expand_fluent`]); invoke
-///   it in the trait's `impl` block as `__wf_fluent_<name>!(T);`. Needs the
-///   generated `Builder` method, so it is incompatible with `no_builder`;
+///   it in the trait's `impl` block. The op's `In` decides the receiver and so
+///   the invocation form — `__wf_fluent_<name>!(T);` when edge 0 is a type
+///   parameter, `__wf_fluent_<name>!();` for a concrete edge 0 or a source.
+///   Needs the generated `Builder` method, so it is incompatible with
+///   `no_builder`;
 /// - `no_builder` — skip the interpreted `Builder` method, for the few ops
 ///   whose hand-written wiring has a deliberately different signature
 ///   (`bimap`/`trimap`, `with_time`);
@@ -2039,6 +2043,12 @@ fn subst_ident(ts: TokenStream2, from: &Ident, to: &TokenStream2) -> TokenStream
 /// `init_arg` seed) passes straight through — so the whole body is one
 /// `self.wire(|b, h| b.<name>(h, ..))`.
 ///
+/// Three receiver shapes are covered, and the op's own `In` decides which —
+/// see [`FluentReceiver`]. The macro's invocation form is the tell: an op
+/// whose first edge is a type parameter takes that type
+/// (`__wf_fluent_map!(T);`), and the other two take nothing
+/// (`__wf_fluent_rolling_mean!();`, `__wf_fluent_ticker!();`).
+///
 /// It is emitted as a `macro_rules!` rather than as an inherent method on
 /// `Stream<T>` deliberately. An inherent impl would weld every op's method to
 /// `Stream` itself, which is exactly the closed vocabulary the extension-trait
@@ -2054,59 +2064,72 @@ fn subst_ident(ts: TokenStream2, from: &Ident, to: &TokenStream2) -> TokenStream
 /// signature that drifts from the op's shape is a compile error rather than a
 /// silent mismatch.
 ///
-/// Two shapes stay hand-written, both by construction rather than oversight:
-/// an op whose first edge is a concrete type (the `Stream<f64>` statistics
-/// ops) has no type parameter to become the receiver, and one whose fluent
-/// signature orders its parameters differently from the generated
+/// One shape stays hand-written by construction rather than oversight: an op
+/// whose fluent signature orders its parameters differently from the generated
 /// `(edges.., init, cfg)` — `delay_with_reset(delay, trigger)` — cannot be
 /// expressed by a forwarder that follows the builder's order.
 fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (shape, name) = (b.shape, &args.build);
     let n = shape.edge_ref_tys.len();
-    if n == 0 {
-        return Err(syn::Error::new(
-            name.span(),
-            "#[op]: `fluent` needs at least one input edge to become `&self` \\
-             (a source has none — write its `SourceOps` method by hand)",
-        ));
-    }
 
-    // The receiver: edge 0's value type must be one of the impl's own type
-    // parameters, since it is what the invoking trait impl substitutes its
-    // own stream parameter for. A concrete edge-0 type (`&f64`) would make
-    // the method's receiver fixed, which the trait impl cannot express.
-    let self_param = match &shape.edge_val_tys[0] {
-        Type::Path(p) => p
-            .path
-            .get_ident()
-            .filter(|id| b.type_params.iter().any(|tp| tp == *id))
-            .ok_or(()),
-        _ => Err(()),
-    }
-    .map_err(|_| {
+    // Edge 0 is the receiver whenever the op has one, because the generated
+    // body forwards through `Stream::wire`, which passes the receiver's handle
+    // to the `Builder` method first.
+    let receiver = if n == 0 {
+        FluentReceiver::Source
+    } else {
         let ty = &shape.edge_val_tys[0];
-        syn::Error::new(
-            name.span(),
-            format!(
-                "#[op]: `fluent` needs this op's first edge to be a bare type \\
-                 parameter (it becomes the method's `&self`), but it is \\
-                 `{}` — write the fluent method by hand",
-                quote! { #ty }
-            ),
-        )
-    })?
-    .clone();
+        let bare = match ty {
+            Type::Path(p) => p
+                .path
+                .get_ident()
+                .filter(|id| b.type_params.iter().any(|tp| tp == *id))
+                .cloned(),
+            _ => None,
+        };
+        match bare {
+            Some(id) => FluentReceiver::Generic(id),
+            // Concrete is *not* the fallback for everything that is not a bare
+            // parameter: a type that merely mentions one — `Burst<T>` — has
+            // something the invoking impl must supply, but no single ident to
+            // bind it to. Generating `Concrete` for it would emit a macro
+            // taking no `$t` whose body still says `T`, and the author would
+            // meet an unresolved-name error at the invocation site with
+            // nothing pointing back here. Reject it where the shape is known.
+            None if mentions_any(ty, b.type_params) => {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "#[op(fluent)] cannot derive a receiver from this edge: it \
+                     mentions one of the op's type parameters but is not itself \
+                     a bare type parameter, so the generated macro has no single \
+                     ident to bind. Make edge 0 either a bare parameter (`T` → \
+                     `Stream<T>`) or fully concrete (`f64` → `Stream<f64>`), or \
+                     drop `fluent` and write the method by hand.",
+                ));
+            }
+            None => FluentReceiver::Concrete,
+        }
+    };
+    let self_param = match &receiver {
+        FluentReceiver::Generic(id) => Some(id.clone()),
+        _ => None,
+    };
 
-    // Every mention of that parameter becomes the macro's `$t`, so the
-    // invoking impl binds the receiver's element type.
+    // Under a generic receiver, every mention of that parameter becomes the
+    // macro's `$t`, so the invoking impl binds the receiver's element type.
+    // The other two receivers name no type the impl has to supply, so their
+    // macros take no argument and substitute nothing.
     let dollar_t = quote! { $t };
-    let sub = |ts: TokenStream2| subst_ident(ts, &self_param, &dollar_t);
+    let sub = |ts: TokenStream2| match &self_param {
+        Some(p) => subst_ident(ts, p, &dollar_t),
+        None => ts,
+    };
 
     // The method's own generics are the impl's, less the receiver's.
     let method_generics: Vec<&Ident> = b
         .type_params
         .iter()
-        .filter(|tp| **tp != self_param)
+        .filter(|tp| Some(*tp) != self_param.as_ref())
         .collect();
     let generics = if method_generics.is_empty() {
         quote! {}
@@ -2117,13 +2140,17 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     // Edges 1.. become `&Stream<_>` parameters; their handles are taken
     // before the wiring closure so it can capture them by value.
     let edge_ids: Vec<Ident> = (1..n).map(|i| format_ident!("__e{i}")).collect();
-    let edge_params = edge_ids
+    let edge_tys: Vec<TokenStream2> = shape
+        .edge_val_tys
         .iter()
-        .zip(&shape.edge_val_tys[1..])
-        .map(|(id, ty)| {
-            let ty = sub(quote! { #ty });
-            quote! { #id: &$crate::fluent::Stream<#ty> }
-        });
+        .skip(1)
+        .map(|ty| sub(quote! { #ty }))
+        .collect();
+    let edge_params: Vec<TokenStream2> = edge_ids
+        .iter()
+        .zip(&edge_tys)
+        .map(|(id, ty)| quote! { #id: &$crate::fluent::Stream<#ty> })
+        .collect();
 
     let (state_ty, cfg_ty, raw_out) = (b.state_ty, b.cfg_ty, b.out_ty);
     let (init_param, init_arg) = if args.init_arg {
@@ -2155,7 +2182,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     let mut bound = |ty: &Type, bounds: TokenStream2| {
         let is_generic = matches!(ty, Type::Path(p)
             if p.path.get_ident().is_some_and(|id|
-                id == &self_param || method_generics.contains(&id)));
+                Some(id) == self_param.as_ref() || method_generics.contains(&id)));
         if is_generic {
             preds.push(sub(quote! { #ty: #bounds }));
         }
@@ -2170,17 +2197,68 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
         bound(raw_out, quote! { ::core::default::Default });
     }
 
+    // A source has no upstream handle to thread, so it wires through
+    // `GraphBuilder::source` rather than `Stream::wire`; everything else about
+    // the method — generics, config, output — is identical.
+    let body = if matches!(receiver, FluentReceiver::Source) {
+        quote! { self.source(move |__b| __b.#name(#init_arg #cfg_arg)) }
+    } else {
+        quote! {
+            #(let #edge_ids = #edge_ids.handle();)*
+            self.wire(move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg))
+        }
+    };
+
     let mac = format_ident!("__wf_fluent_{name}");
+    let (matcher, invocation, doc_tail) = match &receiver {
+        FluentReceiver::Generic(_) => (
+            quote! { ($t:ty) },
+            format!("{mac}!(T);"),
+            "over the trait's element type `T`".to_string(),
+        ),
+        FluentReceiver::Concrete => {
+            let ty = &shape.edge_val_tys[0];
+            (
+                quote! { () },
+                format!("{mac}!();"),
+                format!(
+                    "over `Stream<{}>`, the concrete receiver its first edge fixes",
+                    quote! { #ty }
+                ),
+            )
+        }
+        FluentReceiver::Source => (
+            quote! { () },
+            format!("{mac}!();"),
+            "on a `GraphBuilder` extension trait (it is a source — no receiver \
+             stream)"
+                .to_string(),
+        ),
+    };
     let doc = format!(
-        "Fluent wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke it \\
-         inside an extension-trait `impl` — `{mac}!(T);` — to define the \\
-         `{name}` method over the trait's element type `T`."
+        "Fluent wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke it \
+         inside an extension-trait `impl` — `{invocation}` — to define the \
+         `{name}` method {doc_tail}."
     );
+    let signal = expand_signal(SignalShape {
+        name,
+        receiver: &receiver,
+        matcher: &matcher,
+        generics: &generics,
+        edge_ids: &edge_ids,
+        edge_tys: &edge_tys,
+        init_param: &init_param,
+        init_arg: &init_arg,
+        cfg_param: &cfg_param,
+        cfg_arg: &cfg_arg,
+        out_ty: &out_ty,
+        preds: &preds,
+    });
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
         macro_rules! #mac {
-            ($t:ty) => {
+            #matcher => {
                 fn #name #generics (
                     &self,
                     #(#edge_params,)*
@@ -2189,12 +2267,157 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 ) -> $crate::fluent::Stream<#out_ty>
                 where #(#preds),*
                 {
-                    #(let #edge_ids = #edge_ids.handle();)*
-                    self.wire(move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg))
+                    #body
                 }
             };
         }
+        #signal
     })
+}
+
+/// The pieces [`expand_fluent`] has already derived that [`expand_signal`]
+/// re-uses verbatim. Everything here is computed once, against the op's shape;
+/// the `Signal` twin differs only in the types it wraps and the body it emits.
+struct SignalShape<'a> {
+    name: &'a Ident,
+    receiver: &'a FluentReceiver,
+    matcher: &'a TokenStream2,
+    generics: &'a TokenStream2,
+    edge_ids: &'a [Ident],
+    edge_tys: &'a [TokenStream2],
+    init_param: &'a TokenStream2,
+    init_arg: &'a TokenStream2,
+    cfg_param: &'a TokenStream2,
+    cfg_arg: &'a TokenStream2,
+    out_ty: &'a TokenStream2,
+    preds: &'a [TokenStream2],
+}
+
+/// Writes the op's [`Signal`](../wingfoil_next/signal/index.html) method —
+/// the implicit-graph facade's twin of the fluent one — as
+/// `__wf_signal_<name>!`.
+///
+/// `Signal<T>` is a newtype over `Stream<T>` carrying the graph and a slot for
+/// its `Runner`, so every one of its combinators is the same forward: unwrap
+/// the receiver and each edge, wire the op, re-wrap. That is mechanical enough
+/// that the facade drifted — it was missing 15 of `StreamOps`' 41 methods, one
+/// per op nobody remembered to hand-forward — so the macro writes it.
+///
+/// The unwrap/re-wrap goes through `Signal::as_stream` and `Signal::wrap`,
+/// the `pub(crate)` pair the facade documents as its seam — the same
+/// arrangement as the `Builder` wiring seam [`expand_builder`] targets. This
+/// generator therefore names no private field of a type it does not own, and
+/// `signal.rs` stays free to change its representation.
+///
+/// The body wires through `Stream::wire` and the op's generated `Builder`
+/// method — the same target the fluent method forwards to — rather than
+/// calling the fluent method itself. That keeps the `Signal` method's bounds
+/// exactly the op's: a hand-written trait declaration is free to be *stricter*
+/// than the op needs (`StreamOps::accumulate` asks for `T: Default` where the
+/// op, whose `Out` is a `Vec<T>`, does not), and routing through it would
+/// import that stricter bound into a signature the generator did not write.
+///
+/// Unlike the fluent method these are **inherent** methods, so there is no
+/// hand-written trait declaration for rustc to check the body against. The
+/// whole method is generated, docs included: they point at the op's `Builder`
+/// method, whose docs are the op witness type's, so the semantics are stated
+/// once and the facade cannot describe them differently from the engine.
+///
+/// A source gets no method — it enters the facade as a free function that
+/// makes the graph (`signal::ticker`), which is a different shape and stays
+/// hand-written.
+///
+/// The expansion targets a `pub(crate)` seam, so it only compiles inside
+/// `wingfoil-next`. That is not a limitation to design around — these are
+/// inherent methods on a type this crate owns, so no other crate could invoke
+/// the macro usefully anyway. It is why the macro is `__`-prefixed and
+/// undocumented in the public API despite `#[macro_export]`, which it needs
+/// only to be visible at the crate root where `signal.rs` invokes it.
+fn expand_signal(s: SignalShape<'_>) -> TokenStream2 {
+    if matches!(s.receiver, FluentReceiver::Source) {
+        return quote! {};
+    }
+    let (name, generics, matcher) = (s.name, s.generics, s.matcher);
+    let (edge_ids, init_arg, cfg_arg) = (s.edge_ids, s.init_arg, s.cfg_arg);
+    let (init_param, cfg_param, out_ty, preds) = (s.init_param, s.cfg_param, s.out_ty, s.preds);
+    let edge_params = edge_ids
+        .iter()
+        .zip(s.edge_tys)
+        .map(|(id, ty)| quote! { #id: &$crate::signal::Signal<#ty> });
+
+    let mac = format_ident!("__wf_signal_{name}");
+    let method_doc = format!(
+        "The [`Signal`](crate::signal::Signal) form of [`{name}`]\
+         (crate::interp::Builder::{name}) — see there for what it computes and \
+         when it ticks. Generated by `#[op(fluent)]`."
+    );
+    let doc = format!(
+        "`Signal` wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke \
+         it inside an `impl Signal<..>` block — the expansion goes through \
+         `Signal`'s `pub(crate)` `as_stream` / `wrap` seam, so it compiles \
+         only inside `wingfoil-next`."
+    );
+    quote! {
+        #[doc = #doc]
+        #[macro_export]
+        macro_rules! #mac {
+            #matcher => {
+                #[doc = #method_doc]
+                pub fn #name #generics (
+                    &self,
+                    #(#edge_params,)*
+                    #init_param
+                    #cfg_param
+                ) -> $crate::signal::Signal<#out_ty>
+                where #(#preds),*
+                {
+                    #(let #edge_ids = #edge_ids.as_stream().handle();)*
+                    self.wrap(self.as_stream().wire(
+                        move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg)
+                    ))
+                }
+            };
+        }
+    }
+}
+
+/// Whether `ty` mentions any of `params` at any depth.
+///
+/// Token-level on purpose. The question [`expand_fluent`] asks is only
+/// "does the invoking impl have to supply something for this type", and an
+/// occurrence of the parameter's ident anywhere answers yes — no type
+/// resolution needed. A false positive (a path segment that merely shares a
+/// parameter's name) costs an error telling the author to hand-write the
+/// method, which is what the generator did for every non-bare shape before it
+/// learned the concrete receiver; a false *negative* is what this exists to
+/// prevent, and tokens cannot produce one.
+fn mentions_any(ty: &Type, params: &[Ident]) -> bool {
+    fn walk(ts: TokenStream2, params: &[Ident]) -> bool {
+        ts.into_iter().any(|tt| match tt {
+            TokenTree::Ident(id) => params.contains(&id),
+            TokenTree::Group(g) => walk(g.stream(), params),
+            _ => false,
+        })
+    }
+    walk(ty.to_token_stream(), params)
+}
+
+/// Which of the three receiver shapes an op's [generated fluent
+/// method](expand_fluent) takes — decided by the op's own `In`, not by the
+/// author. A shape that is none of the three is [rejected with a
+/// message](expand_fluent), never silently forced into one.
+enum FluentReceiver {
+    /// Edge 0 is one of the impl's type parameters, so the invoking trait impl
+    /// substitutes its element type for it: the macro takes that type as `$t`
+    /// (`StreamOps`, and any adapter trait generic in its payload).
+    Generic(Ident),
+    /// Edge 0 is a fixed type (`&f64` — the statistics ops, the augurs
+    /// adapter), so the receiver is `Stream<f64>` and there is nothing for the
+    /// invoking impl to supply.
+    Concrete,
+    /// No edges at all: the receiver is the `GraphBuilder`, and the body wires
+    /// through `GraphBuilder::source` (`SourceOps::ticker`, `constant`).
+    Source,
 }
 
 fn expand(def: &NitroDef) -> TokenStream2 {
@@ -2284,7 +2507,11 @@ fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
     match target {
         Target::Compiled => quote! { ::wingfoil_next::op::Ctx::new(&mut __k, #idx) },
         Target::Nested => {
-            quote! { ::wingfoil_next::op::Ctx::nested(__now, __start_time, &mut __q, #idx) }
+            quote! {
+                ::wingfoil_next::op::Ctx::nested(
+                    __now, __wall_time, __start_time, &mut __q, #idx,
+                )
+            }
         }
     }
 }
@@ -2672,6 +2899,10 @@ fn expand_nested(def: &NitroDef) -> TokenStream2 {
             )*
             __g.__composite(__active, __passive, #callback_activated, move |__ctx, __phase| {
                 let __now = __ctx.time();
+                // The outer cycle's wall snap, taken once and shared by every
+                // inner node's `Ctx`. Per-node `NanoTime::now()` reads used to
+                // cost the island ~24 ns per node per activation.
+                let __wall_time = __ctx.wall_time();
                 let __start_time = __ctx.start_time();
                 match __phase {
                     ::wingfoil_next::op::CompositePhase::Start => {
@@ -3003,4 +3234,68 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    fn params(names: &[&str]) -> Vec<Ident> {
+        names
+            .iter()
+            .map(|n| Ident::new(n, Span::call_site()))
+            .collect()
+    }
+
+    /// The predicate that separates [`FluentReceiver::Concrete`] from the
+    /// shapes `#[op(fluent)]` must reject.
+    ///
+    /// `Burst<T>` is the case this exists for: it is not a bare parameter, so
+    /// it is not `Generic`, but it is not concrete either — treating it as
+    /// `Concrete` would emit a macro taking no `$t` whose body still says `T`.
+    #[test]
+    fn mentions_any_sees_parameters_at_every_depth() {
+        let t = params(&["T"]);
+        for ty in [
+            parse_quote!(T),
+            parse_quote!(Burst<T>),
+            parse_quote!(Vec<Option<T>>),
+            parse_quote!((T, u64)),
+            parse_quote!(&[T]),
+        ] {
+            let ty: Type = ty;
+            assert!(mentions_any(&ty, &t), "{} mentions T", ty.to_token_stream());
+        }
+    }
+
+    /// The other side: a genuinely concrete edge — the statistics ops' `f64`,
+    /// and a generic type whose arguments are all concrete — stays `Concrete`,
+    /// so the fixed-receiver shape keeps generating.
+    #[test]
+    fn mentions_any_ignores_types_with_no_parameter() {
+        let t = params(&["T"]);
+        for ty in [
+            parse_quote!(f64),
+            parse_quote!(Burst<u64>),
+            parse_quote!(Vec<NanoTime>),
+            parse_quote!((u64, bool)),
+        ] {
+            let ty: Type = ty;
+            assert!(
+                !mentions_any(&ty, &t),
+                "{} mentions no parameter",
+                ty.to_token_stream()
+            );
+        }
+    }
+
+    /// An op generic in more than one parameter must trip on any of them, not
+    /// just the first.
+    #[test]
+    fn mentions_any_checks_every_parameter() {
+        let ab = params(&["A", "B"]);
+        let ty: Type = parse_quote!(Burst<B>);
+        assert!(mentions_any(&ty, &ab));
+    }
 }
