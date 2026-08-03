@@ -28,7 +28,7 @@ arranged so that cutover is a deletion, not a re-organisation.
 crates/                     # every Cargo crate in the tree
   wingfoil-next/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
-                            #   compat.rs, runtime/, examples/, tests/, benches/
+                            #   signal.rs, runtime/, examples/, tests/, benches/
   wingfoil-next-macros/     # nitro! / #[op] proc macros
   wingfoil-next-python/     # PyO3 Python bindings (built with maturin)
   wingfoil-next-python-macros/

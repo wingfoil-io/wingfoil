@@ -188,9 +188,7 @@ pub trait StatisticsOps {
 }
 
 impl StatisticsOps for Stream<f64> {
-    fn ewma(&self, decay: EwmaDecay) -> Stream<f64> {
-        self.wire(|b, h| b.ewma(h, decay))
-    }
+    __wf_fluent_ewma!();
 
     fn ewma_per_tick(&self, alpha: f64) -> Stream<f64> {
         debug_assert!(
@@ -200,65 +198,35 @@ impl StatisticsOps for Stream<f64> {
         self.wire(|b, h| b.ewma_per_tick(h, alpha))
     }
 
-    fn ewma_half_life(&self, half_life: Duration) -> Stream<f64> {
-        self.wire(|b, h| b.ewma_half_life(h, half_life))
-    }
+    __wf_fluent_ewma_half_life!();
 
-    fn rolling_sum(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_sum(h, window))
-    }
+    __wf_fluent_rolling_sum!();
 
-    fn rolling_mean(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_mean(h, window))
-    }
+    __wf_fluent_rolling_mean!();
 
-    fn rolling_min(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_min(h, window))
-    }
+    __wf_fluent_rolling_min!();
 
-    fn rolling_max(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_max(h, window))
-    }
+    __wf_fluent_rolling_max!();
 
-    fn rolling_var(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_var(h, window))
-    }
+    __wf_fluent_rolling_var!();
 
-    fn rolling_std(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_std(h, window))
-    }
+    __wf_fluent_rolling_std!();
 
-    fn rolling_median(&self, window: usize) -> Stream<f64> {
-        self.wire(|b, h| b.rolling_median(h, window))
-    }
+    __wf_fluent_rolling_median!();
 
-    fn cumulative_sum(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_sum(h))
-    }
+    __wf_fluent_cumulative_sum!();
 
-    fn cumulative_mean(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_mean(h))
-    }
+    __wf_fluent_cumulative_mean!();
 
-    fn cumulative_min(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_min(h))
-    }
+    __wf_fluent_cumulative_min!();
 
-    fn cumulative_max(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_max(h))
-    }
+    __wf_fluent_cumulative_max!();
 
-    fn cumulative_var(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_var(h))
-    }
+    __wf_fluent_cumulative_var!();
 
-    fn cumulative_std(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_std(h))
-    }
+    __wf_fluent_cumulative_std!();
 
-    fn cumulative_median(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_median(h))
-    }
+    __wf_fluent_cumulative_median!();
 
     fn time_windowed_sum(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
@@ -295,29 +263,17 @@ impl StatisticsOps for Stream<f64> {
         self.wire(move |b, h| b.time_windowed_median(h, window))
     }
 
-    fn cumulative_mean_time_weighted(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_mean_time_weighted(h))
-    }
+    __wf_fluent_cumulative_mean_time_weighted!();
 
-    fn cumulative_var_time_weighted(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_var_time_weighted(h))
-    }
+    __wf_fluent_cumulative_var_time_weighted!();
 
-    fn cumulative_std_time_weighted(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_std_time_weighted(h))
-    }
+    __wf_fluent_cumulative_std_time_weighted!();
 
-    fn rolling_mean_time_weighted(&self, window: usize) -> Stream<f64> {
-        self.wire(move |b, h| b.rolling_mean_time_weighted(h, window))
-    }
+    __wf_fluent_rolling_mean_time_weighted!();
 
-    fn rolling_var_time_weighted(&self, window: usize) -> Stream<f64> {
-        self.wire(move |b, h| b.rolling_var_time_weighted(h, window))
-    }
+    __wf_fluent_rolling_var_time_weighted!();
 
-    fn rolling_std_time_weighted(&self, window: usize) -> Stream<f64> {
-        self.wire(move |b, h| b.rolling_std_time_weighted(h, window))
-    }
+    __wf_fluent_rolling_std_time_weighted!();
 
     fn time_windowed_mean_time_weighted(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);
@@ -334,13 +290,9 @@ impl StatisticsOps for Stream<f64> {
         self.wire(move |b, h| b.time_windowed_std_time_weighted(h, window))
     }
 
-    fn cumulative_median_time_weighted(&self) -> Stream<f64> {
-        self.wire(|b, h| b.cumulative_median_time_weighted(h))
-    }
+    __wf_fluent_cumulative_median_time_weighted!();
 
-    fn rolling_median_time_weighted(&self, window: usize) -> Stream<f64> {
-        self.wire(move |b, h| b.rolling_median_time_weighted(h, window))
-    }
+    __wf_fluent_rolling_median_time_weighted!();
 
     fn time_windowed_median_time_weighted(&self, window: Duration) -> Stream<f64> {
         let window = NanoTime::from(window);

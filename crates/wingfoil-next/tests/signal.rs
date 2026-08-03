@@ -1,14 +1,19 @@
-//! Phase 6 facade: legacy-style wingfoil programs run on the new engine.
-//! These are written exactly as legacy code is — free source functions,
-//! `stream.run(...)`, `stream.peek_value()` — but every stream is backed by
-//! the new `Op`/`Builder` engine. This is the compatibility surface that
-//! lets existing code (and the Python bindings) migrate unchanged.
+//! The builder-less [`Signal`] facade: whole programs in the legacy idiom —
+//! free source functions, `stream.run(...)`, `stream.peek_value()` — with
+//! every stream backed by the new `Op`/`Builder` engine.
+//!
+//! `Signal`'s combinators are generated from the op catalog by
+//! `#[op(build = x, fluent)]`, so this file is where the generated surface is
+//! *exercised*: that each method's signature is the one a caller expects, and
+//! that it computes what its fluent twin does. `op_fluent_shapes.rs` pins the
+//! generator's shapes; these are the semantics.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wingfoil_next::compat::{constant, ticker};
+use wingfoil_next::signal::{constant, ticker};
 use wingfoil_next::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -436,4 +441,151 @@ fn legacy_filter_none_drops_none() {
         .accumulate();
     out.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
     assert_eq!(vec![1, 3, 5], out.peek_value());
+}
+
+// --- the surface the facade gained when its forwarding became generated ------
+//
+// These fifteen methods were missing while `Signal`'s combinators were
+// hand-written: each landed in the op catalog, got its fluent method, and
+// nobody came back to forward it. They exist now because `#[op(fluent)]`
+// writes the `Signal` twin too, and these tests are what says the generated
+// signatures are usable and agree with their fluent counterparts.
+
+/// `join` combines two signals, ticking when *either* input ticks.
+#[test]
+fn legacy_join_combines_two_signals() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let doubled = count.map(|c: &u64| c * 2);
+    let summed = count.join(&doubled, |a: &u64, b: &u64| a + b).accumulate();
+    summed.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![3, 6, 9], summed.peek_value());
+}
+
+/// `join_passive` reads `other` without letting it trigger the combine, so the
+/// output ticks once per *source* tick — three ticks here, not the six a pair
+/// of active edges would give.
+///
+/// The first pair is `(1, 1)`, not `(1, 0)`: `delay` writes its value slot with
+/// `Tick::Silent`, updating the slot without ticking, precisely so a passive
+/// reader never sees `T::default()`. That contract is only observable through a
+/// passive edge, which makes this its test.
+#[test]
+fn legacy_join_passive_does_not_trigger_on_the_passive_edge() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let lagged = count.delay(Duration::from_nanos(100));
+    let paired = count
+        .join_passive(&lagged, |now: &u64, then: &u64| (*now, *then))
+        .accumulate();
+    paired.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![(1, 1), (2, 1), (3, 2)], paired.peek_value());
+}
+
+/// `join3` takes two further edges, all active.
+#[test]
+fn legacy_join3_combines_three_signals() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let doubled = count.map(|c: &u64| c * 2);
+    let tripled = count.map(|c: &u64| c * 3);
+    let summed = count
+        .join3(&doubled, &tripled, |a: &u64, b: &u64, c: &u64| a + b + c)
+        .accumulate();
+    summed.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![6, 12, 18], summed.peek_value());
+}
+
+/// The `try_` joins propagate a closure error out of `run`, aborting it — the
+/// facade's fallibility contract reaching the generated methods.
+#[test]
+fn legacy_try_join_aborts_the_run_on_error() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let doubled = count.map(|c: &u64| c * 2);
+    let checked = count.try_join(&doubled, |a: &u64, b: &u64| {
+        if *a >= 3 {
+            anyhow::bail!("too big");
+        }
+        Ok(a + b)
+    });
+    let err = checked.run(HISTORICAL, RunFor::Cycles(5)).unwrap_err();
+    // The engine wraps the closure's error in node context, so the cause chain
+    // (`{:#}`) is where the original message lives.
+    assert!(format!("{err:#}").contains("too big"), "{err:#}");
+    assert!(err.to_string().contains("TryJoin"), "{err}");
+}
+
+/// `try_join3` / `try_join_passive` wire the same way; assert the happy path
+/// so both generated signatures stay exercised.
+#[test]
+fn legacy_try_join3_and_try_join_passive_combine() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let doubled = count.map(|c: &u64| c * 2);
+    let tripled = count.map(|c: &u64| c * 3);
+    let three = count
+        .try_join3(&doubled, &tripled, |a: &u64, b: &u64, c: &u64| {
+            Ok(a + b + c)
+        })
+        .accumulate();
+    let passive = count
+        .try_join_passive(&doubled, |a: &u64, b: &u64| Ok(a + b))
+        .accumulate();
+    three.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![6, 12, 18], three.peek_value());
+    assert_eq!(vec![3, 6, 9], passive.peek_value());
+}
+
+/// `drop_small_change` suppresses a tick whose change the predicate calls
+/// small, measured against the last *emitted* value — so a slow drift of
+/// individually-small steps still eventually gets through.
+#[test]
+fn legacy_drop_small_change_suppresses_small_steps() {
+    let values = ticker(Duration::from_nanos(100))
+        .count()
+        .map(|c: &u64| *c as f64)
+        .drop_small_change(|last: &f64, next: &f64| (next - last).abs() < 2.5)
+        .accumulate();
+    values.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![1.0, 4.0], values.peek_value());
+}
+
+/// `logged` is a pass-through tap. It stays hand-written (its `&str` label
+/// differs from the op's `(String, Level)` `Cfg`), so this pins that the
+/// facade carries it at all — the gap that prompted generating the rest.
+#[test]
+fn legacy_logged_passes_through() {
+    let counted = ticker(Duration::from_nanos(100))
+        .count()
+        .logged("count", log::Level::Debug)
+        .accumulate();
+    counted.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(vec![1, 2, 3], counted.peek_value());
+}
+
+/// The generated `inspect` / `for_each` still see every value, and the
+/// generated `sample` still reads passively — the three that carry side
+/// effects or a passive mask, where a mis-generated body would show up as
+/// wrong observations rather than a compile error.
+#[test]
+fn legacy_generated_taps_observe_every_value() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    // Every signal here comes off the one `ticker`: each free source function
+    // mints its *own* graph, so signals from two of them cannot be combined.
+    let tk = ticker(Duration::from_nanos(100));
+    let count = tk.count();
+    let tapped = count.inspect(move |v: &u64| {
+        recorded.lock().expect("seen mutex poisoned").push(*v);
+    });
+    let trigger = tk.filter(&count.map(|i: &u64| i.is_multiple_of(2)));
+    let sampled = tapped.sample(&trigger).accumulate();
+    sampled.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    assert_eq!(
+        vec![1, 2, 3, 4, 5, 6],
+        *seen.lock().expect("seen mutex poisoned"),
+        "inspect sees every tick of its source"
+    );
+    assert_eq!(
+        vec![2, 4, 6],
+        sampled.peek_value(),
+        "sample reads on the trigger's tick only"
+    );
 }
