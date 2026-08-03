@@ -347,8 +347,8 @@ Both bars predate the scheduler-cost fix ([above](#results)), and this is the
 bench it moves most: the padding is 256 cold branches with **256 separate
 tickers**, so the `Sparse` bar was mostly paying for timers that never fired
 rather than for the ~8 nodes that did. A paired re-run on the same machine puts
-it at **19.4 ms → 6.65 ms**, i.e. ~330 ns per cycle rather than ~984, which
-widens the sparse-vs-oracle gap from 6.2× to ~17×. The table above is left as
+it at **19.4 ms → 5.88 ms**, i.e. ~294 ns per cycle rather than ~984, which
+widens the sparse-vs-oracle gap from 6.2× to ~19×. The table above is left as
 captured, matching how the other superseded readings here are handled.
 [Violin plot](images/ops/store_sparse_dispatch.svg).
 

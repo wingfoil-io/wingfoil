@@ -1241,10 +1241,10 @@ Results, on an 8-node hot path padded with idle tickers (ns per cycle):
 | Idle tickers | 0 | 64 | 256 | 1024 |
 |---|---|---|---|---|
 | before | 247 | 421 | 943 | 2994 |
-| after | 247 | 300 | 327 | 459 |
+| after | 247 | 266 | 287 | 442 |
 
 `store_baseline`'s `sparse_dispatch` bar — an ~8-node hot path among 256 cold
-branches, each with its own ticker — went **19.4 ms → 6.65 ms**. Graphs with a
+branches, each with its own ticker — went **19.4 ms → 5.88 ms**. Graphs with a
 single timer are unchanged to within noise, which is the constraint that
 shaped the fix.
 
