@@ -1,5 +1,5 @@
-Implement a new node/op for **wingfoil-next** named `$ARGUMENTS`, in the op
-catalog (`crates/wingfoil-next/src/ops.rs`, or `stats.rs` for a
+Implement a new node/op for **wingfoil** named `$ARGUMENTS`, in the op
+catalog (`crates/wingfoil/src/ops.rs`, or `stats.rs` for a
 statistics op). Follow these steps in order. Work test-driven: write each
 parity test before its implementation.
 
@@ -19,7 +19,7 @@ reference implementations; read them before writing code:
   `ACTIVATION`, and `Tick<T>` (`Value` / `Silent` / `Quiet`).
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
-- `crates/wingfoil-next-macros/src/lib.rs` — the `#[op]` macro and its flags.
+- `crates/wingfoil-macros/src/lib.rs` — the `#[op]` macro and its flags.
 - `docs/port-plan.md` → **"Adding an op — current tooling"** — the
   authoritative recipe and the touch-point table; read it first.
 
@@ -144,7 +144,7 @@ a fan-in of runtime width has none. The route that works, if you need another:
   add a benchmark bar at a width where the difference can show.
 
 `#[op]` is **in-crate tooling**: its output names `crate::interp::Builder`, so
-an op defined outside `wingfoil-next` writes its forwarders by hand and wires
+an op defined outside `wingfoil` writes its forwarders by hand and wires
 the interpreted side through the public `register_op1`…`register_op4` (or
 `bimap` / `fold`) primitives — see `tests/custom_op.rs`, which keeps a worked
 example of both.
@@ -297,7 +297,7 @@ Hand-written, it is a one-liner over `Stream::wire`:
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
   (`StatisticsOps` in `stats.rs`); users opt in with
-  `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters. The trait is
+  `use wingfoil::stats::StatisticsOps;`, mirroring adapters. The trait is
   yours to declare; only the body comes from the macro.
 
 ## 4b. The `Signal` facade — one line, and don't skip it
@@ -414,9 +414,9 @@ has `start`/`stop` hooks.
 
 ### Python bindings — see step 7
 
-## 7. Python bindings (`wingfoil-next-python`)
+## 7. Python bindings (`wingfoil-python`)
 
-`wingfoil-next-python` is the **go-forward** Python binding (it supersedes
+`wingfoil-python` is the **go-forward** Python binding (it supersedes
 legacy `wingfoil-python`; see `docs/python-interop.md`). Everything
 Python-composable rides one erased edge type, `PyElement` — **only the edges
 erase**, the op interior stays natively typed. pyo3 forbids `#[pymethods]` on a
@@ -427,7 +427,7 @@ polars expression plugins use.
 Pick the lightest tool that fits:
 
 - **Stateless single-input** (with or without one config arg) → the
-  `pyop_fn!` declarative macro (`crates/wingfoil-next-python/src/macros.rs`):
+  `pyop_fn!` declarative macro (`crates/wingfoil-python/src/macros.rs`):
   ```rust
   pyop_fn! {
       /// <doc>
@@ -435,7 +435,7 @@ Pick the lightest tool that fits:
   }
   ```
 - **Any concrete one-, two- or three-input op** → the `#[pyop]` **proc**
-  macro (`wingfoil-next-python-macros`), placed alongside `#[op]` on the `Op`
+  macro (`wingfoil-python-macros`), placed alongside `#[op]` on the `Op`
   impl; it reads the associated types + `cycle` and emits the `#[pyfunction]`:
   ```rust
   #[op(build = $ARGUMENTS)]
@@ -473,7 +473,7 @@ Then:
 3. **Rust seam test** in `tests/plugin_seam.rs` — wire the op over
    `wire_op1`/`wire_op2` and assert values + tick times, the same parity
    discipline as everywhere in next.
-4. **pytest** in `tests/test_interop.py` — call `wingfoil_next.$ARGUMENTS(...)`,
+4. **pytest** in `tests/test_interop.py` — call `wingfoil.$ARGUMENTS(...)`,
    compose it between built-in combinators, and assert the result. Include a
    round-trip that also authors the same graph purely in Rust and asserts they
    agree, when practical (the parity-oracle discipline).
@@ -520,10 +520,10 @@ makes it feel native rather than bolted on:
   the pyclass methods use — `graph.rs` owns the erased object form and the real
   work (returning `anyhow::Result`), `python.rs` owns `#[pyclass]`/`#[pyfunction]`
   argument extraction and the `to_pyerr` mapping.
-- **Prefer Rust over a new pure-Python module.** `python/wingfoil_next/` exists
+- **Prefer Rust over a new pure-Python module.** `python/wingfoil/` exists
   only for what genuinely needs Python (subclassing, in `CustomStream`), and its
   `__init__.py` re-export is *derived* from the extension — so a Rust
-  `#[pyfunction]` appears in `wingfoil_next.*` with nothing to keep in sync,
+  `#[pyfunction]` appears in `wingfoil.*` with nothing to keep in sync,
   while a Python helper is a second hand-maintained surface. Even helpers that
   are "just pandas calls" belong in Rust for that reason.
 
@@ -534,7 +534,7 @@ pytest.
 **A *family* of ops binds as one dispatcher, not one function per op.** The
 op-per-binding assumption above breaks whenever the legacy Python contract
 parameterises a whole family with argument *objects*. The statistics surface is
-the worked example (`crates/wingfoil-next-python/src/statistics.rs`): the engine
+the worked example (`crates/wingfoil-python/src/statistics.rs`): the engine
 spells out ~40 methods on `StatisticsOps` (`rolling_mean`,
 `time_windowed_mean`, `cumulative_mean_time_weighted`, …) because Rust affords a
 wide statically-checked surface; legacy Python offered eight methods times two
@@ -588,10 +588,10 @@ command at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test -p wingfoil-next                  # catalog + completeness + parity
+cargo test --manifest-path crates/wingfoil/Cargo.toml                  # catalog + completeness + parity
 # if you touched Python bindings:
-cargo test -p wingfoil-next-python           # the Rust seam tests
-cd crates/wingfoil-next-python && maturin develop && pytest
+cargo test --manifest-path crates/wingfoil-python/Cargo.toml           # the Rust seam tests
+cd crates/wingfoil-python && maturin develop && pytest
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
@@ -601,10 +601,10 @@ only lint pass that sees feature-gated code (e.g. a `stats`/`augurs` op).
 all-features build, so it also compiles the legacy **aeron** C library, which
 fails in a dev sandbox without the native toolchain — unrelated to your change.
 When that blocks you, run the scoped equivalent that still lints every
-`wingfoil-next` feature/target:
+`wingfoil` feature/target:
 
 ```bash
-cargo clippy -p wingfoil-next --all-features --all-targets -- -D warnings
+cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
 ```
 
 Note the substitution in the PR; the full workspace `lint-all` runs in CI.

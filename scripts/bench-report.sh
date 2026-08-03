@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Run the wingfoil-next benchmark suite and refresh the captured report.
+# Run the wingfoil benchmark suite and refresh the captured report.
 #
 #   scripts/bench-report.sh              # run everything, refresh images/, print estimates
 #   scripts/bench-report.sh --no-run     # just re-harvest plots/estimates from the last run
 #
 # Runs every bench target that needs no external service or system dependency
 # (so: not the aeron/iceoryx2 ones), copies criterion's plots into
-# crates/wingfoil-next/benches/images/, and prints each benchmark's point
+# crates/wingfoil/benches/images/, and prints each benchmark's point
 # estimate so the tables in benches/README.md can be refilled by hand.
 #
 # The two hand-drawn charts are NOT regenerated here — they carry their data
 # inline, so paste the numbers this prints into them and re-run:
 #
-#   crates/wingfoil-next/benches/plot_tiers.py       (tier summary)
-#   crates/wingfoil-next/benches/topological_vs_per_path/plot.py  (topological
+#   crates/wingfoil/benches/plot_tiers.py       (tier summary)
+#   crates/wingfoil/benches/topological_vs_per_path/plot.py  (topological
 #                                                    sort vs per-path propagation)
 #
 # Benchmarks want a quiet machine: nothing else running, and ideally not a
@@ -23,7 +23,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 crit="$root/target/criterion"
-img="$root/crates/wingfoil-next/benches/images"
+img="$root/crates/wingfoil/benches/images"
 
 # One feature set across every target, so all the numbers come from a single
 # consistently-built artifact set (and cargo does not rebuild between them).
@@ -43,7 +43,7 @@ targets=(
 if [[ "${1:-}" != "--no-run" ]]; then
   for target in "${targets[@]}"; do
     echo "==> $target"
-    cargo bench -p wingfoil-next --features "$features" --bench "$target"
+    cargo bench --manifest-path crates/wingfoil/Cargo.toml --features "$features" --bench "$target"
   done
 fi
 

@@ -2,15 +2,14 @@
 
 Wingfoil's engine was rewritten. This page is the complete list of what
 changes for Rust callers, and why. The Python half is
-[`crates/wingfoil-next-python/docs/migration.rst`](../crates/wingfoil-next-python/docs/migration.rst)
+[`crates/wingfoil-python/docs/migration.rst`](../crates/wingfoil-python/docs/migration.rst)
 — it stands on its own; this page does not repeat it.
 
-> **Status: the facade question is not yet ratified.** This guide is written on
-> the assumption recorded as cutover-plan row **1.4** — that the new engine
-> replaces the old one outright, with **no compatibility facade** over the
-> `MutableNode` API. That matches what the Python binding already committed to.
-> If 1.4 lands the other way, the "what breaks" sections below narrow; nothing
-> else here changes.
+> **Ruled 2026-08-03 (cutover-plan 1.4): there is no compatibility facade.**
+> The new engine replaces the old one outright — the `MutableNode` wiring path
+> retires with the legacy tree and nothing re-exports it under the new name.
+> Rust downstreams break at the major version bump, deliberately, and this
+> guide is the answer. The Python binding made the same call.
 
 ## The shape of the change
 
@@ -23,7 +22,7 @@ That is a real break, not a rename. In exchange, one definition of a node's
 semantics now drives the interpreted engine, a fully-monomorphized compiled
 runner, and compiled islands nested inside interpreted graphs — with no
 duplicated cycle logic to drift. See
-[`wingfoil-next-architecture.md`](wingfoil-next-architecture.md).
+[`wingfoil-architecture.md`](wingfoil-architecture.md).
 
 Everything the legacy tree could do, the new engine can do. The **one**
 exception is listed under [What is gone](#what-is-gone).
@@ -131,14 +130,14 @@ method. Now sinks are extension-trait methods on `Stream<T>` and sources are
 free functions taking `&GraphBuilder` first:
 
 ```rust
-use wingfoil_next::adapters::zmq::{ZeroMqPub, zmq_sub};
+use wingfoil::adapters::zmq::{ZeroMqPub, zmq_sub};
 
 let (data, status) = zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, "tcp://host:5556")?;
 let sink = stream.zmq_pub(5556, ());
 ```
 
 Adapters stay **out of the prelude** — opt in per adapter with
-`use wingfoil_next::adapters::<name>::…;`.
+`use wingfoil::adapters::<name>::…;`.
 
 Two behavioural differences worth knowing before you port an I/O graph:
 

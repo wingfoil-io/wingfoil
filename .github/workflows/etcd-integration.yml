@@ -61,7 +61,7 @@ jobs:
 
       - name: Run etcd integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features etcd-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features etcd-integration-test \
             -- --test-threads=1 --nocapture etcd::integration_tests
         env:
           RUST_LOG: INFO

@@ -5,14 +5,14 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/iceoryx2/**'
-      - 'crates/wingfoil-next/tests/iceoryx2_adapter.rs'
-      - 'crates/wingfoil-next/tests/iceoryx2_integration.rs'
-      - 'crates/wingfoil-next-python/src/adapters/iceoryx2.rs'
+      - 'crates/wingfoil/src/adapters/iceoryx2/**'
+      - 'crates/wingfoil/tests/iceoryx2_adapter.rs'
+      - 'crates/wingfoil/tests/iceoryx2_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/iceoryx2.rs'
       # The binding's `stages` path splits and packs its wire header through
       # this module, and only the marked tier below round-trips it.
-      - 'crates/wingfoil-next-python/src/latency.rs'
-      - 'crates/wingfoil-next-python/tests/test_iceoryx2.py'
+      - 'crates/wingfoil-python/src/latency.rs'
+      - 'crates/wingfoil-python/tests/test_iceoryx2.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -53,12 +53,12 @@ jobs:
       # both the Local-variant suite and the cross-process Ipc suite.
       - name: Run iceoryx2 (next) integration tests (Local + IPC)
         run: |
-          cargo test --features iceoryx2-integration-test -p wingfoil-next \
+          cargo test --features iceoryx2-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # Daemonless here too: nothing to start, the marker only keeps a live-clock
       # tier out of the default run.
       - name: Set up Python
@@ -66,14 +66,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         # iceoryx2 is out of the wheel's default features (Linux/POSIX-only), so
         # it is requested explicitly here.
         run: |
@@ -84,11 +84,11 @@ jobs:
       # As with aeron: `test_iceoryx2.py` skips itself when the module lacks the
       # surface, and an all-skipped run still exits 0 — so prove it is in.
       - name: Check the iceoryx2 surface is present
-        working-directory: crates/wingfoil-next-python
-        run: .venv/bin/python -c "import wingfoil_next as wf; assert hasattr(wf, 'iceoryx2_sub')"
+        working-directory: crates/wingfoil-python
+        run: .venv/bin/python -c "import wingfoil as wf; assert hasattr(wf, 'iceoryx2_sub')"
 
       - name: Run Python iceoryx2 (next) integration tests
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_iceoryx2 tests/test_iceoryx2.py -v
         env:
           RUST_LOG: INFO

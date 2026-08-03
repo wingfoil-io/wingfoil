@@ -59,7 +59,7 @@ jobs:
 
       - name: Run ZMQ integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features zmq-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features zmq-integration-test \
             -- --test-threads=1 zmq::integration_tests
         env:
           RUST_LOG: INFO

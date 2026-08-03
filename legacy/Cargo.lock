@@ -7514,6 +7514,25 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wingfoil"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossbeam",
+ "derive-new",
+ "derive_more 2.1.1",
+ "formato",
+ "iceoryx2",
+ "log",
+ "quanta",
+ "serde",
+ "thiserror 2.0.19",
+ "tinyvec",
+ "wingfoil-macros",
+]
+
+[[package]]
+name = "wingfoil"
 version = "8.0.0"
 dependencies = [
  "aeron-rs",
@@ -7579,8 +7598,8 @@ dependencies = [
  "tracing-subscriber",
  "tynm",
  "webpki-roots 0.26.11",
+ "wingfoil 0.1.0",
  "wingfoil-derive",
- "wingfoil-next",
  "wingfoil-wire-types",
  "zmq",
 ]
@@ -7595,26 +7614,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wingfoil-next"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossbeam",
- "derive-new",
- "derive_more 2.1.1",
- "formato",
- "iceoryx2",
- "log",
- "quanta",
- "serde",
- "thiserror 2.0.19",
- "tinyvec",
- "wingfoil-next-macros",
-]
-
-[[package]]
-name = "wingfoil-next-macros"
+name = "wingfoil-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -7639,7 +7639,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
- "wingfoil",
+ "wingfoil 8.0.0",
 ]
 
 [[package]]

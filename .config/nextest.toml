@@ -4,7 +4,7 @@ slow-timeout = { period = "10s", terminate-after = 1 }
 # The trybuild suites drive a nested `cargo build` over the macro compile-fail
 # cases, which on a cold target dir compiles a dependency tree of its own. The
 # 10s hard kill above is sized for the engine's unit tests and would terminate
-# them mid-compile — it did, the first time `wingfoil-next`'s tests ran under
+# them mid-compile — it did, the first time `wingfoil`'s tests ran under
 # nextest. Warn here instead of killing; the job's `timeout-minutes` is the
 # real backstop.
 [[profile.default.overrides]]

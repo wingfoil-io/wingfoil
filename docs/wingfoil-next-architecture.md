@@ -91,7 +91,7 @@ runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
 compat.rs     A legacy-style Signal facade over the fallible lifecycle
 ```
 
-Plus `wingfoil-next-macros` (`nitro!` and `#[op]`), `wingfoil-next-python`
+Plus `wingfoil-macros` (`nitro!` and `#[op]`), `wingfoil-python`
 (PyO3 bindings), `wingfoil-wire-types` + `wingfoil-wasm` + `js/` (the browser
 side of the web adapter).
 
@@ -169,7 +169,7 @@ Three tiers for anything with I/O:
 1. `tests/<name>_adapter.rs` — no service required, runs in normal CI.
 2. `tests/<name>_integration.rs` — needs a container or real sockets; compiled
    always, run in a per-adapter workflow.
-3. `crates/wingfoil-next-python/tests/test_<name>.py` — the binding surface.
+3. `crates/wingfoil-python/tests/test_<name>.py` — the binding surface.
 
 An op that reaches the compiled tiers should be asserted across all three
 strategies in one test, comparing them against each other — that is how the

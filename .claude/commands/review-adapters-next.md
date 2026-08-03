@@ -1,7 +1,7 @@
-Audit the wingfoil-next I/O adapters against the `/new-adapter-next` skill and
+Audit the wingfoil I/O adapters against the `/new-adapter-next` skill and
 the strict-superset parity obligation. Scope: `$ARGUMENTS` names a single
 adapter (e.g. `redis`) to review just that one; leave it blank to review **all**
-next adapters under `crates/wingfoil-next/src/adapters/`.
+next adapters under `crates/wingfoil/src/adapters/`.
 
 This is a **read-and-report** skill — it changes no adapter code. Its four
 deliverables map to the four things a maintainer needs to know before trusting
@@ -44,11 +44,11 @@ Then enumerate the review set:
 
 ```bash
 # next adapters (single-file modules and directory modules)
-ls crates/wingfoil-next/src/adapters/
+ls crates/wingfoil/src/adapters/
 # which legacy adapters have a next twin, and which don't yet
 ls -d legacy/wingfoil/src/adapters/*/
 # every documented deviation block currently in the tree
-grep -rn "Deviations from legacy" crates/wingfoil-next/src/adapters/
+grep -rn "Deviations from legacy" crates/wingfoil/src/adapters/
 ```
 
 Classify each next adapter up front — the audit differs by kind:
@@ -195,7 +195,7 @@ The skill's own "Feed lessons back into this skill" section makes keeping it
 current part of "done". Hunt for lessons the tree has learned that the skill
 hasn't absorbed yet:
 
-- **Mine recent adapter PRs.** `git log --oneline next -- crates/wingfoil-next/src/adapters/`
+- **Mine recent adapter PRs.** `git log --oneline next -- crates/wingfoil/src/adapters/`
   and the deviation register's "Resolved / ratified" list. Each resolved item
   (B1 `consume_async` flush teardown, B3 `consume_async_bursts`, B2 unified
   `<adapter>_source`, A5 graph-owned runtime, the `produce_async`/`postgres_write`

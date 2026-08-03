@@ -43,11 +43,11 @@ reopened); and migrating `external`, the plain `channel` feeders, and
 `produce_async`/`produce_async_bounded` (etcd/kafka/redis/postgres) plus the
 `RunParams` simplification.
 
-[`channel`]: ../crates/wingfoil-next/src/interp.rs
+[`channel`]: ../crates/wingfoil/src/interp.rs
 
 ## One-paragraph summary
 
-Today every background I/O source in wingfoil-next (`produce_async`, `external`,
+Today every background I/O source in wingfoil (`produce_async`, `external`,
 `channel`-fed adapters like `zmq_sub`) spawns its producer thread/task and
 connects its socket at **wiring time** — i.e. inside the factory function, while
 the graph is still being *constructed*, before `Runner::run`. This proposal is
@@ -118,25 +118,25 @@ to do it, and the channel/waker-recreation interlock ("the hard part" below) is
 
 Grounding references (all on the `next` branch):
 
-- **`produce_async` / `produce_async_bounded`** — `crates/wingfoil-next/src/async_source.rs`.
+- **`produce_async` / `produce_async_bounded`** — `crates/wingfoil/src/async_source.rs`.
   The module doc states outright the task "is spawned at *wiring* time, before
   `Runner::run`"; the spawn is `handle.spawn(async move { … })` inside the
   factory (~`async_source.rs:205`, and ~`:330` for the bounded variant). Used by
   etcd / kafka / redis / postgres.
 - **`GraphBuilder::channel` / `external` / `poll` / `source`** —
-  `crates/wingfoil-next/src/fluent.rs:209–258` (+ `source` at `:59`,
+  `crates/wingfoil/src/fluent.rs:209–258` (+ `source` at `:59`,
   `wire` at `:325`). `channel()`/`external()` return `(Stream<Burst<T>>, Sender)`;
   the *adapter* spawns the feeder thread and owns the socket.
-- **`ChannelSender` / `Message`** — `crates/wingfoil-next/src/channel.rs`
+- **`ChannelSender` / `Message`** — `crates/wingfoil/src/channel.rs`
   (`Message` enum `:32`, `ChannelSender` `:79`, `send`/`send_at`/`send_error`
   `:110`/`:119`/`:125`).
-- **`zmq_sub`** — `crates/wingfoil-next/src/adapters/zmq.rs` (~`:247–258`):
+- **`zmq_sub`** — `crates/wingfoil/src/adapters/zmq.rs` (~`:247–258`):
   `let (events, sender) = g.channel(); std::thread::Builder::new().spawn(move ||
   run_subscriber(&address, &sender, &stop))?;` — the thread (and the socket
   connect inside `run_subscriber`) happen in the factory, at wiring. Stop *is*
   already lifecycle-bound: a `ThreadStopGuard` (a `Drop`) carried through a
   passthrough op signals the thread at teardown. Only the *spawn* is eager.
-- **The `reset` hook** — `crates/wingfoil-next/src/interp.rs` (`ResetFn`,
+- **The `reset` hook** — `crates/wingfoil/src/interp.rs` (`ResetFn`,
   `set_reset` `:643`, the `register_op1` reset closure `:727–729`). Phase 1
   landed this so the deterministic historical subset (tickers/constants/
   combinators/feedback) re-runs; it restores per-node state to its wiring-time
@@ -262,8 +262,8 @@ The defer + testability work shipped incrementally, smallest surface first:
 - No regression in the existing parity suites, especially `produce_async`'s
   historical determinism tests and the zmq integration suite.
 - `cargo fmt` / `cargo lint` / `cargo lint-all` (or the scoped
-  `cargo clippy -p wingfoil-next --all-features` if aeron's C lib can't build in
-  the sandbox) / `cargo test -p wingfoil-next --all-features` all green.
+  `cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features` if aeron's C lib can't build in
+  the sandbox) / `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` all green.
 
 ## Risks & open questions
 

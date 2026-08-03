@@ -52,13 +52,13 @@ jobs:
 
       - name: Run augurs unit tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features augurs -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features augurs \
             -- --nocapture adapters::augurs
         env:
           RUST_LOG: INFO
 
       - name: Run augurs example
-        run: cargo run --manifest-path legacy/Cargo.toml -p wingfoil --example augurs --features augurs
+        run: cargo run --manifest-path legacy/wingfoil/Cargo.toml --example augurs --features augurs
 
       # --- Python bindings ---
       - name: Install protoc

@@ -37,7 +37,7 @@ is a `Box<dyn FnMut(&mut Kernel) -> Result<bool>>` adapting the monomorphic
 
 The repo has lived through the naive version once: the legacy
 `wingfoil::codegen` retrofit (since deleted; its walls are recorded in
-`wingfoil-next/src/lib.rs`) ran the wired graph from `build.rs` and emitted
+`wingfoil/src/lib.rs`) ran the wired graph from `build.rs` and emitted
 a runner. Types came back as name strings; closures could not be recovered
 at all, forcing the `Inputs` re-supply — a human re-stating each closure —
 and its drift risk. Wall #1 was even more fundamental: with semantics
@@ -184,7 +184,7 @@ A generator step (a small bin or `build.rs`) runs the same wiring once
 against the recording builder and prints the artifact:
 
 ```rust
-wingfoil_next::codegen::generate(|g| desk_graph(g, &config), "src/desk_graph.gen.rs")?;
+wingfoil::codegen::generate(|g| desk_graph(g, &config), "src/desk_graph.gen.rs")?;
 ```
 
 The artifact is **reviewable plain Rust: a `nitro!` invocation with the

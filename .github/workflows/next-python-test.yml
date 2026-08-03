@@ -5,15 +5,15 @@ on:
   push:
     branches: [ "next", "main" ]
     paths:
-      - "crates/wingfoil-next-python/**"
-      - "crates/wingfoil-next-python-macros/**"
-      - "crates/wingfoil-next/**"
+      - "crates/wingfoil-python/**"
+      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil/**"
   pull_request:
     branches: [ "next", "main" ]
     paths:
-      - "crates/wingfoil-next-python/**"
-      - "crates/wingfoil-next-python-macros/**"
-      - "crates/wingfoil-next/**"
+      - "crates/wingfoil-python/**"
+      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil/**"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
@@ -66,16 +66,16 @@ jobs:
         # Default features (extension-module OFF) so the auto-initialize
         # embedded-interpreter unit and integration tests link libpython and run.
         # These do not run in the rust-test leg, which is scoped to
-        # `-p wingfoil` / `-p wingfoil-next`.
+        # `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil/Cargo.toml`.
         #
         # `all-adapters` additionally covers the per-adapter `#[pyadapter]`
         # bindings and their marshaling tests, which are feature-gated off by
         # default. Adapters needing a system library at build time must stay out
         # of that roll-up (or be installed above) so this step keeps working.
-        run: cargo test -p wingfoil-next-python --features all-adapters
+        run: cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
 
       - name: Build module and run pytest
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         # `-F all-adapters` rather than the `[tool.maturin] features` default:
         # each adapter binding carries a service-free pytest tier (names exposed,
         # argument defaults, wiring-time rejections), and those only run if the

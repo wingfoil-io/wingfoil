@@ -1,5 +1,5 @@
-Implement a new I/O adapter for **wingfoil-next** named `$ARGUMENTS`, under
-`crates/wingfoil-next/src/adapters/`. Follow these steps in order. Work
+Implement a new I/O adapter for **wingfoil** named `$ARGUMENTS`, under
+`crates/wingfoil/src/adapters/`. Follow these steps in order. Work
 test-driven: write each test before its implementation.
 
 Adapters in next are built **strictly on the public Op-pattern API** — sources
@@ -173,7 +173,7 @@ run mode from the `RunParams` the factory already takes.
   enables chaining: `trait <Name>SinkOps { fn $ARGUMENTS_write(&self, ...) }`.
 - **Compute ops** are an extension trait on the relevant `Stream<T>`.
 - Nothing goes in the [`prelude`] — users opt in per adapter with
-  `use wingfoil_next::adapters::$ARGUMENTS::...;`, mirroring `stats`.
+  `use wingfoil::adapters::$ARGUMENTS::...;`, mirroring `stats`.
 - Third-party-reachable wiring only: implement traits via [`Stream::wire`] /
   [`GraphBuilder::source`], the same primitives external crates get.
 
@@ -237,7 +237,7 @@ and deterministic. A `for_each`/`register_op1` sink reads the run mode from its
 (inside an island the ctx reports `RealTime`, consistent with `is_last_cycle`).
 This mirrors legacy's `state.run_mode()` guard in spin-mode adapters.
 
-## 3. Feature flags — `crates/wingfoil-next/Cargo.toml`
+## 3. Feature flags — `crates/wingfoil/Cargo.toml`
 
 Adapters with dependencies are feature-gated so the default build stays
 dependency-free (the `csv`/`augurs` precedent):
@@ -475,7 +475,7 @@ Each `send` wakes the kernel; values arriving between cycles group into one
 `source_at_start` builds on `channel`, so a graph containing it is **single-run**
 for now (the receive channel + waker are consumed by the first run), same as a
 plain `channel` source. `StopHandle`/`source_at_start` are `use
-wingfoil_next::interp::{...}` / the `SourceOps` trait; define `ThreadStopGuard`
+wingfoil::interp::{...}` / the `SourceOps` trait; define `ThreadStopGuard`
 as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 
 > **Not on `source_at_start` yet:** the `produce_async` and plain
@@ -825,7 +825,7 @@ Container infrastructure — choose one:
   (the `order_book` precedent). If the legacy tree has an example for this
   adapter, port it — same scenario, same output.
 - Top with a `//!` doc comment including the exact run command.
-- Register in `crates/wingfoil-next/Cargo.toml`:
+- Register in `crates/wingfoil/Cargo.toml`:
   ```toml
   [[example]]
   name = "$ARGUMENTS_adapter"          # add `path = ...` for the directory form
@@ -841,7 +841,7 @@ Container infrastructure — choose one:
 ### Optional: benchmarks (low-latency adapters)
 
 For a latency- or throughput-sensitive adapter (a poll/spin source, an IPC
-transport), add a Criterion suite under `crates/wingfoil-next/benches/`
+transport), add a Criterion suite under `crates/wingfoil/benches/`
 and register it with `harness = false` + `required-features = ["$ARGUMENTS"]`.
 Skip it when throughput is bounded by the remote service rather than the
 adapter glue — benches only earn their keep where the adapter itself is on the
@@ -854,12 +854,12 @@ existing hub exactly as the legacy adapters do:
 
 1. Create `.github/workflows/$ARGUMENTS-next-integration.yml` following the
    etcd workflow's shape (`workflow_call` + `workflow_dispatch` + `push` with
-   `paths: ['crates/wingfoil-next/src/adapters/$ARGUMENTS**']`), with
+   `paths: ['crates/wingfoil/src/adapters/$ARGUMENTS**']`), with
    the test step:
    ```yaml
    - name: Run $ARGUMENTS (next) integration tests
      run: |
-       cargo test --features $ARGUMENTS-integration-test -p wingfoil-next \
+       cargo test --features $ARGUMENTS-integration-test --manifest-path crates/wingfoil/Cargo.toml \
          -- --test-threads=1 --nocapture
    ```
 2. Register it as a job in `.github/workflows/integration-tests.yml`
@@ -868,7 +868,7 @@ existing hub exactly as the legacy adapters do:
 
 ### Exposing the adapter to Python — `#[pyadapter]`
 
-`wingfoil-next-python` is the go-forward Python binding (it **supersedes** the
+`wingfoil-python` is the go-forward Python binding (it **supersedes** the
 legacy `wingfoil-python`; see `docs/python-interop.md`). A next adapter
 reaches Python through the `#[pyadapter]` proc macro — values erase to
 `PyElement` at the boundary while the adapter's interior stays natively typed.
@@ -907,7 +907,7 @@ legacy operators/modes left behind) has three extra bookkeeping steps that are
 easy to miss because the adapter already looks done:
 
 1. **Widen the dependency's sub-feature list** in
-   `crates/wingfoil-next/Cargo.toml` to match legacy's. The first pass
+   `crates/wingfoil/Cargo.toml` to match legacy's. The first pass
    deliberately enabled only the sub-features its subset needed (augurs shipped
    `ets, mstl, outlier`; the other four operators needed `changepoint, seasons,
    dtw, clustering`), and the comment above the dep says so — update both.
@@ -936,9 +936,9 @@ at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test -p wingfoil-next --features $ARGUMENTS
+cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS
 # service-backed adapters only, with the service/container available:
-cargo test -p wingfoil-next --features $ARGUMENTS-integration-test -- --test-threads=1
+cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS-integration-test -- --test-threads=1
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
@@ -948,10 +948,10 @@ only lint pass that sees your feature-gated code.
 also compiles the legacy **aeron** adapter's C library — which fails to build
 in a dev sandbox without the native toolchain (`CMake "Inappropriate ioctl for
 device"`), unrelated to your change. When that blocks you, run the scoped
-equivalent that still lints every `wingfoil-next` feature/target:
+equivalent that still lints every `wingfoil` feature/target:
 
 ```bash
-cargo clippy -p wingfoil-next --all-features --all-targets -- -D warnings
+cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
 ```
 
 That covers all of your adapter's code; the full workspace `lint-all` runs in

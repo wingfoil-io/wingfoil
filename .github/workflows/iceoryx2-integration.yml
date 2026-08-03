@@ -48,7 +48,7 @@ jobs:
 
       - name: Run iceoryx2 integration tests (Local + IPC)
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features iceoryx2-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features iceoryx2-integration-test \
             -- --test-threads=1 --nocapture iceoryx2::
         env:
           RUST_LOG: INFO

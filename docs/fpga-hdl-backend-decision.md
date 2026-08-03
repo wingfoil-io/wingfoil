@@ -65,7 +65,7 @@ The Op pattern is accidentally RTL-shaped — the legacy object graph
 (`RefCell` fields, peeked `Rc<dyn Stream>`s) had no such mapping. Another
 case where the rearchitecture is the prerequisite, not the casualty:
 
-| wingfoil-next concept | hardware twin |
+| wingfoil concept | hardware twin |
 |---|---|
 | tick | `valid` strobe on a clock edge |
 | `Tick::Value` / `Silent` / `Quiet` | valid high / update state with valid low / valid low |
@@ -104,8 +104,8 @@ Fixed-width types (the FPGA dialect — `i16` ticks, not `f64`), quoted
 closure, explicit capture:
 
 ```rust
-use wingfoil_next::prelude::*;
-use wingfoil_next::func;
+use wingfoil::prelude::*;
+use wingfoil::func;
 
 /// Emit price deltas that exceed a threshold. FPGA-eligible:
 /// fixed-width types, kernel-subset closure bodies.
@@ -119,7 +119,7 @@ pub fn spike_detector(g: &GraphBuilder, cfg: &Config) -> Stream<i16> {
 
 ```rust
 // bin/genfpga.rs — same front-end as the software generator, different backend
-wingfoil_next::codegen::generate_hdl(|g| spike_detector(g, &config), "src/spike.gen.rs")?;
+wingfoil::codegen::generate_hdl(|g| spike_detector(g, &config), "src/spike.gen.rs")?;
 ```
 
 The same graph runs interpreted in software, unchanged — that run *is* the

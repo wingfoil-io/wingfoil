@@ -59,7 +59,7 @@ jobs:
 
       - name: Run Prometheus integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features prometheus-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features prometheus-integration-test \
             -- --test-threads=1 --nocapture prometheus::integration_tests
         env:
           RUST_LOG: INFO

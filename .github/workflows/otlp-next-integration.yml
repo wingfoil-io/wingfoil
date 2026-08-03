@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/otlp**'
-      - 'crates/wingfoil-next/tests/otlp_integration.rs'
+      - 'crates/wingfoil/src/adapters/otlp**'
+      - 'crates/wingfoil/tests/otlp_integration.rs'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -58,7 +58,7 @@ jobs:
 
       - name: Run OTLP (next) integration tests
         run: |
-          cargo test --features otlp-integration-test -p wingfoil-next \
+          cargo test --features otlp-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

@@ -75,7 +75,7 @@ CI is configured in [`.github/workflows/rust-test.yml`](.github/workflows/rust-t
 cargo fmt --manifest-path legacy/Cargo.toml --all -- --check   # formatting
 cargo lint-legacy              # clippy, default features
 cargo test-legacy              # the whole legacy workspace
-cargo test --manifest-path legacy/Cargo.toml -p wingfoil --features full
+cargo test --manifest-path legacy/wingfoil/Cargo.toml --features full
 ```
 
 **Every command needs the manifest path.** This tree is its own cargo

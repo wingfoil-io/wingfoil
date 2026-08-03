@@ -1,22 +1,22 @@
 
 [workspace]
 members = [
-    "crates/wingfoil-next",
-    "crates/wingfoil-next-macros",
-    "crates/wingfoil-next-python",
-    "crates/wingfoil-next-python-macros",
+    "crates/wingfoil",
+    "crates/wingfoil-macros",
+    "crates/wingfoil-python",
+    "crates/wingfoil-python-macros",
     "crates/wingfoil-wire-types",
 ]
 # wingfoil-wasm is excluded from the default workspace because it targets
 # wasm32-unknown-unknown and depends on a different lock file / toolchain.
 #
-# `legacy` is excluded because the cutover renames `wingfoil-next` to
+# `legacy` is excluded because the cutover renames `wingfoil` to
 # `wingfoil` (cutover-plan 1.2) and two members of one workspace cannot share a
 # package name — so legacy has to leave the workspace *before* the rename, not
 # with the deletion. It is its own workspace now, rooted at `legacy/Cargo.toml`,
 # and builds with `--manifest-path legacy/Cargo.toml`.
 #
-# The parity oracle is unaffected: `wingfoil-next` still dev-depends on
+# The parity oracle is unaffected: `wingfoil` still dev-depends on
 # `wingfoil` by path (tests/engine_semantics.rs, benches/tiers.rs), and a path
 # dependency may cross a workspace boundary.
 #
@@ -37,7 +37,7 @@ rust-version = "1.88"
 unsafe_op_in_unsafe_fn = "warn"
 # The `latency_stages!` derive unconditionally emits an
 # `#[cfg(feature = "iceoryx2")]` ZeroCopySend impl. Crates that invoke the
-# macro without an `iceoryx2` feature (e.g. wingfoil-next) would otherwise get
+# macro without an `iceoryx2` feature (e.g. wingfoil) would otherwise get
 # an `unexpected_cfgs` warning; declare the feature name as known so the gate
 # simply stays off there. `wingfoil` has a real `iceoryx2` feature already.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("iceoryx2"))'] }

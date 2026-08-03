@@ -2,7 +2,7 @@
 
 Status: **porting in progress** — the Phase 0 contract spikes have landed and
 several later phases are underway (see the ✅/🟡 markers throughout the body).
-The `wingfoil-next` and `wingfoil-next-macros` crates now live on this branch
+The `wingfoil` and `wingfoil-macros` crates now live on this branch
 (with tests and lints passing) and implement the target pattern: `Op` trait
 (pure semantics, engine-owned state), a sparse dirty-list
 interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
@@ -22,7 +22,7 @@ that pattern.
 ## Strategy
 
 **Parallel port with a compat facade, not an in-place rewrite.**
-`wingfoil-next` becomes the real engine. The legacy `wingfoil` API
+`wingfoil` becomes the real engine. The legacy `wingfoil` API
 (`Rc<dyn Stream>`, `NodeOperators`, `#[node]`) survives as a facade over it
 until cutover, so:
 
@@ -30,7 +30,7 @@ until cutover, so:
   permanent parity oracle;
 - Rust downstreams on the legacy `wingfoil` API see no breakage until the
   facade is deliberately deprecated at cutover. (The **Python** bindings are the
-  exception — they are *replaced*, not facaded: `wingfoil-next-python`
+  exception — they are *replaced*, not facaded: `wingfoil-python`
   supersedes legacy `wingfoil-python`, a deliberate breaking change — see
   Phase 6.);
 - the port can pause indefinitely at any phase boundary with everything
@@ -236,7 +236,7 @@ DAG breaks straight-line emission). Oracle: legacy `feedback_works`,
 
 Decision (corrected) and implemented (Phase 3): **the burst pattern
 throughout — never latest-wins, never a dropped value.** A source emits
-`Stream<Burst<T>>` (`wingfoil_next::Burst<T>`), where a burst is every
+`Stream<Burst<T>>` (`wingfoil::Burst<T>`), where a burst is every
 value occurring at one instant, grouped and delivered atomically in a single
 cycle. Same-time values ride *one* burst — they are not coalesced (the
 latest-wins bug of my first cut) and not split across the clock by
@@ -457,7 +457,7 @@ inference resolves the op type the macro never names, and per-op facts
 (`ACTIVATION`, passive-edge masks) are re-emitted as consts the emission
 folds on. Delay's engine-level special cases became `Tick::Silent` in the
 `Op` contract. Measured at parity with the deleted table emission and
-covered by `wingfoil-next/tests/custom_op.rs`; full analysis in
+covered by `wingfoil/tests/custom_op.rs`; full analysis in
 `macro-extensibility-decision.md`. The fluent method remains
 hand-written (constraint #2, unchanged).
 
@@ -888,7 +888,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    extension trait that registers a lock-free `arc-swap` slot per metric and
    wires the publish sink (over `register_op1`), behind the `prometheus` feature.
    No-op under historical replay (reads the new
-   [`Ctx::run_mode`](../crates/wingfoil-next/src/op.rs) accessor). Self-contained
+   [`Ctx::run_mode`](../crates/wingfoil/src/op.rs) accessor). Self-contained
    parity tests in `tests/prometheus_adapter.rs` (the legacy exporter unit tests
    + the `multiple_metrics` self-contained integration test, raw-TCP scrape); the
    end-to-end Prometheus-scrape test is `tests/prometheus_integration.rs` behind
@@ -1314,7 +1314,7 @@ it is now a smaller win rather than a loss.
 (The absolute figures in this section are the capture that motivated the
 finding; the node counts and times have since moved with the workload and the
 machine. Current, internally-comparable numbers live in
-[`crates/wingfoil-next/benches/README.md`](../crates/wingfoil-next/benches/README.md#execution-tiers).)
+[`crates/wingfoil/benches/README.md`](../crates/wingfoil/benches/README.md#execution-tiers).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth
@@ -1576,20 +1576,20 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
 
 ## Phase 6 — Python bindings, examples, benches
 
-**Decision (2026-07): `wingfoil-next-python` supersedes the legacy
+**Decision (2026-07): `wingfoil-python` supersedes the legacy
 `wingfoil-python` bindings — it is not a compatibility facade over them.** The
 go-forward Python surface is the fresh object-form binding in
-`crates/wingfoil-next-python` (`PyGraph`/`PyStream` over the shared
+`crates/wingfoil-python` (`PyGraph`/`PyStream` over the shared
 interpreted `GraphBuilder`, erased to `PyElement`, plus the
 `#[pyop]`/`pyop_fn!` plugin seams — see `docs/python-interop.md`). Legacy
 `wingfoil-python` (`import wingfoil`) is **retired at cutover**, not kept
 running unchanged, so this is a **breaking change** for Python users
-(`import wingfoil` → `import wingfoil_next`; next-python likely claims the
+(`import wingfoil` → `import wingfoil`; next-python likely claims the
 `wingfoil` module name via a rename at cutover). The gate is next-python's own
 pytest suite (`test_interop.py`) reaching parity with the surface the legacy
 tests covered — not "legacy pytest passes unchanged."
 
-- **Object form** ✅ *landed*: `wingfoil-next-python` `PyGraph`/`PyStream`
+- **Object form** ✅ *landed*: `wingfoil-python` `PyGraph`/`PyStream`
   (`graph.rs`) — the "true `Rc<dyn Stream>` object form" this plan previously
   listed as remaining facade work — with `PyElement` erasure, re-runnable
   graphs, and the `#[pyop]`/`pyop_fn!` op-authoring seams.
@@ -1613,7 +1613,7 @@ tests covered — not "legacy pytest passes unchanged."
   bullet.
 - **Per-adapter Python bindings** 🟡 *mechanical + stream-transform tiers landed (9 of 15)*: the `#[pyadapter]`
   exposure of the real `adapters::*` I/O adapters, each behind a
-  `wingfoil-next-python` cargo feature of the same name (`crate::adapters::*`,
+  `wingfoil-python` cargo feature of the same name (`crate::adapters::*`,
   registered in the `#[pymodule]` under the same `#[cfg]`). **postgres** is the
   first and the template: `postgres_read` / `postgres_sub` / `postgres_source` /
   `postgres_write` / `postgres_notify_trigger_sql`, with a dynamic row↔`dict`
@@ -1831,7 +1831,7 @@ tests covered — not "legacy pytest passes unchanged."
 - **Python latency surface** 🟢 *landed* — the last non-adapter gap in the
   binding, ported from legacy's `py_latency` module
   (`legacy/wingfoil-python/src/py_latency.rs`) to
-  `wingfoil-next-python/src/latency.rs`. Same dynamic shape as legacy, because
+  `wingfoil-python/src/latency.rs`. Same dynamic shape as legacy, because
   Python cannot name a compile-time `Stage` type: a `Latency` pyclass carrying
   a *runtime* `Vec<String>` of stage names beside its `Vec<u64>` stamps (so a
   stamp resolves its slot by name), a `TracedBytes` carrier, and the
@@ -1870,7 +1870,7 @@ tests covered — not "legacy pytest passes unchanged."
   gate stated at the top of this phase ("next-python's own pytest suite reaching
   parity with the surface the legacy tests covered") had never been checked, only
   assumed. Every test function in `legacy/wingfoil-python/tests/` (268, in 21 files) was
-  mapped case by case onto its next counterpart (`wingfoil-next-python/tests/`,
+  mapped case by case onto its next counterpart (`wingfoil-python/tests/`,
   325 in 20 files). Name-matching is useless here — next's suite was written
   fresh, and exactly **6** of the 268 legacy names appear on the next side (all
   in postgres); the mapping is by *surface covered*, not by name.
@@ -1900,13 +1900,13 @@ tests covered — not "legacy pytest passes unchanged."
     `examples/dataframe.py`) where legacy returned `(time, value)` tuples for a
     Python helper to assemble — legacy's tuple shape is next's `collect()`. The
     **multi-stream** half — `pandas_helpers.build_dataframe`, which outer-joins
-    several streams on time — is now `wingfoil_next.build_dataframe`, also built
+    several streams on time — is now `wingfoil.build_dataframe`, also built
     in Rust; its 4 legacy tests (`test_dict_of_streams`,
     `test_async_frequencies`, `test_massive_fan_out`,
     `test_build_dataframe_skips_empty_streams`) are ported one for one. The
     remaining 7 cover `to_dataframe`, a pure-Python list-to-frame converter with
     no next counterpart by design (next builds the frame in the engine).
-  - `test_statistics.py` (37) → `crates/wingfoil-next-python/tests/test_statistics.py`,
+  - `test_statistics.py` (37) → `crates/wingfoil-python/tests/test_statistics.py`,
     one for one (cutover-plan row 3.7). `src/statistics.rs` binds the same
     `Window` / `Weighting` / `EwmaSpan` classes and their int/str/float
     shorthands over `mean`/`variance`/`std`/`sum`/`min`/`max`/`median`/`ewma`.
@@ -1938,7 +1938,7 @@ tests covered — not "legacy pytest passes unchanged."
   surface* rather than missing tests: the statistics adapter binding and
   `build_dataframe`. Both have landed (cutover-plan rows 3.7 and 3.8) — see the
   `test_statistics.py` and `test_pandas.py` entries above.
-- **`wingfoil_next::signal` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
+- **`wingfoil::signal` (`Signal<T>`)** stays a *Rust-side* legacy-idiom
   ergonomic (free `ticker`/`constant`, `stream.run`/`peek_value`; `tests/
   signal.rs`) — it is **not** the Python-binding path (that is the object-form
   `PyStream` above).
@@ -1982,7 +1982,7 @@ tests covered — not "legacy pytest passes unchanged."
 - **Engine tracing / instrumentation** 🟢 *landed*: legacy's `tracing` +
   `instrument-run` / `-cycle` / `-apply-nodes` / `-initialise` / `-cycle-node` /
   `-default` / `-all` features are ported one-for-one into
-  `wingfoil-next`, with the span sites in `interp.rs`
+  `wingfoil`, with the span sites in `interp.rs`
   (`Runner::run` / `run_dynamic`, the lifecycle-phase loops, `drain_cycle` and
   the full-sweep oracle's cycle body, and the per-node `cycle` call). Coverage:
   `tests/instrumentation.rs` (span names, the `desc`/`index`/`node` fields, the
@@ -2028,7 +2028,7 @@ tests covered — not "legacy pytest passes unchanged."
   compiled island — the bar that stays comparable with legacy is still the
   interpreted, per-tick one, under the same `depth_N` names. Per-
   target deviations are recorded in each bench's own module doc, and the suite
-  is catalogued in `crates/wingfoil-next/benches/README.md`. Still **not** a CI
+  is catalogued in `crates/wingfoil/benches/README.md`. Still **not** a CI
   gate, for the reason above.
 
 ## Phase 7 — cutover
@@ -2150,7 +2150,7 @@ deferred by design, not dropped.
 One theme: letting the `compiled()` / `nitro!` path ingest external /
 timestamped data, which it excludes today (capability-matrix rows "Busy-poll
 ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
-footnotes 2–3). Both work on the interpreted engine now (`wingfoil_next::Burst`,
+footnotes 2–3). Both work on the interpreted engine now (`wingfoil::Burst`,
 `poll`) and feed a compiled island through its inputs.
 
 **Busy-poll ingest (`ALWAYS` sources — legacy `poll`/`producer`).**
@@ -2187,7 +2187,7 @@ as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
 
 ### Engine architecture / orientation doc (was #507)
 
-An evidence-backed `docs/wingfoil-next-architecture.md` orienting a new
+An evidence-backed `docs/wingfoil-architecture.md` orienting a new
 contributor/agent to the Op-pattern engine, citing source at `file:line`.
 Deliberately a *current-state snapshot*, not a migration guide — so it is
 deferred until after the incoming refactor settles (a snapshot written now would
@@ -2210,7 +2210,7 @@ Phases 0–1 are serial (contract work, ~15% of the effort). Phase 2 groups
 parallelize once the recipe is proven on one nontrivial node
 (suggested: throttle — scheduling + state + macro row). Phase 4 adapters
 are fully independent of each other; statistics can start as soon as
-Phase 1 lands. The Phase 6 Python binding (`wingfoil-next-python`, the
+Phase 1 lands. The Phase 6 Python binding (`wingfoil-python`, the
 object form) can be built out early (it only needs the Phase 1 contract) to
 de-risk the Python gate. One PR per node group / adapter; every PR carries its
 parity tests.

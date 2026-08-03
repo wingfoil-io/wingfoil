@@ -67,7 +67,7 @@ jobs:
 
       - name: Run ${{ matrix.adapter }} integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features ${{ matrix.feature }} -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features ${{ matrix.feature }} \
             -- --test-threads=1 --nocapture ${{ matrix.test-filter }}
         env:
           RUST_LOG: INFO

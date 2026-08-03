@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Verify that every wingfoil-next example is documented.
+# Verify that every wingfoil example is documented.
 #
-# For each `[[example]]` target declared in crates/wingfoil-next/Cargo.toml:
+# For each `[[example]]` target declared in crates/wingfoil/Cargo.toml:
 #   1. its directory must contain a README.md, and
 #   2. that directory must be linked from its group's README.md
 #      (examples/{core,adapters,showcase}/README.md).
@@ -13,7 +13,7 @@
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-crate="$repo_root/crates/wingfoil-next"
+crate="$repo_root/crates/wingfoil"
 examples="$crate/examples"
 manifest="$crate/Cargo.toml"
 
@@ -101,7 +101,7 @@ if [[ $fail -ne 0 ]]; then
     echo
     echo "Example documentation check FAILED."
     echo "Every example needs a README.md beside it and a link from its group's index."
-    echo "See next/crates/wingfoil-next/examples/README.md § 'Adding an example'."
+    echo "See next/crates/wingfoil/examples/README.md § 'Adding an example'."
     exit 1
 fi
 

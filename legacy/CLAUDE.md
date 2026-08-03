@@ -69,7 +69,7 @@ workspace root, and **`-p wingfoil` no longer resolves from the repo root** —
 every command needs the manifest path (run from the repo root):
 
 ```bash
-cargo test --manifest-path legacy/Cargo.toml -p wingfoil
+cargo test --manifest-path legacy/wingfoil/Cargo.toml
 cargo test --manifest-path legacy/Cargo.toml -p wingfoil-python
 cargo lint-legacy   # clippy, default features (alias in .cargo/config.toml)
 cargo test-legacy   # the whole legacy workspace (alias)

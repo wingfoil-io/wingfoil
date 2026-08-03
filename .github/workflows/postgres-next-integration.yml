@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crates/wingfoil-next/src/adapters/postgres**'
-      - 'crates/wingfoil-next/src/adapters/common.rs'
-      - 'crates/wingfoil-next/tests/postgres_integration.rs'
-      - 'crates/wingfoil-next-python/src/adapters/postgres.rs'
-      - 'crates/wingfoil-next-python/tests/test_postgres.py'
+      - 'crates/wingfoil/src/adapters/postgres**'
+      - 'crates/wingfoil/src/adapters/common.rs'
+      - 'crates/wingfoil/tests/postgres_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/postgres.rs'
+      - 'crates/wingfoil-python/tests/test_postgres.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
 # main/next are not, so every merged commit keeps a status of its own. The
@@ -59,12 +59,12 @@ jobs:
 
       - name: Run postgres (next) integration tests
         run: |
-          cargo test --features postgres-integration-test -p wingfoil-next \
+          cargo test --features postgres-integration-test --manifest-path crates/wingfoil/Cargo.toml \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
-      # --- Python bindings (wingfoil-next-python) ---
+      # --- Python bindings (wingfoil-python) ---
       # The Rust tests above use testcontainers (per-test container); the Python
       # tests expect a fixed localhost:5432, so start one explicitly.
       - name: Start postgres container for Python tests
@@ -86,21 +86,21 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: crates/wingfoil-next-python/pyproject.toml
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
 
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux.
         run: sudo apt-get install -y patchelf
 
       - name: Build the next Python bindings
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: |
           python -m venv .venv
           .venv/bin/pip install maturin pytest "psycopg[binary]"
           .venv/bin/maturin develop
 
       - name: Run Python postgres (next) integration tests
-        working-directory: crates/wingfoil-next-python
+        working-directory: crates/wingfoil-python
         run: .venv/bin/pytest -m requires_postgres tests/test_postgres.py -v
         env:
           RUST_LOG: INFO
