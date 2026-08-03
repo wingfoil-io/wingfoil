@@ -136,7 +136,7 @@ anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
 wingfoil = { path = "../wingfoil", version = "9.0.0" }
 # The #[pyop] proc macro, re-exported so users depend only on this crate.
-wingfoil-python-macros = { path = "../wingfoil-python-macros", version = "9.0.0" }
+wingfoil-python-derive = { path = "../wingfoil-python-derive", version = "9.0.0" }
 # NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
 # types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
 # `wingfoil`, which owns them (`runtime::run`, `runtime::time`). See

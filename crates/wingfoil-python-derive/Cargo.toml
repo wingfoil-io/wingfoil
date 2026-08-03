@@ -1,11 +1,11 @@
 [package]
-name = "wingfoil-python-macros"
+name = "wingfoil-python-derive"
 version = "9.0.0"
 edition = "2024"
 authors = ["wingfoil@wingfoil.io"]
 license = "Apache-2.0"
 homepage = "https://github.com/wingfoil-io/wingfoil/"
-documentation = "https://docs.rs/wingfoil-python-macros"
+documentation = "https://docs.rs/wingfoil-python-derive"
 rust-version.workspace = true
 # Publishable from the cutover on (was `false` while these crates were
 # prototypes under the `-next` names). Same registry list as the legacy

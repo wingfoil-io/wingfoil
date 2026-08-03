@@ -21,7 +21,7 @@ name: publish.crates
 #
 #   wingfoil-derive ─┐
 #   wingfoil-wire-types ─┴─> wingfoil ─┐
-#   wingfoil-python-macros ────────────┴─> wingfoil-python
+#   wingfoil-python-derive ────────────┴─> wingfoil-python
 #
 # `--registry crates-io` on every step: these crates list two registries in
 # `package.publish`, and cargo refuses to guess between them.
@@ -55,8 +55,8 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io
 
-      - name: Publish wingfoil-python-macros
-        working-directory: crates/wingfoil-python-macros
+      - name: Publish wingfoil-python-derive
+        working-directory: crates/wingfoil-python-derive
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         run: cargo publish --registry crates-io

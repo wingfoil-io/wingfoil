@@ -1,4 +1,4 @@
-# wingfoil-python-macros
+# wingfoil-python-derive
 
 **`#[pyop]`** — derive a Python-callable function from an `Op` impl.
 

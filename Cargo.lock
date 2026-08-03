@@ -7679,11 +7679,11 @@ dependencies = [
  "pyo3",
  "serde_json",
  "wingfoil 9.0.0",
- "wingfoil-python-macros",
+ "wingfoil-python-derive",
 ]
 
 [[package]]
-name = "wingfoil-python-macros"
+name = "wingfoil-python-derive"
 version = "9.0.0"
 dependencies = [
  "proc-macro2",

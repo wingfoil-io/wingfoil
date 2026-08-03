@@ -38,19 +38,19 @@ pub use graph::{PyGraph, PyStream};
 pub use python::{Graph, Stream, to_pyerr};
 
 /// Derive a Python-callable function from an `Op` impl. See
-/// [`wingfoil_python_macros`] — placed on `impl Op for MyOp`, it generates
+/// [`wingfoil_python_derive`] — placed on `impl Op for MyOp`, it generates
 /// a free `#[pyfunction]` wiring the op at the erased boundary.
-pub use wingfoil_python_macros::pyop;
+pub use wingfoil_python_derive::pyop;
 
 /// Expose a Rust-authored sub-graph wiring function (`fn(&Stream<T>) ->
 /// Stream<U>`) as a Python callable that splices its nodes into the caller's
-/// graph. See [`wingfoil_python_macros::pygraph`].
-pub use wingfoil_python_macros::pygraph;
+/// graph. See [`wingfoil_python_derive::pygraph`].
+pub use wingfoil_python_derive::pygraph;
 
 /// Expose a user **source** adapter (`impl Trait for GraphBuilder { fn m(&self,
 /// …) -> Stream<T> }`) as a Python callable `module.m(graph, …)`. See
-/// [`wingfoil_python_macros::pyadapter`].
-pub use wingfoil_python_macros::pyadapter;
+/// [`wingfoil_python_derive::pyadapter`].
+pub use wingfoil_python_derive::pyadapter;
 
 // Re-exported so third-party op crates (and the `pyop!`/`#[pyop]` macros) can
 // name the op vocabulary without depending on `wingfoil` directly.

@@ -435,7 +435,7 @@ Pick the lightest tool that fits:
   }
   ```
 - **Any concrete one-, two- or three-input op** → the `#[pyop]` **proc**
-  macro (`wingfoil-python-macros`), placed alongside `#[op]` on the `Op`
+  macro (`wingfoil-python-derive`), placed alongside `#[op]` on the `Op`
   impl; it reads the associated types + `cycle` and emits the `#[pyfunction]`:
   ```rust
   #[op(build = $ARGUMENTS)]

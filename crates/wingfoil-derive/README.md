@@ -92,5 +92,5 @@ Adding an op is covered by the `/new-op-next` skill and
 
 - [`../README.md`](../README.md) — the crate map for `next/`
 - [`../wingfoil/`](../wingfoil/) — the engine these macros serve
-- [`../wingfoil-python-macros/`](../wingfoil-python-macros/) — the same idea for the Python bindings
+- [`../wingfoil-python-derive/`](../wingfoil-python-derive/) — the same idea for the Python bindings
 - [`../../docs/macro-extensibility-decision.md`](../../docs/macro-extensibility-decision.md) — why there is no per-op table

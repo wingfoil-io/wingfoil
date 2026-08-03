@@ -6,13 +6,13 @@ on:
     branches: [ "next", "main" ]
     paths:
       - "crates/wingfoil-python/**"
-      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
   pull_request:
     branches: [ "next", "main" ]
     paths:
       - "crates/wingfoil-python/**"
-      - "crates/wingfoil-python-macros/**"
+      - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
   workflow_dispatch:
 
