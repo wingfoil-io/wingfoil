@@ -90,7 +90,28 @@ pub fn constant<T: Clone + Default + 'static>(value: T) -> Signal<T> {
 }
 
 impl<T> Signal<T> {
-    fn wrap<B>(&self, stream: Stream<B>) -> Signal<B> {
+    /// The [`Stream`] this signal wraps, for wiring the next node onto.
+    ///
+    /// This — with [`wrap`](Self::wrap) — is the **`#[op(fluent)]` facade
+    /// seam**: every combinator the macro generates is `as_stream` on the
+    /// receiver and each edge, wire the op, `wrap` the result back into this
+    /// graph. Naming the pair is what keeps the generated code off the private
+    /// fields, so the facade's representation stays free to change as long as
+    /// these two hold.
+    ///
+    /// `pub(crate)` is the widest this needs to be, and it is not a
+    /// restriction: `Signal`'s combinators are *inherent* methods, so only
+    /// this crate can add one. Callers outside it hold the graph explicitly
+    /// and use [`Stream`] directly.
+    pub(crate) fn as_stream(&self) -> &Stream<T> {
+        &self.stream
+    }
+
+    /// Put `stream` into this signal's graph — the other half of the seam
+    /// described on [`as_stream`](Self::as_stream). The new signal shares the
+    /// graph and the runner slot, so [`run`](Signal::run) on any signal in the
+    /// graph makes [`peek_value`](Signal::peek_value) work on all of them.
+    pub(crate) fn wrap<B>(&self, stream: Stream<B>) -> Signal<B> {
         Signal {
             stream,
             graph: self.graph.clone(),
